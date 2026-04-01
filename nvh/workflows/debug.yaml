@@ -1,0 +1,20 @@
+name: Debug Pipeline
+description: Multi-step code debugging workflow
+steps:
+  - name: diagnose
+    action: ask
+    prompt: "Diagnose this error. What's causing it and why?\n\n{{input}}"
+    advisor: anthropic
+    save_as: diagnosis
+
+  - name: fix
+    action: ask
+    prompt: "Based on this diagnosis, write the corrected code:\n\nDiagnosis: {{diagnosis}}\n\nOriginal error: {{input}}"
+    advisor: openai
+    save_as: fix
+
+  - name: verify
+    action: convene
+    prompt: "Verify this fix is correct and complete:\n\nOriginal: {{input}}\nDiagnosis: {{diagnosis}}\nFix: {{fix}}"
+    cabinet: code_tutor
+    save_as: verification

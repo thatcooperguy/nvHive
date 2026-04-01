@@ -1,0 +1,20 @@
+name: Code Review Pipeline
+description: Three-pass code review with different expert perspectives
+steps:
+  - name: security_scan
+    action: ask
+    prompt: "Analyze this code for security vulnerabilities (injection, XSS, auth issues):\n\n{{input}}"
+    advisor: anthropic
+    save_as: security
+
+  - name: quality_review
+    action: ask
+    prompt: "Review this code for quality, readability, and best practices:\n\n{{input}}"
+    advisor: openai
+    save_as: quality
+
+  - name: synthesis
+    action: convene
+    prompt: "Synthesize these code review findings into actionable recommendations:\n\nSecurity: {{security}}\n\nQuality: {{quality}}"
+    cabinet: code_review
+    save_as: summary

@@ -1,0 +1,235 @@
+# =============================================================================
+# Hive — Cloud GPU deployment override
+#
+# Usage:
+#   docker compose -f docker-compose.yaml -f docker-compose.cloud.yaml up -d
+#
+# Target: Linux cloud VMs with NVIDIA GPUs
+#   AWS g5/p4, GCP a2/a3, Lambda Labs, CoreWeave, Linux Desktop instances
+#
+# This file overrides only the fields that differ from the base compose file.
+# All services, volumes, and networks are inherited from docker-compose.yaml.
+#
+# Requirements:
+#   - NVIDIA Container Toolkit installed and configured
+#   - docker info | grep -i runtime  →  should show "nvidia"
+#   - For rootless Docker: nvidia-ctk runtime configure --runtime=docker
+#       --config=$HOME/.config/docker/daemon.json && systemctl --user restart docker
+# =============================================================================
+
+name: hive
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # hive-api — bind to all interfaces so cloud load balancers can reach it
+  # ---------------------------------------------------------------------------
+  hive-api:
+    ports:
+      # Cloud: expose on all interfaces (sit behind nginx/caddy or security group)
+      - "0.0.0.0:8000:8000"
+    environment:
+      HIVE_DATA_DIR: /data
+      PYTHONUNBUFFERED: "1"
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://ollama:11434}"
+      # Raise the API worker count for multi-core cloud VMs
+      WEB_CONCURRENCY: "${WEB_CONCURRENCY:-4}"
+    deploy:
+      resources:
+        limits:
+          # Cloud VMs typically have more RAM; raise ceiling
+          memory: 4G
+        reservations:
+          memory: 512M
+    healthcheck:
+      # Faster health checks — cloud orchestrators need quick convergence
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # hive-web — bind to all interfaces for external access
+  # ---------------------------------------------------------------------------
+  hive-web:
+    ports:
+      - "0.0.0.0:3000:3000"
+    environment:
+      # On cloud instances the public IP is the ingress; users set this in .env
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000}"
+      NODE_ENV: production
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+    healthcheck:
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # ollama — full GPU passthrough with cloud-tuned environment
+  # ---------------------------------------------------------------------------
+  ollama:
+    ports:
+      # Bind to loopback only; external access goes through the API
+      - "127.0.0.1:11434:11434"
+
+    # Explicit NVIDIA runtime declaration — required on some cloud providers
+    # (supplements the deploy.resources.reservations block in the base file)
+    runtime: nvidia
+
+    environment:
+      OLLAMA_HOST: "0.0.0.0:11434"
+      OLLAMA_KEEP_ALIVE: "${OLLAMA_KEEP_ALIVE:-30m}"
+
+      # Flash Attention significantly reduces VRAM usage on Ampere/Ada/Hopper GPUs
+      OLLAMA_FLASH_ATTENTION: "${OLLAMA_FLASH_ATTENTION:-1}"
+
+      # Allow more parallel requests — cloud VMs have more RAM and bandwidth
+      OLLAMA_NUM_PARALLEL: "${OLLAMA_NUM_PARALLEL:-4}"
+
+      # Pass-through NVIDIA runtime variables required by the NVIDIA Container Toolkit
+      NVIDIA_VISIBLE_DEVICES: "${NVIDIA_VISIBLE_DEVICES:-all}"
+      NVIDIA_DRIVER_CAPABILITIES: "${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}"
+
+      # Optional: set a VRAM ceiling so Ollama doesn't OOM other processes.
+      # Expressed as a fraction of total VRAM (0.9 = 90%).
+      # OLLAMA_GPU_OVERHEAD: "0"
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+        limits:
+          # Prevent Ollama's CPU threads from monopolising the VM
+          # GPU memory is managed by CUDA — this only limits host RAM
+          memory: "${OLLAMA_MEMORY_LIMIT:-16G}"
+
+    healthcheck:
+      # Faster convergence on cloud — models load quickly from NVMe
+      interval: 10s
+      timeout: 10s
+      start_period: 20s
+      retries: 6
+
+  # ---------------------------------------------------------------------------
+  # ollama-init — pull the right model based on GPU VRAM
+  #
+  # Override OLLAMA_PULL_MODEL in your .env to choose a different model:
+  #   OLLAMA_PULL_MODEL=nemotron          # 70B — needs 48 GB+ VRAM (A100, H100)
+  #   OLLAMA_PULL_MODEL=nemotron-small    # 4B  — runs on 8 GB+ VRAM (default)
+  #   OLLAMA_PULL_MODEL=llama3.3:70b      # Meta Llama 3.3 70B
+  # ---------------------------------------------------------------------------
+  ollama-init:
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    command:
+      - |
+        MODEL="${OLLAMA_PULL_MODEL:-nemotron-small}"
+        echo "Hive cloud init: checking for model: $MODEL ..."
+        if ollama list 2>/dev/null | grep -qF "$MODEL"; then
+          echo "$MODEL already present — skipping pull."
+        else
+          echo "Pulling $MODEL ..."
+          ollama pull "$MODEL" && echo "Pull complete." \
+            || echo "Pull failed — retry with: docker compose exec ollama ollama pull $MODEL"
+        fi
+
+  # ---------------------------------------------------------------------------
+  # nginx — HTTPS reverse proxy (optional; activate with --profile https)
+  #
+  # Usage:
+  #   docker compose -f docker-compose.yaml -f docker-compose.cloud.yaml \
+  #     --profile https up -d
+  #
+  # Place your TLS certificate files at:
+  #   ./nginx/certs/hive.crt
+  #   ./nginx/certs/hive.key
+  # Or let Caddy handle ACME automatically (see caddy service below).
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: hive-nginx
+    profiles: ["https"]
+    restart: unless-stopped
+
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+
+    networks:
+      - council-net
+
+    depends_on:
+      hive-api:
+        condition: service_healthy
+      hive-web:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # caddy — automatic HTTPS via ACME/Let's Encrypt (optional profile: caddy)
+  #
+  # Usage:
+  #   HIVE_DOMAIN=hive.example.com \
+  #   docker compose -f docker-compose.yaml -f docker-compose.cloud.yaml \
+  #     --profile caddy up -d
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: hive-caddy
+    profiles: ["caddy"]
+    restart: unless-stopped
+
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+      - "0.0.0.0:443:443/udp"  # HTTP/3
+
+    environment:
+      HIVE_DOMAIN: "${HIVE_DOMAIN:-localhost}"
+
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+    networks:
+      - council-net
+
+    depends_on:
+      hive-api:
+        condition: service_healthy
+      hive-web:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# ---------------------------------------------------------------------------
+# Extra volumes for optional proxy services
+# ---------------------------------------------------------------------------
+volumes:
+  hive-data:
+  ollama-models:
+  caddy-data:
+  caddy-config:

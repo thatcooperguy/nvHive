@@ -1,0 +1,1795 @@
+# Model Capability Catalog
+# Scores are 0.0-1.0 per task type. Pricing per 1M tokens in USD.
+# Last updated: 2026-03-31
+
+models:
+  # --- OpenAI ---
+  gpt-4o:
+    provider: openai
+    display_name: GPT-4o
+    context_window: 128000
+    max_output_tokens: 16384
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 2.50
+    output_cost_per_1m_tokens: 10.00
+    typical_latency_ms: 900
+    capability_scores:
+      code_generation: 0.88
+      code_review: 0.87
+      code_debug: 0.86
+      reasoning: 0.85
+      math: 0.85
+      creative_writing: 0.82
+      summarization: 0.80
+      translation: 0.82
+      conversation: 0.85
+      question_answering: 0.84
+      structured_extraction: 0.88
+      multimodal: 0.90
+      long_context_analysis: 0.75
+      instruction_following: 0.88
+
+  gpt-4o-mini:
+    provider: openai
+    display_name: GPT-4o Mini
+    context_window: 128000
+    max_output_tokens: 16384
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.15
+    output_cost_per_1m_tokens: 0.60
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.75
+      code_review: 0.72
+      code_debug: 0.70
+      reasoning: 0.70
+      math: 0.68
+      creative_writing: 0.70
+      summarization: 0.72
+      translation: 0.74
+      conversation: 0.78
+      question_answering: 0.73
+      structured_extraction: 0.76
+      multimodal: 0.72
+      long_context_analysis: 0.65
+      instruction_following: 0.75
+
+  gpt-4.1:
+    provider: openai
+    display_name: GPT-4.1
+    context_window: 1047576
+    max_output_tokens: 32768
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 2.00
+    output_cost_per_1m_tokens: 8.00
+    typical_latency_ms: 800
+    capability_scores:
+      code_generation: 0.92
+      code_review: 0.90
+      code_debug: 0.91
+      reasoning: 0.88
+      math: 0.87
+      creative_writing: 0.83
+      summarization: 0.85
+      translation: 0.84
+      conversation: 0.86
+      question_answering: 0.87
+      structured_extraction: 0.91
+      multimodal: 0.88
+      long_context_analysis: 0.90
+      instruction_following: 0.92
+
+  # --- Anthropic ---
+  claude-sonnet-4-6:
+    provider: anthropic
+    display_name: Claude Sonnet 4.6
+    context_window: 200000
+    max_output_tokens: 64000
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 3.00
+    output_cost_per_1m_tokens: 15.00
+    typical_latency_ms: 1200
+    capability_scores:
+      code_generation: 0.91
+      code_review: 0.93
+      code_debug: 0.90
+      reasoning: 0.92
+      math: 0.82
+      creative_writing: 0.95
+      summarization: 0.89
+      translation: 0.83
+      conversation: 0.90
+      question_answering: 0.88
+      structured_extraction: 0.90
+      multimodal: 0.82
+      long_context_analysis: 0.88
+      instruction_following: 0.93
+
+  claude-haiku-4-5-20251001:
+    provider: anthropic
+    display_name: Claude Haiku 4.5
+    context_window: 200000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.80
+    output_cost_per_1m_tokens: 4.00
+    typical_latency_ms: 600
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.74
+      reasoning: 0.75
+      math: 0.70
+      creative_writing: 0.74
+      summarization: 0.76
+      translation: 0.72
+      conversation: 0.80
+      question_answering: 0.75
+      structured_extraction: 0.77
+      multimodal: 0.70
+      long_context_analysis: 0.72
+      instruction_following: 0.78
+
+  claude-opus-4-6:
+    provider: anthropic
+    display_name: Claude Opus 4.6
+    context_window: 200000
+    max_output_tokens: 32000
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 15.00
+    output_cost_per_1m_tokens: 75.00
+    typical_latency_ms: 2000
+    capability_scores:
+      code_generation: 0.94
+      code_review: 0.95
+      code_debug: 0.93
+      reasoning: 0.96
+      math: 0.88
+      creative_writing: 0.96
+      summarization: 0.92
+      translation: 0.86
+      conversation: 0.93
+      question_answering: 0.92
+      structured_extraction: 0.93
+      multimodal: 0.85
+      long_context_analysis: 0.92
+      instruction_following: 0.96
+
+  # --- Google ---
+  gemini/gemini-2.0-pro:
+    provider: google
+    display_name: Gemini 2.0 Pro
+    context_window: 1000000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 1.25
+    output_cost_per_1m_tokens: 5.00
+    typical_latency_ms: 1500
+    capability_scores:
+      code_generation: 0.82
+      code_review: 0.80
+      code_debug: 0.78
+      reasoning: 0.83
+      math: 0.82
+      creative_writing: 0.76
+      summarization: 0.82
+      translation: 0.80
+      conversation: 0.80
+      question_answering: 0.84
+      structured_extraction: 0.82
+      multimodal: 0.92
+      long_context_analysis: 0.95
+      instruction_following: 0.82
+
+  gemini/gemini-2.0-flash:
+    provider: google
+    display_name: Gemini 2.0 Flash
+    context_window: 1000000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.10
+    output_cost_per_1m_tokens: 0.40
+    typical_latency_ms: 400
+    capability_scores:
+      code_generation: 0.72
+      code_review: 0.70
+      code_debug: 0.68
+      reasoning: 0.70
+      math: 0.68
+      creative_writing: 0.65
+      summarization: 0.72
+      translation: 0.70
+      conversation: 0.72
+      question_answering: 0.73
+      structured_extraction: 0.70
+      multimodal: 0.78
+      long_context_analysis: 0.85
+      instruction_following: 0.72
+
+  # --- Groq ---
+  groq/llama-3.3-70b-versatile:
+    provider: groq
+    display_name: Llama 3.3 70B Versatile (Groq)
+    context_window: 128000
+    max_output_tokens: 32768
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.59
+    output_cost_per_1m_tokens: 0.79
+    typical_latency_ms: 200
+    capability_scores:
+      code_generation: 0.80
+      code_review: 0.78
+      code_debug: 0.76
+      reasoning: 0.80
+      math: 0.76
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.74
+      conversation: 0.80
+      question_answering: 0.78
+      structured_extraction: 0.78
+      multimodal: 0.0
+      long_context_analysis: 0.70
+      instruction_following: 0.80
+
+  groq/llama-3.1-8b-instant:
+    provider: groq
+    display_name: Llama 3.1 8B Instant (Groq)
+    context_window: 128000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.05
+    output_cost_per_1m_tokens: 0.08
+    typical_latency_ms: 100
+    capability_scores:
+      code_generation: 0.65
+      code_review: 0.62
+      code_debug: 0.60
+      reasoning: 0.62
+      math: 0.58
+      creative_writing: 0.60
+      summarization: 0.65
+      translation: 0.64
+      conversation: 0.68
+      question_answering: 0.64
+      structured_extraction: 0.63
+      multimodal: 0.0
+      long_context_analysis: 0.58
+      instruction_following: 0.65
+
+  groq/mixtral-8x7b-32768:
+    provider: groq
+    display_name: Mixtral 8x7B (Groq)
+    context_window: 32768
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.24
+    output_cost_per_1m_tokens: 0.24
+    typical_latency_ms: 150
+    capability_scores:
+      code_generation: 0.73
+      code_review: 0.70
+      code_debug: 0.68
+      reasoning: 0.72
+      math: 0.68
+      creative_writing: 0.68
+      summarization: 0.70
+      translation: 0.72
+      conversation: 0.72
+      question_answering: 0.70
+      structured_extraction: 0.70
+      multimodal: 0.0
+      long_context_analysis: 0.55
+      instruction_following: 0.72
+
+  # --- Grok (xAI) ---
+  xai/grok-2:
+    provider: grok
+    display_name: Grok 2
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 2.00
+    output_cost_per_1m_tokens: 10.00
+    typical_latency_ms: 900
+    capability_scores:
+      code_generation: 0.82
+      code_review: 0.80
+      code_debug: 0.79
+      reasoning: 0.84
+      math: 0.80
+      creative_writing: 0.82
+      summarization: 0.79
+      translation: 0.76
+      conversation: 0.84
+      question_answering: 0.82
+      structured_extraction: 0.80
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.82
+
+  xai/grok-3:
+    provider: grok
+    display_name: Grok 3
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 3.00
+    output_cost_per_1m_tokens: 15.00
+    typical_latency_ms: 1100
+    capability_scores:
+      code_generation: 0.88
+      code_review: 0.86
+      code_debug: 0.85
+      reasoning: 0.90
+      math: 0.87
+      creative_writing: 0.86
+      summarization: 0.84
+      translation: 0.80
+      conversation: 0.88
+      question_answering: 0.87
+      structured_extraction: 0.86
+      multimodal: 0.0
+      long_context_analysis: 0.78
+      instruction_following: 0.88
+
+  # --- Mistral ---
+  mistral/mistral-large-latest:
+    provider: mistral
+    display_name: Mistral Large
+    context_window: 128000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 2.00
+    output_cost_per_1m_tokens: 6.00
+    typical_latency_ms: 800
+    capability_scores:
+      code_generation: 0.82
+      code_review: 0.80
+      code_debug: 0.78
+      reasoning: 0.80
+      math: 0.78
+      creative_writing: 0.75
+      summarization: 0.78
+      translation: 0.82
+      conversation: 0.80
+      question_answering: 0.79
+      structured_extraction: 0.80
+      multimodal: 0.0
+      long_context_analysis: 0.70
+      instruction_following: 0.82
+
+  mistral/mistral-small-latest:
+    provider: mistral
+    display_name: Mistral Small
+    context_window: 128000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.10
+    output_cost_per_1m_tokens: 0.30
+    typical_latency_ms: 400
+    capability_scores:
+      code_generation: 0.68
+      code_review: 0.66
+      code_debug: 0.64
+      reasoning: 0.65
+      math: 0.62
+      creative_writing: 0.62
+      summarization: 0.66
+      translation: 0.70
+      conversation: 0.68
+      question_answering: 0.65
+      structured_extraction: 0.66
+      multimodal: 0.0
+      long_context_analysis: 0.60
+      instruction_following: 0.68
+
+  # --- Cohere ---
+  command-r-plus:
+    provider: cohere
+    display_name: Command R+
+    context_window: 128000
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 2.50
+    output_cost_per_1m_tokens: 10.00
+    typical_latency_ms: 1000
+    capability_scores:
+      code_generation: 0.76
+      code_review: 0.74
+      code_debug: 0.72
+      reasoning: 0.76
+      math: 0.70
+      creative_writing: 0.74
+      summarization: 0.80
+      translation: 0.80
+      conversation: 0.82
+      question_answering: 0.78
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.78
+
+  command-r:
+    provider: cohere
+    display_name: Command R
+    context_window: 128000
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0.15
+    output_cost_per_1m_tokens: 0.60
+    typical_latency_ms: 700
+    capability_scores:
+      code_generation: 0.65
+      code_review: 0.63
+      code_debug: 0.61
+      reasoning: 0.64
+      math: 0.58
+      creative_writing: 0.65
+      summarization: 0.70
+      translation: 0.72
+      conversation: 0.72
+      question_answering: 0.66
+      structured_extraction: 0.65
+      multimodal: 0.0
+      long_context_analysis: 0.62
+      instruction_following: 0.67
+
+  # --- DeepSeek ---
+  deepseek/deepseek-chat:
+    provider: deepseek
+    display_name: DeepSeek Chat
+    context_window: 64000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.07
+    output_cost_per_1m_tokens: 1.10
+    typical_latency_ms: 900
+    capability_scores:
+      code_generation: 0.86
+      code_review: 0.84
+      code_debug: 0.84
+      reasoning: 0.85
+      math: 0.88
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.74
+      conversation: 0.76
+      question_answering: 0.82
+      structured_extraction: 0.82
+      multimodal: 0.0
+      long_context_analysis: 0.68
+      instruction_following: 0.82
+
+  deepseek/deepseek-reasoner:
+    provider: deepseek
+    display_name: DeepSeek Reasoner (R1)
+    context_window: 64000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0.55
+    output_cost_per_1m_tokens: 2.19
+    typical_latency_ms: 2500
+    capability_scores:
+      code_generation: 0.88
+      code_review: 0.86
+      code_debug: 0.88
+      reasoning: 0.94
+      math: 0.96
+      creative_writing: 0.65
+      summarization: 0.74
+      translation: 0.70
+      conversation: 0.70
+      question_answering: 0.88
+      structured_extraction: 0.78
+      multimodal: 0.0
+      long_context_analysis: 0.65
+      instruction_following: 0.80
+
+  # --- NVIDIA Nemotron (Local via Ollama) ---
+  ollama/nemotron-mini:
+    provider: ollama
+    display_name: NVIDIA Nemotron Mini 4B (Local)
+    context_window: 4096
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 200
+    capability_scores:
+      code_generation: 0.68
+      code_review: 0.65
+      code_debug: 0.63
+      reasoning: 0.70
+      math: 0.66
+      creative_writing: 0.60
+      summarization: 0.68
+      translation: 0.58
+      conversation: 0.72
+      question_answering: 0.68
+      structured_extraction: 0.65
+      multimodal: 0.0
+      long_context_analysis: 0.50
+      instruction_following: 0.70
+
+  ollama/nemotron-small:
+    provider: ollama
+    display_name: NVIDIA Nemotron Small (Local — Recommended)
+    context_window: 131072
+    max_output_tokens: 16384
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.74
+      reasoning: 0.80
+      math: 0.78
+      creative_writing: 0.70
+      summarization: 0.78
+      translation: 0.68
+      conversation: 0.80
+      question_answering: 0.78
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.80
+
+  ollama/nemotron:
+    provider: ollama
+    display_name: NVIDIA Nemotron 70B (Local)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 1500
+    capability_scores:
+      code_generation: 0.85
+      code_review: 0.84
+      code_debug: 0.82
+      reasoning: 0.88
+      math: 0.86
+      creative_writing: 0.78
+      summarization: 0.84
+      translation: 0.76
+      conversation: 0.86
+      question_answering: 0.84
+      structured_extraction: 0.82
+      multimodal: 0.0
+      long_context_analysis: 0.80
+      instruction_following: 0.86
+
+  ollama/nemotron:120b:
+    provider: ollama
+    display_name: NVIDIA Nemotron 120B Flagship (Local, Q4_K_M)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 3000
+    capability_scores:
+      code_generation: 0.90
+      code_review: 0.89
+      code_debug: 0.88
+      reasoning: 0.93
+      math: 0.91
+      creative_writing: 0.85
+      summarization: 0.90
+      translation: 0.82
+      conversation: 0.91
+      question_answering: 0.90
+      structured_extraction: 0.88
+      multimodal: 0.0
+      long_context_analysis: 0.88
+      instruction_following: 0.92
+
+  # --- Ollama (Local) ---
+  ollama/llama3.1:
+    provider: ollama
+    display_name: Llama 3.1 (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.72
+      code_review: 0.68
+      code_debug: 0.66
+      reasoning: 0.68
+      math: 0.60
+      creative_writing: 0.65
+      summarization: 0.70
+      translation: 0.65
+      conversation: 0.72
+      question_answering: 0.68
+      structured_extraction: 0.65
+      multimodal: 0.0
+      long_context_analysis: 0.60
+
+  # --- Additional OpenAI ---
+  gpt-4.1-mini:
+    provider: openai
+    display_name: GPT-4.1 Mini
+    context_window: 1047576
+    max_output_tokens: 32768
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.40
+    output_cost_per_1m_tokens: 1.60
+    typical_latency_ms: 400
+    capability_scores:
+      code_generation: 0.82
+      code_review: 0.80
+      code_debug: 0.78
+      reasoning: 0.78
+      math: 0.76
+      creative_writing: 0.74
+      summarization: 0.78
+      translation: 0.76
+      conversation: 0.80
+      question_answering: 0.78
+      structured_extraction: 0.82
+      multimodal: 0.78
+      long_context_analysis: 0.82
+      instruction_following: 0.82
+
+  o3:
+    provider: openai
+    display_name: OpenAI o3 (Reasoning)
+    context_window: 200000
+    max_output_tokens: 100000
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 10.00
+    output_cost_per_1m_tokens: 40.00
+    typical_latency_ms: 5000
+    capability_scores:
+      code_generation: 0.92
+      code_review: 0.90
+      code_debug: 0.91
+      reasoning: 0.97
+      math: 0.96
+      creative_writing: 0.80
+      summarization: 0.85
+      translation: 0.82
+      conversation: 0.82
+      question_answering: 0.92
+      structured_extraction: 0.90
+      multimodal: 0.85
+      long_context_analysis: 0.88
+      instruction_following: 0.92
+
+  o3-mini:
+    provider: openai
+    display_name: OpenAI o3-mini (Fast Reasoning)
+    context_window: 200000
+    max_output_tokens: 100000
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 1.10
+    output_cost_per_1m_tokens: 4.40
+    typical_latency_ms: 2000
+    capability_scores:
+      code_generation: 0.85
+      code_review: 0.83
+      code_debug: 0.84
+      reasoning: 0.90
+      math: 0.90
+      creative_writing: 0.72
+      summarization: 0.78
+      translation: 0.75
+      conversation: 0.76
+      question_answering: 0.85
+      structured_extraction: 0.84
+      multimodal: 0.78
+      long_context_analysis: 0.82
+      instruction_following: 0.86
+
+  # --- Additional Google ---
+  gemini/gemini-2.5-pro:
+    provider: google
+    display_name: Gemini 2.5 Pro
+    context_window: 1000000
+    max_output_tokens: 65536
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 1.25
+    output_cost_per_1m_tokens: 10.00
+    typical_latency_ms: 2000
+    capability_scores:
+      code_generation: 0.90
+      code_review: 0.88
+      code_debug: 0.87
+      reasoning: 0.92
+      math: 0.90
+      creative_writing: 0.82
+      summarization: 0.88
+      translation: 0.85
+      conversation: 0.85
+      question_answering: 0.90
+      structured_extraction: 0.88
+      multimodal: 0.94
+      long_context_analysis: 0.96
+      instruction_following: 0.90
+
+  gemini/gemini-2.5-flash:
+    provider: google
+    display_name: Gemini 2.5 Flash
+    context_window: 1000000
+    max_output_tokens: 65536
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.15
+    output_cost_per_1m_tokens: 0.60
+    typical_latency_ms: 300
+    capability_scores:
+      code_generation: 0.80
+      code_review: 0.78
+      code_debug: 0.76
+      reasoning: 0.82
+      math: 0.80
+      creative_writing: 0.74
+      summarization: 0.80
+      translation: 0.78
+      conversation: 0.80
+      question_answering: 0.82
+      structured_extraction: 0.80
+      multimodal: 0.86
+      long_context_analysis: 0.92
+      instruction_following: 0.82
+
+  # --- Additional Groq ---
+  groq/llama-3.3-70b-specdec:
+    provider: groq
+    display_name: Llama 3.3 70B SpecDec (Groq)
+    context_window: 8192
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.59
+    output_cost_per_1m_tokens: 0.99
+    typical_latency_ms: 100
+    capability_scores:
+      code_generation: 0.80
+      code_review: 0.78
+      code_debug: 0.76
+      reasoning: 0.80
+      math: 0.76
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.74
+      conversation: 0.80
+      question_answering: 0.78
+      structured_extraction: 0.78
+      multimodal: 0.0
+      long_context_analysis: 0.40
+      instruction_following: 0.80
+
+  groq/gemma2-9b-it:
+    provider: groq
+    display_name: Gemma 2 9B (Groq)
+    context_window: 8192
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.20
+    output_cost_per_1m_tokens: 0.20
+    typical_latency_ms: 120
+    capability_scores:
+      code_generation: 0.68
+      code_review: 0.66
+      code_debug: 0.64
+      reasoning: 0.70
+      math: 0.66
+      creative_writing: 0.65
+      summarization: 0.68
+      translation: 0.70
+      conversation: 0.72
+      question_answering: 0.68
+      structured_extraction: 0.66
+      multimodal: 0.0
+      long_context_analysis: 0.40
+      instruction_following: 0.70
+
+  # --- Additional Ollama (Local) ---
+  ollama/phi4:
+    provider: ollama
+    display_name: Microsoft Phi-4 (Local)
+    context_window: 16384
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 300
+    capability_scores:
+      code_generation: 0.74
+      code_review: 0.72
+      code_debug: 0.70
+      reasoning: 0.76
+      math: 0.78
+      creative_writing: 0.62
+      summarization: 0.70
+      translation: 0.60
+      conversation: 0.72
+      question_answering: 0.72
+      structured_extraction: 0.70
+      multimodal: 0.0
+      long_context_analysis: 0.50
+      instruction_following: 0.74
+
+  ollama/codellama:
+    provider: ollama
+    display_name: Code Llama (Local)
+    context_window: 16384
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 400
+    capability_scores:
+      code_generation: 0.82
+      code_review: 0.78
+      code_debug: 0.80
+      reasoning: 0.62
+      math: 0.60
+      creative_writing: 0.45
+      summarization: 0.55
+      translation: 0.50
+      conversation: 0.55
+      question_answering: 0.58
+      structured_extraction: 0.60
+      multimodal: 0.0
+      long_context_analysis: 0.50
+      instruction_following: 0.65
+
+  ollama/gemma2:
+    provider: ollama
+    display_name: Google Gemma 2 (Local)
+    context_window: 8192
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 250
+    capability_scores:
+      code_generation: 0.68
+      code_review: 0.65
+      code_debug: 0.63
+      reasoning: 0.70
+      math: 0.66
+      creative_writing: 0.65
+      summarization: 0.68
+      translation: 0.70
+      conversation: 0.72
+      question_answering: 0.68
+      structured_extraction: 0.66
+      multimodal: 0.0
+      long_context_analysis: 0.40
+      instruction_following: 0.70
+
+  ollama/qwen2.5:
+    provider: ollama
+    display_name: Qwen 2.5 (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 400
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.74
+      reasoning: 0.76
+      math: 0.80
+      creative_writing: 0.68
+      summarization: 0.74
+      translation: 0.82
+      conversation: 0.76
+      question_answering: 0.76
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.70
+      instruction_following: 0.78
+
+  ollama/deepseek-r1:
+    provider: ollama
+    display_name: DeepSeek R1 (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 1000
+    capability_scores:
+      code_generation: 0.86
+      code_review: 0.84
+      code_debug: 0.85
+      reasoning: 0.92
+      math: 0.94
+      creative_writing: 0.68
+      summarization: 0.80
+      translation: 0.72
+      conversation: 0.74
+      question_answering: 0.85
+      structured_extraction: 0.80
+      multimodal: 0.0
+      long_context_analysis: 0.75
+      instruction_following: 0.82
+
+  # --- Mock (testing) ---
+  mock/default:
+    provider: mock
+    display_name: Mock Provider (Testing)
+    context_window: 128000
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.5
+      code_review: 0.5
+      code_debug: 0.5
+      reasoning: 0.5
+      math: 0.5
+      creative_writing: 0.5
+      summarization: 0.5
+      translation: 0.5
+      conversation: 0.5
+      question_answering: 0.5
+      structured_extraction: 0.5
+      multimodal: 0.5
+      long_context_analysis: 0.5
+      instruction_following: 0.5
+
+  mock/fast:
+    provider: mock
+    display_name: Mock Provider Fast (Testing)
+    context_window: 128000
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 100
+    capability_scores:
+      code_generation: 0.5
+      code_review: 0.5
+      code_debug: 0.5
+      reasoning: 0.5
+      math: 0.5
+      creative_writing: 0.5
+      summarization: 0.5
+      translation: 0.5
+      conversation: 0.5
+      question_answering: 0.5
+      structured_extraction: 0.5
+      multimodal: 0.5
+      long_context_analysis: 0.5
+      instruction_following: 0.5
+
+  mock/slow:
+    provider: mock
+    display_name: Mock Provider Slow (Testing)
+    context_window: 128000
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 2000
+    capability_scores:
+      code_generation: 0.5
+      code_review: 0.5
+      code_debug: 0.5
+      reasoning: 0.5
+      math: 0.5
+      creative_writing: 0.5
+      summarization: 0.5
+      translation: 0.5
+      conversation: 0.5
+      question_answering: 0.5
+      structured_extraction: 0.5
+      multimodal: 0.5
+      long_context_analysis: 0.5
+      instruction_following: 0.5
+      instruction_following: 0.68
+
+  # --- Perplexity ---
+  perplexity/llama-3.1-sonar-large-128k-online:
+    provider: perplexity
+    display_name: Perplexity Sonar Large 128K (Online)
+    context_window: 128000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 1.00
+    output_cost_per_1m_tokens: 1.00
+    typical_latency_ms: 1200
+    capability_scores:
+      code_generation: 0.72
+      code_review: 0.70
+      code_debug: 0.68
+      reasoning: 0.75
+      math: 0.70
+      creative_writing: 0.68
+      summarization: 0.80
+      translation: 0.72
+      conversation: 0.78
+      question_answering: 0.88
+      structured_extraction: 0.72
+      multimodal: 0.0
+      long_context_analysis: 0.78
+      instruction_following: 0.74
+
+  perplexity/llama-3.1-sonar-small-128k-online:
+    provider: perplexity
+    display_name: Perplexity Sonar Small 128K (Online)
+    context_window: 128000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0.20
+    output_cost_per_1m_tokens: 0.20
+    typical_latency_ms: 700
+    capability_scores:
+      code_generation: 0.60
+      code_review: 0.58
+      code_debug: 0.56
+      reasoning: 0.62
+      math: 0.58
+      creative_writing: 0.58
+      summarization: 0.70
+      translation: 0.64
+      conversation: 0.68
+      question_answering: 0.80
+      structured_extraction: 0.60
+      multimodal: 0.0
+      long_context_analysis: 0.65
+      instruction_following: 0.63
+
+  # --- Together AI ---
+  together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo:
+    provider: together
+    display_name: Llama 3.1 70B Instruct Turbo (Together)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.88
+    output_cost_per_1m_tokens: 0.88
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.74
+      reasoning: 0.78
+      math: 0.74
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.74
+      conversation: 0.78
+      question_answering: 0.78
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.78
+
+  together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo:
+    provider: together
+    display_name: Llama 3.1 8B Instruct Turbo (Together)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.18
+    output_cost_per_1m_tokens: 0.18
+    typical_latency_ms: 200
+    capability_scores:
+      code_generation: 0.62
+      code_review: 0.60
+      code_debug: 0.58
+      reasoning: 0.62
+      math: 0.58
+      creative_writing: 0.60
+      summarization: 0.64
+      translation: 0.64
+      conversation: 0.66
+      question_answering: 0.63
+      structured_extraction: 0.62
+      multimodal: 0.0
+      long_context_analysis: 0.58
+      instruction_following: 0.63
+
+  # --- Fireworks AI ---
+  fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct:
+    provider: fireworks
+    display_name: Llama 3.1 70B Instruct (Fireworks)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.90
+    output_cost_per_1m_tokens: 0.90
+    typical_latency_ms: 450
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.74
+      reasoning: 0.78
+      math: 0.74
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.74
+      conversation: 0.78
+      question_answering: 0.78
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.78
+
+  # --- OpenRouter ---
+  openrouter/meta-llama/llama-3.1-70b-instruct:
+    provider: openrouter
+    display_name: Llama 3.1 70B Instruct (OpenRouter)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.88
+    output_cost_per_1m_tokens: 0.88
+    typical_latency_ms: 600
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.74
+      reasoning: 0.78
+      math: 0.74
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.74
+      conversation: 0.78
+      question_answering: 0.78
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.78
+
+  # --- Cerebras ---
+  cerebras/llama3.1-70b:
+    provider: cerebras
+    display_name: Llama 3.1 70B (Cerebras)
+    context_window: 128000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.60
+    output_cost_per_1m_tokens: 0.60
+    typical_latency_ms: 80
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.74
+      reasoning: 0.78
+      math: 0.74
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.74
+      conversation: 0.78
+      question_answering: 0.78
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.78
+
+  cerebras/llama3.1-8b:
+    provider: cerebras
+    display_name: Llama 3.1 8B (Cerebras)
+    context_window: 128000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.10
+    output_cost_per_1m_tokens: 0.10
+    typical_latency_ms: 40
+    capability_scores:
+      code_generation: 0.62
+      code_review: 0.60
+      code_debug: 0.58
+      reasoning: 0.62
+      math: 0.58
+      creative_writing: 0.60
+      summarization: 0.64
+      translation: 0.64
+      conversation: 0.66
+      question_answering: 0.63
+      structured_extraction: 0.62
+      multimodal: 0.0
+      long_context_analysis: 0.58
+      instruction_following: 0.63
+
+  # --- SambaNova ---
+  sambanova/Meta-Llama-3.1-70B-Instruct:
+    provider: sambanova
+    display_name: Llama 3.1 70B Instruct (SambaNova)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.60
+    output_cost_per_1m_tokens: 1.20
+    typical_latency_ms: 350
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.74
+      reasoning: 0.78
+      math: 0.74
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.74
+      conversation: 0.78
+      question_answering: 0.78
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.78
+
+  # --- Hugging Face ---
+  huggingface/meta-llama/Meta-Llama-3-8B-Instruct:
+    provider: huggingface
+    display_name: Llama 3 8B Instruct (Hugging Face)
+    context_window: 8192
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0.10
+    output_cost_per_1m_tokens: 0.10
+    typical_latency_ms: 1500
+    capability_scores:
+      code_generation: 0.60
+      code_review: 0.58
+      code_debug: 0.56
+      reasoning: 0.60
+      math: 0.56
+      creative_writing: 0.58
+      summarization: 0.62
+      translation: 0.62
+      conversation: 0.64
+      question_answering: 0.61
+      structured_extraction: 0.60
+      multimodal: 0.0
+      long_context_analysis: 0.50
+      instruction_following: 0.61
+
+  # --- AI21 ---
+  jamba-1.5-large:
+    provider: ai21
+    display_name: Jamba 1.5 Large (AI21)
+    context_window: 256000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 2.00
+    output_cost_per_1m_tokens: 8.00
+    typical_latency_ms: 1100
+    capability_scores:
+      code_generation: 0.76
+      code_review: 0.74
+      code_debug: 0.72
+      reasoning: 0.76
+      math: 0.72
+      creative_writing: 0.74
+      summarization: 0.82
+      translation: 0.76
+      conversation: 0.78
+      question_answering: 0.78
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.92
+      instruction_following: 0.76
+
+  jamba-1.5-mini:
+    provider: ai21
+    display_name: Jamba 1.5 Mini (AI21)
+    context_window: 256000
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.20
+    output_cost_per_1m_tokens: 0.40
+    typical_latency_ms: 600
+    capability_scores:
+      code_generation: 0.62
+      code_review: 0.60
+      code_debug: 0.58
+      reasoning: 0.62
+      math: 0.58
+      creative_writing: 0.62
+      summarization: 0.68
+      translation: 0.66
+      conversation: 0.66
+      question_answering: 0.65
+      structured_extraction: 0.63
+      multimodal: 0.0
+      long_context_analysis: 0.88
+      instruction_following: 0.64
+
+  # --- GitHub Models ---
+  github/gpt-4o:
+    provider: github
+    display_name: GPT-4o (GitHub Models)
+    context_window: 8192
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 900
+    capability_scores:
+      code_generation: 0.88
+      code_review: 0.87
+      code_debug: 0.86
+      reasoning: 0.85
+      math: 0.85
+      creative_writing: 0.82
+      summarization: 0.80
+      translation: 0.82
+      conversation: 0.85
+      question_answering: 0.84
+      structured_extraction: 0.88
+      multimodal: 0.90
+      long_context_analysis: 0.55
+      instruction_following: 0.88
+
+  github/gpt-4o-mini:
+    provider: github
+    display_name: GPT-4o Mini (GitHub Models)
+    context_window: 128000
+    max_output_tokens: 16384
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.75
+      code_review: 0.72
+      code_debug: 0.70
+      reasoning: 0.70
+      math: 0.68
+      creative_writing: 0.70
+      summarization: 0.72
+      translation: 0.74
+      conversation: 0.78
+      question_answering: 0.73
+      structured_extraction: 0.76
+      multimodal: 0.72
+      long_context_analysis: 0.65
+      instruction_following: 0.75
+
+  github/meta-llama-3.1-70b-instruct:
+    provider: github
+    display_name: Llama 3.1 70B (GitHub Models)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 800
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.75
+      reasoning: 0.78
+      math: 0.72
+      creative_writing: 0.74
+      summarization: 0.76
+      translation: 0.72
+      conversation: 0.80
+      question_answering: 0.78
+      structured_extraction: 0.74
+      multimodal: 0.0
+      long_context_analysis: 0.70
+      instruction_following: 0.78
+
+  # --- NVIDIA NIM ---
+  nvidia/meta-llama-3.1-70b-instruct:
+    provider: nvidia
+    display_name: Llama 3.1 70B (NVIDIA NIM)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 700
+    capability_scores:
+      code_generation: 0.78
+      code_review: 0.76
+      code_debug: 0.75
+      reasoning: 0.78
+      math: 0.72
+      creative_writing: 0.74
+      summarization: 0.76
+      translation: 0.72
+      conversation: 0.80
+      question_answering: 0.78
+      structured_extraction: 0.74
+      multimodal: 0.0
+      long_context_analysis: 0.70
+      instruction_following: 0.78
+
+  nvidia/meta-llama-3.1-8b-instruct:
+    provider: nvidia
+    display_name: Llama 3.1 8B (NVIDIA NIM)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 400
+    capability_scores:
+      code_generation: 0.65
+      code_review: 0.62
+      code_debug: 0.62
+      reasoning: 0.65
+      math: 0.60
+      creative_writing: 0.64
+      summarization: 0.68
+      translation: 0.66
+      conversation: 0.70
+      question_answering: 0.67
+      structured_extraction: 0.64
+      multimodal: 0.0
+      long_context_analysis: 0.60
+      instruction_following: 0.66
+
+  nvidia/mistralai-mixtral-8x22b-instruct:
+    provider: nvidia
+    display_name: Mixtral 8x22B (NVIDIA NIM)
+    context_window: 65536
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 900
+    capability_scores:
+      code_generation: 0.80
+      code_review: 0.78
+      code_debug: 0.78
+      reasoning: 0.80
+      math: 0.78
+      creative_writing: 0.76
+      summarization: 0.78
+      translation: 0.80
+      conversation: 0.80
+      question_answering: 0.80
+      structured_extraction: 0.78
+      multimodal: 0.0
+      long_context_analysis: 0.65
+      instruction_following: 0.80
+
+  # --- SiliconFlow ---
+  siliconflow/Qwen2.5-7B-Instruct:
+    provider: siliconflow
+    display_name: Qwen 2.5 7B (SiliconFlow)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.70
+      code_review: 0.68
+      code_debug: 0.68
+      reasoning: 0.70
+      math: 0.68
+      creative_writing: 0.66
+      summarization: 0.70
+      translation: 0.72
+      conversation: 0.72
+      question_answering: 0.70
+      structured_extraction: 0.68
+      multimodal: 0.0
+      long_context_analysis: 0.65
+      instruction_following: 0.70
+
+  siliconflow/Qwen2.5-72B-Instruct:
+    provider: siliconflow
+    display_name: Qwen 2.5 72B (SiliconFlow)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 800
+    capability_scores:
+      code_generation: 0.82
+      code_review: 0.80
+      code_debug: 0.80
+      reasoning: 0.82
+      math: 0.80
+      creative_writing: 0.76
+      summarization: 0.80
+      translation: 0.82
+      conversation: 0.82
+      question_answering: 0.82
+      structured_extraction: 0.80
+      multimodal: 0.0
+      long_context_analysis: 0.70
+      instruction_following: 0.82
+
+  siliconflow/deepseek-ai-DeepSeek-V2.5:
+    provider: siliconflow
+    display_name: DeepSeek V2.5 (SiliconFlow)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 700
+    capability_scores:
+      code_generation: 0.84
+      code_review: 0.82
+      code_debug: 0.82
+      reasoning: 0.83
+      math: 0.82
+      creative_writing: 0.74
+      summarization: 0.78
+      translation: 0.76
+      conversation: 0.80
+      question_answering: 0.82
+      structured_extraction: 0.80
+      multimodal: 0.0
+      long_context_analysis: 0.70
+      instruction_following: 0.82
+
+  # --- LLM7 ---
+  llm7/deepseek-r1-0528:
+    provider: llm7
+    display_name: DeepSeek R1 0528 (LLM7)
+    context_window: 65536
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: false
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 1500
+    capability_scores:
+      code_generation: 0.82
+      code_review: 0.80
+      code_debug: 0.80
+      reasoning: 0.90
+      math: 0.88
+      creative_writing: 0.70
+      summarization: 0.75
+      translation: 0.70
+      conversation: 0.72
+      question_answering: 0.82
+      structured_extraction: 0.74
+      multimodal: 0.0
+      long_context_analysis: 0.65
+      instruction_following: 0.78
+
+  llm7/gpt-4o-mini:
+    provider: llm7
+    display_name: GPT-4o Mini (LLM7)
+    context_window: 128000
+    max_output_tokens: 16384
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 600
+    capability_scores:
+      code_generation: 0.75
+      code_review: 0.72
+      code_debug: 0.70
+      reasoning: 0.70
+      math: 0.68
+      creative_writing: 0.70
+      summarization: 0.72
+      translation: 0.74
+      conversation: 0.78
+      question_answering: 0.73
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.65
+      instruction_following: 0.75
+
+  llm7/llama-3.3-70b:
+    provider: llm7
+    display_name: Llama 3.3 70B (LLM7)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0.0
+    output_cost_per_1m_tokens: 0.0
+    typical_latency_ms: 700
+    capability_scores:
+      code_generation: 0.80
+      code_review: 0.78
+      code_debug: 0.77
+      reasoning: 0.80
+      math: 0.76
+      creative_writing: 0.75
+      summarization: 0.78
+      translation: 0.74
+      conversation: 0.82
+      question_answering: 0.80
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.80

@@ -1,0 +1,231 @@
+# =============================================================================
+# Hive — Docker Compose (full stack)
+#
+# Designed for NVIDIA Ubuntu Linux with rootless Docker or user namespaces.
+# GPU support is OPTIONAL: the stack starts fine without an NVIDIA GPU.
+#
+# Quick start:
+#   cp .env.example .env && $EDITOR .env   # add your API keys
+#   docker compose up -d
+#   # nemotron-small is pulled automatically by ollama-init
+#   # For the full Nemotron 70B model (needs 48GB+ VRAM):
+#   docker compose exec ollama ollama pull nemotron
+#
+# Or run the automated helper:
+#   ./scripts/setup.sh
+# =============================================================================
+
+name: hive
+
+# ---------------------------------------------------------------------------
+# Shared network
+# ---------------------------------------------------------------------------
+networks:
+  hive-net:
+    driver: bridge
+
+# ---------------------------------------------------------------------------
+# Named volumes
+# ---------------------------------------------------------------------------
+volumes:
+  hive-data:
+    # SQLite database, logs, and any other persistent API state
+  ollama-models:
+    # Ollama model weights — persisted across container restarts
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # -------------------------------------------------------------------------
+  # hive-api  — Python / FastAPI backend
+  # -------------------------------------------------------------------------
+  hive-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hive-api:latest
+    container_name: hive-api
+    restart: unless-stopped
+
+    # Port mapping: host 8000 → container 8000
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    # Load API keys and config from .env
+    env_file:
+      - .env
+    environment:
+      HIVE_DATA_DIR: /data
+      PYTHONUNBUFFERED: "1"
+      # Point the Hive engine at the Ollama sidecar
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://ollama:11434}"
+
+    volumes:
+      # Named volume for SQLite DB and other persistent data
+      - hive-data:/data
+
+    networks:
+      - hive-net
+
+    # Non-root uid 1000 (matches the user created in the Dockerfile)
+    user: "1000:1000"
+
+    # Depend on Ollama being reachable (soft dependency — API starts even
+    # if Ollama fails to come up)
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+    # Reasonable resource limits — avoids one runaway request killing the host
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+
+  # -------------------------------------------------------------------------
+  # hive-web  — Next.js frontend
+  # -------------------------------------------------------------------------
+  hive-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: hive-web:latest
+    container_name: hive-web
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:3000:3000"
+
+    env_file:
+      - .env
+    environment:
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:8000}"
+      NODE_ENV: production
+
+    networks:
+      - hive-net
+
+    # Non-root uid 1001
+    user: "1001:1001"
+
+    depends_on:
+      hive-api:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # -------------------------------------------------------------------------
+  # ollama  — local LLM inference server
+  #
+  # GPU support is handled via the `deploy.resources.reservations` block.
+  # If no NVIDIA GPU / container toolkit is present, Docker will silently
+  # ignore the reservation and Ollama will run on CPU — no error, no crash.
+  # -------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:11434:11434"
+
+    volumes:
+      # Model weights live here — pulling a model once persists it
+      - ollama-models:/root/.ollama
+
+    networks:
+      - hive-net
+
+    # NVIDIA GPU support (optional — graceful fallback to CPU when absent)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all        # use all available GPUs
+              capabilities: [gpu]
+
+    # Ollama listens on 11434; use the REST API for health checks
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 15s
+      start_period: 30s
+      retries: 5
+
+    # Environment tuning
+    environment:
+      # Bind to all interfaces inside the container so other services can reach it
+      OLLAMA_HOST: "0.0.0.0:11434"
+      # Keep models loaded in VRAM between requests (0 = unload immediately, -1 = never)
+      OLLAMA_KEEP_ALIVE: "5m"
+
+    # After Ollama starts up, automatically pull the quick-start model if it
+    # is not already present.  This runs as a one-off command inside the same
+    # container via the `ollama pull` CLI which talks to the running server.
+    # We use a separate init container pattern via `post_start` hook equivalent:
+    # the `ollama-init` service below handles the first-run model pull.
+
+  # -------------------------------------------------------------------------
+  # ollama-init  — one-shot service that pre-pulls nemotron-mini on first start
+  #
+  # Runs once, pulls the model, then exits.  Docker Compose won't restart it
+  # because restart: "no".  On subsequent `docker compose up` runs it will
+  # start again but `ollama pull` is idempotent — it skips download if the
+  # model layer is already cached in the ollama-models volume.
+  #
+  # NVIDIA Nemotron Mini is the recommended default model for Council.
+  # It runs on NVIDIA GPUs via CUDA and falls back to CPU gracefully.
+  # -------------------------------------------------------------------------
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: ollama-init
+    restart: "no"
+
+    volumes:
+      - ollama-models:/root/.ollama
+
+    networks:
+      - hive-net
+
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+    # Point the CLI at the running Ollama server (not localhost — different container)
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Hive init: checking for nemotron-small model (NVIDIA recommended)..."
+        if ollama list 2>/dev/null | grep -q 'nemotron-small'; then
+          echo "nemotron-small already present — skipping pull."
+        else
+          echo "Pulling nemotron-small (NVIDIA Nemotron Small, ~5 GB)..."
+          ollama pull nemotron-small && echo "Pull complete." || echo "Pull failed — will retry on next startup."
+        fi

@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nvhive"
+version = "0.1.0"
+description = "NVHive — Multi-LLM orchestration platform with intelligent routing, hive consensus, and auto-agent generation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "NVHive Contributors" }]
+keywords = ["llm", "ai", "nvidia", "gpu", "orchestration", "multi-model", "agents", "ollama", "nemotron"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "typer[all]>=0.12",
+    "litellm>=1.40",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "keyring>=25.0",
+    "rich>=13.0",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "tiktoken>=0.7",
+    "anyio>=4.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "passlib[bcrypt]>=1.7",
+    "nvidia-ml-py3>=7.352.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "build>=1.0",
+    "twine>=5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/thatcooperguy/nvHive"
+Repository = "https://github.com/thatcooperguy/nvHive"
+Issues = "https://github.com/thatcooperguy/nvHive/issues"
+
+[project.scripts]
+nvh = "nvh.cli.main:main"
+nvhive = "nvh.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["nvh*"]
+
+[tool.setuptools.package-data]
+nvh = ["config/*.yaml", "workflows/*.yaml"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true

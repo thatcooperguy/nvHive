@@ -1,0 +1,863 @@
+"""Main orchestration engine — ties together routing, providers, council, fallback, caching, and budget."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import time
+from collections import OrderedDict
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any
+
+from nvh.config.settings import CouncilConfig, load_config
+from nvh.core.context import ConversationManager
+from nvh.core.council import CouncilOrchestrator, CouncilResponse
+from nvh.core.rate_limiter import ProviderRateManager
+from nvh.core.router import RoutingDecision, RoutingEngine
+from nvh.core.webhooks import (
+    WebhookEvent,
+    WebhookManager,
+    format_budget_alert,
+    format_provider_alert,
+    format_query_complete,
+)
+from nvh.providers.base import (
+    CompletionResponse,
+    FinishReason,
+    Message,
+    ProviderError,
+    ProviderUnavailableError,
+    RateLimitError,
+    Usage,
+)
+from nvh.providers.registry import ProviderRegistry, get_registry
+from nvh.storage import repository as repo
+
+# ---------------------------------------------------------------------------
+# In-Memory LRU Cache with TTL
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CacheEntry:
+    response: CompletionResponse
+    timestamp: float
+
+
+class ResponseCache:
+    """Simple in-memory LRU cache with TTL."""
+
+    def __init__(self, max_size: int = 1000, ttl_seconds: int = 86400):
+        self.max_size = max_size
+        self.ttl = ttl_seconds
+        self._store: OrderedDict[str, CacheEntry] = OrderedDict()
+        self._lock = asyncio.Lock()
+
+    def _make_key(
+        self,
+        provider: str,
+        model: str,
+        messages: list[Message],
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        key_data = json.dumps({
+            "provider": provider,
+            "model": model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }, sort_keys=True)
+        return hashlib.sha256(key_data.encode()).hexdigest()
+
+    async def get(
+        self,
+        provider: str,
+        model: str,
+        messages: list[Message],
+        temperature: float,
+        max_tokens: int,
+    ) -> CompletionResponse | None:
+        async with self._lock:
+            key = self._make_key(provider, model, messages, temperature, max_tokens)
+            entry = self._store.get(key)
+            if entry is None:
+                return None
+            # Check TTL
+            if time.time() - entry.timestamp > self.ttl:
+                del self._store[key]
+                return None
+            # Move to end (most recently used)
+            self._store.move_to_end(key)
+            # Return a copy with cache_hit flag
+            resp = entry.response.model_copy()
+            resp.cache_hit = True
+            resp.cost_usd = Decimal("0")
+            return resp
+
+    async def put(
+        self,
+        provider: str,
+        model: str,
+        messages: list[Message],
+        temperature: float,
+        max_tokens: int,
+        response: CompletionResponse,
+    ) -> None:
+        async with self._lock:
+            key = self._make_key(provider, model, messages, temperature, max_tokens)
+            self._store[key] = CacheEntry(response=response, timestamp=time.time())
+            self._store.move_to_end(key)
+            # Evict if over capacity
+            while len(self._store) > self.max_size:
+                self._store.popitem(last=False)
+
+    async def clear(self, provider: str | None = None) -> int:
+        async with self._lock:
+            if provider is None:
+                count = len(self._store)
+                self._store.clear()
+                return count
+            keys_to_remove = [
+                k for k, v in self._store.items()
+                if v.response.provider == provider
+            ]
+            for k in keys_to_remove:
+                del self._store[k]
+            return len(keys_to_remove)
+
+    @property
+    def stats(self) -> dict[str, Any]:
+        return {
+            "entries": len(self._store),
+            "max_size": self.max_size,
+            "ttl_seconds": self.ttl,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Engine
+# ---------------------------------------------------------------------------
+
+class Engine:
+    """Main orchestration engine."""
+
+    def __init__(
+        self,
+        config: CouncilConfig | None = None,
+        registry: ProviderRegistry | None = None,
+    ):
+        self.config = config or load_config()
+        self.registry = registry or get_registry()
+        self.rate_manager = ProviderRateManager()
+        self.router = RoutingEngine(self.config, self.registry, self.rate_manager)
+        self.council = CouncilOrchestrator(self.config, self.registry)
+        self.context = ConversationManager()
+        self.cache = ResponseCache(
+            max_size=self.config.cache.max_size,
+            ttl_seconds=self.config.cache.ttl_seconds,
+        )
+        self.webhooks = WebhookManager()
+        if self.config.webhooks:
+            self.webhooks.load_from_config(
+                [wh.model_dump() for wh in self.config.webhooks]
+            )
+        self._initialized = False
+        self._budget_lock = asyncio.Lock()
+
+        # Local LLM orchestrator
+        from nvh.core.orchestrator import LocalOrchestrator, OrchestrationConfig, OrchestrationMode
+        orch_mode = OrchestrationMode(self.config.defaults.orchestration_mode)
+        self.orchestrator = LocalOrchestrator(OrchestrationConfig(mode=orch_mode))
+
+        # Load COUNCIL.md context files for injection into all prompts
+        from nvh.core.context_files import find_context_files
+        self._context_files = find_context_files()
+        if self._context_files:
+            import logging
+            names = [f.name for f in self._context_files]
+            logging.getLogger(__name__).info(f"Loaded context files: {names}")
+
+    def _build_system_prompt(self, user_prompt: str | None = None) -> str | None:
+        """Build system prompt with COUNCIL.md context injected.
+
+        Combines context files (COUNCIL.md, .council/context/*.md, etc.)
+        with the user's explicit system prompt.
+        """
+        from nvh.core.context_files import build_context_prompt
+        combined = build_context_prompt(
+            context_files=self._context_files,
+            user_system_prompt=user_prompt or "",
+        )
+        return combined if combined else None
+
+    async def initialize(self) -> list[str]:
+        """Initialize the engine: setup DB, register providers.
+
+        If no providers are configured, auto-detects zero-signup providers
+        (Ollama, LLM7) so the product works out of the box.
+
+        Returns list of enabled provider names.
+        """
+        if not self._initialized:
+            await repo.init_db()
+            enabled = self.registry.setup_from_config(self.config)
+
+            # Auto-detect zero-signup providers if nothing is configured
+            if not enabled:
+                enabled = self._auto_detect_providers()
+
+            # Initialize local orchestrator
+            gpu_vram = 0
+            try:
+                from nvh.utils.gpu import get_total_vram_mb
+                gpu_vram = get_total_vram_mb() / 1024
+            except Exception:
+                pass
+            await self.orchestrator.initialize(self.registry, gpu_vram)
+
+            await self.webhooks.start()
+            self._initialized = True
+            return enabled
+        return self.registry.list_enabled()
+
+    def _auto_detect_providers(self) -> list[str]:
+        """Fallback: auto-detect providers that need no configuration."""
+        import logging
+        log = logging.getLogger(__name__)
+        detected = []
+
+        # LLM7 — always available (anonymous API, no signup)
+        try:
+            from nvh.providers.llm7_provider import LLM7Provider
+            provider = LLM7Provider()
+            self.registry.register("llm7", provider)
+            detected.append("llm7")
+            log.info("Auto-detected: LLM7 (anonymous, no signup needed)")
+        except Exception:
+            pass
+
+        # Ollama — check if running locally
+        try:
+            import httpx
+            resp = httpx.get("http://localhost:11434/api/tags", timeout=2)
+            if resp.status_code == 200:
+                from nvh.providers.ollama_provider import OllamaProvider
+                provider = OllamaProvider()
+                self.registry.register("ollama", provider)
+                detected.append("ollama")
+                log.info("Auto-detected: Ollama (local, running on localhost:11434)")
+        except Exception:
+            pass
+
+        # Check for any API keys in environment (even without config)
+        import os
+        env_providers = {
+            "GROQ_API_KEY": ("groq", "nvh.providers.groq_provider", "GroqProvider"),
+            "GITHUB_TOKEN": ("github", "nvh.providers.github_provider", "GitHubProvider"),
+            "GOOGLE_API_KEY": ("google", "nvh.providers.google_provider", "GoogleProvider"),
+            "OPENAI_API_KEY": ("openai", "nvh.providers.openai_provider", "OpenAIProvider"),
+            "ANTHROPIC_API_KEY": ("anthropic", "nvh.providers.anthropic_provider", "AnthropicProvider"),
+        }
+        for env_var, (name, module_path, class_name) in env_providers.items():
+            key = os.environ.get(env_var, "")
+            if key and name not in detected:
+                try:
+                    import importlib
+                    mod = importlib.import_module(module_path)
+                    cls = getattr(mod, class_name)
+                    provider = cls(api_key=key)
+                    self.registry.register(name, provider)
+                    detected.append(name)
+                    log.info(f"Auto-detected: {name} (API key found in ${env_var})")
+                except Exception:
+                    pass
+
+        return detected
+
+    # -----------------------------------------------------------------------
+    # Connectivity Check
+    # -----------------------------------------------------------------------
+
+    async def check_connectivity(self) -> bool:
+        """Check whether any cloud advisor is reachable.
+
+        Returns True if connectivity is available, False if offline.
+        Falls back to True on unexpected errors so queries are not blocked.
+        """
+        return await self._check_connectivity()
+
+    async def _check_connectivity(self) -> bool:
+        """Quick connectivity check — can we reach any cloud advisor?"""
+        import httpx
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.head("https://api.groq.com", timeout=3)
+                return resp.status_code < 500
+        except Exception:
+            return False
+
+    # -----------------------------------------------------------------------
+    # Simple Query
+    # -----------------------------------------------------------------------
+
+    async def query(
+        self,
+        prompt: str,
+        provider: str | None = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        stream: bool = False,
+        use_cache: bool = True,
+        strategy: str = "best",
+        conversation_id: str | None = None,
+        continue_last: bool = False,
+        privacy: bool = False,
+    ) -> CompletionResponse:
+        """Execute a single query with routing, fallback, caching, and budget enforcement.
+
+        When *privacy* is ``True``, cache reads/writes, query logging, and
+        conversation persistence are all skipped so no data is stored.
+        """
+        await self.initialize()
+
+        temp = temperature if temperature is not None else self.config.defaults.temperature
+        max_tok = max_tokens or self.config.defaults.max_tokens
+        sys_prompt = self._build_system_prompt(system_prompt or self.config.defaults.system_prompt)
+
+        # Budget check
+        await self._check_budget()
+
+        # Offline detection: if no provider is pinned and cloud is unreachable,
+        # auto-route to a local provider (Ollama, then LLM7 as anonymous fallback).
+        _effective_provider = provider
+        if not _effective_provider:
+            is_online = await self._check_connectivity()
+            if not is_online:
+                import logging
+                _log = logging.getLogger(__name__)
+                enabled = self.registry.list_enabled()
+                for _local in ("ollama", "llm7"):
+                    if _local in enabled:
+                        _effective_provider = _local
+                        _log.info(
+                            "Offline detected — auto-routing to local provider: %s",
+                            _effective_provider,
+                        )
+                        break
+                if not _effective_provider:
+                    raise ProviderUnavailableError(
+                        "You appear to be offline and no local providers are available.\n"
+                        "Options:\n"
+                        "  Start Ollama:   ollama serve\n"
+                        "  Install Ollama: curl -fsSL https://ollama.com/install.sh | sh\n"
+                        "  Check network:  ping api.groq.com"
+                    )
+
+        # Smart routing via local orchestrator (LIGHT+ mode), falls back to keywords
+        _orchestrated_provider = _effective_provider
+        if not _orchestrated_provider and self.orchestrator.is_active:
+            available = self.registry.list_enabled()
+            orch_result = await self.orchestrator.smart_route(prompt, available)
+            if orch_result and orch_result.get("advisor") in available:
+                _orchestrated_provider = orch_result["advisor"]
+                import logging as _logging
+                _logging.getLogger(__name__).debug(
+                    "Orchestrator routed to %s: %s",
+                    _orchestrated_provider,
+                    orch_result.get("reason", ""),
+                )
+
+        # Route
+        decision = self.router.route(
+            query=prompt,
+            provider_override=_orchestrated_provider,
+            model_override=model,
+            strategy=strategy,
+        )
+
+        # Prompt optimization via local orchestrator (LIGHT+ mode)
+        _optimized_prompt = prompt
+        if self.orchestrator.is_active:
+            _optimized_prompt = await self.orchestrator.optimize_prompt(prompt, decision.provider)
+
+        # Build messages (with conversation context if continuing, unless privacy mode)
+        if privacy:
+            messages: list[Message] = []
+            if sys_prompt:
+                messages.append(Message(role="system", content=sys_prompt))
+            messages.append(Message(role="user", content=_optimized_prompt))
+        else:
+            messages = await self._build_messages(
+                prompt=_optimized_prompt,
+                conversation_id=conversation_id,
+                continue_last=continue_last,
+                system_prompt=sys_prompt,
+                provider=decision.provider,
+                model=decision.model,
+            )
+
+        # Cache check (skipped in privacy mode)
+        if not privacy and use_cache and self.config.cache.enabled and temp == 0:
+            cached = await self.cache.get(decision.provider, decision.model, messages, temp, max_tok)
+            if cached:
+                await self._log_query(cached, "simple", cache_hit=True, conversation_id=conversation_id)
+                return cached
+
+        # Execute with fallback chain
+        response = await self._execute_with_fallback(
+            messages=messages,
+            decision=decision,
+            temperature=temp,
+            max_tokens=max_tok,
+            system_prompt=sys_prompt,
+            stream=stream,
+        )
+
+        # Response evaluation via local orchestrator (FULL mode only)
+        from nvh.core.orchestrator import OrchestrationMode as _OMode
+        if self.orchestrator.mode == _OMode.FULL and not privacy:
+            eval_result = await self.orchestrator.evaluate_response(
+                query=prompt,
+                response_text=response.content,
+                advisor=response.provider,
+            )
+            if eval_result.get("should_retry") and not response.fallback_from:
+                retry_provider = eval_result.get("retry_with")
+                if retry_provider and retry_provider != response.provider:
+                    import logging as _logging
+                    _logging.getLogger(__name__).debug(
+                        "Orchestrator eval suggests retry with %s (quality=%s)",
+                        retry_provider,
+                        eval_result.get("quality"),
+                    )
+
+        if privacy:
+            # Skip all storage in privacy mode
+            return response
+
+        # Cache the response
+        if use_cache and self.config.cache.enabled and temp == 0:
+            await self.cache.put(decision.provider, decision.model, messages, temp, max_tok, response)
+
+        # Log and persist
+        conv_id = conversation_id
+        if conversation_id or continue_last:
+            conv_id = await self.context.get_or_create_conversation(
+                conversation_id=conversation_id,
+                continue_last=continue_last,
+                provider=response.provider,
+                model=response.model,
+            )
+            await self.context.add_user_message(conv_id, prompt)
+            await self.context.add_assistant_message(conv_id, response)
+
+        await self._log_query(response, "simple", conversation_id=conv_id)
+
+        # Emit webhook event
+        await self.webhooks.emit(
+            WebhookEvent.QUERY_COMPLETE,
+            format_query_complete(
+                provider=response.provider,
+                model=response.model,
+                tokens=response.usage.total_tokens,
+                cost=float(response.cost_usd or 0),
+                latency_ms=response.latency_ms or 0,
+                mode="simple",
+            ),
+        )
+
+        return response
+
+    # -----------------------------------------------------------------------
+    # Council Mode
+    # -----------------------------------------------------------------------
+
+    async def run_council(
+        self,
+        prompt: str,
+        members: list[str] | None = None,
+        weights: dict[str, float] | None = None,
+        strategy: str | None = None,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        synthesize: bool = True,
+        conversation_id: str | None = None,
+        auto_agents: bool = False,
+        agent_preset: str | None = None,
+        num_agents: int | None = None,
+        privacy: bool = False,
+    ) -> CouncilResponse:
+        """Run a council session.
+
+        Args:
+            auto_agents: Auto-generate expert personas based on query content.
+            agent_preset: Use a named preset ("executive", "engineering", etc.).
+            num_agents: Number of agent personas to generate.
+            privacy: When ``True``, skip all query logging and conversation
+                     persistence so no data is stored.
+        """
+        await self.initialize()
+        await self._check_budget()
+
+        temp = temperature if temperature is not None else self.config.defaults.temperature
+        max_tok = max_tokens or self.config.defaults.max_tokens
+        sys_prompt = self._build_system_prompt(system_prompt or self.config.defaults.system_prompt)
+
+        # Build messages with conversation context (skipped in privacy mode)
+        msgs: list[Message] | None = None
+        if conversation_id and not privacy:
+            msgs = await self.context.get_context_messages(conversation_id, sys_prompt)
+            msgs.append(Message(role="user", content=prompt))
+
+        result = await self.council.run_council(
+            query=prompt,
+            members_override=members,
+            weights_override=weights,
+            strategy=strategy,
+            system_prompt=sys_prompt,
+            temperature=temp,
+            max_tokens=max_tok,
+            messages=msgs,
+            synthesize=synthesize,
+            auto_agents=auto_agents,
+            agent_preset=agent_preset,
+            num_agents=num_agents,
+        )
+
+        if privacy:
+            # Skip all logging and persistence in privacy mode
+            return result
+
+        # Log each member response
+        for pname, resp in result.member_responses.items():
+            await self._log_query(resp, "council", conversation_id=conversation_id)
+
+        if result.synthesis:
+            await self._log_query(result.synthesis, "council", conversation_id=conversation_id)
+
+        # Emit webhook event
+        total_tokens = sum(
+            r.usage.total_tokens for r in result.member_responses.values()
+        )
+        total_cost = float(result.total_cost_usd or 0)
+        await self.webhooks.emit(
+            WebhookEvent.COUNCIL_COMPLETE,
+            {
+                "members": list(result.member_responses.keys()),
+                "strategy": result.strategy,
+                "total_tokens": total_tokens,
+                "total_cost_usd": round(total_cost, 6),
+                "total_latency_ms": result.total_latency_ms,
+                "quorum_met": result.quorum_met,
+                "failed_members": result.failed_members,
+                "synthesized": result.synthesis is not None,
+            },
+        )
+
+        return result
+
+    # -----------------------------------------------------------------------
+    # Compare Mode
+    # -----------------------------------------------------------------------
+
+    async def compare(
+        self,
+        prompt: str,
+        providers: list[str] | None = None,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> dict[str, CompletionResponse]:
+        """Query multiple providers and return all responses for comparison."""
+        await self.initialize()
+        await self._check_budget()
+
+        temp = temperature if temperature is not None else self.config.defaults.temperature
+        max_tok = max_tokens or self.config.defaults.max_tokens
+        sys_prompt = self._build_system_prompt(system_prompt or self.config.defaults.system_prompt)
+
+        target_providers = providers or self.registry.list_enabled()
+        messages = [Message(role="user", content=prompt)]
+
+        import asyncio
+        tasks = {}
+        for pname in target_providers:
+            if not self.registry.has(pname):
+                continue
+            p = self.registry.get(pname)
+            pconfig = self.config.providers.get(pname)
+            pmodel = pconfig.default_model if pconfig else ""
+            tasks[pname] = asyncio.create_task(
+                p.complete(
+                    messages=messages,
+                    model=pmodel or None,
+                    temperature=temp,
+                    max_tokens=max_tok,
+                    system_prompt=sys_prompt,
+                )
+            )
+
+        results: dict[str, CompletionResponse] = {}
+        for pname, task in tasks.items():
+            try:
+                results[pname] = await task
+            except Exception as e:
+                results[pname] = CompletionResponse(
+                    content=f"Error: {e}",
+                    model="",
+                    provider=pname,
+                    usage=Usage(),
+                    finish_reason=FinishReason.ERROR,
+                )
+
+        for pname, resp in results.items():
+            await self._log_query(resp, "compare")
+
+        return results
+
+    # -----------------------------------------------------------------------
+    # Internals
+    # -----------------------------------------------------------------------
+
+    async def _build_messages(
+        self,
+        prompt: str,
+        conversation_id: str | None,
+        continue_last: bool,
+        system_prompt: str | None,
+        provider: str,
+        model: str,
+    ) -> list[Message]:
+        """Build the message list, including conversation history if applicable."""
+        if conversation_id or continue_last:
+            conv_id = await self.context.get_or_create_conversation(
+                conversation_id=conversation_id,
+                continue_last=continue_last,
+                provider=provider,
+                model=model,
+            )
+            messages = await self.context.get_context_messages(conv_id, system_prompt)
+            messages.append(Message(role="user", content=prompt))
+            return messages
+
+        messages: list[Message] = []
+        if system_prompt:
+            messages.append(Message(role="system", content=system_prompt))
+        messages.append(Message(role="user", content=prompt))
+        return messages
+
+    async def _execute_with_fallback(
+        self,
+        messages: list[Message],
+        decision: RoutingDecision,
+        temperature: float,
+        max_tokens: int,
+        system_prompt: str | None,
+        stream: bool,
+    ) -> CompletionResponse:
+        """Execute query with automatic fallback chain on failure."""
+        fallback_chain = self._get_fallback_chain(decision.provider)
+        last_error: Exception | None = None
+
+        for i, provider_name in enumerate(fallback_chain):
+            if not self.registry.has(provider_name):
+                continue
+
+            # Check circuit breaker / rate limiter
+            try:
+                self.rate_manager.check_available(provider_name)
+            except (ProviderUnavailableError, RateLimitError):
+                continue
+
+            provider = self.registry.get(provider_name)
+            pconfig = self.config.providers.get(provider_name)
+            model = decision.model if i == 0 else (pconfig.default_model if pconfig else "")
+
+            try:
+                if stream:
+                    from nvh.utils.streaming import collect_stream
+                    stream_iter = await provider.stream(
+                        messages=messages,
+                        model=model or None,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        system_prompt=system_prompt,
+                    ).__aiter__()
+                    # For now, collect the stream (CLI will handle real streaming)
+                    response = await collect_stream(stream_iter)
+                else:
+                    response = await provider.complete(
+                        messages=messages,
+                        model=model or None,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        system_prompt=system_prompt,
+                    )
+
+                self.rate_manager.record_success(provider_name)
+
+                if i > 0:
+                    response.fallback_from = decision.provider
+                    # Emit recovery event when a previously-failing provider succeeds
+                    await self.webhooks.emit(
+                        WebhookEvent.PROVIDER_RECOVERED,
+                        format_provider_alert(provider=provider_name, event_type=WebhookEvent.PROVIDER_RECOVERED),
+                    )
+
+                return response
+
+            except RateLimitError as e:
+                self.rate_manager.record_failure(provider_name, e)
+                await self.webhooks.emit(
+                    WebhookEvent.PROVIDER_DOWN,
+                    format_provider_alert(provider=provider_name, event_type=WebhookEvent.PROVIDER_DOWN, error=str(e)),
+                )
+                last_error = e
+                continue
+            except ProviderError as e:
+                self.rate_manager.record_failure(provider_name, e)
+                await self.webhooks.emit(
+                    WebhookEvent.PROVIDER_ERROR,
+                    format_provider_alert(provider=provider_name, event_type=WebhookEvent.PROVIDER_ERROR, error=str(e)),
+                )
+                last_error = e
+                continue
+
+        # All providers failed
+        providers_tried = ", ".join(fallback_chain[:3])
+        raise ProviderError(
+            f"All advisors failed — could not complete your request.\n"
+            f"Tried: {providers_tried}\n"
+            f"Last error: {last_error}\n"
+            f"Options:\n"
+            f"  Check advisor status: nvh status\n"
+            f"  Reconfigure an advisor: nvh setup\n"
+            f"  Use a local model: nvh config set defaults.provider ollama",
+            provider=decision.provider,
+        )
+
+    def _get_fallback_chain(self, primary: str) -> list[str]:
+        """Build fallback chain: primary first, then configured fallback order."""
+        chain = [primary]
+        for p in self.config.council.fallback_order:
+            if p not in chain:
+                chain.append(p)
+        # Add any remaining enabled providers
+        for p in self.registry.list_enabled():
+            if p not in chain:
+                chain.append(p)
+        return chain
+
+    async def _check_budget(self) -> None:
+        """Check if budget limits have been reached (serialised via lock)."""
+        async with self._budget_lock:
+            await self._check_budget_inner()
+
+    async def _check_budget_inner(self) -> None:
+        """Inner budget check — must only be called while holding _budget_lock."""
+        budget = self.config.budget
+
+        daily_spend = Decimal("0")
+        monthly_spend = Decimal("0")
+
+        if budget.daily_limit_usd > 0:
+            daily_spend = await repo.get_spend("daily")
+            if daily_spend >= budget.daily_limit_usd:
+                if budget.hard_stop:
+                    raise BudgetExceededError(
+                        f"Daily budget limit reached (${daily_spend:.4f} / ${budget.daily_limit_usd:.2f}).\n"
+                        f"Options:\n"
+                        f"  Raise the limit:    nvh config set budget.daily_limit_usd 10\n"
+                        f"  Disable hard stop:  nvh config set budget.hard_stop false\n"
+                        f"  Use a free model:   nvh safe \"question\"  (local/free only)"
+                    )
+            elif budget.alert_threshold > 0 and float(daily_spend) / float(budget.daily_limit_usd) >= budget.alert_threshold:
+                await self.webhooks.emit(
+                    WebhookEvent.BUDGET_THRESHOLD,
+                    format_budget_alert(
+                        daily_spend=float(daily_spend),
+                        daily_limit=float(budget.daily_limit_usd),
+                        monthly_spend=float(monthly_spend),
+                        monthly_limit=float(budget.monthly_limit_usd),
+                        threshold_pct=budget.alert_threshold,
+                    ),
+                )
+
+        if budget.monthly_limit_usd > 0:
+            monthly_spend = await repo.get_spend("monthly")
+            if monthly_spend >= budget.monthly_limit_usd:
+                if budget.hard_stop:
+                    raise BudgetExceededError(
+                        f"Monthly budget limit reached (${monthly_spend:.4f} / ${budget.monthly_limit_usd:.2f}).\n"
+                        f"Options:\n"
+                        f"  Raise the limit:    nvh config set budget.monthly_limit_usd 50\n"
+                        f"  Disable hard stop:  nvh config set budget.hard_stop false\n"
+                        f"  Use a free model:   nvh safe \"question\"  (local/free only)"
+                    )
+            elif budget.alert_threshold > 0 and float(monthly_spend) / float(budget.monthly_limit_usd) >= budget.alert_threshold:
+                if budget.daily_limit_usd <= 0:
+                    # Only emit monthly alert if we haven't already emitted daily above
+                    daily_spend = await repo.get_spend("daily")
+                await self.webhooks.emit(
+                    WebhookEvent.BUDGET_THRESHOLD,
+                    format_budget_alert(
+                        daily_spend=float(daily_spend),
+                        daily_limit=float(budget.daily_limit_usd),
+                        monthly_spend=float(monthly_spend),
+                        monthly_limit=float(budget.monthly_limit_usd),
+                        threshold_pct=budget.alert_threshold,
+                    ),
+                )
+
+    async def _log_query(
+        self,
+        response: CompletionResponse,
+        mode: str,
+        cache_hit: bool = False,
+        conversation_id: str | None = None,
+    ) -> None:
+        """Log a query to the database."""
+        import logging as _logging
+        try:
+            await repo.log_query(
+                mode=mode,
+                provider=response.provider,
+                model=response.model,
+                input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                cost_usd=response.cost_usd,
+                latency_ms=response.latency_ms,
+                status="success" if response.finish_reason != FinishReason.ERROR else "error",
+                cache_hit=cache_hit,
+                fallback_from=response.fallback_from or "",
+                conversation_id=conversation_id,
+            )
+        except Exception as e:
+            _logging.getLogger(__name__).warning(f"Failed to log query: {e}")
+
+    async def get_budget_status(self) -> dict[str, Any]:
+        """Get current budget status."""
+        daily = await repo.get_spend("daily")
+        monthly = await repo.get_spend("monthly")
+        daily_by_provider = await repo.get_spend_by_provider("daily")
+        daily_queries = await repo.get_query_count("daily")
+        monthly_queries = await repo.get_query_count("monthly")
+
+        return {
+            "daily_spend": daily,
+            "daily_limit": self.config.budget.daily_limit_usd,
+            "monthly_spend": monthly,
+            "monthly_limit": self.config.budget.monthly_limit_usd,
+            "daily_queries": daily_queries,
+            "monthly_queries": monthly_queries,
+            "by_provider": daily_by_provider,
+        }
+
+
+class BudgetExceededError(Exception):
+    pass

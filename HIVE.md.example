@@ -1,0 +1,69 @@
+---
+name: Project Context
+scope: all
+priority: 10
+---
+
+# Project Context
+
+This context is automatically injected into every LLM prompt (all advisors, local and cloud).
+Place a `HIVE.md` file in your project root to provide shared context.
+
+## How it works
+
+- `HIVE.md` in your project root → injected into every query
+- `~/HIVE.md` → user-level context (applies everywhere)
+- `~/.hive/global_context.md` → global context (lowest priority)
+- `.hive/context/*.md` → modular context files for specific topics
+
+## Example for a student project:
+
+```markdown
+# CS261 Data Structures Project
+
+## Context
+- Language: Java 17
+- Build system: Gradle
+- Testing: JUnit 5
+- This is a university assignment — explain concepts, don't just give answers
+
+## Rules
+- Always explain the time complexity of solutions
+- Prefer readable code over clever one-liners
+- Follow Google Java Style Guide
+- When debugging, explain WHY the bug occurs, not just how to fix it
+
+## Current Assignment
+- Implementing a red-black tree with insert, delete, and search
+- Due: April 15, 2026
+- Must handle duplicate keys by storing in a linked list at each node
+```
+
+## Example for a game development project:
+
+```markdown
+# Dragon Quest Clone — Game Design Context
+
+## Tech Stack
+- Engine: Godot 4.3
+- Language: GDScript + some C# for performance
+- Target: Steam (PC) + Nintendo Switch
+
+## Design Principles
+- Turn-based combat with party of 4
+- Pixel art style (16x16 tiles, 32x32 characters)
+- No microtransactions — premium $19.99
+
+## Current Sprint
+- Implementing the magic system
+- Each spell has: element, mana cost, cast time, area of effect
+- Need to balance damage formulas
+```
+
+## Frontmatter Options
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `name` | filename | Display name for the context |
+| `scope` | `all` | When to inject: `all`, `convene`, `query`, `code` |
+| `priority` | `10` | Higher priority = injected first (0-100) |

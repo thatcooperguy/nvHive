@@ -1,0 +1,91 @@
+version: "1"
+
+defaults:
+  provider: openai
+  output: text
+  stream: true
+  timeout: 30
+  max_tokens: 4096
+  temperature: 1.0
+  show_metadata: true
+
+advisors:
+  openai:
+    api_key: ${OPENAI_API_KEY}
+    default_model: gpt-4o
+    fallback_model: gpt-4o-mini
+    enabled: true
+
+  anthropic:
+    api_key: ${ANTHROPIC_API_KEY}
+    default_model: claude-sonnet-4-6
+    fallback_model: claude-haiku-4-5-20251001
+    enabled: true
+
+  google:
+    api_key: ${GOOGLE_API_KEY}
+    default_model: gemini/gemini-2.0-flash
+    fallback_model: gemini/gemini-2.0-flash
+    enabled: false
+
+  ollama:
+    base_url: http://localhost:11434
+    default_model: ollama/llama3.1
+    type: ollama
+    enabled: false
+
+council:
+  default_weights:
+    openai: 0.40
+    anthropic: 0.35
+    google: 0.25
+  synthesis_provider: anthropic
+  strategy: weighted_consensus
+  fallback_order: [openai, anthropic, google, ollama]
+  quorum: 2
+
+routing:
+  weights:
+    capability: 0.4
+    cost: 0.3
+    latency: 0.2
+    health: 0.1
+  rules:
+    - match: { task_type: code_generation }
+      provider: anthropic
+    - match: { task_type: creative_writing }
+      provider: anthropic
+    - match: { task_type: math }
+      provider: openai
+
+budget:
+  daily_limit_usd: 10.00
+  monthly_limit_usd: 100.00
+  alert_threshold: 0.80
+  hard_stop: true
+
+cache:
+  enabled: true
+  ttl_seconds: 86400
+  max_size: 1000
+
+logging:
+  level: INFO
+
+profiles:
+  cost_optimized:
+    defaults:
+      provider: openai
+    providers:
+      openai:
+        default_model: gpt-4o-mini
+      anthropic:
+        default_model: claude-haiku-4-5-20251001
+
+  quality:
+    defaults:
+      provider: anthropic
+    council:
+      default_weights:
+        openai: 0.5
+        anthropic: 0.5
