@@ -3400,9 +3400,9 @@ def integrate(
         console.print(f"  [green]✓[/green] [bold]{p.display_name}[/bold] — {status}")
         console.print(f"    [dim]{p.detection_method}[/dim]")
         if p.integration_type == "mcp":
-            console.print(f"    [dim]Integration: MCP tool server[/dim]")
+            console.print("    [dim]Integration: MCP tool server[/dim]")
         else:
-            console.print(f"    [dim]Integration: Inference provider (proxy)[/dim]")
+            console.print("    [dim]Integration: Inference provider (proxy)[/dim]")
         for note in p.notes:
             console.print(f"    [dim]{note}[/dim]")
 
