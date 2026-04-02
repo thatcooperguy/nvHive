@@ -6,7 +6,7 @@
 
 ## What is nvHive?
 
-nvHive routes your questions to the right AI model automatically. It manages 22 providers and 63 models behind a single `nvh` command, picking the best advisor based on task type, cost, and privacy requirements. Simple questions stay local on your GPU (free, private). Complex questions route to the best cloud model. You can also convene a council of AI-generated expert personas to debate a decision, or poll every provider at once to compare answers. Twenty-five models are free with no credit card required.
+nvHive routes your questions to the right AI model automatically. It manages 22 providers and 63 models behind a single `nvh` command, picking the best advisor based on task type, cost, and privacy requirements. Simple questions stay local on your GPU (free, private). Complex questions route to the best cloud model. You can also convene a council of AI-generated expert personas to debate a decision, or poll every provider at once to compare answers. Twenty-five of the supported models are free with no credit card required.
 
 ## Platform Support
 
