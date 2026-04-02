@@ -251,7 +251,7 @@ def _detect_gpus_smi() -> list[GPUInfo]:
 def _get_cuda_version() -> str:
     """Return CUDA version string reported by nvidia-smi, or 'unknown'."""
     try:
-        result = subprocess.run(
+        subprocess.run(
             ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
             capture_output=True,
             text=True,

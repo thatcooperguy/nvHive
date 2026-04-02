@@ -29,8 +29,8 @@ Events:
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +109,7 @@ class HookManager:
         )
         try:
             await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             logger.warning(f"Hook command timed out: {cmd[:50]}...")
 

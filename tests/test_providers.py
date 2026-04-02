@@ -2,7 +2,6 @@
 
 from decimal import Decimal
 
-
 from nvh.core.rate_limiter import CircuitBreaker, ProviderRateManager, TokenBucket
 from nvh.providers.base import (
     CircuitState,

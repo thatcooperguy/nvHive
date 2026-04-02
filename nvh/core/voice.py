@@ -95,7 +95,7 @@ async def text_to_speech(
             await asyncio.wait_for(proc.communicate(), timeout=30)
             if proc.returncode == 0:
                 return output_path
-        except (FileNotFoundError, asyncio.TimeoutError):
+        except (TimeoutError, FileNotFoundError):
             pass
 
     # Fallback: system TTS
@@ -166,7 +166,7 @@ async def record_audio(duration: float = 10.0, output_path: str | None = None) -
             )
             await asyncio.wait_for(proc.communicate(), timeout=duration + 5)
             return output_path
-        except (FileNotFoundError, asyncio.TimeoutError):
+        except (TimeoutError, FileNotFoundError):
             pass
         raise RuntimeError(
             "No audio recording tool found on macOS. Install: brew install sox"
@@ -181,7 +181,7 @@ async def record_audio(duration: float = 10.0, output_path: str | None = None) -
         )
         await asyncio.wait_for(proc.communicate(), timeout=duration + 5)
         return output_path
-    except (FileNotFoundError, asyncio.TimeoutError):
+    except (TimeoutError, FileNotFoundError):
         pass
 
     # Try sox on Linux too
@@ -193,7 +193,7 @@ async def record_audio(duration: float = 10.0, output_path: str | None = None) -
         )
         await asyncio.wait_for(proc.communicate(), timeout=duration + 5)
         return output_path
-    except (FileNotFoundError, asyncio.TimeoutError):
+    except (TimeoutError, FileNotFoundError):
         pass
 
     raise RuntimeError("No audio recording tool found. Install: sudo apt install alsa-utils")

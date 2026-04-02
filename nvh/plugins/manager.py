@@ -25,6 +25,7 @@ Or via pip packages with entry points:
 
 import importlib
 import importlib.metadata
+import importlib.util
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,7 +114,6 @@ class PluginManager:
                         return obj
 
             elif info.source == "file":
-                import importlib.util
                 spec = importlib.util.spec_from_file_location(name, info.module)
                 if spec and spec.loader:
                     module = importlib.util.module_from_spec(spec)

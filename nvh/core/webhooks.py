@@ -141,7 +141,7 @@ class WebhookManager:
                 hook, payload = await asyncio.wait_for(self._queue.get(), timeout=1.0)
                 asyncio.create_task(self._dispatch(hook, payload))
                 self._queue.task_done()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             except asyncio.CancelledError:
                 break

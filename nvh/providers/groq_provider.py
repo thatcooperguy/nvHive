@@ -126,7 +126,7 @@ class GroqProvider:
     ) -> AsyncIterator[StreamChunk]:
         model_name = self._get_model(model)
         msgs = _build_messages(messages, system_prompt)
-        start = time.monotonic()
+        time.monotonic()
         accumulated = ""
 
         try:

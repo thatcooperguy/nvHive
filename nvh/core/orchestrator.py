@@ -26,13 +26,12 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any
+from enum import StrEnum
 
 logger = logging.getLogger(__name__)
 
 
-class OrchestrationMode(str, Enum):
+class OrchestrationMode(StrEnum):
     OFF = "off"       # keyword routing, template agents
     LIGHT = "light"   # smart routing + prompt optimization
     FULL = "full"     # everything: routing, agents, eval, synthesis

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from passlib.context import CryptContext
 from sqlalchemy import func, select
@@ -101,7 +101,7 @@ async def authenticate_user(username: str, password: str) -> User | None:
             return None
 
         # Update last_login
-        user.last_login = datetime.now(timezone.utc)
+        user.last_login = datetime.now(UTC)
         await session.commit()
         return user
 
@@ -127,11 +127,11 @@ async def get_user_by_token(token: str) -> User | None:
             return None
 
         # Check expiry
-        if api_token.expires_at is not None and api_token.expires_at < datetime.now(timezone.utc):
+        if api_token.expires_at is not None and api_token.expires_at < datetime.now(UTC):
             return None
 
         # Update last_used timestamp
-        api_token.last_used = datetime.now(timezone.utc)
+        api_token.last_used = datetime.now(UTC)
         await session.commit()
 
         # Return owning user

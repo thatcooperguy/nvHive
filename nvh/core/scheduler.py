@@ -16,7 +16,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -66,7 +66,7 @@ class Scheduler:
             last_run="",
             next_run=time.time(),
             enabled=True,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
         )
         self._tasks.append(task)
         self._save()
@@ -90,7 +90,7 @@ class Scheduler:
     def mark_completed(self, task_id: str):
         for t in self._tasks:
             if t.id == task_id:
-                t.last_run = datetime.now(timezone.utc).isoformat()
+                t.last_run = datetime.now(UTC).isoformat()
                 t.next_run = time.time() + t.interval_seconds
                 break
         self._save()

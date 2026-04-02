@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 # Enums
 # ---------------------------------------------------------------------------
 
-class FinishReason(str, enum.Enum):
+class FinishReason(enum.StrEnum):
     STOP = "stop"
     LENGTH = "length"
     CONTENT_FILTER = "content_filter"
@@ -21,7 +21,7 @@ class FinishReason(str, enum.Enum):
     ERROR = "error"
 
 
-class TaskType(str, enum.Enum):
+class TaskType(enum.StrEnum):
     CODE_GENERATION = "code_generation"
     CODE_REVIEW = "code_review"
     CODE_DEBUG = "code_debug"
@@ -37,7 +37,7 @@ class TaskType(str, enum.Enum):
     LONG_CONTEXT_ANALYSIS = "long_context_analysis"
 
 
-class CircuitState(str, enum.Enum):
+class CircuitState(enum.StrEnum):
     CLOSED = "closed"
     OPEN = "open"
     HALF_OPEN = "half_open"

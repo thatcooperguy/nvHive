@@ -152,7 +152,7 @@ class SandboxExecutor:
                         proc.communicate(),
                         timeout=self.config.timeout_seconds,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     proc.kill()
                     await proc.wait()
                     elapsed = int((time.monotonic() - start) * 1000)
@@ -215,7 +215,7 @@ class SandboxExecutor:
                         proc.communicate(),
                         timeout=self.config.timeout_seconds,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     proc.kill()
                     await proc.wait()
                     elapsed = int((time.monotonic() - start) * 1000)

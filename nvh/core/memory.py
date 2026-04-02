@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -87,9 +87,9 @@ class MemoryStore:
             id=str(uuid.uuid4())[:8],
             type=memory_type,
             content=content,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
             source=source,
-            last_accessed=datetime.now(timezone.utc).isoformat(),
+            last_accessed=datetime.now(UTC).isoformat(),
         )
         self._memories.append(memory)
         self._save()
@@ -121,7 +121,7 @@ class MemoryStore:
         # Mark as accessed
         for m in results:
             m.access_count += 1
-            m.last_accessed = datetime.now(timezone.utc).isoformat()
+            m.last_accessed = datetime.now(UTC).isoformat()
         if results:
             self._save()
         return results

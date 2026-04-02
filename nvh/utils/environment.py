@@ -13,7 +13,6 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -71,7 +70,7 @@ class EnvironmentInfo:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _curl_metadata(url: str, headers: Optional[dict[str, str]] = None,
+def _curl_metadata(url: str, headers: dict[str, str] | None = None,
                    timeout: float = 1.5) -> str:
     """Fetch a metadata URL, returning the response body or empty string on failure.
 
@@ -327,7 +326,7 @@ def detect_environment() -> EnvironmentInfo:
     return info
 
 
-def get_environment_summary(info: Optional[EnvironmentInfo] = None) -> str:
+def get_environment_summary(info: EnvironmentInfo | None = None) -> str:
     """Return a one-line summary string for use in logs and CLI output."""
     if info is None:
         info = detect_environment()

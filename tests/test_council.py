@@ -2,7 +2,6 @@
 
 from decimal import Decimal
 
-
 from nvh.core.council import CouncilMember
 from nvh.providers.base import CompletionResponse, Usage
 

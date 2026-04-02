@@ -338,7 +338,7 @@ class RoutingEngine:
         multimodal), this returns None and the router escalates to cloud.
         """
         # Task types the local model handles well
-        LOCAL_STRONG_TASKS = {
+        local_strong_tasks = {
             TaskType.CONVERSATION,
             TaskType.QUESTION_ANSWERING,
             TaskType.SUMMARIZATION,
@@ -347,30 +347,30 @@ class RoutingEngine:
         }
 
         # Task types that should escalate to cloud for better quality
-        ESCALATE_TASKS = {
+        escalate_tasks = {
             TaskType.MULTIMODAL,           # needs vision models
             TaskType.LONG_CONTEXT_ANALYSIS, # may exceed local context window
         }
 
         # Keywords that suggest the user wants cloud quality
-        ESCALATE_KEYWORDS = [
+        escalate_keywords = [
             "best possible", "highest quality", "professional",
             "production", "enterprise", "critical",
         ]
 
         # Always escalate multimodal and long-context
-        if classification.task_type in ESCALATE_TASKS:
+        if classification.task_type in escalate_tasks:
             return None
 
         # Check for escalation keywords
         query_lower = query.lower()
-        if any(kw in query_lower for kw in ESCALATE_KEYWORDS):
+        if any(kw in query_lower for kw in escalate_keywords):
             return None
 
         # Check if query is simple enough for local
         estimated_tokens = input_tokens or len(query) // 4
         is_short = estimated_tokens < 500
-        is_simple_task = classification.task_type in LOCAL_STRONG_TASKS
+        is_simple_task = classification.task_type in local_strong_tasks
 
         # Get local model capability for this task
         local_models = self.registry.get_models_for_provider("ollama")

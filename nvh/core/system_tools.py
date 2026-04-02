@@ -59,7 +59,7 @@ def register_system_tools(registry: ToolRegistry) -> None:
                         name, pid, _, _, mem = row[0], row[1], row[2], row[3], row[4]
                         lines_out.append(f"{name:<30} {pid:>6} {mem:>12}")
                 if filter:
-                    lines_out = [lines_out[0]] + [l for l in lines_out[1:] if filter.lower() in l.lower()]
+                    lines_out = [lines_out[0]] + [ln for ln in lines_out[1:] if filter.lower() in ln.lower()]
                 return "\n".join(lines_out[:26])
             else:
                 # Linux and macOS both support ps aux; --sort is GNU/procps only
@@ -80,14 +80,14 @@ def register_system_tools(registry: ToolRegistry) -> None:
                     col = 3 if sort_by == "memory" else 2
                     try:
                         header = lines[0]
-                        data = sorted(lines[1:], key=lambda l: float(l.split()[col]) if len(l.split()) > col else 0, reverse=True)
+                        data = sorted(lines[1:], key=lambda ln: float(ln.split()[col]) if len(ln.split()) > col else 0, reverse=True)
                         lines = [header] + data
                     except Exception:
                         pass
 
                 if filter:
                     header = lines[0] if lines else ""
-                    filtered = [l for l in lines[1:] if filter.lower() in l.lower()]
+                    filtered = [ln for ln in lines[1:] if filter.lower() in ln.lower()]
                     return header + "\n" + "\n".join(filtered[:20])
 
                 return "\n".join(lines[:25])
@@ -304,11 +304,10 @@ def register_system_tools(registry: ToolRegistry) -> None:
         # Build glob pattern
         if extension:
             ext = extension if extension.startswith(".") else f".{extension}"
-            pattern = f"*{ext}"
         elif name:
-            pattern = f"*{name}*"
+            pass
         else:
-            pattern = "*"
+            pass
 
         # Parse min_size to bytes (e.g. "10M" -> 10*1024*1024)
         min_bytes = 0
@@ -519,18 +518,18 @@ def register_system_tools(registry: ToolRegistry) -> None:
             if sys.platform == "win32":
                 # CPU via wmic
                 cpu_out = await _run("wmic cpu get Name /value")
-                cpu_name = next((l.split("=",1)[1] for l in cpu_out.splitlines() if "Name=" in l), "")
+                cpu_name = next((ln.split("=",1)[1] for ln in cpu_out.splitlines() if "Name=" in ln), "")
                 cpu_count = _platform.os.cpu_count() or 0
                 info.append(f"CPU: {cpu_name.strip()} ({cpu_count} logical cores)")
 
                 # RAM via wmic
                 mem_out = await _run("wmic OS get TotalVisibleMemorySize,FreePhysicalMemory /value")
                 total = free = 0
-                for l in mem_out.splitlines():
-                    if "TotalVisibleMemorySize=" in l:
-                        total = int(l.split("=",1)[1].strip() or 0)
-                    elif "FreePhysicalMemory=" in l:
-                        free  = int(l.split("=",1)[1].strip() or 0)
+                for ln in mem_out.splitlines():
+                    if "TotalVisibleMemorySize=" in ln:
+                        total = int(ln.split("=",1)[1].strip() or 0)
+                    elif "FreePhysicalMemory=" in ln:
+                        free  = int(ln.split("=",1)[1].strip() or 0)
                 used = total - free
                 info.append(f"RAM: {total//1024}MB total, {used//1024}MB used, {free//1024}MB free")
 
@@ -543,8 +542,8 @@ def register_system_tools(registry: ToolRegistry) -> None:
                 net_out = await _run("ipconfig")
                 if net_out:
                     # Just keep the adapter summary lines
-                    net_lines = [l for l in net_out.splitlines()
-                                 if "adapter" in l.lower() or "IPv4" in l or "IPv6" in l]
+                    net_lines = [ln for ln in net_out.splitlines()
+                                 if "adapter" in ln.lower() or "IPv4" in ln or "IPv6" in ln]
                     info.append("Network:\n" + "\n".join(net_lines[:10]))
 
             elif sys.platform == "darwin":
@@ -690,7 +689,7 @@ def register_system_tools(registry: ToolRegistry) -> None:
                     if len(content) > 5000:
                         return content[:5000] + f"\n... (truncated, {len(content)} chars)"
                     return content
-            except (FileNotFoundError, asyncio.TimeoutError):
+            except (TimeoutError, FileNotFoundError):
                 continue
         return "Clipboard tools not available (install xclip: apt install xclip)"
 
@@ -749,7 +748,7 @@ def register_system_tools(registry: ToolRegistry) -> None:
                 await asyncio.wait_for(proc.communicate(input=content.encode()), timeout=3)
                 if proc.returncode == 0:
                     return f"Copied {len(content)} chars to clipboard"
-            except (FileNotFoundError, asyncio.TimeoutError):
+            except (TimeoutError, FileNotFoundError):
                 continue
         return "Clipboard tools not available"
 

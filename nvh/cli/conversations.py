@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import typer
 from rich.console import Console
@@ -30,8 +29,8 @@ def _run(coro):
 def _relative_time(dt: datetime) -> str:
     """Return a human-readable relative timestamp (e.g. '2 hours ago')."""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    now = datetime.now(UTC)
     delta = now - dt
     total_seconds = int(delta.total_seconds())
 
@@ -116,7 +115,7 @@ def conversation_list(
 
         console.print(table)
         console.print(
-            f"[dim]Tip: use [bold]hive conversation show <id>[/bold] with the first 8 chars of an ID.[/dim]"
+            "[dim]Tip: use [bold]hive conversation show <id>[/bold] with the first 8 chars of an ID.[/dim]"
         )
 
     _run(_list())
@@ -233,7 +232,7 @@ def conversation_delete(
 def conversation_export(
     conversation_id: str = typer.Argument(..., help="Conversation ID (or prefix)"),
     format: str = typer.Option("json", "-f", "--format", help="Export format: json, markdown"),
-    output_file: Optional[str] = typer.Option(None, "-o", "--output", help="Write to file instead of stdout"),
+    output_file: str | None = typer.Option(None, "-o", "--output", help="Write to file instead of stdout"),
 ):
     """Export a conversation to JSON or Markdown."""
 

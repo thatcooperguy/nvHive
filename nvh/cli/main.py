@@ -18,7 +18,6 @@ import sys
 import webbrowser
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -27,7 +26,6 @@ from rich.panel import Panel
 from rich.table import Table
 
 from nvh import __version__
-
 
 # The callback handles `nvh "question"` with no subcommand — smart default mode
 app = typer.Typer(
@@ -249,9 +247,9 @@ def _make_advisor_cmd(advisor_name: str):
     info = KNOWN_ADVISORS[advisor_name]
 
     def cmd(
-        question: Optional[str] = typer.Argument(None, help="Question to ask this advisor"),
-        model: Optional[str] = typer.Option(None, "-m", "--model", help="Specific model"),
-        system: Optional[str] = typer.Option(None, "-s", "--system", help="System prompt"),
+        question: str | None = typer.Argument(None, help="Question to ask this advisor"),
+        model: str | None = typer.Option(None, "-m", "--model", help="Specific model"),
+        system: str | None = typer.Option(None, "-s", "--system", help="System prompt"),
         raw: bool = typer.Option(False, "--raw", help="Output just the answer, no metadata"),
     ):
         if question:
@@ -391,25 +389,25 @@ def _read_stdin() -> str:
 
 @app.command()
 def ask(
-    prompt: Optional[str] = typer.Argument(None, help="The prompt to send to the LLM"),
-    provider: Optional[str] = typer.Option(None, "-p", "--advisor", help="Advisor to use"),
-    model: Optional[str] = typer.Option(None, "-m", "--model", help="Model to use"),
-    system: Optional[str] = typer.Option(None, "-s", "--system", help="System prompt"),
+    prompt: str | None = typer.Argument(None, help="The prompt to send to the LLM"),
+    provider: str | None = typer.Option(None, "-p", "--advisor", help="Advisor to use"),
+    model: str | None = typer.Option(None, "-m", "--model", help="Model to use"),
+    system: str | None = typer.Option(None, "-s", "--system", help="System prompt"),
     output: str = typer.Option("text", "-o", "--output", help="Output format: text, json, markdown, raw"),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream output"),
-    max_tokens: Optional[int] = typer.Option(None, "--max-tokens", help="Max output tokens"),
-    temperature: Optional[float] = typer.Option(None, "-t", "--temperature", help="Temperature"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens", help="Max output tokens"),
+    temperature: float | None = typer.Option(None, "-t", "--temperature", help="Temperature"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache"),
     strategy: str = typer.Option("best", "--strategy", help="Routing: best, cheapest, fastest, best-for-task"),
     continue_: bool = typer.Option(False, "-c", "--continue", help="Continue last conversation"),
-    conversation: Optional[str] = typer.Option(None, "--conversation", help="Continue a specific conversation"),
-    profile: Optional[str] = typer.Option(None, "--profile", help="Config profile to use"),
+    conversation: str | None = typer.Option(None, "--conversation", help="Continue a specific conversation"),
+    profile: str | None = typer.Option(None, "--profile", help="Config profile to use"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show routing details"),
     quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress metadata"),
     privacy: bool = typer.Option(False, "--privacy", help="Privacy mode: disable logging, caching, and conversation persistence"),
-    template: Optional[str] = typer.Option(None, "--template", help="Prompt template name to use"),
-    var: Optional[list[str]] = typer.Option(None, "--var", help="Template variable as key=value (repeatable)"),
-    file: Optional[str] = typer.Option(None, "-f", "--file", help="Include a file's contents in the prompt"),
+    template: str | None = typer.Option(None, "--template", help="Prompt template name to use"),
+    var: list[str] | None = typer.Option(None, "--var", help="Template variable as key=value (repeatable)"),
+    file: str | None = typer.Option(None, "-f", "--file", help="Include a file's contents in the prompt"),
     output_json: bool = typer.Option(False, "--json", help="Shorthand for --output json"),
     output_raw: bool = typer.Option(False, "--raw", help="Shorthand for --output raw (no metadata, just the answer)"),
     knowledge: bool = typer.Option(False, "--knowledge", "-k", help="Augment prompt with your knowledge base (RAG)"),
@@ -422,7 +420,7 @@ def ask(
         output = "raw"
         quiet = True
     # Handle template rendering before stdin processing
-    template_system: Optional[str] = None
+    template_system: str | None = None
     if template:
         from nvh.core.templates import render_template
         # Parse --var key=value pairs
@@ -506,7 +504,6 @@ def ask(
 
         if stream and output == "text":
             # Stream the response
-            provider_obj = None
             decision = engine.router.route(full_prompt, provider_override=provider, model_override=model, strategy=strategy)
 
             if verbose:
@@ -516,7 +513,6 @@ def ask(
             pconfig = config.providers.get(decision.provider)
             pmodel = model or decision.model or (pconfig.default_model if pconfig else "")
 
-            messages = [{"role": "user", "content": full_prompt}]
             from nvh.providers.base import Message
             msgs = [Message(role="user", content=full_prompt)]
             if system:
@@ -584,9 +580,9 @@ def ask(
 
 @app.command()
 def code(
-    prompt: Optional[str] = typer.Argument(None),
-    file: Optional[str] = typer.Option(None, "-f", "--file"),
-    advisor: Optional[str] = typer.Option(None, "-a"),
+    prompt: str | None = typer.Argument(None),
+    file: str | None = typer.Option(None, "-f", "--file"),
+    advisor: str | None = typer.Option(None, "-a"),
 ):
     """Coding focus — optimized for code tasks.
 
@@ -636,11 +632,11 @@ def code(
         await engine.initialize()
 
         # Route to coding-capable advisor; prefer anthropic/openai/groq for code
-        _CODING_ADVISORS = ["anthropic", "openai", "groq", "github", "google", "deepseek"]
+        coding_advisors = ["anthropic", "openai", "groq", "github", "google", "deepseek"]
         enabled = engine.registry.list_enabled()
         chosen_provider = advisor
         if not chosen_provider:
-            for pref in _CODING_ADVISORS:
+            for pref in coding_advisors:
                 if pref in enabled:
                     chosen_provider = pref
                     break
@@ -666,7 +662,7 @@ def code(
 
 @app.command()
 def write(
-    prompt: Optional[str] = typer.Argument(None),
+    prompt: str | None = typer.Argument(None),
     tone: str = typer.Option("professional", help="Tone: casual, professional, academic, creative"),
 ):
     """Writing focus — optimized for text composition.
@@ -698,10 +694,10 @@ def write(
         await engine.initialize()
 
         # Claude is best for writing; fall back to openai, google
-        _WRITING_ADVISORS = ["anthropic", "openai", "google", "groq", "github"]
+        writing_advisors = ["anthropic", "openai", "google", "groq", "github"]
         enabled = engine.registry.list_enabled()
         chosen_provider = None
-        for pref in _WRITING_ADVISORS:
+        for pref in writing_advisors:
             if pref in enabled:
                 chosen_provider = pref
                 break
@@ -727,7 +723,7 @@ def write(
 
 @app.command()
 def research(
-    prompt: Optional[str] = typer.Argument(None),
+    prompt: str | None = typer.Argument(None),
 ):
     """Research focus — web search + multi-source synthesis.
 
@@ -757,7 +753,7 @@ def research(
         engine = Engine(config=config)
         await engine.initialize()
 
-        console.print(f"[dim][research → web search + synthesis][/dim]\n")
+        console.print("[dim][research → web search + synthesis][/dim]\n")
 
         # Step 1: web search via Perplexity if available, else council synthesis
         enabled = engine.registry.list_enabled()
@@ -805,7 +801,7 @@ def research(
 
 @app.command()
 def math(
-    prompt: Optional[str] = typer.Argument(None),
+    prompt: str | None = typer.Argument(None),
 ):
     """Math focus — optimized for math and calculations.
 
@@ -836,10 +832,10 @@ def math(
         await engine.initialize()
 
         # Route to reasoning-focused advisors: o3, DeepSeek-R1, then general fallback
-        _MATH_ADVISORS = ["openai", "deepseek", "anthropic", "google", "groq"]
+        math_advisors = ["openai", "deepseek", "anthropic", "google", "groq"]
         enabled = engine.registry.list_enabled()
         chosen_provider = None
-        for pref in _MATH_ADVISORS:
+        for pref in math_advisors:
             if pref in enabled:
                 chosen_provider = pref
                 break
@@ -949,7 +945,7 @@ _CLIP_ACTIONS = {
 @app.command()
 def clip(
     action: str = typer.Argument("ask", help="What to do: ask, explain, fix, summarize, translate"),
-    advisor: Optional[str] = typer.Option(None, "-a"),
+    advisor: str | None = typer.Option(None, "-a"),
     copy: bool = typer.Option(False, "--copy", "-c", help="Copy the result back to clipboard"),
 ):
     """Process clipboard contents with AI.
@@ -1026,18 +1022,18 @@ def clip(
 @app.command("convene")
 def convene_cmd(
     prompt: str = typer.Argument(..., help="The prompt to send to the hive"),
-    members: Optional[str] = typer.Option(None, "--members", help="Comma-separated advisor list"),
-    weights: Optional[str] = typer.Option(None, "--weights", help="Advisor weights, e.g. openai=0.4,anthropic=0.6"),
-    strategy: Optional[str] = typer.Option(None, "--strategy", help="Consensus: weighted_consensus, majority_vote, best_of"),
-    system: Optional[str] = typer.Option(None, "-s", "--system", help="System prompt"),
+    members: str | None = typer.Option(None, "--members", help="Comma-separated advisor list"),
+    weights: str | None = typer.Option(None, "--weights", help="Advisor weights, e.g. openai=0.4,anthropic=0.6"),
+    strategy: str | None = typer.Option(None, "--strategy", help="Consensus: weighted_consensus, majority_vote, best_of"),
+    system: str | None = typer.Option(None, "-s", "--system", help="System prompt"),
     output: str = typer.Option("text", "-o", "--output", help="Output format: text, json, table"),
-    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
-    temperature: Optional[float] = typer.Option(None, "-t", "--temperature"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens"),
+    temperature: float | None = typer.Option(None, "-t", "--temperature"),
     no_synthesize: bool = typer.Option(False, "--no-synthesize", help="Skip synthesis, show raw responses"),
     auto_agents: bool = typer.Option(False, "--auto-agents", "-a", help="Auto-generate expert personas based on query content"),
-    preset: Optional[str] = typer.Option(None, "--cabinet", help="Agent cabinet: executive, engineering, security_review, code_review, product, data, full_board"),
-    num_agents: Optional[int] = typer.Option(None, "--num-agents", "-n", help="Number of agent personas to generate"),
-    profile: Optional[str] = typer.Option(None, "--profile"),
+    preset: str | None = typer.Option(None, "--cabinet", help="Agent cabinet: executive, engineering, security_review, code_review, product, data, full_board"),
+    num_agents: int | None = typer.Option(None, "--num-agents", "-n", help="Number of agent personas to generate"),
+    profile: str | None = typer.Option(None, "--profile"),
     quiet: bool = typer.Option(False, "-q", "--quiet"),
     privacy: bool = typer.Option(False, "--privacy", help="Privacy mode: disable logging, caching, and conversation persistence"),
     output_raw: bool = typer.Option(False, "--raw", help="Output just the synthesis text, no panels"),
@@ -1076,7 +1072,7 @@ def convene_cmd(
             else:
                 personas = generate_agents(prompt, num_agents=num_agents or len(member_list or engine.registry.list_enabled()))
 
-            console.print(f"[bold]Hive Mode[/bold] — auto-generated expert advisors:\n")
+            console.print("[bold]Hive Mode[/bold] — auto-generated expert advisors:\n")
             for p in personas:
                 console.print(f"  [bold cyan]{p.role}[/bold cyan] — {p.expertise}")
             console.print()
@@ -1184,12 +1180,12 @@ def convene_cmd(
 @app.command()
 def poll(
     prompt: str = typer.Argument(..., help="The prompt to poll across advisors"),
-    providers: Optional[str] = typer.Option(None, "--advisors", help="Comma-separated advisor list"),
+    providers: str | None = typer.Option(None, "--advisors", help="Comma-separated advisor list"),
     output: str = typer.Option("text", "-o", "--output", help="Output format: text, json, table"),
-    system: Optional[str] = typer.Option(None, "-s", "--system"),
-    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
-    temperature: Optional[float] = typer.Option(None, "-t", "--temperature"),
-    profile: Optional[str] = typer.Option(None, "--profile"),
+    system: str | None = typer.Option(None, "-s", "--system"),
+    max_tokens: int | None = typer.Option(None, "--max-tokens"),
+    temperature: float | None = typer.Option(None, "-t", "--temperature"),
+    profile: str | None = typer.Option(None, "--profile"),
 ):
     """Poll multiple advisors and compare their responses side by side."""
     async def _run_compare():
@@ -1202,7 +1198,7 @@ def poll(
 
         provider_list = providers.split(",") if providers else None
 
-        console.print(f"[bold]Poll Mode[/bold] — querying advisors...\n")
+        console.print("[bold]Poll Mode[/bold] — querying advisors...\n")
 
         try:
             results = await engine.compare(
@@ -1261,9 +1257,9 @@ def poll(
 @app.command()
 def throwdown(
     prompt: str = typer.Argument(..., help="The question for the throwdown"),
-    cabinet: Optional[str] = typer.Option(None, "--cabinet", "-c", help="Agent cabinet to use"),
-    num_agents: Optional[int] = typer.Option(None, "-n", "--num-agents", help="Number of agents"),
-    profile: Optional[str] = typer.Option(None, "--profile"),
+    cabinet: str | None = typer.Option(None, "--cabinet", "-c", help="Agent cabinet to use"),
+    num_agents: int | None = typer.Option(None, "-n", "--num-agents", help="Number of agents"),
+    profile: str | None = typer.Option(None, "--profile"),
     quiet: bool = typer.Option(False, "-q", "--quiet"),
     quick: bool = typer.Option(False, "--quick", help="Single pass instead of two (cheaper throwdown)"),
 ):
@@ -1501,7 +1497,7 @@ def status():
                 saved_usd = avg_cloud_cost * local_queries
                 console.print(f"[bold]Savings:[/bold]  ${saved_usd:.2f} saved this month ({local_queries} local queries)")
         except Exception:
-            console.print(f"[bold]Budget:[/bold]   unavailable")
+            console.print("[bold]Budget:[/bold]   unavailable")
 
         # Default mode
         default_mode = getattr(config.defaults, "mode", "ask")
@@ -1535,9 +1531,9 @@ def quick(
 
         # Priority order: groq (fastest free tier) > deepseek (cheapest cloud) > ollama (local free)
         # then fall back to cheapest available
-        CHEAP_PRIORITY = ["groq", "deepseek", "ollama"]
+        cheap_priority = ["groq", "deepseek", "ollama"]
         chosen_provider = None
-        for pname in CHEAP_PRIORITY:
+        for pname in cheap_priority:
             if pname in enabled:
                 chosen_provider = pname
                 break
@@ -1570,7 +1566,7 @@ def quick(
 @app.command()
 def safe(
     prompt: str = typer.Argument(..., help="Question to answer privately using local models only"),
-    model: Optional[str] = typer.Option(None, "-m", "--model", help="Local model to use"),
+    model: str | None = typer.Option(None, "-m", "--model", help="Local model to use"),
     raw: bool = typer.Option(False, "--raw", help="Output just the answer"),
 ):
     """Private mode — your data never leaves your machine.
@@ -1680,7 +1676,7 @@ ACCOUNT_SIGNUP = [
 
 @app.command()
 def setup(
-    email: Optional[str] = typer.Option(None, "--email", "-e", help="Your email for provider signups"),
+    email: str | None = typer.Option(None, "--email", "-e", help="Your email for provider signups"),
     all_providers: bool = typer.Option(False, "--all", help="Set up ALL free providers (opens many browser tabs)"),
     skip_eula: bool = typer.Option(False, "--accept-terms", help="Accept terms without prompting"),
 ):
@@ -1724,8 +1720,8 @@ def setup(
         user_data["eula_accepted"] = True
         user_data["eula_version"] = "1.0"
         try:
-            from datetime import datetime, timezone
-            user_data["accepted_at"] = datetime.now(timezone.utc).isoformat()
+            from datetime import UTC, datetime
+            user_data["accepted_at"] = datetime.now(UTC).isoformat()
         except Exception:
             pass
         user_file.write_text(json.dumps(user_data, indent=2))
@@ -1813,7 +1809,7 @@ def setup(
 
     # Step 5: Account-signup providers (if not already covered by --all)
     if not all_providers and ACCOUNT_SIGNUP:
-        console.print(f"\n[bold green]Step 3/3: Account-based providers[/bold green] (need existing account)\n")
+        console.print("\n[bold green]Step 3/3: Account-based providers[/bold green] (need existing account)\n")
         for name, display, url, desc in ACCOUNT_SIGNUP:
             has_key = False
             try:
@@ -1847,18 +1843,20 @@ def setup(
 
     # Summary
     total_free = len(ZERO_SIGNUP) + configured
-    console.print(f"\n[bold green]Setup complete![/bold green]")
+    console.print("\n[bold green]Setup complete![/bold green]")
     console.print(f"  {total_free} free advisors ready, {skipped} skipped")
-    console.print(f"\n  Try it: [bold]nvh \"What is the meaning of life?\"[/bold]")
-    console.print(f"  Or just: [bold]nvh[/bold] (launches interactive chat)")
+    console.print("\n  Try it: [bold]nvh \"What is the meaning of life?\"[/bold]")
+    console.print("  Or just: [bold]nvh[/bold] (launches interactive chat)")
     if skipped > 0:
-        console.print(f"  Set up more later: [bold]nvh setup --all[/bold]")
+        console.print("  Set up more later: [bold]nvh setup --all[/bold]")
     console.print()
 
 
 # ---------------------------------------------------------------------------
 # nvh conversation
 # ---------------------------------------------------------------------------
+
+from datetime import UTC  # noqa: E402
 
 from nvh.cli.conversations import conversation_app  # noqa: E402
 
@@ -1910,9 +1908,9 @@ def config_init(
                 try:
                     import keyring
                     keyring.set_password("nvhive", f"{name}_api_key", key)
-                    console.print(f"  [green]Key stored securely in keychain[/green]")
+                    console.print("  [green]Key stored securely in keychain[/green]")
                 except Exception:
-                    console.print(f"  [yellow]Keychain unavailable. Key will be read from env var.[/yellow]")
+                    console.print("  [yellow]Keychain unavailable. Key will be read from env var.[/yellow]")
                 providers_to_enable.append(name)
 
     # Check for Ollama
@@ -1933,8 +1931,8 @@ def config_init(
             f"  {name}:\n    api_key:",
             f"  {name}:\n    enabled: true\n    api_key:",
         ).replace(
-            f"    type: ollama\n    enabled: false",
-            f"    type: ollama\n    enabled: true",
+            "    type: ollama\n    enabled: false",
+            "    type: ollama\n    enabled: true",
         ) if name == "ollama" else config_content.replace(
             f"  {name}:\n    api_key: ${{{name.upper()}_API_KEY}}\n    default_model:",
             f"  {name}:\n    enabled: true\n    api_key: ${{{name.upper()}_API_KEY}}\n    default_model:",
@@ -2017,7 +2015,7 @@ def config_edit():
 
 @config_app.command("export")
 def config_export(
-    output: Optional[str] = typer.Option(None, "--output", "-o", help="Output file path (default: stdout)"),
+    output: str | None = typer.Option(None, "--output", "-o", help="Output file path (default: stdout)"),
 ):
     """Export the current config with API keys masked.
 
@@ -2034,13 +2032,13 @@ def config_export(
     config = load_config()
     data = config.model_dump(mode="json")
 
-    _ENV_PATTERN = _re.compile(r"^\$\{[^}]+\}$")
+    env_pattern = _re.compile(r"^\$\{[^}]+\}$")
 
     def _mask_value(v: str) -> str:
         """Show first 4 + last 4 chars; keep ${ENV_VAR} references as-is."""
         if not v:
             return v
-        if _ENV_PATTERN.match(v):
+        if env_pattern.match(v):
             return v  # already a reference — keep it
         if len(v) <= 8:
             return "****"
@@ -2122,12 +2120,12 @@ def config_import(
 
     # Scan for unresolved ${ENV_VAR} references
     import re as _re
-    _ENV_PATTERN = _re.compile(r"\$\{([^}:]+)(?::-(.*?))?\}")
+    env_pattern = _re.compile(r"\$\{([^}:]+)(?::-(.*?))?\}")
     unset_vars: list[str] = []
 
     def _find_unset(node: object) -> None:
         if isinstance(node, str):
-            for m in _ENV_PATTERN.finditer(node):
+            for m in env_pattern.finditer(node):
                 var_name = m.group(1)
                 default  = m.group(2)
                 if os.environ.get(var_name) is None and default is None:
@@ -2260,12 +2258,12 @@ def config_diff(
         changed.append((key, cur_disp, oth_disp, is_different))
 
     # Only show fields that differ, plus always show high-interest sections
-    INTERESTING_PREFIXES = (
+    interesting_prefixes = (
         "routing.", "council.", "budget.", "defaults.", "cache.",
     )
     rows_to_show = [
         row for row in changed
-        if row[3] or any(row[0].startswith(p) for p in INTERESTING_PREFIXES)
+        if row[3] or any(row[0].startswith(p) for p in interesting_prefixes)
     ]
 
     if not rows_to_show:
@@ -2366,11 +2364,16 @@ def advisor_info(
 
     # Special capabilities
     caps = []
-    if profile.has_search: caps.append("Web Search")
-    if profile.is_fast: caps.append("Ultra-Fast")
-    if profile.is_local: caps.append("Local/Private")
-    if profile.is_reasoning: caps.append("Deep Reasoning")
-    if profile.long_context: caps.append("Long Context (100K+)")
+    if profile.has_search:
+        caps.append("Web Search")
+    if profile.is_fast:
+        caps.append("Ultra-Fast")
+    if profile.is_local:
+        caps.append("Local/Private")
+    if profile.is_reasoning:
+        caps.append("Deep Reasoning")
+    if profile.long_context:
+        caps.append("Long Context (100K+)")
     if caps:
         console.print(f"[cyan]Capabilities: {', '.join(caps)}[/cyan]")
 
@@ -2427,7 +2430,7 @@ def advisor_remove(name: str = typer.Argument(..., help="Advisor name")):
 
 @advisor_app.command("test")
 def advisor_test(
-    name: Optional[str] = typer.Argument(None, help="Advisor to test (omit for all)"),
+    name: str | None = typer.Argument(None, help="Advisor to test (omit for all)"),
     all_: bool = typer.Option(False, "--all", help="Test all configured advisors"),
 ):
     """Test advisor connectivity and API key validity."""
@@ -2495,7 +2498,7 @@ def advisor_login(
         tool = cli_tools.get(name)
         if tool and shutil.which(tool):
             console.print(f"[green]Detected {tool} CLI. You can authenticate via: [bold]{tool} auth login[/bold][/green]")
-            console.print(f"Or paste an API key manually below.")
+            console.print("Or paste an API key manually below.")
 
     url = urls.get(name, "")
     if url:
@@ -2509,7 +2512,7 @@ def advisor_login(
         try:
             import keyring
             keyring.set_password("nvhive", f"{name}_api_key", key)
-            console.print(f"[green]Key stored securely in keychain.[/green]")
+            console.print("[green]Key stored securely in keychain.[/green]")
         except Exception:
             console.print(f"[yellow]Set {name.upper()}_API_KEY in your environment.[/yellow]")
 
@@ -2679,7 +2682,7 @@ def list_plugins():
 
 @app.command()
 def bench(
-    model: Optional[str] = typer.Option(None, "-m", "--model", help="Model to benchmark (default: current local model)"),
+    model: str | None = typer.Option(None, "-m", "--model", help="Model to benchmark (default: current local model)"),
     quick_mode: bool = typer.Option(False, "--quick", help="Run only 2 tests instead of 4"),
     all_models: bool = typer.Option(False, "--all", help="Benchmark all loaded local models"),
 ):
@@ -2854,7 +2857,7 @@ app.add_typer(model_app, name="model")
 
 @model_app.command("list")
 def model_list(
-    provider: Optional[str] = typer.Option(None, "-p", "--advisor", help="Filter by advisor"),
+    provider: str | None = typer.Option(None, "-p", "--advisor", help="Filter by advisor"),
 ):
     """List all available models from the capability catalog."""
     from nvh.providers.registry import get_registry
@@ -2943,8 +2946,8 @@ def agent_analyze(
 
     console.print(table)
 
-    console.print(f"\n[dim]Run: hive convene \"<query>\" --auto-agents to use these agents[/dim]")
-    console.print(f"[dim]Run: hive convene \"<query>\" --cabinet <name> to use a cabinet[/dim]")
+    console.print("\n[dim]Run: hive convene \"<query>\" --auto-agents to use these agents[/dim]")
+    console.print("[dim]Run: hive convene \"<query>\" --cabinet <name> to use a cabinet[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -2953,13 +2956,13 @@ def agent_analyze(
 
 @app.command()
 def repl(
-    provider: Optional[str] = typer.Option(None, "-p", "--advisor", help="Starting advisor"),
-    model: Optional[str] = typer.Option(None, "-m", "--model", help="Starting model"),
+    provider: str | None = typer.Option(None, "-p", "--advisor", help="Starting advisor"),
+    model: str | None = typer.Option(None, "-m", "--model", help="Starting model"),
     council_mode: bool = typer.Option(False, "--convene", help="Start in hive mode"),
     auto_agents: bool = typer.Option(False, "-a", "--auto-agents", help="Enable auto-agent generation"),
-    preset: Optional[str] = typer.Option(None, "--cabinet", help="Agent cabinet to use"),
-    system: Optional[str] = typer.Option(None, "-s", "--system", help="System prompt"),
-    profile: Optional[str] = typer.Option(None, "--profile", help="Config profile"),
+    preset: str | None = typer.Option(None, "--cabinet", help="Agent cabinet to use"),
+    system: str | None = typer.Option(None, "-s", "--system", help="System prompt"),
+    profile: str | None = typer.Option(None, "--profile", help="Config profile"),
 ):
     """Launch interactive REPL with multi-turn conversation support."""
     async def _run_repl():
@@ -3102,7 +3105,7 @@ app.add_typer(auth_app, name="auth")
 def auth_create_user(
     username: str = typer.Argument(..., help="Username for the new user"),
     role: str = typer.Option("user", "--role", "-r", help="Role: admin, user, viewer"),
-    email: Optional[str] = typer.Option(None, "--email", "-e", help="Email address (optional)"),
+    email: str | None = typer.Option(None, "--email", "-e", help="Email address (optional)"),
 ):
     """Create a new user account (prompts for password)."""
     async def _create():
@@ -3160,7 +3163,7 @@ def auth_create_token(
         )
 
         console.print(f"\n[green]API token created:[/green] {token_record.name} (id: {token_record.id})")
-        console.print(f"\n[bold yellow]Token (shown once — copy now):[/bold yellow]")
+        console.print("\n[bold yellow]Token (shown once — copy now):[/bold yellow]")
         console.print(f"\n  {raw_token}\n")
         console.print("[dim]Use this token as: Authorization: Bearer <token>[/dim]")
 
@@ -3260,7 +3263,7 @@ def serve(
 
 @app.command()
 def openclaw(
-    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output path for openclaw.json"),
+    output: str | None = typer.Option(None, "-o", "--output", help="Output path for openclaw.json"),
     agent_config: bool = typer.Option(False, "--agent", help="Generate NemoClaw agent config instead"),
     no_merge: bool = typer.Option(False, "--no-merge", help="Overwrite existing config instead of merging"),
 ):
@@ -3408,7 +3411,7 @@ def nemoclaw(
             resp = httpx.get(url, timeout=5)
             if resp.status_code == 200:
                 data = resp.json()
-                console.print(f"  [green]✓[/green] NVHive proxy is [bold green]healthy[/bold green]")
+                console.print("  [green]✓[/green] NVHive proxy is [bold green]healthy[/bold green]")
                 console.print(f"  [green]✓[/green] Engine initialized: {data.get('engine_initialized', '?')}")
                 console.print(f"  [green]✓[/green] Providers enabled: {data.get('providers_enabled', '?')}")
                 providers = data.get("providers", [])
@@ -3416,21 +3419,21 @@ def nemoclaw(
                     console.print(f"  [green]✓[/green] Available: {', '.join(providers)}")
                 has_local = data.get("has_local_inference", False)
                 if has_local:
-                    console.print(f"  [green]✓[/green] Local inference (Ollama) available")
+                    console.print("  [green]✓[/green] Local inference (Ollama) available")
                 else:
-                    console.print(f"  [yellow]![/yellow] No local inference — cloud-only routing")
+                    console.print("  [yellow]![/yellow] No local inference — cloud-only routing")
                 console.print()
                 console.print("  [bold green]Ready for NemoClaw![/bold green] Register with:")
                 console.print()
                 _print_openshell_commands(host, port)
             else:
                 console.print(f"  [red]✗[/red] Proxy returned status {resp.status_code}")
-                console.print(f"  Start the proxy first: [bold]nvh nemoclaw --start[/bold]")
+                console.print("  Start the proxy first: [bold]nvh nemoclaw --start[/bold]")
         except Exception as e:
             console.print(f"  [red]✗[/red] Cannot reach NVHive proxy at {host}:{port}")
             console.print(f"  Error: {e}")
             console.print()
-            console.print(f"  Start the proxy first: [bold]nvh nemoclaw --start[/bold]")
+            console.print("  Start the proxy first: [bold]nvh nemoclaw --start[/bold]")
         console.print()
         return
 
@@ -3532,10 +3535,10 @@ def _print_openshell_commands(host: str, port: int):
     """Print the openshell provider create command."""
     # Use host.openshell.internal for sandbox-to-host communication
     endpoint_host = "host.openshell.internal" if host in ("127.0.0.1", "0.0.0.0", "localhost") else host
-    console.print(f"  [dim]$[/dim] openshell provider create \\")
-    console.print(f"      --name nvhive \\")
-    console.print(f"      --type openai \\")
-    console.print(f"      --credential OPENAI_API_KEY=nvhive \\")
+    console.print("  [dim]$[/dim] openshell provider create \\")
+    console.print("      --name nvhive \\")
+    console.print("      --type openai \\")
+    console.print("      --credential OPENAI_API_KEY=nvhive \\")
     console.print(f"      --config OPENAI_BASE_URL=http://{endpoint_host}:{port}/v1/proxy")
 
 
@@ -3562,7 +3565,7 @@ def keys(
         nvh keys              # show all links
         nvh keys --open       # open all signup pages in browser
     """
-    FREE_PROVIDERS = [
+    free_providers = [
         ("Groq", "https://console.groq.com/keys", "30 req/min free — FASTEST inference", "groq"),
         ("GitHub Models", "https://github.com/settings/tokens", "Free GPT-4o — just need a GitHub account", "github"),
         ("Google Gemini", "https://aistudio.google.com/apikey", "15 req/min free — 1M token context", "google"),
@@ -3586,7 +3589,7 @@ def keys(
     table.add_column("Signup URL")
     table.add_column("Add Key With")
 
-    for name, url, desc, cmd in FREE_PROVIDERS:
+    for name, url, desc, cmd in free_providers:
         # Check if already configured
         has_key = False
         try:
@@ -3722,9 +3725,9 @@ def webui(
 
     # Start the API server in background (web UI needs it)
     console.print(f"[bold]Starting nvHive Web UI on port {port}...[/bold]")
-    console.print(f"[dim]API server must be running: nvh serve (in another terminal)[/dim]")
+    console.print("[dim]API server must be running: nvh serve (in another terminal)[/dim]")
     console.print(f"[dim]Web UI: http://localhost:{port}[/dim]")
-    console.print(f"[dim]Press Ctrl+C to stop[/dim]")
+    console.print("[dim]Press Ctrl+C to stop[/dim]")
     console.print()
 
     try:
@@ -3742,7 +3745,7 @@ def webui(
 
 @app.command()
 def debug(
-    output: Optional[str] = typer.Option(None, "-o", "--output", help="Save to file instead of printing"),
+    output: str | None = typer.Option(None, "-o", "--output", help="Save to file instead of printing"),
     send: bool = typer.Option(False, "--send", help="Copy to clipboard for sharing"),
     nvidia_report: bool = typer.Option(False, "--nvidia-report", help="Also run nvidia-bug-report.sh for NVIDIA support"),
 ):
@@ -3766,7 +3769,7 @@ def debug(
     import platform
     import subprocess
     import sys
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     lines: list[str] = []
 
@@ -3775,7 +3778,7 @@ def debug(
         if not output and not send:
             console.print(text)
 
-    log(f"NVHive Debug Report — {datetime.now(timezone.utc).isoformat()}")
+    log(f"NVHive Debug Report — {datetime.now(UTC).isoformat()}")
     log("=" * 60)
 
     # --- System ---
@@ -3858,7 +3861,7 @@ def debug(
             if os.path.exists(p):
                 if p.endswith("nvcc"):
                     r = subprocess.run([p, "--version"], capture_output=True, text=True, timeout=5)
-                    ver = [l for l in r.stdout.splitlines() if "release" in l.lower()]
+                    ver = [ln for ln in r.stdout.splitlines() if "release" in ln.lower()]
                     log(f"  CUDA toolkit: {ver[0].strip() if ver else 'found'}")
                 else:
                     log(f"  CUDA toolkit: {open(p).read().strip()}")
@@ -3940,7 +3943,7 @@ def debug(
             log(f"  ~/nvh size:  {nvh_size:.2f} GB")
         hive_dir = os.path.expanduser("~/.hive")
         if os.path.isdir(hive_dir):
-            log(f"  ~/.hive:     exists")
+            log("  ~/.hive:     exists")
     except Exception as e:
         log(f"  Error: {e}")
 
@@ -3994,7 +3997,7 @@ def debug(
         resp = httpx.get("http://localhost:11434/api/tags", timeout=3)
         if resp.status_code == 200:
             models = resp.json().get("models", [])
-            log(f"  Status:      running")
+            log("  Status:      running")
             log(f"  Models:      {len(models)}")
             for m in models[:10]:
                 name = m.get("name", "?")
@@ -4093,8 +4096,8 @@ def debug(
         log(f"  Error: {e}")
 
     # --- NVIDIA Bug Report (only when issues detected or --nvidia-report) ---
-    gpu_issues = any("NOT FOUND" in l or "UNREACHABLE" in l or "not found" in l.lower()
-                     for l in lines if "[GPU]" in "".join(lines[:lines.index(l)+1]) or "NVIDIA" in l)
+    gpu_issues = any("NOT FOUND" in ln or "UNREACHABLE" in ln or "not found" in ln.lower()
+                     for ln in lines if "[GPU]" in "".join(lines[:lines.index(ln)+1]) or "NVIDIA" in ln)
 
     if nvidia_report or gpu_issues:
         log("\n[NVIDIA BUG REPORT]")
@@ -4108,9 +4111,9 @@ def debug(
             if result.returncode == 0 and os.path.exists(nvidia_report_path):
                 size_kb = os.path.getsize(nvidia_report_path) / 1024
                 log(f"  Generated:   {nvidia_report_path} ({size_kb:.0f} KB)")
-                log(f"  Send to NVIDIA support or attach to bug reports")
+                log("  Send to NVIDIA support or attach to bug reports")
                 if gpu_issues:
-                    log(f"  [!] GPU issues detected — this report may help diagnose the problem")
+                    log("  [!] GPU issues detected — this report may help diagnose the problem")
             else:
                 log(f"  nvidia-bug-report.sh failed (exit {result.returncode})")
                 if result.stderr:
@@ -4216,7 +4219,7 @@ def doctor():
     else:
         try:
             import yaml
-            raw = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+            yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
             _pass("Config file (YAML)", str(DEFAULT_CONFIG_PATH))
             raw_yaml_ok = True
         except Exception as e:
@@ -4532,7 +4535,7 @@ def template_list():
         table.add_row(t.name, t.description or "[dim]—[/dim]", req, opt)
 
     console.print(table)
-    console.print(f"\n[dim]Use: hive ask --template <name> --var key=value[/dim]")
+    console.print("\n[dim]Use: hive ask --template <name> --var key=value[/dim]")
 
 
 @template_app.command("show")
@@ -4567,7 +4570,7 @@ def template_show(
     if t.system:
         console.print(f"\n[bold]System prompt:[/bold]\n{t.system}")
 
-    console.print(f"\n[bold]Body:[/bold]")
+    console.print("\n[bold]Body:[/bold]")
     console.print(Panel(t.body, border_style="dim"))
 
     console.print(
@@ -4692,7 +4695,7 @@ def workflow_list():
         table.add_row(wf_name, desc, str(path))
 
     console.print(table)
-    console.print(f"\n[dim]Run: nvh workflow run <name> --input \"...\"[/dim]")
+    console.print("\n[dim]Run: nvh workflow run <name> --input \"...\"[/dim]")
 
 
 @workflow_app.command("run")
@@ -4733,7 +4736,6 @@ def workflow_run(
         console.print(f"[dim]{wf.description}[/dim]")
     console.print(f"[dim]{len(wf.steps)} step(s)[/dim]\n")
 
-    step_statuses: dict[str, str] = {}
 
     def on_step(step_name: str, status: str, result: str) -> None:
         icons = {"running": "[yellow]...[/yellow]", "done": "[green]OK[/green]", "skipped": "[dim]SKIP[/dim]", "error": "[red]ERR[/red]"}
@@ -4877,12 +4879,12 @@ def _reload_hint(shell: str) -> None:
 @app.command("do")
 def do_task(
     task: str = typer.Argument(..., help="Task for the agent to complete"),
-    advisor: Optional[str] = typer.Option(None, "-a", "--advisor", help="Specific advisor to use"),
-    model: Optional[str] = typer.Option(None, "-m", "--model", help="Specific model to use"),
+    advisor: str | None = typer.Option(None, "-a", "--advisor", help="Specific advisor to use"),
+    model: str | None = typer.Option(None, "-m", "--model", help="Specific model to use"),
     max_steps: int = typer.Option(15, "--max-steps", help="Maximum agent iterations"),
     auto: bool = typer.Option(True, "--auto/--confirm", help="Auto-approve safe tools (default: yes)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done without executing"),
-    profile: Optional[str] = typer.Option(None, "--profile", help="Config profile to use"),
+    profile: str | None = typer.Option(None, "--profile", help="Config profile to use"),
 ):
     """Hands-free mode — give NVHive a task and it completes it autonomously.
 
@@ -4983,7 +4985,7 @@ def do_task(
                 else:
                     console.print(f"  [red]✗[/red] [dim]{result.error}[/dim]")
             if not step.tool_calls:
-                console.print(f"  [dim](no tools — generating final answer)[/dim]")
+                console.print("  [dim](no tools — generating final answer)[/dim]")
             console.print()
 
         def confirm_unsafe(tool_name: str, tool_args: dict) -> bool:
@@ -5043,8 +5045,8 @@ def voice(
     duration: int = typer.Option(10, "-d", "--duration", help="Recording duration in seconds"),
     stt: str = typer.Option("groq", "--stt", help="Speech-to-text provider: groq, local"),
     tts: str = typer.Option("edge", "--tts", help="Text-to-speech provider: edge, system"),
-    advisor: Optional[str] = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
-    model: Optional[str] = typer.Option(None, "-m", "--model", help="Model to use"),
+    advisor: str | None = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
+    model: str | None = typer.Option(None, "-m", "--model", help="Model to use"),
     no_speak: bool = typer.Option(False, "--no-speak", help="Skip TTS — show text only"),
 ):
     """Voice mode — speak your question, hear the answer.
@@ -5177,9 +5179,9 @@ def imagine(
 
 @app.command()
 def screenshot(
-    advisor: Optional[str] = typer.Option(None, "-a", "--advisor", help="Advisor to use for analysis"),
-    model: Optional[str] = typer.Option(None, "-m", "--model", help="Model to use"),
-    save: Optional[str] = typer.Option(None, "--save", help="Save screenshot to this path"),
+    advisor: str | None = typer.Option(None, "-a", "--advisor", help="Advisor to use for analysis"),
+    model: str | None = typer.Option(None, "-m", "--model", help="Model to use"),
+    save: str | None = typer.Option(None, "--save", help="Save screenshot to this path"),
     no_analysis: bool = typer.Option(False, "--no-analysis", help="Just take the screenshot, skip LLM analysis"),
     question: str = typer.Option("Describe this screenshot in detail.", "-q", "--question", help="Question to ask about the screenshot"),
 ):
@@ -5320,12 +5322,12 @@ def learn(
     files: list[_Path] = []
     if target.is_dir():
         # Ingest all readable files in the directory (non-recursive for safety)
-        SUPPORTED_EXTS = {
+        supported_exts = {
             ".txt", ".md", ".rst", ".csv", ".log",
             ".py", ".js", ".ts", ".java", ".c", ".cpp", ".go", ".rs",
             ".json", ".yaml", ".yml", ".toml", ".pdf",
         }
-        files = [f for f in sorted(target.iterdir()) if f.is_file() and f.suffix.lower() in SUPPORTED_EXTS]
+        files = [f for f in sorted(target.iterdir()) if f.is_file() and f.suffix.lower() in supported_exts]
         if not files:
             console.print(f"[yellow]No supported files found in {path}[/yellow]")
             raise typer.Exit(1)
@@ -5484,7 +5486,7 @@ def schedule_add(
     if task.advisor:
         console.print(f"  Advisor:  {task.advisor}")
     console.print(f"  Mode:     {task.mode}")
-    console.print(f"\n[dim]Run 'nvh schedule start' to launch the scheduler daemon.[/dim]")
+    console.print("\n[dim]Run 'nvh schedule start' to launch the scheduler daemon.[/dim]")
 
 
 @schedule_app.command("list")
@@ -5684,7 +5686,7 @@ async def _git_query(prompt: str, system: str | None = None) -> str:
 def git_commit(
     push: bool = typer.Option(False, "--push", "-p", help="Git push after committing"),
     no_confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
-    advisor: Optional[str] = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
+    advisor: str | None = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
 ):
     """Generate an AI commit message from staged changes and optionally commit.
 
@@ -5761,7 +5763,7 @@ def git_commit(
             if push_rc != 0:
                 console.print(f"[yellow]Push failed:[/yellow] {push_out}")
             else:
-                console.print(f"[green]Pushed.[/green]")
+                console.print("[green]Pushed.[/green]")
     else:
         console.print("[dim]Aborted.[/dim]")
 
@@ -5769,7 +5771,7 @@ def git_commit(
 @git_app.command("review")
 def git_review(
     staged: bool = typer.Option(False, "--staged", help="Review only staged changes"),
-    advisor: Optional[str] = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
+    advisor: str | None = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
     output: str = typer.Option("text", "-o", "--output", help="Output format: text, markdown"),
 ):
     """AI review of uncommitted changes.
@@ -5826,7 +5828,7 @@ def git_review(
 @git_app.command("explain")
 def git_explain(
     n: int = typer.Option(5, "-n", help="Number of recent commits to explain"),
-    advisor: Optional[str] = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
+    advisor: str | None = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
     output: str = typer.Option("text", "-o", "--output", help="Output format: text, markdown"),
 ):
     """Explain recent git history in plain English.
@@ -5897,7 +5899,7 @@ def scan(
         "--focus", "-f",
         help="Analysis focus: overview, security, quality, dependencies",
     ),
-    advisor: Optional[str] = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
+    advisor: str | None = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
     output: str = typer.Option("text", "-o", "--output", help="Output format: text, markdown"),
     max_files: int = typer.Option(200, "--max-files", help="Maximum files to index"),
 ):
@@ -5949,7 +5951,7 @@ def scan(
         return False
 
     # ---- Language detection by extension ----------------------------------------
-    _EXT_LANG: dict[str, str] = {
+    ext_lang: dict[str, str] = {
         ".py": "Python", ".js": "JavaScript", ".ts": "TypeScript",
         ".tsx": "TypeScript/React", ".jsx": "JavaScript/React",
         ".go": "Go", ".rs": "Rust", ".java": "Java", ".kt": "Kotlin",
@@ -5985,7 +5987,7 @@ def scan(
             all_files.append(rel)
 
             ext = FsPath(fname).suffix.lower()
-            lang = _EXT_LANG.get(ext)
+            lang = ext_lang.get(ext)
             if lang:
                 try:
                     fpath = os.path.join(root, fname)
@@ -6004,7 +6006,7 @@ def scan(
     top_langs = sorted(lang_lines.items(), key=lambda kv: kv[1], reverse=True)[:10]
 
     # ---- Read key project files --------------------------------------------------
-    KEY_FILES = [
+    key_files = [
         "README.md", "README.rst", "README.txt", "README",
         "package.json", "pyproject.toml", "setup.py", "setup.cfg",
         "Cargo.toml", "go.mod", "pom.xml", "build.gradle",
@@ -6014,7 +6016,7 @@ def scan(
         "Makefile", "justfile", ".github/workflows",
     ]
     key_file_contents: list[str] = []
-    for kf in KEY_FILES:
+    for kf in key_files:
         kf_path = target / kf
         if kf_path.is_file():
             try:
@@ -6040,7 +6042,7 @@ def scan(
     if focus == "security":
         # Look for common sensitive patterns
         sensitive_hits: list[str] = []
-        _SENSITIVE_PATTERNS = [
+        sensitive_patterns = [
             ("hardcoded secret", ["password =", "secret =", "api_key =", "token =", "private_key ="]),
             ("SQL injection risk", ["f\"SELECT", "f'SELECT", '+ "SELECT', "+ 'SELECT'"]),
             ("shell injection risk", ["shell=True", "os.system(", "subprocess.call("]),
@@ -6051,7 +6053,7 @@ def scan(
             fpath = target / rel_file
             try:
                 text = fpath.read_text(errors="replace")
-                for concern, patterns in _SENSITIVE_PATTERNS:
+                for concern, patterns in sensitive_patterns:
                     for pat in patterns:
                         if pat.lower() in text.lower():
                             sensitive_hits.append(f"  [{concern}] {rel_file}")

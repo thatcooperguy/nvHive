@@ -221,7 +221,7 @@ async def _run_do_command_async(task: str, session: ReplSession, engine: Engine)
             else:
                 console.print(f"  [red]✗[/red] [dim]{result.error}[/dim]")
         if not step.tool_calls:
-            console.print(f"  [dim](no tools — generating final answer)[/dim]")
+            console.print("  [dim](no tools — generating final answer)[/dim]")
         console.print()
 
     result = await run_agent_loop(
@@ -291,7 +291,7 @@ def _handle_command(line: str, session: ReplSession):
             console.print("[dim]System prompt cleared.[/dim]")
         else:
             session.system_prompt = arg
-            console.print(f"[dim]System prompt set.[/dim]")
+            console.print("[dim]System prompt set.[/dim]")
 
     elif cmd == "/convene":
         session.council_mode = not session.council_mode
@@ -567,12 +567,10 @@ async def _run_council_query(
         console.print(Rule("[bold green]Synthesis[/bold green]", style="green"))
         console.print(Markdown(result.synthesis.content))
         synthesis_content = result.synthesis.content
-        cost_detail = f"${result.synthesis.cost_usd:.4f} synthesis + member costs"
     else:
         # No synthesis — use the first member response content as "output"
         if result.member_responses:
             synthesis_content = next(iter(result.member_responses.values())).content
-        cost_detail = "member costs only"
 
     if result.failed_members:
         failed = ", ".join(
@@ -700,12 +698,12 @@ async def run_repl(
     enabled = engine.registry.list_enabled()
 
     # Build advisor status line — mark free/local providers
-    FREE_PROVIDERS = {"ollama", "groq", "google", "cohere", "together", "fireworks",
+    free_providers = {"ollama", "groq", "google", "cohere", "together", "fireworks",
                       "cerebras", "sambanova", "huggingface", "ai21", "mock"}
     if enabled:
         advisor_parts = []
         for adv in enabled:
-            tag = " (free)" if adv in FREE_PROVIDERS else ""
+            tag = " (free)" if adv in free_providers else ""
             advisor_parts.append(f"{adv}{tag}")
         advisor_line = ", ".join(advisor_parts)
     else:
@@ -832,7 +830,7 @@ async def run_repl(
         cost: Decimal = Decimal("0")
 
         # Apply focus mode: inject a one-shot system prompt override and provider hint
-        _FOCUS_SYSTEMS: dict[str, str] = {
+        focus_systems: dict[str, str] = {
             "code": (
                 "You are an expert software engineer. Provide clear, correct, well-structured code. "
                 "When writing code, include brief explanations of key decisions. "
@@ -853,7 +851,7 @@ async def run_repl(
         }
         _focus_system_override: str | None = None
         if session.focus:
-            _focus_system_override = _FOCUS_SYSTEMS.get(session.focus)
+            _focus_system_override = focus_systems.get(session.focus)
             console.print(f"[dim][focus: {session.focus}][/dim]")
             session.focus = None  # consume the one-shot focus
 

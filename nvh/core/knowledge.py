@@ -16,7 +16,7 @@ Usage:
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -117,7 +117,7 @@ class KnowledgeBase:
             path=str(path.resolve()),
             doc_type=ext.lstrip("."),
             num_chunks=len(chunks),
-            ingested_at=datetime.now(timezone.utc).isoformat(),
+            ingested_at=datetime.now(UTC).isoformat(),
             size_bytes=len(content_bytes),
         )
         self._docs.append(doc)

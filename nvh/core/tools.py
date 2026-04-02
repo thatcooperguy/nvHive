@@ -23,8 +23,9 @@ from __future__ import annotations
 
 import glob as globmod
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass
@@ -99,7 +100,7 @@ class ToolRegistry:
             full_path = self._resolve_path(path)
             if not os.path.isfile(full_path):
                 raise FileNotFoundError(f"File not found: {path}")
-            with open(full_path, "r") as f:
+            with open(full_path) as f:
                 content = f.read()
             if len(content) > 100_000:
                 content = content[:100_000] + f"\n... (truncated, {len(content)} chars total)"
@@ -130,7 +131,7 @@ class ToolRegistry:
             files = globmod.glob(os.path.join(full_dir, "**", pattern), recursive=True)
             for fpath in files[:50]:  # limit files searched
                 try:
-                    with open(fpath, "r") as f:
+                    with open(fpath) as f:
                         for i, line in enumerate(f, 1):
                             if query.lower() in line.lower():
                                 rel = os.path.relpath(fpath, self.workspace)

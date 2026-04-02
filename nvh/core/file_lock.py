@@ -32,13 +32,13 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-class LockType(str, Enum):
+class LockType(StrEnum):
     READ = "read"       # Shared — multiple readers allowed
     WRITE = "write"     # Exclusive — one writer, no readers
 
@@ -173,7 +173,7 @@ class FileLockCoordinator:
             paths_to_clean = []
             for path, locks in self._locks.items():
                 before = len(locks)
-                self._locks[path] = [l for l in locks if l.agent_id != agent_id]
+                self._locks[path] = [lk for lk in locks if lk.agent_id != agent_id]
                 released = before - len(self._locks[path])
                 count += released
                 if not self._locks[path]:
@@ -322,7 +322,7 @@ class FileLockCoordinator:
 
             try:
                 await asyncio.wait_for(event.wait(), timeout=min(remaining, 2.0))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
             # Try again
@@ -345,7 +345,7 @@ class FileLockCoordinator:
         """Remove expired locks (caller must hold self._mutex)."""
         paths_to_clean = []
         for path, locks in self._locks.items():
-            self._locks[path] = [l for l in locks if not l.is_expired]
+            self._locks[path] = [lk for lk in locks if not lk.is_expired]
             if not self._locks[path]:
                 paths_to_clean.append(path)
 

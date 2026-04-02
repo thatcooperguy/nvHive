@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -138,7 +138,7 @@ async def add_message(
         conv.message_count = seq
         conv.total_tokens += input_tokens + output_tokens
         conv.total_cost_usd += cost_usd
-        conv.updated_at = datetime.now(timezone.utc)
+        conv.updated_at = datetime.now(UTC)
         if not conv.provider:
             conv.provider = provider
         if not conv.model:
@@ -283,7 +283,7 @@ async def log_query(
 
 async def get_spend(period: str = "daily") -> Decimal:
     """Get total spend for the given period ('daily' or 'monthly')."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if period == "daily":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif period == "monthly":
@@ -303,7 +303,7 @@ async def get_spend(period: str = "daily") -> Decimal:
 
 async def get_spend_by_provider(period: str = "daily") -> dict[str, Decimal]:
     """Get spend per provider for the given period."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if period == "daily":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     else:
@@ -322,7 +322,7 @@ async def get_spend_by_provider(period: str = "daily") -> dict[str, Decimal]:
 
 
 async def get_query_count(period: str = "daily") -> int:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if period == "daily":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     else:
@@ -361,7 +361,7 @@ async def get_savings(period: str = "monthly") -> dict:
             "savings_pct": float,
         }
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if period == "daily":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     else:
@@ -427,7 +427,7 @@ async def update_provider_meta(
 ) -> None:
     async with get_session() as session:
         meta = await session.get(ProviderKeyMeta, provider)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if meta is None:
             meta = ProviderKeyMeta(
                 provider=provider,

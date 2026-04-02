@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Callable
 
 from nvh.config.settings import CouncilConfig
 from nvh.providers.base import (
@@ -581,7 +580,7 @@ class CouncilOrchestrator:
                 timeout=timeout,
             )
             return response
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise ProviderError(
                 f"Provider {member.provider} timed out after {timeout}s",
                 provider=member.provider,

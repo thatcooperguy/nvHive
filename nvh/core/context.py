@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from nvh.providers.base import CompletionResponse, Message
 from nvh.storage import repository as repo
 

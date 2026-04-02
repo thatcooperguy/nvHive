@@ -239,7 +239,7 @@ class TestEngineIntegration:
 
         prompt = "Cached query"
         # Cache only activates at temperature=0
-        r1 = await engine.query(prompt, temperature=0.0)
+        await engine.query(prompt, temperature=0.0)
         r2 = await engine.query(prompt, temperature=0.0)
 
         assert r2.cache_hit is True

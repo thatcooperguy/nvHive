@@ -17,7 +17,7 @@ import time
 from collections import defaultdict
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
@@ -563,12 +563,12 @@ async def system_recommendations() -> dict[str, Any]:
         opts = get_ollama_optimizations(gpus)
 
         # OOM check for the three main Nemotron model sizes
-        OOM_MODELS = {
+        oom_models = {
             "nemotron-mini": 2.0,
             "nemotron-small": 5.0,
             "nemotron": 40.0,
         }
-        oom_results = {name: check_oom_risk(vram, gpus) for name, vram in OOM_MODELS.items()}
+        oom_results = {name: check_oom_risk(vram, gpus) for name, vram in oom_models.items()}
 
         rec_data = [
             {
@@ -855,7 +855,7 @@ async def provider_health(
     try:
         provider = engine.registry.get(name)
         hs = await asyncio.wait_for(provider.health_check(), timeout=10.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail=f"Health check for '{name}' timed out.",
@@ -1308,7 +1308,7 @@ async def auth_login(request: LoginRequest, req: Request) -> dict[str, Any]:
         user_id=user.id,
         name="login_session",
         scopes="query,council,compare,admin" if user.role == "admin" else "query,council,compare",
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+        expires_at=datetime.now(UTC) + timedelta(hours=24),
     )
 
     return _response_envelope({
@@ -1613,7 +1613,7 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
 
     # --- Build plan ---
     # Rough size estimates in GB (used for ETA when exact size is unknown)
-    _SIZE_ESTIMATES: dict[str, float] = {
+    size_estimates: dict[str, float] = {
         "nemotron-mini": 2.0,
         "nemotron-small": 4.7,
         "nemotron": 40.0,
@@ -1623,7 +1623,7 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
         "llama3.3:70b-instruct-q4_K_M": 40.0,
     }
     # Assume ~200 Mbps download (typical cloud / consumer broadband)
-    _DOWNLOAD_MBPS = 200.0
+    download_mbps = 200.0
 
     to_pull = []
     already_installed = []
@@ -1632,9 +1632,9 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
         model_name = rec.model
         is_installed = model_name in installed_names or model_name.split(":")[0] in installed_names
 
-        size_gb = _SIZE_ESTIMATES.get(model_name, rec.vram_required_gb or 4.0)
+        size_gb = size_estimates.get(model_name, rec.vram_required_gb or 4.0)
         size_bytes = int(size_gb * 1024 ** 3)
-        eta_seconds = int((size_gb * 8 * 1024) / _DOWNLOAD_MBPS)  # GB -> Gb -> Mb -> s
+        eta_seconds = int((size_gb * 8 * 1024) / download_mbps)  # GB -> Gb -> Mb -> s
 
         entry: dict[str, Any] = {
             "model": model_name,
@@ -1855,7 +1855,9 @@ class ConversationQueryRequest(BaseModel):
     max_tokens: int | None = Field(default=None, gt=0)
 
 
-from nvh.storage import repository as repo  # needed by conversation endpoints
+from nvh.storage import (
+    repository as repo,  # noqa: E402 — after middleware setup to avoid circular import
+)
 
 
 @app.get("/v1/conversations", summary="List conversations with pagination")
@@ -2112,7 +2114,7 @@ async def save_provider_key(request: SaveKeyRequest):
         keyring.set_password("nvhive", f"{request.provider}_api_key", request.api_key)
 
         # Validate the key by running a health check
-        engine = get_engine()
+        get_engine()
         # Reinitialize to pick up the new key
         # (In practice, a restart may be needed for full effect)
 
