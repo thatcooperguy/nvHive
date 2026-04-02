@@ -3248,13 +3248,229 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
     port: int = typer.Option(8000, "--port", help="Port number"),
     reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev mode)"),
+    daemon: bool = typer.Option(False, "--daemon", help="Install as system service (auto-start on boot)"),
 ):
-    """Start the REST API server."""
+    """Start the REST API server.
+
+    Use --daemon to install as a persistent service that starts on boot.
+    """
+    if daemon:
+        import sys as _sys
+
+        from nvh.integrations.service import install_launchd_service, install_systemd_service
+        console.print("[bold]Installing nvHive proxy as a system service...[/bold]")
+        if _sys.platform == "darwin":
+            ok, msg = install_launchd_service(host, port)
+        else:
+            ok, msg = install_systemd_service(host, port)
+        if ok:
+            console.print(f"[green]✓[/green] {msg}")
+            console.print(f"  Proxy will auto-start on boot at http://{host}:{port}")
+            console.print("  Manage with: [bold]nvh service status|stop|uninstall[/bold]")
+        else:
+            console.print(f"[red]✗[/red] {msg}")
+        return
+
     from nvh.api.server import run_server
     console.print(f"[bold]Hive API Server[/bold] starting on http://{host}:{port}")
     console.print(f"API docs: http://{host}:{port}/docs")
     console.print()
     run_server(host=host, port=port, reload=reload)
+
+
+@app.command()
+def service(
+    action: str = typer.Argument("status", help="Action: status, stop, uninstall"),
+):
+    """Manage the nvHive proxy background service.
+
+    Examples:
+        nvh service              Check if proxy service is running
+        nvh service status       Same as above
+        nvh service stop         Stop the service (keeps it installed)
+        nvh service uninstall    Remove the service completely
+    """
+    from nvh.integrations.service import service_status, uninstall_service
+
+    if action == "status":
+        running, msg = service_status()
+        if running:
+            console.print(f"  [green]✓[/green] nvHive proxy service: [bold green]{msg}[/bold green]")
+        else:
+            console.print(f"  [yellow]○[/yellow] nvHive proxy service: [bold]{msg}[/bold]")
+            if msg == "Not installed":
+                console.print("  Install with: [bold]nvh serve --daemon[/bold]")
+
+    elif action == "stop":
+        import subprocess
+        import sys as _sys
+        if _sys.platform == "darwin":
+            subprocess.run(["launchctl", "unload",
+                           str(Path.home() / "Library" / "LaunchAgents" / "com.nvhive.proxy.plist")],
+                          capture_output=True)
+        else:
+            subprocess.run(["systemctl", "--user", "stop", "nvhive-proxy"], capture_output=True)
+        console.print("  [green]✓[/green] Service stopped")
+
+    elif action == "uninstall":
+        ok, msg = uninstall_service()
+        if ok:
+            console.print(f"  [green]✓[/green] {msg}")
+        else:
+            console.print(f"  [yellow]○[/yellow] {msg}")
+
+    else:
+        console.print(f"  [red]Unknown action: {action}[/red]")
+        console.print("  Use: status, stop, uninstall")
+
+
+# ---------------------------------------------------------------------------
+# hive integrate — auto-detect and configure all platforms
+# ---------------------------------------------------------------------------
+
+@app.command()
+def integrate(
+    auto: bool = typer.Option(False, "--auto", "-y", help="Auto-configure all detected platforms without prompting"),
+    scan_only: bool = typer.Option(False, "--scan", help="Just scan — don't configure anything"),
+):
+    """Auto-detect and configure nvHive with all installed AI platforms.
+
+    Scans for NemoClaw, OpenClaw, Claude Code, Cursor, and Claude Desktop,
+    then offers to register nvHive with each one automatically.
+
+    Examples:
+        nvh integrate          Scan and prompt for each platform
+        nvh integrate --auto   Configure everything without prompting
+        nvh integrate --scan   Just show what's installed
+    """
+    from rich.rule import Rule
+
+    from nvh.integrations.detector import (
+        detect_platforms,
+        register_claude_code,
+        register_claude_desktop,
+        register_cursor,
+        register_nemoclaw,
+        register_openclaw,
+    )
+
+    console.print()
+    console.print(Panel(
+        "[bold]NVHive Auto-Integration[/bold]\n"
+        "Scanning for AI platforms to connect with nvHive...",
+        border_style="blue",
+    ))
+    console.print()
+
+    platforms = detect_platforms()
+    detected = [p for p in platforms if p.detected]
+    not_detected = [p for p in platforms if not p.detected]
+
+    # --- Show scan results ---
+    console.print(Rule("Detected Platforms"))
+    console.print()
+
+    if not detected:
+        console.print("  [yellow]No external AI platforms detected.[/yellow]")
+        console.print()
+        console.print("  [bold]That's OK![/bold] nvHive works great standalone:")
+        console.print('    [dim]$[/dim] nvh "What is machine learning?"')
+        console.print('    [dim]$[/dim] nvh convene "Should we use Rust or Go?"')
+        console.print('    [dim]$[/dim] nvh throwdown "Best database for SaaS?"')
+        console.print()
+        console.print("  Want to connect nvHive to other tools later? Install any of:")
+        console.print()
+
+        integ_table = Table(show_header=True, header_style="bold", padding=(0, 2))
+        integ_table.add_column("Platform")
+        integ_table.add_column("Install")
+        integ_table.add_column("Then run")
+        integ_table.add_row("NemoClaw", "pip install nemoclaw", "nvh nemoclaw")
+        integ_table.add_row("OpenClaw", "pip install openclaw", "nvh openclaw")
+        integ_table.add_row("Claude Code", "npm i -g @anthropic/claude-code", "nvh integrate --auto")
+        integ_table.add_row("Cursor", "https://cursor.com", "nvh integrate --auto")
+        console.print(integ_table)
+        console.print()
+        console.print("  After installing, run [bold]nvh integrate[/bold] again to auto-configure.")
+        console.print()
+        return
+
+    for p in detected:
+        status = "[green]✓ configured[/green]" if p.already_configured else "[yellow]○ not configured[/yellow]"
+        console.print(f"  [green]✓[/green] [bold]{p.display_name}[/bold] — {status}")
+        console.print(f"    [dim]{p.detection_method}[/dim]")
+        if p.integration_type == "mcp":
+            console.print(f"    [dim]Integration: MCP tool server[/dim]")
+        else:
+            console.print(f"    [dim]Integration: Inference provider (proxy)[/dim]")
+        for note in p.notes:
+            console.print(f"    [dim]{note}[/dim]")
+
+    if not_detected:
+        console.print()
+        console.print("  [dim]Not found:[/dim]", end="")
+        console.print(f" [dim]{', '.join(p.display_name for p in not_detected)}[/dim]")
+
+    console.print()
+
+    if scan_only:
+        return
+
+    # --- Configure each detected platform ---
+    to_configure = [p for p in detected if not p.already_configured]
+
+    if not to_configure:
+        console.print("  [bold green]All detected platforms are already configured![/bold green]")
+        console.print()
+        return
+
+    console.print(Rule("Configure Integrations"))
+    console.print()
+
+    registered = 0
+    for p in to_configure:
+        if not auto:
+            confirm = typer.confirm(f"  Configure {p.display_name}?", default=True)
+            if not confirm:
+                console.print(f"  [dim]Skipped {p.display_name}[/dim]")
+                continue
+
+        success = False
+        msg = ""
+
+        if p.name == "nemoclaw":
+            success, msg = register_nemoclaw()
+        elif p.name == "openclaw":
+            success, msg = register_openclaw(p.config_path or None)
+        elif p.name == "claude_code":
+            success, msg = register_claude_code()
+        elif p.name == "cursor":
+            success, msg = register_cursor(p.config_path or None)
+        elif p.name == "claude_desktop":
+            success, msg = register_claude_desktop()
+
+        if success:
+            console.print(f"  [green]✓[/green] {p.display_name}: {msg}")
+            registered += 1
+        else:
+            console.print(f"  [red]✗[/red] {p.display_name}: {msg}")
+
+    console.print()
+    if registered:
+        console.print(f"  [bold green]{registered} platform(s) configured![/bold green]")
+
+        # Check if any MCP platforms were configured
+        mcp_platforms = [p for p in to_configure if p.integration_type == "mcp" and not p.already_configured]
+        proxy_platforms = [p for p in to_configure if p.integration_type == "inference" and not p.already_configured]
+
+        if mcp_platforms:
+            console.print()
+            console.print("  MCP tools are available immediately (stdio transport).")
+            console.print("  Your agent will spawn nvHive automatically when needed.")
+        if proxy_platforms:
+            console.print()
+            console.print("  Start the proxy for NemoClaw: [bold]nvh nemoclaw --start[/bold]")
+    console.print()
 
 
 # ---------------------------------------------------------------------------
@@ -6360,7 +6576,7 @@ def main():
         "code", "write", "research", "math", "clip",
         "voice", "imagine", "screenshot", "bench", "scan", "learn",
         "setup", "status", "savings", "debug", "doctor", "update", "version",
-        "serve", "repl", "completions", "plugins", "nemoclaw", "mcp", "openclaw",
+        "serve", "repl", "completions", "plugins", "nemoclaw", "mcp", "openclaw", "integrate", "service",
         "advisor", "agent", "config", "conversation", "budget", "model",
         "template", "workflow", "knowledge", "schedule", "webhook", "auth",
         "git", "webui", "keys",
