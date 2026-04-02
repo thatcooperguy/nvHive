@@ -103,26 +103,68 @@ def generate_launchd_plist(
 """
 
 
-def install_systemd_service(host: str = "127.0.0.1", port: int = 8000) -> tuple[bool, str]:
-    """Install the systemd user service."""
-    service_dir = Path.home() / ".config" / "systemd" / "user"
-    service_dir.mkdir(parents=True, exist_ok=True)
-    service_file = service_dir / "nvhive-proxy.service"
+def _try_nohup_fallback(host: str, port: int) -> tuple[bool, str]:
+    """Fallback for sandbox/container: run proxy via nohup."""
+    import subprocess
+    nvh = _find_nvh_bin()
+    log_dir = Path.home() / ".config" / "nvhive" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "proxy.log"
+    pid_file = log_dir / "proxy.pid"
 
+    try:
+        proc = subprocess.Popen(
+            ["nohup", nvh, "serve", "--host", host, "--port", str(port)],
+            stdout=open(log_file, "a"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        pid_file.write_text(str(proc.pid))
+        return True, (
+            f"Proxy running in background (PID {proc.pid})\n"
+            f"  Log: {log_file}\n"
+            f"  Stop: kill $(cat {pid_file})"
+        )
+    except Exception as e:
+        return False, f"nohup fallback failed: {e}"
+
+
+def install_systemd_service(host: str = "127.0.0.1", port: int = 8000) -> tuple[bool, str]:
+    """Install the systemd user service. Falls back to nohup in sandboxes."""
+    import shutil
+    import subprocess
+
+    # Check if systemctl is available
+    if not shutil.which("systemctl"):
+        return _try_nohup_fallback(host, port)
+
+    service_dir = Path.home() / ".config" / "systemd" / "user"
+    try:
+        service_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        return _try_nohup_fallback(host, port)
+
+    service_file = service_dir / "nvhive-proxy.service"
     content = generate_systemd_service(host, port)
     service_file.write_text(content)
 
-    # Enable and start
-    import subprocess
     try:
-        subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, capture_output=True)
-        subprocess.run(["systemctl", "--user", "enable", "nvhive-proxy"], check=True, capture_output=True)
-        subprocess.run(["systemctl", "--user", "start", "nvhive-proxy"], check=True, capture_output=True)
+        subprocess.run(
+            ["systemctl", "--user", "daemon-reload"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["systemctl", "--user", "enable", "nvhive-proxy"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["systemctl", "--user", "start", "nvhive-proxy"],
+            check=True, capture_output=True,
+        )
         return True, f"Service installed and started: {service_file}"
-    except subprocess.CalledProcessError as e:
-        return False, f"Service file written to {service_file} but start failed: {e.stderr.decode().strip()}"
-    except FileNotFoundError:
-        return False, f"Service file written to {service_file} — run: systemctl --user enable --now nvhive-proxy"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # systemd not working — fall back to nohup
+        return _try_nohup_fallback(host, port)
 
 
 def install_launchd_service(host: str = "127.0.0.1", port: int = 8000) -> tuple[bool, str]:

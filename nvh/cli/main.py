@@ -3356,13 +3356,13 @@ def hostname(
         console.print(f"  {'[green]✓[/green]' if ok else '[yellow]![/yellow]'} {msg}")
         return
 
+    from nvh.integrations.hostname import get_access_urls
+
     if is_hostname_configured():
-        console.print("  [green]✓[/green] [bold]nvhive[/bold] hostname is already configured")
-        console.print("  WebUI: http://nvhive:3000")
-        console.print("  API:   http://nvhive:8000")
-        console.print()
-        console.print("  [dim]Want http://nvhive with no port? Run:[/dim]")
-        console.print("  [dim]  sudo nvh webui --port 80[/dim]")
+        urls = get_access_urls()
+        console.print("  [green]✓[/green] [bold]nvhive[/bold] hostname is configured")
+        console.print(f"  WebUI: {urls['webui']}")
+        console.print(f"  API:   {urls['api']}")
         return
 
     ok, msg = add_hostname()
@@ -3371,8 +3371,8 @@ def hostname(
     else:
         console.print(f"  [yellow]![/yellow] {msg}")
     console.print()
-    console.print("  [dim]Want http://nvhive with no port? Run:[/dim]")
-    console.print("  [dim]  sudo nvh webui --port 80[/dim]")
+    urls = get_access_urls()
+    console.print(f"  Access your instance at: {urls['webui']}")
 
 
 # ---------------------------------------------------------------------------
@@ -4137,40 +4137,59 @@ def webui(
         console.print("[green]Web UI ready. Run 'nvh webui' to launch.[/green]")
         return
 
-    # Smart port selection — check for conflicts
+    # --- Smart setup: hostname + best port ---
     import socket
 
-    def _port_in_use(p: int) -> bool:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            return s.connect_ex(("127.0.0.1", p)) == 0
+    from nvh.integrations.hostname import add_hostname, is_hostname_configured
 
-    chosen_port = port
-    if _port_in_use(port):
-        if port == 3000:
-            # Default port occupied — try alternatives
-            for fallback in [3001, 3002, 8080, 8081]:
-                if not _port_in_use(fallback):
+    def _port_available(p: int) -> bool:
+        """Check if a port is free to bind."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", p))
+                return True
+        except OSError:
+            return False
+
+    # Step 1: Try to set up hostname (silent, best-effort)
+    if not is_hostname_configured():
+        ok, msg = add_hostname()
+        if ok and "localhost" not in msg:
+            console.print("  [green]✓[/green] Hostname configured: nvhive")
+
+    # Step 2: Smart port selection — cascade through preferred ports
+    if port == 3000:
+        # Default: try 80 first (if we have access), then 3000, then fallbacks
+        preferred = [80, 3000, 3001, 3002, 8080]
+        chosen_port = None
+        for p in preferred:
+            if _port_available(p):
+                chosen_port = p
+                if p != 3000:
                     console.print(
-                        f"[yellow]![/yellow] Port {port} is in use. "
-                        f"Switching to port {fallback}."
+                        f"  [green]✓[/green] Using port {p}"
+                        + (" (privileged)" if p < 1024 else "")
                     )
-                    chosen_port = fallback
-                    break
-            else:
-                console.print(f"[red]Port {port} and fallbacks are all in use.[/red]")
-                console.print("Specify a free port: [bold]nvh webui --port 9000[/bold]")
-                raise typer.Exit(1)
-        else:
+                break
+        if chosen_port is None:
+            console.print("[red]All preferred ports are in use (80, 3000-3002, 8080).[/red]")
+            console.print("Specify a free port: [bold]nvh webui --port 9000[/bold]")
+            raise typer.Exit(1)
+    else:
+        # User specified a port — use it or fail
+        if not _port_available(port):
             console.print(f"[red]Port {port} is already in use.[/red]")
             console.print("Choose a different port: [bold]nvh webui --port 3001[/bold]")
             raise typer.Exit(1)
+        chosen_port = port
 
-    # Check hostname setup
-    from nvh.integrations.hostname import is_hostname_configured
+    # Step 3: Build the access URL
     host_label = "nvhive" if is_hostname_configured() else "localhost"
+    port_suffix = "" if chosen_port == 80 else f":{chosen_port}"
+    access_url = f"http://{host_label}{port_suffix}"
 
-    console.print(f"[bold]Starting nvHive Web UI on port {chosen_port}...[/bold]")
-    console.print(f"  WebUI: http://{host_label}:{chosen_port}")
+    console.print("[bold]Starting nvHive Web UI...[/bold]")
+    console.print(f"  WebUI: {access_url}")
     console.print("  [dim]API server must be running: nvh serve (in another terminal)[/dim]")
     console.print("  [dim]Press Ctrl+C to stop[/dim]")
     console.print()
