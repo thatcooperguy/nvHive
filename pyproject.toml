@@ -85,6 +85,15 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    # aiosqlite worker thread tries to callback after event loop closes during
+    # test teardown — harmless race condition, not a real error.
+    "ignore::pytest.PytestUnhandledThreadExceptionWarning",
+    # FastAPI upstream deprecation — they need to update to HTTP_422_UNPROCESSABLE_CONTENT.
+    "ignore:'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated:DeprecationWarning",
+    # passlib imports deprecated crypt module — upstream issue, fixed in newer passlib.
+    "ignore:'crypt' is deprecated:DeprecationWarning",
+]
 
 [tool.mypy]
 python_version = "3.11"
