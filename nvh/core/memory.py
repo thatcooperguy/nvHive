@@ -36,7 +36,7 @@ class Memory:
     content: str           # the memory content
     created_at: str        # ISO timestamp
     source: str = ""       # where this came from (user, auto, conversation)
-    relevance: float = 1.0 # 0-1, decays over time if not accessed
+    relevance: float = 1.0 # 0-1, used for sorting (higher = more relevant)
     access_count: int = 0  # how often this memory has been used
     last_accessed: str = ""
 

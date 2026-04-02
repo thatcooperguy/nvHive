@@ -55,7 +55,6 @@ async def ask(
     system: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
-    stream: bool = False,
 ) -> CompletionResponse:
     """Ask a single advisor a question.
 
@@ -66,7 +65,6 @@ async def ask(
         system: System prompt
         temperature: 0.0-2.0
         max_tokens: Max response length
-        stream: Not yet supported in SDK
 
     Returns:
         CompletionResponse with .content, .provider, .model, .usage, .cost_usd

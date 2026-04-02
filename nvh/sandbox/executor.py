@@ -1,18 +1,23 @@
 """Sandboxed code execution for LLM tool use.
 
-Executes code inside an isolated Docker container (or subprocess with
-resource limits if Docker is unavailable). All execution is:
+Two execution modes:
+
+**Docker mode** (preferred, full isolation):
 - Time-limited (configurable, default 30s)
 - Memory-limited (configurable, default 512MB)
 - Network-isolated (no outbound access)
 - Filesystem-isolated (only a temp directory is shared)
 - Non-root (runs as unprivileged user inside container)
 
-This enables LLMs to:
-- Execute Python/JavaScript/bash code
-- Read/write files in a sandboxed workspace
-- Run tests
-- All without root access on the host
+**Subprocess fallback** (when Docker is unavailable):
+- Time-limited only (via asyncio timeout)
+- NO memory limit, NO network isolation, NO user isolation
+- Code runs with the same permissions as the nvHive process
+- Use with caution — only run trusted code in this mode
+
+Docker mode is strongly recommended for production deployments.
+The subprocess fallback is intended for development and trusted
+environments where Docker is not available.
 """
 
 import asyncio
@@ -85,6 +90,11 @@ class SandboxExecutor:
         if await self._check_docker():
             return await self._execute_docker(code, language, files)
         else:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Docker unavailable — using subprocess fallback "
+                "(no network/memory/user isolation)"
+            )
             return await self._execute_subprocess(code, language, files)
 
     async def _execute_docker(

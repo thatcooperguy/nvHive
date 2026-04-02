@@ -228,7 +228,7 @@ async def _authenticate_websocket(websocket: WebSocket) -> bool:
         if user:
             return True
     except Exception:
-        pass
+        logger.warning("WebSocket auth: token validation failed", exc_info=True)
 
     await websocket.close(code=4003, reason="Invalid token")
     return False
@@ -1154,11 +1154,13 @@ async def ws_council(websocket: WebSocket) -> None:
         return
 
     async def _send(event: dict) -> None:
-        """Send a single event over the WebSocket; swallow errors on disconnect."""
+        """Send a single event over the WebSocket."""
         try:
             await websocket.send_json(event)
+        except WebSocketDisconnect:
+            pass  # client disconnected, expected
         except Exception:
-            pass
+            logger.debug("WebSocket send failed for event type=%s", event.get("type"))
 
     try:
         await engine.council.run_council_streaming(

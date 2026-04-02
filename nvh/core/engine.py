@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -139,6 +140,9 @@ class ResponseCache:
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
+
 
 class Engine:
     """Main orchestration engine."""
@@ -289,14 +293,31 @@ class Engine:
         return await self._check_connectivity()
 
     async def _check_connectivity(self) -> bool:
-        """Quick connectivity check — can we reach any cloud advisor?"""
+        """Quick connectivity check — can we reach any cloud provider?
+
+        Tests multiple endpoints in parallel and returns True if any respond.
+        """
+        import asyncio
+
         import httpx
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.head("https://api.groq.com", timeout=3)
-                return resp.status_code < 500
-        except Exception:
-            return False
+
+        endpoints = [
+            "https://api.groq.com",
+            "https://api.openai.com",
+            "https://api.anthropic.com",
+            "https://generativelanguage.googleapis.com",
+        ]
+
+        async def _ping(url: str) -> bool:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.head(url, timeout=3)
+                    return resp.status_code < 500
+            except Exception:
+                return False
+
+        results = await asyncio.gather(*[_ping(url) for url in endpoints])
+        return any(results)
 
     # -----------------------------------------------------------------------
     # Simple Query
@@ -428,12 +449,33 @@ class Engine:
             if eval_result.get("should_retry") and not response.fallback_from:
                 retry_provider = eval_result.get("retry_with")
                 if retry_provider and retry_provider != response.provider:
-                    import logging as _logging
-                    _logging.getLogger(__name__).debug(
-                        "Orchestrator eval suggests retry with %s (quality=%s)",
+                    logger.info(
+                        "Orchestrator: retrying with %s (quality=%s, reason=%s)",
                         retry_provider,
                         eval_result.get("quality"),
+                        eval_result.get("reason", "low quality"),
                     )
+                    # Actually retry with the suggested provider
+                    if self.registry.has(retry_provider):
+                        retry_decision = self.router.route(
+                            query=prompt,
+                            provider_override=retry_provider,
+                        )
+                        try:
+                            retry_response = await self._execute_with_fallback(
+                                messages=messages,
+                                decision=retry_decision,
+                                temperature=temp,
+                                max_tokens=max_tok,
+                                system_prompt=sys_prompt,
+                                stream=stream,
+                            )
+                            response = retry_response
+                        except Exception:
+                            logger.debug(
+                                "Retry with %s failed, keeping original",
+                                retry_provider,
+                            )
 
         if privacy:
             # Skip all storage in privacy mode

@@ -285,7 +285,7 @@ class RoutingEngine:
                 "cost": cost_score,
                 "latency": lat_score,
                 "health": health,
-                "model": 0,  # placeholder
+                "model": 0,  # reserved for future model-level scoring
             }
 
         if not provider_scores:
