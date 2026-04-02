@@ -2573,3 +2573,159 @@ async def proxy_health():
             "streaming": True,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Integrations API  (/v1/integrations/*)
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/v1/integrations/scan",
+    summary="Scan for installed AI platforms",
+    tags=["integrations"],
+)
+async def integrations_scan():
+    """Detect installed AI platforms and their connection status."""
+    from nvh.integrations.detector import detect_platforms
+
+    platforms = detect_platforms()
+    results = []
+    for p in platforms:
+        results.append({
+            "name": p.name,
+            "display_name": p.display_name,
+            "detected": p.detected,
+            "already_configured": p.already_configured,
+            "detection_method": p.detection_method,
+            "config_path": p.config_path,
+            "integration_type": p.integration_type,
+            "notes": p.notes,
+        })
+
+    return _response_envelope({
+        "platforms": results,
+        "detected_count": sum(1 for p in platforms if p.detected),
+        "configured_count": sum(
+            1 for p in platforms if p.already_configured
+        ),
+        "total_count": len(platforms),
+    })
+
+
+class _ConnectRequest(BaseModel):
+    platform: str
+    host: str = "127.0.0.1"
+    port: int = 8000
+
+
+@app.post(
+    "/v1/integrations/connect",
+    summary="Connect nvHive to a platform",
+    tags=["integrations"],
+)
+async def integrations_connect(
+    request: _ConnectRequest,
+    _auth: Any = Depends(require_auth),
+):
+    """Register nvHive with a detected platform."""
+    from nvh.integrations.detector import (
+        register_claude_code,
+        register_claude_desktop,
+        register_cursor,
+        register_nemoclaw,
+        register_openclaw,
+    )
+
+    handlers = {
+        "nemoclaw": lambda: register_nemoclaw(
+            request.host, request.port
+        ),
+        "openclaw": lambda: register_openclaw(),
+        "claude_code": lambda: register_claude_code(),
+        "cursor": lambda: register_cursor(),
+        "claude_desktop": lambda: register_claude_desktop(),
+    }
+
+    handler = handlers.get(request.platform)
+    if not handler:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown platform: {request.platform}",
+        )
+
+    success, message = handler()
+    return _response_envelope({
+        "platform": request.platform,
+        "success": success,
+        "message": message,
+    })
+
+
+class _ConnectAllRequest(BaseModel):
+    host: str = "127.0.0.1"
+    port: int = 8000
+
+
+@app.post(
+    "/v1/integrations/connect-all",
+    summary="Auto-connect all detected platforms",
+    tags=["integrations"],
+)
+async def integrations_connect_all(
+    request: _ConnectAllRequest,
+    _auth: Any = Depends(require_auth),
+):
+    """Scan and connect all detected platforms in one call."""
+    from nvh.integrations.detector import (
+        detect_platforms,
+        register_claude_code,
+        register_claude_desktop,
+        register_cursor,
+        register_nemoclaw,
+        register_openclaw,
+    )
+
+    handlers = {
+        "nemoclaw": lambda: register_nemoclaw(
+            request.host, request.port
+        ),
+        "openclaw": lambda: register_openclaw(),
+        "claude_code": lambda: register_claude_code(),
+        "cursor": lambda: register_cursor(),
+        "claude_desktop": lambda: register_claude_desktop(),
+    }
+
+    platforms = detect_platforms()
+    results = []
+
+    for p in platforms:
+        if not p.detected or p.already_configured:
+            results.append({
+                "platform": p.name,
+                "display_name": p.display_name,
+                "action": "skipped",
+                "reason": (
+                    "already configured" if p.already_configured
+                    else "not detected"
+                ),
+                "success": p.already_configured,
+            })
+            continue
+
+        handler = handlers.get(p.name)
+        if handler:
+            success, message = handler()
+            results.append({
+                "platform": p.name,
+                "display_name": p.display_name,
+                "action": "connected" if success else "failed",
+                "message": message,
+                "success": success,
+            })
+
+    connected = sum(1 for r in results if r["success"])
+    return _response_envelope({
+        "results": results,
+        "connected": connected,
+        "total": len(results),
+    })

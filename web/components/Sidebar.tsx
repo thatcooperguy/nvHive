@@ -36,6 +36,15 @@ function IconSettings() {
   );
 }
 
+function IconIntegrations() {
+  return (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round"
+        d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.193-9.193a4.5 4.5 0 00-6.364 6.364l4.5 4.5a4.5 4.5 0 006.364-6.364l-1.757-1.757" />
+    </svg>
+  );
+}
+
 function IconSetup() {
   return (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -195,6 +204,7 @@ interface SidebarProps {
 const BOTTOM_NAV = [
   { href: '/system', label: 'System', icon: <IconSystem /> },
   { href: '/providers', label: 'Advisors', icon: <IconProviders /> },
+  { href: '/integrations', label: 'Integrations', icon: <IconIntegrations /> },
   { href: '/settings', label: 'Settings', icon: <IconSettings /> },
   { href: '/setup', label: 'Setup', icon: <IconSetup /> },
 ];
