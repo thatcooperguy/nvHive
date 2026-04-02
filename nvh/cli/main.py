@@ -3273,11 +3273,9 @@ def serve(
 
     from nvh.api.server import run_server
     from nvh.integrations.hostname import is_hostname_configured
-    console.print(f"[bold]Hive API Server[/bold] starting on http://{host}:{port}")
-    if is_hostname_configured():
-        console.print(f"  Also available at: http://nvhive:{port}")
-    console.print(f"API docs: http://{host}:{port}/docs")
-    console.print("  Tip: run [bold]nvh hostname[/bold] to enable http://nvhive")
+    host_label = "nvhive" if is_hostname_configured() else host
+    console.print(f"[bold]Hive API Server[/bold] starting on http://{host_label}:{port}")
+    console.print(f"  API docs: http://{host_label}:{port}/docs")
     console.print()
     run_server(host=host, port=port, reload=reload)
 
@@ -3326,53 +3324,6 @@ def service(
     else:
         console.print(f"  [red]Unknown action: {action}[/red]")
         console.print("  Use: status, stop, uninstall")
-
-
-# ---------------------------------------------------------------------------
-# hive hostname — local DNS setup
-# ---------------------------------------------------------------------------
-
-@app.command()
-def hostname(
-    remove: bool = typer.Option(False, "--remove", help="Remove nvhive hostname"),
-):
-    """Set up 'nvhive' as a local hostname for easy browser access.
-
-    After setup, access the WebUI at http://nvhive:3000 and the API at
-    http://nvhive:8000 instead of http://localhost.
-
-    Examples:
-        nvh hostname           Add nvhive to /etc/hosts
-        nvh hostname --remove  Remove it
-    """
-    from nvh.integrations.hostname import (
-        add_hostname,
-        is_hostname_configured,
-        remove_hostname,
-    )
-
-    if remove:
-        ok, msg = remove_hostname()
-        console.print(f"  {'[green]✓[/green]' if ok else '[yellow]![/yellow]'} {msg}")
-        return
-
-    from nvh.integrations.hostname import get_access_urls
-
-    if is_hostname_configured():
-        urls = get_access_urls()
-        console.print("  [green]✓[/green] [bold]nvhive[/bold] hostname is configured")
-        console.print(f"  WebUI: {urls['webui']}")
-        console.print(f"  API:   {urls['api']}")
-        return
-
-    ok, msg = add_hostname()
-    if ok:
-        console.print(f"  [green]✓[/green] {msg}")
-    else:
-        console.print(f"  [yellow]![/yellow] {msg}")
-    console.print()
-    urls = get_access_urls()
-    console.print(f"  Access your instance at: {urls['webui']}")
 
 
 # ---------------------------------------------------------------------------
@@ -6677,7 +6628,7 @@ def main():
         "code", "write", "research", "math", "clip",
         "voice", "imagine", "screenshot", "bench", "scan", "learn",
         "setup", "status", "savings", "debug", "doctor", "update", "version",
-        "serve", "repl", "completions", "plugins", "nemoclaw", "mcp", "openclaw", "integrate", "service", "hostname",
+        "serve", "repl", "completions", "plugins", "nemoclaw", "mcp", "openclaw", "integrate", "service",
         "advisor", "agent", "config", "conversation", "budget", "model",
         "template", "workflow", "knowledge", "schedule", "webhook", "auth",
         "git", "webui", "keys",
