@@ -320,7 +320,9 @@ async def openai_stream_generator(
                             "index": 0,
                             "delta": {},
                             "logprobs": None,
-                            "finish_reason": chunk.finish_reason.value if chunk.finish_reason else "stop",
+                            "finish_reason": (
+                                chunk.finish_reason.value if chunk.finish_reason else "stop"
+                            ),
                         }
                     ],
                 }
@@ -338,6 +340,33 @@ async def openai_stream_generator(
         yield f"data: {json.dumps(error_chunk)}\n\n".encode()
 
     yield b"data: [DONE]\n\n"
+
+
+def _sse_choices(
+    delta: dict[str, Any],
+    finish_reason: str | None = None,
+) -> list[dict[str, Any]]:
+    """Build the choices array for an SSE streaming chunk."""
+    return [{
+        "index": 0,
+        "delta": delta,
+        "logprobs": None,
+        "finish_reason": finish_reason,
+    }]
+
+
+def _extract_content(result: Any) -> str:
+    """Extract text content from a CouncilResponse."""
+    if result.synthesis:
+        if hasattr(result.synthesis, "content"):
+            return result.synthesis.content
+        return str(result.synthesis)
+    if result.member_responses:
+        first = next(iter(result.member_responses.values()))
+        if hasattr(first, "content"):
+            return first.content
+        return str(first)
+    return ""
 
 
 async def council_stream_generator(
@@ -364,7 +393,9 @@ async def council_stream_generator(
         "object": "chat.completion.chunk",
         "created": now,
         "model": effective_model,
-        "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "logprobs": None, "finish_reason": None}],
+        "choices": _sse_choices(
+            {"role": "assistant", "content": ""}
+        ),
     }
     yield f"data: {json.dumps(role_chunk)}\n\n".encode()
 
@@ -378,17 +409,18 @@ async def council_stream_generator(
             auto_agents=True,
         )
     except Exception as exc:
-        error_chunk = {"error": {"message": str(exc), "type": "council_error", "code": "council_failed"}}
+        error_chunk = {
+            "error": {
+                "message": str(exc),
+                "type": "council_error",
+                "code": "council_failed",
+            }
+        }
         yield f"data: {json.dumps(error_chunk)}\n\n".encode()
         yield b"data: [DONE]\n\n"
         return
 
-    content = ""
-    if result.synthesis:
-        content = result.synthesis.content if hasattr(result.synthesis, "content") else str(result.synthesis)
-    elif result.member_responses:
-        first_resp = next(iter(result.member_responses.values()))
-        content = first_resp.content if hasattr(first_resp, "content") else str(first_resp)
+    content = _extract_content(result)
 
     # Stream content in word-sized chunks for progressive rendering
     words = content.split(" ")
@@ -399,7 +431,7 @@ async def council_stream_generator(
             "object": "chat.completion.chunk",
             "created": now,
             "model": effective_model,
-            "choices": [{"index": 0, "delta": {"content": delta}, "logprobs": None, "finish_reason": None}],
+            "choices": _sse_choices({"content": delta}),
         }
         yield f"data: {json.dumps(chunk)}\n\n".encode()
 
@@ -409,7 +441,7 @@ async def council_stream_generator(
         "object": "chat.completion.chunk",
         "created": now,
         "model": effective_model,
-        "choices": [{"index": 0, "delta": {}, "logprobs": None, "finish_reason": "stop"}],
+        "choices": _sse_choices({}, finish_reason="stop"),
     }
     yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"
@@ -431,7 +463,9 @@ async def throwdown_stream_generator(
         "object": "chat.completion.chunk",
         "created": now,
         "model": "throwdown",
-        "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "logprobs": None, "finish_reason": None}],
+        "choices": _sse_choices(
+            {"role": "assistant", "content": ""}
+        ),
     }
     yield f"data: {json.dumps(role_chunk)}\n\n".encode()
 
@@ -445,17 +479,18 @@ async def throwdown_stream_generator(
             strategy="throwdown",
         )
     except Exception as exc:
-        error_chunk = {"error": {"message": str(exc), "type": "throwdown_error", "code": "throwdown_failed"}}
+        error_chunk = {
+            "error": {
+                "message": str(exc),
+                "type": "throwdown_error",
+                "code": "throwdown_failed",
+            }
+        }
         yield f"data: {json.dumps(error_chunk)}\n\n".encode()
         yield b"data: [DONE]\n\n"
         return
 
-    content = ""
-    if result.synthesis:
-        content = result.synthesis.content if hasattr(result.synthesis, "content") else str(result.synthesis)
-    elif result.member_responses:
-        first_resp = next(iter(result.member_responses.values()))
-        content = first_resp.content if hasattr(first_resp, "content") else str(first_resp)
+    content = _extract_content(result)
 
     words = content.split(" ")
     for i, word in enumerate(words):
@@ -465,7 +500,7 @@ async def throwdown_stream_generator(
             "object": "chat.completion.chunk",
             "created": now,
             "model": "throwdown",
-            "choices": [{"index": 0, "delta": {"content": delta}, "logprobs": None, "finish_reason": None}],
+            "choices": _sse_choices({"content": delta}),
         }
         yield f"data: {json.dumps(chunk)}\n\n".encode()
 
@@ -474,7 +509,7 @@ async def throwdown_stream_generator(
         "object": "chat.completion.chunk",
         "created": now,
         "model": "throwdown",
-        "choices": [{"index": 0, "delta": {}, "logprobs": None, "finish_reason": "stop"}],
+        "choices": _sse_choices({}, finish_reason="stop"),
     }
     yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"

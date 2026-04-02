@@ -30,8 +30,6 @@ Register with OpenClaw (openclaw.json):
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 from typing import Any
 
@@ -73,7 +71,11 @@ def _format_council_response(result: Any) -> str:
 
     # Synthesis first
     if result.synthesis:
-        content = result.synthesis.content if hasattr(result.synthesis, "content") else str(result.synthesis)
+        content = (
+            result.synthesis.content
+            if hasattr(result.synthesis, "content")
+            else str(result.synthesis)
+        )
         parts.append(f"## Council Synthesis\n\n{content}")
 
     # Individual member responses

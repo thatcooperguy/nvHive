@@ -52,12 +52,10 @@ def test_mcp_server_format_council_response():
 
 def test_mcp_server_create_server_without_sdk():
     """Creating the server without mcp installed should raise ImportError."""
-    import importlib
-    import sys
 
     # If mcp is actually installed, skip
     try:
-        import mcp
+        import mcp  # noqa: F401
         pytest.skip("mcp SDK is installed — cannot test missing-SDK path")
     except ImportError:
         pass
