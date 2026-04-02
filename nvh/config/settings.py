@@ -116,7 +116,7 @@ class DefaultsConfig(BaseModel):
     timeout: int = 30
     max_tokens: int = 4096
     temperature: float = 1.0
-    system_prompt: str = ""
+    system_prompt: str = "Always respond in English unless the user explicitly requests another language."
     show_metadata: bool = True
     orchestration_mode: str = "auto"  # off, light, full, auto
 

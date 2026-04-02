@@ -17,12 +17,12 @@ const STEPS: { id: Step; label: string; num: number }[] = [
 ];
 
 const CLOUD_PROVIDERS = [
-  { id: 'openai', name: 'OpenAI', description: 'GPT-4o, GPT-4o-mini', envKey: 'OPENAI_API_KEY', placeholder: 'sk-...' },
-  { id: 'anthropic', name: 'Anthropic', description: 'Claude Sonnet, Haiku, Opus', envKey: 'ANTHROPIC_API_KEY', placeholder: 'sk-ant-...' },
-  { id: 'google', name: 'Google Gemini', description: 'Gemini 2.0 Flash, Pro', envKey: 'GOOGLE_API_KEY', placeholder: 'AIza...' },
-  { id: 'groq', name: 'Groq', description: 'Llama 3.3 70B (ultra-fast)', envKey: 'GROQ_API_KEY', placeholder: 'gsk_...' },
-  { id: 'grok', name: 'xAI Grok', description: 'Grok 2, Grok 3', envKey: 'XAI_API_KEY', placeholder: 'xai-...' },
-  { id: 'mistral', name: 'Mistral', description: 'Mistral Large, Small', envKey: 'MISTRAL_API_KEY', placeholder: 'your-key...' },
+  { id: 'openai', name: 'OpenAI', description: 'GPT-4o, GPT-4o-mini', envKey: 'OPENAI_API_KEY', placeholder: 'sk-...', signupUrl: 'https://platform.openai.com/api-keys' },
+  { id: 'anthropic', name: 'Anthropic', description: 'Claude Sonnet, Haiku, Opus', envKey: 'ANTHROPIC_API_KEY', placeholder: 'sk-ant-...', signupUrl: 'https://console.anthropic.com/settings/keys' },
+  { id: 'google', name: 'Google Gemini', description: 'Gemini 2.0 Flash, Pro', envKey: 'GOOGLE_API_KEY', placeholder: 'AIza...', signupUrl: 'https://aistudio.google.com/apikey' },
+  { id: 'groq', name: 'Groq', description: 'Llama 3.3 70B (ultra-fast)', envKey: 'GROQ_API_KEY', placeholder: 'gsk_...', signupUrl: 'https://console.groq.com/keys' },
+  { id: 'grok', name: 'xAI Grok', description: 'Grok 2, Grok 3', envKey: 'XAI_API_KEY', placeholder: 'xai-...', signupUrl: 'https://console.x.ai' },
+  { id: 'mistral', name: 'Mistral', description: 'Mistral Large, Small', envKey: 'MISTRAL_API_KEY', placeholder: 'your-key...', signupUrl: 'https://console.mistral.ai/api-keys' },
 ];
 
 // ─── Provider Card (used in Cloud step) ──────────────────────────────────────
@@ -95,17 +95,31 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
       {/* Inline key form */}
       {isExpanded && !isConfigured && (
         <div className="border-t border-[#1a1a1a] p-3 space-y-2">
-          <div className="text-[10px] font-mono text-[#555555]">
-            {p.env_key ? `Environment variable: ${p.env_key}` : 'Paste your API key below'}
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] font-mono text-[#555555]">
+              {p.env_key ? `Environment variable: ${p.env_key}` : 'Paste your API key below'}
+            </div>
+            {p.signup_url && (
+              <a
+                href={p.signup_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10px] font-mono text-[#76B900] hover:underline"
+              >
+                Get Key &rarr;
+              </a>
+            )}
           </div>
           <div className="flex gap-2">
             <input
-              type="password"
+              type="text"
               value={keyInputs[p.id] ?? ''}
               onChange={e => setKeyInputs(prev => ({ ...prev, [p.id]: e.target.value }))}
               placeholder={p.placeholder ?? 'Paste API key...'}
               className="input-base flex-1 px-3 py-2 text-xs font-mono"
               onKeyDown={e => { if (e.key === 'Enter') handleSaveKey(p.id); }}
+              spellCheck={false}
+              autoComplete="off"
               autoFocus
             />
             <button
@@ -673,21 +687,41 @@ export default function SetupPage() {
                         <div className="text-sm font-mono font-bold text-white">{provider.name}</div>
                         <div className="text-[10px] font-mono text-[#555555]">{provider.description}</div>
                       </div>
-                      {apiKeys[provider.id] && (
-                        <span className="text-[10px] font-mono text-[#76B900] bg-[#76B900]/10 px-1.5 py-0.5">CONFIGURED</span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {apiKeys[provider.id] && (
+                          <span className="text-[10px] font-mono text-[#76B900] bg-[#76B900]/10 px-1.5 py-0.5">CONFIGURED</span>
+                        )}
+                        {provider.signupUrl && (
+                          <a
+                            href={provider.signupUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] font-mono text-[#76B900] hover:underline"
+                          >
+                            Get Key &rarr;
+                          </a>
+                        )}
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <input
-                        type="password"
+                        type="text"
                         value={apiKeys[provider.id] || ''}
                         onChange={e => setApiKeys(prev => ({ ...prev, [provider.id]: e.target.value }))}
-                        placeholder={`${provider.envKey}=${provider.placeholder}`}
+                        onPaste={e => {
+                          const pasted = e.clipboardData.getData('text').trim();
+                          if (pasted) {
+                            setApiKeys(prev => ({ ...prev, [provider.id]: pasted }));
+                          }
+                        }}
+                        placeholder={`Paste ${provider.envKey} here...`}
                         className="input-base flex-1 px-3 py-2 text-xs font-mono"
+                        spellCheck={false}
+                        autoComplete="off"
                       />
                     </div>
                     <div className="text-[10px] font-mono text-[#333333] mt-1">
-                      Set as env var: <span className="text-[#555555]">{provider.envKey}=your-key</span>
+                      Or set as env var: <span className="text-[#555555]">{provider.envKey}=your-key</span>
                     </div>
                   </div>
                 ))}
