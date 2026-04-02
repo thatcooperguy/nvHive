@@ -8,18 +8,6 @@
 - **Run it free on your GPU.** NVIDIA Nemotron models run locally via Ollama with no API keys, no cloud costs, no data leaving your machine.
 - **Council mode.** When one model isn't enough, multiple LLMs debate your question and synthesize a consensus answer.
 
----
-
-### Web Dashboard
-
-<p align="center">
-  <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
-</p>
-
-Launch with `nvh webui` — NVIDIA-themed dark UI with real-time streaming, council visualization, provider management, and one-click integrations. [Full WebUI guide →](docs/WEBUI.md)
-
-### CLI
-
 <p align="center">
   <img src="docs/screenshots/terminal-demo.svg" alt="nvHive CLI" width="640">
 </p>
@@ -74,7 +62,7 @@ Auto-detects GPU, downloads the right Nemotron model, configures everything. Sup
 | `nvh safe "question"` | Local only — nothing leaves your machine |
 | `nvh code / write / research` | Task-optimized routing |
 | `nvh setup` | Interactive provider setup wizard |
-| `nvh webui` | Launch the web dashboard |
+| `nvh webui` | Launch the web dashboard at `http://nvhive` |
 | `nvh integrate` | Auto-detect and connect all platforms |
 | `nvh status` | Providers, GPU, budget at a glance |
 
@@ -124,7 +112,7 @@ graph LR
     style E fill:#76B900,color:#000
 ```
 
-NemoClaw agents can request virtual models: `auto`, `safe`, `council`, `council:N`, `throwdown`. Set `x-nvhive-privacy: local-only` for sensitive queries.
+Virtual models: `auto`, `safe`, `council`, `council:N`, `throwdown`. Set `x-nvhive-privacy: local-only` for sensitive queries.
 
 [Full NemoClaw guide →](docs/NEMOCLAW.md)
 
@@ -148,7 +136,7 @@ graph LR
     F --> G[22 LLM Providers]
 ```
 
-MCP tools available: `ask`, `ask_safe`, `council`, `throwdown`, `status`, `list_advisors`, `list_cabinets`.
+MCP tools: `ask`, `ask_safe`, `council`, `throwdown`, `status`, `list_advisors`, `list_cabinets`.
 
 ### OpenClaw
 
@@ -184,7 +172,7 @@ Any tool that speaks the OpenAI API can use nvHive as a backend:
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8000/v1/proxy", api_key="nvhive")
+client = OpenAI(base_url="http://nvhive:8000/v1/proxy", api_key="nvhive")
 response = client.chat.completions.create(
     model="auto",  # nvHive picks the best model
     messages=[{"role": "user", "content": "Hello"}]
@@ -238,7 +226,40 @@ graph TB
     style API fill:#1a1a1a,color:#76B900,stroke:#76B900
 ```
 
-[Detailed integration guides →](docs/NEMOCLAW.md) · [SDK & API reference →](docs/SDK_API.md)
+[NemoClaw guide →](docs/NEMOCLAW.md) · [SDK & API reference →](docs/SDK_API.md)
+
+---
+
+## Web Dashboard
+
+Launch the NVIDIA-themed dashboard:
+
+```bash
+nvh webui                 # auto-configures hostname + best port
+```
+
+Access at `http://nvhive:3000` (auto-configured) or `http://localhost:3000`.
+
+<p align="center">
+  <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
+</p>
+
+8 pages: Chat, Council, Query Builder, Advisors, Integrations, System, Settings, and Setup Wizard. NVIDIA dark theme with green accents, real-time streaming, command palette (Ctrl+K), and keyboard shortcuts.
+
+<details>
+<summary><b>Screenshots</b></summary>
+
+| Advisors | System Dashboard |
+|:-:|:-:|
+| ![Advisors](docs/screenshots/advisors.png) | ![System](docs/screenshots/system.png) |
+
+| Integrations | Setup Wizard |
+|:-:|:-:|
+| ![Integrations](docs/screenshots/integrations.png) | ![Setup](docs/screenshots/setup.png) |
+
+</details>
+
+[Full WebUI guide →](docs/WEBUI.md)
 
 ---
 
