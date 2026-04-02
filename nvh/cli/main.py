@@ -3255,6 +3255,292 @@ def serve(
 
 
 # ---------------------------------------------------------------------------
+# hive openclaw — OpenClaw integration setup
+# ---------------------------------------------------------------------------
+
+@app.command()
+def openclaw(
+    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output path for openclaw.json"),
+    agent_config: bool = typer.Option(False, "--agent", help="Generate NemoClaw agent config instead"),
+    no_merge: bool = typer.Option(False, "--no-merge", help="Overwrite existing config instead of merging"),
+):
+    """Set up NVHive as an OpenClaw / NemoClaw MCP tool server.
+
+    Generates the configuration to register nvHive's tools (ask, council,
+    throwdown, etc.) with any OpenClaw or NemoClaw agent.
+
+    Examples:
+        nvh openclaw                   Generate openclaw.json with nvHive MCP config
+        nvh openclaw -o my-config.json Write to custom path
+        nvh openclaw --agent           Generate NemoClaw agent config
+    """
+    from nvh.integrations.openclaw import (
+        generate_nemoclaw_agent_config,
+        generate_openclaw_config,
+        write_openclaw_config,
+    )
+
+    if agent_config:
+        import json
+        config = generate_nemoclaw_agent_config()
+        console.print(Panel(
+            json.dumps(config, indent=2),
+            title="NemoClaw Agent Config",
+            border_style="cyan",
+        ))
+        console.print()
+        console.print("Add this to your NemoClaw agent definition to give the agent")
+        console.print("access to nvHive's multi-LLM tools.")
+        return
+
+    from pathlib import Path
+    path = write_openclaw_config(
+        output_path=Path(output) if output else None,
+        merge_existing=not no_merge,
+    )
+    console.print(f"[green]✓[/green] NVHive MCP config written to [bold]{path}[/bold]")
+    console.print()
+    console.print("  Tools registered:")
+    console.print("    [bold]ask[/bold]           — Smart-routed LLM query")
+    console.print("    [bold]ask_safe[/bold]      — Local-only query (Ollama)")
+    console.print("    [bold]council[/bold]       — Multi-model consensus")
+    console.print("    [bold]throwdown[/bold]     — Two-pass deep analysis")
+    console.print("    [bold]status[/bold]        — System status and GPU info")
+    console.print("    [bold]list_advisors[/bold] — Available providers")
+    console.print("    [bold]list_cabinets[/bold] — Agent presets")
+    console.print()
+    console.print("  Start the MCP server: [bold]nvh mcp[/bold]")
+
+
+# ---------------------------------------------------------------------------
+# hive mcp — MCP server for Claude Code, Cursor, OpenClaw
+# ---------------------------------------------------------------------------
+
+@app.command()
+def mcp(
+    transport: str = typer.Option("stdio", "--transport", "-t", help="Transport: stdio or streamable-http"),
+    port: int = typer.Option(8080, "--port", help="Port for HTTP transport"),
+):
+    """Start the MCP (Model Context Protocol) server.
+
+    Exposes nvHive tools to Claude Code, Cursor, OpenClaw, and any MCP client.
+
+    Tools provided:
+      ask           Smart-routed LLM query
+      ask_safe      Local-only query (Ollama)
+      council       Multi-model consensus
+      throwdown     Two-pass deep analysis
+      status        System status
+      list_advisors Available providers
+      list_cabinets Agent cabinet presets
+
+    Examples:
+        nvh mcp                           Start via stdio (default)
+        nvh mcp -t streamable-http        Start as HTTP server
+        claude mcp add nvhive nvh mcp     Register with Claude Code
+    """
+    try:
+        from nvh.mcp_server import create_server
+    except ImportError:
+        console.print("[red]MCP SDK not installed.[/red]")
+        console.print('Install with: [bold]pip install "nvhive[mcp]"[/bold]')
+        console.print('  or: [bold]pip install "mcp[cli]"[/bold]')
+        raise typer.Exit(1)
+
+    server = create_server()
+
+    if transport == "stdio":
+        console.print("[bold]NVHive MCP Server[/bold] starting (stdio transport)")
+        console.print("Register with Claude Code:")
+        console.print("  [dim]$[/dim] claude mcp add nvhive nvh mcp")
+        console.print()
+        server.run(transport="stdio")
+    elif transport in ("streamable-http", "http", "sse"):
+        console.print(f"[bold]NVHive MCP Server[/bold] starting on port {port} (HTTP transport)")
+        console.print(f"Connect clients to: http://localhost:{port}/mcp")
+        console.print()
+        server.run(transport="streamable-http", host="0.0.0.0", port=port)
+    else:
+        console.print(f"[red]Unknown transport: {transport}[/red]")
+        console.print("Use: stdio, streamable-http")
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# hive nemoclaw — NemoClaw integration setup
+# ---------------------------------------------------------------------------
+
+@app.command()
+def nemoclaw(
+    host: str = typer.Option("127.0.0.1", "--host", help="NVHive proxy bind address"),
+    port: int = typer.Option(8000, "--port", help="NVHive proxy port"),
+    test: bool = typer.Option(False, "--test", help="Test connectivity to a running nvHive proxy"),
+    start: bool = typer.Option(False, "--start", help="Start the proxy server for NemoClaw"),
+):
+    """NemoClaw integration — use NVHive as your NemoClaw inference provider.
+
+    Registers NVHive's smart router, council consensus, and throwdown analysis
+    as an OpenAI-compatible inference endpoint inside NemoClaw's OpenShell sandbox.
+
+    Examples:
+        nvh nemoclaw              Show setup instructions
+        nvh nemoclaw --test       Test if nvHive proxy is reachable
+        nvh nemoclaw --start      Start the proxy server for NemoClaw
+    """
+    from rich.rule import Rule
+
+    console.print()
+    console.print(Panel(
+        "[bold cyan]NVHive ↔ NemoClaw Integration[/bold cyan]\n"
+        "Use NVHive as your NemoClaw inference provider for multi-model\n"
+        "smart routing, council consensus, and throwdown analysis.",
+        border_style="cyan",
+    ))
+
+    # --- Test mode: check if the proxy is running ---
+    if test:
+        console.print()
+        console.print(Rule("Connectivity Test"))
+        console.print()
+        try:
+            import httpx
+            url = f"http://{host}:{port}/v1/proxy/health"
+            console.print(f"  Testing [bold]{url}[/bold] ...")
+            resp = httpx.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                console.print(f"  [green]✓[/green] NVHive proxy is [bold green]healthy[/bold green]")
+                console.print(f"  [green]✓[/green] Engine initialized: {data.get('engine_initialized', '?')}")
+                console.print(f"  [green]✓[/green] Providers enabled: {data.get('providers_enabled', '?')}")
+                providers = data.get("providers", [])
+                if providers:
+                    console.print(f"  [green]✓[/green] Available: {', '.join(providers)}")
+                has_local = data.get("has_local_inference", False)
+                if has_local:
+                    console.print(f"  [green]✓[/green] Local inference (Ollama) available")
+                else:
+                    console.print(f"  [yellow]![/yellow] No local inference — cloud-only routing")
+                console.print()
+                console.print("  [bold green]Ready for NemoClaw![/bold green] Register with:")
+                console.print()
+                _print_openshell_commands(host, port)
+            else:
+                console.print(f"  [red]✗[/red] Proxy returned status {resp.status_code}")
+                console.print(f"  Start the proxy first: [bold]nvh nemoclaw --start[/bold]")
+        except Exception as e:
+            console.print(f"  [red]✗[/red] Cannot reach NVHive proxy at {host}:{port}")
+            console.print(f"  Error: {e}")
+            console.print()
+            console.print(f"  Start the proxy first: [bold]nvh nemoclaw --start[/bold]")
+        console.print()
+        return
+
+    # --- Start mode: launch the proxy ---
+    if start:
+        console.print()
+        console.print(Rule("Starting NVHive Proxy for NemoClaw"))
+        console.print()
+        console.print(f"  Binding to [bold]{host}:{port}[/bold]")
+        console.print(f"  OpenAI-compatible endpoint: http://{host}:{port}/v1/proxy/chat/completions")
+        console.print(f"  Health check: http://{host}:{port}/v1/proxy/health")
+        console.print(f"  API docs: http://{host}:{port}/docs")
+        console.print()
+        console.print("  Register this with NemoClaw using:")
+        console.print()
+        _print_openshell_commands(host, port)
+        console.print()
+        from nvh.api.server import run_server
+        run_server(host=host, port=port, reload=False)
+        return
+
+    # --- Default: show setup instructions ---
+    console.print()
+    console.print(Rule("Quick Start"))
+    console.print()
+    console.print("  [bold]Step 1:[/bold] Start the NVHive proxy")
+    console.print("  [dim]$[/dim] nvh nemoclaw --start")
+    console.print()
+    console.print("  [bold]Step 2:[/bold] Register NVHive as your NemoClaw inference provider")
+    console.print()
+    _print_openshell_commands(host, port)
+    console.print()
+    console.print("  [bold]Step 3:[/bold] Set NVHive as your default inference")
+    console.print("  [dim]$[/dim] openshell inference set --provider nvhive --model auto")
+    console.print()
+
+    console.print(Rule("Virtual Models"))
+    console.print()
+
+    model_table = Table(show_header=True, header_style="bold cyan", padding=(0, 2))
+    model_table.add_column("Model", style="bold")
+    model_table.add_column("Mode")
+    model_table.add_column("Description")
+
+    model_table.add_row("auto", "Smart routing", "Best available provider based on query type, cost, and speed")
+    model_table.add_row("safe", "Local only", "Routes to Ollama — nothing leaves your machine")
+    model_table.add_row("council", "Consensus", "3-model council with synthesis (default)")
+    model_table.add_row("council:N", "Consensus", "N-model council (2-10 members)")
+    model_table.add_row("throwdown", "Deep analysis", "Two-pass analysis with critique and refinement")
+    model_table.add_row("<model-id>", "Direct", "Route to a specific model (gpt-4o, claude-sonnet-4, etc.)")
+
+    console.print(model_table)
+    console.print()
+
+    console.print(Rule("Privacy Header"))
+    console.print()
+    console.print("  NemoClaw's privacy router can force local-only routing by setting:")
+    console.print("  [bold]x-nvhive-privacy: local-only[/bold]")
+    console.print()
+    console.print("  When this header is present, all inference stays on-device via Ollama,")
+    console.print("  regardless of the model name requested. This integrates with NemoClaw's")
+    console.print("  content-aware sensitivity routing.")
+    console.print()
+
+    console.print(Rule("Architecture"))
+    console.print()
+    console.print("  ┌─────────────────────────────────────┐")
+    console.print("  │  NemoClaw Sandbox                   │")
+    console.print("  │  ┌──────────┐    ┌──────────────┐   │")
+    console.print("  │  │ OpenClaw │───▶│ inference     │   │")
+    console.print("  │  │  Agent   │    │ .local        │   │")
+    console.print("  │  └──────────┘    └──────┬───────┘   │")
+    console.print("  └────────────────────────-┼───────────┘")
+    console.print("                            │ OpenShell Gateway")
+    console.print("                            ▼")
+    console.print("                  ┌──────────────────┐")
+    console.print("                  │   NVHive Proxy   │")
+    console.print(f"                  │  {host}:{port}  │")
+    console.print("                  │   /v1/proxy/     │")
+    console.print("                  └────────┬─────────┘")
+    console.print("                           │ Smart Router")
+    console.print("              ┌─────────-──┼────────────┐")
+    console.print("              ▼            ▼            ▼")
+    console.print("        ┌──────────┐ ┌──────────┐ ┌──────────┐")
+    console.print("        │  Ollama  │ │   Groq   │ │Anthropic │ ...22 providers")
+    console.print("        │ Nemotron │ │          │ │          │")
+    console.print("        └──────────┘ └──────────┘ └──────────┘")
+    console.print()
+
+    console.print(Rule("Commands"))
+    console.print()
+    console.print("  [bold]nvh nemoclaw[/bold]           Show this setup guide")
+    console.print("  [bold]nvh nemoclaw --test[/bold]    Test proxy connectivity")
+    console.print("  [bold]nvh nemoclaw --start[/bold]   Start the proxy server")
+    console.print()
+
+
+def _print_openshell_commands(host: str, port: int):
+    """Print the openshell provider create command."""
+    # Use host.openshell.internal for sandbox-to-host communication
+    endpoint_host = "host.openshell.internal" if host in ("127.0.0.1", "0.0.0.0", "localhost") else host
+    console.print(f"  [dim]$[/dim] openshell provider create \\")
+    console.print(f"      --name nvhive \\")
+    console.print(f"      --type openai \\")
+    console.print(f"      --credential OPENAI_API_KEY=nvhive \\")
+    console.print(f"      --config OPENAI_BASE_URL=http://{endpoint_host}:{port}/v1/proxy")
+
+
+# ---------------------------------------------------------------------------
 # hive version
 # ---------------------------------------------------------------------------
 
@@ -5926,7 +6212,7 @@ def main():
         "code", "write", "research", "math", "clip",
         "voice", "imagine", "screenshot", "bench", "scan", "learn",
         "setup", "status", "savings", "debug", "doctor", "update", "version",
-        "serve", "repl", "completions", "plugins",
+        "serve", "repl", "completions", "plugins", "nemoclaw", "mcp", "openclaw",
         "advisor", "agent", "config", "conversation", "budget", "model",
         "template", "workflow", "knowledge", "schedule", "webhook", "auth",
         "git", "webui", "keys",

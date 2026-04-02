@@ -46,6 +46,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = [
+    "mcp[cli]>=1.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -64,6 +67,7 @@ Issues = "https://github.com/thatcooperguy/nvHive/issues"
 [project.scripts]
 nvh = "nvh.cli.main:main"
 nvhive = "nvh.cli.main:main"
+nvhive-mcp = "nvh.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["nvh*"]

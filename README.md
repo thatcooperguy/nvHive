@@ -152,6 +152,11 @@ No API keys needed for your first query -- nvHive defaults to free local or anon
 | `nvh webui` | Install and launch the web UI (optional) |
 | `nvh update` | Check for and install updates |
 | `nvh version` | Print version |
+| `nvh mcp` | Start MCP server (Claude Code, Cursor, OpenClaw) |
+| `nvh openclaw` | Generate OpenClaw/NemoClaw tool config |
+| `nvh nemoclaw` | NemoClaw integration setup guide |
+| `nvh nemoclaw --test` | Test NemoClaw proxy connectivity |
+| `nvh nemoclaw --start` | Start proxy server for NemoClaw |
 
 ### Management
 
@@ -412,6 +417,65 @@ response = client.chat.completions.create(
 )
 ```
 
+## MCP Server (Claude Code, Cursor, OpenClaw)
+
+nvHive exposes its tools via the [Model Context Protocol](https://modelcontextprotocol.io/), making them available to Claude Code, Cursor, OpenClaw, and any MCP-compatible client.
+
+```bash
+# Install MCP support
+pip install "nvhive[mcp]"
+
+# Register with Claude Code
+claude mcp add nvhive nvh mcp
+
+# Or start as HTTP server for remote clients
+nvh mcp -t streamable-http --port 8080
+```
+
+Tools available via MCP: `ask`, `ask_safe`, `council`, `throwdown`, `status`, `list_advisors`, `list_cabinets`.
+
+For OpenClaw agents, generate the config:
+
+```bash
+nvh openclaw              # creates openclaw.json with nvHive MCP config
+nvh openclaw --agent      # generates NemoClaw agent config
+```
+
+## NemoClaw Integration
+
+nvHive works as an inference provider inside [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), giving NemoClaw agents access to multi-model smart routing, council consensus, and throwdown analysis.
+
+```bash
+# Setup in three commands:
+nvh nemoclaw --start                     # 1. Start nvHive proxy
+openshell provider create \              # 2. Register with NemoClaw
+    --name nvhive --type openai \
+    --credential OPENAI_API_KEY=nvhive \
+    --config OPENAI_BASE_URL=http://host.openshell.internal:8000/v1/proxy
+openshell inference set \                # 3. Set as default
+    --provider nvhive --model auto
+```
+
+NemoClaw agents can request any virtual model:
+
+| Model | What It Does |
+|-------|-------------|
+| `auto` | Smart routing — best provider for the query |
+| `safe` | Local only — nothing leaves your machine |
+| `council` | 3-model consensus with synthesis |
+| `council:N` | N-model council (2-10 members) |
+| `throwdown` | Two-pass deep analysis with critique |
+
+Privacy-aware routing: set `x-nvhive-privacy: local-only` header to force all inference through local Ollama, integrating with NemoClaw's content sensitivity routing.
+
+```
+NemoClaw Sandbox → OpenShell Gateway → nvHive Proxy → 22 providers
+                                          ↓
+                          Smart Router / Council / Throwdown
+```
+
+Run `nvh nemoclaw` for the full setup guide, or `nvh nemoclaw --test` to verify connectivity.
+
 ## Configuration
 
 Configuration lives at `~/.config/nvhive/config.yaml`. Manage it with:
@@ -513,7 +577,7 @@ nvh CLI
 | Python files | 81 |
 | Lines of code | 27,518 |
 | Functions | 810 |
-| Tests | 122 |
+| Tests | 181 |
 | Providers | 22 |
 | Models | 63 (25 free) |
 | Tools | 27 (18 safe, 9 confirm) |

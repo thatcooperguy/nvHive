@@ -2218,6 +2218,7 @@ class _ProxyCompletionsRequest(BaseModel):
 )
 async def proxy_chat_completions(
     request: _ProxyChatRequest,
+    raw_request: Request,
     _auth: Any = Depends(require_auth),
 ):
     """Drop-in replacement for POST https://api.openai.com/v1/chat/completions.
@@ -2228,12 +2229,19 @@ async def proxy_chat_completions(
     Supported ``model`` values:
     - ``"auto"`` / ``"nvhive"`` — smart routing (default)
     - ``"safe"`` / ``"local"`` — Ollama only, stays on-device
+    - ``"council"`` / ``"council:N"`` — multi-LLM consensus (N members)
+    - ``"throwdown"`` — two-pass deep analysis with critique
     - Any real model ID (``"gpt-4o"``, ``"claude-3-5-sonnet-20241022"``, …)
+
+    NemoClaw integration:
+    - Set ``x-nvhive-privacy: local-only`` header to force local routing.
     """
     from nvh.api.proxy import (
         format_openai_response,
+        is_throwdown_model,
         openai_messages_to_nvhive,
         openai_stream_generator,
+        parse_council_model,
         resolve_provider_from_model,
     )
 
@@ -2246,7 +2254,142 @@ async def proxy_chat_completions(
     if not prompt:
         raise HTTPException(status_code=400, detail="No user message content found.")
 
-    provider_override, model_override = resolve_provider_from_model(request.model)
+    # --- Privacy header (NemoClaw integration) ---
+    # x-nvhive-privacy: local-only forces all routing through Ollama
+    privacy_header = raw_request.headers.get("x-nvhive-privacy", "").lower().strip()
+    force_local = privacy_header in ("local-only", "local", "private")
+
+    if force_local:
+        provider_override, model_override = "ollama", None
+    else:
+        provider_override, model_override = resolve_provider_from_model(request.model)
+
+    # --- Council path ---
+    council_size = parse_council_model(request.model)
+    if council_size is not None and not force_local:
+        from nvh.api.proxy import council_stream_generator
+
+        # Streaming council
+        if request.stream:
+            return StreamingResponse(
+                council_stream_generator(
+                    engine=engine,
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens,
+                    council_size=council_size,
+                    requested_model=request.model,
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        # Non-streaming council
+        try:
+            await engine._check_budget()
+        except BudgetExceededError as exc:
+            raise HTTPException(status_code=402, detail=str(exc))
+
+        try:
+            result = await engine.run_council(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                num_agents=council_size,
+                auto_agents=True,
+                privacy=force_local,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except BudgetExceededError as exc:
+            raise HTTPException(status_code=402, detail=str(exc))
+        except Exception as exc:
+            logger.error("proxy council error: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        content = ""
+        if result.synthesis:
+            content = result.synthesis.content if hasattr(result.synthesis, "content") else str(result.synthesis)
+        elif result.member_responses:
+            first = next(iter(result.member_responses.values()))
+            content = first.content if hasattr(first, "content") else str(first)
+
+        responses = list(result.member_responses.values())
+        total_input = sum(r.usage.input_tokens for r in responses if r.usage)
+        total_output = sum(r.usage.output_tokens for r in responses if r.usage)
+
+        return format_openai_response(
+            content=content,
+            model=f"council:{council_size}",
+            provider="nvhive-council",
+            prompt_tokens=total_input,
+            completion_tokens=total_output,
+            finish_reason="stop",
+        )
+
+    # --- Throwdown path ---
+    if is_throwdown_model(request.model) and not force_local:
+        from nvh.api.proxy import throwdown_stream_generator
+
+        # Streaming throwdown
+        if request.stream:
+            return StreamingResponse(
+                throwdown_stream_generator(
+                    engine=engine,
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=request.temperature,
+                    max_tokens=request.max_tokens,
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        # Non-streaming throwdown
+        try:
+            await engine._check_budget()
+        except BudgetExceededError as exc:
+            raise HTTPException(status_code=402, detail=str(exc))
+
+        try:
+            result = await engine.run_council(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                auto_agents=True,
+                strategy="throwdown",
+                privacy=force_local,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except BudgetExceededError as exc:
+            raise HTTPException(status_code=402, detail=str(exc))
+        except Exception as exc:
+            logger.error("proxy throwdown error: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        content = ""
+        if result.synthesis:
+            content = result.synthesis.content if hasattr(result.synthesis, "content") else str(result.synthesis)
+        elif result.member_responses:
+            first = next(iter(result.member_responses.values()))
+            content = first.content if hasattr(first, "content") else str(first)
+
+        responses = list(result.member_responses.values())
+        total_input = sum(r.usage.input_tokens for r in responses if r.usage)
+        total_output = sum(r.usage.output_tokens for r in responses if r.usage)
+
+        return format_openai_response(
+            content=content,
+            model="throwdown",
+            provider="nvhive-throwdown",
+            prompt_tokens=total_input,
+            completion_tokens=total_output,
+            finish_reason="stop",
+        )
 
     # --- Streaming path ---
     if request.stream:
@@ -2382,9 +2525,49 @@ async def proxy_models(
 ):
     """Return available models in OpenAI's ``GET /v1/models`` format.
 
-    Includes NVHive virtual routing models (``auto``, ``safe``) and the real
-    models exposed by each enabled provider.
+    Includes NVHive virtual routing models (``auto``, ``safe``, ``council``,
+    ``throwdown``) and the real models exposed by each enabled provider.
     """
     from nvh.api.proxy import build_models_list
     engine = get_engine()
     return build_models_list(engine.registry)
+
+
+@app.get(
+    "/v1/proxy/health",
+    summary="Proxy health check for NemoClaw/OpenShell integration",
+    tags=["proxy"],
+)
+async def proxy_health():
+    """Health endpoint for external orchestrators (NemoClaw, OpenShell, etc.).
+
+    Returns provider availability, routing status, and supported virtual models
+    so NemoClaw can verify this inference provider is alive and capable.
+    """
+    engine = get_engine()
+    enabled = engine.registry.list_enabled() if hasattr(engine.registry, "list_enabled") else []
+
+    # Check if local inference is available
+    has_local = "ollama" in enabled
+
+    return {
+        "status": "ok",
+        "provider": "nvhive",
+        "version": engine.config.version if hasattr(engine.config, "version") else "1.0.0",
+        "engine_initialized": engine._initialized,
+        "providers_enabled": len(enabled),
+        "providers": list(enabled),
+        "has_local_inference": has_local,
+        "supported_models": [
+            "auto", "safe", "local",
+            "council", "council:3", "council:5",
+            "throwdown",
+        ],
+        "features": {
+            "smart_routing": True,
+            "council_consensus": True,
+            "throwdown_analysis": True,
+            "privacy_header": True,
+            "streaming": True,
+        },
+    }

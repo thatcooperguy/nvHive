@@ -1,0 +1,97 @@
+# NemoClaw Blueprint for NVHive Integration
+# ===========================================
+#
+# Drop this file into your NemoClaw project or pass it during onboarding:
+#   nemoclaw onboard --blueprint nvhive-blueprint.yaml
+#
+# Prerequisites:
+#   1. nvHive installed: pip install nvhive
+#   2. nvHive proxy running: nvh nemoclaw --start
+#
+# This blueprint configures NemoClaw to use NVHive as its inference provider,
+# giving agents access to 22 LLM providers, smart routing, council consensus,
+# and throwdown analysis through a single OpenAI-compatible endpoint.
+
+version: "1.0"
+name: nvhive-inference
+
+# --- Sandbox Configuration ---
+sandbox:
+  image: ubuntu:22.04
+  ports:
+    - "8080:8080"    # Agent HTTP (if needed)
+  environment:
+    # NVHive virtual model — change to customize default routing:
+    #   auto       = smart routing (recommended)
+    #   safe       = local Ollama only
+    #   council    = 3-model consensus
+    #   council:5  = 5-model consensus
+    #   throwdown  = two-pass deep analysis
+    NVHIVE_DEFAULT_MODEL: "auto"
+
+# --- Inference Configuration ---
+inference:
+  # NVHive as the primary inference provider
+  default_provider: nvhive
+
+  providers:
+    nvhive:
+      type: openai
+      description: "NVHive multi-LLM smart router with council consensus"
+      credentials:
+        OPENAI_API_KEY: "nvhive"
+      config:
+        # Use host.openshell.internal to reach the host from inside the sandbox.
+        # Change the port if you started nvHive on a different port.
+        OPENAI_BASE_URL: "http://host.openshell.internal:8000/v1/proxy"
+
+    # Fallback: direct local Ollama (bypasses nvHive for ultra-low-latency)
+    ollama-direct:
+      type: openai
+      description: "Direct Ollama access (bypasses NVHive routing)"
+      credentials:
+        OPENAI_API_KEY: "ollama"
+      config:
+        OPENAI_BASE_URL: "http://host.openshell.internal:11434/v1"
+
+  # Model routing profiles
+  profiles:
+    default:
+      provider: nvhive
+      model: "auto"
+      description: "Smart routing — NVHive picks the best model"
+
+    private:
+      provider: nvhive
+      model: "safe"
+      description: "Local only — nothing leaves the machine"
+      headers:
+        x-nvhive-privacy: "local-only"
+
+    consensus:
+      provider: nvhive
+      model: "council:3"
+      description: "Multi-model consensus with synthesis"
+
+    deep-analysis:
+      provider: nvhive
+      model: "throwdown"
+      description: "Two-pass analysis with critique and refinement"
+
+    fast-local:
+      provider: ollama-direct
+      model: "nemotron-mini"
+      description: "Direct Ollama for minimum latency"
+
+# --- Guardrails ---
+guardrails:
+  # NVHive handles its own rate limiting and budget enforcement,
+  # but you can add NemoClaw-level guardrails here.
+  max_tokens_per_request: 16384
+  max_requests_per_minute: 60
+
+# --- Health Check ---
+health:
+  endpoint: "http://host.openshell.internal:8000/v1/proxy/health"
+  interval_seconds: 30
+  timeout_seconds: 5
