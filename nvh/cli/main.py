@@ -3263,55 +3263,202 @@ def serve(
 
 @app.command()
 def openclaw(
+    test: bool = typer.Option(False, "--test", help="Test if the MCP server is reachable"),
+    start: bool = typer.Option(False, "--start", help="Start the MCP server for OpenClaw"),
+    config: bool = typer.Option(False, "--config", help="Generate openclaw.json config file"),
     output: str | None = typer.Option(None, "-o", "--output", help="Output path for openclaw.json"),
-    agent_config: bool = typer.Option(False, "--agent", help="Generate NemoClaw agent config instead"),
-    no_merge: bool = typer.Option(False, "--no-merge", help="Overwrite existing config instead of merging"),
+    http: bool = typer.Option(False, "--http", help="Use HTTP transport instead of stdio"),
+    port: int = typer.Option(8080, "--port", help="Port for HTTP transport"),
 ):
-    """Set up NVHive as an OpenClaw / NemoClaw MCP tool server.
+    """OpenClaw integration — use NVHive tools in any OpenClaw agent.
 
-    Generates the configuration to register nvHive's tools (ask, council,
-    throwdown, etc.) with any OpenClaw or NemoClaw agent.
+    Registers nvHive's multi-LLM tools (ask, council, throwdown, etc.)
+    as an MCP server that any OpenClaw agent can call.
 
     Examples:
-        nvh openclaw                   Generate openclaw.json with nvHive MCP config
-        nvh openclaw -o my-config.json Write to custom path
-        nvh openclaw --agent           Generate NemoClaw agent config
+        nvh openclaw              Show setup instructions
+        nvh openclaw --test       Test MCP server connectivity
+        nvh openclaw --start      Start the MCP server
+        nvh openclaw --config     Generate openclaw.json
     """
-    from nvh.integrations.openclaw import (
-        generate_nemoclaw_agent_config,
-        write_openclaw_config,
-    )
+    from rich.rule import Rule
 
-    if agent_config:
-        import json
-        config = generate_nemoclaw_agent_config()
-        console.print(Panel(
-            json.dumps(config, indent=2),
-            title="NemoClaw Agent Config",
-            border_style="cyan",
-        ))
+    console.print()
+    console.print(Panel(
+        "[bold green]NVHive ↔ OpenClaw Integration[/bold green]\n"
+        "Give any OpenClaw agent access to nvHive's multi-LLM tools:\n"
+        "smart routing, council consensus, and throwdown analysis.",
+        border_style="green",
+    ))
+
+    # --- Test mode ---
+    if test:
         console.print()
-        console.print("Add this to your NemoClaw agent definition to give the agent")
-        console.print("access to nvHive's multi-LLM tools.")
+        console.print(Rule("Connectivity Test"))
+        console.print()
+        if http:
+            try:
+                import httpx
+                url = f"http://localhost:{port}/mcp"
+                console.print(f"  Testing [bold]{url}[/bold] ...")
+                httpx.get(url, timeout=5)
+                console.print("  [green]✓[/green] MCP HTTP server is [bold green]reachable[/bold green]")
+            except Exception as e:
+                console.print(f"  [red]✗[/red] Cannot reach MCP server at port {port}")
+                console.print(f"  Error: {e}")
+                console.print()
+                console.print("  Start it: [bold]nvh openclaw --start --http[/bold]")
+        else:
+            # For stdio, check if nvhive-mcp or nvh module is importable
+            try:
+                from nvh.mcp_server import create_server
+                create_server()
+                console.print("  [green]✓[/green] MCP server module loads [bold green]OK[/bold green]")
+                console.print("  [green]✓[/green] nvhive-mcp entry point available")
+            except ImportError:
+                console.print("  [red]✗[/red] MCP SDK not installed")
+                console.print('  Install with: [bold]pip install "nvhive[mcp]"[/bold]')
+            except Exception as e:
+                console.print(f"  [yellow]![/yellow] MCP server loads but: {e}")
+                console.print("  This is OK — the server needs an MCP client to connect.")
+
+            console.print()
+            console.print("  [dim]For stdio transport, OpenClaw spawns the server automatically.")
+            console.print("  No separate start step needed — just add the config.[/dim]")
+        console.print()
         return
 
-    from pathlib import Path
-    path = write_openclaw_config(
-        output_path=Path(output) if output else None,
-        merge_existing=not no_merge,
-    )
-    console.print(f"[green]✓[/green] NVHive MCP config written to [bold]{path}[/bold]")
+    # --- Start mode ---
+    if start:
+        console.print()
+        console.print(Rule("Starting NVHive MCP Server for OpenClaw"))
+        console.print()
+        try:
+            from nvh.mcp_server import create_server
+        except ImportError:
+            console.print("[red]MCP SDK not installed.[/red]")
+            console.print('Install with: [bold]pip install "nvhive[mcp]"[/bold]')
+            raise typer.Exit(1)
+
+        server = create_server()
+        if http:
+            console.print(f"  Transport: HTTP on port {port}")
+            console.print(f"  Connect clients to: http://localhost:{port}/mcp")
+            console.print()
+            server.run(transport="streamable-http", host="0.0.0.0", port=port)
+        else:
+            console.print("  Transport: stdio")
+            console.print("  OpenClaw will spawn this server automatically via config.")
+            console.print()
+            server.run(transport="stdio")
+        return
+
+    # --- Config mode ---
+    if config:
+        from pathlib import Path
+
+        from nvh.integrations.openclaw import write_openclaw_config
+        path = write_openclaw_config(output_path=Path(output) if output else None)
+        console.print()
+        console.print(f"  [green]✓[/green] Config written to [bold]{path}[/bold]")
+        console.print()
+        console.print("  OpenClaw will auto-discover nvHive tools on next agent run.")
+        console.print()
+        return
+
+    # --- Default: show setup guide ---
     console.print()
-    console.print("  Tools registered:")
-    console.print("    [bold]ask[/bold]           — Smart-routed LLM query")
-    console.print("    [bold]ask_safe[/bold]      — Local-only query (Ollama)")
-    console.print("    [bold]council[/bold]       — Multi-model consensus")
-    console.print("    [bold]throwdown[/bold]     — Two-pass deep analysis")
-    console.print("    [bold]status[/bold]        — System status and GPU info")
-    console.print("    [bold]list_advisors[/bold] — Available providers")
-    console.print("    [bold]list_cabinets[/bold] — Agent presets")
+    console.print(Rule("Quick Start"))
     console.print()
-    console.print("  Start the MCP server: [bold]nvh mcp[/bold]")
+    console.print("  [bold]Step 1:[/bold] Install MCP support (if not already)")
+    console.print('  [dim]$[/dim] pip install "nvhive[mcp]"')
+    console.print()
+    console.print("  [bold]Step 2:[/bold] Add nvHive to your OpenClaw config")
+    console.print()
+    console.print("  [bold]Option A[/bold] — auto-generate openclaw.json:")
+    console.print("  [dim]$[/dim] nvh openclaw --config")
+    console.print()
+    console.print("  [bold]Option B[/bold] — add manually to openclaw.json:")
+    console.print()
+    console.print(Panel(
+        '{\n'
+        '  "mcpServers": {\n'
+        '    "nvhive": {\n'
+        '      "command": "nvhive-mcp"\n'
+        '    }\n'
+        '  }\n'
+        '}',
+        title="openclaw.json",
+        border_style="dim",
+        width=45,
+    ))
+    console.print()
+    console.print("  [bold]Step 3:[/bold] Use nvHive tools in your agent")
+    console.print("  Your OpenClaw agent can now call any nvHive tool directly.")
+    console.print()
+
+    console.print(Rule("Available Tools"))
+    console.print()
+
+    tool_table = Table(show_header=True, header_style="bold green", padding=(0, 2))
+    tool_table.add_column("Tool", style="bold")
+    tool_table.add_column("What It Does")
+    tool_table.add_column("Example Use")
+
+    tool_table.add_row("ask", "Smart-routed LLM query", "Ask any question across 22 providers")
+    tool_table.add_row("ask_safe", "Local-only query", "Privacy-sensitive queries via Ollama")
+    tool_table.add_row("council", "Multi-model consensus", "Get 3-5 LLMs to debate and synthesize")
+    tool_table.add_row("throwdown", "Two-pass deep analysis", "Complex questions with critique loop")
+    tool_table.add_row("status", "System status", "Check providers, GPU, budget")
+    tool_table.add_row("list_advisors", "Available providers", "See which LLMs are configured")
+    tool_table.add_row("list_cabinets", "Agent presets", "Browse expert persona groups")
+
+    console.print(tool_table)
+    console.print()
+
+    console.print(Rule("Architecture"))
+    console.print()
+    console.print("  ┌─────────────────────────────────────┐")
+    console.print("  │  OpenClaw Agent                     │")
+    console.print("  │  ┌──────────┐    ┌──────────────┐   │")
+    console.print("  │  │  Agent   │───▶│  MCP Client  │   │")
+    console.print("  │  │  Logic   │    │              │   │")
+    console.print("  │  └──────────┘    └──────┬───────┘   │")
+    console.print("  └────────────────────────-┼───────────┘")
+    console.print("                            │ stdio / HTTP")
+    console.print("                            ▼")
+    console.print("                  ┌──────────────────┐")
+    console.print("                  │  NVHive MCP      │")
+    console.print("                  │  Server          │")
+    console.print("                  │  (nvhive-mcp)    │")
+    console.print("                  └────────┬─────────┘")
+    console.print("                           │ Smart Router")
+    console.print("              ┌─────────-──┼────────────┐")
+    console.print("              ▼            ▼            ▼")
+    console.print("        ┌──────────┐ ┌──────────┐ ┌──────────┐")
+    console.print("        │  Ollama  │ │   Groq   │ │Anthropic │ ...22 providers")
+    console.print("        │ Nemotron │ │          │ │          │")
+    console.print("        └──────────┘ └──────────┘ └──────────┘")
+    console.print()
+
+    console.print(Rule("Transport Options"))
+    console.print()
+    console.print("  [bold]stdio[/bold] (default) — OpenClaw spawns nvHive as a subprocess.")
+    console.print("  No manual start needed. Just add the config and go.")
+    console.print()
+    console.print("  [bold]HTTP[/bold] — for remote or multi-client setups:")
+    console.print("  [dim]$[/dim] nvh openclaw --start --http --port 8080")
+    console.print("  Then configure OpenClaw with URL: http://localhost:8080/mcp")
+    console.print()
+
+    console.print(Rule("Commands"))
+    console.print()
+    console.print("  [bold]nvh openclaw[/bold]            Show this setup guide")
+    console.print("  [bold]nvh openclaw --test[/bold]     Test MCP server availability")
+    console.print("  [bold]nvh openclaw --start[/bold]    Start MCP server manually")
+    console.print("  [bold]nvh openclaw --config[/bold]   Generate openclaw.json")
+    console.print("  [bold]nvh openclaw --http[/bold]     Use HTTP transport (with --start or --test)")
+    console.print()
 
 
 # ---------------------------------------------------------------------------
