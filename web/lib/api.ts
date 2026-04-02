@@ -394,7 +394,7 @@ export async function getFreeProviders(): Promise<FreeProvidersResult> {
 }
 
 export async function saveProviderKey(provider_id: string, api_key: string): Promise<{ ok: boolean }> {
-  return apiPost<{ ok: boolean }>('/v1/setup/save-key', { provider_id, api_key });
+  return apiPost<{ ok: boolean }>('/v1/setup/save-key', { provider: provider_id, api_key });
 }
 
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
