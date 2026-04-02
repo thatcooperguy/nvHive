@@ -9,6 +9,10 @@
 - **Council mode.** When one model isn't enough, multiple LLMs debate your question and synthesize a consensus answer.
 
 <p align="center">
+  <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
+</p>
+
+<p align="center">
   <img src="docs/screenshots/terminal-demo.svg" alt="nvHive CLI" width="640">
 </p>
 
@@ -232,34 +236,11 @@ graph TB
 
 ## Web Dashboard
 
-Launch the NVIDIA-themed dashboard:
-
 ```bash
 nvh webui                 # auto-configures hostname + best port
 ```
 
-Access at `http://nvhive:3000` (auto-configured) or `http://localhost:3000`.
-
-<p align="center">
-  <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
-</p>
-
-8 pages: Chat, Council, Query Builder, Advisors, Integrations, System, Settings, and Setup Wizard. NVIDIA dark theme with green accents, real-time streaming, command palette (Ctrl+K), and keyboard shortcuts.
-
-<details>
-<summary><b>Screenshots</b></summary>
-
-| Advisors | System Dashboard |
-|:-:|:-:|
-| ![Advisors](docs/screenshots/advisors.png) | ![System](docs/screenshots/system.png) |
-
-| Integrations | Setup Wizard |
-|:-:|:-:|
-| ![Integrations](docs/screenshots/integrations.png) | ![Setup](docs/screenshots/setup.png) |
-
-</details>
-
-[Full WebUI guide →](docs/WEBUI.md)
+Access at `http://nvhive:3000` — 8 pages including Chat, Council, Advisors, Integrations, System, Settings, and Setup Wizard. [Full WebUI guide →](docs/WEBUI.md)
 
 ---
 
