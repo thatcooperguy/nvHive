@@ -2,7 +2,7 @@
 
 **Multi-LLM orchestration platform for NVIDIA GPUs and the cloud.**
 
-![version](https://img.shields.io/badge/version-0.1.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-156%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-22-orange) ![models](https://img.shields.io/badge/models-63-purple)
+![version](https://img.shields.io/badge/version-0.2.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-184%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-22-orange) ![models](https://img.shields.io/badge/models-63-purple) ![integrations](https://img.shields.io/badge/integrations-5-cyan)
 
 ## What is nvHive?
 
@@ -149,14 +149,16 @@ No API keys needed for your first query -- nvHive defaults to free local or anon
 | `nvh setup` | Interactive provider setup wizard |
 | `nvh keys` | Show all free API key signup links in one table |
 | `nvh keys --open` | Open all free provider signup pages in browser |
-| `nvh webui` | Install and launch the web UI (optional) |
+| `nvh webui` | Launch web UI (auto hostname + smart port) |
+| `nvh integrate` | Auto-detect and connect all AI platforms |
+| `nvh integrate --auto` | Connect everything without prompting |
 | `nvh update` | Check for and install updates |
 | `nvh version` | Print version |
+| `nvh serve` | Start the API server |
+| `nvh serve --daemon` | Install as persistent background service |
 | `nvh mcp` | Start MCP server (Claude Code, Cursor, OpenClaw) |
-| `nvh openclaw` | Generate OpenClaw/NemoClaw tool config |
+| `nvh openclaw` | OpenClaw integration setup guide |
 | `nvh nemoclaw` | NemoClaw integration setup guide |
-| `nvh nemoclaw --test` | Test NemoClaw proxy connectivity |
-| `nvh nemoclaw --start` | Start proxy server for NemoClaw |
 
 ### Management
 
@@ -434,11 +436,24 @@ nvh mcp -t streamable-http --port 8080
 
 Tools available via MCP: `ask`, `ask_safe`, `council`, `throwdown`, `status`, `list_advisors`, `list_cabinets`.
 
+```mermaid
+graph LR
+    CC[Claude Code] -->|stdio| MCP[nvHive MCP Server]
+    CU[Cursor] -->|stdio| MCP
+    OC[OpenClaw] -->|stdio| MCP
+    MCP --> ASK[ask / ask_safe]
+    MCP --> CON[council / throwdown]
+    MCP --> SYS[status / list_advisors]
+    ASK --> ENGINE[nvHive Engine]
+    CON --> ENGINE
+    ENGINE --> PROVIDERS[22 LLM Providers]
+```
+
 For OpenClaw agents, generate the config:
 
 ```bash
-nvh openclaw              # creates openclaw.json with nvHive MCP config
-nvh openclaw --agent      # generates NemoClaw agent config
+nvh openclaw              # setup guide + auto-config
+nvh openclaw --config     # creates openclaw.json with nvHive MCP config
 ```
 
 ## NemoClaw Integration
@@ -468,10 +483,19 @@ NemoClaw agents can request any virtual model:
 
 Privacy-aware routing: set `x-nvhive-privacy: local-only` header to force all inference through local Ollama, integrating with NemoClaw's content sensitivity routing.
 
-```
-NemoClaw Sandbox → OpenShell Gateway → nvHive Proxy → 22 providers
-                                          ↓
-                          Smart Router / Council / Throwdown
+```mermaid
+graph LR
+    subgraph NemoClaw Sandbox
+        AGENT[OpenClaw Agent] --> INF[inference.local]
+    end
+    INF -->|OpenShell Gateway| PROXY[nvHive Proxy :8000]
+    PROXY --> ROUTER[Smart Router]
+    ROUTER --> OLLAMA[Ollama / Nemotron]
+    ROUTER --> CLOUD[Cloud Providers]
+    ROUTER --> COUNCIL[Council / Throwdown]
+
+    style OLLAMA fill:#76B900,color:#000
+    style PROXY fill:#76B900,color:#000
 ```
 
 Run `nvh nemoclaw` for the full setup guide, or `nvh nemoclaw --test` to verify connectivity.
@@ -593,59 +617,100 @@ The dashboard opens at `http://localhost:3000` and connects to the nvHive API au
 ### Architecture Diagram
 
 ```mermaid
-graph LR
-    A[Web UI :3000] -->|REST + WebSocket| B[nvHive API :8000]
-    C[nvh CLI] -->|direct| B
-    D[OpenAI SDK] -->|proxy| B
-    E[MCP Client] -->|stdio/HTTP| F[MCP Server]
-    F -->|internal| B
-    B --> G[Smart Router]
-    G --> H[22 LLM Providers]
-    G --> I[Council Engine]
-    G --> J[Local Ollama]
+graph TB
+    subgraph Clients
+        CLI[nvh CLI]
+        WEB[Web UI :3000]
+        SDK[OpenAI SDK]
+        NC[NemoClaw Agent]
+        OC[OpenClaw Agent]
+        CC[Claude Code / Cursor]
+    end
+
+    subgraph nvHive Core
+        API[API Server :8000]
+        MCP[MCP Server]
+        PROXY[OpenAI Proxy]
+        ROUTER[Smart Router]
+        COUNCIL[Council Engine]
+        AGENTS[Agent System]
+    end
+
+    subgraph Providers
+        LOCAL[Ollama / Nemotron]
+        CLOUD[OpenAI / Anthropic / Google]
+        FREE[Groq / LLM7 / GitHub]
+    end
+
+    CLI --> API
+    WEB -->|REST + WebSocket| API
+    SDK -->|OpenAI-compatible| PROXY
+    NC -->|OpenShell Gateway| PROXY
+    OC -->|MCP stdio| MCP
+    CC -->|MCP stdio| MCP
+
+    MCP --> API
+    PROXY --> API
+    API --> ROUTER
+    ROUTER --> COUNCIL
+    ROUTER --> LOCAL
+    ROUTER --> CLOUD
+    ROUTER --> FREE
+    COUNCIL --> LOCAL
+    COUNCIL --> CLOUD
+
+    style LOCAL fill:#76B900,color:#000
+    style NC fill:#76B900,color:#000
 ```
 
 ## Architecture
 
 ```
-nvh CLI
-  |
-  +-- Action Detector -----> Direct execution (install, open, find)
-  |
-  +-- Router
-  |     |-- Task classifier (code, writing, research, math, general)
-  |     |-- Advisor scorer (relevance, cost, speed, privacy)
-  |     +-- Model selector (GPU VRAM, provider availability)
-  |
-  +-- Providers (22)
-  |     |-- Local: Ollama (Nemotron, CodeLlama, Llama3)
-  |     |-- Cloud: OpenAI, Anthropic, Google, Groq, ...
-  |     +-- Free: LLM7, GitHub Models, NVIDIA NIM, ...
-  |
-  +-- Agent System
-  |     |-- Auto-generation from query analysis
-  |     +-- 12 pre-built cabinets (22 expert personas)
-  |
-  +-- Tool System (27 tools, 18 safe / 9 confirm)
-  |
-  +-- SDK + OpenAI-compatible API server
+nvh CLI / Web UI / SDK
+  │
+  ├── Action Detector ────────► Direct execution (install, open, find)
+  │
+  ├── Smart Router
+  │     ├── Task classifier (code, writing, research, math, general)
+  │     ├── Advisor scorer (relevance, cost, speed, privacy)
+  │     └── Model selector (GPU VRAM, provider availability)
+  │
+  ├── Providers (22)
+  │     ├── Local: Ollama (Nemotron, CodeLlama, Llama3)
+  │     ├── Cloud: OpenAI, Anthropic, Google, Groq, ...
+  │     └── Free: LLM7, GitHub Models, NVIDIA NIM, ...
+  │
+  ├── Agent System
+  │     ├── Auto-generation from query analysis
+  │     └── 12 pre-built cabinets (22 expert personas)
+  │
+  ├── Tool System (27 tools, 18 safe / 9 confirm)
+  │
+  ├── Integrations
+  │     ├── NemoClaw ─── OpenAI-compatible inference provider
+  │     ├── OpenClaw ─── MCP tool server
+  │     ├── Claude Code / Cursor ─── MCP tool server
+  │     └── Auto-detect + one-click setup (nvh integrate)
+  │
+  └── SDK + OpenAI-compatible API + MCP server
 ```
 
 ## Project Stats
 
 | Metric | Value |
 |--------|-------|
-| Python files | 81 |
-| Lines of code | 27,518 |
-| Functions | 810 |
-| Tests | 181 |
+| Python files | 87 |
+| Lines of code | 30,873 |
+| Tests | 184 (0 warnings) |
 | Providers | 22 |
 | Models | 63 (25 free) |
 | Tools | 27 (18 safe, 9 confirm) |
 | Cabinets | 12 |
 | Expert personas | 22 |
-| Wheel size | 276 KB |
-| Commits | 42 |
+| Integrations | 5 (NemoClaw, OpenClaw, Claude Code, Cursor, Desktop) |
+| MCP tools | 7 (ask, council, throwdown, status, ...) |
+| WebUI pages | 8 |
+| Version | 0.2.0 |
 
 ## Documentation
 
