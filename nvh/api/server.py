@@ -2182,21 +2182,52 @@ class SaveKeyRequest(BaseModel):
 
 @app.post("/v1/setup/save-key")
 async def save_provider_key(request: SaveKeyRequest):
-    """Save an API key for a provider (stores in OS keychain)."""
+    """Save an API key for a provider (stores in OS keychain + env var).
+
+    Also reinitializes the engine so the new provider is available
+    immediately without restarting the server.
+    """
     try:
         import keyring
         keyring.set_password("nvhive", f"{request.provider}_api_key", request.api_key)
 
-        # Validate the key by running a health check
-        get_engine()
-        # Reinitialize to pick up the new key
-        # (In practice, a restart may be needed for full effect)
+        # Set the env var so the provider picks it up on reinit
+        env_var_map = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "google": "GOOGLE_API_KEY",
+            "groq": "GROQ_API_KEY",
+            "mistral": "MISTRAL_API_KEY",
+            "cohere": "COHERE_API_KEY",
+            "deepseek": "DEEPSEEK_API_KEY",
+            "github": "GITHUB_TOKEN",
+            "nvidia": "NVIDIA_API_KEY",
+            "fireworks": "FIREWORKS_API_KEY",
+            "cerebras": "CEREBRAS_API_KEY",
+            "sambanova": "SAMBANOVA_API_KEY",
+            "huggingface": "HUGGINGFACE_API_KEY",
+            "ai21": "AI21_API_KEY",
+            "siliconflow": "SILICONFLOW_API_KEY",
+            "grok": "XAI_API_KEY",
+            "perplexity": "PERPLEXITY_API_KEY",
+            "together": "TOGETHER_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+        }
+        env_key = env_var_map.get(request.provider)
+        if env_key:
+            os.environ[env_key] = request.api_key
+
+        # Reinitialize engine to register the new provider
+        global _engine
+        if _engine is not None:
+            _engine._initialized = False
+            await _engine.initialize()
 
         return {
             "status": "success",
             "data": {
                 "provider": request.provider,
-                "message": f"API key saved for {request.provider}",
+                "message": f"API key saved for {request.provider}. Provider is now active.",
             },
         }
     except Exception as exc:
