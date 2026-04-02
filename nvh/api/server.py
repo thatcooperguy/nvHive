@@ -2041,19 +2041,41 @@ async def get_free_providers():
     available = detect_available_free_advisors()
     available_names = {a.name for a in available}
 
+    # Placeholder hints per provider
+    key_placeholders = {
+        "openai": "sk-...",
+        "anthropic": "sk-ant-...",
+        "google": "AIza...",
+        "groq": "gsk_...",
+        "mistral": "your-key...",
+        "cohere": "your-key...",
+        "github": "ghp_...",
+        "grok": "xai-...",
+    }
+
     providers = []
     for advisor in FREE_TIER_ADVISORS:
         profile = ADVISOR_PROFILES.get(advisor.name, None)
+        requires_key = advisor.check_fn == "env"
+        signup_tier = (
+            "none" if not requires_key
+            else "email" if advisor.priority <= 8
+            else "account"
+        )
         providers.append({
-            "name": advisor.name,
+            "id": advisor.name,
+            "name": profile.display_name if profile else advisor.name,
             "display_name": profile.display_name if profile else advisor.name,
             "daily_limit": advisor.daily_limit,
             "priority": advisor.priority,
             "configured": advisor.name in available_names,
-            "requires_signup": advisor.check_fn == "env",
-            "requires_key": advisor.check_fn == "env",
+            "requires_signup": requires_key,
+            "requires_key": requires_key,
+            "signup_tier": signup_tier,
             "signup_url": _get_signup_url(advisor.name),
             "env_var": advisor.env_var,
+            "env_key": advisor.env_var,
+            "placeholder": key_placeholders.get(advisor.name, "your-key..."),
             "strengths": profile.strengths[:3] if profile else [],
             "free_tier_limits": profile.free_tier_limits if profile else "",
         })
@@ -2061,34 +2083,86 @@ async def get_free_providers():
     # Add zero-signup providers
     zero_signup = [
         {
-            "name": "ollama",
+            "id": "ollama",
+            "name": "Ollama (Local AI)",
             "display_name": "Ollama (Local AI)",
             "daily_limit": "Unlimited (local GPU)",
             "priority": 1,
             "configured": "ollama" in available_names,
             "requires_signup": False,
             "requires_key": False,
+            "signup_tier": "none",
             "signup_url": "",
             "env_var": "",
+            "env_key": "",
+            "placeholder": "",
             "strengths": ["Free", "Private", "Runs on your GPU"],
             "free_tier_limits": "Unlimited",
         },
         {
-            "name": "llm7",
+            "id": "llm7",
+            "name": "LLM7 (Anonymous)",
             "display_name": "LLM7 (Anonymous)",
             "daily_limit": "30 RPM, no signup",
             "priority": 9,
             "configured": True,  # always available
             "requires_signup": False,
             "requires_key": False,
+            "signup_tier": "none",
             "signup_url": "",
             "env_var": "",
+            "env_key": "",
+            "placeholder": "",
             "strengths": ["No signup needed", "Anonymous access", "DeepSeek-R1 free"],
             "free_tier_limits": "30 RPM anonymous, 120 RPM with token",
         },
     ]
 
-    all_providers = zero_signup + providers
+    # Add paid providers (not free-tier but users want to configure them)
+    import os
+    paid_providers = [
+        {
+            "id": "openai", "name": "OpenAI", "display_name": "OpenAI",
+            "daily_limit": "Pay-as-you-go", "priority": 0,
+            "configured": bool(os.environ.get("OPENAI_API_KEY")),
+            "requires_signup": True, "requires_key": True,
+            "signup_tier": "account", "signup_url": "https://platform.openai.com/api-keys",
+            "env_var": "OPENAI_API_KEY", "env_key": "OPENAI_API_KEY",
+            "placeholder": "sk-...",
+            "strengths": ["GPT-4o", "Best all-around", "Function calling"],
+            "free_tier_limits": "",
+        },
+        {
+            "id": "anthropic", "name": "Anthropic", "display_name": "Anthropic",
+            "daily_limit": "Pay-as-you-go", "priority": 0,
+            "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+            "requires_signup": True, "requires_key": True,
+            "signup_tier": "account", "signup_url": "https://console.anthropic.com/settings/keys",
+            "env_var": "ANTHROPIC_API_KEY", "env_key": "ANTHROPIC_API_KEY",
+            "placeholder": "sk-ant-...",
+            "strengths": ["Claude Sonnet", "Best for code", "200K context"],
+            "free_tier_limits": "",
+        },
+        {
+            "id": "deepseek", "name": "DeepSeek", "display_name": "DeepSeek",
+            "daily_limit": "Pay-as-you-go (very cheap)", "priority": 0,
+            "configured": bool(os.environ.get("DEEPSEEK_API_KEY")),
+            "requires_signup": True, "requires_key": True,
+            "signup_tier": "account", "signup_url": "https://platform.deepseek.com",
+            "env_var": "DEEPSEEK_API_KEY", "env_key": "DEEPSEEK_API_KEY",
+            "placeholder": "sk-...",
+            "strengths": ["DeepSeek R1", "$0.07/M tokens", "Top reasoning"],
+            "free_tier_limits": "",
+        },
+    ]
+
+    # Merge, dedup by id, and sort
+    seen = set()
+    all_providers = []
+    for p in zero_signup + providers + paid_providers:
+        if p["id"] not in seen:
+            seen.add(p["id"])
+            all_providers.append(p)
     all_providers.sort(key=lambda p: p["priority"])
 
     return {
