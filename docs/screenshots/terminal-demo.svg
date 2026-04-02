@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 440">
+  <style>
+    .bg { fill: #0a0a0a; }
+    .bar { fill: #1a1a1a; }
+    .title { fill: #888; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 11px; }
+    .prompt { fill: #76B900; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 13px; }
+    .cmd { fill: #e2e8f0; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 13px; }
+    .dim { fill: #666; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 13px; }
+    .green { fill: #76B900; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 13px; }
+    .white { fill: #fff; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 13px; }
+    .output { fill: #94a3b8; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 12px; }
+    .box { fill: none; stroke: #76B900; stroke-width: 1; opacity: 0.4; }
+    .dot-r { fill: #ef4444; }
+    .dot-y { fill: #f59e0b; }
+    .dot-g { fill: #22c55e; }
+  </style>
+  <!-- Background -->
+  <rect class="bg" width="720" height="440" rx="8"/>
+  <!-- Title bar -->
+  <rect class="bar" width="720" height="32" rx="8"/>
+  <rect class="bg" y="24" width="720" height="8"/>
+  <circle class="dot-r" cx="16" cy="16" r="5"/>
+  <circle class="dot-y" cx="34" cy="16" r="5"/>
+  <circle class="dot-g" cx="52" cy="16" r="5"/>
+  <text class="title" x="360" y="20" text-anchor="middle">nvHive — Terminal</text>
+
+  <!-- Line 1: Install -->
+  <text class="prompt" x="20" y="60">$</text>
+  <text class="cmd" x="35" y="60">pip install nvhive</text>
+  <text class="dim" x="20" y="78">Successfully installed nvhive-0.2.0</text>
+
+  <!-- Line 2: Setup -->
+  <text class="prompt" x="20" y="108">$</text>
+  <text class="cmd" x="35" y="108">nvh setup</text>
+  <text class="dim" x="20" y="126">✓ GPU detected: NVIDIA RTX 4090 (24GB)</text>
+  <text class="dim" x="20" y="142">✓ Ollama installed, nemotron-small ready</text>
+  <text class="dim" x="20" y="158">✓ LLM7 enabled (anonymous, free)</text>
+
+  <!-- Line 3: Ask -->
+  <text class="prompt" x="20" y="188">$</text>
+  <text class="cmd" x="35" y="188">nvh "What is CUDA?"</text>
+
+  <!-- Response box -->
+  <rect class="box" x="20" y="200" width="680" height="90" rx="0"/>
+  <text class="green" x="28" y="218">nemotron-small</text>
+  <text class="dim" x="170" y="218">(local, free)</text>
+  <text class="output" x="28" y="238">CUDA is NVIDIA's parallel computing platform that lets</text>
+  <text class="output" x="28" y="254">developers use GPU cores for general-purpose computing.</text>
+  <text class="output" x="28" y="270">It accelerates workloads like AI training, rendering,</text>
+  <text class="output" x="28" y="286">and scientific simulations.</text>
+  <text class="dim" x="535" y="286">0.3s · 48 tok · $0.00</text>
+
+  <!-- Line 4: WebUI -->
+  <text class="prompt" x="20" y="316">$</text>
+  <text class="cmd" x="35" y="316">nvh webui</text>
+  <text class="green" x="20" y="334">✓</text>
+  <text class="dim" x="35" y="334">Starting nvHive Web UI...</text>
+  <text class="dim" x="35" y="350">WebUI: http://nvhive:3000</text>
+
+  <!-- Line 5: Integrate -->
+  <text class="prompt" x="20" y="380">$</text>
+  <text class="cmd" x="35" y="380">nvh integrate --auto</text>
+  <text class="green" x="20" y="398">✓</text>
+  <text class="dim" x="35" y="398">Claude Code — Connected</text>
+  <text class="green" x="20" y="414">✓</text>
+  <text class="dim" x="35" y="414">2 platform(s) configured!</text>
+</svg>
