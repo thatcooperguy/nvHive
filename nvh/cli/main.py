@@ -4137,16 +4137,47 @@ def webui(
         console.print("[green]Web UI ready. Run 'nvh webui' to launch.[/green]")
         return
 
-    # Start the API server in background (web UI needs it)
-    console.print(f"[bold]Starting nvHive Web UI on port {port}...[/bold]")
-    console.print("[dim]API server must be running: nvh serve (in another terminal)[/dim]")
-    console.print(f"[dim]Web UI: http://localhost:{port}[/dim]")
-    console.print("[dim]Press Ctrl+C to stop[/dim]")
+    # Smart port selection — check for conflicts
+    import socket
+
+    def _port_in_use(p: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(("127.0.0.1", p)) == 0
+
+    chosen_port = port
+    if _port_in_use(port):
+        if port == 3000:
+            # Default port occupied — try alternatives
+            for fallback in [3001, 3002, 8080, 8081]:
+                if not _port_in_use(fallback):
+                    console.print(
+                        f"[yellow]![/yellow] Port {port} is in use. "
+                        f"Switching to port {fallback}."
+                    )
+                    chosen_port = fallback
+                    break
+            else:
+                console.print(f"[red]Port {port} and fallbacks are all in use.[/red]")
+                console.print("Specify a free port: [bold]nvh webui --port 9000[/bold]")
+                raise typer.Exit(1)
+        else:
+            console.print(f"[red]Port {port} is already in use.[/red]")
+            console.print("Choose a different port: [bold]nvh webui --port 3001[/bold]")
+            raise typer.Exit(1)
+
+    # Check hostname setup
+    from nvh.integrations.hostname import is_hostname_configured
+    host_label = "nvhive" if is_hostname_configured() else "localhost"
+
+    console.print(f"[bold]Starting nvHive Web UI on port {chosen_port}...[/bold]")
+    console.print(f"  WebUI: http://{host_label}:{chosen_port}")
+    console.print("  [dim]API server must be running: nvh serve (in another terminal)[/dim]")
+    console.print("  [dim]Press Ctrl+C to stop[/dim]")
     console.print()
 
     try:
         subprocess.run(
-            ["npm", "run", "dev", "--", "-p", str(port)],
+            ["npm", "run", "dev", "--", "-p", str(chosen_port)],
             cwd=web_dir,
         )
     except KeyboardInterrupt:
