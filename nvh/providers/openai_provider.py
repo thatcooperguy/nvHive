@@ -32,21 +32,25 @@ def _map_error(e: Exception, provider: str) -> ProviderError:
     """Map LiteLLM/OpenAI exceptions to our error taxonomy with actionable messages."""
     msg = str(e)
     if "AuthenticationError" in type(e).__name__ or "401" in msg:
+        from nvh.providers.quota_info import get_quota_info
+        info = get_quota_info(provider)
+        parts = [
+            f"API key invalid or missing permissions for '{provider}'.",
+            "  Fix: nvh setup  (reconfigure keys)",
+        ]
+        if info.upgrade_url:
+            parts.append(f"  Get key: {info.upgrade_url}")
         return AuthenticationError(
-            f"API key invalid for '{provider}'.\n"
-            f"Run: nvh {provider}  (to reconfigure)\n"
-            f"Or set the environment variable (e.g. OPENAI_API_KEY, GROQ_API_KEY)\n"
-            f"Original error: {msg}",
+            "\n".join(parts),
             provider=provider,
             original_error=e,
         )
     if "RateLimitError" in type(e).__name__ or "429" in msg:
-        retry_after = getattr(e, "retry_after", None)
-        wait_hint = f"(wait {retry_after:.0f}s)" if retry_after else "(wait a moment)"
+        from nvh.providers.quota_info import format_rate_limit_message, parse_retry_after
+        retry_after = getattr(e, "retry_after", None) or parse_retry_after(msg)
+        friendly = format_rate_limit_message(provider, msg)
         return RateLimitError(
-            f"Rate limited by '{provider}' {wait_hint} — trying next advisor...\n"
-            f"To switch default: nvh config set defaults.provider <other_provider>\n"
-            f"Original error: {msg}",
+            friendly,
             provider=provider,
             retry_after=retry_after,
             original_error=e,

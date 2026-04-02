@@ -2836,3 +2836,58 @@ async def integrations_connect_all(
         "connected": connected,
         "total": len(results),
     })
+
+
+# ---------------------------------------------------------------------------
+# Quota Info API  (/v1/quota/*)
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/v1/quota/{provider_name}",
+    summary="Get quota and rate limit info for a provider",
+    tags=["quota"],
+)
+async def get_provider_quota(provider_name: str):
+    """Return quota details, rate limits, reset times, and upgrade links."""
+    from nvh.providers.quota_info import get_quota_info
+
+    info = get_quota_info(provider_name)
+    return _response_envelope({
+        "provider": info.provider,
+        "tier": info.tier,
+        "limit": info.limit_description,
+        "reset": info.reset_hint,
+        "upgrade_url": info.upgrade_url,
+        "upgrade_hint": info.upgrade_hint,
+    })
+
+
+@app.get(
+    "/v1/quota",
+    summary="Get quota info for all configured providers",
+    tags=["quota"],
+)
+async def get_all_quotas():
+    """Return quota details for every enabled provider."""
+    from nvh.providers.quota_info import get_quota_info
+
+    engine = get_engine()
+    enabled = (
+        engine.registry.list_enabled()
+        if hasattr(engine.registry, "list_enabled")
+        else []
+    )
+
+    quotas = []
+    for name in enabled:
+        info = get_quota_info(name)
+        quotas.append({
+            "provider": info.provider,
+            "tier": info.tier,
+            "limit": info.limit_description,
+            "reset": info.reset_hint,
+            "upgrade_url": info.upgrade_url,
+            "upgrade_hint": info.upgrade_hint,
+        })
+
+    return _response_envelope({"quotas": quotas})
