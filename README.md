@@ -8,6 +8,10 @@
   <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web UI" width="640">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/terminal-demo.svg" alt="nvHive CLI Demo" width="640">
+</p>
+
 - **Ask once, get the best model.** nvHive routes your question to the right LLM across 22 providers and 63 models — automatically, based on task type, cost, and privacy.
 - **Run it free on your GPU.** NVIDIA Nemotron models run locally via Ollama with no API keys, no cloud costs, no data leaving your machine.
 - **Council mode.** When one model isn't enough, multiple LLMs debate your question and synthesize a consensus answer.
