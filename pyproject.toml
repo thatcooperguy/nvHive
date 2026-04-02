@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nvhive"
-version = "0.1.0"
+version = "0.2.0"
 description = "NVHive — Multi-LLM orchestration platform with intelligent routing, hive consensus, and auto-agent generation"
 readme = "README.md"
 requires-python = ">=3.11"
