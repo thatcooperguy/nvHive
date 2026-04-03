@@ -487,6 +487,16 @@ export default function ChatPage() {
     updateLastMessage(msg => ({ ...msg, streaming: false }));
   }, [updateLastMessage]);
 
+  // Safety: auto-reset streaming if stuck for more than 60 seconds
+  useEffect(() => {
+    if (!streaming) return;
+    const timer = setTimeout(() => {
+      console.warn('nvHive: streaming timeout — auto-resetting');
+      handleStop();
+    }, 60000);
+    return () => clearTimeout(timer);
+  }, [streaming, handleStop]);
+
   const handleSubmit = useCallback(async () => {
     const prompt = inputValue.trim();
     if (!prompt || streaming) return;

@@ -3743,11 +3743,13 @@ def nemoclaw(
     port: int = typer.Option(8000, "--port", help="NVHive proxy port"),
     test: bool = typer.Option(False, "--test", help="Test connectivity to a running nvHive proxy"),
     start: bool = typer.Option(False, "--start", help="Start the proxy server for NemoClaw"),
+    mcp: bool = typer.Option(False, "--mcp", help="Show MCP tool server setup for NemoClaw"),
 ):
-    """NemoClaw integration — use NVHive as your NemoClaw inference provider.
+    """NemoClaw integration — use NVHive as your NemoClaw inference provider and MCP tool server.
 
-    Registers NVHive's smart router, council consensus, and throwdown analysis
-    as an OpenAI-compatible inference endpoint inside NemoClaw's OpenShell sandbox.
+    Two integration modes:
+    1. Inference Provider — NemoClaw routes all LLM calls through nvHive's smart router
+    2. MCP Tool Server — NemoClaw agents can call nvHive tools (ask, council, throwdown)
 
     Examples:
         nvh nemoclaw              Show setup instructions
@@ -3818,6 +3820,48 @@ def nemoclaw(
         console.print()
         from nvh.api.server import run_server
         run_server(host=host, port=port, reload=False)
+        return
+
+    # --- MCP mode: show MCP tool server setup ---
+    if mcp:
+        console.print()
+        console.print(Rule("NemoClaw MCP Tool Server"))
+        console.print()
+        console.print("  Give NemoClaw agents direct access to nvHive tools like")
+        console.print("  [bold]council[/bold] and [bold]throwdown[/bold] — in addition to inference routing.")
+        console.print()
+        console.print("  [bold]Step 1:[/bold] Install MCP support")
+        console.print('  [dim]$[/dim] pip install "nvhive[mcp]"')
+        console.print()
+        console.print("  [bold]Step 2:[/bold] Add to your NemoClaw blueprint or agent config:")
+        console.print()
+        console.print(Panel(
+            '{\n'
+            '  "mcpServers": {\n'
+            '    "nvhive": {\n'
+            '      "command": "nvhive-mcp"\n'
+            '    }\n'
+            '  }\n'
+            '}',
+            title="NemoClaw Agent Config",
+            border_style="cyan",
+            width=45,
+        ))
+        console.print()
+        console.print("  [bold]Tools available to NemoClaw agents:[/bold]")
+        console.print("    [bold]ask[/bold]           — Smart-routed query across 22 providers")
+        console.print("    [bold]ask_safe[/bold]      — Local-only query (nothing leaves machine)")
+        console.print("    [bold]council[/bold]       — Multi-model consensus (3-10 LLMs debate)")
+        console.print("    [bold]throwdown[/bold]     — Two-pass deep analysis with critique")
+        console.print("    [bold]status[/bold]        — Provider and GPU status")
+        console.print("    [bold]list_advisors[/bold] — Available providers")
+        console.print("    [bold]list_cabinets[/bold] — Expert persona presets")
+        console.print()
+        console.print("  [dim]Why both inference + MCP?[/dim]")
+        console.print("  [dim]Inference: every agent call auto-routes to the best model.[/dim]")
+        console.print("  [dim]MCP tools: agent can explicitly request council consensus[/dim]")
+        console.print("  [dim]or throwdown analysis when a decision needs multiple perspectives.[/dim]")
+        console.print()
         return
 
     # --- Default: show setup instructions ---
@@ -3893,6 +3937,7 @@ def nemoclaw(
     console.print("  [bold]nvh nemoclaw[/bold]           Show this setup guide")
     console.print("  [bold]nvh nemoclaw --test[/bold]    Test proxy connectivity")
     console.print("  [bold]nvh nemoclaw --start[/bold]   Start the proxy server")
+    console.print("  [bold]nvh nemoclaw --mcp[/bold]     Show MCP tool server setup")
     console.print()
 
 
