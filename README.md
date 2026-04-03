@@ -94,19 +94,27 @@ Or set up each platform individually:
 
 ### NVIDIA NemoClaw
 
-nvHive works as an **inference provider** inside [NemoClaw](https://github.com/NVIDIA/NemoClaw), giving NemoClaw agents access to smart routing, council consensus, and throwdown analysis.
+nvHive integrates with [NemoClaw](https://github.com/NVIDIA/NemoClaw) in two ways:
 
+**1. Inference Provider** — all agent LLM calls route through nvHive's smart router:
 ```bash
 nvh nemoclaw --start    # start proxy
 nvh nemoclaw --test     # verify connectivity
+```
+
+**2. MCP Tool Server** — agents can explicitly call council/throwdown for consensus:
+```bash
+nvh nemoclaw --mcp      # show MCP setup
 ```
 
 ```mermaid
 graph LR
     subgraph NemoClaw Sandbox
         A[OpenClaw Agent] --> B[inference.local]
+        A -->|MCP| M[nvHive MCP]
     end
     B -->|OpenShell Gateway| C[nvHive Proxy :8000]
+    M -->|tools| C
     C --> D[Smart Router]
     D --> E[Ollama / Nemotron]
     D --> F[22 Cloud Providers]
@@ -114,9 +122,10 @@ graph LR
 
     style C fill:#76B900,color:#000
     style E fill:#76B900,color:#000
+    style M fill:#76B900,color:#000
 ```
 
-Virtual models: `auto`, `safe`, `council`, `council:N`, `throwdown`. Set `x-nvhive-privacy: local-only` for sensitive queries.
+Virtual models: `auto`, `safe`, `council`, `council:N`, `throwdown`. MCP tools: `ask`, `council`, `throwdown`, `status`.
 
 [Full NemoClaw guide →](docs/NEMOCLAW.md)
 
@@ -212,6 +221,7 @@ graph TB
     CLI --> API
     WEB --> API
     NC -->|OpenShell Gateway| PROXY
+    NC -->|MCP| MCP
     OC -->|MCP| MCP
     CC -->|MCP| MCP
     CU -->|MCP| MCP

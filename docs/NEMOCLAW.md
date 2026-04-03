@@ -1,8 +1,11 @@
 # NemoClaw Integration
 
-nvHive works as an inference provider inside [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), giving NemoClaw agents access to multi-model smart routing, council consensus, and throwdown analysis.
+nvHive integrates with [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw) in two ways:
 
-## Setup
+1. **Inference Provider** — all agent LLM calls route through nvHive's smart router automatically
+2. **MCP Tool Server** — agents can explicitly call `council()` and `throwdown()` for multi-model consensus
+
+## Inference Provider Setup
 
 ```bash
 # Setup in three commands:
@@ -49,6 +52,44 @@ graph LR
 ```
 
 Run `nvh nemoclaw` for the full setup guide, or `nvh nemoclaw --test` to verify connectivity.
+
+## MCP Tool Server Setup
+
+In addition to inference routing, NemoClaw agents can call nvHive tools directly via MCP:
+
+```bash
+pip install "nvhive[mcp]"
+nvh nemoclaw --mcp      # show full MCP setup
+```
+
+Add to your NemoClaw agent config:
+
+```json
+{
+  "mcpServers": {
+    "nvhive": {
+      "command": "nvhive-mcp"
+    }
+  }
+}
+```
+
+### Available MCP Tools
+
+| Tool | What It Does |
+|------|-------------|
+| `ask` | Smart-routed query across 22 providers |
+| `ask_safe` | Local-only query (nothing leaves machine) |
+| `council` | Multi-model consensus (3-10 LLMs debate) |
+| `throwdown` | Two-pass deep analysis with critique |
+| `status` | Provider and GPU status |
+| `list_advisors` | Available providers |
+| `list_cabinets` | Expert persona presets |
+
+### Why Both Inference + MCP?
+
+- **Inference provider**: every agent LLM call auto-routes to the best model. The agent doesn't need to think about model selection.
+- **MCP tools**: the agent can explicitly request council consensus or throwdown analysis when a decision needs multiple perspectives. This is something inference routing alone can't do — it picks one model per call, while `council()` dispatches to many.
 
 ---
 
