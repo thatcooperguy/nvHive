@@ -4620,6 +4620,103 @@ def debug(
 
 
 # ---------------------------------------------------------------------------
+# hive test — end-to-end smoke test
+# ---------------------------------------------------------------------------
+
+@app.command()
+def test(
+    api_url: str = typer.Option("http://localhost:8000", "--api", help="API server URL"),
+    webui_url: str = typer.Option("http://localhost:3000", "--webui", help="WebUI URL"),
+    skip_webui: bool = typer.Option(False, "--no-webui", help="Skip WebUI tests"),
+    skip_providers: bool = typer.Option(False, "--no-providers", help="Skip provider health checks"),
+    fix: bool = typer.Option(False, "--fix", help="Attempt to fix issues found"),
+):
+    """Run end-to-end smoke tests on your nvHive installation.
+
+    Walks through every component and reports what works and what doesn't:
+    core imports, engine init, provider health, API endpoints, WebUI pages,
+    integrations, MCP server, GPU detection, and quota system.
+
+    Examples:
+        nvh test                  Run all tests
+        nvh test --no-webui       Skip WebUI (if not running)
+        nvh test --fix            Try to fix issues automatically
+    """
+    from rich.rule import Rule
+
+    from nvh.core.smoke_test import run_smoke_tests
+
+    console.print()
+    console.print(Panel(
+        "[bold]nvHive Smoke Test[/bold]\n"
+        "Walking through every component...",
+        border_style="cyan",
+    ))
+    console.print()
+
+    report = _run(run_smoke_tests(
+        api_url=api_url,
+        webui_url=webui_url,
+        skip_webui=skip_webui,
+        skip_providers=skip_providers,
+    ))
+
+    # Group by category
+    categories: dict[str, list] = {}
+    for r in report.results:
+        categories.setdefault(r.category, []).append(r)
+
+    for category, results in categories.items():
+        passed = sum(1 for r in results if r.passed)
+        total = len(results)
+        console.print(Rule(f"{category} ({passed}/{total})"))
+        console.print()
+
+        for r in results:
+            if r.passed:
+                icon = "[green]✓[/green]"
+                detail = f"[dim]{r.message}[/dim]" if r.message else ""
+                time_str = f"[dim]{r.duration_ms}ms[/dim]" if r.duration_ms else ""
+                console.print(f"  {icon} {r.name}  {detail}  {time_str}")
+            else:
+                icon = "[red]✗[/red]"
+                console.print(f"  {icon} {r.name}")
+                if r.error:
+                    console.print(f"    [red]{r.error}[/red]")
+        console.print()
+
+    # Summary
+    console.print(Rule("Summary"))
+    console.print()
+    if report.failed == 0:
+        console.print(f"  [bold green]All {report.total} tests passed[/bold green] in {report.total_ms}ms")
+    else:
+        console.print(
+            f"  [bold]{report.passed}[/bold] passed, "
+            f"[bold red]{report.failed}[/bold red] failed "
+            f"out of {report.total} tests ({report.total_ms}ms)"
+        )
+
+    if fix and report.failed > 0:
+        console.print()
+        console.print("  [bold]Attempting fixes...[/bold]")
+        for r in report.results:
+            if not r.passed:
+                if "not reachable" in r.error.lower() and "serve" in r.error:
+                    console.print(f"  [yellow]![/yellow] {r.name}: Start API with [bold]nvh serve[/bold]")
+                elif "not reachable" in r.error.lower() and "webui" in r.error:
+                    console.print(f"  [yellow]![/yellow] {r.name}: Start WebUI with [bold]nvh webui[/bold]")
+                elif "pip install" in r.error:
+                    console.print(f"  [yellow]![/yellow] {r.name}: Run [bold]{r.error}[/bold]")
+                elif "unhealthy" in r.error or "rate" in r.error.lower():
+                    console.print(f"  [yellow]![/yellow] {r.name}: Provider issue — check API key or quota")
+                else:
+                    console.print(f"  [yellow]![/yellow] {r.name}: {r.error[:80]}")
+
+    console.print()
+
+
+# ---------------------------------------------------------------------------
 # hive doctor
 # ---------------------------------------------------------------------------
 
@@ -6673,7 +6770,7 @@ def main():
         "code", "write", "research", "math", "clip",
         "voice", "imagine", "screenshot", "bench", "scan", "learn",
         "setup", "status", "savings", "debug", "doctor", "update", "version",
-        "serve", "repl", "completions", "plugins", "nemoclaw", "mcp", "openclaw", "integrate", "service",
+        "serve", "repl", "completions", "plugins", "nemoclaw", "mcp", "openclaw", "integrate", "service", "test",
         "advisor", "agent", "config", "conversation", "budget", "model",
         "template", "workflow", "knowledge", "schedule", "webhook", "auth",
         "git", "webui", "keys",
