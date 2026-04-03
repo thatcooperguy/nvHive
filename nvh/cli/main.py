@@ -1435,7 +1435,7 @@ def status():
         try:
             from nvh.integrations.cloud_session import detect_cloud_session, format_cloud_status
             cloud = detect_cloud_session()
-            if cloud.is_cloud:
+            if cloud.is_cloud_session:
                 console.print(f"  [bold green]Cloud:[/bold green]     {format_cloud_status(cloud)}")
         except Exception:
             pass
@@ -4269,8 +4269,8 @@ def debug(
     try:
         from nvh.integrations.cloud_session import detect_cloud_session
         cloud = detect_cloud_session()
-        log(f"  Detected:    {cloud.is_cloud}")
-        if cloud.is_cloud:
+        log(f"  Detected:    {cloud.is_cloud_session}")
+        if cloud.is_cloud_session:
             log(f"  Tier:        {cloud.tier}")
             log(f"  GPU class:   {cloud.gpu_class}")
             log(f"  Session ID:  {cloud.session_id[:12]}..." if cloud.session_id else "  Session ID:  none")
@@ -4954,7 +4954,7 @@ def doctor():
     try:
         from nvh.integrations.cloud_session import detect_cloud_session
         cloud = detect_cloud_session()
-        if cloud.is_cloud:
+        if cloud.is_cloud_session:
             tier_label = cloud.tier.capitalize() if cloud.tier else "Unknown"
             _pass(
                 "Linux Desktop",
