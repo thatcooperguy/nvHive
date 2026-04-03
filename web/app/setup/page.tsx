@@ -798,13 +798,27 @@ export default function SetupPage() {
                     </svg>
                     RUNNING TEST...
                   </>
-                ) : 'RUN TEST QUERY'}
+                ) : testResult ? 'RUN TEST AGAIN' : 'RUN TEST QUERY'}
               </button>
+
+              {apiStatus !== 'connected' && (
+                <div className="bg-[#f59e0b]/5 border border-[#f59e0b]/20 p-3">
+                  <div className="text-xs font-mono text-[#f59e0b]">
+                    API server not connected. Start it with: nvh serve
+                  </div>
+                </div>
+              )}
 
               {testError && (
                 <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 p-3">
                   <div className="text-[10px] font-mono text-[#ef4444] uppercase tracking-wider mb-1">Error</div>
                   <div className="text-xs font-mono text-[#ef4444]">{testError}</div>
+                  <button
+                    onClick={handleTest}
+                    className="mt-2 text-xs font-mono text-[#f59e0b] hover:underline"
+                  >
+                    Retry
+                  </button>
                 </div>
               )}
 

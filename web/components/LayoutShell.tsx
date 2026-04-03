@@ -1,6 +1,6 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import GlobalModals from '@/components/GlobalModals';
 import { UIShellProvider, useUIShell } from '@/components/UIShellProvider';
@@ -19,6 +19,7 @@ import { UIShellProvider, useUIShell } from '@/components/UIShellProvider';
 /** Inner shell — needs access to UIShell context, so must be inside the provider */
 function InnerShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const isChatPage = pathname === '/';
   const { openCommandPalette } = useUIShell();
 
@@ -51,12 +52,12 @@ function InnerShell({ children }: { children: React.ReactNode }) {
           >
             Ctrl+K
           </button>
-          <span className="text-[#444444]">v0.2.0</span>
+          <span className="text-[#444444]">v0.3.0</span>
         </div>
       </div>
       {/* Offset for top bar */}
       <div className="pt-8 layout-with-sidebar">
-        <Sidebar />
+        <Sidebar onNewChat={() => router.push('/')} />
         <main className="flex-1 min-w-0 overflow-auto">
           {children}
         </main>
