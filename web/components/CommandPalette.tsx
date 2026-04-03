@@ -16,6 +16,7 @@ export type PaletteActionId =
   | 'model-claude-sonnet'
   | 'nav-system'
   | 'nav-providers'
+  | 'nav-analytics'
   | 'nav-integrations'
   | 'nav-settings'
   | 'toggle-sidebar'
@@ -58,6 +59,7 @@ const STATIC_ACTIONS: PaletteAction[] = [
   { id: 'nav-system',       label: 'Go to System',       category: 'Navigation', icon: '⊞' },
   { id: 'nav-providers',    label: 'Go to Providers',    category: 'Navigation', icon: '⊟' },
   { id: 'nav-integrations', label: 'Go to Integrations', category: 'Navigation', icon: '⊡' },
+  { id: 'nav-analytics',    label: 'Go to Analytics',    category: 'Navigation', icon: '▤' },
   { id: 'nav-settings',     label: 'Go to Settings',     category: 'Navigation', icon: '⚙' },
 
   // Settings

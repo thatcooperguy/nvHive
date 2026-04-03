@@ -70,6 +70,9 @@ export default function GlobalModals() {
       case 'nav-integrations':
         router.push('/integrations');
         break;
+      case 'nav-analytics':
+        router.push('/analytics');
+        break;
       case 'nav-settings':
         router.push('/settings');
         break;

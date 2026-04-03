@@ -1251,6 +1251,283 @@ def poll(
 
 
 # ---------------------------------------------------------------------------
+# nvh batch — run multiple prompts from a file and collect structured results
+# ---------------------------------------------------------------------------
+
+@app.command()
+def batch(
+    file: str = typer.Argument(..., help="File containing prompts (txt, json, or yaml)"),
+    output: str | None = typer.Option(
+        None, "-o", "--output", help="Output file path (.json, .csv, or .txt)",
+    ),
+    provider: str | None = typer.Option(None, "-p", "--provider", help="Force a specific provider"),
+    model: str | None = typer.Option(None, "-m", "--model", help="Force a specific model"),
+    parallel: int = typer.Option(1, "--parallel", help="Number of prompts to run concurrently"),
+    system: str | None = typer.Option(None, "-s", "--system", help="System prompt for all queries"),
+    profile: str | None = typer.Option(None, "--profile", help="Config profile to use"),
+    fmt: str = typer.Option("text", "--format", help="Console output format: text, json, csv"),
+):
+    """Batch mode — run multiple prompts from a file and collect structured results.
+
+    The prompts file can be:
+    - Plain text: one prompt per line
+    - JSON: a list of objects with at least a "prompt" key
+      (optional per-item keys: "provider", "model", "system")
+
+    File format is auto-detected by extension (.json for JSON, everything else
+    treated as plain text, one prompt per line).
+
+    Examples:
+        nvh batch prompts.txt
+        nvh batch prompts.json -o results.json
+        nvh batch prompts.txt -o results.csv --provider groq
+        nvh batch prompts.txt --parallel 3
+    """
+    import json as json_mod
+    import time
+
+    file_path = Path(file)
+    if not file_path.exists():
+        console.print(f"[red]Error: File not found: {file}[/red]")
+        raise typer.Exit(1)
+
+    # --- Parse prompts file ---
+    raw = file_path.read_text().strip()
+    prompts: list[dict] = []
+
+    if file_path.suffix.lower() == ".json":
+        try:
+            data = json_mod.loads(raw)
+        except json_mod.JSONDecodeError as exc:
+            console.print(f"[red]Error: Invalid JSON in {file}: {exc}[/red]")
+            raise typer.Exit(1)
+        if not isinstance(data, list):
+            console.print("[red]Error: JSON file must contain a list of prompt objects.[/red]")
+            raise typer.Exit(1)
+        for idx, item in enumerate(data):
+            if isinstance(item, str):
+                prompts.append({"prompt": item})
+            elif isinstance(item, dict) and "prompt" in item:
+                prompts.append(item)
+            else:
+                console.print(
+                    f"[red]Error: Item {idx} in JSON must be a string or "
+                    f"object with a 'prompt' key.[/red]",
+                )
+                raise typer.Exit(1)
+    elif file_path.suffix.lower() in (".yaml", ".yml"):
+        try:
+            import yaml
+            data = yaml.safe_load(raw)
+        except ImportError:
+            console.print(
+                "[red]Error: PyYAML is required for YAML files. "
+                "Install it with: pip install pyyaml[/red]",
+            )
+            raise typer.Exit(1)
+        except Exception as exc:
+            console.print(f"[red]Error: Invalid YAML in {file}: {exc}[/red]")
+            raise typer.Exit(1)
+        if not isinstance(data, list):
+            console.print("[red]Error: YAML file must contain a list of prompt objects.[/red]")
+            raise typer.Exit(1)
+        for idx, item in enumerate(data):
+            if isinstance(item, str):
+                prompts.append({"prompt": item})
+            elif isinstance(item, dict) and "prompt" in item:
+                prompts.append(item)
+            else:
+                console.print(
+                    f"[red]Error: Item {idx} in YAML must be a string or "
+                    f"mapping with a 'prompt' key.[/red]",
+                )
+                raise typer.Exit(1)
+    else:
+        # Plain text — one prompt per line
+        for line in raw.splitlines():
+            line = line.strip()
+            if line:
+                prompts.append({"prompt": line})
+
+    if not prompts:
+        console.print("[red]Error: No prompts found in file.[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Batch Mode[/bold] — {len(prompts)} prompt(s), parallelism={parallel}\n")
+
+    # --- Run prompts ---
+    async def _run_batch():
+        from rich.progress import (
+            BarColumn,
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            TimeElapsedColumn,
+        )
+
+        from nvh.config.settings import load_config
+        from nvh.core.engine import Engine
+
+        config = load_config(profile=profile)
+        engine = Engine(config=config)
+        await engine.initialize()
+
+        results: list[dict] = []
+        semaphore = asyncio.Semaphore(parallel)
+
+        async def _process_one(idx: int, item: dict, progress, task_id) -> dict:
+            async with semaphore:
+                p = item["prompt"]
+                p_provider = item.get("provider") or provider
+                p_model = item.get("model") or model
+                p_system = item.get("system") or system
+
+                start_t = time.monotonic()
+                try:
+                    resp = await engine.query(
+                        prompt=p,
+                        provider=p_provider,
+                        model=p_model,
+                        system_prompt=p_system,
+                        stream=False,
+                    )
+                    elapsed = int((time.monotonic() - start_t) * 1000)
+                    result = {
+                        "index": idx,
+                        "prompt": p,
+                        "content": resp.content,
+                        "provider": resp.provider or p_provider or "",
+                        "model": resp.model or p_model or "",
+                        "latency_ms": resp.latency_ms or elapsed,
+                        "cost_usd": str(resp.cost_usd or "0"),
+                        "tokens_in": resp.usage.input_tokens if resp.usage else 0,
+                        "tokens_out": resp.usage.output_tokens if resp.usage else 0,
+                        "error": None,
+                    }
+                except Exception as exc:
+                    elapsed = int((time.monotonic() - start_t) * 1000)
+                    result = {
+                        "index": idx,
+                        "prompt": p,
+                        "content": "",
+                        "provider": p_provider or "",
+                        "model": p_model or "",
+                        "latency_ms": elapsed,
+                        "cost_usd": "0",
+                        "tokens_in": 0,
+                        "tokens_out": 0,
+                        "error": str(exc),
+                    }
+                progress.advance(task_id)
+                return result
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.completed}/{task.total}"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("Running prompts…", total=len(prompts))
+            tasks = [
+                _process_one(i, item, progress, task_id)
+                for i, item in enumerate(prompts)
+            ]
+            results = await asyncio.gather(*tasks)
+
+        # Sort by original index
+        results = sorted(results, key=lambda r: r["index"])
+
+        # --- Save / display results ---
+        errors = [r for r in results if r["error"]]
+        successes = [r for r in results if not r["error"]]
+        total_cost = sum(Decimal(r["cost_usd"]) for r in results)
+
+        # Determine output format from --output file extension or --format
+        out_fmt = fmt
+        if output:
+            out_path = Path(output)
+            ext = out_path.suffix.lower()
+            if ext == ".json":
+                out_fmt = "json"
+            elif ext == ".csv":
+                out_fmt = "csv"
+            else:
+                out_fmt = "text"
+
+        # Build output data
+        if out_fmt == "json":
+            json_str = json_mod.dumps(results, indent=2, ensure_ascii=False)
+            if output:
+                Path(output).write_text(json_str)
+                console.print(f"\n[green]Results saved to {output}[/green]")
+            else:
+                console.print_json(json_str)
+
+        elif out_fmt == "csv":
+            import csv
+            import io
+
+            fieldnames = [
+                "index", "prompt", "content", "provider", "model",
+                "latency_ms", "cost_usd", "tokens_in", "tokens_out", "error",
+            ]
+            buf = io.StringIO()
+            writer = csv.DictWriter(buf, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(results)
+            csv_str = buf.getvalue()
+
+            if output:
+                Path(output).write_text(csv_str)
+                console.print(f"\n[green]Results saved to {output}[/green]")
+            else:
+                console.print(csv_str)
+
+        else:
+            # Text output
+            for r in results:
+                if r["error"]:
+                    console.print(Panel(
+                        f"[red]Error: {r['error']}[/red]",
+                        title=f"[{r['index']}] {r['prompt'][:60]}",
+                        border_style="red",
+                    ))
+                else:
+                    header = (
+                        f"[{r['index']}] {r['provider']}/{r['model']}  "
+                        f"{r['latency_ms']}ms  ${r['cost_usd']}"
+                    )
+                    console.print(Panel(
+                        r["content"],
+                        title=header,
+                        subtitle=r["prompt"][:80],
+                        border_style="cyan",
+                    ))
+
+            if output:
+                lines = []
+                for r in results:
+                    lines.append(f"--- [{r['index']}] {r['prompt'][:80]} ---")
+                    if r["error"]:
+                        lines.append(f"ERROR: {r['error']}")
+                    else:
+                        lines.append(r["content"])
+                    lines.append("")
+                Path(output).write_text("\n".join(lines))
+                console.print(f"\n[green]Results saved to {output}[/green]")
+
+        # Summary
+        console.print(
+            f"\n[bold]Batch complete:[/bold] {len(successes)} succeeded, "
+            f"{len(errors)} failed, total cost ${total_cost:.4f}",
+        )
+
+    _run(_run_batch())
+
+
+# ---------------------------------------------------------------------------
 # nvh throwdown — two-pass deep analysis with all APIs and agents
 # ---------------------------------------------------------------------------
 
@@ -6766,7 +7043,7 @@ def main():
 
     # Common command aliases
     known_commands.update({
-        "ask", "convene", "poll", "throwdown", "quick", "safe", "do",
+        "ask", "convene", "poll", "batch", "throwdown", "quick", "safe", "do",
         "code", "write", "research", "math", "clip",
         "voice", "imagine", "screenshot", "bench", "scan", "learn",
         "setup", "status", "savings", "debug", "doctor", "update", "version",

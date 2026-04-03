@@ -105,6 +105,31 @@ export async function getSystemInfo(): Promise<SystemInfo> {
   return apiGet<SystemInfo>('/v1/system/info');
 }
 
+// ─── Analytics ──────────────────────────────────────────────────────────────
+
+export interface AnalyticsData {
+  queries_today: number;
+  queries_this_week: number;
+  queries_this_month: number;
+  cost_by_provider: Record<string, string>;
+  queries_by_provider: Record<string, number>;
+  latency_by_provider: Record<string, number>;
+  most_used_models: Array<{ model: string; provider: string; count: number }>;
+  free_queries: number;
+  paid_queries: number;
+  savings: {
+    local_queries: number;
+    cloud_queries: number;
+    estimated_cloud_cost: string;
+    total_savings: string;
+    savings_pct: number;
+  };
+}
+
+export async function getAnalytics(): Promise<AnalyticsData> {
+  return apiGet<AnalyticsData>('/v1/analytics');
+}
+
 // ─── Query ───────────────────────────────────────────────────────────────────
 
 export async function query(

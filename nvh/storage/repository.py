@@ -417,6 +417,113 @@ async def get_savings(period: str = "monthly") -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Analytics
+# ---------------------------------------------------------------------------
+
+
+async def get_analytics() -> dict:
+    """Return comprehensive analytics data for the dashboard.
+
+    Includes query counts by period, cost and latency breakdowns per provider,
+    most-used models, free-vs-paid ratio, and savings data.
+    """
+    now = datetime.now(UTC)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = now - timedelta(days=7)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    async with get_session() as session:
+        # --- Query counts by period ---
+        today_count = (await session.execute(
+            select(func.count(QueryLog.id)).where(QueryLog.created_at >= today_start)
+        )).scalar_one() or 0
+
+        week_count = (await session.execute(
+            select(func.count(QueryLog.id)).where(QueryLog.created_at >= week_start)
+        )).scalar_one() or 0
+
+        month_count = (await session.execute(
+            select(func.count(QueryLog.id)).where(QueryLog.created_at >= month_start)
+        )).scalar_one() or 0
+
+        # --- Per-provider stats (this month) ---
+        provider_rows = (await session.execute(
+            select(
+                QueryLog.provider,
+                func.count(QueryLog.id),
+                func.coalesce(func.sum(QueryLog.cost_usd), 0),
+                func.coalesce(func.avg(QueryLog.latency_ms), 0),
+            )
+            .where(QueryLog.created_at >= month_start)
+            .group_by(QueryLog.provider)
+        )).all()
+
+        cost_by_provider: dict[str, str] = {}
+        queries_by_provider: dict[str, int] = {}
+        latency_by_provider: dict[str, float] = {}
+
+        for prov, cnt, cost, latency in provider_rows:
+            cost_by_provider[prov] = str(Decimal(str(cost)))
+            queries_by_provider[prov] = cnt
+            latency_by_provider[prov] = round(float(latency), 1)
+
+        # --- Most used models (this month, top 10) ---
+        model_rows = (await session.execute(
+            select(
+                QueryLog.model,
+                QueryLog.provider,
+                func.count(QueryLog.id),
+            )
+            .where(QueryLog.created_at >= month_start)
+            .group_by(QueryLog.model, QueryLog.provider)
+            .order_by(func.count(QueryLog.id).desc())
+            .limit(10)
+        )).all()
+
+        most_used_models = [
+            {"model": m, "provider": p, "count": c}
+            for m, p, c in model_rows
+        ]
+
+        # --- Free vs paid ratio (this month) ---
+        free_count = (await session.execute(
+            select(func.count(QueryLog.id)).where(
+                QueryLog.created_at >= month_start,
+                QueryLog.cost_usd == Decimal("0"),
+            )
+        )).scalar_one() or 0
+
+        paid_count = (await session.execute(
+            select(func.count(QueryLog.id)).where(
+                QueryLog.created_at >= month_start,
+                QueryLog.cost_usd > Decimal("0"),
+            )
+        )).scalar_one() or 0
+
+    # --- Savings ---
+    savings = await get_savings("monthly")
+
+    return {
+        "queries_today": today_count,
+        "queries_this_week": week_count,
+        "queries_this_month": month_count,
+        "cost_by_provider": cost_by_provider,
+        "queries_by_provider": queries_by_provider,
+        "latency_by_provider": latency_by_provider,
+        "most_used_models": most_used_models,
+        "free_queries": free_count,
+        "paid_queries": paid_count,
+        "savings": {
+            "local_queries": savings["local_queries"],
+            "cloud_queries": savings["cloud_queries"],
+            "estimated_cloud_cost": str(savings["estimated_cloud_cost"]),
+            "total_savings": str(savings["total_savings"]),
+            "savings_pct": savings["savings_pct"],
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # Provider Key Metadata
 # ---------------------------------------------------------------------------
 

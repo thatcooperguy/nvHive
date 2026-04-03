@@ -941,6 +941,19 @@ async def clear_cache(provider: str | None = None, _auth: None = Depends(require
     return _response_envelope({"cleared": cleared, "provider": provider})
 
 
+# -- /v1/analytics ------------------------------------------------------------
+
+@app.get("/v1/analytics", summary="Usage analytics — query counts, cost breakdown, latency, savings")
+async def analytics(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    from nvh.storage import repository as repo
+    try:
+        data = await repo.get_analytics()
+    except Exception:
+        logger.exception("Error fetching analytics")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+    return _response_envelope(data)
+
+
 # -- /v1/agents ---------------------------------------------------------------
 
 @app.get("/v1/agents/presets", summary="List available agent presets and their roles")
