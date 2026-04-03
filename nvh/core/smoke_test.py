@@ -316,5 +316,194 @@ async def run_smoke_tests(
     except Exception as e:
         add("GPU detection", "Hardware", False, error=str(e)[:80])
 
+    # ===== QUERY MODES =====
+    if engine:
+        # Action detection
+        try:
+            from nvh.core.action_detector import detect_action
+            action = detect_action("install pandas")
+            add("Action detector", "Query Modes", action is not None,
+                message=f"detected: {action.tool_name if action else 'none'}")
+        except Exception as e:
+            add("Action detector", "Query Modes", False, error=str(e)[:80])
+
+        # Task classification
+        try:
+            from nvh.core.router import classify_task
+            result = classify_task("Write a Python sort function")
+            top_task = max(result.all_scores, key=result.all_scores.get)
+            add("Task classifier", "Query Modes", True,
+                message=f"'{top_task}' ({result.all_scores[top_task]:.2f})")
+        except Exception as e:
+            add("Task classifier", "Query Modes", False, error=str(e)[:80])
+
+        # Router scoring
+        try:
+            decision = engine.router.route("Explain quantum computing")
+            add("Smart routing", "Query Modes", True,
+                message=f"→ {decision.provider}/{decision.model}")
+        except Exception as e:
+            add("Smart routing", "Query Modes", False, error=str(e)[:80])
+
+    # ===== AGENT SYSTEM =====
+    try:
+        from nvh.core.agents import generate_agents, list_presets
+        presets = list_presets()
+        add("Agent presets", "Agents", len(presets) > 0,
+            message=f"{len(presets)} cabinets")
+    except Exception as e:
+        add("Agent presets", "Agents", False, error=str(e)[:80])
+
+    try:
+        from nvh.core.agents import generate_agents
+        agents = generate_agents("Should we migrate to microservices?", num_agents=3)
+        add("Agent generation", "Agents", len(agents) > 0,
+            message=f"{len(agents)} agents: {', '.join(a.role for a in agents)}")
+    except Exception as e:
+        add("Agent generation", "Agents", False, error=str(e)[:80])
+
+    # ===== TOOL SYSTEM =====
+    try:
+        from nvh.core.tools import ToolRegistry
+        registry = ToolRegistry(include_system=True)
+        tools = registry.list_tools()
+        safe = [t for t in tools if t.safe]
+        add("Tool registry", "Tools", len(tools) > 0,
+            message=f"{len(tools)} tools ({len(safe)} safe)")
+    except Exception as e:
+        add("Tool registry", "Tools", False, error=str(e)[:80])
+
+    # ===== API QUERY EXECUTION =====
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{api_url}/v1/query",
+                json={"prompt": test_query, "stream": False},
+                timeout=30,
+            )
+            data = resp.json()
+            content = data.get("data", {}).get("content", "")
+            provider = data.get("data", {}).get("provider", "?")
+            add("API query execution", "API Query", len(content) > 0,
+                message=f"{provider}: {len(content)} chars")
+    except Exception as e:
+        add("API query execution", "API Query", False, error=str(e)[:80])
+
+    # OpenAI proxy
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{api_url}/v1/proxy/chat/completions",
+                json={
+                    "model": "auto",
+                    "messages": [{"role": "user", "content": "Say hi"}],
+                    "max_tokens": 10,
+                },
+                timeout=30,
+            )
+            data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            add("OpenAI proxy", "API Query", len(content) > 0,
+                message=f"response: {content[:40]}")
+    except Exception as e:
+        add("OpenAI proxy", "API Query", False, error=str(e)[:80])
+
+    # ===== STORAGE =====
+    try:
+        from nvh.storage import repository as repo  # noqa: F401
+        add("Storage module", "Storage", True, message="imports OK")
+    except Exception as e:
+        add("Storage module", "Storage", False, error=str(e)[:80])
+
+    # ===== CONFIGURATION =====
+    try:
+        from nvh.config.settings import load_config
+        config = load_config()
+        add("Config loading", "Config", True,
+            message=f"system_prompt: {len(config.defaults.system_prompt)} chars")
+    except Exception as e:
+        add("Config loading", "Config", False, error=str(e)[:80])
+
+    # HIVE.md / context files
+    try:
+        from nvh.core.context_files import find_context_files
+        ctx_files = find_context_files()
+        add("Context files (HIVE.md)", "Config", True,
+            message=f"{len(ctx_files)} found" if ctx_files else "none (OK)")
+    except Exception as e:
+        add("HIVE.md detection", "Config", False, error=str(e)[:80])
+
+    # ===== KEYRING =====
+    try:
+        import keyring
+        keyring.get_password("nvhive", "smoke_test_key")
+        add("Keyring access", "Security", True,
+            message="accessible")
+    except Exception as e:
+        add("Keyring access", "Security", False,
+            error=f"keyring unavailable: {str(e)[:60]}")
+
+    # ===== ADVISOR PROFILES =====
+    try:
+        from nvh.core.advisor_profiles import ADVISOR_PROFILES
+        add("Advisor profiles", "Config", len(ADVISOR_PROFILES) > 0,
+            message=f"{len(ADVISOR_PROFILES)} profiles loaded")
+    except Exception as e:
+        add("Advisor profiles", "Config", False, error=str(e)[:80])
+
+    # ===== CAPABILITIES CATALOG =====
+    try:
+        from pathlib import Path
+        cap_file = Path(__file__).parent.parent / "config" / "capabilities.yaml"
+        if cap_file.exists():
+            import yaml
+            with open(cap_file) as f:
+                caps = yaml.safe_load(f)
+            models = caps.get("models", {})
+            add("Capabilities catalog", "Config", len(models) > 0,
+                message=f"{len(models)} models defined")
+        else:
+            add("Capabilities catalog", "Config", False,
+                error="capabilities.yaml not found")
+    except Exception as e:
+        add("Capabilities catalog", "Config", False, error=str(e)[:80])
+
+    # ===== ORCHESTRATOR =====
+    try:
+        from nvh.core.orchestrator import LocalOrchestrator
+        orch = LocalOrchestrator()
+        add("Orchestrator", "Orchestration", True,
+            message=f"mode: {orch.mode.value}")
+    except Exception as e:
+        add("Orchestrator", "Orchestration", False, error=str(e)[:80])
+
+    # ===== SANDBOX =====
+    try:
+        from nvh.sandbox.executor import SandboxExecutor
+        SandboxExecutor()  # verify it instantiates
+        has_docker = False
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["docker", "info"], capture_output=True, timeout=3)
+            has_docker = result.returncode == 0
+        except Exception:
+            pass
+        add("Sandbox executor", "Security", True,
+            message=f"docker: {'available' if has_docker else 'subprocess fallback'}")
+    except Exception as e:
+        add("Sandbox executor", "Security", False, error=str(e)[:80])
+
+    # ===== FREE TIER DETECTION =====
+    try:
+        from nvh.core.free_tier import detect_available_free_advisors
+        free = detect_available_free_advisors()
+        add("Free tier detection", "Providers", True,
+            message=f"{len(free)} free advisors available")
+    except Exception as e:
+        add("Free tier detection", "Providers", False, error=str(e)[:80])
+
     report.total_ms = int((time.monotonic() - start) * 1000)
     return report
