@@ -24,3 +24,4 @@ web/node_modules/
 web/.next/
 web/out/
 .DS_Store
+docs/NVIDIA_POSITIONING.md
