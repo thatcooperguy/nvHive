@@ -8,7 +8,6 @@ These tests require:
 Skip gracefully if Playwright or servers are not available.
 """
 
-import subprocess
 
 import pytest
 

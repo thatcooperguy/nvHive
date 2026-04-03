@@ -7,8 +7,6 @@ commands produce the expected output without errors.
 import subprocess
 import sys
 
-import pytest
-
 PYTHON = sys.executable
 NVH = [PYTHON, "-m", "nvh.cli.main"]
 TIMEOUT = 30
