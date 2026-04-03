@@ -119,6 +119,7 @@ class DefaultsConfig(BaseModel):
     system_prompt: str = "Always respond in English unless the user explicitly requests another language."
     show_metadata: bool = True
     orchestration_mode: str = "auto"  # off, light, full, auto
+    prefer_nvidia: bool = False
 
 
 class CacheConfig(BaseModel):
@@ -416,6 +417,12 @@ advisors:
     default_model: meta/llama-3.1-70b-instruct
     fallback_model: meta/llama-3.1-8b-instruct
     base_url: https://integrate.api.nvidia.com/v1
+    enabled: false
+
+  triton:
+    base_url: ${TRITON_URL:-${TRITON_ENDPOINT:-http://localhost:8001}}
+    default_model: ""
+    type: triton
     enabled: false
 
   siliconflow:

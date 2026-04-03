@@ -94,6 +94,7 @@ class ProviderRegistry:
         from nvh.providers.sambanova_provider import SambaNovProvider
         from nvh.providers.siliconflow_provider import SiliconFlowProvider
         from nvh.providers.together_provider import TogetherProvider
+        from nvh.providers.triton_provider import TritonProvider
 
         enabled = []
 
@@ -120,6 +121,7 @@ class ProviderRegistry:
             "nvidia": NvidiaProvider,
             "siliconflow": SiliconFlowProvider,
             "llm7": LLM7Provider,
+            "triton": TritonProvider,
         }
 
         for name, pconfig in config.providers.items():

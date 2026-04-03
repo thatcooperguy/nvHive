@@ -10,6 +10,9 @@ from nvh.core.rate_limiter import ProviderRateManager
 from nvh.providers.base import ModelInfo, TaskType
 from nvh.providers.registry import ProviderRegistry
 
+# Providers that run on NVIDIA hardware / NVIDIA-optimized inference
+_NVIDIA_PROVIDERS = frozenset({"nvidia", "ollama", "triton"})
+
 # ---------------------------------------------------------------------------
 # Task Classifier (keyword/regex for MVP)
 # ---------------------------------------------------------------------------
@@ -278,6 +281,10 @@ class RoutingEngine:
                     + health * weights.get("health", 0.1)
                     + profile_bonus
                 )
+
+            # Apply --prefer-nvidia bonus (1.3x) when quality is comparable
+            if self.config.defaults.prefer_nvidia and pname in _NVIDIA_PROVIDERS:
+                composite *= 1.3
 
             provider_scores[pname] = {
                 "composite": composite,

@@ -411,6 +411,7 @@ def ask(
     output_json: bool = typer.Option(False, "--json", help="Shorthand for --output json"),
     output_raw: bool = typer.Option(False, "--raw", help="Shorthand for --output raw (no metadata, just the answer)"),
     knowledge: bool = typer.Option(False, "--knowledge", "-k", help="Augment prompt with your knowledge base (RAG)"),
+    prefer_nvidia: bool = typer.Option(False, "--prefer-nvidia", help="Bias routing toward NVIDIA providers (ollama/Nemotron, NIM, Triton)"),
 ):
     """Ask a single LLM advisor a question."""
     # Apply shorthand output flags
@@ -491,6 +492,9 @@ def ask(
         from nvh.core.engine import Engine
 
         config = load_config(profile=profile)
+        # Apply --prefer-nvidia CLI flag (overrides config setting)
+        if prefer_nvidia:
+            config.defaults.prefer_nvidia = True
         engine = Engine(config=config)
         await engine.initialize()
 
@@ -1834,6 +1838,112 @@ def quick(
             raise typer.Exit(1)
 
     _run(_run_quick())
+
+
+# ---------------------------------------------------------------------------
+# nvh pipe — Unix pipeline mode
+# ---------------------------------------------------------------------------
+
+# Maximum characters to read from stdin before truncating.
+# ~100k chars ≈ ~25-30k tokens, safe for most model context windows.
+_PIPE_MAX_CHARS = 100_000
+
+@app.command()
+def pipe(
+    prompt: str | None = typer.Argument(None, help="Prompt to prepend to stdin content"),
+    provider: str | None = typer.Option(None, "-a", "--provider", help="Provider to use"),
+    model: str | None = typer.Option(None, "-m", "--model", help="Model to use"),
+    json_output: bool = typer.Option(False, "--json", help="Output structured JSON response"),
+):
+    """Read from stdin and send to LLM — composable with Unix pipelines.
+
+    Reads piped input, optionally prepends a prompt, sends to the LLM,
+    and prints only raw response text (no Rich formatting) so output
+    can be piped further.
+
+    Examples:
+        git diff --staged | nvh pipe "Write a commit message for this diff"
+        cat error.log | nvh pipe "What caused this crash?"
+        echo "explain this" | nvh pipe
+        cat data.json | nvh pipe "Summarize this JSON" --provider groq
+        nvh pipe "translate to Spanish" < input.txt > output.txt
+    """
+    _run_pipe_command(prompt=prompt, provider=provider, model=model, json_output=json_output)
+
+
+def _run_pipe_command(
+    prompt: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    json_output: bool = False,
+):
+    """Shared implementation for pipe mode (explicit command and auto-detect)."""
+    # Read stdin
+    if sys.stdin.isatty():
+        print("Error: nvh pipe expects input on stdin.", file=sys.stderr)
+        print("Usage: cat file.txt | nvh pipe \"your prompt\"", file=sys.stderr)
+        raise typer.Exit(1)
+
+    stdin_text = sys.stdin.read(_PIPE_MAX_CHARS)
+
+    # Check if there was more data we truncated
+    extra = sys.stdin.read(1)
+    truncated = len(extra) > 0
+    if truncated:
+        # Drain remaining stdin to avoid broken pipe
+        try:
+            while sys.stdin.read(8192):
+                pass
+        except Exception:
+            pass
+        stdin_text += "\n\n[Content truncated — input exceeded limit]"
+
+    if not stdin_text.strip() and not prompt:
+        print("Error: no input received on stdin and no prompt provided.", file=sys.stderr)
+        raise typer.Exit(1)
+
+    # Build the full prompt: user prompt + stdin content
+    parts = []
+    if prompt:
+        parts.append(prompt)
+    if stdin_text.strip():
+        if prompt:
+            parts.append(f"\n---\n{stdin_text}")
+        else:
+            parts.append(stdin_text)
+    full_prompt = "".join(parts)
+
+    if json_output:
+        system_prompt = (
+            "You must respond with valid JSON only. No markdown, no explanation outside the JSON. "
+            "Use an appropriate JSON structure for the request."
+        )
+    else:
+        system_prompt = None
+
+    async def _run_pipe():
+        from nvh.config.settings import load_config
+        from nvh.core.engine import Engine
+
+        config = load_config()
+        engine = Engine(config=config)
+        await engine.initialize()
+
+        try:
+            resp = await engine.query(
+                prompt=full_prompt,
+                provider=provider,
+                model=model,
+                system_prompt=system_prompt,
+                stream=False,
+            )
+            # Raw output only — no Rich formatting so it pipes cleanly
+            print(resp.content, end="")
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise typer.Exit(1)
+
+    _run(_run_pipe())
 
 
 # ---------------------------------------------------------------------------
@@ -6998,6 +7108,291 @@ def scan(
 
 
 # ---------------------------------------------------------------------------
+# Tour — interactive first-run experience
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def tour(
+    skip: list[int] = typer.Option(
+        [], "--skip", "-s", help="Steps to skip (1, 2, or 3)"
+    ),
+):
+    """Interactive first-run tour — proves multi-LLM value in 90 seconds."""
+    import time
+
+    from rich.rule import Rule
+    from rich.text import Text
+
+    async def _run_tour():
+        from nvh.config.settings import load_config
+        from nvh.core.engine import Engine
+        from nvh.core.router import classify_task
+
+        config = load_config()
+        engine = Engine(config=config)
+        enabled_providers = await engine.initialize()
+
+        # --- Welcome banner ---
+        console.print()
+        console.print(
+            Panel(
+                "[bold white]Welcome to nvHive[/bold white]\n\n"
+                "This 90-second tour shows what multi-LLM orchestration "
+                "can do.\n"
+                "Three live demos, real API calls, real results.",
+                border_style="bright_magenta",
+                padding=(1, 3),
+            )
+        )
+        console.print()
+
+        # =============================================================
+        # Step 1: Routing in action
+        # =============================================================
+        if 1 not in skip:
+            console.print(Rule(
+                "[bold cyan]Step 1 of 3[/bold cyan]  "
+                "Watch routing in action",
+                style="cyan",
+            ))
+            console.print()
+
+            demo_queries = [
+                (
+                    "Write a Python function to merge two sorted lists",
+                    "coding",
+                ),
+                (
+                    "Write a haiku about the ocean at midnight",
+                    "creative",
+                ),
+            ]
+
+            for query, label in demo_queries:
+                console.print(
+                    f"  [bold]Query:[/bold] [italic]{query}[/italic]"
+                )
+                console.print()
+
+                with console.status(
+                    f"[dim]Routing {label} question...[/dim]",
+                    spinner="dots",
+                ):
+                    classification = classify_task(query)
+                    decision = engine.router.route(query)
+                    start = time.monotonic()
+                    try:
+                        resp = await engine.query(
+                            prompt=query, stream=False,
+                        )
+                        elapsed = int(
+                            (time.monotonic() - start) * 1000
+                        )
+                    except Exception as exc:
+                        console.print(
+                            f"    [red]Error: {exc}[/red]\n"
+                        )
+                        continue
+
+                info_table = Table(
+                    show_header=False, box=None, padding=(0, 2),
+                )
+                info_table.add_column("key", style="bold")
+                info_table.add_column("value")
+                info_table.add_row(
+                    "Provider",
+                    f"[green]{resp.provider}[/green]",
+                )
+                info_table.add_row("Model", resp.model)
+                info_table.add_row(
+                    "Latency", f"{resp.latency_ms or elapsed}ms",
+                )
+                info_table.add_row("Cost", f"${resp.cost_usd:.4f}")
+                info_table.add_row(
+                    "Task type", classification.task_type.value,
+                )
+                info_table.add_row("Why chosen", decision.reason)
+
+                preview = resp.content.strip().replace("\n", " ")
+                if len(preview) > 120:
+                    preview = preview[:120] + "..."
+
+                console.print(Panel(
+                    Text(preview, style="dim"),
+                    title=f"[bold]{label.title()} response[/bold]",
+                    border_style="blue",
+                    padding=(0, 1),
+                ))
+                console.print(info_table)
+                console.print()
+
+            console.print(
+                "[green]  --> The router picked different providers"
+                " based on the task.[/green]\n"
+            )
+
+        # =============================================================
+        # Step 2: Council in action
+        # =============================================================
+        if 2 not in skip:
+            console.print(Rule(
+                "[bold yellow]Step 2 of 3[/bold yellow]  "
+                "See the council in action",
+                style="yellow",
+            ))
+            console.print()
+
+            council_prompt = (
+                "Is Python or Rust better for CLI tools?"
+            )
+            console.print(
+                "  [bold]Council query:[/bold] "
+                f"[italic]{council_prompt}[/italic]\n"
+            )
+
+            with console.status(
+                "[dim]Querying council members in parallel...[/dim]",
+                spinner="dots",
+            ):
+                try:
+                    result = await engine.run_council(
+                        prompt=council_prompt,
+                        synthesize=True,
+                    )
+                except Exception as exc:
+                    console.print(
+                        f"  [red]Council error: {exc}[/red]\n"
+                    )
+                    result = None
+
+            if result:
+                for member_label, mresp in (
+                    result.member_responses.items()
+                ):
+                    snippet = (
+                        mresp.content.strip()
+                        .replace("\n", " ")[:100]
+                    )
+                    if len(mresp.content.strip()) > 100:
+                        snippet += "..."
+                    console.print(Panel(
+                        snippet,
+                        title=(
+                            f"[bold]{member_label}[/bold]"
+                            f" ({mresp.model})"
+                        ),
+                        border_style="blue",
+                        padding=(0, 1),
+                    ))
+
+                if result.synthesis:
+                    synth_preview = (
+                        result.synthesis.content.strip()
+                    )
+                    if len(synth_preview) > 300:
+                        synth_preview = synth_preview[:300] + "..."
+                    console.print(Panel(
+                        synth_preview,
+                        title="[bold green]Synthesis[/bold green]",
+                        border_style="green",
+                        padding=(0, 1),
+                    ))
+
+                member_count = len(result.member_responses)
+                total_cost = result.total_cost_usd
+                console.print(
+                    f"  [dim]Members: {member_count} | "
+                    f"Strategy: {result.strategy} | "
+                    f"Latency: {result.total_latency_ms}ms | "
+                    f"Cost: ${total_cost:.4f}[/dim]"
+                )
+                console.print()
+                console.print(
+                    "[green]  --> Multiple LLMs debated, then a "
+                    "synthesis merged the best ideas.[/green]\n"
+                )
+
+        # =============================================================
+        # Step 3: Make it yours
+        # =============================================================
+        if 3 not in skip:
+            console.print(Rule(
+                "[bold magenta]Step 3 of 3[/bold magenta]  "
+                "Make it yours",
+                style="magenta",
+            ))
+            console.print()
+
+            if enabled_providers:
+                provider_list = ", ".join(
+                    f"[green]{p}[/green]"
+                    for p in enabled_providers
+                )
+                console.print(
+                    f"  [bold]Providers configured:[/bold] "
+                    f"{len(enabled_providers)} ({provider_list})"
+                )
+            else:
+                console.print(
+                    "  [bold]Providers configured:[/bold] "
+                    "[yellow]0[/yellow] — using auto-detected "
+                    "defaults"
+                )
+
+            console.print()
+
+            suggestions = Table(
+                show_header=False, box=None, padding=(0, 2),
+            )
+            suggestions.add_column("icon", width=3)
+            suggestions.add_column("text")
+            suggestions.add_row(
+                "[bold yellow]+[/bold yellow]",
+                "Add a free API key:  [cyan]nvh keys[/cyan]",
+            )
+            suggestions.add_row(
+                "[bold yellow]+[/bold yellow]",
+                "Interactive mode:    [cyan]nvh repl[/cyan]",
+            )
+            suggestions.add_row(
+                "[bold yellow]+[/bold yellow]",
+                "Web dashboard:       [cyan]nvh webui[/cyan]",
+            )
+            suggestions.add_row(
+                "[bold yellow]+[/bold yellow]",
+                "System status:       [cyan]nvh status[/cyan]",
+            )
+            suggestions.add_row(
+                "[bold yellow]+[/bold yellow]",
+                "Ask anything:        "
+                "[cyan]nvh \"your question\"[/cyan]",
+            )
+
+            console.print(Panel(
+                suggestions,
+                title="[bold]Next steps[/bold]",
+                border_style="bright_magenta",
+                padding=(1, 2),
+            ))
+            console.print()
+
+        # --- Farewell ---
+        console.print(
+            Panel(
+                "[bold]Tour complete.[/bold]  You have a multi-LLM "
+                "command center at your fingertips.\n"
+                "Run [cyan]nvh repl[/cyan] for interactive mode or "
+                "[cyan]nvh webui[/cyan] for the dashboard.",
+                border_style="bright_green",
+                padding=(1, 3),
+            )
+        )
+
+    _run(_run_tour())
+
+
+# ---------------------------------------------------------------------------
 # Entry point — catches unknown commands and treats them as prompts
 # ---------------------------------------------------------------------------
 
@@ -7013,6 +7408,10 @@ def main():
     args = sys.argv[1:]
 
     if not args:
+        # If stdin is piped (not a TTY), auto-engage pipe mode
+        if not sys.stdin.isatty():
+            _run_pipe_command()
+            return
         # No arguments → launch REPL
         _run(_launch_default_repl())
         return
@@ -7044,19 +7443,24 @@ def main():
     # Common command aliases
     known_commands.update({
         "ask", "convene", "poll", "batch", "throwdown", "quick", "safe", "do",
-        "code", "write", "research", "math", "clip",
+        "code", "write", "research", "math", "clip", "pipe",
         "voice", "imagine", "screenshot", "bench", "scan", "learn",
         "setup", "status", "savings", "debug", "doctor", "update", "version",
         "serve", "repl", "completions", "plugins", "nemoclaw", "mcp", "openclaw", "integrate", "service", "test",
         "advisor", "agent", "config", "conversation", "budget", "model",
         "template", "workflow", "knowledge", "schedule", "webhook", "auth",
-        "git", "webui", "keys",
+        "git", "webui", "keys", "tour",
     })
 
     if first in known_commands:
         # It's a subcommand — let Typer handle it
         app()
     else:
+        # If stdin is piped, auto-engage pipe mode with args as the prompt
+        if not sys.stdin.isatty():
+            _run_pipe_command(prompt=" ".join(args))
+            return
+
         # It's a bare prompt — route to smart default
         prompt = " ".join(args)
 
