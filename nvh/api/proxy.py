@@ -561,3 +561,251 @@ def build_models_list(registry: Any) -> dict[str, Any]:
         "object": "list",
         "data": model_objects,
     }
+
+
+# ------------------------------------------------------------------
+# Anthropic/Claude API format proxy
+# ------------------------------------------------------------------
+# Accepts requests in Anthropic Messages API format and routes them
+# through nvHive's engine. This lets OpenClaw users and any tool
+# that talks to the Anthropic API point at nvHive instead:
+#
+#   ANTHROPIC_API_URL=http://localhost:8000/v1/anthropic
+#   ANTHROPIC_API_KEY=anything
+#
+# nvHive handles routing, fallback, and multi-provider orchestration.
+# ------------------------------------------------------------------
+
+_CLAUDE_STOP_TO_NVHIVE = {
+    "end_turn": "stop",
+    "max_tokens": "length",
+    "stop_sequence": "stop",
+    "tool_use": "tool_calls",
+}
+
+
+def anthropic_messages_to_nvhive(
+    messages: list[dict[str, Any]],
+    system: str | None = None,
+) -> tuple[str, str | None]:
+    """Convert Anthropic Messages format to nvHive (prompt, system).
+
+    Anthropic format uses top-level ``system`` param and messages
+    with ``role`` + ``content`` (where content can be text or list
+    of content blocks).
+    """
+    parts: list[str] = []
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+
+        # Content can be a string or list of content blocks
+        if isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif block.get("type") == "tool_result":
+                        text_parts.append(
+                            str(block.get("content", "")),
+                        )
+                elif isinstance(block, str):
+                    text_parts.append(block)
+            content = " ".join(text_parts)
+
+        if role == "assistant":
+            parts.append(f"Assistant: {content}")
+        else:
+            parts.append(f"User: {content}")
+
+    prompt = (
+        "\n".join(parts) if len(parts) > 1
+        else (
+            parts[0].removeprefix("User: ") if parts else ""
+        )
+    )
+    return prompt, system
+
+
+def format_anthropic_response(
+    content: str,
+    model: str,
+    provider: str,
+    *,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    stop_reason: str = "end_turn",
+) -> dict[str, Any]:
+    """Build an Anthropic Messages API response dict."""
+    return {
+        "id": f"msg_{uuid.uuid4().hex[:24]}",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [
+            {
+                "type": "text",
+                "text": content,
+            }
+        ],
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        },
+        "x_nvhive_provider": provider,
+    }
+
+
+async def anthropic_stream_generator(
+    engine: Any,
+    prompt: str,
+    provider_override: str | None,
+    model_override: str | None,
+    system_prompt: str | None,
+    temperature: float | None,
+    max_tokens: int | None,
+    requested_model: str,
+) -> AsyncGenerator[bytes, None]:
+    """Yield SSE events in Anthropic streaming format.
+
+    Produces message_start, content_block_start, content_block_delta,
+    content_block_stop, and message_stop events.
+    """
+    from nvh.providers.base import Message
+
+    config = engine.config
+    temp = (
+        temperature if temperature is not None
+        else config.defaults.temperature
+    )
+    max_tok = max_tokens or config.defaults.max_tokens
+    sys = system_prompt or config.defaults.system_prompt or None
+
+    msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+
+    decision = engine.router.route(
+        query=prompt,
+        provider_override=provider_override,
+        model_override=model_override,
+    )
+
+    if not engine.registry.has(decision.provider):
+        error_event = {
+            "type": "error",
+            "error": {
+                "type": "provider_unavailable",
+                "message": (
+                    f"Provider '{decision.provider}' is not"
+                    " available. Check nvh status."
+                ),
+            },
+        }
+        yield (
+            f"event: error\ndata: {json.dumps(error_event)}\n\n"
+        ).encode()
+        return
+
+    provider = engine.registry.get(decision.provider)
+    messages: list[Message] = []
+    if sys:
+        messages.append(Message(role="system", content=sys))
+    messages.append(Message(role="user", content=prompt))
+
+    effective_model = (
+        decision.model or requested_model or "nvhive"
+    )
+
+    # message_start event
+    start_event = {
+        "type": "message_start",
+        "message": {
+            "id": msg_id,
+            "type": "message",
+            "role": "assistant",
+            "model": effective_model,
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        },
+    }
+    yield (
+        f"event: message_start\n"
+        f"data: {json.dumps(start_event)}\n\n"
+    ).encode()
+
+    # content_block_start
+    block_start = {
+        "type": "content_block_start",
+        "index": 0,
+        "content_block": {"type": "text", "text": ""},
+    }
+    yield (
+        f"event: content_block_start\n"
+        f"data: {json.dumps(block_start)}\n\n"
+    ).encode()
+
+    total_output_tokens = 0
+    try:
+        async for chunk in provider.stream(
+            messages=messages,
+            model=decision.model or None,
+            temperature=temp,
+            max_tokens=max_tok,
+            system_prompt=sys,
+        ):
+            if chunk.delta:
+                delta_event = {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "text_delta",
+                        "text": chunk.delta,
+                    },
+                }
+                yield (
+                    f"event: content_block_delta\n"
+                    f"data: {json.dumps(delta_event)}\n\n"
+                ).encode()
+
+            if chunk.usage:
+                total_output_tokens = chunk.usage.output_tokens
+
+    except Exception as exc:
+        error_event = {
+            "type": "error",
+            "error": {
+                "type": "api_error",
+                "message": f"Stream error: {type(exc).__name__}",
+            },
+        }
+        yield (
+            f"event: error\n"
+            f"data: {json.dumps(error_event)}\n\n"
+        ).encode()
+        return
+
+    # content_block_stop
+    block_stop = {"type": "content_block_stop", "index": 0}
+    yield (
+        f"event: content_block_stop\n"
+        f"data: {json.dumps(block_stop)}\n\n"
+    ).encode()
+
+    # message_delta (final usage + stop reason)
+    msg_delta = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {"output_tokens": total_output_tokens},
+    }
+    yield (
+        f"event: message_delta\n"
+        f"data: {json.dumps(msg_delta)}\n\n"
+    ).encode()
+
+    # message_stop
+    yield b"event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"

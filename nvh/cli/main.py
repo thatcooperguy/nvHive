@@ -127,10 +127,18 @@ async def _smart_default(prompt: str):
             # Display synthesis
             if result.synthesis:
                 console.print(result.synthesis.content)
+                confidence_part = ""
+                if result.confidence_score is not None:
+                    pct = int(result.confidence_score * 100)
+                    summary = result.agreement_summary or ""
+                    confidence_part = f" | Confidence: {pct}%"
+                    if summary:
+                        confidence_part += f" — {summary}"
                 console.print(
                     f"\n[dim]Agents: {', '.join(result.agents_used)}"
                     f" | Cost: ${result.total_cost_usd:.4f}"
-                    f" | {result.total_latency_ms}ms[/dim]"
+                    f" | {result.total_latency_ms}ms"
+                    f"{confidence_part}[/dim]"
                 )
             else:
                 for label, resp in result.member_responses.items():
@@ -197,9 +205,16 @@ async def _smart_default(prompt: str):
             console.print(f"[dim][ask → {decision.provider}/{decision.model}][/dim]\n")
             resp = await engine.query(prompt=prompt, stream=False)
             console.print(resp.content)
-            console.print(f"\n[dim]Advisor: {resp.provider} | Model: {resp.model} | "
-                         f"Tokens: {resp.usage.input_tokens}/{resp.usage.output_tokens} | "
-                         f"Cost: ${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]")
+            meta_parts = [
+                f"Advisor: {resp.provider}",
+                f"Model: {resp.model}",
+                f"Tokens: {resp.usage.input_tokens}/{resp.usage.output_tokens}",
+                f"Cost: ${resp.cost_usd:.4f}",
+                f"{resp.latency_ms}ms",
+            ]
+            if resp.fallback_from:
+                meta_parts.insert(0, f"[yellow]Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
+            console.print(f"\n[dim]{' | '.join(meta_parts)}[/dim]")
         except Exception as e:
             console.print(_format_cli_error(e))
 
@@ -1012,9 +1027,17 @@ def research(
             )
             if result.synthesis:
                 console.print(Markdown(result.synthesis.content))
+                confidence_part = ""
+                if result.confidence_score is not None:
+                    pct = int(result.confidence_score * 100)
+                    summary = result.agreement_summary or ""
+                    confidence_part = f" | Confidence: {pct}%"
+                    if summary:
+                        confidence_part += f" — {summary}"
                 console.print(
                     f"\n[dim]Agents: {', '.join(result.agents_used)} | "
-                    f"Cost: ${result.total_cost_usd:.4f} | {result.total_latency_ms}ms[/dim]"
+                    f"Cost: ${result.total_cost_usd:.4f} | {result.total_latency_ms}ms"
+                    f"{confidence_part}[/dim]"
                 )
             else:
                 for label, resp in result.member_responses.items():
@@ -1396,6 +1419,8 @@ def convene_cmd(
                 "total_latency_ms": result.total_latency_ms,
                 "strategy": result.strategy,
                 "quorum_met": result.quorum_met,
+                "confidence_score": result.confidence_score,
+                "agreement_summary": result.agreement_summary,
             }
             console.print_json(json.dumps(data, indent=2))
             return
@@ -1444,6 +1469,15 @@ def convene_cmd(
                 title=f"SYNTHESIS ({result.strategy})",
                 border_style="green",
             ))
+
+        # Display confidence
+        if result.confidence_score is not None:
+            pct = int(result.confidence_score * 100)
+            summary = result.agreement_summary or ""
+            confidence_text = f"Confidence: {pct}%"
+            if summary:
+                confidence_text += f" — {summary}"
+            console.print(f"\n[dim]{confidence_text}[/dim]")
 
         if not quiet:
             parts = [
@@ -1976,6 +2010,116 @@ def throwdown(
                          f"Agents used: {', '.join(pass1.agents_used)}[/dim]")
 
     _run(_run_throwdown())
+
+
+# ---------------------------------------------------------------------------
+# nvh health — provider resilience dashboard
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def health():
+    """Provider health + resilience dashboard.
+
+    Shows which providers are up, their health scores, failover
+    chain, and recent error rates. Use this to verify your setup
+    can survive any single provider going down.
+
+    Examples:
+        nvh health
+    """
+    async def _run_health():
+        from nvh.config.settings import load_config
+        from nvh.core.engine import Engine
+
+        config = load_config()
+        engine = Engine(config=config)
+        await engine.initialize()
+
+        enabled = engine.registry.list_enabled()
+        if not enabled:
+            console.print(
+                "[red]No providers enabled.[/red]\n"
+                "  Run: [bold]nvh setup[/bold]"
+            )
+            return
+
+        table = Table(
+            title="Provider Health & Resilience",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Provider", style="bold")
+        table.add_column("Status", justify="center")
+        table.add_column("Health", justify="right")
+        table.add_column("In Fallback Chain", justify="center")
+
+        fallback = engine._get_fallback_chain(
+            config.defaults.provider or enabled[0],
+        )
+
+        for prov in sorted(enabled):
+            try:
+                score = engine.rate_manager.get_health_score(prov)
+            except Exception:
+                score = 0.5
+
+            if score >= 0.8:
+                status_str = "[green]Healthy[/green]"
+            elif score >= 0.4:
+                status_str = "[yellow]Degraded[/yellow]"
+            elif score >= 0.1:
+                status_str = "[red]Unhealthy[/red]"
+            else:
+                status_str = "[red bold]Down[/red bold]"
+
+            health_str = f"{score:.0%}"
+            chain_pos = (
+                fallback.index(prov) + 1
+                if prov in fallback else 0
+            )
+            chain_str = (
+                f"#{chain_pos}" if chain_pos else "[dim]—[/dim]"
+            )
+
+            table.add_row(prov, status_str, health_str, chain_str)
+
+        console.print(table)
+        console.print()
+
+        # Resilience summary
+        healthy = sum(
+            1 for p in enabled
+            if engine.rate_manager.get_health_score(p) >= 0.8
+        )
+        console.print(
+            f"  [bold]{healthy}/{len(enabled)}[/bold]"
+            f" providers healthy"
+        )
+
+        if healthy >= 3:
+            console.print(
+                "  [green]Resilient[/green] — your workflow"
+                " survives any single provider outage"
+            )
+        elif healthy >= 2:
+            console.print(
+                "  [yellow]Partial resilience[/yellow] — add more"
+                " providers with [bold]nvh setup --all[/bold]"
+            )
+        else:
+            console.print(
+                "  [red]Vulnerable[/red] — only 1 healthy provider."
+                " Run [bold]nvh setup[/bold] to add more."
+            )
+
+        console.print(
+            f"\n  Fallback chain: "
+            f"[bold]{' → '.join(fallback[:5])}[/bold]"
+        )
+        console.print()
+
+    _run(_run_health())
 
 
 # ---------------------------------------------------------------------------

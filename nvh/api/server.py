@@ -2721,6 +2721,192 @@ async def proxy_health():
 
 
 # ---------------------------------------------------------------------------
+# Anthropic/Claude API Proxy  (/v1/anthropic/*)
+# ---------------------------------------------------------------------------
+# Drop-in replacement for the Anthropic Messages API.
+# Set ANTHROPIC_BASE_URL=http://localhost:8000/v1/anthropic in any
+# Anthropic SDK client and nvHive handles routing, fallback, and
+# cost optimization.
+#
+# This is the zero-friction migration path for OpenClaw users.
+# ---------------------------------------------------------------------------
+
+
+class AnthropicMessageRequest(BaseModel):
+    model: str = "auto"
+    messages: list[dict[str, Any]]
+    system: str | None = None
+    max_tokens: int = Field(default=4096, gt=0)
+    temperature: float | None = Field(default=None, ge=0.0, le=1.0)
+    stream: bool = False
+    metadata: dict[str, Any] | None = None
+
+
+@app.post(
+    "/v1/anthropic/messages",
+    summary="Anthropic Messages API proxy",
+    tags=["anthropic-proxy"],
+)
+async def anthropic_messages(
+    request: AnthropicMessageRequest,
+    raw_request: Request,
+):
+    """Anthropic Messages API compatible endpoint.
+
+    Drop-in replacement for https://api.anthropic.com/v1/messages.
+    Routes through nvHive's smart router with automatic fallback.
+
+    Model routing:
+      "auto" / "nvhive"  -> smart routing
+      "claude-*"          -> Anthropic provider
+      "council" / "council:N" -> multi-model consensus
+      "throwdown"         -> two-pass deep analysis
+      Any other model     -> nvHive routes to best provider
+    """
+    from nvh.api.proxy import (
+        anthropic_messages_to_nvhive,
+        anthropic_stream_generator,
+        format_anthropic_response,
+        is_throwdown_model,
+        parse_council_model,
+        resolve_provider_from_model,
+    )
+
+    engine = get_engine()
+    prompt, system_prompt = anthropic_messages_to_nvhive(
+        request.messages, request.system,
+    )
+
+    if not prompt:
+        raise HTTPException(
+            status_code=400,
+            detail="No user message content found.",
+        )
+
+    # Check for council/throwdown virtual models
+    council_size = parse_council_model(request.model)
+    is_throwdown = is_throwdown_model(request.model)
+
+    if request.stream and not council_size and not is_throwdown:
+        provider_override, model_override = (
+            resolve_provider_from_model(request.model)
+        )
+        return StreamingResponse(
+            anthropic_stream_generator(
+                engine=engine,
+                prompt=prompt,
+                provider_override=provider_override,
+                model_override=model_override,
+                system_prompt=system_prompt,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                requested_model=request.model,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # Non-streaming (or council/throwdown)
+    try:
+        if council_size:
+            result = await engine.run_council(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                auto_agents=True,
+                num_agents=council_size,
+            )
+            content = (
+                result.synthesis.content
+                if result.synthesis
+                else "Council produced no synthesis."
+            )
+            return format_anthropic_response(
+                content=content,
+                model=f"council({council_size})",
+                provider="council",
+                input_tokens=sum(
+                    r.usage.input_tokens
+                    for r in result.member_responses.values()
+                ),
+                output_tokens=sum(
+                    r.usage.output_tokens
+                    for r in result.member_responses.values()
+                ),
+            )
+
+        if is_throwdown:
+            pass1 = await engine.run_council(
+                prompt=prompt,
+                auto_agents=True,
+                synthesize=True,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+            )
+            critique = (
+                f"Original: {prompt}\n\n"
+                f"Analysis:\n"
+                f"{pass1.synthesis.content if pass1.synthesis else ''}"
+                f"\n\nCritique and improve this analysis."
+            )
+            pass2 = await engine.run_council(
+                prompt=critique,
+                auto_agents=True,
+                synthesize=True,
+            )
+            final = await engine.query(
+                prompt=(
+                    f"Original: {prompt}\n\n"
+                    f"Pass 1:\n"
+                    f"{pass1.synthesis.content if pass1.synthesis else ''}"
+                    f"\n\nPass 2:\n"
+                    f"{pass2.synthesis.content if pass2.synthesis else ''}"
+                    f"\n\nFinal definitive answer:"
+                ),
+            )
+            return format_anthropic_response(
+                content=final.content,
+                model="throwdown",
+                provider=final.provider,
+                input_tokens=final.usage.input_tokens,
+                output_tokens=final.usage.output_tokens,
+            )
+
+        # Standard single query with smart routing
+        provider_override, model_override = (
+            resolve_provider_from_model(request.model)
+        )
+        resp = await engine.query(
+            prompt=prompt,
+            provider=provider_override,
+            model=model_override,
+            system_prompt=system_prompt,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+        return format_anthropic_response(
+            content=resp.content,
+            model=resp.model,
+            provider=resp.provider,
+            input_tokens=resp.usage.input_tokens,
+            output_tokens=resp.usage.output_tokens,
+        )
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "type": "api_error",
+                "message": f"nvHive routing error: {type(exc).__name__}",
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # Integrations API  (/v1/integrations/*)
 # ---------------------------------------------------------------------------
 
