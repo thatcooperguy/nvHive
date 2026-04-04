@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -40,6 +41,8 @@ class CouncilResponse:
     quorum_met: bool
     members: list[CouncilMember]
     agents_used: list[str] = field(default_factory=list)  # persona roles assigned
+    confidence_score: float | None = field(default=None)  # 0.0-1.0 agreement level
+    agreement_summary: str | None = field(default=None)  # human-readable summary
 
 
 class CouncilOrchestrator:
@@ -98,6 +101,134 @@ class CouncilOrchestrator:
     def _get_model_for_provider(self, provider_name: str) -> str:
         pconfig = self.config.providers.get(provider_name)
         return pconfig.default_model if pconfig else ""
+
+    async def _analyze_agreement(
+        self,
+        query: str,
+        member_responses: dict[str, CompletionResponse],
+        *,
+        use_llm: bool = True,
+    ) -> tuple[float | None, str | None]:
+        """Analyze agreement across member responses.
+
+        Returns (confidence_score, agreement_summary).
+        Tries an LLM call first (if use_llm=True); falls back to a simple heuristic.
+        """
+        if len(member_responses) < 2:
+            return None, None
+
+        # --- Try LLM-based analysis ---
+        if not use_llm:
+            return self._heuristic_agreement(member_responses)
+
+        synth_provider_name = self.config.council.synthesis_provider
+        if not synth_provider_name or not self.registry.has(synth_provider_name):
+            available = self.registry.list_enabled()
+            synth_provider_name = available[0] if available else None
+
+        if synth_provider_name:
+            try:
+                provider = self.registry.get(synth_provider_name)
+                model = self._get_model_for_provider(synth_provider_name)
+                n = len(member_responses)
+                parts = [
+                    f"Given these {n} responses to the question '{query[:200]}', "
+                    "rate their agreement on a scale of 0-10 and summarize: "
+                    "do they agree on the core answer? Where do they diverge?\n\n"
+                    "Respond in EXACTLY this format:\n"
+                    "SCORE: <number 0-10>\n"
+                    "SUMMARY: <one sentence>\n\n"
+                ]
+                for label, resp in member_responses.items():
+                    # Truncate each response to keep prompt short
+                    content = resp.content[:300]
+                    parts.append(f"--- {label} ---\n{content}\n\n")
+
+                analysis = await asyncio.wait_for(
+                    provider.complete(
+                        messages=[Message(role="user", content="".join(parts))],
+                        model=model or None,
+                        temperature=0.1,
+                        max_tokens=200,
+                    ),
+                    timeout=15,
+                )
+
+                # Parse score and summary from response
+                text = analysis.content
+                score_match = re.search(r"SCORE:\s*(\d+(?:\.\d+)?)", text)
+                summary_match = re.search(r"SUMMARY:\s*(.+)", text)
+
+                if score_match:
+                    raw_score = float(score_match.group(1))
+                    confidence = min(max(raw_score / 10.0, 0.0), 1.0)
+                    summary = summary_match.group(1).strip() if summary_match else None
+                    return confidence, summary
+
+            except Exception:
+                pass  # Fall through to heuristic
+
+        # --- Heuristic fallback ---
+        return self._heuristic_agreement(member_responses)
+
+    @staticmethod
+    def _heuristic_agreement(
+        member_responses: dict[str, CompletionResponse],
+    ) -> tuple[float, str]:
+        """Simple heuristic: keyword overlap + length similarity."""
+        contents = [r.content.lower() for r in member_responses.values()]
+        n = len(contents)
+
+        # Extract keyword sets (words 4+ chars, skip common words)
+        stop = {
+            "that", "this", "with", "from", "have", "will", "been",
+            "they", "their", "would", "could", "should", "about",
+            "which", "there", "these", "those", "what", "when",
+            "were", "also", "into", "more", "than", "some", "very",
+            "just", "your",
+        }
+        keyword_sets = []
+        for c in contents:
+            words = set(re.findall(r"\b[a-z]{4,}\b", c)) - stop
+            keyword_sets.append(words)
+
+        # Pairwise Jaccard similarity
+        overlaps = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                union = keyword_sets[i] | keyword_sets[j]
+                if union:
+                    overlaps.append(len(keyword_sets[i] & keyword_sets[j]) / len(union))
+                else:
+                    overlaps.append(0.0)
+
+        avg_overlap = sum(overlaps) / len(overlaps) if overlaps else 0.0
+
+        # Length similarity (coefficient of variation)
+        lengths = [len(c) for c in contents]
+        mean_len = sum(lengths) / n
+        if mean_len > 0:
+            variance = sum((ln - mean_len) ** 2 for ln in lengths) / n
+            cv = variance**0.5 / mean_len
+            len_similarity = max(0.0, 1.0 - cv)
+        else:
+            len_similarity = 0.0
+
+        # Combine: 70% keyword overlap, 30% length similarity
+        confidence = 0.7 * avg_overlap + 0.3 * len_similarity
+        confidence = min(max(confidence, 0.0), 1.0)
+
+        # Generate summary
+        agree_count = sum(1 for o in overlaps if o > 0.3) if overlaps else 0
+        total_pairs = len(overlaps)
+        if confidence >= 0.7:
+            summary = f"Strong consensus ({n}/{n} largely agree on core approach)"
+        elif confidence >= 0.4:
+            summary = f"Partial agreement ({agree_count}/{total_pairs} pairs overlap significantly)"
+        else:
+            summary = f"Split decision — responses diverge significantly across {n} members"
+
+        return confidence, summary
 
     async def run_council(
         self,
@@ -227,6 +358,16 @@ class CouncilOrchestrator:
         # Calculate total cost of member responses
         member_cost = sum(r.cost_usd for r in member_responses.values())
 
+        # Analyze agreement across member responses
+        confidence_score: float | None = None
+        agreement_summary: str | None = None
+        if quorum_met and len(member_responses) > 1:
+            confidence_score, agreement_summary = await self._analyze_agreement(
+                query=query,
+                member_responses=member_responses,
+                use_llm=synthesize,
+            )
+
         # Synthesize if we have quorum
         synthesis = None
         if quorum_met and synthesize and len(member_responses) > 1:
@@ -255,6 +396,8 @@ class CouncilOrchestrator:
             quorum_met=quorum_met,
             members=members,
             agents_used=agents_used,
+            confidence_score=confidence_score,
+            agreement_summary=agreement_summary,
         )
 
     async def run_council_streaming(
@@ -439,6 +582,12 @@ class CouncilOrchestrator:
         quorum_met = len(member_responses) >= quorum
         member_cost = sum(r.cost_usd for r in member_responses.values())
 
+        # Analyze agreement across member responses
+        confidence_score, agreement_summary = await self._analyze_agreement(
+            query=query,
+            member_responses=member_responses,
+        )
+
         # Synthesis
         synthesis: CompletionResponse | None = None
         if quorum_met and synthesize and len(member_responses) > 1:
@@ -566,6 +715,8 @@ class CouncilOrchestrator:
             "total_cost": str(total_cost),
             "total_latency_ms": total_elapsed,
             "quorum_met": quorum_met,
+            "confidence_score": confidence_score,
+            "agreement_summary": agreement_summary,
         })
 
         return CouncilResponse(
@@ -578,6 +729,8 @@ class CouncilOrchestrator:
             quorum_met=quorum_met,
             members=members,
             agents_used=agents_used,
+            confidence_score=confidence_score,
+            agreement_summary=agreement_summary,
         )
 
     async def _call_member(

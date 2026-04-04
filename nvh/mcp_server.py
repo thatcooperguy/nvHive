@@ -105,6 +105,15 @@ def _format_council_response(result: Any) -> str:
             content = resp.content if hasattr(resp, "content") else str(resp)
             parts.append(f"\n### {provider}\n{content[:500]}{'...' if len(content) > 500 else ''}")
 
+    # Confidence
+    if getattr(result, "confidence_score", None) is not None:
+        pct = int(result.confidence_score * 100)
+        summary = getattr(result, "agreement_summary", None) or ""
+        confidence_text = f"Confidence: {pct}%"
+        if summary:
+            confidence_text += f" — {summary}"
+        parts.append(f"\n\n**{confidence_text}**")
+
     # Metadata
     meta = []
     if result.strategy:
