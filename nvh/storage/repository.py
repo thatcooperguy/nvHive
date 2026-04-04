@@ -14,6 +14,7 @@ from nvh.storage.models import (
     Conversation,
     ConversationMessage,
     ProviderKeyMeta,
+    QualityBenchmarkLog,
     QueryLog,
 )
 
@@ -552,3 +553,81 @@ async def update_provider_meta(
             meta.last_error = last_error
             meta.total_requests += 1
         await session.commit()
+
+
+# -----------------------------------------------------------------------
+# Quality Benchmark Logs
+# -----------------------------------------------------------------------
+
+
+async def log_quality_benchmark(
+    run_id: str,
+    prompt_id: str,
+    task_type: str,
+    mode: str,
+    provider: str,
+    model: str,
+    overall_score: float,
+    cost_usd: Decimal = Decimal("0"),
+    latency_ms: int = 0,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    scores_json: str = "{}",
+) -> None:
+    """Log a single quality benchmark evaluation result."""
+    await init_db()
+    async with _session_factory() as session:
+        entry = QualityBenchmarkLog(
+            run_id=run_id,
+            prompt_id=prompt_id,
+            task_type=task_type,
+            mode=mode,
+            provider=provider,
+            model=model,
+            overall_score=overall_score,
+            cost_usd=cost_usd,
+            latency_ms=latency_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            scores_json=scores_json,
+        )
+        session.add(entry)
+        await session.commit()
+
+
+async def get_benchmark_runs(
+    limit: int = 10,
+) -> list[dict]:
+    """Get recent benchmark runs with summary stats."""
+    await init_db()
+    async with _session_factory() as session:
+        result = await session.execute(
+            select(
+                QualityBenchmarkLog.run_id,
+                func.count(QualityBenchmarkLog.id).label("evals"),
+                func.avg(QualityBenchmarkLog.overall_score).label(
+                    "avg_score",
+                ),
+                func.sum(QualityBenchmarkLog.cost_usd).label(
+                    "total_cost",
+                ),
+                func.min(QualityBenchmarkLog.created_at).label(
+                    "started_at",
+                ),
+            )
+            .group_by(QualityBenchmarkLog.run_id)
+            .order_by(
+                func.min(QualityBenchmarkLog.created_at).desc(),
+            )
+            .limit(limit)
+        )
+        return [
+            {
+                "run_id": row.run_id,
+                "evaluations": row.evals,
+                "avg_score": round(float(row.avg_score or 0), 2),
+                "total_cost": float(row.total_cost or 0),
+                "started_at": str(row.started_at),
+            }
+            for row in result
+        ]

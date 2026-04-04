@@ -112,3 +112,35 @@ class ProviderKeyMeta(Base):
     last_error: Mapped[str] = mapped_column(String(255), default="")
     total_requests: Mapped[int] = mapped_column(Integer, default=0)
     is_valid: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class QualityBenchmarkLog(Base):
+    """Stores individual evaluation results from quality benchmarks."""
+    __tablename__ = "quality_benchmark_logs"
+    __table_args__ = (
+        Index("ix_qbench_run", "run_id"),
+        Index("ix_qbench_created", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=_new_id,
+    )
+    run_id: Mapped[str] = mapped_column(String(36))
+    prompt_id: Mapped[str] = mapped_column(String(64))
+    task_type: Mapped[str] = mapped_column(String(32))
+    mode: Mapped[str] = mapped_column(String(32))
+    provider: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(128))
+    overall_score: Mapped[float] = mapped_column(
+        Numeric(4, 2), default=0.0,
+    )
+    cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), default=Decimal("0"),
+    )
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    scores_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow,
+    )

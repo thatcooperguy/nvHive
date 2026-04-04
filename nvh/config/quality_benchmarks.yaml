@@ -1,0 +1,327 @@
+# nvHive Quality Benchmark Dataset
+# 16 prompts across 7 task types — tests whether council consensus
+# produces higher-quality results than any single model.
+#
+# Each prompt includes criteria for what makes a good answer.
+# The LLM judge scores responses blind (doesn't see which model produced it).
+
+prompts:
+  # ---------------------------------------------------------------
+  # Code Generation (3 prompts)
+  # ---------------------------------------------------------------
+  - id: code_gen_001
+    task_type: code_generation
+    difficulty: medium
+    prompt: >
+      Write a Python function that finds the longest palindromic
+      substring in a string. Include type hints, docstring, and
+      handle edge cases (empty string, single character, no
+      palindrome longer than 1).
+    criteria:
+      - "Correct algorithm (at minimum O(n^2))"
+      - "Handles edge cases: empty string, single char, all same chars"
+      - "Includes type hints and docstring"
+      - "Clean, readable code"
+    tags: [algorithms, python, strings]
+
+  - id: code_gen_002
+    task_type: code_generation
+    difficulty: hard
+    prompt: >
+      Write a Python async context manager that implements a
+      distributed rate limiter using Redis. It should support
+      sliding window rate limiting with configurable window size
+      and max requests. Include error handling for Redis
+      connection failures (should fail-open, not block requests).
+    criteria:
+      - "Correct async context manager protocol (__aenter__/__aexit__)"
+      - "Sliding window algorithm (not just fixed window)"
+      - "Fail-open on Redis errors (graceful degradation)"
+      - "Configurable window_seconds and max_requests"
+      - "Thread-safe / async-safe"
+    tags: [distributed-systems, redis, python, async]
+
+  - id: code_gen_003
+    task_type: code_generation
+    difficulty: easy
+    prompt: >
+      Write a SQL query that finds the top 5 customers by total
+      order value in the last 30 days, including their name, email,
+      number of orders, and total spend. Tables: customers(id, name,
+      email), orders(id, customer_id, total_amount, created_at).
+    criteria:
+      - "Correct JOIN between customers and orders"
+      - "Proper date filtering (last 30 days)"
+      - "Aggregation with GROUP BY"
+      - "ORDER BY total spend descending, LIMIT 5"
+    tags: [sql, databases]
+
+  # ---------------------------------------------------------------
+  # Code Review (2 prompts)
+  # ---------------------------------------------------------------
+  - id: code_review_001
+    task_type: code_review
+    difficulty: hard
+    prompt: >
+      Review this Python code for security issues:
+
+      ```python
+      @app.route('/api/users/<user_id>')
+      def get_user(user_id):
+          query = f"SELECT * FROM users WHERE id = '{user_id}'"
+          result = db.execute(query)
+          user = result.fetchone()
+          if user:
+              return jsonify({
+                  'id': user.id,
+                  'name': user.name,
+                  'email': user.email,
+                  'password_hash': user.password_hash,
+                  'ssn': user.ssn
+              })
+          return jsonify({'error': 'Not found'}), 404
+      ```
+    criteria:
+      - "Identifies SQL injection vulnerability"
+      - "Identifies sensitive data exposure (password_hash, SSN)"
+      - "Suggests parameterized queries"
+      - "Recommends response filtering / serialization"
+      - "Notes missing authentication/authorization"
+    tags: [security, python, web]
+
+  - id: code_review_002
+    task_type: code_review
+    difficulty: medium
+    prompt: >
+      Review this Python function for performance issues and suggest
+      improvements:
+
+      ```python
+      def find_duplicates(items: list[dict]) -> list[dict]:
+          duplicates = []
+          for i in range(len(items)):
+              for j in range(i + 1, len(items)):
+                  if items[i]['email'] == items[j]['email']:
+                      if items[i] not in duplicates:
+                          duplicates.append(items[i])
+                      if items[j] not in duplicates:
+                          duplicates.append(items[j])
+          return duplicates
+      ```
+    criteria:
+      - "Identifies O(n^2) time complexity"
+      - "Identifies O(n) 'in' check on list of dicts"
+      - "Suggests set-based or dict-based approach"
+      - "Provides corrected implementation"
+    tags: [performance, python, algorithms]
+
+  # ---------------------------------------------------------------
+  # Code Debug (2 prompts)
+  # ---------------------------------------------------------------
+  - id: code_debug_001
+    task_type: code_debug
+    difficulty: medium
+    prompt: >
+      This async Python function is supposed to fetch data from
+      3 APIs concurrently, but it runs sequentially and takes 3x
+      as long as expected. Find the bug:
+
+      ```python
+      async def fetch_all():
+          result1 = await fetch_api("https://api1.example.com/data")
+          result2 = await fetch_api("https://api2.example.com/data")
+          result3 = await fetch_api("https://api3.example.com/data")
+          return [result1, result2, result3]
+      ```
+    criteria:
+      - "Identifies that await is sequential, not concurrent"
+      - "Suggests asyncio.gather() or asyncio.create_task()"
+      - "Provides corrected concurrent implementation"
+      - "Explains why the original code is sequential"
+    tags: [async, python, concurrency]
+
+  - id: code_debug_002
+    task_type: code_debug
+    difficulty: hard
+    prompt: >
+      Users report that this caching decorator sometimes returns
+      stale data and occasionally crashes with KeyError. Find all
+      bugs:
+
+      ```python
+      _cache = {}
+
+      def cached(ttl=60):
+          def decorator(func):
+              def wrapper(*args, **kwargs):
+                  key = str(args)
+                  if key in _cache:
+                      value, timestamp = _cache[key]
+                      if time.time() - timestamp < ttl:
+                          return value
+                  result = func(*args, **kwargs)
+                  _cache[key] = (result, time.time())
+                  return result
+              return wrapper
+          return decorator
+      ```
+    criteria:
+      - "Identifies kwargs not included in cache key"
+      - "Identifies thread-safety issue (shared mutable dict)"
+      - "Identifies unhashable args issue (mutable args in key)"
+      - "Notes missing cache eviction (memory leak)"
+      - "Provides corrected implementation or suggestions"
+    tags: [caching, python, concurrency, debugging]
+
+  # ---------------------------------------------------------------
+  # Reasoning (3 prompts)
+  # ---------------------------------------------------------------
+  - id: reasoning_001
+    task_type: reasoning
+    difficulty: medium
+    prompt: >
+      A startup has 10 engineers and needs to ship a product in
+      3 months. They can either build a monolith or start with
+      microservices. Analyze the tradeoffs and give a clear
+      recommendation with reasoning.
+    criteria:
+      - "Considers team size and timeline constraints"
+      - "Addresses operational complexity of microservices"
+      - "Gives a clear recommendation (not just 'it depends')"
+      - "Acknowledges valid counterarguments"
+      - "Practical, experience-informed reasoning"
+    tags: [architecture, engineering, startups]
+
+  - id: reasoning_002
+    task_type: reasoning
+    difficulty: hard
+    prompt: >
+      A company is choosing between PostgreSQL and MongoDB for a
+      new product that will handle both structured financial
+      transactions AND unstructured user-generated content (reviews,
+      comments, media metadata). They expect 100M records in year 1.
+      Recommend a database strategy.
+    criteria:
+      - "Considers the dual nature of the data (structured + unstructured)"
+      - "Evaluates polyglot persistence vs single-database approach"
+      - "Addresses scaling to 100M records"
+      - "Considers ACID requirements for financial data"
+      - "Gives a concrete recommendation with migration path"
+    tags: [databases, architecture, scaling]
+
+  - id: reasoning_003
+    task_type: reasoning
+    difficulty: medium
+    prompt: >
+      Your production service experienced a cascading failure at
+      2 AM that took down 3 dependent services. The root cause was
+      a single database connection pool exhaustion. Design a
+      post-mortem action plan that prevents this class of failure.
+    criteria:
+      - "Addresses connection pool monitoring and alerting"
+      - "Proposes circuit breaker pattern for dependent services"
+      - "Includes both immediate fixes and systemic improvements"
+      - "Considers graceful degradation strategies"
+      - "Actionable items with clear ownership"
+    tags: [reliability, incident-response, production]
+
+  # ---------------------------------------------------------------
+  # Math (2 prompts)
+  # ---------------------------------------------------------------
+  - id: math_001
+    task_type: math
+    difficulty: medium
+    prompt: >
+      A bag contains 5 red balls and 3 blue balls. You draw 3
+      balls without replacement. What is the probability that
+      exactly 2 are red? Show your work step by step.
+    criteria:
+      - "Correct probability calculation"
+      - "Clear step-by-step work shown"
+      - "Uses correct combinatorial approach (C(5,2)*C(3,1)/C(8,3))"
+    reference_answer: "15/28 (approximately 0.5357)"
+    tags: [probability, combinatorics]
+
+  - id: math_002
+    task_type: math
+    difficulty: hard
+    prompt: >
+      A factory produces widgets on two machines. Machine A produces
+      60% of widgets with a 2% defect rate. Machine B produces 40%
+      with a 5% defect rate. If a randomly selected widget is found
+      to be defective, what is the probability it came from Machine B?
+      Use Bayes' theorem and show all steps.
+    criteria:
+      - "Correctly applies Bayes' theorem"
+      - "Shows prior and likelihood calculations"
+      - "Arrives at correct posterior probability"
+      - "Clear step-by-step presentation"
+    reference_answer: "P(B|defective) = 0.625 or 5/8"
+    tags: [probability, bayes-theorem]
+
+  # ---------------------------------------------------------------
+  # Creative Writing (2 prompts)
+  # ---------------------------------------------------------------
+  - id: creative_001
+    task_type: creative_writing
+    difficulty: medium
+    prompt: >
+      Write the opening paragraph (150-200 words) of a technical
+      blog post titled "Why We Migrated from Microservices Back to
+      a Monolith." The tone should be honest, slightly contrarian,
+      and hook the reader immediately.
+    criteria:
+      - "Compelling hook in the first sentence"
+      - "Contrarian but credible tone"
+      - "Sets up the 'why' without giving everything away"
+      - "Appropriate length (150-200 words)"
+      - "Would make an engineer want to keep reading"
+    tags: [technical-writing, blog, engineering]
+
+  - id: creative_002
+    task_type: creative_writing
+    difficulty: easy
+    prompt: >
+      Write a concise product description (100 words max) for an
+      AI-powered code review tool that targets senior engineers.
+      Avoid buzzwords, focus on concrete value.
+    criteria:
+      - "Concise (100 words or fewer)"
+      - "Targets senior engineers specifically"
+      - "Avoids buzzwords (no 'revolutionary', 'leverage', 'synergy')"
+      - "Focuses on concrete value proposition"
+    tags: [product-copy, marketing]
+
+  # ---------------------------------------------------------------
+  # Question Answering (2 prompts)
+  # ---------------------------------------------------------------
+  - id: qa_001
+    task_type: question_answering
+    difficulty: medium
+    prompt: >
+      What are the practical differences between REST and GraphQL
+      for a team building a mobile app with frequently changing
+      data requirements? Give specific scenarios where each wins.
+    criteria:
+      - "Covers over-fetching/under-fetching tradeoff"
+      - "Mentions schema evolution and versioning"
+      - "Gives specific mobile app scenarios"
+      - "Addresses caching differences"
+      - "Balanced comparison (not biased toward one)"
+    tags: [api-design, web, mobile]
+
+  - id: qa_002
+    task_type: question_answering
+    difficulty: hard
+    prompt: >
+      Explain the CAP theorem to a senior engineer who understands
+      distributed systems but has never formally studied it.
+      Include a concrete example of how it applies to a real system
+      they would recognize (e.g., DynamoDB, Cassandra, or Spanner).
+    criteria:
+      - "Correct explanation of Consistency, Availability, Partition tolerance"
+      - "Explains the 'choose two' tradeoff accurately"
+      - "Concrete real-world system example"
+      - "Appropriate depth for senior engineer audience"
+      - "Mentions modern nuances (PACELC, tunable consistency)"
+    tags: [distributed-systems, theory, databases]

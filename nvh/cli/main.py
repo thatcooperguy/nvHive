@@ -3753,6 +3753,277 @@ def bench(
 
 
 # ---------------------------------------------------------------------------
+# nvh benchmark (quality)
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def benchmark(
+    mode: str = typer.Option(
+        "all", "-m", "--mode",
+        help=(
+            "Modes to test: single, council-free,"
+            " council-premium, throwdown, all"
+        ),
+    ),
+    models: str | None = typer.Option(
+        None, "--models",
+        help="Comma-separated single models to benchmark",
+    ),
+    council: str | None = typer.Option(
+        None, "--council",
+        help="Comma-separated council members override",
+    ),
+    dataset: str | None = typer.Option(
+        None, "-d", "--dataset",
+        help="Path to custom benchmark YAML",
+    ),
+    judge: str = typer.Option(
+        "auto", "-j", "--judge",
+        help="Judge provider: auto, local, or provider name",
+    ),
+    output: str = typer.Option(
+        "table", "-o", "--output",
+        help="Output format: table, json, markdown",
+    ),
+    export_path: str | None = typer.Option(
+        None, "--export",
+        help="Export results to file",
+    ),
+    task_types: str | None = typer.Option(
+        None, "--tasks",
+        help="Filter by task types (comma-separated)",
+    ),
+    temperature: float = typer.Option(
+        0.0, "-t", "--temperature",
+    ),
+    max_tokens: int = typer.Option(
+        2048, "--max-tokens",
+    ),
+    store: bool = typer.Option(
+        True, "--store/--no-store",
+        help="Store results in database",
+    ),
+    profile: str | None = typer.Option(
+        None, "--profile",
+    ),
+):
+    """Quality benchmark — prove council beats single models.
+
+    Runs curated prompts through different modes (single model,
+    free council, premium council, throwdown) and scores each
+    response using a blind LLM judge on quality dimensions.
+
+    Examples:
+        nvh benchmark                        # run all modes
+        nvh benchmark -m council-free        # free only ($0)
+        nvh benchmark --export results.md    # markdown report
+        nvh benchmark --tasks code_generation,reasoning
+    """
+    from nvh.core.quality_benchmark import (
+        BenchmarkMode,
+        QualityBenchmarkRunner,
+        QualityJudge,
+        generate_json_report,
+        generate_markdown_report,
+        load_dataset,
+    )
+
+    async def _run_benchmark():
+        from nvh.config.settings import load_config
+        from nvh.core.engine import Engine
+
+        config = load_config(profile=profile)
+        engine = Engine(config=config)
+        await engine.initialize()
+
+        # Load dataset
+        ds_path = Path(dataset) if dataset else None
+        prompts = load_dataset(ds_path)
+        if not prompts:
+            console.print("[red]No benchmark prompts found.[/red]")
+            raise typer.Exit(1)
+
+        # Parse modes
+        mode_map = {
+            "single": BenchmarkMode.SINGLE,
+            "council-free": BenchmarkMode.COUNCIL_FREE,
+            "council-premium": BenchmarkMode.COUNCIL_PREMIUM,
+            "throwdown": BenchmarkMode.THROWDOWN,
+        }
+        if mode == "all":
+            modes_list = list(BenchmarkMode)
+        else:
+            parsed = [
+                m.strip() for m in mode.split(",")
+            ]
+            modes_list = []
+            for m in parsed:
+                if m not in mode_map:
+                    console.print(
+                        f"[red]Unknown mode '{m}'.[/red]"
+                        f" Options: {', '.join(mode_map)}"
+                    )
+                    raise typer.Exit(1)
+                modes_list.append(mode_map[m])
+
+        # Parse filters
+        single_provs = (
+            [p.strip() for p in models.split(",")]
+            if models else None
+        )
+        council_members = (
+            [p.strip() for p in council.split(",")]
+            if council else None
+        )
+        task_filter = (
+            [t.strip() for t in task_types.split(",")]
+            if task_types else None
+        )
+
+        # Setup judge and runner
+        qj = QualityJudge(engine, judge_provider=judge)
+        runner = QualityBenchmarkRunner(engine, qj, prompts)
+
+        # Progress callback
+        def on_progress(current, total, prompt_id):
+            console.print(
+                f"  [dim][{current}/{total}]"
+                f" {prompt_id}[/dim]",
+            )
+
+        console.print(
+            f"\n[bold]nvHive Quality Benchmark[/bold]"
+            f"\n  Prompts: {len(prompts)}"
+            f" | Modes: {', '.join(str(m) for m in modes_list)}"
+            f" | Judge: {judge}\n"
+        )
+
+        report = await runner.run(
+            modes=modes_list,
+            single_providers=single_provs,
+            council_free_members=council_members,
+            council_premium_members=council_members,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            task_types=task_filter,
+            on_progress=on_progress,
+        )
+
+        # Store results
+        if store:
+            import json as _json
+            from nvh.storage import repository as repo
+            for pr in report.results:
+                for ev in pr.evaluations:
+                    scores = {
+                        ds.dimension: ds.score
+                        for ds in ev.dimension_scores
+                    }
+                    await repo.log_quality_benchmark(
+                        run_id=report.run_id,
+                        prompt_id=ev.prompt_id,
+                        task_type=pr.prompt.task_type,
+                        mode=ev.mode,
+                        provider=ev.provider,
+                        model=ev.model,
+                        overall_score=ev.overall_score,
+                        cost_usd=ev.cost_usd,
+                        latency_ms=ev.latency_ms,
+                        input_tokens=ev.input_tokens,
+                        output_tokens=ev.output_tokens,
+                        scores_json=_json.dumps(scores),
+                    )
+
+        # Display results
+        if output == "json":
+            console.print(generate_json_report(report))
+        elif output == "markdown":
+            console.print(
+                generate_markdown_report(report),
+            )
+        else:
+            # Rich table output
+            _display_benchmark_table(report)
+
+        # Export
+        if export_path:
+            ep = Path(export_path)
+            if ep.suffix == ".json":
+                ep.write_text(generate_json_report(report))
+            else:
+                ep.write_text(
+                    generate_markdown_report(report),
+                )
+            console.print(
+                f"\n[green]Exported to {ep}[/green]",
+            )
+
+        console.print(
+            f"\n[dim]Run ID: {report.run_id}"
+            f" | Cost: ${report.total_cost_usd:.4f}"
+            f" | Duration:"
+            f" {report.total_duration_ms / 1000:.1f}s[/dim]\n"
+        )
+
+    _run(_run_benchmark())
+
+
+def _display_benchmark_table(report):
+    """Display benchmark results as a Rich table."""
+    from nvh.core.quality_benchmark import _MODE_DISPLAY
+
+    if not report.summary:
+        console.print("[yellow]No results to display.[/yellow]")
+        return
+
+    table = Table(
+        title="Quality Benchmark Results",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Mode", style="bold")
+    table.add_column("Accuracy", justify="right")
+    table.add_column("Complete", justify="right")
+    table.add_column("Actionable", justify="right")
+    table.add_column("Coherence", justify="right")
+    table.add_column("Overall", justify="right", style="bold")
+    table.add_column("Avg Cost", justify="right")
+
+    for mode_key, scores in report.summary.items():
+        display = _MODE_DISPLAY.get(mode_key, mode_key)
+        overall = scores.get("overall", 0)
+        # Color overall score
+        if overall >= 8.5:
+            ov_str = f"[bold green]{overall:.1f}[/bold green]"
+        elif overall >= 7.0:
+            ov_str = f"[green]{overall:.1f}[/green]"
+        elif overall >= 5.0:
+            ov_str = f"[yellow]{overall:.1f}[/yellow]"
+        else:
+            ov_str = f"[red]{overall:.1f}[/red]"
+
+        cost = scores.get("avg_cost", 0)
+        cost_str = (
+            "[green]$0.0000[/green]"
+            if cost == 0
+            else f"${cost:.4f}"
+        )
+
+        table.add_row(
+            display,
+            f"{scores.get('accuracy', 0):.1f}",
+            f"{scores.get('completeness', 0):.1f}",
+            f"{scores.get('actionability', 0):.1f}",
+            f"{scores.get('coherence', 0):.1f}",
+            ov_str,
+            cost_str,
+        )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
 # hive model
 # ---------------------------------------------------------------------------
 
