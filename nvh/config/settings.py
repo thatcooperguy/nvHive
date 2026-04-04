@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from decimal import Decimal
@@ -10,6 +11,8 @@ from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Env var interpolation
@@ -28,8 +31,14 @@ def _interpolate_env(value: Any) -> Any:
             if env_val is not None:
                 return env_val
             if default is not None:
-                return default
-            return m.group(0)  # leave unresolved
+                # Resolve nested ${INNER} in default values
+                return _interpolate_env(default)
+            _log.warning(
+                "Config: env var $%s is not set and has no default"
+                " — value will be empty string",
+                var_name,
+            )
+            return ""  # empty string, not raw ${VAR}
 
         return _ENV_PATTERN.sub(_replacer, value)
     if isinstance(value, dict):
@@ -50,11 +59,11 @@ class ProviderConfig(BaseModel):
     base_url: str = ""
     type: str = ""  # e.g. "openai_compatible"
     enabled: bool = True
-    timeout: int = 60
-    retry_attempts: int = 3
-    retry_initial_delay: float = 1.0
-    retry_multiplier: float = 2.0
-    retry_max_delay: float = 30.0
+    timeout: int = Field(default=60, ge=1, le=600)
+    retry_attempts: int = Field(default=3, ge=0, le=10)
+    retry_initial_delay: float = Field(default=1.0, ge=0.0)
+    retry_multiplier: float = Field(default=2.0, ge=1.0)
+    retry_max_delay: float = Field(default=30.0, ge=0.0)
 
 
 class CouncilWeights(BaseModel):
@@ -79,8 +88,8 @@ class CouncilModeConfig(BaseModel):
     synthesis_provider: str = ""
     strategy: str = "weighted_consensus"  # weighted_consensus | majority_vote | best_of
     fallback_order: list[str] = Field(default_factory=list)
-    quorum: int = 2
-    timeout: int = 60
+    quorum: int = Field(default=2, ge=1, le=10)
+    timeout: int = Field(default=60, ge=5, le=600)
 
 
 class RoutingRule(BaseModel):
@@ -100,11 +109,15 @@ class RoutingConfig(BaseModel):
 
 
 class BudgetConfig(BaseModel):
-    daily_limit_usd: Decimal = Decimal("5")    # safe default — was 0 (unlimited)
-    monthly_limit_usd: Decimal = Decimal("20")  # safe default — was 0 (unlimited)
-    alert_threshold: float = 0.80
+    daily_limit_usd: Decimal = Field(
+        default=Decimal("5"), ge=0,
+    )
+    monthly_limit_usd: Decimal = Field(
+        default=Decimal("20"), ge=0,
+    )
+    alert_threshold: float = Field(default=0.80, ge=0.0, le=1.0)
     hard_stop: bool = True
-    degrade_on_limit: bool = True  # auto-downgrade to local when limit hit — was False
+    degrade_on_limit: bool = True
 
 
 class DefaultsConfig(BaseModel):
@@ -113,9 +126,9 @@ class DefaultsConfig(BaseModel):
     model: str = ""
     output: str = "text"
     stream: bool = True
-    timeout: int = 30
-    max_tokens: int = 4096
-    temperature: float = 1.0
+    timeout: int = Field(default=30, ge=1, le=600)
+    max_tokens: int = Field(default=4096, ge=1, le=200_000)
+    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
     system_prompt: str = "Always respond in English unless the user explicitly requests another language."
     show_metadata: bool = True
     orchestration_mode: str = "auto"  # off, light, full, auto
@@ -124,8 +137,8 @@ class DefaultsConfig(BaseModel):
 
 class CacheConfig(BaseModel):
     enabled: bool = True
-    ttl_seconds: int = 86400  # 24 hours
-    max_size: int = 1000
+    ttl_seconds: int = Field(default=86400, ge=1)
+    max_size: int = Field(default=1000, ge=1)
     cache_nonzero_temp: bool = False
 
 
@@ -208,8 +221,24 @@ def _find_project_config() -> Path | None:
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML file and apply env var interpolation."""
-    with open(path) as f:
-        raw = yaml.safe_load(f) or {}
+    try:
+        with open(path) as f:
+            raw = yaml.safe_load(f) or {}
+    except yaml.YAMLError as e:
+        _log.error("Invalid YAML in %s: %s", path, e)
+        raise ValueError(
+            f"Config file has invalid YAML syntax: {path}\n"
+            f"Error: {e}\n"
+            f"Fix the file or regenerate with: nvh config init --force"
+        ) from e
+    except PermissionError:
+        _log.error("Cannot read config file (permission denied): %s", path)
+        raise
+    if not isinstance(raw, dict):
+        _log.error("Config file must be a YAML mapping, got %s", type(raw).__name__)
+        raise ValueError(
+            f"Config file must be a YAML mapping (dict), not {type(raw).__name__}: {path}"
+        )
     return _interpolate_env(raw)
 
 
@@ -261,7 +290,15 @@ def load_config(
             if env_profile in profiles:
                 merged = _deep_merge(merged, profiles[env_profile])
 
-    return CouncilConfig(**merged)
+    try:
+        return CouncilConfig(**merged)
+    except Exception as e:
+        _log.error("Config validation failed: %s", e)
+        raise ValueError(
+            f"Config validation error: {e}\n"
+            f"Check your config file for invalid values.\n"
+            f"Reset to defaults: nvh config init --force"
+        ) from e
 
 
 def get_config_dir() -> Path:

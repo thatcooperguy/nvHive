@@ -24,34 +24,55 @@ _TASK_PATTERNS: dict[TaskType, list[re.Pattern[str]]] = {
         re.compile(r"```"),
     ],
     TaskType.CODE_REVIEW: [
-        re.compile(r"\b(review|critique|improve|refactor|optimize|clean up)\b.*\b(code|function|class)\b", re.I),
+        re.compile(
+            r"\b(review|critique|improve|refactor|optimize|clean up)\b"
+            r".*\b(code|function|class)\b", re.I,
+        ),
     ],
     TaskType.CODE_DEBUG: [
-        re.compile(r"\b(debug|fix|error|bug|traceback|exception|stack trace|doesn.t work|broken)\b", re.I),
+        re.compile(
+            r"\b(debug|fix|error|bug|traceback|exception"
+            r"|stack trace|doesn.t work|broken)\b", re.I,
+        ),
     ],
     TaskType.REASONING: [
         re.compile(r"\b(explain|why|how does|analyze|compare|evaluate|think|reason|logic)\b", re.I),
     ],
     TaskType.MATH: [
-        re.compile(r"\b(calculate|compute|solve|equation|integral|derivative|proof|theorem)\b", re.I),
+        re.compile(
+            r"\b(calculate|compute|solve|equation"
+            r"|integral|derivative|proof|theorem)\b", re.I,
+        ),
         re.compile(r"[0-9]+\s*[\+\-\*\/\^]\s*[0-9]+"),
         re.compile(r"\b(algebra|calculus|statistics|probability|matrix|vector)\b", re.I),
     ],
     TaskType.CREATIVE_WRITING: [
-        re.compile(r"\b(write|compose|draft|create)\b.*\b(story|poem|essay|blog|article|letter|song|script)\b", re.I),
+        re.compile(
+            r"\b(write|compose|draft|create)\b"
+            r".*\b(story|poem|essay|blog|article"
+            r"|letter|song|script)\b", re.I,
+        ),
         re.compile(r"\b(creative|fiction|narrative|prose)\b", re.I),
     ],
     TaskType.SUMMARIZATION: [
         re.compile(r"\b(summarize|summary|tldr|tl;dr|brief|condense|recap)\b", re.I),
     ],
     TaskType.TRANSLATION: [
-        re.compile(r"\b(translate|translation|in (spanish|french|german|chinese|japanese|korean|arabic|portuguese|italian|russian|hindi))\b", re.I),
+        re.compile(
+            r"\b(translate|translation|in (spanish|french"
+            r"|german|chinese|japanese|korean|arabic"
+            r"|portuguese|italian|russian|hindi))\b", re.I,
+        ),
     ],
     TaskType.CONVERSATION: [
         re.compile(r"\b(hello|hi|hey|thanks|thank you|how are you|what.s up)\b", re.I),
     ],
     TaskType.QUESTION_ANSWERING: [
-        re.compile(r"\b(what is|who is|when did|where is|how many|how much|define|meaning of)\b", re.I),
+        re.compile(
+            r"\b(what is|who is|when did|where is"
+            r"|how many|how much|define|meaning of)\b",
+            re.I,
+        ),
         re.compile(r"\?$"),
     ],
     TaskType.STRUCTURED_EXTRACTION: [
@@ -143,7 +164,18 @@ class RoutingEngine:
             strategy: 'best', 'cheapest', 'fastest', 'best-for-task'
             input_tokens: Estimated input token count
         """
-        classification = classify_task(query)
+        import logging
+        _log = logging.getLogger(__name__)
+
+        try:
+            classification = classify_task(query)
+        except Exception as e:
+            _log.warning("Task classification failed (%s), defaulting to CONVERSATION", e)
+            classification = ClassificationResult(
+                task_type=TaskType.CONVERSATION,
+                confidence=0.3,
+                all_scores={TaskType.CONVERSATION: 0.3},
+            )
 
         # Direct override — bypass routing
         if provider_override:
@@ -203,107 +235,162 @@ class RoutingEngine:
             )
 
         provider_scores: dict[str, dict[str, float]] = {}
+        skipped_reasons: dict[str, str] = {}
+
+        # Import advisor profiles once outside the loop
+        try:
+            from nvh.core.advisor_profiles import (
+                ADVISOR_PROFILES as advisor_profiles,  # noqa: N811
+            )
+        except ImportError:
+            advisor_profiles = {}
+
         for pname in available:
-            # Skip unhealthy providers
-            health = self.rate_manager.get_health_score(pname)
-            if health < 0.1:
-                continue
-
-            models = self.registry.get_models_for_provider(pname)
-            if not models:
-                # Use provider config default model
-                pconfig = self.config.providers.get(pname)
-                if pconfig and pconfig.default_model:
-                    model_info = self.registry.get_model_info(pconfig.default_model)
-                    if model_info:
-                        models = [model_info]
-
-            if not models:
-                continue
-
-            # Pick the best model from this provider
-            best_model = models[0]
-            best_cap = 0.0
-            for m in models:
-                task_key = classification.task_type.value
-                cap = m.capability_scores.get(task_key, 0.5)
-                if cap > best_cap:
-                    best_cap = cap
-                    best_model = m
-
-            # Filter by context window
-            if input_tokens > 0 and best_model.context_window > 0:
-                if input_tokens > best_model.context_window * 0.9:
+            try:
+                # Skip unhealthy providers
+                try:
+                    health = self.rate_manager.get_health_score(pname)
+                except Exception:
+                    health = 0.5  # assume moderate health on check failure
+                if health < 0.1:
+                    skipped_reasons[pname] = "unhealthy (health < 0.1)"
                     continue
 
-            # Calculate composite score with advisor profile intelligence
-            cap_score = best_cap
-            cost_score = self._cost_score(best_model)
-            lat_score = self._latency_score(best_model)
+                models = self.registry.get_models_for_provider(pname)
+                if not models:
+                    # Use provider config default model
+                    pconfig = self.config.providers.get(pname)
+                    if pconfig and pconfig.default_model:
+                        model_info = self.registry.get_model_info(pconfig.default_model)
+                        if model_info:
+                            models = [model_info]
 
-            # Apply advisor profile adjustments (strengths/weaknesses)
-            profile_bonus = 0.0
-            from nvh.core.advisor_profiles import ADVISOR_PROFILES
-            profile = ADVISOR_PROFILES.get(pname)
-            if profile:
-                # Bonus for advisor's inherent quality/reliability
-                profile_bonus += profile.quality_weight * 0.05
-                # Penalty if task matches advisor's "avoid_for" list
-                task_desc = query.lower()
-                for avoid in profile.avoid_for:
-                    avoid_words = [w.lower() for w in avoid.split()[:4]]
-                    if any(w in task_desc for w in avoid_words if len(w) > 3):
-                        profile_bonus -= 0.10
-                        break
-                # Bonus for special capabilities matching the task
-                if profile.has_search and any(w in task_desc for w in ["search", "latest", "current", "recent", "news", "today"]):
-                    profile_bonus += 0.15
-                if profile.is_fast and any(w in task_desc for w in ["quick", "fast", "brief", "short"]):
-                    profile_bonus += 0.10
-                if profile.is_local and any(w in task_desc for w in ["private", "confidential", "secret", "sensitive"]):
-                    profile_bonus += 0.15
-                if profile.is_reasoning and any(w in task_desc for w in ["prove", "derive", "proof", "theorem", "reason", "logic"]):
-                    profile_bonus += 0.12
+                if not models:
+                    skipped_reasons[pname] = "no models available"
+                    continue
 
-            weights = self.config.routing.weights
+                # Pick the best model from this provider
+                best_model = models[0]
+                best_cap = 0.0
+                for m in models:
+                    task_key = classification.task_type.value
+                    cap = m.capability_scores.get(task_key, 0.5)
+                    if cap > best_cap:
+                        best_cap = cap
+                        best_model = m
 
-            if strategy == "cheapest":
-                composite = cost_score
-            elif strategy == "fastest":
-                composite = lat_score
-            elif strategy == "best-for-task":
-                composite = cap_score + profile_bonus
-            else:  # "best"
-                composite = (
-                    cap_score * weights.get("capability", 0.4)
-                    + cost_score * weights.get("cost", 0.3)
-                    + lat_score * weights.get("latency", 0.2)
-                    + health * weights.get("health", 0.1)
-                    + profile_bonus
-                )
+                # Filter by context window
+                if input_tokens > 0 and best_model.context_window > 0:
+                    if input_tokens > best_model.context_window * 0.9:
+                        skipped_reasons[pname] = (
+                            f"context too small ({best_model.context_window})"
+                        )
+                        continue
 
-            # Apply --prefer-nvidia bonus (1.3x) when quality is comparable
-            if self.config.defaults.prefer_nvidia and pname in _NVIDIA_PROVIDERS:
-                composite *= 1.3
+                # Calculate composite score with advisor profile intelligence
+                cap_score = best_cap
+                cost_score = self._cost_score(best_model)
+                lat_score = self._latency_score(best_model)
 
-            provider_scores[pname] = {
-                "composite": composite,
-                "capability": cap_score,
-                "cost": cost_score,
-                "latency": lat_score,
-                "health": health,
-                "model": 0,  # reserved for future model-level scoring
-            }
+                # Apply advisor profile adjustments (strengths/weaknesses)
+                profile_bonus = 0.0
+                profile = advisor_profiles.get(pname)
+                if profile:
+                    # Bonus for advisor's inherent quality/reliability
+                    profile_bonus += profile.quality_weight * 0.05
+                    # Penalty if task matches advisor's "avoid_for" list
+                    task_desc = query.lower()
+                    for avoid in profile.avoid_for:
+                        avoid_words = [w.lower() for w in avoid.split()[:4]]
+                        if any(w in task_desc for w in avoid_words if len(w) > 3):
+                            profile_bonus -= 0.10
+                            break
+                    # Bonus for special capabilities matching the task
+                    _search_words = [
+                        "search", "latest", "current",
+                        "recent", "news", "today",
+                    ]
+                    _fast_words = [
+                        "quick", "fast", "brief", "short",
+                    ]
+                    _local_words = [
+                        "private", "confidential",
+                        "secret", "sensitive",
+                    ]
+                    _reasoning_words = [
+                        "prove", "derive", "proof",
+                        "theorem", "reason", "logic",
+                    ]
+                    if profile.has_search and any(
+                        w in task_desc for w in _search_words
+                    ):
+                        profile_bonus += 0.15
+                    if profile.is_fast and any(
+                        w in task_desc for w in _fast_words
+                    ):
+                        profile_bonus += 0.10
+                    if profile.is_local and any(
+                        w in task_desc for w in _local_words
+                    ):
+                        profile_bonus += 0.15
+                    if profile.is_reasoning and any(
+                        w in task_desc
+                        for w in _reasoning_words
+                    ):
+                        profile_bonus += 0.12
+
+                weights = self.config.routing.weights
+
+                if strategy == "cheapest":
+                    composite = cost_score
+                elif strategy == "fastest":
+                    composite = lat_score
+                elif strategy == "best-for-task":
+                    composite = cap_score + profile_bonus
+                else:  # "best"
+                    composite = (
+                        cap_score * weights.get("capability", 0.4)
+                        + cost_score * weights.get("cost", 0.3)
+                        + lat_score * weights.get("latency", 0.2)
+                        + health * weights.get("health", 0.1)
+                        + profile_bonus
+                    )
+
+                # Apply --prefer-nvidia bonus (1.3x) when quality is comparable
+                if self.config.defaults.prefer_nvidia and pname in _NVIDIA_PROVIDERS:
+                    composite *= 1.3
+
+                provider_scores[pname] = {
+                    "composite": composite,
+                    "capability": cap_score,
+                    "cost": cost_score,
+                    "latency": lat_score,
+                    "health": health,
+                    "model": 0,  # reserved for future model-level scoring
+                }
+            except Exception as e:
+                _log.warning("Scoring failed for provider %s: %s", pname, e)
+                skipped_reasons[pname] = f"scoring error: {e}"
+                continue
 
         if not provider_scores:
             default = self.config.defaults.provider or available[0]
+            skip_summary = "; ".join(f"{p}: {r}" for p, r in list(skipped_reasons.items())[:5])
+            _log.warning(
+                "All providers filtered out during routing. Skipped: %s. Falling back to %s.",
+                skip_summary or "(none)", default,
+            )
             return RoutingDecision(
                 provider=default,
                 model=model_override or "",
                 task_type=classification.task_type,
                 confidence=classification.confidence,
                 scores={},
-                reason="All providers filtered out, using default",
+                reason=(
+                    f"All providers filtered out"
+                    f" ({skip_summary or 'unknown'}),"
+                    f" using default: {default}"
+                ),
             )
 
         # Select the best
@@ -401,7 +488,11 @@ class RoutingEngine:
 
         if is_simple_task and local_capability >= 0.65:
             use_local = True
-            reason = f"Local-first: {classification.task_type.value} handled well by local model (capability: {local_capability:.0%})"
+            reason = (
+                f"Local-first: {classification.task_type.value}"
+                f" handled well by local model"
+                f" (capability: {local_capability:.0%})"
+            )
         elif is_short and local_capability >= 0.70:
             use_local = True
             reason = f"Local-first: short query, local model capable ({local_capability:.0%})"

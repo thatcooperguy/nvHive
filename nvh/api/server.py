@@ -35,7 +35,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from nvh.core.agents import generate_agents, get_preset_agents, list_presets
 from nvh.core.engine import BudgetExceededError, Engine
@@ -358,7 +358,7 @@ def _serialize_completion(resp: CompletionResponse) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 class QueryRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(..., min_length=1, max_length=500_000)
     provider: str | None = None
     model: str | None = None
     system_prompt: str | None = None
@@ -368,7 +368,7 @@ class QueryRequest(BaseModel):
 
 
 class CouncilRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(..., min_length=1, max_length=500_000)
     members: list[str] | None = None
     weights: dict[str, float] | None = None
     strategy: str | None = None
@@ -382,7 +382,7 @@ class CouncilRequest(BaseModel):
 
 
 class CompareRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(..., min_length=1, max_length=500_000)
     providers: list[str] | None = None
     system_prompt: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
@@ -390,7 +390,7 @@ class CompareRequest(BaseModel):
 
 
 class AgentAnalyzeRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(..., min_length=1, max_length=500_000)
     num_agents: int = Field(default=3, gt=0, le=10)
     preset: str | None = None
 
@@ -1788,7 +1788,7 @@ async def sandbox_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @app.get("/v1/locks", summary="Current file lock status")
-async def get_lock_status():
+async def get_lock_status(_auth: None = Depends(require_auth)):
     """Show all active file locks and which agents hold them."""
     from nvh.core.file_lock import get_file_lock_coordinator
     coordinator = get_file_lock_coordinator()
@@ -1803,7 +1803,10 @@ class ConflictCheckRequest(BaseModel):
 
 
 @app.post("/v1/locks/check-conflicts", summary="Check for file modification conflicts")
-async def check_conflicts(request: ConflictCheckRequest):
+async def check_conflicts(
+    request: ConflictCheckRequest,
+    _auth: None = Depends(require_auth),
+):
     """Check if proposed file changes would conflict with existing locks."""
     from nvh.core.file_lock import get_file_lock_coordinator
     coordinator = get_file_lock_coordinator()
@@ -2015,7 +2018,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) ->
 # ---------------------------------------------------------------------------
 
 @app.get("/v1/context")
-async def get_context_files():
+async def get_context_files(_auth: None = Depends(require_auth)):
     """List loaded COUNCIL.md context files."""
     from nvh.core.context_files import get_context_summary
     engine = get_engine()
@@ -2029,7 +2032,7 @@ async def get_context_files():
 
 
 @app.post("/v1/context/reload")
-async def reload_context():
+async def reload_context(_auth: None = Depends(require_auth)):
     """Reload context files from disk."""
     from nvh.core.context_files import find_context_files
     engine = get_engine()
@@ -2048,7 +2051,7 @@ async def reload_context():
 # ---------------------------------------------------------------------------
 
 @app.get("/v1/setup/free-providers")
-async def get_free_providers():
+async def get_free_providers(_auth: None = Depends(require_auth)):
     """List all free-tier providers and their setup status."""
     from nvh.core.advisor_profiles import ADVISOR_PROFILES
     from nvh.core.free_tier import FREE_TIER_ADVISORS, detect_available_free_advisors
@@ -2190,13 +2193,35 @@ async def get_free_providers():
     }
 
 
+_ALLOWED_PROVIDERS = {
+    "openai", "anthropic", "google", "groq", "mistral",
+    "cohere", "deepseek", "github", "nvidia", "fireworks",
+    "cerebras", "sambanova", "huggingface", "ai21",
+    "siliconflow", "grok", "perplexity", "together",
+    "openrouter", "ollama",
+}
+
+
 class SaveKeyRequest(BaseModel):
-    provider: str
-    api_key: str
+    provider: str = Field(..., min_length=1, max_length=32)
+    api_key: str = Field(..., min_length=10, max_length=500)
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        if v not in _ALLOWED_PROVIDERS:
+            raise ValueError(
+                f"Unknown provider '{v}'. Allowed: "
+                f"{', '.join(sorted(_ALLOWED_PROVIDERS))}"
+            )
+        return v
 
 
 @app.post("/v1/setup/save-key")
-async def save_provider_key(request: SaveKeyRequest):
+async def save_provider_key(
+    request: SaveKeyRequest,
+    _auth: None = Depends(require_auth),
+):
     """Save an API key for a provider (stores in OS keychain + env var).
 
     Also reinitializes the engine so the new provider is available
@@ -2254,7 +2279,7 @@ async def save_provider_key(request: SaveKeyRequest):
 
 
 @app.get("/v1/setup/status")
-async def get_setup_status():
+async def get_setup_status(_auth: None = Depends(require_auth)):
     """Check overall setup status — how many providers are ready."""
     from nvh.core.free_tier import detect_available_free_advisors
 

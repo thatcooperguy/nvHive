@@ -10,10 +10,12 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -52,6 +54,11 @@ class Conversation(Base):
 
 class ConversationMessage(Base):
     __tablename__ = "conversation_messages"
+    __table_args__ = (
+        Index("ix_convo_msg_conv_id", "conversation_id"),
+        Index("ix_convo_msg_conv_seq", "conversation_id", "sequence"),
+        UniqueConstraint("conversation_id", "sequence", name="uq_conv_seq"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
     conversation_id: Mapped[str] = mapped_column(
@@ -73,6 +80,11 @@ class ConversationMessage(Base):
 
 class QueryLog(Base):
     __tablename__ = "query_logs"
+    __table_args__ = (
+        Index("ix_query_log_created", "created_at"),
+        Index("ix_query_log_provider", "provider"),
+        Index("ix_query_log_prov_created", "provider", "created_at"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
     conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

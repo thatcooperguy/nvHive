@@ -1,7 +1,7 @@
 """NVHive MCP Server — expose nvHive tools to Claude Code, Cursor, OpenClaw, and NemoClaw.
 
 Model Context Protocol server that gives any MCP client access to:
-- Smart routing across 22 LLM providers
+- Smart routing across 23 LLM providers (63 models, 25 free)
 - Council consensus (multi-model synthesis)
 - Throwdown analysis (two-pass deep analysis)
 - Provider status and GPU info
@@ -30,22 +30,42 @@ Register with OpenClaw (openclaw.json):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Lazy imports to keep startup fast — MCP servers should launch quickly via stdio.
+# Lazy imports to keep startup fast ��� MCP servers should launch quickly via stdio.
 _engine = None
+_engine_lock = asyncio.Lock()
+
+# Default timeout for LLM operations (seconds)
+_QUERY_TIMEOUT = 120
+_COUNCIL_TIMEOUT = 300
 
 
 async def _get_engine():
-    """Lazy-initialize the nvHive engine."""
+    """Lazy-initialize the nvHive engine (thread-safe)."""
     global _engine
-    if _engine is None:
-        from nvh.core.engine import Engine
-        _engine = Engine()
-        await _engine.initialize()
+    if _engine is not None:
+        return _engine
+    async with _engine_lock:
+        if _engine is not None:
+            return _engine
+        try:
+            from nvh.core.engine import Engine
+            _engine = Engine()
+            await _engine.initialize()
+        except Exception as e:
+            logger.error("Failed to initialize nvHive engine: %s", e)
+            raise RuntimeError(
+                f"nvHive engine failed to start: {e}\n"
+                "Troubleshooting:\n"
+                "  1. Check config:  nvh config init\n"
+                "  2. Test providers: nvh test --quick\n"
+                "  3. Check logs:    ~/.hive/nvhive.log"
+            ) from e
     return _engine
 
 
@@ -114,10 +134,107 @@ def create_server():
     mcp = FastMCP(
         "nvhive",
         description=(
-            "NVHive — Multi-LLM orchestration with smart routing, "
-            "council consensus, and throwdown analysis across 22 providers."
+            "NVHive ��� Multi-LLM orchestration with smart routing, "
+            "council consensus, and throwdown analysis across 23 providers (63 models, 25 free)."
         ),
     )
+
+    # ------------------------------------------------------------------
+    # Input validation helpers
+    # ------------------------------------------------------------------
+
+    valid_strategies = {"weighted_consensus", "majority_vote", "best_of"}
+    valid_cabinets = {
+        "executive", "engineering", "security_review", "code_review",
+        "product", "data", "full_board", "homework_help", "code_tutor",
+        "essay_review", "study_group", "exam_prep",
+    }
+
+    def _validate_prompt(prompt: str) -> str:
+        prompt = prompt.strip()
+        if not prompt:
+            raise ValueError("Prompt cannot be empty.")
+        if len(prompt) > 500_000:
+            raise ValueError(f"Prompt too long ({len(prompt)} chars). Maximum is 500,000.")
+        return prompt
+
+    def _validate_temperature(temperature: float) -> float:
+        if not (0.0 <= temperature <= 2.0):
+            raise ValueError(f"Temperature must be 0.0–2.0, got {temperature}.")
+        return temperature
+
+    def _validate_max_tokens(max_tokens: int) -> int:
+        if not (1 <= max_tokens <= 200_000):
+            raise ValueError(f"max_tokens must be 1–200,000, got {max_tokens}.")
+        return max_tokens
+
+    def _error_response(e: Exception, operation: str) -> str:
+        """Format an error into a helpful, actionable message."""
+        from nvh.providers.base import (
+            AuthenticationError,
+            ContentFilterError,
+            InsufficientQuotaError,
+            ProviderUnavailableError,
+            RateLimitError,
+            TokenLimitError,
+        )
+
+        msg = str(e)
+        if isinstance(e, AuthenticationError):
+            return (
+                f"Authentication failed for {operation}: {msg}\n\n"
+                "Fix: Run `nvh setup` to reconfigure your API key, "
+                "or set the provider's API key as an environment variable."
+            )
+        if isinstance(e, RateLimitError):
+            return (
+                f"Rate limit hit during {operation}: {msg}\n\n"
+                "nvHive will auto-retry with a different provider. "
+                "Or wait a moment and try again."
+            )
+        if isinstance(e, InsufficientQuotaError):
+            return (
+                f"Quota exceeded during {operation}: {msg}\n\n"
+                "Options:\n"
+                "  - Use a free provider: set advisor='groq' or advisor='github'\n"
+                "  - Use local inference: use the ask_safe tool instead\n"
+                "  - Check budget: use the status tool"
+            )
+        if isinstance(e, TokenLimitError):
+            return (
+                f"Input too long for {operation}: {msg}\n\n"
+                "Try shortening the prompt or using a model with a larger context window."
+            )
+        if isinstance(e, ContentFilterError):
+            return f"Content filtered during {operation}: {msg}"
+        if isinstance(e, ProviderUnavailableError):
+            return (
+                f"Provider unavailable for {operation}: {msg}\n\n"
+                "Check provider status with the status tool, "
+                "or try a different advisor."
+            )
+        if isinstance(e, asyncio.TimeoutError):
+            return (
+                f"Timed out during {operation}.\n\n"
+                "The operation took too long. Try:\n"
+                "  - A faster provider (advisor='groq')\n"
+                "  - A shorter prompt\n"
+                "  - Fewer council members"
+            )
+        if isinstance(e, (RuntimeError, ValueError)):
+            return f"Error in {operation}: {msg}"
+
+        # Unknown error — log full traceback, show summary to client
+        logger.exception("Unexpected error in MCP tool %s", operation)
+        return (
+            f"Unexpected error during {operation}: {msg}\n\n"
+            "Check that nvHive is configured correctly: nvh status\n"
+            "If this persists, check logs at ~/.hive/nvhive.log"
+        )
+
+    # ------------------------------------------------------------------
+    # Tools
+    # ------------------------------------------------------------------
 
     @mcp.tool()
     async def ask(
@@ -130,7 +247,7 @@ def create_server():
         """Ask a question using NVHive's smart router.
 
         Routes to the best available LLM provider based on query type,
-        cost, speed, and reliability. Supports 22 providers and 63 models.
+        cost, speed, and reliability. Supports 23 providers and 63 models (25 free).
 
         Args:
             prompt: The question or task to send to the LLM.
@@ -139,20 +256,30 @@ def create_server():
             model: Specific model to use (e.g. "gpt-4o", "claude-sonnet-4").
                   Leave empty for auto-selection.
             temperature: Sampling temperature (0.0-2.0). Default 1.0.
-            max_tokens: Maximum response tokens. Default 4096.
+            max_tokens: Maximum response tokens (1-200000). Default 4096.
         """
-        engine = await _get_engine()
         try:
-            resp = await engine.query(
-                prompt=prompt,
-                provider=advisor or None,
-                model=model or None,
-                temperature=temperature,
-                max_tokens=max_tokens,
+            prompt = _validate_prompt(prompt)
+            temperature = _validate_temperature(temperature)
+            max_tokens = _validate_max_tokens(max_tokens)
+        except ValueError as e:
+            return str(e)
+
+        try:
+            engine = await _get_engine()
+            resp = await asyncio.wait_for(
+                engine.query(
+                    prompt=prompt,
+                    provider=advisor or None,
+                    model=model or None,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                ),
+                timeout=_QUERY_TIMEOUT,
             )
             return _format_response(resp)
         except Exception as e:
-            return f"Error: {e}"
+            return _error_response(e, "ask")
 
     @mcp.tool()
     async def ask_safe(prompt: str, model: str = "") -> str:
@@ -165,16 +292,24 @@ def create_server():
             prompt: The question or task.
             model: Local model to use (default: auto-select based on GPU).
         """
-        engine = await _get_engine()
         try:
-            resp = await engine.query(
-                prompt=prompt,
-                provider="ollama",
-                model=model or None,
+            prompt = _validate_prompt(prompt)
+        except ValueError as e:
+            return str(e)
+
+        try:
+            engine = await _get_engine()
+            resp = await asyncio.wait_for(
+                engine.query(
+                    prompt=prompt,
+                    provider="ollama",
+                    model=model or None,
+                ),
+                timeout=_QUERY_TIMEOUT,
             )
             return _format_response(resp)
         except Exception as e:
-            return f"Error: {e}"
+            return _error_response(e, "ask_safe")
 
     @mcp.tool()
     async def council(
@@ -198,18 +333,49 @@ def create_server():
                     "homework_help", "code_tutor", "essay_review".
                     Leave empty for auto-generated agents.
         """
-        engine = await _get_engine()
         try:
-            result = await engine.run_council(
-                prompt=prompt,
-                num_agents=max(2, min(num_members, 10)),
-                auto_agents=not bool(cabinet),
-                agent_preset=cabinet or None,
-                strategy=strategy or None,
+            prompt = _validate_prompt(prompt)
+        except ValueError as e:
+            return str(e)
+
+        # Validate num_members with feedback
+        if num_members < 2:
+            num_members = 2
+            logger.info("num_members clamped to minimum of 2")
+        elif num_members > 10:
+            num_members = 10
+            logger.info("num_members clamped to maximum of 10")
+
+        # Validate strategy
+        if strategy and strategy not in valid_strategies:
+            return (
+                f"Invalid strategy '{strategy}'. "
+                f"Valid options: {', '.join(sorted(valid_strategies))}"
+            )
+
+        # Validate cabinet
+        if cabinet and cabinet not in valid_cabinets:
+            return (
+                f"Invalid cabinet '{cabinet}'. "
+                f"Valid options: {', '.join(sorted(valid_cabinets))}\n"
+                "Use the list_cabinets tool to see descriptions."
+            )
+
+        try:
+            engine = await _get_engine()
+            result = await asyncio.wait_for(
+                engine.run_council(
+                    prompt=prompt,
+                    num_agents=num_members,
+                    auto_agents=not bool(cabinet),
+                    agent_preset=cabinet or None,
+                    strategy=strategy or None,
+                ),
+                timeout=_COUNCIL_TIMEOUT,
             )
             return _format_council_response(result)
         except Exception as e:
-            return f"Error: {e}"
+            return _error_response(e, "council")
 
     @mcp.tool()
     async def throwdown(prompt: str, cabinet: str = "") -> str:
@@ -223,17 +389,32 @@ def create_server():
             prompt: The question for deep analysis.
             cabinet: Agent cabinet preset. Leave empty for auto-generated.
         """
-        engine = await _get_engine()
         try:
-            result = await engine.run_council(
-                prompt=prompt,
-                auto_agents=not bool(cabinet),
-                agent_preset=cabinet or None,
-                strategy="throwdown",
+            prompt = _validate_prompt(prompt)
+        except ValueError as e:
+            return str(e)
+
+        if cabinet and cabinet not in valid_cabinets:
+            return (
+                f"Invalid cabinet '{cabinet}'. "
+                f"Valid options: {', '.join(sorted(valid_cabinets))}\n"
+                "Use the list_cabinets tool to see descriptions."
+            )
+
+        try:
+            engine = await _get_engine()
+            result = await asyncio.wait_for(
+                engine.run_council(
+                    prompt=prompt,
+                    auto_agents=not bool(cabinet),
+                    agent_preset=cabinet or None,
+                    strategy="throwdown",
+                ),
+                timeout=_COUNCIL_TIMEOUT,
             )
             return _format_council_response(result)
         except Exception as e:
-            return f"Error: {e}"
+            return _error_response(e, "throwdown")
 
     @mcp.tool()
     async def status() -> str:
@@ -242,7 +423,10 @@ def create_server():
         Returns enabled providers, GPU info, budget status,
         and available models.
         """
-        engine = await _get_engine()
+        try:
+            engine = await _get_engine()
+        except Exception as e:
+            return _error_response(e, "status")
 
         parts = ["## NVHive Status\n"]
 
@@ -250,7 +434,9 @@ def create_server():
         enabled = engine.registry.list_enabled() if hasattr(engine.registry, "list_enabled") else []
         parts.append(f"**Providers enabled:** {len(enabled)}")
         if enabled:
-            parts.append(f"  {', '.join(enabled)}")
+            parts.append(f"  {', '.join(sorted(enabled))}")
+        else:
+            parts.append("  (none — run `nvh setup` to configure providers)")
 
         # GPU
         try:
@@ -278,17 +464,36 @@ def create_server():
         Shows which providers are enabled, have API keys configured,
         and their free tier limits.
         """
-        engine = await _get_engine()
+        try:
+            engine = await _get_engine()
+        except Exception as e:
+            return _error_response(e, "list_advisors")
+
         enabled = engine.registry.list_enabled() if hasattr(engine.registry, "list_enabled") else []
 
         if not enabled:
-            return "No advisors enabled. Run `nvh setup` to configure providers."
+            return (
+                "No advisors enabled.\n\n"
+                "Get started:\n"
+                "  1. Run `nvh setup` to configure providers\n"
+                "  2. Or set an API key: export GROQ_API_KEY=gsk_...\n"
+                "  3. Then restart the MCP server"
+            )
 
         lines = ["## Available Advisors\n"]
-        lines.append("| Advisor | Status |")
-        lines.append("|---------|--------|")
+        lines.append("| Advisor | Status | Free Tier |")
+        lines.append("|---------|--------|-----------|")
+
+        # Enrich with free tier info from advisor profiles
+        try:
+            from nvh.core.advisor_profiles import ADVISOR_PROFILES as profiles  # noqa: N811
+        except ImportError:
+            profiles = {}
+
         for name in sorted(enabled):
-            lines.append(f"| {name} | Enabled |")
+            profile = profiles.get(name)
+            free = "Yes" if (profile and profile.has_free_tier) else "—"
+            lines.append(f"| {name} | Enabled | {free} |")
 
         return "\n".join(lines)
 

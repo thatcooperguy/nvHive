@@ -33,11 +33,13 @@ class OllamaProvider:
         fallback_model: str = "",
         base_url: str | None = None,
         provider_name: str = "ollama",
+        timeout: int = 300,
     ):
         self._default_model = default_model
         self._fallback_model = fallback_model
         self._base_url = base_url or "http://localhost:11434"
         self._provider_name = provider_name
+        self._timeout = timeout
 
     @property
     def name(self) -> str:
@@ -68,6 +70,7 @@ class OllamaProvider:
                 messages=msgs,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                timeout=self._timeout,
                 **self._kwargs(model_name),
                 **kwargs,
             )
@@ -122,6 +125,7 @@ class OllamaProvider:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=True,
+                timeout=self._timeout,
                 **self._kwargs(model_name),
                 **kwargs,
             )

@@ -71,6 +71,7 @@ class GitHubProvider:
         fallback_model: str = "meta-llama-3.1-8b-instruct",
         base_url: str | None = None,
         provider_name: str = "github",
+        timeout: int = 120,
     ):
         # Resolve API key from env if not provided
         self._api_key = (
@@ -83,6 +84,7 @@ class GitHubProvider:
         self._fallback_model = fallback_model
         self._base_url = base_url or self.BASE_URL
         self._provider_name = provider_name
+        self._timeout = timeout
 
     @property
     def name(self) -> str:
@@ -116,6 +118,7 @@ class GitHubProvider:
                 messages=msgs,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                timeout=self._timeout,
                 **self._kwargs(model_name),
                 **kwargs,
             )
@@ -168,6 +171,7 @@ class GitHubProvider:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=True,
+                timeout=self._timeout,
                 **self._kwargs(model_name),
                 **kwargs,
             )
@@ -237,6 +241,7 @@ class GitHubProvider:
             await litellm.acompletion(
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
+                timeout=15,
                 **self._kwargs(self._default_model),
             )
             elapsed = int((time.monotonic() - start) * 1000)

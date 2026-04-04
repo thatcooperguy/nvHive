@@ -55,13 +55,30 @@ def hash_token(token: str) -> str:
 # User management
 # ---------------------------------------------------------------------------
 
+_VALID_ROLES = {"admin", "user", "viewer"}
+
+
 async def create_user(
     username: str,
     password: str,
     role: str = "user",
     email: str | None = None,
 ) -> User:
-    """Create and persist a new user. Raises ValueError if username already exists."""
+    """Create and persist a new user. Raises ValueError on invalid input."""
+    # Input validation
+    username = username.strip()
+    if not username or len(username) < 2:
+        raise ValueError("Username must be at least 2 characters.")
+    if len(username) > 64:
+        raise ValueError("Username must be 64 characters or fewer.")
+    if not password or len(password) < 8:
+        raise ValueError("Password must be at least 8 characters.")
+    if role not in _VALID_ROLES:
+        raise ValueError(
+            f"Invalid role '{role}'. Must be one of: "
+            f"{', '.join(sorted(_VALID_ROLES))}"
+        )
+
     async with get_session() as session:
         existing = await session.execute(
             select(User).where(User.username == username)
@@ -89,13 +106,28 @@ async def get_user_count() -> int:
 
 
 async def authenticate_user(username: str, password: str) -> User | None:
-    """Verify credentials and return the User on success, or None on failure."""
+    """Verify credentials and return the User on success, or None on failure.
+
+    Uses constant-time comparison to prevent timing-based username enumeration.
+    """
+    # Dummy hash for constant-time comparison when user is not found.
+    # This prevents attackers from determining if a username exists
+    # by measuring response time differences.
+    _dummy_hash = (
+        "$2b$12$LJ3m4ys3Rl0t3XEbLUMgruY5bBIxmU3MpY5sDGOXF/hdsCP3Tqo.i"
+    )
+
     async with get_session() as session:
         result = await session.execute(
-            select(User).where(User.username == username, User.is_active == True)  # noqa: E712
+            select(User).where(
+                User.username == username,
+                User.is_active == True,  # noqa: E712
+            )
         )
         user = result.scalar_one_or_none()
         if user is None:
+            # Perform a dummy verify to equalize timing
+            pwd_context.verify("dummy", _dummy_hash)
             return None
         if not verify_password(password, user.password_hash):
             return None
@@ -145,7 +177,7 @@ async def get_user_by_token(token: str) -> User | None:
 async def create_token_for_user(
     user_id: str,
     name: str,
-    scopes: str = "ask,convene,poll",
+    scopes: str = "query,council,compare",
     expires_at: datetime | None = None,
 ) -> tuple[str, APIToken]:
     """Create an API token for a user.

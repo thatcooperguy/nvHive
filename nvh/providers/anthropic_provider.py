@@ -30,12 +30,14 @@ class AnthropicProvider:
         fallback_model: str = "claude-haiku-4-5-20251001",
         base_url: str | None = None,
         provider_name: str = "anthropic",
+        timeout: int = 120,
     ):
         self._api_key = api_key
         self._default_model = default_model
         self._fallback_model = fallback_model
         self._base_url = base_url
         self._provider_name = provider_name
+        self._timeout = timeout
 
     @property
     def name(self) -> str:
@@ -70,6 +72,7 @@ class AnthropicProvider:
                 messages=msgs,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                timeout=self._timeout,
                 **self._kwargs(model_name),
                 **kwargs,
             )
@@ -120,6 +123,7 @@ class AnthropicProvider:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=True,
+                timeout=self._timeout,
                 **self._kwargs(model_name),
                 **kwargs,
             )
@@ -184,6 +188,7 @@ class AnthropicProvider:
             await litellm.acompletion(
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
+                timeout=15,
                 **self._kwargs(self._default_model),
             )
             elapsed = int((time.monotonic() - start) * 1000)

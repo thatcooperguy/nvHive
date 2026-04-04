@@ -225,7 +225,7 @@ def _build_system_prompt(persona: PersonaTemplate, query: str) -> str:
         f"- How does this affect your domain of expertise?\n"
         f"- What risks or opportunities does your experience reveal?\n"
         f"- What would you recommend based on real-world experience?\n"
-        f"- What do others in the room (other experts) might miss that you'd catch?\n\n"
+        f"- What might others in the room (other experts) miss that you'd catch?\n\n"
         f"Be specific, actionable, and honest. Flag genuine risks. "
         f"Don't hedge excessively — give a clear opinion with reasoning. "
         f"Draw on concrete examples from your domain when relevant."

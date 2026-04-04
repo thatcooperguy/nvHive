@@ -1,0 +1,26 @@
+{
+  "name": "@nvhive/claude-code-channel",
+  "version": "0.1.0",
+  "description": "nvHive channel plugin for Claude Code — multi-model routing, council consensus, and cost alerts pushed into your session",
+  "type": "module",
+  "main": "nvhive-channel.ts",
+  "scripts": {
+    "start": "bun run nvhive-channel.ts",
+    "dev": "bun run --watch nvhive-channel.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.23.0"
+  },
+  "author": "nvHive",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "channel",
+    "nvhive",
+    "llm",
+    "multi-model",
+    "routing"
+  ]
+}

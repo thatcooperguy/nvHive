@@ -1,4 +1,8 @@
-"""Main orchestration engine — ties together routing, providers, council, fallback, caching, and budget."""
+"""Main orchestration engine.
+
+Ties together routing, providers, council, fallback, caching,
+and budget.
+"""
 
 from __future__ import annotations
 
@@ -242,16 +246,21 @@ class Engine:
         except Exception:
             pass
 
-        # Ollama — check if running locally
+        # Ollama — check if running locally (supports OLLAMA_BASE_URL override)
         try:
+            import os as _os_env
+
             import httpx
-            resp = httpx.get("http://localhost:11434/api/tags", timeout=2)
+            ollama_url = _os_env.environ.get(
+                "OLLAMA_BASE_URL", "http://localhost:11434",
+            )
+            resp = httpx.get(f"{ollama_url}/api/tags", timeout=2)
             if resp.status_code == 200:
                 from nvh.providers.ollama_provider import OllamaProvider
-                provider = OllamaProvider()
+                provider = OllamaProvider(base_url=ollama_url)
                 self.registry.register("ollama", provider)
                 detected.append("ollama")
-                log.info("Auto-detected: Ollama (local, running on localhost:11434)")
+                log.info("Auto-detected: Ollama (local, running on %s)", ollama_url)
         except Exception:
             pass
 
@@ -262,7 +271,11 @@ class Engine:
             "GITHUB_TOKEN": ("github", "nvh.providers.github_provider", "GitHubProvider"),
             "GOOGLE_API_KEY": ("google", "nvh.providers.google_provider", "GoogleProvider"),
             "OPENAI_API_KEY": ("openai", "nvh.providers.openai_provider", "OpenAIProvider"),
-            "ANTHROPIC_API_KEY": ("anthropic", "nvh.providers.anthropic_provider", "AnthropicProvider"),
+            "ANTHROPIC_API_KEY": (
+                "anthropic",
+                "nvh.providers.anthropic_provider",
+                "AnthropicProvider",
+            ),
         }
         for env_var, (name, module_path, class_name) in env_providers.items():
             key = os.environ.get(env_var, "")
@@ -423,9 +436,16 @@ class Engine:
 
         # Cache check (skipped in privacy mode)
         if not privacy and use_cache and self.config.cache.enabled and temp == 0:
-            cached = await self.cache.get(decision.provider, decision.model, messages, temp, max_tok)
+            cached = await self.cache.get(
+                decision.provider, decision.model,
+                messages, temp, max_tok,
+            )
             if cached:
-                await self._log_query(cached, "simple", cache_hit=True, conversation_id=conversation_id)
+                await self._log_query(
+                    cached, "simple",
+                    cache_hit=True,
+                    conversation_id=conversation_id,
+                )
                 return cached
 
         # Execute with fallback chain
@@ -483,7 +503,10 @@ class Engine:
 
         # Cache the response
         if use_cache and self.config.cache.enabled and temp == 0:
-            await self.cache.put(decision.provider, decision.model, messages, temp, max_tok, response)
+            await self.cache.put(
+                decision.provider, decision.model,
+                messages, temp, max_tok, response,
+            )
 
         # Log and persist
         conv_id = conversation_id
@@ -704,16 +727,26 @@ class Engine:
     ) -> CompletionResponse:
         """Execute query with automatic fallback chain on failure."""
         fallback_chain = self._get_fallback_chain(decision.provider)
-        last_error: Exception | None = None
+        failure_log: list[str] = []  # track why each provider failed
 
         for i, provider_name in enumerate(fallback_chain):
             if not self.registry.has(provider_name):
+                failure_log.append(f"{provider_name}: not registered")
                 continue
 
             # Check circuit breaker / rate limiter
             try:
                 self.rate_manager.check_available(provider_name)
-            except (ProviderUnavailableError, RateLimitError):
+            except ProviderUnavailableError:
+                failure_log.append(
+                    f"{provider_name}: circuit breaker open",
+                )
+                continue
+            except RateLimitError:
+                failure_log.append(f"{provider_name}: rate limited")
+                continue
+            except Exception as e:
+                failure_log.append(f"{provider_name}: health check error ({e})")
                 continue
 
             provider = self.registry.get(provider_name)
@@ -745,41 +778,58 @@ class Engine:
 
                 if i > 0:
                     response.fallback_from = decision.provider
-                    # Emit recovery event when a previously-failing provider succeeds
+                    logger.info(
+                        "Fallback succeeded: %s → %s (after %d failures)",
+                        decision.provider, provider_name, i,
+                    )
+                    # Emit recovery event
                     await self.webhooks.emit(
                         WebhookEvent.PROVIDER_RECOVERED,
-                        format_provider_alert(provider=provider_name, event_type=WebhookEvent.PROVIDER_RECOVERED),
+                        format_provider_alert(
+                            provider=provider_name,
+                            event_type=WebhookEvent.PROVIDER_RECOVERED,
+                        ),
                     )
 
                 return response
 
             except RateLimitError as e:
                 self.rate_manager.record_failure(provider_name, e)
+                failure_log.append(f"{provider_name}: rate limited ({e})")
                 await self.webhooks.emit(
                     WebhookEvent.PROVIDER_DOWN,
-                    format_provider_alert(provider=provider_name, event_type=WebhookEvent.PROVIDER_DOWN, error=str(e)),
+                    format_provider_alert(
+                        provider=provider_name,
+                        event_type=WebhookEvent.PROVIDER_DOWN,
+                        error=str(e),
+                    ),
                 )
-                last_error = e
                 continue
             except ProviderError as e:
                 self.rate_manager.record_failure(provider_name, e)
+                failure_log.append(
+                    f"{provider_name}: {type(e).__name__} — {e}",
+                )
                 await self.webhooks.emit(
                     WebhookEvent.PROVIDER_ERROR,
-                    format_provider_alert(provider=provider_name, event_type=WebhookEvent.PROVIDER_ERROR, error=str(e)),
+                    format_provider_alert(
+                        provider=provider_name,
+                        event_type=WebhookEvent.PROVIDER_ERROR,
+                        error=str(e),
+                    ),
                 )
-                last_error = e
                 continue
 
-        # All providers failed
-        providers_tried = ", ".join(fallback_chain[:3])
+        # All providers failed — build a detailed, actionable error
+        failure_summary = "\n  ".join(failure_log[:8]) if failure_log else "No providers attempted"
         raise ProviderError(
-            f"All advisors failed — could not complete your request.\n"
-            f"Tried: {providers_tried}\n"
-            f"Last error: {last_error}\n"
-            f"Options:\n"
-            f"  Check advisor status: nvh status\n"
-            f"  Reconfigure an advisor: nvh setup\n"
-            f"  Use a local model: nvh config set defaults.provider ollama",
+            f"All advisors failed — could not complete your request.\n\n"
+            f"What was tried:\n  {failure_summary}\n\n"
+            f"What to do:\n"
+            f"  1. Check provider status:  nvh status\n"
+            f"  2. Reconfigure providers:  nvh setup\n"
+            f"  3. Try a local model:      nvh safe \"your question\"\n"
+            f"  4. Try a specific provider: nvh ask --advisor groq \"your question\"",
             provider=decision.provider,
         )
 
@@ -812,13 +862,19 @@ class Engine:
             if daily_spend >= budget.daily_limit_usd:
                 if budget.hard_stop:
                     raise BudgetExceededError(
-                        f"Daily budget limit reached (${daily_spend:.4f} / ${budget.daily_limit_usd:.2f}).\n"
+                        f"Daily budget limit reached"
+                        f" (${daily_spend:.4f}"
+                        f" / ${budget.daily_limit_usd:.2f}).\n"
                         f"Options:\n"
                         f"  Raise the limit:    nvh config set budget.daily_limit_usd 10\n"
                         f"  Disable hard stop:  nvh config set budget.hard_stop false\n"
                         f"  Use a free model:   nvh safe \"question\"  (local/free only)"
                     )
-            elif budget.alert_threshold > 0 and float(daily_spend) / float(budget.daily_limit_usd) >= budget.alert_threshold:
+            elif (
+                budget.alert_threshold > 0
+                and float(daily_spend) / float(budget.daily_limit_usd)
+                >= budget.alert_threshold
+            ):
                 await self.webhooks.emit(
                     WebhookEvent.BUDGET_THRESHOLD,
                     format_budget_alert(
@@ -835,13 +891,19 @@ class Engine:
             if monthly_spend >= budget.monthly_limit_usd:
                 if budget.hard_stop:
                     raise BudgetExceededError(
-                        f"Monthly budget limit reached (${monthly_spend:.4f} / ${budget.monthly_limit_usd:.2f}).\n"
+                        f"Monthly budget limit reached"
+                        f" (${monthly_spend:.4f}"
+                        f" / ${budget.monthly_limit_usd:.2f}).\n"
                         f"Options:\n"
                         f"  Raise the limit:    nvh config set budget.monthly_limit_usd 50\n"
                         f"  Disable hard stop:  nvh config set budget.hard_stop false\n"
                         f"  Use a free model:   nvh safe \"question\"  (local/free only)"
                     )
-            elif budget.alert_threshold > 0 and float(monthly_spend) / float(budget.monthly_limit_usd) >= budget.alert_threshold:
+            elif (
+                budget.alert_threshold > 0
+                and float(monthly_spend) / float(budget.monthly_limit_usd)
+                >= budget.alert_threshold
+            ):
                 if budget.daily_limit_usd <= 0:
                     # Only emit monthly alert if we haven't already emitted daily above
                     daily_spend = await repo.get_spend("daily")

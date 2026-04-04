@@ -178,7 +178,16 @@ class CouncilOrchestrator:
         for member in members:
             # Use persona system prompt if assigned, otherwise fall back to user's system prompt
             member_system = member.system_prompt or system_prompt
-            label = f"{member.provider}:{member.persona}" if member.persona else member.provider
+            base_label = (
+                f"{member.provider}:{member.persona}"
+                if member.persona else member.provider
+            )
+            # Ensure unique labels when same provider appears twice
+            label = base_label
+            suffix = 2
+            while label in tasks:
+                label = f"{base_label}#{suffix}"
+                suffix += 1
             tasks[label] = asyncio.create_task(
                 self._call_member(member, msgs, member_system, temperature, max_tokens, timeout)
             )
@@ -189,9 +198,11 @@ class CouncilOrchestrator:
             timeout=timeout + 5,  # extra buffer
         )
 
-        # Cancel any still-pending tasks
+        # Cancel and await any still-pending tasks to prevent resource leaks
         for task in pending:
             task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
         # Collect results
         for label, task in tasks.items():
@@ -409,8 +420,20 @@ class CouncilOrchestrator:
                     "error": str(exc),
                 })
 
-        # Run all member streams concurrently
-        await asyncio.gather(*[_stream_member(m) for m in members])
+        # Run all member streams concurrently with timeout
+        council_timeout = timeout or self.config.council.timeout
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *[_stream_member(m) for m in members],
+                    return_exceptions=True,
+                ),
+                timeout=council_timeout + 5,
+            )
+        except asyncio.TimeoutError:
+            for label in [m.label for m in members]:
+                if label not in member_responses and label not in failed_members:
+                    failed_members[label] = "timed out"
 
         total_elapsed = int((time.monotonic() - start) * 1000)
         quorum_met = len(member_responses) >= quorum

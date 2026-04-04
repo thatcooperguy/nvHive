@@ -42,12 +42,14 @@ class GroqProvider:
         fallback_model: str = "groq/llama-3.1-8b-instant",
         base_url: str | None = None,
         provider_name: str = "groq",
+        timeout: int = 120,
     ):
         self._api_key = api_key
         self._default_model = default_model
         self._fallback_model = fallback_model
         self._base_url = base_url
         self._provider_name = provider_name
+        self._timeout = timeout
 
     @property
     def name(self) -> str:
@@ -82,6 +84,7 @@ class GroqProvider:
                 messages=msgs,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                timeout=self._timeout,
                 **self._kwargs(model_name),
                 **kwargs,
             )
@@ -135,6 +138,7 @@ class GroqProvider:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=True,
+                timeout=self._timeout,
                 **self._kwargs(model_name),
                 **kwargs,
             )
@@ -203,6 +207,7 @@ class GroqProvider:
             await litellm.acompletion(
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
+                timeout=15,
                 **self._kwargs(self._default_model),
             )
             elapsed = int((time.monotonic() - start) * 1000)

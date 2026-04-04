@@ -27,6 +27,59 @@ from rich.table import Table
 
 from nvh import __version__
 
+
+def _format_cli_error(e: Exception) -> str:
+    """Format an exception into a helpful, actionable CLI error message."""
+    from nvh.providers.base import (
+        AuthenticationError,
+        ContentFilterError,
+        InsufficientQuotaError,
+        ProviderError,
+        ProviderUnavailableError,
+        RateLimitError,
+        TokenLimitError,
+    )
+
+    msg = str(e)
+    if isinstance(e, AuthenticationError):
+        provider = getattr(e, "provider", "unknown")
+        return (
+            f"[red]Authentication failed[/red] ({provider}): {msg}\n"
+            f"  Fix: [bold]nvh setup[/bold] to reconfigure, or check your API key."
+        )
+    if isinstance(e, RateLimitError):
+        provider = getattr(e, "provider", "unknown")
+        return (
+            f"[yellow]Rate limited[/yellow] ({provider}): {msg}\n"
+            f"  Wait a moment or try: [bold]nvh ask --advisor groq \"your question\"[/bold]"
+        )
+    if isinstance(e, InsufficientQuotaError):
+        return (
+            f"[yellow]Quota/budget exceeded[/yellow]: {msg}\n"
+            f"  Free options:\n"
+            f"    [bold]nvh safe \"your question\"[/bold]     (local, no cost)\n"
+            f"    [bold]nvh ask --advisor groq ...[/bold]    (free tier)"
+        )
+    if isinstance(e, TokenLimitError):
+        return (
+            f"[yellow]Input too long[/yellow]: {msg}\n"
+            f"  Try shortening the prompt or specifying a model with a larger context window."
+        )
+    if isinstance(e, ContentFilterError):
+        return f"[yellow]Content filtered[/yellow]: {msg}"
+    if isinstance(e, ProviderUnavailableError):
+        return (
+            f"[red]Provider unavailable[/red]: {msg}\n"
+            f"  Check status: [bold]nvh status[/bold]"
+        )
+    if isinstance(e, ProviderError):
+        # This includes the detailed fallback chain error we improved above
+        return f"[red]{msg}[/red]"
+
+    # Generic fallback — still better than bare "Error: ..."
+    return f"[red]Error:[/red] {msg}"
+
+
 # The callback handles `nvh "question"` with no subcommand — smart default mode
 app = typer.Typer(
     name="nvh",
@@ -74,12 +127,16 @@ async def _smart_default(prompt: str):
             # Display synthesis
             if result.synthesis:
                 console.print(result.synthesis.content)
-                console.print(f"\n[dim]Agents: {', '.join(result.agents_used)} | Cost: ${result.total_cost_usd:.4f} | {result.total_latency_ms}ms[/dim]")
+                console.print(
+                    f"\n[dim]Agents: {', '.join(result.agents_used)}"
+                    f" | Cost: ${result.total_cost_usd:.4f}"
+                    f" | {result.total_latency_ms}ms[/dim]"
+                )
             else:
                 for label, resp in result.member_responses.items():
                     console.print(Panel(resp.content, title=label, border_style="blue"))
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
 
     elif default_mode == "poll":
         console.print("[dim][poll → all advisors][/dim]\n")
@@ -89,7 +146,7 @@ async def _smart_default(prompt: str):
                 header = f"{pname}/{resp.model}  {resp.latency_ms}ms  ${resp.cost_usd:.4f}"
                 console.print(Panel(resp.content, title=header, border_style="cyan"))
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
 
     elif default_mode == "throwdown":
         console.print("[dim][throwdown → two-pass deep analysis][/dim]\n")
@@ -123,10 +180,14 @@ async def _smart_default(prompt: str):
                 title="[bold green]THROWDOWN RESULT[/bold green]",
                 border_style="green",
             ))
-            total_cost = pass1.total_cost_usd + pass2.total_cost_usd + (final.cost_usd if final else Decimal("0"))
+            total_cost = (
+                pass1.total_cost_usd
+                + pass2.total_cost_usd
+                + (final.cost_usd if final else Decimal("0"))
+            )
             console.print(f"\n[dim]Total cost: ${total_cost:.4f}[/dim]")
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
 
     else:
         # Default: ask — smart route to best advisor
@@ -140,7 +201,7 @@ async def _smart_default(prompt: str):
                          f"Tokens: {resp.usage.input_tokens}/{resp.usage.output_tokens} | "
                          f"Cost: ${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]")
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
 
 async def _execute_action(action):
     """Execute a detected system action directly — no LLM needed."""
@@ -172,7 +233,7 @@ async def _execute_action(action):
         else:
             console.print(f"[red]{result.error}[/red]")
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+        console.print(_format_cli_error(e))
 
 
 async def _launch_default_repl():
@@ -218,27 +279,133 @@ async def _launch_default_repl():
 
 KNOWN_ADVISORS = {
     "openai": {"name": "OpenAI", "url": "https://platform.openai.com/api-keys", "free_tier": False},
-    "anthropic": {"name": "Anthropic", "url": "https://console.anthropic.com/settings/keys", "free_tier": False},
-    "google": {"name": "Google Gemini", "url": "https://aistudio.google.com/apikey", "free_tier": True, "free_info": "15 req/min free"},
-    "groq": {"name": "Groq", "url": "https://console.groq.com/keys", "free_tier": True, "free_info": "Free tier: 30 req/min, 14.4K tok/min"},
+    "anthropic": {
+        "name": "Anthropic",
+        "url": "https://console.anthropic.com/settings/keys",
+        "free_tier": False,
+    },
+    "google": {
+        "name": "Google Gemini",
+        "url": "https://aistudio.google.com/apikey",
+        "free_tier": True, "free_info": "15 req/min free",
+    },
+    "groq": {
+        "name": "Groq",
+        "url": "https://console.groq.com/keys",
+        "free_tier": True,
+        "free_info": "Free tier: 30 req/min, 14.4K tok/min",
+    },
     "grok": {"name": "Grok (xAI)", "url": "https://console.x.ai", "free_tier": False},
-    "mistral": {"name": "Mistral", "url": "https://console.mistral.ai/api-keys", "free_tier": True, "free_info": "Free Experiment plan: 2 RPM"},
-    "cohere": {"name": "Cohere", "url": "https://dashboard.cohere.com/api-keys", "free_tier": True, "free_info": "Trial API key included on signup"},
-    "deepseek": {"name": "DeepSeek", "url": "https://platform.deepseek.com", "free_tier": False, "free_info": "Very cheap: $0.07/M tokens"},
-    "ollama": {"name": "Ollama (Local)", "url": "https://ollama.com/download", "free_tier": True, "free_info": "Unlimited, free, runs on your GPU"},
-    "mock": {"name": "Mock (Testing)", "url": "", "free_tier": True, "free_info": "Testing only, no real API calls"},
-    "perplexity": {"name": "Perplexity", "url": "https://www.perplexity.ai/settings/api", "free_tier": False, "free_info": "Search-augmented responses with citations"},
-    "together": {"name": "Together AI", "url": "https://api.together.xyz/settings/api-keys", "free_tier": False, "free_info": "Requires $5 minimum purchase"},
-    "fireworks": {"name": "Fireworks AI", "url": "https://fireworks.ai/account/api-keys", "free_tier": True, "free_info": "Free tier available"},
-    "openrouter": {"name": "OpenRouter", "url": "https://openrouter.ai/keys", "free_tier": False, "free_info": "Routes to best available provider"},
-    "cerebras": {"name": "Cerebras", "url": "https://cloud.cerebras.ai", "free_tier": True, "free_info": "Free tier: 30 req/min"},
-    "sambanova": {"name": "SambaNova", "url": "https://cloud.sambanova.ai", "free_tier": True, "free_info": "Free tier available"},
-    "huggingface": {"name": "Hugging Face", "url": "https://huggingface.co/settings/tokens", "free_tier": True, "free_info": "Free Inference API"},
-    "ai21": {"name": "AI21 Labs", "url": "https://studio.ai21.com/account/api-key", "free_tier": True, "free_info": "Free tier available"},
-    "github": {"name": "GitHub Models", "url": "https://github.com/marketplace/models", "free_tier": True, "free_info": "Free for all GitHub users: 50-150 req/day, frontier models"},
-    "nvidia": {"name": "NVIDIA NIM", "url": "https://build.nvidia.com", "free_tier": True, "free_info": "1000+ free API credits, 40 RPM, NVIDIA Developer Program"},
-    "siliconflow": {"name": "SiliconFlow", "url": "https://cloud.siliconflow.cn", "free_tier": True, "free_info": "Permanently free models at 1000 RPM"},
-    "llm7": {"name": "LLM7", "url": "https://llm7.io", "free_tier": True, "free_info": "Anonymous access: 30 RPM, no signup required"},
+    "mistral": {
+        "name": "Mistral",
+        "url": "https://console.mistral.ai/api-keys",
+        "free_tier": True,
+        "free_info": "Free Experiment plan: 2 RPM",
+    },
+    "cohere": {
+        "name": "Cohere",
+        "url": "https://dashboard.cohere.com/api-keys",
+        "free_tier": True,
+        "free_info": "Trial API key included on signup",
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "url": "https://platform.deepseek.com",
+        "free_tier": False,
+        "free_info": "Very cheap: $0.07/M tokens",
+    },
+    "ollama": {
+        "name": "Ollama (Local)",
+        "url": "https://ollama.com/download",
+        "free_tier": True,
+        "free_info": "Unlimited, free, runs on your GPU",
+    },
+    "mock": {
+        "name": "Mock (Testing)", "url": "",
+        "free_tier": True,
+        "free_info": "Testing only, no real API calls",
+    },
+    "perplexity": {
+        "name": "Perplexity",
+        "url": "https://www.perplexity.ai/settings/api",
+        "free_tier": False,
+        "free_info": "Search-augmented responses with citations",
+    },
+    "together": {
+        "name": "Together AI",
+        "url": "https://api.together.xyz/settings/api-keys",
+        "free_tier": False,
+        "free_info": "Requires $5 minimum purchase",
+    },
+    "fireworks": {
+        "name": "Fireworks AI",
+        "url": "https://fireworks.ai/account/api-keys",
+        "free_tier": True,
+        "free_info": "Free tier available",
+    },
+    "openrouter": {
+        "name": "OpenRouter",
+        "url": "https://openrouter.ai/keys",
+        "free_tier": False,
+        "free_info": "Routes to best available provider",
+    },
+    "cerebras": {
+        "name": "Cerebras",
+        "url": "https://cloud.cerebras.ai",
+        "free_tier": True,
+        "free_info": "Free tier: 30 req/min",
+    },
+    "sambanova": {
+        "name": "SambaNova",
+        "url": "https://cloud.sambanova.ai",
+        "free_tier": True,
+        "free_info": "Free tier available",
+    },
+    "huggingface": {
+        "name": "Hugging Face",
+        "url": "https://huggingface.co/settings/tokens",
+        "free_tier": True,
+        "free_info": "Free Inference API",
+    },
+    "ai21": {
+        "name": "AI21 Labs",
+        "url": "https://studio.ai21.com/account/api-key",
+        "free_tier": True,
+        "free_info": "Free tier available",
+    },
+    "github": {
+        "name": "GitHub Models",
+        "url": "https://github.com/marketplace/models",
+        "free_tier": True,
+        "free_info": (
+            "Free for all GitHub users:"
+            " 50-150 req/day, frontier models"
+        ),
+    },
+    "nvidia": {
+        "name": "NVIDIA NIM",
+        "url": "https://build.nvidia.com",
+        "free_tier": True,
+        "free_info": (
+            "1000+ free API credits, 40 RPM,"
+            " NVIDIA Developer Program"
+        ),
+    },
+    "siliconflow": {
+        "name": "SiliconFlow",
+        "url": "https://cloud.siliconflow.cn",
+        "free_tier": True,
+        "free_info": "Permanently free models at 1000 RPM",
+    },
+    "llm7": {
+        "name": "LLM7",
+        "url": "https://llm7.io",
+        "free_tier": True,
+        "free_info": (
+            "Anonymous access: 30 RPM,"
+            " no signup required"
+        ),
+    },
 }
 
 
@@ -273,10 +440,11 @@ def _make_advisor_cmd(advisor_name: str):
                     else:
                         console.print(resp.content)
                         console.print(f"\n[dim]{resp.provider}/{resp.model} | "
-                                     f"{resp.usage.input_tokens}/{resp.usage.output_tokens} tokens | "
+                                     f"{resp.usage.input_tokens}"
+                                     f"/{resp.usage.output_tokens} tokens | "
                                      f"${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]")
                 except Exception as e:
-                    console.print(f"[red]Error: {e}[/red]")
+                    console.print(_format_cli_error(e))
             _run(_ask())
         else:
             # nvh openai → setup/login
@@ -312,7 +480,10 @@ def _make_advisor_cmd(advisor_name: str):
                     keyring.set_password("nvhive", f"{advisor_name}_api_key", key)
                     console.print("[green]Key stored securely.[/green]")
                 except Exception:
-                    console.print(f"[yellow]Set {advisor_name.upper()}_API_KEY in your environment.[/yellow]")
+                    console.print(
+                        f"[yellow]Set {advisor_name.upper()}_API_KEY"
+                        " in your environment.[/yellow]"
+                    )
 
     cmd.__name__ = f"{advisor_name}_cmd"
     cmd.__doc__ = f"Ask {info['name']}, or set up API key if no question given."
@@ -393,25 +564,55 @@ def ask(
     provider: str | None = typer.Option(None, "-p", "--advisor", help="Advisor to use"),
     model: str | None = typer.Option(None, "-m", "--model", help="Model to use"),
     system: str | None = typer.Option(None, "-s", "--system", help="System prompt"),
-    output: str = typer.Option("text", "-o", "--output", help="Output format: text, json, markdown, raw"),
+    output: str = typer.Option(
+        "text", "-o", "--output",
+        help="Output format: text, json, markdown, raw",
+    ),
     stream: bool = typer.Option(True, "--stream/--no-stream", help="Stream output"),
     max_tokens: int | None = typer.Option(None, "--max-tokens", help="Max output tokens"),
     temperature: float | None = typer.Option(None, "-t", "--temperature", help="Temperature"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Bypass cache"),
-    strategy: str = typer.Option("best", "--strategy", help="Routing: best, cheapest, fastest, best-for-task"),
+    strategy: str = typer.Option(
+        "best", "--strategy",
+        help="Routing: best, cheapest, fastest, best-for-task",
+    ),
     continue_: bool = typer.Option(False, "-c", "--continue", help="Continue last conversation"),
-    conversation: str | None = typer.Option(None, "--conversation", help="Continue a specific conversation"),
+    conversation: str | None = typer.Option(
+        None, "--conversation",
+        help="Continue a specific conversation",
+    ),
     profile: str | None = typer.Option(None, "--profile", help="Config profile to use"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show routing details"),
     quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress metadata"),
-    privacy: bool = typer.Option(False, "--privacy", help="Privacy mode: disable logging, caching, and conversation persistence"),
+    privacy: bool = typer.Option(
+        False, "--privacy",
+        help="Privacy mode: disable logging, caching,"
+        " and conversation persistence",
+    ),
     template: str | None = typer.Option(None, "--template", help="Prompt template name to use"),
-    var: list[str] | None = typer.Option(None, "--var", help="Template variable as key=value (repeatable)"),
-    file: str | None = typer.Option(None, "-f", "--file", help="Include a file's contents in the prompt"),
+    var: list[str] | None = typer.Option(
+        None, "--var",
+        help="Template variable as key=value (repeatable)",
+    ),
+    file: str | None = typer.Option(
+        None, "-f", "--file",
+        help="Include a file's contents in the prompt",
+    ),
     output_json: bool = typer.Option(False, "--json", help="Shorthand for --output json"),
-    output_raw: bool = typer.Option(False, "--raw", help="Shorthand for --output raw (no metadata, just the answer)"),
-    knowledge: bool = typer.Option(False, "--knowledge", "-k", help="Augment prompt with your knowledge base (RAG)"),
-    prefer_nvidia: bool = typer.Option(False, "--prefer-nvidia", help="Bias routing toward NVIDIA providers (ollama/Nemotron, NIM, Triton)"),
+    output_raw: bool = typer.Option(
+        False, "--raw",
+        help="Shorthand for --output raw"
+        " (no metadata, just the answer)",
+    ),
+    knowledge: bool = typer.Option(
+        False, "--knowledge", "-k",
+        help="Augment prompt with your knowledge base (RAG)",
+    ),
+    prefer_nvidia: bool = typer.Option(
+        False, "--prefer-nvidia",
+        help="Bias routing toward NVIDIA providers"
+        " (ollama/Nemotron, NIM, Triton)",
+    ),
 ):
     """Ask a single LLM advisor a question."""
     # Apply shorthand output flags
@@ -433,7 +634,8 @@ def ask(
             else:
                 console.print(f"[red]Error: --var '{item}' must be in key=value format.[/red]")
                 raise typer.Exit(1)
-        # If a positional prompt was given, use it as the primary variable if no explicit var mapping
+        # If a positional prompt was given, use it as the
+        # primary variable if no explicit var mapping
         if prompt and "text" not in template_vars and "code" not in template_vars:
             template_vars.setdefault("text", prompt)
             template_vars.setdefault("code", prompt)
@@ -462,7 +664,10 @@ def ask(
     # Read from stdin if no prompt provided
     stdin_content = _read_stdin()
     if not prompt and not stdin_content and not file_content:
-        console.print("[red]Error: No prompt provided. Pass a prompt or pipe input via stdin.[/red]")
+        console.print(
+            "[red]Error: No prompt provided."
+            " Pass a prompt or pipe input via stdin.[/red]"
+        )
         raise typer.Exit(1)
 
     full_prompt = ""
@@ -485,7 +690,10 @@ def ask(
             if not quiet:
                 console.print("[dim][knowledge base context injected][/dim]")
         else:
-            console.print("[dim][knowledge base: no relevant documents found — run 'nvh learn <file>' to add some][/dim]")
+            console.print(
+                "[dim][knowledge base: no relevant documents"
+                " found — run 'nvh learn <file>' to add some][/dim]"
+            )
 
     async def _run_query():
         from nvh.config.settings import load_config
@@ -504,14 +712,25 @@ def ask(
         if verbose:
             from nvh.core.router import classify_task
             classification = classify_task(full_prompt)
-            console.print(f"[dim]Task type: {classification.task_type.value} (confidence: {classification.confidence:.2f})[/dim]")
+            console.print(
+                f"[dim]Task type: {classification.task_type.value}"
+                f" (confidence: {classification.confidence:.2f})[/dim]"
+            )
 
         if stream and output == "text":
             # Stream the response
-            decision = engine.router.route(full_prompt, provider_override=provider, model_override=model, strategy=strategy)
+            decision = engine.router.route(
+                full_prompt,
+                provider_override=provider,
+                model_override=model,
+                strategy=strategy,
+            )
 
             if verbose:
-                console.print(f"[dim]Routed to: {decision.provider}/{decision.model} ({decision.reason})[/dim]")
+                console.print(
+                    f"[dim]Routed to: {decision.provider}"
+                    f"/{decision.model} ({decision.reason})[/dim]"
+                )
 
             prov = engine.registry.get(decision.provider)
             pconfig = config.providers.get(decision.provider)
@@ -544,13 +763,16 @@ def ask(
                         console.print()  # newline
                         parts = [f"Provider: {decision.provider}", f"Model: {pmodel}"]
                         if chunk.usage:
-                            parts.append(f"Tokens: {chunk.usage.input_tokens} in / {chunk.usage.output_tokens} out")
+                            parts.append(
+                                f"Tokens: {chunk.usage.input_tokens}"
+                                f" in / {chunk.usage.output_tokens} out"
+                            )
                         if chunk.cost_usd:
                             parts.append(f"Cost: ${chunk.cost_usd:.4f}")
                         parts.append(f"Latency: {elapsed}ms")
                         console.print(f"\n[dim]{' | '.join(parts)}[/dim]")
             except Exception as e:
-                console.print(f"\n[red]Error: {e}[/red]")
+                console.print(f"\n{_format_cli_error(e)}")
                 raise typer.Exit(1)
         else:
             # Non-streaming
@@ -572,7 +794,7 @@ def ask(
                 _format_output(resp.content, output)
                 _print_metadata(resp, show=not quiet)
             except Exception as e:
-                console.print(f"[red]Error: {e}[/red]")
+                console.print(_format_cli_error(e))
                 raise typer.Exit(1)
 
     _run(_run_query())
@@ -659,7 +881,7 @@ def code(
                 f"Cost: ${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]"
             )
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
 
     _run(_run_code())
 
@@ -720,7 +942,7 @@ def write(
                 f"Cost: ${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]"
             )
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
 
     _run(_run_write())
 
@@ -798,7 +1020,7 @@ def research(
                 for label, resp in result.member_responses.items():
                     console.print(Panel(resp.content, title=label, border_style="blue"))
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
 
     _run(_run_research())
 
@@ -869,7 +1091,7 @@ def math(
                 f"Cost: ${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]"
             )
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
 
     _run(_run_math())
 
@@ -935,7 +1157,10 @@ def _write_clipboard(text: str) -> None:
 
 
 _CLIP_ACTIONS = {
-    "ask": "Answer any questions about the following content, or describe it if no question is obvious:",
+    "ask": (
+        "Answer any questions about the following content,"
+        " or describe it if no question is obvious:"
+    ),
     "explain": "Explain the following clearly and concisely:",
     "fix": (
         "Fix any bugs, errors, or issues in the following code. "
@@ -965,7 +1190,10 @@ def clip(
     """
     valid_actions = list(_CLIP_ACTIONS.keys())
     if action not in valid_actions:
-        console.print(f"[red]Unknown action '{action}'. Choose from: {', '.join(valid_actions)}[/red]")
+        console.print(
+            f"[red]Unknown action '{action}'."
+            f" Choose from: {', '.join(valid_actions)}[/red]"
+        )
         raise typer.Exit(1)
 
     try:
@@ -1014,7 +1242,7 @@ def clip(
                 except RuntimeError as e:
                     console.print(f"[yellow]Could not copy to clipboard: {e}[/yellow]")
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
 
     _run(_run_clip())
 
@@ -1027,20 +1255,46 @@ def clip(
 def convene_cmd(
     prompt: str = typer.Argument(..., help="The prompt to send to the hive"),
     members: str | None = typer.Option(None, "--members", help="Comma-separated advisor list"),
-    weights: str | None = typer.Option(None, "--weights", help="Advisor weights, e.g. openai=0.4,anthropic=0.6"),
-    strategy: str | None = typer.Option(None, "--strategy", help="Consensus: weighted_consensus, majority_vote, best_of"),
+    weights: str | None = typer.Option(
+        None, "--weights",
+        help="Advisor weights, e.g. openai=0.4,anthropic=0.6",
+    ),
+    strategy: str | None = typer.Option(
+        None, "--strategy",
+        help="Consensus: weighted_consensus, majority_vote, best_of",
+    ),
     system: str | None = typer.Option(None, "-s", "--system", help="System prompt"),
     output: str = typer.Option("text", "-o", "--output", help="Output format: text, json, table"),
     max_tokens: int | None = typer.Option(None, "--max-tokens"),
     temperature: float | None = typer.Option(None, "-t", "--temperature"),
-    no_synthesize: bool = typer.Option(False, "--no-synthesize", help="Skip synthesis, show raw responses"),
-    auto_agents: bool = typer.Option(False, "--auto-agents", "-a", help="Auto-generate expert personas based on query content"),
-    preset: str | None = typer.Option(None, "--cabinet", help="Agent cabinet: executive, engineering, security_review, code_review, product, data, full_board"),
-    num_agents: int | None = typer.Option(None, "--num-agents", "-n", help="Number of agent personas to generate"),
+    no_synthesize: bool = typer.Option(
+        False, "--no-synthesize",
+        help="Skip synthesis, show raw responses",
+    ),
+    auto_agents: bool = typer.Option(
+        False, "--auto-agents", "-a",
+        help="Auto-generate expert personas based on query content",
+    ),
+    preset: str | None = typer.Option(
+        None, "--cabinet",
+        help="Agent cabinet: executive, engineering,"
+        " security_review, code_review, product, data, full_board",
+    ),
+    num_agents: int | None = typer.Option(
+        None, "--num-agents", "-n",
+        help="Number of agent personas to generate",
+    ),
     profile: str | None = typer.Option(None, "--profile"),
     quiet: bool = typer.Option(False, "-q", "--quiet"),
-    privacy: bool = typer.Option(False, "--privacy", help="Privacy mode: disable logging, caching, and conversation persistence"),
-    output_raw: bool = typer.Option(False, "--raw", help="Output just the synthesis text, no panels"),
+    privacy: bool = typer.Option(
+        False, "--privacy",
+        help="Privacy mode: disable logging, caching,"
+        " and conversation persistence",
+    ),
+    output_raw: bool = typer.Option(
+        False, "--raw",
+        help="Output just the synthesis text, no panels",
+    ),
 ):
     """Convene a hive session — query multiple LLMs and synthesize consensus.
 
@@ -1074,14 +1328,25 @@ def convene_cmd(
             if preset:
                 personas = get_preset_agents(preset, prompt)
             else:
-                personas = generate_agents(prompt, num_agents=num_agents or len(member_list or engine.registry.list_enabled()))
+                personas = generate_agents(
+                    prompt,
+                    num_agents=num_agents or len(
+                        member_list or engine.registry.list_enabled()
+                    ),
+                )
 
             console.print("[bold]Hive Mode[/bold] — auto-generated expert advisors:\n")
             for p in personas:
                 console.print(f"  [bold cyan]{p.role}[/bold cyan] — {p.expertise}")
             console.print()
         else:
-            console.print(f"[bold]Hive Mode[/bold] — querying {len(member_list or engine.registry.list_enabled())} advisors...\n")
+            member_count = len(
+                member_list or engine.registry.list_enabled()
+            )
+            console.print(
+                f"[bold]Hive Mode[/bold] — querying"
+                f" {member_count} advisors...\n"
+            )
 
         try:
             result = await engine.run_council(
@@ -1099,7 +1364,7 @@ def convene_cmd(
                 privacy=privacy,
             )
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
             raise typer.Exit(1)
 
         if output_raw:
@@ -1115,7 +1380,12 @@ def convene_cmd(
             import json
             data = {
                 "member_responses": {
-                    p: {"content": r.content, "model": r.model, "cost_usd": str(r.cost_usd), "latency_ms": r.latency_ms}
+                    p: {
+                        "content": r.content,
+                        "model": r.model,
+                        "cost_usd": str(r.cost_usd),
+                        "latency_ms": r.latency_ms,
+                    }
                     for p, r in result.member_responses.items()
                 },
                 "synthesis": {
@@ -1142,16 +1412,29 @@ def convene_cmd(
                     break
 
             if persona:
-                header = f"{persona} ({resp.provider}) [weight: {weight:.0%}]  {resp.latency_ms}ms  ${resp.cost_usd:.4f}"
+                header = (
+                    f"{persona} ({resp.provider})"
+                    f" [weight: {weight:.0%}]"
+                    f"  {resp.latency_ms}ms"
+                    f"  ${resp.cost_usd:.4f}"
+                )
                 console.print(Panel(resp.content, title=header, border_style="blue"))
             else:
-                header = f"{label} [weight: {weight:.0%}]  {resp.latency_ms}ms  ${resp.cost_usd:.4f}"
+                header = (
+                    f"{label} [weight: {weight:.0%}]"
+                    f"  {resp.latency_ms}ms"
+                    f"  ${resp.cost_usd:.4f}"
+                )
                 console.print(Panel(resp.content, title=header, border_style="blue"))
 
         # Display failures
         for label, error in result.failed_members.items():
             if label != "_synthesis":
-                console.print(Panel(f"[red]{error}[/red]", title=f"{label} (FAILED)", border_style="red"))
+                console.print(Panel(
+                    f"[red]{error}[/red]",
+                    title=f"{label} (FAILED)",
+                    border_style="red",
+                ))
 
         # Display synthesis
         if result.synthesis:
@@ -1213,13 +1496,18 @@ def poll(
                 max_tokens=max_tokens,
             )
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
             raise typer.Exit(1)
 
         if output == "json":
             import json
             data = {
-                p: {"content": r.content, "model": r.model, "cost_usd": str(r.cost_usd), "latency_ms": r.latency_ms}
+                p: {
+                    "content": r.content,
+                    "model": r.model,
+                    "cost_usd": str(r.cost_usd),
+                    "latency_ms": r.latency_ms,
+                }
                 for p, r in results.items()
             }
             console.print_json(json.dumps(data, indent=2))
@@ -1542,7 +1830,10 @@ def throwdown(
     num_agents: int | None = typer.Option(None, "-n", "--num-agents", help="Number of agents"),
     profile: str | None = typer.Option(None, "--profile"),
     quiet: bool = typer.Option(False, "-q", "--quiet"),
-    quick: bool = typer.Option(False, "--quick", help="Single pass instead of two (cheaper throwdown)"),
+    quick: bool = typer.Option(
+        False, "--quick",
+        help="Single pass instead of two (cheaper throwdown)",
+    ),
 ):
     """Throwdown mode — two-pass deep analysis with all advisors and agents.
 
@@ -1652,8 +1943,10 @@ def throwdown(
             final_prompt = (
                 f"Original question: {prompt}\n\n"
                 f"Pass 1 analysis:\n{pass1.synthesis.content if pass1.synthesis else ''}\n\n"
-                f"Pass 2 critique and refinement:\n{pass2.synthesis.content if pass2.synthesis else ''}\n\n"
-                f"Produce a definitive final answer that integrates the best insights from both passes. "
+                "Pass 2 critique and refinement:\n"
+                f"{pass2.synthesis.content if pass2.synthesis else ''}\n\n"
+                "Produce a definitive final answer that"
+                " integrates the best insights from both passes. "
                 f"Be concise, actionable, and highlight the key decision points."
             )
 
@@ -1668,8 +1961,16 @@ def throwdown(
                 console.print(f"[red]Final synthesis failed: {e}[/red]")
 
             # Stats
-            total_cost = pass1.total_cost_usd + pass2.total_cost_usd + (final.cost_usd if final else 0)
-            total_time = pass1.total_latency_ms + pass2.total_latency_ms + (final.latency_ms if final else 0)
+            total_cost = (
+                pass1.total_cost_usd
+                + pass2.total_cost_usd
+                + (final.cost_usd if final else 0)
+            )
+            total_time = (
+                pass1.total_latency_ms
+                + pass2.total_latency_ms
+                + (final.latency_ms if final else 0)
+            )
             console.print(f"\n[dim]Throwdown complete | Total cost: ${total_cost:.4f} | "
                          f"Total time: {total_time}ms | "
                          f"Agents used: {', '.join(pass1.agents_used)}[/dim]")
@@ -1704,7 +2005,10 @@ def status():
             if gpus:
                 gpu_parts = []
                 for g in gpus:
-                    gpu_parts.append(f"{g.name} ({g.vram_gb:.0f} GB) — {g.utilization_pct}% utilized")
+                    gpu_parts.append(
+                        f"{g.name} ({g.vram_gb:.0f} GB)"
+                        f" — {g.utilization_pct}% utilized"
+                    )
                 gpu_line = " | ".join(gpu_parts)
             else:
                 gpu_line = "no NVIDIA GPU detected (CPU mode)"
@@ -1765,8 +2069,16 @@ def status():
             monthly_spend = budget_data["monthly_spend"]
             monthly_limit = budget_data["monthly_limit"]
 
-            daily_str = f"${daily_spend:.2f} / ${daily_limit:.2f} daily" if daily_limit > 0 else f"${daily_spend:.2f} spent today"
-            monthly_str = f"${monthly_spend:.2f} / ${monthly_limit:.2f} monthly" if monthly_limit > 0 else f"${monthly_spend:.2f} spent this month"
+            daily_str = (
+                f"${daily_spend:.2f} / ${daily_limit:.2f} daily"
+                if daily_limit > 0
+                else f"${daily_spend:.2f} spent today"
+            )
+            monthly_str = (
+                f"${monthly_spend:.2f} / ${monthly_limit:.2f} monthly"
+                if monthly_limit > 0
+                else f"${monthly_spend:.2f} spent this month"
+            )
             console.print(f"[bold]Budget:[/bold]   {daily_str} | {monthly_str}")
 
             # Savings: queries handled by local (Ollama) vs cloud
@@ -1774,15 +2086,26 @@ def status():
             monthly_queries = budget_data.get("monthly_queries", 0)
             if monthly_queries > 0 and local_queries > 0:
                 # Rough savings estimate: average cloud query cost * local query count
-                avg_cloud_cost = float(monthly_spend) / max(monthly_queries - local_queries, 1) if monthly_queries > local_queries else 0.002
+                avg_cloud_cost = (
+                    float(monthly_spend)
+                    / max(monthly_queries - local_queries, 1)
+                    if monthly_queries > local_queries
+                    else 0.002
+                )
                 saved_usd = avg_cloud_cost * local_queries
-                console.print(f"[bold]Savings:[/bold]  ${saved_usd:.2f} saved this month ({local_queries} local queries)")
+                console.print(
+                    f"[bold]Savings:[/bold]  ${saved_usd:.2f}"
+                    f" saved this month ({local_queries} local queries)"
+                )
         except Exception:
             console.print("[bold]Budget:[/bold]   unavailable")
 
         # Default mode
         default_mode = getattr(config.defaults, "mode", "ask")
-        console.print(f"[bold]Mode:[/bold]     {default_mode} (default) — change with: nvh config set defaults.mode convene")
+        console.print(
+            f"[bold]Mode:[/bold]     {default_mode} (default)"
+            " — change with: nvh config set defaults.mode convene"
+        )
 
         console.print(Rule(style="dim"))
 
@@ -1834,7 +2157,7 @@ def quick(
             # Raw output — no metadata
             print(resp.content, end="")
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
             raise typer.Exit(1)
 
     _run(_run_quick())
@@ -1996,9 +2319,15 @@ def safe(
                 print(resp.content, end="")
             else:
                 console.print(resp.content)
-                console.print(f"\n[dim]{resp.model} (local) | {resp.usage.total_tokens} tokens | FREE | {resp.latency_ms}ms | [green]no data transmitted[/green][/dim]")
+                console.print(
+                    f"\n[dim]{resp.model} (local)"
+                    f" | {resp.usage.total_tokens} tokens"
+                    " | FREE"
+                    f" | {resp.latency_ms}ms"
+                    " | [green]no data transmitted[/green][/dim]"
+                )
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(_format_cli_error(e))
             raise typer.Exit(1)
 
     _run(_run_safe())
@@ -2054,8 +2383,16 @@ EMAIL_SIGNUP = [
 ]
 
 ACCOUNT_SIGNUP = [
-    ("google", "Google Gemini", "https://aistudio.google.com/apikey", "Google account, 15 RPM free"),
-    ("github", "GitHub Models", "https://github.com/settings/tokens", "GitHub account, GPT-4o free"),
+    (
+        "google", "Google Gemini",
+        "https://aistudio.google.com/apikey",
+        "Google account, 15 RPM free",
+    ),
+    (
+        "github", "GitHub Models",
+        "https://github.com/settings/tokens",
+        "GitHub account, GPT-4o free",
+    ),
     ("nvidia", "NVIDIA NIM", "https://build.nvidia.com/", "NVIDIA Dev account, 1000 credits"),
     ("mistral", "Mistral", "https://console.mistral.ai/api-keys", "Phone verify, 2 RPM free"),
 ]
@@ -2064,7 +2401,10 @@ ACCOUNT_SIGNUP = [
 @app.command()
 def setup(
     email: str | None = typer.Option(None, "--email", "-e", help="Your email for provider signups"),
-    all_providers: bool = typer.Option(False, "--all", help="Set up ALL free providers (opens many browser tabs)"),
+    all_providers: bool = typer.Option(
+        False, "--all",
+        help="Set up ALL free providers (opens many browser tabs)",
+    ),
     skip_eula: bool = typer.Option(False, "--accept-terms", help="Accept terms without prompting"),
 ):
     """One-shot setup — configure all free AI providers at once.
@@ -2082,7 +2422,11 @@ def setup(
     """
     # Step 1: EULA
     if not skip_eula:
-        console.print(Panel(EULA_TEXT, title="[bold]NVHive — Terms of Use[/bold]", border_style="green"))
+        console.print(Panel(
+            EULA_TEXT,
+            title="[bold]NVHive — Terms of Use[/bold]",
+            border_style="green",
+        ))
         if not typer.confirm("\nDo you agree to these terms?", default=True):
             console.print("[dim]Setup cancelled.[/dim]")
             raise typer.Exit()
@@ -2117,26 +2461,44 @@ def setup(
     console.print()
 
     # Step 3: Zero-signup providers (auto-enable)
-    console.print("[bold green]Step 1/3: Zero-signup providers[/bold green] (enabled immediately)\n")
+    console.print(
+        "[bold green]Step 1/3: Zero-signup providers"
+        "[/bold green] (enabled immediately)\n"
+    )
+    import os as _os
+    _ollama_url = _os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
     for name, display, desc in ZERO_SIGNUP:
         if name == "ollama":
             try:
                 import httpx
-                resp = httpx.get("http://localhost:11434/api/tags", timeout=3)
+                resp = httpx.get(f"{_ollama_url}/api/tags", timeout=3)
                 if resp.status_code == 200:
                     models = resp.json().get("models", [])
-                    console.print(f"  [green]✓[/green] {display} — {desc} ({len(models)} models ready)")
+                    console.print(
+                        f"  [green]✓[/green] {display}"
+                        f" — {desc} ({len(models)} models ready)"
+                    )
+                    if _ollama_url != "http://localhost:11434":
+                        console.print(f"    [dim]Using custom URL: {_ollama_url}[/dim]")
                 else:
-                    console.print(f"  [yellow]![/yellow] {display} — not running. Start with: ollama serve")
+                    console.print(
+                        f"  [yellow]![/yellow] {display}"
+                        " — not running. Start with: ollama serve"
+                    )
             except Exception:
-                console.print(f"  [yellow]![/yellow] {display} — not detected. Install: curl -fsSL https://ollama.com/install.sh | sh")
+                console.print(f"  [yellow]![/yellow] {display} — not detected at {_ollama_url}")
+                console.print("    Install: curl -fsSL https://ollama.com/install.sh | sh")
+                console.print("    Custom URL: export OLLAMA_BASE_URL=http://host:port")
         else:
             console.print(f"  [green]✓[/green] {display} — {desc}")
 
     console.print()
 
     # Step 4: Email-signup providers
-    console.print("[bold green]Step 2/3: Email-signup providers[/bold green] (free, just need a key)\n")
+    console.print(
+        "[bold green]Step 2/3: Email-signup providers"
+        "[/bold green] (free, just need a key)\n"
+    )
 
     providers_to_setup = EMAIL_SIGNUP if not all_providers else EMAIL_SIGNUP + ACCOUNT_SIGNUP
     configured = 0
@@ -2181,22 +2543,98 @@ def setup(
         console.print(f"  Opening: [link={signup_url}]{signup_url}[/link]")
         webbrowser.open(signup_url)
 
-        key = typer.prompt(f"  Paste your {display} API key (or Enter to skip)", default="", hide_input=True)
+        key = typer.prompt(
+            f"  Paste your {display} API key (or Enter to skip)",
+            default="", hide_input=True,
+        )
         if key:
+            key = key.strip()
+            # Validate key format (basic sanity check)
+            if len(key) < 10:
+                console.print(
+                    f"  [red]✗ Key looks too short ({len(key)} chars)."
+                    " Skipping — double-check and re-run nvh setup.[/red]"
+                )
+                skipped += 1
+                continue
+
+            # Quick connectivity test
+            _key_valid = False
+            with console.status(f"  Testing {display} key..."):
+                try:
+                    import httpx
+                    _test_urls = {
+                        "groq": "https://api.groq.com/openai/v1/models",
+                        "cerebras": "https://api.cerebras.ai/v1/models",
+                        "fireworks": "https://api.fireworks.ai/inference/v1/models",
+                        "cohere": "https://api.cohere.ai/v1/models",
+                        "google": "https://generativelanguage.googleapis.com/v1/models",
+                        "github": "https://models.inference.ai.azure.com/models",
+                        "mistral": "https://api.mistral.ai/v1/models",
+                    }
+                    _test_url = _test_urls.get(name)
+                    if _test_url:
+                        _headers = {"Authorization": f"Bearer {key}"}
+                        if name == "google":
+                            # Google uses query param
+                            _test_url += f"?key={key}"
+                            _headers = {}
+                        _resp = httpx.get(_test_url, headers=_headers, timeout=8)
+                        if _resp.status_code in (200, 201):
+                            _key_valid = True
+                        elif _resp.status_code in (401, 403):
+                            console.print(
+                                f"  [red]✗ Key rejected by {display}"
+                                f" (HTTP {_resp.status_code})."
+                                " Check the key and try again.[/red]"
+                            )
+                            skipped += 1
+                            continue
+                        else:
+                            # Non-auth error — key might still be fine, store it
+                            _key_valid = True
+                    else:
+                        # No test URL for this provider — trust the key
+                        _key_valid = True
+                except Exception:
+                    # Network error — can't validate, store anyway
+                    _key_valid = True
+
+            # Store the key
             try:
                 import keyring
                 keyring.set_password("nvhive", f"{name}_api_key", key)
-                console.print(f"  [green]✓ {display} configured![/green]")
+                if _key_valid:
+                    console.print(f"  [green]✓ {display} configured and verified![/green]")
+                else:
+                    console.print(
+                        f"  [green]✓ {display} key stored[/green]"
+                        " [dim](could not verify — will test on first use)[/dim]"
+                    )
                 configured += 1
             except Exception:
-                console.print(f"  [yellow]Keychain unavailable. Set {name.upper()}_API_KEY in your environment.[/yellow]")
+                # Keyring unavailable — give specific fallback guidance
+                _env_var = f"{name.upper()}_API_KEY"
+                console.print(f"  [yellow]Keychain unavailable. To use {display}:[/yellow]")
+                console.print(
+                    f"    Option 1: export {_env_var}={key[:4]}..."
+                    "  (add to ~/.bashrc or ~/.zshrc)"
+                )
+                console.print(
+                    "    Option 2: Add to ~/.hive/config.yaml"
+                    f" under providers.{name}.api_key"
+                )
+                skipped += 1
         else:
             console.print(f"  [dim]Skipped {display}[/dim]")
             skipped += 1
 
     # Step 5: Account-signup providers (if not already covered by --all)
     if not all_providers and ACCOUNT_SIGNUP:
-        console.print("\n[bold green]Step 3/3: Account-based providers[/bold green] (need existing account)\n")
+        console.print(
+            "\n[bold green]Step 3/3: Account-based providers"
+            "[/bold green] (need existing account)\n"
+        )
         for name, display, url, desc in ACCOUNT_SIGNUP:
             has_key = False
             try:
@@ -2232,10 +2670,14 @@ def setup(
     total_free = len(ZERO_SIGNUP) + configured
     console.print("\n[bold green]Setup complete![/bold green]")
     console.print(f"  {total_free} free advisors ready, {skipped} skipped")
-    console.print("\n  Try it: [bold]nvh \"What is the meaning of life?\"[/bold]")
-    console.print("  Or just: [bold]nvh[/bold] (launches interactive chat)")
+    console.print()
+    console.print("  [bold]Next steps:[/bold]")
+    console.print("    Verify everything works:  [bold]nvh test --quick[/bold]")
+    console.print("    Try a query:              [bold]nvh \"What is the meaning of life?\"[/bold]")
+    console.print("    Launch interactive chat:   [bold]nvh[/bold]")
+    console.print("    Start the web dashboard:   [bold]nvh webui[/bold]")
     if skipped > 0:
-        console.print("  Set up more later: [bold]nvh setup --all[/bold]")
+        console.print(f"    Set up {skipped} more providers: [bold]nvh setup --all[/bold]")
     console.print()
 
 
@@ -2297,20 +2739,26 @@ def config_init(
                     keyring.set_password("nvhive", f"{name}_api_key", key)
                     console.print("  [green]Key stored securely in keychain[/green]")
                 except Exception:
-                    console.print("  [yellow]Keychain unavailable. Key will be read from env var.[/yellow]")
+                    console.print(
+                        "  [yellow]Keychain unavailable."
+                        " Key will be read from env var.[/yellow]"
+                    )
                 providers_to_enable.append(name)
 
-    # Check for Ollama
-    console.print("\nChecking for local Ollama...")
+    # Check for Ollama (supports OLLAMA_BASE_URL env var)
+    import os as _os_cfg
+    _ollama_cfg_url = _os_cfg.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    console.print(f"\nChecking for local Ollama at {_ollama_cfg_url}...")
     try:
         import httpx
-        resp = httpx.get("http://localhost:11434/api/tags", timeout=3)
+        resp = httpx.get(f"{_ollama_cfg_url}/api/tags", timeout=3)
         if resp.status_code == 200:
             models = resp.json().get("models", [])
             console.print(f"  [green]Ollama detected! {len(models)} models available.[/green]")
             providers_to_enable.append("ollama")
     except Exception:
         console.print("  [dim]Ollama not detected (not running or not installed)[/dim]")
+        console.print("  [dim]Custom URL: export OLLAMA_BASE_URL=http://host:port[/dim]")
 
     # Update config to enable selected providers
     for name in providers_to_enable:
@@ -2322,7 +2770,11 @@ def config_init(
             "    type: ollama\n    enabled: true",
         ) if name == "ollama" else config_content.replace(
             f"  {name}:\n    api_key: ${{{name.upper()}_API_KEY}}\n    default_model:",
-            f"  {name}:\n    enabled: true\n    api_key: ${{{name.upper()}_API_KEY}}\n    default_model:",
+            (
+                f"  {name}:\n    enabled: true\n"
+                f"    api_key: ${{{name.upper()}_API_KEY}}\n"
+                "    default_model:"
+            ),
         )
 
     # Set default provider
@@ -2332,12 +2784,17 @@ def config_init(
 
     DEFAULT_CONFIG_PATH.write_text(config_content)
     console.print(f"\n[green]Config written to {DEFAULT_CONFIG_PATH}[/green]")
-    console.print(f"Default advisor: [bold]{providers_to_enable[0] if providers_to_enable else 'none'}[/bold]")
+    default_adv = providers_to_enable[0] if providers_to_enable else "none"
+    console.print(f"Default advisor: [bold]{default_adv}[/bold]")
     console.print("\nRun [bold]hive ask \"Hello, world!\"[/bold] to test your setup!")
 
 
 @config_app.command("get")
-def config_get(key: str = typer.Argument(..., help="Config key (dot notation, e.g. defaults.provider)")):
+def config_get(
+    key: str = typer.Argument(
+        ..., help="Config key (dot notation, e.g. defaults.provider)"
+    ),
+):
     """Get a configuration value."""
     from nvh.config.settings import load_config
     config = load_config()
@@ -2402,7 +2859,10 @@ def config_edit():
 
 @config_app.command("export")
 def config_export(
-    output: str | None = typer.Option(None, "--output", "-o", help="Output file path (default: stdout)"),
+    output: str | None = typer.Option(
+        None, "--output", "-o",
+        help="Output file path (default: stdout)",
+    ),
 ):
     """Export the current config with API keys masked.
 
@@ -2704,7 +3164,10 @@ def advisor_list():
         has_key = bool(pconfig.api_key and not pconfig.api_key.startswith("${"))
         if not has_key:
             import os
-            has_key = bool(os.environ.get(f"{name.upper()}_API_KEY") or os.environ.get(f"HIVE_{name.upper()}_API_KEY"))
+            has_key = bool(
+                os.environ.get(f"{name.upper()}_API_KEY")
+                or os.environ.get(f"HIVE_{name.upper()}_API_KEY")
+            )
         if not has_key:
             try:
                 import keyring
@@ -2741,13 +3204,21 @@ def advisor_info(
 
     # Header
     console.print(f"\n[bold]{profile.display_name}[/bold]")
-    console.print(f"Cost tier: {profile.cost_tier} | Free tier: {'Yes' if profile.has_free_tier else 'No'}")
+    free_label = "Yes" if profile.has_free_tier else "No"
+    console.print(
+        f"Cost tier: {profile.cost_tier}"
+        f" | Free tier: {free_label}"
+    )
     if profile.free_tier_limits:
         console.print(f"[green]{profile.free_tier_limits}[/green]")
 
     # Scores
-    console.print(f"\n[dim]Quality: {profile.quality_weight:.0%} | Speed: {profile.speed_weight:.0%} | "
-                 f"Cost efficiency: {profile.cost_weight:.0%} | Reliability: {profile.reliability_weight:.0%}[/dim]")
+    console.print(
+        f"\n[dim]Quality: {profile.quality_weight:.0%}"
+        f" | Speed: {profile.speed_weight:.0%}"
+        f" | Cost efficiency: {profile.cost_weight:.0%}"
+        f" | Reliability: {profile.reliability_weight:.0%}[/dim]"
+    )
 
     # Special capabilities
     caps = []
@@ -2801,7 +3272,11 @@ def advisor_add(
         keyring.set_password("nvhive", f"{name}_api_key", key)
         console.print(f"[green]API key for {name} stored in keychain.[/green]")
     except Exception:
-        console.print(f"[yellow]Keychain unavailable. Set {name.upper()}_API_KEY environment variable instead.[/yellow]")
+        console.print(
+            f"[yellow]Keychain unavailable."
+            f" Set {name.upper()}_API_KEY environment"
+            " variable instead.[/yellow]"
+        )
 
 
 @advisor_app.command("remove")
@@ -2884,7 +3359,10 @@ def advisor_login(
         cli_tools = {"google": "gcloud", "aws": "aws", "azure": "az"}
         tool = cli_tools.get(name)
         if tool and shutil.which(tool):
-            console.print(f"[green]Detected {tool} CLI. You can authenticate via: [bold]{tool} auth login[/bold][/green]")
+            console.print(
+                f"[green]Detected {tool} CLI."
+                f" You can authenticate via: [bold]{tool} auth login[/bold][/green]"
+            )
             console.print("Or paste an API key manually below.")
 
     url = urls.get(name, "")
@@ -2949,7 +3427,11 @@ def budget_status():
         table.add_column("Limit", justify="right")
 
         daily_limit = f"${status['daily_limit']:.2f}" if status['daily_limit'] > 0 else "unlimited"
-        monthly_limit = f"${status['monthly_limit']:.2f}" if status['monthly_limit'] > 0 else "unlimited"
+        monthly_limit = (
+            f"${status['monthly_limit']:.2f}"
+            if status['monthly_limit'] > 0
+            else "unlimited"
+        )
 
         table.add_row("Daily spend", f"${status['daily_spend']:.4f}", daily_limit)
         table.add_row("Monthly spend", f"${status['monthly_spend']:.4f}", monthly_limit)
@@ -3001,22 +3483,40 @@ def savings():
 
         if local_q == 0:
             lines.append("[yellow]No local model queries recorded yet.[/yellow]")
-            lines.append("Run queries with a local model (Ollama, LM Studio, etc.) to start saving.")
+            lines.append(
+                "Run queries with a local model"
+                " (Ollama, LM Studio, etc.) to start saving."
+            )
         else:
-            lines.append(f"[bold green]Money saved this month:[/bold green]       [bold]${saved:.2f}[/bold]")
+            lines.append(
+                f"[bold green]Money saved this month:[/bold green]"
+                f"       [bold]${saved:.2f}[/bold]"
+            )
             lines.append(f"[dim]If you'd used cloud for everything:   ${hypothetical:.2f}[/dim]")
             lines.append(f"[dim]Your actual cloud spend:              ${actual_spend:.2f}[/dim]")
-            lines.append(f"[bold]Savings percentage:[/bold]               [bold cyan]{pct:.1f}%[/bold cyan]")
+            lines.append(
+                "[bold]Savings percentage:[/bold]"
+                f"               [bold cyan]{pct:.1f}%[/bold cyan]"
+            )
             lines.append("")
             if pct >= 80:
-                lines.append("[bold green]Outstanding.[/bold green] You're running almost everything locally. "
-                             "Every dollar counts — keep it up!")
+                lines.append(
+                    "[bold green]Outstanding.[/bold green]"
+                    " You're running almost everything locally. "
+                    "Every dollar counts — keep it up!"
+                )
             elif pct >= 50:
-                lines.append("[green]Great work.[/green] Over half your queries run free on local hardware. "
-                             "You're making your budget go further.")
+                lines.append(
+                    "[green]Great work.[/green]"
+                    " Over half your queries run free"
+                    " on local hardware. "
+                    "You're making your budget go further."
+                )
             elif pct >= 20:
                 lines.append("[yellow]Good start.[/yellow] You're saving real money. "
-                             "Try routing more queries to local models to stretch your budget further.")
+                             "Try routing more queries to"
+                             " local models to stretch your"
+                             " budget further.")
             else:
                 lines.append("[dim]Tip:[/dim] Point more queries at a local model "
                              "(Ollama, LM Studio) to dramatically cut your costs.")
@@ -3069,7 +3569,10 @@ def list_plugins():
 
 @app.command()
 def bench(
-    model: str | None = typer.Option(None, "-m", "--model", help="Model to benchmark (default: current local model)"),
+    model: str | None = typer.Option(
+        None, "-m", "--model",
+        help="Model to benchmark (default: current local model)",
+    ),
     quick_mode: bool = typer.Option(False, "--quick", help="Run only 2 tests instead of 4"),
     all_models: bool = typer.Option(False, "--all", help="Benchmark all loaded local models"),
 ):
@@ -3203,15 +3706,27 @@ def bench(
 
             if baseline:
                 baseline_label, baseline_tps = baseline
-                console.print(f"Community average for {baseline_label}: ~{baseline_tps} tok/s [dim](7B Q4_K_M)[/dim]")
+                console.print(
+                    f"Community average for {baseline_label}:"
+                    f" ~{baseline_tps} tok/s [dim](7B Q4_K_M)[/dim]"
+                )
                 # Note if the model is larger than the baseline 7B
                 model_short = bench_model.split(":")[0]
-                is_larger = any(x in model_short for x in ["70b", "34b", "22b", "13b", "small", "medium", "large"])
-                size_note = f" ({model_short} is larger than the baseline 7B model)" if is_larger else ""
+                is_larger = any(
+                    x in model_short
+                    for x in ["70b", "34b", "22b", "13b",
+                              "small", "medium", "large"]
+                )
+                size_note = (
+                    f" ({model_short} is larger than"
+                    " the baseline 7B model)"
+                    if is_larger else ""
+                )
                 console.print(f"Your result: [bold cyan]{avg_tps:.1f} tok/s[/bold cyan]{size_note}")
                 console.print()
 
-                # Star rating: ratio of result vs baseline (adjusted: larger models expected to be slower)
+                # Star rating: ratio of result vs baseline
+                # (adjusted: larger models expected to be slower)
                 ratio = avg_tps / baseline_tps
                 if ratio >= 1.2:
                     stars, label = 5, "Outstanding"
@@ -3227,7 +3742,10 @@ def bench(
                 star_str = "⭐" * stars + "☆" * (5 - stars)
                 console.print(f"Rating: {star_str} [bold]{label}[/bold] for this model size")
             else:
-                console.print(f"[bold cyan]Result: {avg_tps:.1f} tok/s[/bold cyan] [dim](no community baseline for this GPU)[/dim]")
+                console.print(
+                    f"[bold cyan]Result: {avg_tps:.1f} tok/s[/bold cyan]"
+                    " [dim](no community baseline for this GPU)[/dim]"
+                )
 
             console.print()
 
@@ -3346,7 +3864,10 @@ def repl(
     provider: str | None = typer.Option(None, "-p", "--advisor", help="Starting advisor"),
     model: str | None = typer.Option(None, "-m", "--model", help="Starting model"),
     council_mode: bool = typer.Option(False, "--convene", help="Start in hive mode"),
-    auto_agents: bool = typer.Option(False, "-a", "--auto-agents", help="Enable auto-agent generation"),
+    auto_agents: bool = typer.Option(
+        False, "-a", "--auto-agents",
+        help="Enable auto-agent generation",
+    ),
     preset: str | None = typer.Option(None, "--cabinet", help="Agent cabinet to use"),
     system: str | None = typer.Option(None, "-s", "--system", help="System prompt"),
     profile: str | None = typer.Option(None, "--profile", help="Config profile"),
@@ -3469,7 +3990,10 @@ def webhook_add(
 
     # Check for duplicate URL
     if any(wh.url == url for wh in config.webhooks):
-        console.print(f"[yellow]Webhook with URL '{url}' already exists. Updating events/secret.[/yellow]")
+        console.print(
+            f"[yellow]Webhook with URL '{url}'"
+            " already exists. Updating events/secret.[/yellow]"
+        )
         config.webhooks = [wh if wh.url != url else new_wh for wh in config.webhooks]
     else:
         config.webhooks.append(new_wh)
@@ -3511,12 +4035,20 @@ def auth_create_user(
         effective_role = "admin" if count == 0 else role
 
         try:
-            user = await create_user(username=username, password=password, role=effective_role, email=email)
+            user = await create_user(
+                username=username,
+                password=password,
+                role=effective_role,
+                email=email,
+            )
         except ValueError as exc:
             console.print(f"[red]Error: {exc}[/red]")
             raise typer.Exit(1)
 
-        console.print(f"[green]User created:[/green] {user.username} (role: {user.role}, id: {user.id})")
+        console.print(
+            f"[green]User created:[/green] {user.username}"
+            f" (role: {user.role}, id: {user.id})"
+        )
         if count == 0:
             console.print("[yellow]First user automatically granted admin role.[/yellow]")
 
@@ -3549,7 +4081,10 @@ def auth_create_token(
             scopes=scopes,
         )
 
-        console.print(f"\n[green]API token created:[/green] {token_record.name} (id: {token_record.id})")
+        console.print(
+            f"\n[green]API token created:[/green]"
+            f" {token_record.name} (id: {token_record.id})"
+        )
         console.print("\n[bold yellow]Token (shown once — copy now):[/bold yellow]")
         console.print(f"\n  {raw_token}\n")
         console.print("[dim]Use this token as: Authorization: Bearer <token>[/dim]")
@@ -3635,7 +4170,10 @@ def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
     port: int = typer.Option(8000, "--port", help="Port number"),
     reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev mode)"),
-    daemon: bool = typer.Option(False, "--daemon", help="Install as system service (auto-start on boot)"),
+    daemon: bool = typer.Option(
+        False, "--daemon",
+        help="Install as system service (auto-start on boot)",
+    ),
 ):
     """Start the REST API server.
 
@@ -3684,7 +4222,10 @@ def service(
     if action == "status":
         running, msg = service_status()
         if running:
-            console.print(f"  [green]✓[/green] nvHive proxy service: [bold green]{msg}[/bold green]")
+            console.print(
+                f"  [green]✓[/green] nvHive proxy service:"
+                f" [bold green]{msg}[/bold green]"
+            )
         else:
             console.print(f"  [yellow]○[/yellow] nvHive proxy service: [bold]{msg}[/bold]")
             if msg == "Not installed":
@@ -3695,7 +4236,11 @@ def service(
         import sys as _sys
         if _sys.platform == "darwin":
             subprocess.run(["launchctl", "unload",
-                           str(Path.home() / "Library" / "LaunchAgents" / "com.nvhive.proxy.plist")],
+                           str(
+                               Path.home() / "Library"
+                               / "LaunchAgents"
+                               / "com.nvhive.proxy.plist"
+                           )],
                           capture_output=True)
         else:
             subprocess.run(["systemctl", "--user", "stop", "nvhive-proxy"], capture_output=True)
@@ -3717,9 +4262,198 @@ def service(
 # hive integrate — auto-detect and configure all platforms
 # ---------------------------------------------------------------------------
 
+
+@app.command()
+def migrate(
+    source: str = typer.Option(
+        "auto", "--from",
+        help="Source to migrate from: auto, openclaw, claw-code",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Show what would be imported without making changes",
+    ),
+):
+    """Migrate to nvHive from OpenClaw, Claw Code, or other AI tools.
+
+    Detects existing configurations and imports API keys, provider
+    settings, and MCP configurations so you're up and running fast.
+
+    Especially useful for OpenClaw users affected by the new API billing
+    — nvHive routes across 23 providers (25 free) so you're never locked
+    into one provider's pricing.
+
+    Examples:
+        nvh migrate                     # auto-detect and import
+        nvh migrate --from openclaw     # import from OpenClaw
+        nvh migrate --dry-run           # preview without changes
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    console.print("[bold]nvHive Migration Tool[/bold]\n")
+
+    found_sources: list[dict] = []
+
+    # --- Detect OpenClaw ---
+    openclaw_paths = [
+        _Path.home() / ".openclaw" / "config.json",
+        _Path.home() / ".config" / "openclaw" / "config.json",
+        _Path("openclaw.json"),
+    ]
+    for p in openclaw_paths:
+        if p.exists():
+            found_sources.append({"type": "openclaw", "path": p})
+            break
+
+    # --- Detect Claw Code ---
+    claw_paths = [
+        _Path.home() / ".claw" / "config.json",
+        _Path.home() / ".config" / "claw-code" / "settings.json",
+    ]
+    for p in claw_paths:
+        if p.exists():
+            found_sources.append({"type": "claw-code", "path": p})
+            break
+
+    # --- Detect Claude Code MCP configs ---
+    claude_mcp = _Path.home() / ".claude" / "claude_desktop_config.json"
+    if claude_mcp.exists():
+        found_sources.append({"type": "claude-desktop", "path": claude_mcp})
+
+    # --- Detect environment variables from other tools ---
+    env_keys: dict[str, str] = {}
+    _key_map = {
+        "OPENAI_API_KEY": "openai",
+        "ANTHROPIC_API_KEY": "anthropic",
+        "GROQ_API_KEY": "groq",
+        "GOOGLE_API_KEY": "google",
+        "GITHUB_TOKEN": "github",
+        "MISTRAL_API_KEY": "mistral",
+        "COHERE_API_KEY": "cohere",
+        "XAI_API_KEY": "grok",
+        "DEEPSEEK_API_KEY": "deepseek",
+        "FIREWORKS_API_KEY": "fireworks",
+        "TOGETHER_API_KEY": "together",
+    }
+    for env_var, provider_name in _key_map.items():
+        val = os.environ.get(env_var, "")
+        if val:
+            env_keys[provider_name] = env_var
+
+    if source != "auto":
+        found_sources = [s for s in found_sources if s["type"] == source]
+
+    # Report findings
+    if not found_sources and not env_keys:
+        console.print("[yellow]No existing AI tool configurations found.[/yellow]\n")
+        console.print("  nvHive checked for: OpenClaw, Claw Code, Claude Desktop configs")
+        console.print("  and common API key environment variables.\n")
+        console.print("  Get started from scratch: [bold]nvh setup[/bold]")
+        return
+
+    # Show what was found
+    console.print("[green]Found the following:[/green]\n")
+
+    if found_sources:
+        for src in found_sources:
+            console.print(f"  Config: [bold]{src['type']}[/bold] at {src['path']}")
+
+    if env_keys:
+        console.print(
+            "  API keys in environment:"
+            f" [bold]{', '.join(sorted(env_keys.keys()))}[/bold]"
+        )
+
+    console.print()
+
+    if dry_run:
+        console.print("[dim]Dry run — no changes made.[/dim]")
+        return
+
+    # Import from found configs
+    imported = 0
+
+    for src in found_sources:
+        try:
+            config_data = _json.loads(src["path"].read_text())
+        except Exception as e:
+            console.print(f"  [yellow]Could not read {src['path']}: {e}[/yellow]")
+            continue
+
+        if src["type"] in ("openclaw", "claw-code"):
+            # Extract MCP server configs
+            mcp_servers = config_data.get("mcpServers", {})
+            if mcp_servers:
+                console.print(f"  Found {len(mcp_servers)} MCP server(s) in {src['type']} config")
+
+            # Extract API keys
+            providers = config_data.get("providers", config_data.get("apiKeys", {}))
+            for pname, pdata in providers.items():
+                key = (
+                    pdata if isinstance(pdata, str)
+                    else pdata.get("api_key", pdata.get("apiKey", ""))
+                )
+                if key:
+                    try:
+                        import keyring
+                        keyring.set_password("nvhive", f"{pname}_api_key", key)
+                        console.print(f"  [green]✓[/green] Imported {pname} API key")
+                        imported += 1
+                    except Exception:
+                        console.print(
+                            f"  [yellow]![/yellow] {pname}:"
+                            f" set {pname.upper()}_API_KEY"
+                            " in your environment"
+                        )
+
+    # Register environment keys
+    if env_keys:
+        for provider_name, env_var in env_keys.items():
+            try:
+                import keyring
+                existing = keyring.get_password("nvhive", f"{provider_name}_api_key")
+                if existing:
+                    console.print(
+                        f"  [dim]Skipped {provider_name}"
+                        " — already configured in nvHive[/dim]"
+                    )
+                else:
+                    key = os.environ[env_var]
+                    keyring.set_password("nvhive", f"{provider_name}_api_key", key)
+                    console.print(f"  [green]✓[/green] Imported {provider_name} from ${env_var}")
+                    imported += 1
+            except Exception:
+                console.print(
+                    f"  [green]✓[/green] {provider_name}"
+                    f" available via ${env_var}"
+                    " (will use env var directly)"
+                )
+                imported += 1
+
+    console.print(
+        f"\n[bold green]Migration complete![/bold green]"
+        f" {imported} provider(s) imported.\n"
+    )
+    console.print("  [bold]Next steps:[/bold]")
+    console.print("    Verify:    [bold]nvh test --quick[/bold]")
+    console.print("    Try it:    [bold]nvh \"Hello from nvHive!\"[/bold]")
+    console.print("    Dashboard: [bold]nvh webui[/bold]")
+    console.print()
+    console.print(
+        "  [dim]nvHive routes across 23 providers (25 free)"
+        " — no more single-provider lock-in.[/dim]"
+    )
+
+
+# ---------------------------------------------------------------------------
+
 @app.command()
 def integrate(
-    auto: bool = typer.Option(False, "--auto", "-y", help="Auto-configure all detected platforms without prompting"),
+    auto: bool = typer.Option(
+        False, "--auto", "-y",
+        help="Auto-configure all detected platforms without prompting",
+    ),
     scan_only: bool = typer.Option(False, "--scan", help="Just scan — don't configure anything"),
 ):
     """Auto-detect and configure nvHive with all installed AI platforms.
@@ -3776,7 +4510,11 @@ def integrate(
         integ_table.add_column("Then run")
         integ_table.add_row("NemoClaw", "pip install nemoclaw", "nvh nemoclaw")
         integ_table.add_row("OpenClaw", "pip install openclaw", "nvh openclaw")
-        integ_table.add_row("Claude Code", "npm i -g @anthropic/claude-code", "nvh integrate --auto")
+        integ_table.add_row(
+            "Claude Code",
+            "npm i -g @anthropic/claude-code",
+            "nvh integrate --auto",
+        )
         integ_table.add_row("Cursor", "https://cursor.com", "nvh integrate --auto")
         console.print(integ_table)
         console.print()
@@ -3785,7 +4523,11 @@ def integrate(
         return
 
     for p in detected:
-        status = "[green]✓ configured[/green]" if p.already_configured else "[yellow]○ not configured[/yellow]"
+        status = (
+            "[green]✓ configured[/green]"
+            if p.already_configured
+            else "[yellow]○ not configured[/yellow]"
+        )
         console.print(f"  [green]✓[/green] [bold]{p.display_name}[/bold] — {status}")
         console.print(f"    [dim]{p.detection_method}[/dim]")
         if p.integration_type == "mcp":
@@ -3849,8 +4591,16 @@ def integrate(
         console.print(f"  [bold green]{registered} platform(s) configured![/bold green]")
 
         # Check if any MCP platforms were configured
-        mcp_platforms = [p for p in to_configure if p.integration_type == "mcp" and not p.already_configured]
-        proxy_platforms = [p for p in to_configure if p.integration_type == "inference" and not p.already_configured]
+        mcp_platforms = [
+            p for p in to_configure
+            if p.integration_type == "mcp"
+            and not p.already_configured
+        ]
+        proxy_platforms = [
+            p for p in to_configure
+            if p.integration_type == "inference"
+            and not p.already_configured
+        ]
 
         if mcp_platforms:
             console.print()
@@ -3907,7 +4657,10 @@ def openclaw(
                 url = f"http://localhost:{port}/mcp"
                 console.print(f"  Testing [bold]{url}[/bold] ...")
                 httpx.get(url, timeout=5)
-                console.print("  [green]✓[/green] MCP HTTP server is [bold green]reachable[/bold green]")
+                console.print(
+                    "  [green]✓[/green] MCP HTTP server is"
+                    " [bold green]reachable[/bold green]"
+                )
             except Exception as e:
                 console.print(f"  [red]✗[/red] Cannot reach MCP server at port {port}")
                 console.print(f"  Error: {e}")
@@ -3918,7 +4671,10 @@ def openclaw(
             try:
                 from nvh.mcp_server import create_server
                 create_server()
-                console.print("  [green]✓[/green] MCP server module loads [bold green]OK[/bold green]")
+                console.print(
+                    "  [green]✓[/green] MCP server module"
+                    " loads [bold green]OK[/bold green]"
+                )
                 console.print("  [green]✓[/green] nvhive-mcp entry point available")
             except ImportError:
                 console.print("  [red]✗[/red] MCP SDK not installed")
@@ -4013,7 +4769,10 @@ def openclaw(
     tool_table.add_row("ask", "Smart-routed LLM query", "Ask any question across 22 providers")
     tool_table.add_row("ask_safe", "Local-only query", "Privacy-sensitive queries via Ollama")
     tool_table.add_row("council", "Multi-model consensus", "Get 3-5 LLMs to debate and synthesize")
-    tool_table.add_row("throwdown", "Two-pass deep analysis", "Complex questions with critique loop")
+    tool_table.add_row(
+        "throwdown", "Two-pass deep analysis",
+        "Complex questions with critique loop",
+    )
     tool_table.add_row("status", "System status", "Check providers, GPU, budget")
     tool_table.add_row("list_advisors", "Available providers", "See which LLMs are configured")
     tool_table.add_row("list_cabinets", "Agent presets", "Browse expert persona groups")
@@ -4062,7 +4821,10 @@ def openclaw(
     console.print("  [bold]nvh openclaw --test[/bold]     Test MCP server availability")
     console.print("  [bold]nvh openclaw --start[/bold]    Start MCP server manually")
     console.print("  [bold]nvh openclaw --config[/bold]   Generate openclaw.json")
-    console.print("  [bold]nvh openclaw --http[/bold]     Use HTTP transport (with --start or --test)")
+    console.print(
+        "  [bold]nvh openclaw --http[/bold]"
+        "     Use HTTP transport (with --start or --test)"
+    )
     console.print()
 
 
@@ -4072,7 +4834,10 @@ def openclaw(
 
 @app.command()
 def mcp(
-    transport: str = typer.Option("stdio", "--transport", "-t", help="Transport: stdio or streamable-http"),
+    transport: str = typer.Option(
+        "stdio", "--transport", "-t",
+        help="Transport: stdio or streamable-http",
+    ),
     port: int = typer.Option(8080, "--port", help="Port for HTTP transport"),
 ):
     """Start the MCP (Model Context Protocol) server.
@@ -4166,8 +4931,14 @@ def nemoclaw(
             if resp.status_code == 200:
                 data = resp.json()
                 console.print("  [green]✓[/green] NVHive proxy is [bold green]healthy[/bold green]")
-                console.print(f"  [green]✓[/green] Engine initialized: {data.get('engine_initialized', '?')}")
-                console.print(f"  [green]✓[/green] Providers enabled: {data.get('providers_enabled', '?')}")
+                console.print(
+                    "  [green]✓[/green] Engine initialized:"
+                    f" {data.get('engine_initialized', '?')}"
+                )
+                console.print(
+                    "  [green]✓[/green] Providers enabled:"
+                    f" {data.get('providers_enabled', '?')}"
+                )
                 providers = data.get("providers", [])
                 if providers:
                     console.print(f"  [green]✓[/green] Available: {', '.join(providers)}")
@@ -4215,7 +4986,10 @@ def nemoclaw(
         console.print(Rule("NemoClaw MCP Tool Server"))
         console.print()
         console.print("  Give NemoClaw agents direct access to nvHive tools like")
-        console.print("  [bold]council[/bold] and [bold]throwdown[/bold] — in addition to inference routing.")
+        console.print(
+            "  [bold]council[/bold] and [bold]throwdown[/bold]"
+            " — in addition to inference routing."
+        )
         console.print()
         console.print("  [bold]Step 1:[/bold] Install MCP support")
         console.print('  [dim]$[/dim] pip install "nvhive[mcp]"')
@@ -4247,7 +5021,10 @@ def nemoclaw(
         console.print("  [dim]Why both inference + MCP?[/dim]")
         console.print("  [dim]Inference: every agent call auto-routes to the best model.[/dim]")
         console.print("  [dim]MCP tools: agent can explicitly request council consensus[/dim]")
-        console.print("  [dim]or throwdown analysis when a decision needs multiple perspectives.[/dim]")
+        console.print(
+            "  [dim]or throwdown analysis when a decision"
+            " needs multiple perspectives.[/dim]"
+        )
         console.print()
         return
 
@@ -4274,12 +5051,21 @@ def nemoclaw(
     model_table.add_column("Mode")
     model_table.add_column("Description")
 
-    model_table.add_row("auto", "Smart routing", "Best available provider based on query type, cost, and speed")
+    model_table.add_row(
+        "auto", "Smart routing",
+        "Best available provider based on query type, cost, and speed",
+    )
     model_table.add_row("safe", "Local only", "Routes to Ollama — nothing leaves your machine")
     model_table.add_row("council", "Consensus", "3-model council with synthesis (default)")
     model_table.add_row("council:N", "Consensus", "N-model council (2-10 members)")
-    model_table.add_row("throwdown", "Deep analysis", "Two-pass analysis with critique and refinement")
-    model_table.add_row("<model-id>", "Direct", "Route to a specific model (gpt-4o, claude-sonnet-4, etc.)")
+    model_table.add_row(
+        "throwdown", "Deep analysis",
+        "Two-pass analysis with critique and refinement",
+    )
+    model_table.add_row(
+        "<model-id>", "Direct",
+        "Route to a specific model (gpt-4o, claude-sonnet-4, etc.)",
+    )
 
     console.print(model_table)
     console.print()
@@ -4331,7 +5117,11 @@ def nemoclaw(
 def _print_openshell_commands(host: str, port: int):
     """Print the openshell provider create command."""
     # Use host.openshell.internal for sandbox-to-host communication
-    endpoint_host = "host.openshell.internal" if host in ("127.0.0.1", "0.0.0.0", "localhost") else host
+    endpoint_host = (
+        "host.openshell.internal"
+        if host in ("127.0.0.1", "0.0.0.0", "localhost")
+        else host
+    )
     console.print("  [dim]$[/dim] openshell provider create \\")
     console.print("      --name nvhive \\")
     console.print("      --type openai \\")
@@ -4364,17 +5154,41 @@ def keys(
     """
     free_providers = [
         ("Groq", "https://console.groq.com/keys", "30 req/min free — FASTEST inference", "groq"),
-        ("GitHub Models", "https://github.com/settings/tokens", "Free GPT-4o — just need a GitHub account", "github"),
-        ("Google Gemini", "https://aistudio.google.com/apikey", "15 req/min free — 1M token context", "google"),
-        ("Cerebras", "https://cloud.cerebras.ai/", "30 req/min free — wafer-scale speed", "cerebras"),
+        (
+            "GitHub Models", "https://github.com/settings/tokens",
+            "Free GPT-4o — just need a GitHub account", "github",
+        ),
+        (
+            "Google Gemini", "https://aistudio.google.com/apikey",
+            "15 req/min free — 1M token context", "google",
+        ),
+        (
+            "Cerebras", "https://cloud.cerebras.ai/",
+            "30 req/min free — wafer-scale speed", "cerebras",
+        ),
         ("NVIDIA NIM", "https://build.nvidia.com/", "1000 free credits — 100+ models", "nvidia"),
-        ("SiliconFlow", "https://cloud.siliconflow.cn/", "1000 req/min free — best rate limits", "siliconflow"),
+        (
+            "SiliconFlow", "https://cloud.siliconflow.cn/",
+            "1000 req/min free — best rate limits", "siliconflow",
+        ),
         ("Fireworks AI", "https://fireworks.ai/", "10 req/min free", "fireworks"),
-        ("Mistral", "https://console.mistral.ai/api-keys", "2 req/min free — multilingual", "mistral"),
-        ("SambaNova", "https://cloud.sambanova.ai/", "200K tokens/day free — Llama 405B", "sambanova"),
-        ("Hugging Face", "https://huggingface.co/settings/tokens", "Free inference API", "huggingface"),
+        (
+            "Mistral", "https://console.mistral.ai/api-keys",
+            "2 req/min free — multilingual", "mistral",
+        ),
+        (
+            "SambaNova", "https://cloud.sambanova.ai/",
+            "200K tokens/day free — Llama 405B", "sambanova",
+        ),
+        (
+            "Hugging Face", "https://huggingface.co/settings/tokens",
+            "Free inference API", "huggingface",
+        ),
         ("AI21 Labs", "https://studio.ai21.com/", "$10 free credit — 256K context", "ai21"),
-        ("Cohere", "https://dashboard.cohere.com/api-keys", "1K calls/month free — RAG specialist", "cohere"),
+        (
+            "Cohere", "https://dashboard.cohere.com/api-keys",
+            "1K calls/month free — RAG specialist", "cohere",
+        ),
     ]
 
     console.print("\n[bold]Free AI Provider Signup Links[/bold]")
@@ -4437,7 +5251,10 @@ def update():
             console.print(f"[red]Update failed: {e}[/red]")
     else:
         console.print("[dim]Not installed from git. Reinstall with:[/dim]")
-        console.print("curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash")
+        console.print(
+            "curl -sSL https://raw.githubusercontent.com"
+            "/thatcooperguy/nvHive/main/install.sh | bash"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -4468,7 +5285,12 @@ def webui(
     # Find the web directory
     web_dir = None
     candidates = [
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "web"),
+        os.path.join(
+            os.path.dirname(os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))
+            )),
+            "web",
+        ),
         os.path.expanduser("~/nvh/repo/web"),
         os.path.join(os.getcwd(), "web"),
     ]
@@ -4592,9 +5414,15 @@ def webui(
 
 @app.command()
 def debug(
-    output: str | None = typer.Option(None, "-o", "--output", help="Save to file instead of printing"),
+    output: str | None = typer.Option(
+        None, "-o", "--output",
+        help="Save to file instead of printing",
+    ),
     send: bool = typer.Option(False, "--send", help="Copy to clipboard for sharing"),
-    nvidia_report: bool = typer.Option(False, "--nvidia-report", help="Also run nvidia-bug-report.sh for NVIDIA support"),
+    nvidia_report: bool = typer.Option(
+        False, "--nvidia-report",
+        help="Also run nvidia-bug-report.sh for NVIDIA support",
+    ),
 ):
     """Full diagnostic dump — captures everything needed to troubleshoot issues.
 
@@ -4660,7 +5488,11 @@ def debug(
         if cloud.is_cloud_session:
             log(f"  Tier:        {cloud.tier}")
             log(f"  GPU class:   {cloud.gpu_class}")
-            log(f"  Session ID:  {cloud.session_id[:12]}..." if cloud.session_id else "  Session ID:  none")
+            log(
+                f"  Session ID:  {cloud.session_id[:12]}..."
+                if cloud.session_id
+                else "  Session ID:  none"
+            )
             log(f"  Storage:     {cloud.persistent_storage}")
     except Exception as e:
         log(f"  Error: {e}")
@@ -4694,7 +5526,9 @@ def debug(
     log("\n[DRIVERS & DEPENDENCIES]")
     try:
         # NVIDIA driver
-        result = subprocess.run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version",
+             "--format=csv,noheader"],
                                 capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
             log(f"  NVIDIA driver: {result.stdout.strip()}")
@@ -4832,7 +5666,11 @@ def debug(
                 pass
             if not key:
                 key = os.environ.get(f"{name.upper()}_API_KEY", "")
-            status = f"set ({key[:4]}...{key[-4:]})" if len(key) > 8 else ("set" if key else "not set")
+            status = (
+                f"set ({key[:4]}...{key[-4:]})"
+                if len(key) > 8
+                else ("set" if key else "not set")
+            )
             log(f"  {name:15s} {status}")
     except Exception as e:
         log(f"  Keyring error: {e}")
@@ -4944,7 +5782,9 @@ def debug(
 
     # --- NVIDIA Bug Report (only when issues detected or --nvidia-report) ---
     gpu_issues = any("NOT FOUND" in ln or "UNREACHABLE" in ln or "not found" in ln.lower()
-                     for ln in lines if "[GPU]" in "".join(lines[:lines.index(ln)+1]) or "NVIDIA" in ln)
+                     for ln in lines
+                     if "[GPU]" in "".join(lines[:lines.index(ln)+1])
+                     or "NVIDIA" in ln)
 
     if nvidia_report or gpu_issues:
         log("\n[NVIDIA BUG REPORT]")
@@ -5015,7 +5855,10 @@ def test(
     api_url: str = typer.Option("http://localhost:8000", "--api", help="API server URL"),
     webui_url: str = typer.Option("http://localhost:3000", "--webui", help="WebUI URL"),
     skip_webui: bool = typer.Option(False, "--no-webui", help="Skip WebUI tests"),
-    skip_providers: bool = typer.Option(False, "--no-providers", help="Skip provider health checks"),
+    skip_providers: bool = typer.Option(
+        False, "--no-providers",
+        help="Skip provider health checks",
+    ),
     fix: bool = typer.Option(False, "--fix", help="Attempt to fix issues found"),
 ):
     """Run end-to-end smoke tests on your nvHive installation.
@@ -5076,7 +5919,10 @@ def test(
     console.print(Rule("Summary"))
     console.print()
     if report.failed == 0:
-        console.print(f"  [bold green]All {report.total} tests passed[/bold green] in {report.total_ms}ms")
+        console.print(
+            f"  [bold green]All {report.total} tests passed"
+            f"[/bold green] in {report.total_ms}ms"
+        )
     else:
         console.print(
             f"  [bold]{report.passed}[/bold] passed, "
@@ -5090,13 +5936,22 @@ def test(
         for r in report.results:
             if not r.passed:
                 if "not reachable" in r.error.lower() and "serve" in r.error:
-                    console.print(f"  [yellow]![/yellow] {r.name}: Start API with [bold]nvh serve[/bold]")
+                    console.print(
+                        f"  [yellow]![/yellow] {r.name}:"
+                        " Start API with [bold]nvh serve[/bold]"
+                    )
                 elif "not reachable" in r.error.lower() and "webui" in r.error:
-                    console.print(f"  [yellow]![/yellow] {r.name}: Start WebUI with [bold]nvh webui[/bold]")
+                    console.print(
+                        f"  [yellow]![/yellow] {r.name}:"
+                        " Start WebUI with [bold]nvh webui[/bold]"
+                    )
                 elif "pip install" in r.error:
                     console.print(f"  [yellow]![/yellow] {r.name}: Run [bold]{r.error}[/bold]")
                 elif "unhealthy" in r.error or "rate" in r.error.lower():
-                    console.print(f"  [yellow]![/yellow] {r.name}: Provider issue — check API key or quota")
+                    console.print(
+                        f"  [yellow]![/yellow] {r.name}:"
+                        " Provider issue — check API key or quota"
+                    )
                 else:
                     console.print(f"  [yellow]![/yellow] {r.name}: {r.error[:80]}")
 
@@ -5234,7 +6089,11 @@ def doctor():
                             timeout=10,
                         )
                         health_ok = health.healthy
-                        detail = f"{health.latency_ms}ms" if health_ok else (health.error or "failed")
+                        detail = (
+                            f"{health.latency_ms}ms"
+                            if health_ok
+                            else (health.error or "failed")
+                        )
                     else:
                         detail = "not registered (check API key)"
                 except Exception as e:
@@ -5275,7 +6134,12 @@ def doctor():
         else:
             _warn("Ollama", f"HTTP {resp.status_code}", "Start Ollama: `ollama serve`")
     except Exception:
-        _warn("Ollama", "not reachable at localhost:11434", "Install from https://ollama.ai or start with `ollama serve`")
+        _warn(
+            "Ollama",
+            "not reachable at localhost:11434",
+            "Install from https://ollama.ai"
+            " or start with `ollama serve`",
+        )
 
     # 7. Cache status
     if config is not None:
@@ -5287,7 +6151,11 @@ def doctor():
             if config.cache.enabled:
                 _pass("Cache", cache_detail)
             else:
-                _warn("Cache", "disabled in config", "Set cache.enabled: true in config to improve performance.")
+                _warn(
+                    "Cache", "disabled in config",
+                    "Set cache.enabled: true in config"
+                    " to improve performance.",
+                )
         except Exception as e:
             _warn("Cache", str(e))
 
@@ -5345,7 +6213,13 @@ def doctor():
             tier_label = cloud.tier.capitalize() if cloud.tier else "Unknown"
             _pass(
                 "Linux Desktop",
-                f"{tier_label} tier — {cloud.gpu_class}" + (f" | Session: {cloud.session_id[:8]}..." if cloud.session_id else ""),
+                (
+                    f"{tier_label} tier — {cloud.gpu_class}"
+                    + (
+                        f" | Session: {cloud.session_id[:8]}..."
+                        if cloud.session_id else ""
+                    )
+                ),
             )
         else:
             _pass("Linux Desktop", "not detected (local / native)")
@@ -5354,7 +6228,11 @@ def doctor():
 
     # 10. Local models from Ollama
     if ollama_models:
-        _pass("Ollama local models", ", ".join(ollama_models[:5]) + (" ..." if len(ollama_models) > 5 else ""))
+        _pass(
+            "Ollama local models",
+            ", ".join(ollama_models[:5])
+            + (" ..." if len(ollama_models) > 5 else ""),
+        )
     else:
         _warn(
             "Ollama local models",
@@ -5389,7 +6267,11 @@ def doctor():
 
         # GPU accessibility (separate from nvidia-smi check above)
         if env_info.gpu_accessible:
-            _pass("Environment: GPU accessible", f"{env_info.gpu_count} GPU(s) accessible from this process")
+            _pass(
+                "Environment: GPU accessible",
+                f"{env_info.gpu_count} GPU(s) accessible"
+                " from this process",
+            )
         elif env_info.has_gpu:
             _warn(
                 "Environment: GPU accessible",
@@ -5682,7 +6564,12 @@ def workflow_run(
 
 
     def on_step(step_name: str, status: str, result: str) -> None:
-        icons = {"running": "[yellow]...[/yellow]", "done": "[green]OK[/green]", "skipped": "[dim]SKIP[/dim]", "error": "[red]ERR[/red]"}
+        icons = {
+            "running": "[yellow]...[/yellow]",
+            "done": "[green]OK[/green]",
+            "skipped": "[dim]SKIP[/dim]",
+            "error": "[red]ERR[/red]",
+        }
         icon = icons.get(status, status)
         if status == "running":
             console.print(f"  {icon} {step_name}")
@@ -5706,7 +6593,10 @@ def workflow_run(
 
         console.print()
         if result.success:
-            console.print(f"[green]Workflow complete.[/green] ({result.steps_completed}/{result.steps_total} steps)")
+            console.print(
+                f"[green]Workflow complete.[/green]"
+                f" ({result.steps_completed}/{result.steps_total} steps)"
+            )
             # Print the final saved variable (last save_as), if any
             last_step = next(
                 (s for s in reversed(wf.steps) if s.save_as),
@@ -5752,7 +6642,10 @@ def workflow_show(
             "ask": "cyan", "convene": "magenta", "poll": "yellow",
             "safe": "green", "shell": "red",
         }.get(step.action, "white")
-        console.print(f"\n  [bold]{i}. {step.name}[/bold]  [{action_style}]{step.action}[/{action_style}]")
+        console.print(
+            f"\n  [bold]{i}. {step.name}[/bold]"
+            f"  [{action_style}]{step.action}[/{action_style}]"
+        )
         if step.advisor:
             console.print(f"     advisor: {step.advisor}")
         if step.cabinet:
@@ -5826,8 +6719,14 @@ def do_task(
     advisor: str | None = typer.Option(None, "-a", "--advisor", help="Specific advisor to use"),
     model: str | None = typer.Option(None, "-m", "--model", help="Specific model to use"),
     max_steps: int = typer.Option(15, "--max-steps", help="Maximum agent iterations"),
-    auto: bool = typer.Option(True, "--auto/--confirm", help="Auto-approve safe tools (default: yes)"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done without executing"),
+    auto: bool = typer.Option(
+        True, "--auto/--confirm",
+        help="Auto-approve safe tools (default: yes)",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Show what would be done without executing",
+    ),
     profile: str | None = typer.Option(None, "--profile", help="Config profile to use"),
 ):
     """Hands-free mode — give NVHive a task and it completes it autonomously.
@@ -5875,7 +6774,11 @@ def do_task(
             # Show routing decision
             effective_advisor = advisor or config.defaults.provider or "(auto-selected)"
             effective_model = model or "(provider default)"
-            console.print(f"[bold]Routing:[/bold]  advisor=[cyan]{effective_advisor}[/cyan]  model=[cyan]{effective_model}[/cyan]")
+            console.print(
+                f"[bold]Routing:[/bold]"
+                f"  advisor=[cyan]{effective_advisor}[/cyan]"
+                f"  model=[cyan]{effective_model}[/cyan]"
+            )
             console.print(f"[bold]Max steps:[/bold] {max_steps}")
             console.print(f"[bold]Auto-approve safe tools:[/bold] {'yes' if auto else 'no'}")
             console.print()
@@ -5886,15 +6789,27 @@ def do_task(
             unsafe_tools = [t.name for t in tool_list if not t.safe]
             console.print(f"[bold]Available tools ({len(tool_list)} total):[/bold]")
             console.print(f"  [green]Safe (auto-run):[/green] {', '.join(safe_tools) or 'none'}")
-            console.print(f"  [yellow]Unsafe (require approval):[/yellow] {', '.join(unsafe_tools) or 'none'}")
+            console.print(
+                "  [yellow]Unsafe (require approval):[/yellow]"
+                f" {', '.join(unsafe_tools) or 'none'}"
+            )
             console.print()
 
             # Show spending cap
             budget = config.budget
-            console.print(f"[bold]Spending caps:[/bold]  daily=${budget.daily_limit_usd}  monthly=${budget.monthly_limit_usd}  hard_stop={'yes' if budget.hard_stop else 'no'}")
+            hard = "yes" if budget.hard_stop else "no"
+            console.print(
+                f"[bold]Spending caps:[/bold]"
+                f"  daily=${budget.daily_limit_usd}"
+                f"  monthly=${budget.monthly_limit_usd}"
+                f"  hard_stop={hard}"
+            )
             console.print()
 
-            console.print("[bold yellow]Dry run complete. Remove --dry-run to execute.[/bold yellow]")
+            console.print(
+                "[bold yellow]Dry run complete."
+                " Remove --dry-run to execute.[/bold yellow]"
+            )
             return
 
         start = _time.monotonic()
@@ -5925,7 +6840,11 @@ def do_task(
             for result in step.tool_results:
                 if result.success:
                     preview = result.output[:60].replace("\n", " ").rstrip()
-                    console.print(f"  [green]✓[/green] [dim]{preview}{'...' if len(result.output) > 60 else ''}[/dim]")
+                    suffix = "..." if len(result.output) > 60 else ""
+                    console.print(
+                        f"  [green]✓[/green]"
+                        f" [dim]{preview}{suffix}[/dim]"
+                    )
                 else:
                     console.print(f"  [red]✗[/red] [dim]{result.error}[/dim]")
             if not step.tool_calls:
@@ -6059,7 +6978,10 @@ def voice(
                 if audio_out:
                     await play_audio(audio_out)
                 else:
-                    console.print("[yellow]TTS produced no output — is edge-tts installed?[/yellow]")
+                    console.print(
+                        "[yellow]TTS produced no output"
+                        " — is edge-tts installed?[/yellow]"
+                    )
                     console.print("[dim]Install: pip install edge-tts[/dim]")
             except Exception as e:
                 console.print(f"[yellow]TTS failed (answer shown above): {e}[/yellow]")
@@ -6074,8 +6996,14 @@ def voice(
 @app.command()
 def imagine(
     prompt: str = typer.Argument(..., help="Text description of the image to generate"),
-    output: str = typer.Option("", "-o", "--output", help="Output path for the image (default: auto temp file)"),
-    provider: str = typer.Option("auto", "--provider", help="Provider: auto, openai, stability, pollinations"),
+    output: str = typer.Option(
+        "", "-o", "--output",
+        help="Output path for the image (default: auto temp file)",
+    ),
+    provider: str = typer.Option(
+        "auto", "--provider",
+        help="Provider: auto, openai, stability, pollinations",
+    ),
     size: str = typer.Option("1024x1024", "--size", help="Image dimensions, e.g. 1024x1024"),
     no_open: bool = typer.Option(False, "--no-open", help="Don't open the image after generation"),
 ):
@@ -6126,8 +7054,15 @@ def screenshot(
     advisor: str | None = typer.Option(None, "-a", "--advisor", help="Advisor to use for analysis"),
     model: str | None = typer.Option(None, "-m", "--model", help="Model to use"),
     save: str | None = typer.Option(None, "--save", help="Save screenshot to this path"),
-    no_analysis: bool = typer.Option(False, "--no-analysis", help="Just take the screenshot, skip LLM analysis"),
-    question: str = typer.Option("Describe this screenshot in detail.", "-q", "--question", help="Question to ask about the screenshot"),
+    no_analysis: bool = typer.Option(
+        False, "--no-analysis",
+        help="Just take the screenshot, skip LLM analysis",
+    ),
+    question: str = typer.Option(
+        "Describe this screenshot in detail.",
+        "-q", "--question",
+        help="Question to ask about the screenshot",
+    ),
 ):
     """Take a screenshot and analyse it with a multimodal LLM.
 
@@ -6271,7 +7206,10 @@ def learn(
             ".py", ".js", ".ts", ".java", ".c", ".cpp", ".go", ".rs",
             ".json", ".yaml", ".yml", ".toml", ".pdf",
         }
-        files = [f for f in sorted(target.iterdir()) if f.is_file() and f.suffix.lower() in supported_exts]
+        files = [
+            f for f in sorted(target.iterdir())
+            if f.is_file() and f.suffix.lower() in supported_exts
+        ]
         if not files:
             console.print(f"[yellow]No supported files found in {path}[/yellow]")
             raise typer.Exit(1)
@@ -6334,12 +7272,22 @@ def knowledge_list():
     table.add_column("Ingested", style="dim")
 
     for doc in docs:
-        size_str = f"{doc.size_bytes:,} B" if doc.size_bytes < 1024 else f"{doc.size_bytes // 1024:,} KB"
+        size_str = (
+            f"{doc.size_bytes:,} B"
+            if doc.size_bytes < 1024
+            else f"{doc.size_bytes // 1024:,} KB"
+        )
         ingested_at = doc.ingested_at[:10] if doc.ingested_at else "—"
-        table.add_row(doc.id, doc.filename, doc.doc_type, str(doc.num_chunks), size_str, ingested_at)
+        table.add_row(
+            doc.id, doc.filename, doc.doc_type,
+            str(doc.num_chunks), size_str, ingested_at,
+        )
 
     console.print(table)
-    console.print(f"\n[dim]{len(docs)} document(s) | Use 'nvh knowledge remove <id>' to remove one[/dim]")
+    console.print(
+        f"\n[dim]{len(docs)} document(s)"
+        " | Use 'nvh knowledge remove <id>' to remove one[/dim]"
+    )
 
 
 @knowledge_app.command("search")
@@ -6421,7 +7369,12 @@ def schedule_add(
         raise typer.Exit(1)
 
     scheduler = Scheduler()
-    task = scheduler.add(prompt=prompt, interval_seconds=interval_seconds, advisor=advisor, mode=mode)
+    task = scheduler.add(
+        prompt=prompt,
+        interval_seconds=interval_seconds,
+        advisor=advisor,
+        mode=mode,
+    )
 
     interval_label = every
     console.print(f"[green]Scheduled task added:[/green] [bold]{task.id}[/bold]")
@@ -6486,7 +7439,10 @@ def schedule_list():
         )
 
     console.print(table)
-    console.print(f"\n[dim]{len(tasks)} task(s) | Run 'nvh schedule start' to execute due tasks[/dim]")
+    console.print(
+        f"\n[dim]{len(tasks)} task(s)"
+        " | Run 'nvh schedule start' to execute due tasks[/dim]"
+    )
 
 
 @schedule_app.command("remove")
@@ -6792,7 +7748,10 @@ def git_explain(
     # Truncate very large diffs so we stay within token limits
     max_diff_chars = 12_000
     if len(diff_out) > max_diff_chars:
-        diff_out = diff_out[:max_diff_chars] + f"\n\n[... diff truncated at {max_diff_chars} chars ...]"
+        diff_out = (
+            diff_out[:max_diff_chars]
+            + f"\n\n[... diff truncated at {max_diff_chars} chars ...]"
+        )
 
     console.print(f"[dim]Explaining last {n} commit(s)…[/dim]")
 
@@ -6828,7 +7787,11 @@ def git_explain(
     if output == "markdown":
         console.print(Markdown(explanation))
     else:
-        console.print(Panel(explanation, title="[bold]Git History Explained[/bold]", border_style="green"))
+        console.print(Panel(
+            explanation,
+            title="[bold]Git History Explained[/bold]",
+            border_style="green",
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -6987,7 +7950,10 @@ def scan(
         # Look for common sensitive patterns
         sensitive_hits: list[str] = []
         sensitive_patterns = [
-            ("hardcoded secret", ["password =", "secret =", "api_key =", "token =", "private_key ="]),
+            ("hardcoded secret", [
+                "password =", "secret =", "api_key =",
+                "token =", "private_key =",
+            ]),
             ("SQL injection risk", ["f\"SELECT", "f'SELECT", '+ "SELECT', "+ 'SELECT'"]),
             ("shell injection risk", ["shell=True", "os.system(", "subprocess.call("]),
             ("insecure hash", ["md5(", "sha1(", "hashlib.md5", "hashlib.sha1"]),
@@ -7014,7 +7980,11 @@ def scan(
 
     elif focus == "dependencies":
         dep_files_content: list[str] = []
-        for df in ["requirements.txt", "package.json", "Cargo.toml", "go.mod", "pyproject.toml", "pom.xml"]:
+        for df in [
+            "requirements.txt", "package.json",
+            "Cargo.toml", "go.mod",
+            "pyproject.toml", "pom.xml",
+        ]:
             df_path = target / df
             if df_path.exists():
                 try:
@@ -7075,7 +8045,10 @@ def scan(
         f"\n\n## Your task\n{instruction}"
     )
 
-    console.print(f"[dim]Analysing with focus=[bold]{focus}[/bold] ({total_files} files, {total_lines:,} lines)…[/dim]")
+    console.print(
+        f"[dim]Analysing with focus=[bold]{focus}[/bold]"
+        f" ({total_files} files, {total_lines:,} lines)…[/dim]"
+    )
 
     async def _run():
         from nvh.config.settings import load_config
@@ -7446,7 +8419,9 @@ def main():
         "code", "write", "research", "math", "clip", "pipe",
         "voice", "imagine", "screenshot", "bench", "scan", "learn",
         "setup", "status", "savings", "debug", "doctor", "update", "version",
-        "serve", "repl", "completions", "plugins", "nemoclaw", "mcp", "openclaw", "integrate", "service", "test",
+        "serve", "repl", "completions", "plugins",
+        "nemoclaw", "mcp", "openclaw", "integrate",
+        "service", "test",
         "advisor", "agent", "config", "conversation", "budget", "model",
         "template", "workflow", "knowledge", "schedule", "webhook", "auth",
         "git", "webui", "keys", "tour",
