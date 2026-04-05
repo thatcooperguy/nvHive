@@ -12,7 +12,7 @@ nvHive routes queries to the best available provider automatically. It tracks wh
 
 **What makes it different:**
 - **Learns from every query.** The router measures real provider performance. By 20 queries it's routing based on data, not guesses.
-- **Council consensus.** 3+ models collaborate and synthesize. Different models catch different blind spots.
+- **Council consensus.** 3+ models collaborate and synthesize. Run Nemotron + Gemma 4 locally for fully private council, or mix local + cloud.
 - **Confidence-gated escalation.** Tries a free model first. Escalates to premium only if the response is uncertain.
 - **Cross-model verification.** A second model independently checks for errors and hallucinations.
 
@@ -76,12 +76,12 @@ flowchart TB
     USER[User Query] --> CLASSIFY[Task Classifier<br/>TF-IDF · 13 task types]
     CLASSIFY --> LOCALCHECK{Local GPU<br/>good enough?}
     
-    LOCALCHECK -->|Simple query| GPU[NVIDIA GPU<br/>Nemotron via Ollama<br/>pynvml detection]
+    LOCALCHECK -->|Simple query| GPU[NVIDIA GPU via Ollama<br/>Nemotron + Gemma 4<br/>Two architectures locally]
     LOCALCHECK -->|Complex query| SCORE[Score All Providers<br/>capability · cost · latency · health]
     
     SCORE --> ROUTE{Pick Best<br/>Provider}
     
-    ROUTE --> FREE[Free Providers<br/>LLM7 · Groq · GitHub<br/>signup required for some]
+    ROUTE --> FREE[Free Providers<br/>LLM7 · Groq · GitHub]
     ROUTE --> PAID[Premium Providers<br/>OpenAI · Anthropic · Google]
     ROUTE --> NIM[NVIDIA NIM<br/>Triton]
     ROUTE --> GPU
@@ -163,9 +163,9 @@ Throwdown goes beyond council. Three passes, each building on the last:
 
 ```mermaid
 flowchart TB
-    QUERY[User Query] --> A1[Expert 1 - Groq]
-    QUERY --> A2[Expert 2 - Google]
-    QUERY --> A3[Expert 3 - GitHub]
+    QUERY[User Query] --> A1[Expert 1 - Nemotron<br/>local GPU]
+    QUERY --> A2[Expert 2 - Gemma 4<br/>local GPU]
+    QUERY --> A3[Expert 3 - Groq<br/>cloud free]
     
     A1 --> S1[Pass 1 Synthesis]
     A2 --> S1
@@ -220,7 +220,7 @@ nvh ask --escalate --verify "Explain the CAP theorem"
 
 ## Local GPU Inference with Nemotron
 
-`nvh setup` detects your NVIDIA GPU, recommends the right Nemotron model for your VRAM, and offers to pull it — all in one step. No manual configuration.
+`nvh setup` detects your NVIDIA GPU, selects which models fit in your VRAM, and pulls them automatically. Supports both [NVIDIA Nemotron](https://build.nvidia.com/) and [Google Gemma 4](https://ai.google.dev/gemma) (NVIDIA-optimized) for local council with two different architectures.
 
 <p align="center">
   <img src="docs/screenshots/gpu-detection-demo.gif" alt="nvHive GPU Detection & Model Selection" width="640">
@@ -230,9 +230,10 @@ nvh ask --escalate --verify "Explain the CAP theorem"
 nvh setup
 # Step 3/3: Local GPU inference
 #   Detected: NVIDIA GeForce RTX 4090 (24GB VRAM)
-#   Recommended: nemotron-small — great quality/speed balance
-#   Pull nemotron-small now? [Y/n] y
-#   ✓ nemotron-small ready
+#   Models: nemotron-small, gemma4:26b
+#   Pulling nemotron-small... ✓
+#   Pulling gemma4:26b... ✓
+#   Local council ready — multiple models for consensus
 ```
 
 **What `nvh setup` handles:**
@@ -243,44 +244,49 @@ flowchart TB
     
     DETECT --> VRAM{Available VRAM?}
     
-    VRAM -->|< 6 GB| MINI[nemotron-mini]
-    VRAM -->|6 – 12 GB| SMALL[nemotron-small<br/>recommended]
-    VRAM -->|12 – 24 GB| DUAL[nemotron-small<br/>+ codellama]
-    VRAM -->|24 GB+| FULL[nemotron 70B]
+    VRAM -->|< 6 GB| MINI[nemotron-mini<br/>+ gemma4:e2b]
+    VRAM -->|6 – 12 GB| SMALL[nemotron-small<br/>+ gemma4:e4b]
+    VRAM -->|12 – 48 GB| CHOICE{User choice}
+    VRAM -->|48 GB+| FULL[nemotron 70B<br/>+ gemma4:31b]
+
+    CHOICE -->|Both for council| DUAL[nemotron-small<br/>+ gemma4:26b]
+    CHOICE -->|Single model| SINGLE[nemotron 70B only]
 
     MINI --> CHECK{Ollama running?}
     SMALL --> CHECK
     DUAL --> CHECK
+    SINGLE --> CHECK
     FULL --> CHECK
     
     CHECK -->|Not installed| INSTALL[Show install command]
     CHECK -->|Not running| START[Show: ollama serve]
-    CHECK -->|Running| PULLED{Model pulled?}
+    CHECK -->|Running| PULL[Auto-pull all<br/>models that fit]
     
-    PULLED -->|Yes| READY[Ready ✓]
-    PULLED -->|No| ASK[Pull now? Y/n]
-    ASK --> READY
+    PULL --> READY[Ready ✓<br/>Local council enabled]
     
-    READY --> ROUTE[nvHive Router<br/>Local GPU registered<br/>Learning loop active]
+    READY --> ROUTE[nvHive Router<br/>Two model architectures<br/>Learning loop active]
     
     style SMALL fill:#76B900,color:#000
+    style DUAL fill:#76B900,color:#000
     style READY fill:#76B900,color:#000
     style ROUTE fill:#1a1a2e,color:#76B900,stroke:#76B900
 ```
 
 **After setup, routing is automatic:**
-- Simple queries → local Nemotron on your GPU (free, private, no network)
-- Complex queries → cloud providers when quality requires it
+- Simple queries → local Nemotron or Gemma 4 on your GPU (free, private)
+- Council mode → both models collaborate locally, catching different blind spots
+- Complex queries → cloud providers when local quality isn't sufficient
 - `nvh bench` measures your GPU's actual tok/s with community baselines
-- The learning loop adjusts routing thresholds based on measured quality on YOUR hardware
+- The learning loop measures each model's quality on YOUR hardware
 
-[Full GPU detection guide](docs/GPU_DETECTION.md)
+[Full GPU detection + VRAM guide](docs/GPU_DETECTION.md)
 
 ### NVIDIA Inference Stack
 
 | Layer | Technology | Hardware | Use Case |
 |-------|-----------|----------|----------|
-| **Local** | Ollama + Nemotron | Consumer GPUs (RTX 3060+, 8GB+ VRAM) | Default inference, privacy mode |
+| **Local** | Ollama + Nemotron | Consumer GPUs (RTX 3060+) | Default local inference, privacy mode |
+| **Local** | Ollama + Gemma 4 | Consumer GPUs (RTX 3060+) | NVIDIA-optimized, reasoning + multimodal |
 | **Cloud** | NVIDIA NIM API | NVIDIA cloud | Specialized models, 1000 free credits |
 | **Enterprise** | Triton Inference Server | H100 / A100 / L40 | Production multi-model serving, TensorRT-LLM |
 | **Agent** | NemoClaw / OpenShell | Any | Agent orchestration with nvHive routing |
