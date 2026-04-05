@@ -2982,18 +2982,135 @@ def setup(
             else:
                 skipped += 1
 
+    # GPU detection + model pull
+    console.print()
+    console.print(
+        "[bold green]Step 3/3: Local GPU inference[/bold green]\n",
+    )
+    try:
+        from nvh.utils.gpu import detect_gpus, recommend_models
+        gpus = detect_gpus()
+        if gpus:
+            gpu = gpus[0]
+            console.print(
+                f"  [green]Detected:[/green] {gpu.name}"
+                f" ({gpu.vram_gb:.0f}GB VRAM)",
+            )
+            recs = recommend_models(gpus)
+            if recs:
+                top = recs[0]
+                console.print(
+                    f"  [green]Recommended:[/green]"
+                    f" {top.model} — {top.reason}",
+                )
+
+                # Check if Ollama is running
+                try:
+                    import httpx as _hx
+                    _ollama_base = _os.environ.get(
+                        "OLLAMA_BASE_URL",
+                        "http://localhost:11434",
+                    )
+                    _r = _hx.get(
+                        f"{_ollama_base}/api/tags", timeout=3,
+                    )
+                    if _r.status_code == 200:
+                        # Check if model already pulled
+                        models = _r.json().get("models", [])
+                        model_names = [
+                            m.get("name", "").split(":")[0]
+                            for m in models
+                        ]
+                        if top.model in model_names:
+                            console.print(
+                                f"  [green]✓[/green]"
+                                f" {top.model} already installed",
+                            )
+                        else:
+                            do_pull = typer.confirm(
+                                f"  Pull {top.model} now?",
+                                default=True,
+                            )
+                            if do_pull:
+                                import subprocess as _sp
+                                console.print(
+                                    f"  Pulling {top.model}...",
+                                )
+                                result = _sp.run(
+                                    ["ollama", "pull", top.model],
+                                )
+                                if result.returncode == 0:
+                                    console.print(
+                                        f"  [green]✓"
+                                        f" {top.model} ready"
+                                        f"[/green]",
+                                    )
+                                else:
+                                    console.print(
+                                        f"  [yellow]Pull failed."
+                                        f" Run manually: ollama"
+                                        f" pull {top.model}"
+                                        f"[/yellow]",
+                                    )
+                    else:
+                        console.print(
+                            f"  [dim]Ollama not running."
+                            f" Start with: ollama serve[/dim]",
+                        )
+                        console.print(
+                            f"  [dim]Then pull:"
+                            f" ollama pull {top.model}[/dim]",
+                        )
+                except Exception:
+                    console.print(
+                        f"  [dim]Ollama not detected."
+                        f" Install: curl -fsSL"
+                        f" https://ollama.com/install.sh"
+                        f" | sh[/dim]",
+                    )
+                    console.print(
+                        f"  [dim]Then: ollama pull"
+                        f" {top.model}[/dim]",
+                    )
+        else:
+            console.print(
+                "  [dim]No NVIDIA GPU detected"
+                " — local inference will use CPU mode[/dim]",
+            )
+    except Exception:
+        console.print(
+            "  [dim]GPU detection unavailable[/dim]",
+        )
+
     # Summary
     total_free = len(ZERO_SIGNUP) + configured
     console.print("\n[bold green]Setup complete![/bold green]")
-    console.print(f"  {total_free} free advisors ready, {skipped} skipped")
+    console.print(
+        f"  {total_free} free advisors ready, {skipped} skipped",
+    )
     console.print()
     console.print("  [bold]Next steps:[/bold]")
-    console.print("    Verify everything works:  [bold]nvh test --quick[/bold]")
-    console.print("    Try a query:              [bold]nvh \"What is the meaning of life?\"[/bold]")
-    console.print("    Launch interactive chat:   [bold]nvh[/bold]")
-    console.print("    Start the web dashboard:   [bold]nvh webui[/bold]")
+    console.print(
+        "    Verify everything works: "
+        " [bold]nvh test --quick[/bold]",
+    )
+    console.print(
+        "    Try a query:             "
+        " [bold]nvh \"What is the meaning of life?\"[/bold]",
+    )
+    console.print(
+        "    Launch interactive chat:  "
+        " [bold]nvh[/bold]",
+    )
+    console.print(
+        "    Start the web dashboard:  "
+        " [bold]nvh webui[/bold]",
+    )
     if skipped > 0:
-        console.print(f"    Set up {skipped} more providers: [bold]nvh setup --all[/bold]")
+        console.print(
+            f"    Set up {skipped} more providers:"
+            f" [bold]nvh setup --all[/bold]",
+        )
     console.print()
 
 
