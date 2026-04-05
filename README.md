@@ -24,43 +24,50 @@ No API keys needed. Works immediately with free providers (Groq, GitHub Models, 
 
 ---
 
-## Coming from OpenClaw or NemoClaw?
+## Why nvHive
 
-Anthropic dropped OpenClaw support. NemoClaw agents that routed through OpenClaw to Claude are affected. nvHive replaces that path — and gives you more than OpenClaw had.
+**The problem:** Most AI tools lock you into one provider. When that provider changes pricing, hits rate limits, or goes down, your workflow breaks.
+
+**What nvHive does:** Routes queries to the best available provider automatically. Simple queries go to free models. Complex queries go to premium models. If a provider fails, the next one picks up. Your workflow never breaks.
+
+**What makes it different:**
+- **Learns from every query.** The router tracks which providers actually deliver for which task types. By 20 queries it's routing based on measured performance, not guesses.
+- **Council consensus.** When one model isn't enough, 3+ models collaborate and synthesize. Different models catch different blind spots.
+- **Confidence-gated escalation.** Tries a free model first. If the response is uncertain, automatically escalates to a premium model. You only pay for quality when you need it.
+- **Cross-model verification.** A second model independently checks the first model's answer for errors and hallucinations.
+
+---
+
+## Works With OpenClaw
+
+Anthropic recently changed billing so that Claude subscriptions no longer cover third-party tools like OpenClaw. OpenClaw still works — it just costs more now (API rates instead of subscription).
+
+**nvHive helps reduce that cost.** Use nvHive alongside OpenClaw to route simple queries to free providers and reserve Claude for the queries that actually need it.
 
 ```bash
 pip install nvhive
-nvh migrate --from openclaw    # imports your API keys
-nvh health                     # shows your provider resilience
+
+# Import your existing API keys
+nvh migrate --from openclaw
+
+# See what providers you have available
+nvh health
 ```
 
-**For NemoClaw users** — nvHive plugs directly into OpenShell Gateway. No OpenClaw dependency:
+**How they work together:**
+- OpenClaw handles your agent workflow and tool orchestration
+- nvHive sits behind it as the routing layer, picking the cheapest provider that meets quality requirements
+- Simple queries → free providers (Groq, GitHub Models, local GPU) at $0
+- Complex queries → Claude or GPT-4o when quality requires it
+- Your Claude API spend drops because 70-80% of queries don't need a premium model
+
+**For NemoClaw users** — nvHive plugs directly into OpenShell Gateway as an inference provider:
 ```bash
-nvh nemoclaw --start           # start nvHive proxy for NemoClaw
-# NemoClaw agents now route through 23 providers + your local GPU
+nvh nemoclaw --start
+# NemoClaw agents route through 23 providers + your local GPU
 ```
 
-**For Anthropic SDK users** — one env var, zero code changes:
-```bash
-export ANTHROPIC_BASE_URL=http://localhost:8000/v1/anthropic
-nvh serve
-```
-
-**What you get that OpenClaw didn't have:**
-
-| Feature | OpenClaw | nvHive |
-|---------|----------|--------|
-| Providers | Claude only | 23 providers (25 free) |
-| Failover | None | Automatic across all providers |
-| Local GPU | No | Ollama/Nemotron, private, free |
-| Multi-model consensus | No | Council mode (3+ models) |
-| Adaptive routing | No | Learns from every query |
-| Cost control | No | Budget limits + free routing |
-| Provider health | No | `nvh health` dashboard |
-
-**What's the catch?** nvHive doesn't give you free Claude access — that was OpenClaw's deal with Anthropic, and it's over. If you need Claude specifically, bring your own API key. For everything else, nvHive routes to the best available provider automatically. Free tiers have rate limits (Groq: 30 RPM, Google: 15 RPM). For unlimited local inference, run Ollama.
-
-[Full migration guide (OpenClaw + NemoClaw)](docs/OPENCLAW_MIGRATION.md)
+[Full integration guide](docs/OPENCLAW_MIGRATION.md)
 
 ---
 
@@ -89,7 +96,7 @@ nvh routing-stats
 
 **Failover:** If a provider fails, nvHive tries the next in the fallback chain. It prefers providers NOT already used in the current session (to avoid hitting the same rate limit). Every failure is recorded and feeds back into the health score.
 
-**Local-first:** Queries estimated under 500 tokens on task types the local model handles well (conversation, Q&A, summarization) route to Ollama/Nemotron on your GPU. No network, no cost, no data leaving your machine. Complex queries escalate to cloud. The thresholds adapt as the learning loop measures local model quality.
+**Local-first:** Queries estimated under 500 tokens on task types the local model handles well (conversation, Q&A, summarization) route to Ollama/Nemotron on your GPU. No network, no cost, no data leaving your machine. Complex queries escalate to cloud.
 
 ---
 
@@ -115,6 +122,23 @@ nvh throwdown "Review this architecture for scalability issues"
 
 ---
 
+## Smart Query Features
+
+```bash
+# Confidence-gated escalation: try free first, upgrade only if needed
+nvh ask --escalate "Design a distributed lock manager"
+# → groq (free, confidence: 42%) → auto-escalated to openai
+
+# Cross-model verification: a second model checks the answer
+nvh ask --verify "Is eval() safe in Python?"
+# → groq answers → google verifies ✓ (9/10, no issues)
+
+# Both together: cheapest possible verified answer
+nvh ask --escalate --verify "Explain the CAP theorem"
+```
+
+---
+
 ## Core Commands
 
 | Command | What It Does |
@@ -123,11 +147,13 @@ nvh throwdown "Review this architecture for scalability issues"
 | `nvh convene "question"` | Council consensus (3+ models) |
 | `nvh throwdown "question"` | Two-pass deep analysis with critique |
 | `nvh safe "question"` | Local only — nothing leaves your machine |
+| `nvh ask --escalate` | Try free first, escalate if uncertain |
+| `nvh ask --verify` | Cross-model verification |
 | `nvh health` | Provider resilience dashboard |
 | `nvh routing-stats` | Learned vs static routing scores |
 | `nvh benchmark` | Quality benchmark suite (16 prompts, blind judge) |
 | `nvh nvidia` | NVIDIA GPU infrastructure status |
-| `nvh migrate` | Import from OpenClaw / Claw Code / Claude Desktop |
+| `nvh migrate` | Import keys from OpenClaw / Claude Desktop |
 | `nvh setup` | Interactive provider setup (validates keys on save) |
 
 [Full command reference](docs/COMMANDS.md) (50+ commands)
@@ -149,7 +175,7 @@ Run `nvh setup` to configure. The router handles the rest.
 
 ## For Tool Builders
 
-nvHive is a routing layer, not a tool. Any AI application can add multi-provider routing:
+nvHive is a routing layer. Any AI application can add multi-provider routing:
 
 ```python
 import nvh
@@ -173,7 +199,7 @@ status = await nvh.health()
 # → {"groq": {"healthy": true, "latency_ms": 45}, ...}
 ```
 
-**API Proxies** — point existing SDKs at nvHive with zero code changes:
+**API Proxies** — point existing SDKs at nvHive:
 
 | SDK | Configuration |
 |-----|--------------|
@@ -209,7 +235,7 @@ nvh benchmark --mode all --export results.md
 
 # Check provider resilience
 nvh health
-# → "3/3 providers healthy. Resilient — survives any single provider outage."
+# → "5/5 providers healthy. Resilient — survives any single provider outage."
 
 # See the learning in action
 nvh routing-stats
@@ -227,11 +253,6 @@ pip install nvhive
 nvh setup    # interactive provider configuration with key validation
 ```
 
-Or one-line with auto-migration from OpenClaw:
-```bash
-curl -fsSL https://nvhive.dev/install | sh
-```
-
 ## Learn More
 
 | Guide | Description |
@@ -240,7 +261,8 @@ curl -fsSL https://nvhive.dev/install | sh
 | [Commands](docs/COMMANDS.md) | Full CLI reference (50+ commands) |
 | [Providers](docs/PROVIDERS.md) | 23 providers, rate limits, free tiers |
 | [Council System](docs/COUNCIL.md) | Multi-LLM consensus with confidence scoring |
-| [Claude Code Integration](docs/CLAUDE_CODE_INTEGRATION.md) | MCP server + migration guide |
+| [OpenClaw Integration](docs/OPENCLAW_MIGRATION.md) | Works alongside OpenClaw to reduce costs |
+| [Claude Code](docs/CLAUDE_CODE_INTEGRATION.md) | MCP server setup |
 | [NemoClaw](docs/NEMOCLAW.md) | NVIDIA NemoClaw integration |
 | [SDK & API](docs/SDK_API.md) | Python SDK, REST API, proxies |
 | [Architecture](docs/ARCHITECTURE.md) | System design and adaptive learning |
