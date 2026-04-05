@@ -33,7 +33,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
@@ -497,6 +497,210 @@ async def health_check() -> dict[str, Any]:
         "engine_initialized": engine._initialized,
         "providers_enabled": len(enabled),
     })
+
+
+# -- /metrics (Prometheus) ----------------------------------------------------
+
+
+def _prom_escape(value: str) -> str:
+    """Escape a label value for Prometheus text exposition format."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+async def _build_prometheus_metrics() -> str:
+    """Build Prometheus text exposition format from nvHive internal data."""
+    from sqlalchemy import func as _fn
+    from sqlalchemy import select as _sel
+
+    from nvh.storage import repository as _metrics_repo
+    from nvh.storage.models import QueryLog
+
+    lines: list[str] = []
+    engine = get_engine()
+
+    # ------------------------------------------------------------------
+    # 1) nvhive_queries_total — counter by provider, model, task_type (mode), status
+    # ------------------------------------------------------------------
+    try:
+        from nvh.storage.repository import get_session as _get_sess
+
+        async with _get_sess() as session:
+            rows = (await session.execute(
+                _sel(
+                    QueryLog.provider,
+                    QueryLog.model,
+                    QueryLog.mode,
+                    QueryLog.status,
+                    _fn.count(QueryLog.id),
+                ).group_by(QueryLog.provider, QueryLog.model, QueryLog.mode, QueryLog.status)
+            )).all()
+
+        lines.append("# HELP nvhive_queries_total Total queries processed")
+        lines.append("# TYPE nvhive_queries_total counter")
+        for prov, model, mode, st, cnt in rows:
+            labels = (
+                f'provider="{_prom_escape(prov)}",'
+                f'model="{_prom_escape(model)}",'
+                f'task_type="{_prom_escape(mode)}",'
+                f'status="{_prom_escape(st)}"'
+            )
+            lines.append(f"nvhive_queries_total{{{labels}}} {cnt}")
+    except Exception:
+        logger.debug("metrics: failed to collect nvhive_queries_total", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # 2) nvhive_query_latency_seconds — histogram approximation per provider
+    #    We expose the sum and count; real histogram buckets would need
+    #    in-process instrumentation.  Sum+count is still useful for rate().
+    # ------------------------------------------------------------------
+    try:
+        async with _get_sess() as session:
+            lat_rows = (await session.execute(
+                _sel(
+                    QueryLog.provider,
+                    _fn.count(QueryLog.id),
+                    _fn.sum(QueryLog.latency_ms),
+                ).group_by(QueryLog.provider)
+            )).all()
+
+        lines.append("")
+        lines.append("# HELP nvhive_query_latency_seconds Query latency in seconds")
+        lines.append("# TYPE nvhive_query_latency_seconds histogram")
+        for prov, cnt, total_ms in lat_rows:
+            total_s = (total_ms or 0) / 1000.0
+            lbl = f'provider="{_prom_escape(prov)}"'
+            lines.append(f"nvhive_query_latency_seconds_count{{{lbl}}} {cnt}")
+            lines.append(f"nvhive_query_latency_seconds_sum{{{lbl}}} {total_s:.3f}")
+    except Exception:
+        logger.debug("metrics: failed to collect nvhive_query_latency_seconds", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # 3) nvhive_query_cost_usd — counter per provider
+    # ------------------------------------------------------------------
+    try:
+        async with _get_sess() as session:
+            cost_rows = (await session.execute(
+                _sel(
+                    QueryLog.provider,
+                    _fn.coalesce(_fn.sum(QueryLog.cost_usd), 0),
+                ).group_by(QueryLog.provider)
+            )).all()
+
+        lines.append("")
+        lines.append("# HELP nvhive_query_cost_usd Total cost in USD")
+        lines.append("# TYPE nvhive_query_cost_usd counter")
+        for prov, cost in cost_rows:
+            lbl = f'provider="{_prom_escape(prov)}"'
+            lines.append(f"nvhive_query_cost_usd{{{lbl}}} {float(cost):.6f}")
+    except Exception:
+        logger.debug("metrics: failed to collect nvhive_query_cost_usd", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # 4) nvhive_provider_health — gauge per provider (0.0-1.0)
+    # ------------------------------------------------------------------
+    try:
+        enabled = engine.registry.list_enabled()
+        lines.append("")
+        lines.append("# HELP nvhive_provider_health Current health score per provider")
+        lines.append("# TYPE nvhive_provider_health gauge")
+        for prov_name in enabled:
+            score = engine.rate_manager.get_health_score(prov_name)
+            lbl = f'provider="{_prom_escape(prov_name)}"'
+            lines.append(f"nvhive_provider_health{{{lbl}}} {score:.2f}")
+    except Exception:
+        logger.debug("metrics: failed to collect nvhive_provider_health", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # 5) nvhive_council_queries_total — counter by strategy (mode=council)
+    # ------------------------------------------------------------------
+    try:
+        async with _get_sess() as session:
+            council_rows = (await session.execute(
+                _sel(
+                    QueryLog.mode,
+                    _fn.count(QueryLog.id),
+                ).where(QueryLog.mode == "council")
+                .group_by(QueryLog.mode)
+            )).all()
+
+        lines.append("")
+        lines.append("# HELP nvhive_council_queries_total Council queries processed")
+        lines.append("# TYPE nvhive_council_queries_total counter")
+        for strategy, cnt in council_rows:
+            lbl = f'strategy="{_prom_escape(strategy)}"'
+            lines.append(f"nvhive_council_queries_total{{{lbl}}} {cnt}")
+        if not council_rows:
+            lines.append('nvhive_council_queries_total{strategy="council"} 0')
+    except Exception:
+        logger.debug("metrics: failed to collect nvhive_council_queries_total", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # 6) nvhive_fallback_total — counter by from_provider, to_provider
+    # ------------------------------------------------------------------
+    try:
+        async with _get_sess() as session:
+            fb_rows = (await session.execute(
+                _sel(
+                    QueryLog.fallback_from,
+                    QueryLog.provider,
+                    _fn.count(QueryLog.id),
+                ).where(QueryLog.status == "fallback", QueryLog.fallback_from != "")
+                .group_by(QueryLog.fallback_from, QueryLog.provider)
+            )).all()
+
+        lines.append("")
+        lines.append("# HELP nvhive_fallback_total Fallback events")
+        lines.append("# TYPE nvhive_fallback_total counter")
+        for from_prov, to_prov, cnt in fb_rows:
+            labels = (
+                f'from_provider="{_prom_escape(from_prov)}",'
+                f'to_provider="{_prom_escape(to_prov)}"'
+            )
+            lines.append(f"nvhive_fallback_total{{{labels}}} {cnt}")
+        if not fb_rows:
+            lines.append('nvhive_fallback_total{from_provider="",to_provider=""} 0')
+    except Exception:
+        logger.debug("metrics: failed to collect nvhive_fallback_total", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # 7) nvhive_learning_observations_total — gauge
+    # ------------------------------------------------------------------
+    try:
+        obs_count = await _metrics_repo.get_outcome_count()
+        lines.append("")
+        lines.append(
+            "# HELP nvhive_learning_observations_total Total learning observations"
+        )
+        lines.append("# TYPE nvhive_learning_observations_total gauge")
+        lines.append(f"nvhive_learning_observations_total {obs_count}")
+    except Exception:
+        logger.debug(
+            "metrics: failed to collect nvhive_learning_observations_total",
+            exc_info=True,
+        )
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+@app.get("/metrics", summary="Prometheus metrics endpoint")
+async def prometheus_metrics() -> Response:
+    """Return nvHive metrics in Prometheus text exposition format."""
+    body = await _build_prometheus_metrics()
+    return Response(
+        content=body,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
+@app.get("/v1/metrics", summary="Prometheus metrics endpoint (v1 alias)")
+async def prometheus_metrics_v1() -> Response:
+    """Alias for /metrics under the /v1/ prefix."""
+    body = await _build_prometheus_metrics()
+    return Response(
+        content=body,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 # -- /v1/system/gpu -----------------------------------------------------------
