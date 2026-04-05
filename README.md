@@ -155,10 +155,51 @@ When one model isn't enough, nvHive runs the same query through multiple provide
 ```bash
 nvh convene "Should we use Redis or Postgres for session storage?"
 # → 3 models debate → synthesis with confidence score
-
-nvh throwdown "Review this architecture for scalability issues"
-# → Pass 1: 3 models analyze → Pass 2: critique each other → final synthesis
 ```
+
+### Throwdown Mode — Two-Pass Deep Analysis
+
+Throwdown goes beyond council. Three passes, each building on the last:
+
+```mermaid
+flowchart TB
+    QUERY[User Query<br/>"Review this architecture for scalability"] --> PASS1
+
+    subgraph PASS1[Pass 1 — Independent Analysis]
+        A1[Expert 1<br/>Backend Engineer<br/>Groq / Llama]
+        A2[Expert 2<br/>System Architect<br/>Google / Gemini]
+        A3[Expert 3<br/>DevOps Lead<br/>GitHub / GPT-4o]
+    end
+
+    PASS1 --> SYNTH1[Synthesis 1<br/>Combine initial perspectives<br/>Identify key themes + gaps]
+
+    SYNTH1 --> PASS2
+
+    subgraph PASS2[Pass 2 — Cross-Critique]
+        B1[Expert 1<br/>Critiques Synthesis 1]
+        B2[Expert 2<br/>Finds blind spots]
+        B3[Expert 3<br/>Challenges assumptions]
+    end
+
+    PASS2 --> SYNTH2[Synthesis 2<br/>Integrate critiques<br/>Strengthen weak points]
+
+    SYNTH2 --> FINAL[Pass 3 — Final Synthesis<br/>Definitive answer integrating<br/>both passes + all critiques]
+
+    FINAL --> RESULT[Throwdown Result<br/>+ Total cost<br/>+ All perspectives preserved]
+
+    style PASS1 fill:#1a1a2e,stroke:#76B900
+    style PASS2 fill:#1a1a2e,stroke:#00bcd4
+    style FINAL fill:#76B900,color:#000
+```
+
+```bash
+nvh throwdown "Review this architecture for scalability issues"
+# Pass 1: 3 experts analyze independently
+# Pass 2: experts critique each other's analysis
+# Pass 3: final synthesis integrating all perspectives
+```
+
+**Why throwdown beats single-model:** A single model gives you one perspective, once. Throwdown gives you three perspectives, challenged by three critiques, then synthesized. Errors get caught. Assumptions get questioned. The final answer is more thorough than any single pass.
 
 ---
 
