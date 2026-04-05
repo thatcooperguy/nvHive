@@ -3198,10 +3198,11 @@ def setup(
             else:
                 skipped += 1
 
-    # GPU detection + model pull
+    # GPU detection + auto-pull all models that fit
     console.print()
     console.print(
-        "[bold green]Step 3/3: Local GPU inference[/bold green]\n",
+        "[bold green]Step 3/3: Local GPU inference"
+        "[/bold green]\n",
     )
     try:
         from nvh.utils.gpu import detect_gpus, recommend_models
@@ -3214,10 +3215,42 @@ def setup(
             )
             recs = recommend_models(gpus)
             if recs:
-                top = recs[0]
+                # If multiple models recommended, ask the
+                # user's preference when there's a real
+                # tradeoff (one big model vs two smaller)
+                total_vram = sum(g.vram_gb for g in gpus)
+                if (
+                    len(recs) > 1
+                    and total_vram >= 12
+                    and total_vram < 48
+                ):
+                    console.print(
+                        "  [bold]Choose local model"
+                        " strategy:[/bold]",
+                    )
+                    console.print(
+                        f"    1. Both models for"
+                        f" local council:"
+                        f" {', '.join(r.model for r in recs)}"
+                        f" [green](recommended)[/green]",
+                    )
+                    # Find the largest single model
+                    # that fits
+                    single = recs[0]
+                    console.print(
+                        f"    2. Single larger model:"
+                        f" {single.model} only"
+                        f" (more VRAM headroom)",
+                    )
+                    choice = typer.prompt(
+                        "  Choice", default="1",
+                    )
+                    if choice == "2":
+                        recs = [single]
+
                 console.print(
-                    f"  [green]Recommended:[/green]"
-                    f" {top.model} — {top.reason}",
+                    f"  Models: "
+                    f"{', '.join(r.model for r in recs)}",
                 )
 
                 # Check if Ollama is running
@@ -3231,52 +3264,60 @@ def setup(
                         f"{_ollama_base}/api/tags", timeout=3,
                     )
                     if _r.status_code == 200:
-                        # Check if model already pulled
-                        models = _r.json().get("models", [])
-                        model_names = [
+                        existing = [
                             m.get("name", "").split(":")[0]
-                            for m in models
+                            for m in _r.json().get("models", [])
                         ]
-                        if top.model in model_names:
-                            console.print(
-                                f"  [green]✓[/green]"
-                                f" {top.model} already installed",
-                            )
-                        else:
-                            do_pull = typer.confirm(
-                                f"  Pull {top.model} now?",
-                                default=True,
-                            )
-                            if do_pull:
-                                import subprocess as _sp
+                        import subprocess as _sp
+                        # Pull all recommended models that
+                        # aren't already installed
+                        for rec in recs:
+                            if rec.model in existing:
                                 console.print(
-                                    f"  Pulling {top.model}...",
+                                    f"  [green]✓[/green]"
+                                    f" {rec.model}"
+                                    f" already installed",
+                                )
+                            else:
+                                console.print(
+                                    f"  Pulling"
+                                    f" {rec.model}...",
                                 )
                                 result = _sp.run(
-                                    ["ollama", "pull", top.model],
+                                    [
+                                        "ollama", "pull",
+                                        rec.model,
+                                    ],
                                 )
                                 if result.returncode == 0:
                                     console.print(
                                         f"  [green]✓"
-                                        f" {top.model} ready"
-                                        f"[/green]",
+                                        f" {rec.model}"
+                                        f" ready[/green]",
                                     )
                                 else:
                                     console.print(
-                                        f"  [yellow]Pull failed."
-                                        f" Run manually: ollama"
-                                        f" pull {top.model}"
+                                        f"  [yellow]"
+                                        f"{rec.model} failed"
                                         f"[/yellow]",
                                     )
+                        if len(recs) > 1:
+                            console.print(
+                                "  [green]Local council"
+                                " ready — multiple models"
+                                " for consensus[/green]",
+                            )
                     else:
                         console.print(
                             "  [dim]Ollama not running."
-                            " Start with: ollama serve[/dim]",
+                            " Start with:"
+                            " ollama serve[/dim]",
                         )
-                        console.print(
-                            f"  [dim]Then pull:"
-                            f" ollama pull {top.model}[/dim]",
-                        )
+                        for rec in recs:
+                            console.print(
+                                f"  [dim]Then: ollama"
+                                f" pull {rec.model}[/dim]",
+                            )
                 except Exception:
                     console.print(
                         "  [dim]Ollama not detected."
@@ -3284,9 +3325,10 @@ def setup(
                         " https://ollama.com/install.sh"
                         " | sh[/dim]",
                     )
-                    console.print(
-                        f"  [dim]Then: ollama pull"
-                        f" {top.model}[/dim]",
+                    for rec in recs:
+                        console.print(
+                            f"  [dim]Then: ollama"
+                            f" pull {rec.model}[/dim]",
                     )
         else:
             console.print(
