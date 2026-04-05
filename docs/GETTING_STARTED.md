@@ -291,7 +291,7 @@ Both experts agree: a monad is like a special container...
 
 ## Advisor Setup
 
-### All 22 supported advisors
+### All 23 supported advisors
 
 | Provider | Free Tier | Get API Key | Best For |
 |---|---|---|---|
@@ -723,4 +723,4 @@ nvh ollama
 - Set up budget alerts: `nvh config set budget.daily_limit_usd 5.00`
 - Configure routing rules for your workflow: `nvh config edit`
 - Explore the API docs at **http://localhost:8000/docs**
-- Try `nvh bench` when you want to benchmark your local GPU *(coming soon)*
+- Try `nvh bench` when you want to benchmark your local GPU **

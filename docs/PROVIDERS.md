@@ -1,6 +1,6 @@
 # Supported AI Providers
 
-nvHive manages 22 providers and 63 models behind a single `nvh` command, picking the best advisor based on task type, cost, and privacy requirements.
+nvHive manages 23 providers and 63 models behind a single `nvh` command, picking the best advisor based on task type, cost, and privacy requirements.
 
 ## Provider Table
 
@@ -42,7 +42,7 @@ nvh google "question"       # Route to Gemini
 nvh ollama "question"       # Route to local Ollama
 ```
 
-Works for all 22 providers. Run `nvh <provider>` with no question to launch that provider's setup.
+Works for all 23 providers. Run `nvh <provider>` with no question to launch that provider's setup.
 
 ## GPU-Adaptive Model Selection
 

@@ -3054,8 +3054,8 @@ def setup(
                                     )
                     else:
                         console.print(
-                            f"  [dim]Ollama not running."
-                            f" Start with: ollama serve[/dim]",
+                            "  [dim]Ollama not running."
+                            " Start with: ollama serve[/dim]",
                         )
                         console.print(
                             f"  [dim]Then pull:"
@@ -3063,10 +3063,10 @@ def setup(
                         )
                 except Exception:
                     console.print(
-                        f"  [dim]Ollama not detected."
-                        f" Install: curl -fsSL"
-                        f" https://ollama.com/install.sh"
-                        f" | sh[/dim]",
+                        "  [dim]Ollama not detected."
+                        " Install: curl -fsSL"
+                        " https://ollama.com/install.sh"
+                        " | sh[/dim]",
                     )
                     console.print(
                         f"  [dim]Then: ollama pull"

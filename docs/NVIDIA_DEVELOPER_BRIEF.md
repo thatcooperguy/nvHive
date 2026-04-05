@@ -6,7 +6,7 @@ nvHive is an open-source multi-LLM orchestration platform that drives developer 
 
 When a developer installs nvHive, their NVIDIA GPU becomes the default inference engine. Cloud APIs are the fallback, not the primary path. This inverts the industry norm where cloud is default and local is an afterthought.
 
-**Key metrics:** MIT licensed, on PyPI (`pip install nvhive`), 63 models, 25 free providers, 217 tests passing, CLI + WebUI + SDK + API.
+**Key metrics:** MIT licensed, on PyPI (`pip install nvhive`), 63 models, 25 free providers, 225 tests passing, CLI + WebUI + SDK + API.
 
 ---
 
@@ -179,7 +179,7 @@ nvh bench
 ## Traction
 
 - **PyPI**: Published, `pip install nvhive`
-- **Testing**: 217 tests, CI clean (Python 3.11 + 3.12)
+- **Testing**: 225 tests, CI clean (Python 3.11 + 3.12)
 - **Providers**: 23 integrated, 25 free tiers
 - **CLI**: 50+ commands
 - **WebUI**: 9-page dashboard

@@ -78,7 +78,7 @@ Add to your NemoClaw agent config:
 
 | Tool | What It Does |
 |------|-------------|
-| `ask` | Smart-routed query across 22 providers |
+| `ask` | Smart-routed query across 23 providers |
 | `ask_safe` | Local-only query (nothing leaves machine) |
 | `council` | Multi-model consensus (3-10 LLMs debate) |
 | `throwdown` | Two-pass deep analysis with critique |
