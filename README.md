@@ -181,10 +181,10 @@ nvh ask --escalate --verify "Explain the CAP theorem"
 
 ## Local GPU Inference with Nemotron
 
-nvHive auto-detects your GPU and routes to [NVIDIA Nemotron](https://build.nvidia.com/nvidia/nemotron-mini) running locally via Ollama. Simple queries hit your GPU by default — no cloud, no cost, no data leaving your machine.
+nvHive [auto-detects your GPU](docs/GPU_DETECTION.md) and routes to NVIDIA Nemotron running locally via Ollama. It reads your VRAM and selects the optimal model — from nemotron-mini (4GB) to the full 70B (48GB+). Simple queries hit your GPU by default — no cloud, no cost, no data leaving your machine.
 
 <p align="center">
-  <img src="docs/screenshots/nvidia-demo.gif" alt="nvHive NVIDIA GPU Demo" width="640">
+  <img src="docs/screenshots/gpu-detection-demo.gif" alt="nvHive GPU Detection & Model Selection" width="640">
 </p>
 
 ```bash
@@ -380,6 +380,7 @@ nvh routing-stats                     # learning in action
 | [Council System](docs/COUNCIL.md) | Multi-LLM consensus with confidence scoring |
 | [OpenClaw Integration](docs/OPENCLAW_MIGRATION.md) | Works alongside OpenClaw |
 | [Claude Code](docs/CLAUDE_CODE_INTEGRATION.md) | MCP server setup |
+| [GPU Detection](docs/GPU_DETECTION.md) | Auto-detection, model selection, OOM protection |
 | [NemoClaw](docs/NEMOCLAW.md) | NVIDIA NemoClaw integration |
 | [SDK & API](docs/SDK_API.md) | Python SDK, REST API, proxies |
 | [Architecture](docs/ARCHITECTURE.md) | System design and adaptive learning |
