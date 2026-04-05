@@ -431,8 +431,11 @@ status = await nvh.health()
 | `nvh ask --escalate` | Try free first, escalate if uncertain |
 | `nvh ask --verify` | Cross-model verification |
 | `nvh health` | Provider resilience dashboard |
+| `nvh why` | Explain last routing decision |
+| `nvh history` | Recent queries with costs and timing |
+| `nvh bench` | GPU speed test (tokens/sec) |
+| `nvh bench -q` | Speed + quality comparison |
 | `nvh routing-stats` | Learned vs static routing scores |
-| `nvh benchmark` | Quality benchmark suite |
 | `nvh nvidia` | NVIDIA GPU infrastructure status |
 | `nvh migrate` | Import keys from OpenClaw / Claude Desktop |
 | `nvh setup` | Interactive provider setup |
@@ -454,14 +457,20 @@ status = await nvh.health()
 
 ## Verify It Yourself
 
+<p align="center">
+  <img src="docs/screenshots/bench-demo.gif" alt="nvHive Benchmark Demo" width="640">
+</p>
+
 ```bash
-nvh benchmark --mode council-free     # free council vs single model
-nvh benchmark --mode all --export results.md
-nvh health                            # provider resilience
-nvh routing-stats                     # learning in action
+nvh bench              # GPU speed (tokens/sec)
+nvh bench -q           # speed + quality comparison
+nvh health             # provider resilience
+nvh why                # explain last routing decision
+nvh routing-stats      # learning in action
+nvh history            # recent queries with costs
 ```
 
-16 prompts across code generation, debugging, reasoning, math, creative writing, and Q&A. Blind LLM judge. Run it yourself. Publish the results.
+16 quality prompts across code generation, debugging, reasoning, math, creative writing, and Q&A. Blind LLM judge. Run it yourself. Publish the results.
 
 ## Learn More
 
