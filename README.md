@@ -81,8 +81,8 @@ flowchart TB
     
     SCORE --> ROUTE{Pick Best<br/>Provider}
     
-    ROUTE --> FREE[Free Cloud<br/>Groq · GitHub · LLM7]
-    ROUTE --> PAID[Paid Cloud<br/>OpenAI · Anthropic · Google]
+    ROUTE --> FREE[Free Providers<br/>LLM7 · Groq · GitHub<br/>signup required for some]
+    ROUTE --> PAID[Premium Providers<br/>OpenAI · Anthropic · Google]
     ROUTE --> NIM[NVIDIA NIM<br/>Triton]
     ROUTE --> GPU
     
