@@ -300,12 +300,26 @@ class CouncilOrchestrator:
         else:
             msgs = [Message(role="user", content=query)]
 
-        # Dispatch to all members in parallel
+        # Dispatch members with rate-limit-aware staggering.
+        # Members using different providers fire in parallel.
+        # Members sharing a provider are staggered by 2s to
+        # avoid burning the rate limit on free tiers.
         start = time.monotonic()
         member_responses: dict[str, CompletionResponse] = {}
         failed_members: dict[str, str] = {}
 
+        # Group by provider to detect shared-provider members
+        _seen_providers: dict[str, int] = {}
+        _member_delays: dict[str, float] = {}
+        for member in members:
+            count = _seen_providers.get(member.provider, 0)
+            _member_delays[member.provider + str(count)] = (
+                count * 2.0
+            )
+            _seen_providers[member.provider] = count + 1
+
         tasks = {}
+        _provider_idx: dict[str, int] = {}
         for member in members:
             # Use persona system prompt if assigned, otherwise fall back to user's system prompt
             member_system = member.system_prompt or system_prompt
@@ -319,9 +333,26 @@ class CouncilOrchestrator:
             while label in tasks:
                 label = f"{base_label}#{suffix}"
                 suffix += 1
-            tasks[label] = asyncio.create_task(
-                self._call_member(member, msgs, member_system, temperature, max_tokens, timeout)
-            )
+            # Stagger members sharing the same provider
+            idx = _provider_idx.get(member.provider, 0)
+            delay = idx * 2.0  # 2s between same-provider members
+            _provider_idx[member.provider] = idx + 1
+
+            if delay > 0:
+                tasks[label] = asyncio.create_task(
+                    self._call_member_delayed(
+                        member, msgs, member_system,
+                        temperature, max_tokens, timeout,
+                        delay,
+                    ),
+                )
+            else:
+                tasks[label] = asyncio.create_task(
+                    self._call_member(
+                        member, msgs, member_system,
+                        temperature, max_tokens, timeout,
+                    ),
+                )
 
         # Wait for all tasks (with overall timeout)
         done, pending = await asyncio.wait(
@@ -593,10 +624,9 @@ class CouncilOrchestrator:
         if quorum_met and synthesize and len(member_responses) > 1:
             await on_event({"type": "synthesis_start"})
 
-            synth_provider_name = self.config.council.synthesis_provider
-            if not synth_provider_name or not self.registry.has(synth_provider_name):
-                available = self.registry.list_enabled()
-                synth_provider_name = available[0] if available else None
+            synth_provider_name = self._pick_synthesis_provider(
+                member_responses,
+            )
 
             if synth_provider_name:
                 synth_provider = self.registry.get(synth_provider_name)
@@ -731,6 +761,23 @@ class CouncilOrchestrator:
             agents_used=agents_used,
             confidence_score=confidence_score,
             agreement_summary=agreement_summary,
+        )
+
+    async def _call_member_delayed(
+        self,
+        member: CouncilMember,
+        messages: list[Message],
+        system_prompt: str | None,
+        temperature: float,
+        max_tokens: int,
+        timeout: int,
+        delay: float,
+    ) -> CompletionResponse:
+        """Call a council member after a delay (rate limit stagger)."""
+        await asyncio.sleep(delay)
+        return await self._call_member(
+            member, messages, system_prompt,
+            temperature, max_tokens, timeout,
         )
 
     async def _call_member(
@@ -872,27 +919,10 @@ class CouncilOrchestrator:
 
         synthesis_prompt = "".join(synthesis_parts)
 
-        # Use the synthesis provider
-        synth_provider_name = self.config.council.synthesis_provider
-        if not synth_provider_name or not self.registry.has(synth_provider_name):
-            # Fall back to first available provider
-            available = self.registry.list_enabled()
-            if not available:
-                raise ValueError(
-                    "No advisor available for council synthesis.\n"
-                    "Run: nvh setup  (to configure advisors)\n"
-                    "Or set a synthesis provider: nvh config set council.synthesis_provider groq"
-                )
-            synth_provider_name = available[0]
-
-        synth_provider = self.registry.get(synth_provider_name)
-        synth_model = self._get_model_for_provider(synth_provider_name)
-
-        response = await synth_provider.complete(
-            messages=[Message(role="user", content=synthesis_prompt)],
-            model=synth_model or None,
-            temperature=0.3,  # Lower temp for synthesis
-            max_tokens=4096,
+        # Use the synthesis provider — with retry rotation
+        # to handle rate limits on free tiers
+        response = await self._synthesis_with_retry(
+            synthesis_prompt, responses,
         )
 
         response.metadata["strategy"] = "weighted_consensus"
@@ -921,17 +951,149 @@ class CouncilOrchestrator:
 
         judge_prompt = "".join(parts)
 
-        synth_provider_name = self.config.council.synthesis_provider
-        if not synth_provider_name or not self.registry.has(synth_provider_name):
-            available = self.registry.list_enabled()
-            synth_provider_name = available[0] if available else list(responses.keys())[0]
-
-        synth_provider = self.registry.get(synth_provider_name)
-        response = await synth_provider.complete(
-            messages=[Message(role="user", content=judge_prompt)],
-            temperature=0.1,
-            max_tokens=4096,
+        response = await self._synthesis_with_retry(
+            judge_prompt, responses,
         )
-
         response.metadata["strategy"] = "best_of"
         return response
+
+    def _pick_synthesis_provider(
+        self,
+        member_responses: dict[str, CompletionResponse],
+    ) -> str | None:
+        """Pick the best synthesis provider, preferring non-members.
+
+        Avoids using a provider that just served as a council member
+        to reduce rate limit conflicts on free tiers.
+        """
+        configured = self.config.council.synthesis_provider
+        if configured and self.registry.has(configured):
+            return configured
+
+        # Extract member provider names
+        member_providers = set()
+        for label in member_responses:
+            if ":" in label:
+                member_providers.add(label.split(":")[0])
+            elif "#" in label:
+                member_providers.add(label.split("#")[0])
+            else:
+                member_providers.add(label)
+
+        # Prefer non-member providers
+        available = self.registry.list_enabled()
+        for p in available:
+            if p not in member_providers:
+                return p
+
+        # All providers were members — use first available
+        return available[0] if available else None
+
+    async def _synthesis_with_retry(
+        self,
+        prompt: str,
+        member_responses: dict[str, CompletionResponse],
+        max_retries: int = 3,
+    ) -> CompletionResponse:
+        """Run synthesis with provider rotation and backoff.
+
+        Tries the configured synthesis provider first, then rotates
+        through other available providers if rate-limited. Includes
+        brief backoff between retries to let rate limits recover.
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+
+        # Build prioritized provider list for synthesis
+        candidates: list[str] = []
+
+        # 1. Configured synthesis provider
+        configured = self.config.council.synthesis_provider
+        if configured and self.registry.has(configured):
+            candidates.append(configured)
+
+        # 2. Providers NOT used as council members (fresh rate limit)
+        members_used = set(member_responses.keys())
+        # Strip persona suffix to get provider name
+        member_providers = set()
+        for label in members_used:
+            if ":" in label:
+                member_providers.add(label.split(":")[0])
+            elif "#" in label:
+                member_providers.add(label.split("#")[0])
+            else:
+                member_providers.add(label)
+
+        for p in self.registry.list_enabled():
+            if p not in member_providers and p not in candidates:
+                candidates.append(p)
+
+        # 3. Member providers as last resort
+        for p in self.registry.list_enabled():
+            if p not in candidates:
+                candidates.append(p)
+
+        if not candidates:
+            raise ValueError(
+                "No provider available for synthesis.\n"
+                "Run: nvh setup  (to configure advisors)"
+            )
+
+        last_error: Exception | None = None
+
+        for attempt in range(max_retries):
+            # Pick provider: rotate through candidates
+            provider_name = candidates[
+                attempt % len(candidates)
+            ]
+            provider = self.registry.get(provider_name)
+            model = self._get_model_for_provider(provider_name)
+
+            try:
+                # Brief backoff on retry (not first attempt)
+                if attempt > 0:
+                    backoff = min(5.0 * (attempt + 1), 15.0)
+                    _log.info(
+                        "Synthesis retry %d/%d with %s"
+                        " (backoff %.0fs)",
+                        attempt + 1, max_retries,
+                        provider_name, backoff,
+                    )
+                    await asyncio.sleep(backoff)
+
+                response = await asyncio.wait_for(
+                    provider.complete(
+                        messages=[
+                            Message(
+                                role="user",
+                                content=prompt,
+                            ),
+                        ],
+                        model=model or None,
+                        temperature=0.3,
+                        max_tokens=4096,
+                    ),
+                    timeout=60,
+                )
+                response.metadata["synthesis_provider"] = (
+                    provider_name
+                )
+                return response
+
+            except Exception as e:
+                last_error = e
+                _log.warning(
+                    "Synthesis attempt %d failed (%s): %s",
+                    attempt + 1, provider_name, e,
+                )
+                continue
+
+        # All retries exhausted — raise with context
+        raise ValueError(
+            f"Council synthesis failed after {max_retries}"
+            f" attempts across {len(candidates)} providers.\n"
+            f"Last error: {last_error}\n"
+            f"Tried: {', '.join(candidates[:3])}\n"
+            f"Fix: nvh config set"
+            f" council.synthesis_provider <provider>"
+        )
