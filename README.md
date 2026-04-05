@@ -288,6 +288,10 @@ flowchart LR
 
 nvHive works alongside OpenClaw as a routing layer, and integrates with [NemoClaw](docs/NEMOCLAW.md) (NVIDIA's agent framework) as both inference provider and MCP tool server.
 
+<p align="center">
+  <img src="docs/screenshots/nemoclaw-demo.gif" alt="nvHive NemoClaw Integration" width="640">
+</p>
+
 ```bash
 nvh migrate --from openclaw    # import your existing API keys
 nvh nemoclaw --start           # start proxy for NemoClaw agents
