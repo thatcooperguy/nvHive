@@ -26,9 +26,9 @@ No API keys needed. Works immediately with free providers (Groq, GitHub Models, 
 
 ## Why nvHive
 
-**The problem:** Most AI tools lock you into one provider. When that provider changes pricing, hits rate limits, or goes down, your workflow breaks.
+**The problem:** Most AI tools use a single provider. When that provider hits rate limits, changes pricing, or goes down, you're stuck.
 
-**What nvHive does:** Routes queries to the best available provider automatically. Simple queries go to free models. Complex queries go to premium models. If a provider fails, the next one picks up. Your workflow never breaks.
+**What nvHive does:** Routes queries to the best available provider automatically. Simple queries go to free models. Complex queries go to premium models. If a provider fails, the next one picks up.
 
 **What makes it different:**
 - **Learns from every query.** The router tracks which providers actually deliver for which task types. By 20 queries it's routing based on measured performance, not guesses.
@@ -40,26 +40,25 @@ No API keys needed. Works immediately with free providers (Groq, GitHub Models, 
 
 ## Works With OpenClaw
 
-Anthropic recently changed billing so that Claude subscriptions no longer cover third-party tools like OpenClaw. OpenClaw still works — it just costs more now (API rates instead of subscription).
-
-**nvHive helps reduce that cost.** Use nvHive alongside OpenClaw to route simple queries to free providers and reserve Claude for the queries that actually need it.
+nvHive works alongside OpenClaw as a routing layer. OpenClaw handles agent
+orchestration — nvHive handles provider selection, picking the right model
+for each query based on task type and measured quality.
 
 ```bash
 pip install nvhive
-
-# Import your existing API keys
-nvh migrate --from openclaw
-
-# See what providers you have available
-nvh health
+nvh migrate --from openclaw    # import your existing API keys
+nvh health                     # see available providers
 ```
 
 **How they work together:**
-- OpenClaw handles your agent workflow and tool orchestration
-- nvHive sits behind it as the routing layer, picking the cheapest provider that meets quality requirements
-- Simple queries → free providers (Groq, GitHub Models, local GPU) at $0
-- Complex queries → Claude or GPT-4o when quality requires it
-- Your Claude API spend drops because 70-80% of queries don't need a premium model
+- OpenClaw manages your agent workflow and tools
+- nvHive sits behind it as the routing layer
+- Each query goes to the provider best suited for the task type
+- Free providers handle simple queries at no cost
+- Premium providers handle complex queries when quality requires it
+
+*Note: Anthropic recently changed billing for third-party tools.
+See the [integration guide](docs/OPENCLAW_MIGRATION.md) for details.*
 
 **For NemoClaw users** — nvHive plugs directly into OpenShell Gateway as an inference provider:
 ```bash
@@ -246,11 +245,13 @@ nvh routing-stats
 
 ---
 
-## Install
+## Get Started
 
 ```bash
 pip install nvhive
-nvh setup    # interactive provider configuration with key validation
+nvh setup              # configure providers (validates keys)
+nvh health             # check what's available
+nvh "your question"    # try it
 ```
 
 ## Learn More
