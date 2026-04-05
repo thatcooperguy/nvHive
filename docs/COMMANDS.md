@@ -29,6 +29,7 @@ Complete reference for all nvHive CLI commands.
 | Command | Description |
 |---------|-------------|
 | `nvh bench` | GPU benchmark -- measure tokens/second |
+| `nvh benchmark` | Quality benchmark suite. Runs 16 prompts through different modes (single/council-free/council-premium/throwdown), scores with blind LLM judge. Flags: `--mode`, `--judge`, `--tasks`, `--export`, `--output` |
 | `nvh scan` | Scan and index project files |
 | `nvh learn "topic"` | Interactive learning sessions |
 | `nvh clip` | Clipboard integration |
@@ -42,10 +43,14 @@ Complete reference for all nvHive CLI commands.
 | Command | Description |
 |---------|-------------|
 | `nvh status` | Show configured providers, GPU, active model |
+| `nvh health` | Provider health & resilience dashboard. Shows all providers' health scores, status (healthy/degraded/down), position in fallback chain, and resilience summary |
+| `nvh routing-stats` | Routing intelligence dashboard. Shows learned vs static capability scores per provider/task, sample counts, and deltas. Flags: `--provider`, `--task`, `--reset` |
+| `nvh nvidia` | NVIDIA AI infrastructure dashboard. Shows GPU hardware, inference stack status (Ollama/NIM/Triton), local models, `--prefer-nvidia` routing status |
 | `nvh savings` | Track how much you have saved with free/local models |
 | `nvh debug` | Debug mode with verbose output |
 | `nvh doctor` | Diagnose configuration and connectivity |
 | `nvh setup` | Interactive provider setup wizard |
+| `nvh migrate` | Migrate from OpenClaw/Claw Code/Claude Desktop. Auto-detects configs, imports API keys. Flags: `--from`, `--dry-run` |
 | `nvh keys` | Show all free API key signup links in one table |
 | `nvh keys --open` | Open all free provider signup pages in browser |
 | `nvh webui` | Launch web UI (auto hostname + smart port) |
@@ -91,7 +96,7 @@ nvh google "question"       # Route to Gemini
 nvh ollama "question"       # Route to local Ollama
 ```
 
-Works for all 22 providers. Run `nvh <provider>` with no question to launch that provider's setup.
+Works for all 23 providers. Run `nvh <provider>` with no question to launch that provider's setup.
 
 ---
 
