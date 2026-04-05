@@ -1,297 +1,189 @@
 # nvHive
 
-**One command. Every AI model. Your GPU or the cloud.**
+**Your AI workflow shouldn't depend on one provider.**
 
-![version](https://img.shields.io/badge/version-0.3.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-184%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-22-orange) ![models](https://img.shields.io/badge/models-63-purple)
+![version](https://img.shields.io/badge/version-0.5.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-217%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![models](https://img.shields.io/badge/models-63-purple)
 
-- **Ask once, get the best model.** nvHive routes your question to the right LLM across 22 providers and 63 models — automatically, based on task type, cost, and privacy.
-- **Run it free on your GPU.** NVIDIA Nemotron models run locally via Ollama with no API keys, no cloud costs, no data leaving your machine.
-- **Council mode.** When one model isn't enough, multiple LLMs debate your question and synthesize a consensus answer.
-
-<p align="center">
-  <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/terminal-demo.svg" alt="nvHive CLI" width="640">
-</p>
-
----
-
-## Quick Start
+nvHive is an open-source routing layer that sits between your tools and 23 LLM providers. When one provider changes pricing, drops support, or goes down — your workflow doesn't break. Queries route to the best available model automatically, with council consensus when one model isn't enough.
 
 ```bash
 pip install nvhive
 nvh "What is machine learning?"
 ```
 
-No API keys needed — works immediately with free providers. Run `nvh setup` to add more.
+No API keys needed. Works immediately with free providers.
 
-<details>
-<summary><b>Platform-specific installers</b></summary>
+---
 
-**Linux (NVIDIA GPU):**
+## Coming from OpenClaw?
+
+Anthropic dropped OpenClaw support. Your workflow doesn't have to break.
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
+# Option 1: Migrate in 60 seconds
+pip install nvhive
+nvh migrate --from openclaw
+
+# Option 2: Drop-in API replacement (zero code changes)
+# Point your Anthropic SDK at nvHive:
+export ANTHROPIC_BASE_URL=http://localhost:8000/v1/anthropic
+nvh serve
 ```
 
-**macOS:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash
-```
+nvHive imports your API keys, routes across 23 providers (25 free), and your tools keep working. [Full migration guide](docs/CLAUDE_CODE_INTEGRATION.md)
 
-**Windows (PowerShell):**
-```powershell
-iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex
-```
-
-Auto-detects GPU, downloads the right Nemotron model, configures everything. Supports Linux (NVIDIA CUDA), macOS (Apple Silicon Metal), and Windows.
-</details>
+---
 
 ## How It Works
 
-1. You type: `nvh "Should I use Redis or Postgres for sessions?"`
-2. The **action detector** checks if this is a system command. If so, it executes directly.
-3. The **smart router** classifies the task, scores all advisors on relevance, cost, and speed.
-4. **Local-first**: simple queries stay on Nemotron (free, private, no network).
-5. **Cloud when needed**: complex queries route to the best cloud model.
+1. You ask a question
+2. **Adaptive router** classifies the task and scores all providers on capability, cost, latency, and health — using learned scores that improve with every query
+3. **Local-first**: simple queries stay on your GPU (free, private, no network)
+4. **Cloud when needed**: complex queries route to the best cloud model
+5. **Council mode**: when one model isn't enough, multiple LLMs debate and synthesize
+
+The router learns which providers actually deliver for which task types. Day 1 it uses static scores. By day 30 it's routing based on measured performance from your actual queries.
+
+```bash
+nvh routing-stats    # see learned vs static scores
+nvh health           # provider resilience dashboard
+```
 
 ## Core Commands
 
 | Command | What It Does |
 |---------|-------------|
 | `nvh "question"` | Smart route to the best available model |
-| `nvh convene "question"` | Council of AI experts debate and synthesize |
+| `nvh convene "question"` | Council of experts debate and synthesize |
 | `nvh throwdown "question"` | Two-pass deep analysis with critique |
 | `nvh safe "question"` | Local only — nothing leaves your machine |
-| `nvh code / write / research` | Task-optimized routing |
+| `nvh benchmark` | Quality benchmark — prove council beats single models |
+| `nvh health` | Provider resilience dashboard |
+| `nvh routing-stats` | Learned vs static routing intelligence |
+| `nvh nvidia` | NVIDIA GPU infrastructure status |
+| `nvh migrate` | Import configs from OpenClaw, Claw Code, Claude Desktop |
 | `nvh setup` | Interactive provider setup wizard |
-| `nvh webui` | Launch the web dashboard at `http://nvhive` |
-| `nvh integrate` | Auto-detect and connect all platforms |
-| `nvh status` | Providers, GPU, budget at a glance |
 
-[Full command reference →](docs/COMMANDS.md)
+[Full command reference](docs/COMMANDS.md)
 
 ## Providers
 
-**22 providers. 63 models. 25 free — no credit card required.**
+**23 providers. 63 models. 25 free — no credit card required.**
 
-Ollama (local), OpenAI, Anthropic, Google Gemini, Groq, NVIDIA NIM, DeepSeek, GitHub Models, LLM7, Mistral, Cohere, Cerebras, SambaNova, and more. The smart router picks the best one. Or go direct: `nvh groq "question"`.
+Ollama (local), OpenAI, Anthropic, Google Gemini, Groq, NVIDIA NIM, Triton, DeepSeek, GitHub Models, LLM7, Mistral, Cohere, Cerebras, SambaNova, and more.
 
-[Full provider table →](docs/PROVIDERS.md)
+The router picks the best one. Or go direct: `nvh ask --advisor groq "question"`.
+
+[Full provider table](docs/PROVIDERS.md)
 
 ---
 
-## Integrations
+## For Tool Builders
 
-nvHive connects to your existing AI platforms. Auto-detect everything with one command:
-
-```bash
-nvh integrate --auto
-```
-
-Or set up each platform individually:
-
-### NVIDIA NemoClaw
-
-nvHive integrates with [NemoClaw](https://github.com/NVIDIA/NemoClaw) in two ways:
-
-**1. Inference Provider** — all agent LLM calls route through nvHive's smart router:
-```bash
-nvh nemoclaw --start    # start proxy
-nvh nemoclaw --test     # verify connectivity
-```
-
-**2. MCP Tool Server** — agents can explicitly call council/throwdown for consensus:
-```bash
-nvh nemoclaw --mcp      # show MCP setup
-```
-
-```mermaid
-graph LR
-    subgraph NemoClaw Sandbox
-        A[OpenClaw Agent] --> B[inference.local]
-        A -->|MCP| M[nvHive MCP]
-    end
-    B -->|OpenShell Gateway| C[nvHive Proxy :8000]
-    M -->|tools| C
-    C --> D[Smart Router]
-    D --> E[Ollama / Nemotron]
-    D --> F[22 Cloud Providers]
-    D --> G[Council / Throwdown]
-
-    style C fill:#76B900,color:#000
-    style E fill:#76B900,color:#000
-    style M fill:#76B900,color:#000
-```
-
-Virtual models: `auto`, `safe`, `council`, `council:N`, `throwdown`. MCP tools: `ask`, `council`, `throwdown`, `status`.
-
-[Full NemoClaw guide →](docs/NEMOCLAW.md)
-
-### Anthropic Claude Code
-
-Register nvHive as an MCP tool server — Claude Code gets access to multi-model routing, council consensus, and provider management:
-
-```bash
-pip install "nvhive[mcp]"
-claude mcp add nvhive nvh mcp
-```
-
-```mermaid
-graph LR
-    A[Claude Code] -->|MCP stdio| B[nvHive MCP Server]
-    B --> C[ask / ask_safe]
-    B --> D[council / throwdown]
-    B --> E[status / list_advisors]
-    C --> F[nvHive Engine]
-    D --> F
-    F --> G[22 LLM Providers]
-```
-
-MCP tools: `ask`, `ask_safe`, `council`, `throwdown`, `status`, `list_advisors`, `list_cabinets`.
-
-### OpenClaw
-
-Register nvHive tools with any OpenClaw agent:
-
-```bash
-nvh openclaw --config     # generates openclaw.json
-nvh openclaw --start      # start MCP server
-```
-
-```mermaid
-graph LR
-    A[OpenClaw Agent] -->|MCP stdio| B[nvHive MCP Server]
-    B --> C[ask / council / throwdown]
-    C --> D[Smart Router]
-    D --> E[Local + Cloud Providers]
-```
-
-### Cursor
-
-```bash
-nvh integrate --auto      # auto-detects Cursor and configures
-```
-
-Or manually add to `~/.cursor/mcp.json`:
-```json
-{ "mcpServers": { "nvhive": { "command": "nvhive-mcp" } } }
-```
-
-### OpenAI-Compatible Proxy
-
-Any tool that speaks the OpenAI API can use nvHive as a backend:
+nvHive is infrastructure. Any AI tool, IDE, or agent can add multi-provider routing in 3 lines:
 
 ```python
-from openai import OpenAI
-client = OpenAI(base_url="http://nvhive:8000/v1/proxy", api_key="nvhive")
-response = client.chat.completions.create(
-    model="auto",  # nvHive picks the best model
-    messages=[{"role": "user", "content": "Hello"}]
-)
+import nvh
+
+# Drop-in replacement for OpenAI
+response = await nvh.complete([
+    {"role": "user", "content": "Explain quicksort"}
+])
+print(response.content)
+# → Routed to best available provider, with automatic fallback
 ```
 
-### Integration Architecture
+```python
+# Council consensus — 3 models collaborate
+result = await nvh.convene("Should we use Rust or Go?")
+print(result.synthesis.content)
+print(f"Confidence: {result.confidence_score:.0%}")
 
-```mermaid
-graph TB
-    subgraph Clients
-        CLI[nvh CLI]
-        WEB[Web UI]
-        NC[NemoClaw]
-        OC[OpenClaw]
-        CC[Claude Code]
-        CU[Cursor]
-        SDK[Any OpenAI SDK]
-    end
-    subgraph "nvHive Core"
-        API[API Server :8000]
-        MCP[MCP Server]
-        PROXY[OpenAI Proxy]
-        ROUTER[Smart Router]
-        COUNCIL[Council Engine]
-    end
-    subgraph Providers
-        LOCAL[Ollama / Nemotron]
-        CLOUD[OpenAI / Anthropic / Google]
-        FREE[Groq / LLM7 / GitHub Models]
-    end
-
-    CLI --> API
-    WEB --> API
-    NC -->|OpenShell Gateway| PROXY
-    NC -->|MCP| MCP
-    OC -->|MCP| MCP
-    CC -->|MCP| MCP
-    CU -->|MCP| MCP
-    SDK -->|OpenAI API| PROXY
-
-    MCP --> API
-    PROXY --> API
-    API --> ROUTER
-    ROUTER --> COUNCIL
-    ROUTER --> LOCAL
-    ROUTER --> CLOUD
-    ROUTER --> FREE
-
-    style LOCAL fill:#76B900,color:#000
-    style NC fill:#76B900,color:#000
-    style API fill:#1a1a1a,color:#76B900,stroke:#76B900
+# Check what's available
+providers = await nvh.health()
+decision = await nvh.route("complex question")
 ```
 
-[NemoClaw guide →](docs/NEMOCLAW.md) · [SDK & API reference →](docs/SDK_API.md)
+**API Proxies** — point any existing SDK at nvHive:
+
+| SDK | Configuration |
+|-----|--------------|
+| OpenAI | `base_url="http://localhost:8000/v1/proxy"` |
+| Anthropic | `base_url="http://localhost:8000/v1/anthropic"` |
+| Claude Code | `claude mcp add nvhive -- python -m nvh.mcp_server` |
+| Cursor | `nvh integrate --auto` |
+| Any MCP client | `nvhive-mcp` entry point |
+
+[SDK & API reference](docs/SDK_API.md)
+
+---
+
+## NVIDIA GPU Support
+
+nvHive makes every NVIDIA GPU an AI inference engine. Local-first by default.
+
+```bash
+nvh nvidia              # GPU hardware + inference stack status
+nvh bench               # benchmark your GPU (tokens/sec)
+nvh --prefer-nvidia     # 1.3x routing bonus for local NVIDIA inference
+```
+
+| Provider | Hardware | Use Case |
+|----------|----------|----------|
+| Ollama/Nemotron | Consumer GPUs (RTX 3060+) | Default local inference |
+| NVIDIA NIM | Cloud API | Specialized models |
+| Triton Server | Enterprise GPUs (H100/A100) | Production serving |
+
+Integrates with [NemoClaw](docs/NEMOCLAW.md) as both an inference provider and MCP tool server.
+
+---
+
+## Quality Proof
+
+Don't take our word for it. Run the benchmark yourself:
+
+```bash
+nvh benchmark --mode council-free    # free council vs single model ($0)
+nvh benchmark --mode all             # full comparison across all modes
+nvh benchmark --export results.md    # publish the results
+```
+
+16 real-world prompts across code generation, debugging, reasoning, math, and more. Blind LLM judge scores responses on accuracy, completeness, actionability, and coherence.
 
 ---
 
 ## Web Dashboard
 
 ```bash
-nvh webui                 # auto-configures hostname + best port
+nvh webui
 ```
 
-Access at `http://nvhive:3000` — 8 pages including Chat, Council, Advisors, Integrations, System, Settings, and Setup Wizard. [Full WebUI guide →](docs/WEBUI.md)
+9 pages: Chat, Council, Advisors, Analytics, Integrations, System, Settings, Setup Wizard, Query Builder.
 
 ---
 
-## Privacy and Safe Mode
+## Install
 
-- **`nvh safe`** — local models only, nothing leaves your machine
-- **Local default** — simple queries stay on Ollama, complex route to cloud
-- **HIVE.md** — drop a context file in any project, all advisors see it automatically
+```bash
+# PyPI
+pip install nvhive
 
-## Python SDK
-
-```python
-from nvh import ask, convene, safe
-
-response = await ask("What is machine learning?")
-result = await convene("Should we use Rust?", cabinet="engineering")
-private = await safe("Analyze my salary data")
+# One-line installer (detects OS, auto-migrates from OpenClaw)
+curl -fsSL https://nvhive.dev/install | sh
 ```
-
-Sync versions: `ask_sync`, `convene_sync`, `safe_sync`. [SDK reference →](docs/SDK_API.md)
 
 ## Learn More
 
 | Guide | Description |
 |-------|-------------|
-| [Getting Started](docs/GETTING_STARTED.md) | First-time setup and usage |
-| [Commands](docs/COMMANDS.md) | Full CLI reference |
-| [Providers](docs/PROVIDERS.md) | 22 providers, GPU-adaptive models |
-| [Council System](docs/COUNCIL.md) | Multi-LLM consensus, 12 cabinets |
+| [Getting Started](docs/GETTING_STARTED.md) | First-time setup |
+| [Commands](docs/COMMANDS.md) | Full CLI reference (50+ commands) |
+| [Providers](docs/PROVIDERS.md) | 23 providers, 63 models |
+| [Council System](docs/COUNCIL.md) | Multi-LLM consensus with confidence scoring |
+| [Claude Code Integration](docs/CLAUDE_CODE_INTEGRATION.md) | MCP server + migration guide |
 | [NemoClaw](docs/NEMOCLAW.md) | NVIDIA NemoClaw integration |
-| [SDK & API](docs/SDK_API.md) | Python SDK, proxy, MCP server |
-| [Web Interface](docs/WEBUI.md) | Dashboard pages and design |
-| [Orchestration](docs/ORCHESTRATION.md) | GPU-powered routing and eval |
-| [For Students](docs/STUDENTS.md) | Homework, tutoring, exam prep |
-| [Tools](docs/TOOLS.md) | 27 built-in tools |
-| [Configuration](docs/CONFIGURATION.md) | Config, HIVE.md, budget |
-| [Architecture](docs/ARCHITECTURE.md) | System design and data flow |
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and pull request guidelines.
+| [SDK & API](docs/SDK_API.md) | Python SDK, REST API, proxies |
+| [Architecture](docs/ARCHITECTURE.md) | System design and adaptive learning |
 
 ## License
 
