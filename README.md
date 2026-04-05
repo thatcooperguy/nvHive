@@ -37,6 +37,34 @@ nvh "your question"    # try it
 
 Works immediately with LLM7 (no signup). Run `nvh setup` to add free providers like Groq and GitHub Models.
 
+<details>
+<summary><b>NVIDIA GPU Quick Start</b> — local inference on your hardware</summary>
+
+```bash
+# 1. Install Ollama + Nemotron
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull nemotron-mini        # 4.1GB, runs on 8GB+ VRAM
+
+# 2. Install nvHive
+pip install nvhive
+
+# 3. nvHive auto-detects your GPU and Nemotron
+nvh nvidia                       # GPU info + inference stack status
+nvh bench                        # benchmark your GPU (tokens/sec)
+
+# 4. Queries route to your GPU by default
+nvh "Explain quicksort"          # → local Nemotron, $0, private
+nvh safe "Analyze this code"     # → forced local, nothing leaves machine
+nvh --prefer-nvidia "question"   # → 1.3x bonus for NVIDIA providers
+
+# 5. Council on your GPU — 3 models, $0, fully private
+nvh convene "Redis vs Postgres for sessions?"
+```
+
+nvHive detects NVIDIA GPUs via pynvml (VRAM, driver, CUDA version, temperature, power draw) and selects the optimal Nemotron model for your hardware. Simple queries stay local. Complex queries escalate to cloud only when needed. The learning loop measures your GPU's quality over time and adjusts routing thresholds automatically.
+
+</details>
+
 ---
 
 ## How It Works
@@ -46,29 +74,32 @@ Works immediately with LLM7 (no signup). Run `nvh setup` to add free providers l
 ```mermaid
 flowchart TB
     USER[User Query] --> CLASSIFY[Task Classifier<br/>TF-IDF · 13 task types]
-    CLASSIFY --> LOCALCHECK{Local model<br/>good enough?}
+    CLASSIFY --> LOCALCHECK{Local GPU<br/>good enough?}
     
-    LOCALCHECK -->|Simple query| LOCAL[Ollama / Nemotron<br/>on your GPU]
-    LOCALCHECK -->|Complex query| SCORE[Score All Providers]
+    LOCALCHECK -->|Simple query| GPU[NVIDIA GPU<br/>Nemotron via Ollama<br/>pynvml detection]
+    LOCALCHECK -->|Complex query| SCORE[Score All Providers<br/>capability · cost · latency · health]
     
     SCORE --> ROUTE{Pick Best<br/>Provider}
     
-    ROUTE --> FREE[Free Providers<br/>Groq · GitHub · LLM7]
-    ROUTE --> PAID[Paid Providers<br/>OpenAI · Anthropic · Google]
-    ROUTE --> LOCAL
+    ROUTE --> FREE[Free Cloud<br/>Groq · GitHub · LLM7]
+    ROUTE --> PAID[Paid Cloud<br/>OpenAI · Anthropic · Google]
+    ROUTE --> NIM[NVIDIA NIM<br/>Triton]
+    ROUTE --> GPU
     
     FREE --> RESPONSE[Response]
     PAID --> RESPONSE
-    LOCAL --> RESPONSE
+    NIM --> RESPONSE
+    GPU --> RESPONSE
     
-    RESPONSE --> LEARN[Learning Loop<br/>Record outcome · EMA update]
+    RESPONSE --> LEARN[Learning Loop<br/>Record outcome · EMA update<br/>Adjusts GPU routing thresholds]
     LEARN -->|Feeds back into| SCORE
     
     RESPONSE -->|--verify flag| VERIFY[Cross-Model<br/>Verification]
     VERIFY --> FINAL[Verified Response]
     RESPONSE --> FINAL
     
-    style LOCAL fill:#76B900,color:#000
+    style GPU fill:#76B900,color:#000
+    style NIM fill:#76B900,color:#000
     style LEARN fill:#1a1a2e,color:#76B900,stroke:#76B900
     style VERIFY fill:#1a1a2e,color:#00bcd4,stroke:#00bcd4
 ```
@@ -163,17 +194,25 @@ ollama pull nemotron-mini
 ```
 
 **What happens automatically:**
-1. nvHive detects your GPU (NVIDIA via pynvml, Apple Silicon via system)
-2. Finds Ollama → registers Nemotron as a provider
-3. Simple queries route to Nemotron locally
-4. Complex queries escalate to cloud when needed
-5. The learning loop measures Nemotron's quality and adjusts thresholds
+1. pynvml detects your NVIDIA GPU — reads VRAM, driver, CUDA version, temperature, power draw, PCIe gen, clock speeds
+2. Selects the optimal Nemotron model for your available VRAM
+3. Registers Ollama as a provider with GPU-aware configuration
+4. Simple queries route to Nemotron locally — no network, no cost, private
+5. Complex queries escalate to NIM or cloud when local quality isn't sufficient
+6. `nvh bench` benchmarks your specific GPU with community baselines (e.g. RTX 4090: ~140 tok/s)
+7. The learning loop measures Nemotron's quality on YOUR hardware and adjusts routing thresholds over time
 
-| Provider | Hardware | Use Case |
-|----------|----------|----------|
-| Ollama/Nemotron | Consumer GPUs (RTX 3060+, 8GB+ VRAM) | Default local inference |
-| NVIDIA NIM | Cloud API (1000 free credits on signup) | Specialized models |
-| Triton Server | Enterprise GPUs (H100/A100) | Production multi-model serving |
+### NVIDIA Inference Stack
+
+| Layer | Technology | Hardware | Use Case |
+|-------|-----------|----------|----------|
+| **Local** | Ollama + Nemotron | Consumer GPUs (RTX 3060+, 8GB+ VRAM) | Default inference, privacy mode |
+| **Cloud** | NVIDIA NIM API | NVIDIA cloud | Specialized models, 1000 free credits |
+| **Enterprise** | Triton Inference Server | H100 / A100 / L40 | Production multi-model serving, TensorRT-LLM |
+| **Agent** | NemoClaw / OpenShell | Any | Agent orchestration with nvHive routing |
+| **Detection** | pynvml | Any NVIDIA GPU | VRAM, driver, CUDA, temp, power, PCIe |
+
+`--prefer-nvidia` gives a 1.3x routing bonus to all NVIDIA-backed providers, keeping inference on NVIDIA hardware whenever quality allows.
 
 ---
 
