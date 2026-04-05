@@ -368,12 +368,58 @@ class Engine:
         conversation_id: str | None = None,
         continue_last: bool = False,
         privacy: bool = False,
+        escalate: bool = False,
+        verify: bool = False,
     ) -> CompletionResponse:
         """Execute a single query with routing, fallback, caching, and budget enforcement.
 
         When *privacy* is ``True``, cache reads/writes, query logging, and
         conversation persistence are all skipped so no data is stored.
+
+        When *escalate* is ``True`` and no explicit provider is given, the
+        engine tries the cheapest strategy first and automatically escalates
+        to the best strategy if the response confidence is too low.
+
+        When *verify* is ``True``, a different provider cross-checks the
+        response for hallucinations and logical errors.
         """
+        # --- Confidence-gated escalation (delegates the whole query) ---
+        if escalate and not provider:
+            from nvh.core.smart_query import query_with_escalation
+
+            resp, meta = await query_with_escalation(
+                self,
+                prompt,
+                provider=provider,
+                model=model,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=stream,
+                use_cache=use_cache,
+                conversation_id=conversation_id,
+                continue_last=continue_last,
+                privacy=privacy,
+            )
+            # Attach escalation metadata
+            resp.metadata.update(meta)
+
+            # Optional verification on the (possibly escalated) response
+            if verify and not privacy:
+                from nvh.core.smart_query import verify_response
+
+                verification = await verify_response(
+                    self, prompt, resp.content, resp.provider,
+                )
+                resp.metadata["verification"] = {
+                    "verdict": verification.verdict,
+                    "confidence": verification.confidence,
+                    "issues": verification.issues,
+                    "correction": verification.correction,
+                    "verifier": verification.verifier_provider,
+                }
+            return resp
+
         await self.initialize()
 
         temp = temperature if temperature is not None else self.config.defaults.temperature
@@ -566,6 +612,21 @@ class Engine:
                 response=response,
                 quality_score=_eval_quality,
             ))
+
+        # --- Response verification (cross-model check) ---
+        if verify and not privacy:
+            from nvh.core.smart_query import verify_response
+
+            verification = await verify_response(
+                self, prompt, response.content, response.provider,
+            )
+            response.metadata["verification"] = {
+                "verdict": verification.verdict,
+                "confidence": verification.confidence,
+                "issues": verification.issues,
+                "correction": verification.correction,
+                "verifier": verification.verifier_provider,
+            }
 
         return response
 

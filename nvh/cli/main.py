@@ -628,6 +628,14 @@ def ask(
         help="Bias routing toward NVIDIA providers"
         " (ollama/Nemotron, NIM, Triton)",
     ),
+    escalate: bool = typer.Option(
+        False, "--escalate",
+        help="Try cheap model first, escalate to premium if low confidence",
+    ),
+    verify: bool = typer.Option(
+        False, "--verify",
+        help="Cross-check response with a different model for accuracy",
+    ),
 ):
     """Ask a single LLM advisor a question."""
     # Apply shorthand output flags
@@ -805,9 +813,44 @@ def ask(
                     conversation_id=None if privacy else conversation,
                     continue_last=False if privacy else continue_,
                     privacy=privacy,
+                    escalate=escalate,
+                    verify=verify,
                 )
+
+                # Show escalation info before the response
+                if resp.metadata.get("escalated") and not quiet:
+                    meta = resp.metadata
+                    console.print(
+                        f"[dim][ask → {meta.get('initial_provider', '?')}"
+                        f" → escalated to {resp.provider}/{resp.model}"
+                        f" (confidence: {meta.get('initial_confidence', 0):.0%})][/dim]"
+                    )
+
                 _format_output(resp.content, output)
                 _print_metadata(resp, show=not quiet)
+
+                # Show verification result after metadata
+                veri = resp.metadata.get("verification")
+                if veri and not quiet:
+                    verdict = veri.get("verdict", "unverified")
+                    v_conf = veri.get("confidence", 0)
+                    verifier = veri.get("verifier", "unknown")
+                    issues = veri.get("issues", [])
+                    if verdict == "correct":
+                        console.print(
+                            f"[dim]Verified \u2713 by {verifier}"
+                            f" (confidence: {v_conf:.0f}/10)[/dim]"
+                        )
+                    elif verdict in ("partially_correct", "incorrect"):
+                        issue_text = ", ".join(issues) if issues else "see correction"
+                        console.print(
+                            f"[dim]Verification \u26a0 by {verifier}:"
+                            f" {verdict} \u2014 \"{issue_text}\"[/dim]"
+                        )
+                    else:
+                        console.print(
+                            f"[dim]Verification: {verdict}[/dim]"
+                        )
             except Exception as e:
                 console.print(_format_cli_error(e))
                 raise typer.Exit(1)
