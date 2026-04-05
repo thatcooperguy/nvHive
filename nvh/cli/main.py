@@ -4222,19 +4222,35 @@ def bench(
         None, "-m", "--model",
         help="Model to benchmark (default: current local model)",
     ),
-    quick_mode: bool = typer.Option(False, "--quick", help="Run only 2 tests instead of 4"),
-    all_models: bool = typer.Option(False, "--all", help="Benchmark all loaded local models"),
+    quick_mode: bool = typer.Option(
+        False, "--quick",
+        help="Run only 2 speed tests instead of 4",
+    ),
+    all_models: bool = typer.Option(
+        False, "--all",
+        help="Benchmark all loaded local models",
+    ),
+    quality: bool = typer.Option(
+        False, "--quality", "-q",
+        help="Run quality comparison (single vs council)",
+    ),
+    speed_only: bool = typer.Option(
+        False, "--speed",
+        help="GPU speed test only (skip quality)",
+    ),
 ):
-    """Benchmark your GPU — measure AI inference speed (tokens/second).
+    """Benchmark — GPU speed + AI quality in one command.
 
-    Like 3DMark but for AI. See how fast your GPU can generate text
-    and compare with community averages.
+    By default runs the GPU speed test (tokens/sec). Add --quality
+    to also run the quality comparison (single vs council).
 
     Examples:
-        nvh bench                    # benchmark default local model
-        nvh bench -m nemotron-small  # benchmark specific model
-        nvh bench --quick            # fast 2-test benchmark
-        nvh bench --all              # benchmark all local models
+        nvh bench                  # GPU speed test
+        nvh bench --quality        # speed + quality comparison
+        nvh bench -q               # same, short flag
+        nvh bench --speed          # speed only (skip quality)
+        nvh bench -m nemotron      # benchmark specific model
+        nvh bench --quick          # fast 2-test speed benchmark
     """
     async def _run_bench():
         import httpx
@@ -4400,13 +4416,17 @@ def bench(
 
     _run(_run_bench())
 
+    # Run quality benchmark if requested
+    if quality and not speed_only:
+        benchmark()
+
 
 # ---------------------------------------------------------------------------
-# nvh benchmark (quality)
+# nvh benchmark (quality) — also callable via nvh bench --quality
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(hidden=True)
 def benchmark(
     mode: str = typer.Option(
         "single,council-free", "-m", "--mode",
@@ -4457,17 +4477,17 @@ def benchmark(
         None, "--profile",
     ),
 ):
-    """Quality benchmark — prove council beats single models.
+    """Quality benchmark — compare single model vs council.
 
-    Runs curated prompts through different modes (single model,
-    free council, premium council, throwdown) and scores each
+    Prefer using: nvh bench --quality (or nvh bench -q)
+
+    Runs prompts through single and council modes, scores each
     response using a blind LLM judge on quality dimensions.
 
     Examples:
-        nvh benchmark                        # run all modes
-        nvh benchmark -m council-free        # free only ($0)
-        nvh benchmark --export results.md    # markdown report
-        nvh benchmark --tasks code_generation,reasoning
+        nvh bench -q                         # recommended way
+        nvh benchmark                        # also works
+        nvh benchmark --tasks code_generation
     """
     from nvh.core.quality_benchmark import (
         BenchmarkMode,
