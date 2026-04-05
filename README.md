@@ -12,7 +12,7 @@ nvh "What is machine learning?"
 # → Routed to groq/llama-3.3-70b (free, 520ms)
 ```
 
-No API keys needed. Works immediately with free providers (Groq, GitHub Models, LLM7).
+Works immediately with LLM7 (no signup). Run `nvh setup` to add free providers like Groq and GitHub Models.
 
 <p align="center">
   <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
