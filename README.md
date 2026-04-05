@@ -19,7 +19,7 @@ No API keys needed. Works immediately with free providers (Groq, GitHub Models, 
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/terminal-demo.svg" alt="nvHive CLI" width="640">
+  <img src="docs/screenshots/terminal-demo.gif" alt="nvHive CLI" width="640">
 </p>
 
 ---
