@@ -498,6 +498,10 @@ class Engine:
             strategy=strategy,
         )
 
+        # Save routing context for `nvh why`
+        self._last_decision = decision
+        self._last_prompt = prompt
+
         # Prompt optimization via local orchestrator (LIGHT+ mode)
         _optimized_prompt = prompt
         if self.orchestrator.is_active:
@@ -649,7 +653,58 @@ class Engine:
                 "verifier": verification.verifier_provider,
             }
 
+        # Save routing context for `nvh why`
+        if not privacy:
+            self._save_last_query_context(
+                decision, response, prompt,
+            )
+
         return response
+
+    def _save_last_query_context(
+        self,
+        decision: RoutingDecision,
+        response: CompletionResponse,
+        prompt: str,
+    ) -> None:
+        """Save routing explanation to disk for `nvh why`."""
+        import json as _json
+        from pathlib import Path as _Path
+
+        context = {
+            "prompt": prompt[:200],
+            "task_type": decision.task_type.value,
+            "classification_confidence": decision.confidence,
+            "provider": response.provider,
+            "model": response.model,
+            "strategy": "best",
+            "scores": decision.scores,
+            "reason": decision.reason,
+            "latency_ms": response.latency_ms,
+            "cost_usd": str(response.cost_usd),
+            "tokens": {
+                "input": response.usage.input_tokens,
+                "output": response.usage.output_tokens,
+            },
+            "fallback_from": response.fallback_from,
+            "cache_hit": response.cache_hit,
+            "verification": response.metadata.get(
+                "verification",
+            ),
+            "escalated": response.metadata.get("escalated"),
+            "timestamp": (
+                __import__("datetime")
+                .datetime.now(__import__("datetime").UTC)
+                .isoformat()
+            ),
+        }
+
+        try:
+            why_path = _Path.home() / ".hive" / "last_query.json"
+            why_path.parent.mkdir(parents=True, exist_ok=True)
+            why_path.write_text(_json.dumps(context, indent=2))
+        except Exception:
+            pass  # non-critical
 
     async def _record_learning(
         self,

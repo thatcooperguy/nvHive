@@ -2056,6 +2056,143 @@ def throwdown(
 
 
 # ---------------------------------------------------------------------------
+# nvh why — routing explainability
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def why():
+    """Explain why the last query was routed the way it was.
+
+    Shows the full routing decision breakdown: task classification,
+    provider scores, learned vs static capability, and why the
+    chosen provider won.
+
+    Run any query first, then run `nvh why` to see the explanation.
+
+    Examples:
+        nvh "What is quicksort?"
+        nvh why
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    why_path = _Path.home() / ".hive" / "last_query.json"
+    if not why_path.exists():
+        console.print(
+            "[dim]No query to explain yet."
+            " Run a query first, then nvh why.[/dim]",
+        )
+        return
+
+    try:
+        ctx = _json.loads(why_path.read_text())
+    except Exception:
+        console.print("[red]Could not read last query context.[/red]")
+        return
+
+    console.print()
+    console.print("[bold]Routing Explanation[/bold]")
+    console.print()
+
+    # Query
+    prompt = ctx.get("prompt", "?")
+    console.print(f'  [dim]Query:[/dim] "{prompt}"')
+    console.print()
+
+    # Task classification
+    task = ctx.get("task_type", "?")
+    conf = ctx.get("classification_confidence", 0)
+    console.print(
+        f"  [bold]Task:[/bold] {task}"
+        f" (confidence: {conf:.0%})",
+    )
+    console.print()
+
+    # Decision
+    provider = ctx.get("provider", "?")
+    model = ctx.get("model", "?")
+    reason = ctx.get("reason", "")
+    console.print(
+        f"  [bold]Routed to:[/bold]"
+        f" [green]{provider}/{model}[/green]",
+    )
+    if reason:
+        console.print(f"  [dim]Reason: {reason}[/dim]")
+    console.print()
+
+    # Scores breakdown
+    scores = ctx.get("scores", {})
+    if scores:
+        console.print("  [bold]Provider Scores:[/bold]")
+        table = Table(
+            show_header=True,
+            header_style="bold cyan",
+            pad_edge=False,
+            box=None,
+        )
+        table.add_column("Signal", style="dim")
+        table.add_column("Score", justify="right")
+
+        for signal in [
+            "capability", "cost", "latency", "health",
+            "composite",
+        ]:
+            val = scores.get(signal)
+            if val is not None:
+                style = ""
+                if signal == "composite":
+                    style = "bold green"
+                table.add_row(
+                    signal, f"{val:.3f}", style=style,
+                )
+
+        console.print(table)
+        console.print()
+
+    # Outcome
+    latency = ctx.get("latency_ms", 0)
+    cost = ctx.get("cost_usd", "0")
+    tokens = ctx.get("tokens", {})
+    console.print("  [bold]Outcome:[/bold]")
+    console.print(
+        f"    Latency: {latency}ms"
+        f" | Cost: ${cost}"
+        f" | Tokens: {tokens.get('input', 0)}"
+        f"/{tokens.get('output', 0)}",
+    )
+
+    # Extras
+    if ctx.get("fallback_from"):
+        console.print(
+            f"    [yellow]Fallback:"
+            f" {ctx['fallback_from']}"
+            f" → {provider}[/yellow]",
+        )
+    if ctx.get("cache_hit"):
+        console.print("    [green]Cache hit[/green]")
+    if ctx.get("escalated"):
+        console.print(
+            "    [yellow]Escalated from"
+            " cheaper provider[/yellow]",
+        )
+    if ctx.get("verification"):
+        v = ctx["verification"]
+        verdict = v.get("verdict", "?")
+        vconf = v.get("confidence", 0)
+        verifier = v.get("verifier", "?")
+        console.print(
+            f"    Verified by {verifier}:"
+            f" {verdict} ({vconf}/10)",
+        )
+
+    ts = ctx.get("timestamp", "")
+    if ts:
+        console.print(f"\n  [dim]{ts}[/dim]")
+    console.print()
+
+
+# ---------------------------------------------------------------------------
 # nvh health — provider resilience dashboard
 # ---------------------------------------------------------------------------
 
