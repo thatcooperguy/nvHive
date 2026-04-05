@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.5.1] - 2026-04-05
+
+### Added
+- `nvh why` — routing explainability (shows full scoring breakdown for last query)
+- `nvh history` — recent query history with costs and timing
+- Prometheus metrics endpoint (`/metrics`) — 7 metrics for Grafana dashboards
+- Jupyter notebook integration (`%load_ext nvh.jupyter`) — magic commands
+- Confidence-gated escalation (`--escalate`) — try free first, upgrade if uncertain
+- Cross-model verification (`--verify`) — second model checks for errors
+- TF-IDF task classifier (replaced regex keyword matching)
+- Council synthesis retry with provider rotation and rate-limit staggering
+- `nvh nvidia` GPU detection with automatic Nemotron model pull in setup
+- Feature matrix table in README
+- NemoClaw demo GIF, GPU detection GIF
+- Throwdown mode diagram
+
+### Fixed
+- Engine now auto-loads API keys from keyring (setup saves, engine reads)
+- Council synthesis reliability on free tiers (retry + backoff + rotation)
+- Truthful OpenClaw positioning (complementary, not competitive)
+- README reviewed by 10 AI personas, rewritten based on feedback
+- All docs updated: provider count (23), test count (225)
+- Removed "coming soon" on shipped features
+- Fixed broken Nemotron link
+- Fixed Mermaid diagram rendering on GitHub
+
 ## [0.5.0] - 2026-04-04
 
 ### Added
