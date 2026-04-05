@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,8 +17,135 @@ from nvh.providers.registry import ProviderRegistry
 _NVIDIA_PROVIDERS = frozenset({"nvidia", "ollama", "triton"})
 
 # ---------------------------------------------------------------------------
-# Task Classifier (keyword/regex for MVP)
+# Task Classifier — TF-IDF cosine similarity with regex fallback
 # ---------------------------------------------------------------------------
+
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "it", "of", "in", "to", "and", "or", "for",
+    "on", "at", "by", "with", "as", "be", "was", "are", "been", "from",
+    "has", "have", "had", "do", "does", "did", "but", "not", "this",
+    "that", "these", "those", "i", "me", "my", "you", "your", "we",
+    "our", "he", "she", "they", "them", "its", "can", "will", "would",
+    "could", "should", "just", "about", "so", "if", "then", "than",
+    "also", "into", "up", "out", "some", "all", "no", "more",
+})
+
+_TASK_CORPUS: dict[TaskType, list[str]] = {
+    TaskType.CODE_GENERATION: [
+        "Write a Python function that sorts a list",
+        "Create a REST API endpoint for user registration",
+        "Implement a binary search tree in Java",
+        "Build a React component for a login form",
+        "Write a SQL query to find duplicate records",
+        "Create a Dockerfile for a Node.js application",
+        "Implement rate limiting middleware in Express",
+        "Code a recursive Fibonacci function",
+        "Write a class that implements the observer pattern",
+        "Build a CLI tool in Go that processes CSV files",
+    ],
+    TaskType.CODE_REVIEW: [
+        "Review this code for security vulnerabilities",
+        "What's wrong with this function and how can I improve it",
+        "Critique this implementation and suggest optimizations",
+        "Is this code production-ready and what needs to change",
+        "Review this pull request for best practices",
+        "Check this module for code smells and anti-patterns",
+        "Evaluate the test coverage of this codebase",
+    ],
+    TaskType.CODE_DEBUG: [
+        "I'm getting a TypeError exception can you fix this bug",
+        "Debug this function it returns the wrong result",
+        "Why does this code throw a segmentation fault",
+        "Fix this stack trace error in my Python script",
+        "This program crashes when I pass null values",
+        "Help me find the bug in this recursive function",
+        "My application doesn't work after the latest update",
+    ],
+    TaskType.REASONING: [
+        "Explain how neural networks learn through backpropagation",
+        "Why does quicksort have O(n log n) average complexity",
+        "Analyze the trade-offs between SQL and NoSQL databases",
+        "Compare microservices versus monolithic architecture",
+        "Evaluate the pros and cons of functional programming",
+        "Think through this logic puzzle step by step",
+        "How does garbage collection work in modern languages",
+    ],
+    TaskType.MATH: [
+        "Calculate the integral of x squared from 0 to 5",
+        "Solve this equation 2x plus 5 equals 15",
+        "Compute the derivative of sin x times cos x",
+        "Prove that the square root of 2 is irrational",
+        "What is the probability of rolling two sixes",
+        "Find the eigenvalues of this matrix",
+        "Solve this system of linear algebra equations",
+    ],
+    TaskType.CREATIVE_WRITING: [
+        "Write a short story about a dragon who learns to fly",
+        "Compose a poem about the ocean at sunset",
+        "Draft a blog post about sustainable living",
+        "Create a fictional dialogue between two scientists",
+        "Write a narrative essay about overcoming adversity",
+        "Compose song lyrics about finding your path",
+        "Write a creative fiction piece set in space",
+    ],
+    TaskType.SUMMARIZATION: [
+        "Summarize this article for me in three sentences",
+        "Give me a brief summary of this research paper",
+        "TLDR of this long email thread",
+        "Condense this report into key bullet points",
+        "Recap the main arguments from this document",
+        "Provide a summary overview of this chapter",
+    ],
+    TaskType.TRANSLATION: [
+        "Translate this paragraph to Spanish",
+        "Convert this English text into French",
+        "How do you say this phrase in German",
+        "Translate this document from Japanese to English",
+        "Give me the Chinese translation of this sentence",
+        "Translate this technical manual to Portuguese",
+    ],
+    TaskType.CONVERSATION: [
+        "Hello how are you doing today",
+        "Hi there thanks for your help",
+        "Hey what's up",
+        "Thank you that was very helpful",
+        "Good morning nice to meet you",
+        "How are you",
+    ],
+    TaskType.QUESTION_ANSWERING: [
+        "What is the capital of France",
+        "Who invented the telephone",
+        "When did World War II end",
+        "Where is the Great Barrier Reef located",
+        "How many planets are in our solar system",
+        "Define photosynthesis",
+        "What is the meaning of entropy in physics",
+    ],
+    TaskType.STRUCTURED_EXTRACTION: [
+        "Extract all email addresses from this text",
+        "Parse this HTML into a JSON structure",
+        "Convert this data into a CSV table",
+        "Extract the key-value pairs from this log file",
+        "Format this information as a structured schema",
+        "Pull out all the dates and names from this document",
+    ],
+    TaskType.MULTIMODAL: [
+        "Look at this image and describe what you see",
+        "Analyze this screenshot and identify the UI elements",
+        "What's in this photo",
+        "Describe the diagram in this picture",
+        "Process this image and extract the text from it",
+        "What does this visual chart show",
+    ],
+    TaskType.LONG_CONTEXT_ANALYSIS: [
+        "Analyze this entire 50-page document and find key themes",
+        "Read this full research paper and identify methodology flaws",
+        "Review this long report and extract actionable insights",
+        "Summarize this entire book chapter by chapter",
+        "Process this lengthy legal document for compliance issues",
+        "Analyze the full text of this academic article",
+    ],
+}
 
 _TASK_PATTERNS: dict[TaskType, list[re.Pattern[str]]] = {
     TaskType.CODE_GENERATION: [
@@ -88,6 +217,55 @@ _TASK_PATTERNS: dict[TaskType, list[re.Pattern[str]]] = {
 }
 
 
+def _tokenize(text: str) -> list[str]:
+    """Lowercase, split on non-alphanumeric, filter stopwords."""
+    tokens = re.findall(r"[a-z0-9]+", text.lower())
+    return [t for t in tokens if t not in _STOPWORDS and len(t) > 1]
+
+
+def _compute_tf(tokens: list[str]) -> dict[str, float]:
+    """Term frequency: count / total_tokens."""
+    if not tokens:
+        return {}
+    counts = Counter(tokens)
+    total = len(tokens)
+    return {term: count / total for term, count in counts.items()}
+
+
+def _compute_idf(corpus_docs: list[list[str]]) -> dict[str, float]:
+    """IDF: log(N / df) for each term."""
+    n = len(corpus_docs)
+    if n == 0:
+        return {}
+    df: dict[str, int] = {}
+    for doc in corpus_docs:
+        for term in set(doc):
+            df[term] = df.get(term, 0) + 1
+    return {term: math.log(n / count) for term, count in df.items()}
+
+
+def _tfidf_vector(
+    tokens: list[str], idf: dict[str, float],
+) -> dict[str, float]:
+    """TF * IDF for each term — sparse vector as dict."""
+    tf = _compute_tf(tokens)
+    return {term: freq * idf.get(term, 0.0) for term, freq in tf.items()}
+
+
+def _cosine_similarity(
+    a: dict[str, float], b: dict[str, float],
+) -> float:
+    """Cosine similarity between two sparse vectors."""
+    if not a or not b:
+        return 0.0
+    dot = sum(a[k] * b[k] for k in a if k in b)
+    mag_a = math.sqrt(sum(v * v for v in a.values()))
+    mag_b = math.sqrt(sum(v * v for v in b.values()))
+    if mag_a == 0.0 or mag_b == 0.0:
+        return 0.0
+    return dot / (mag_a * mag_b)
+
+
 @dataclass
 class ClassificationResult:
     task_type: TaskType
@@ -95,30 +273,114 @@ class ClassificationResult:
     all_scores: dict[TaskType, float]
 
 
+class TaskClassifier:
+    """TF-IDF based task classification with regex fallback."""
+
+    _TFIDF_FALLBACK_THRESHOLD = 0.15
+
+    def __init__(self) -> None:
+        self._corpus: dict[TaskType, list[str]] = _TASK_CORPUS
+        self._idf: dict[str, float] = {}
+        self._centroids: dict[TaskType, dict[str, float]] = {}
+        self._initialized = False
+
+    def _initialize(self) -> None:
+        """Build TF-IDF vectors from training corpus (called once)."""
+        # Tokenize every document across all task types
+        all_docs: list[list[str]] = []
+        doc_map: list[tuple[TaskType, list[str]]] = []
+        for task_type, examples in self._corpus.items():
+            for text in examples:
+                tokens = _tokenize(text)
+                all_docs.append(tokens)
+                doc_map.append((task_type, tokens))
+
+        # Compute IDF across entire corpus
+        self._idf = _compute_idf(all_docs)
+
+        # Compute centroid TF-IDF vector per task type
+        for task_type in self._corpus:
+            vectors: list[dict[str, float]] = []
+            for tt, tokens in doc_map:
+                if tt == task_type:
+                    vectors.append(_tfidf_vector(tokens, self._idf))
+
+            # Average the vectors to get centroid
+            if vectors:
+                centroid: dict[str, float] = {}
+                for vec in vectors:
+                    for term, val in vec.items():
+                        centroid[term] = centroid.get(term, 0.0) + val
+                n = len(vectors)
+                self._centroids[task_type] = {
+                    t: v / n for t, v in centroid.items()
+                }
+
+        self._initialized = True
+
+    def _classify_regex(self, query: str) -> ClassificationResult:
+        """Regex fallback classifier (original implementation)."""
+        scores: dict[TaskType, float] = {}
+
+        for task_type, patterns in _TASK_PATTERNS.items():
+            match_count = sum(1 for p in patterns if p.search(query))
+            if match_count > 0:
+                scores[task_type] = min(
+                    1.0, match_count / len(patterns) * 0.8 + 0.2,
+                )
+
+        if not scores:
+            if "?" in query:
+                scores[TaskType.QUESTION_ANSWERING] = 0.5
+            else:
+                scores[TaskType.CONVERSATION] = 0.4
+
+        best_type = max(scores, key=scores.get)  # type: ignore[arg-type]
+        best_score = scores[best_type]
+
+        return ClassificationResult(
+            task_type=best_type,
+            confidence=best_score,
+            all_scores=scores,
+        )
+
+    def classify(self, query: str) -> ClassificationResult:
+        """Classify a query using TF-IDF similarity, regex fallback."""
+        if not self._initialized:
+            self._initialize()
+
+        tokens = _tokenize(query)
+        query_vec = _tfidf_vector(tokens, self._idf)
+
+        # Cosine similarity against each centroid
+        scores: dict[TaskType, float] = {}
+        for task_type, centroid in self._centroids.items():
+            sim = _cosine_similarity(query_vec, centroid)
+            if sim > 0.0:
+                scores[task_type] = sim
+
+        if scores:
+            best_type = max(scores, key=scores.get)  # type: ignore[arg-type]
+            best_score = scores[best_type]
+
+            if best_score >= self._TFIDF_FALLBACK_THRESHOLD:
+                return ClassificationResult(
+                    task_type=best_type,
+                    confidence=best_score,
+                    all_scores=scores,
+                )
+
+        # Fall back to regex when TF-IDF confidence is too low
+        return self._classify_regex(query)
+
+
+# Module-level singleton — initialized lazily on first classify() call
+_classifier = TaskClassifier()
+
+
 def classify_task(query: str) -> ClassificationResult:
-    """Classify query into a task type using keyword/regex matching."""
-    scores: dict[TaskType, float] = {}
-
-    for task_type, patterns in _TASK_PATTERNS.items():
-        match_count = sum(1 for p in patterns if p.search(query))
-        if match_count > 0:
-            scores[task_type] = min(1.0, match_count / len(patterns) * 0.8 + 0.2)
-
-    if not scores:
-        # Default to conversation for short queries, QA for questions
-        if "?" in query:
-            scores[TaskType.QUESTION_ANSWERING] = 0.5
-        else:
-            scores[TaskType.CONVERSATION] = 0.4
-
-    best_type = max(scores, key=scores.get)  # type: ignore[arg-type]
-    best_score = scores[best_type]
-
-    return ClassificationResult(
-        task_type=best_type,
-        confidence=best_score,
-        all_scores=scores,
-    )
+    """Classify query into a task type. Backward-compatible wrapper."""
+    return _classifier.classify(query)
 
 
 # ---------------------------------------------------------------------------
