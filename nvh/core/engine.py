@@ -282,7 +282,7 @@ class Engine:
         except Exception:
             pass
 
-        # Check for any API keys in environment (even without config)
+        # Check for API keys in environment AND keyring
         import os
         env_providers = {
             "GROQ_API_KEY": ("groq", "nvh.providers.groq_provider", "GroqProvider"),
@@ -295,8 +295,29 @@ class Engine:
                 "AnthropicProvider",
             ),
         }
-        for env_var, (name, module_path, class_name) in env_providers.items():
+
+        # Also check keyring for keys saved by nvh setup
+        def _get_key(env_var: str, provider_name: str) -> str:
+            # 1. Environment variable (highest priority)
             key = os.environ.get(env_var, "")
+            if key:
+                return key
+            # 2. Keyring (saved by nvh setup)
+            try:
+                import keyring
+                key = keyring.get_password(
+                    "nvhive", f"{provider_name}_api_key",
+                )
+                if key:
+                    # Also set the env var so providers can find it
+                    os.environ[env_var] = key
+                    return key
+            except Exception:
+                pass
+            return ""
+
+        for env_var, (name, module_path, class_name) in env_providers.items():
+            key = _get_key(env_var, name)
             if key and name not in detected:
                 try:
                     import importlib
@@ -305,7 +326,7 @@ class Engine:
                     provider = cls(api_key=key)
                     self.registry.register(name, provider)
                     detected.append(name)
-                    log.info(f"Auto-detected: {name} (API key found in ${env_var})")
+                    log.info("Auto-detected: %s (API key found)", name)
                 except Exception:
                     pass
 
