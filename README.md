@@ -97,6 +97,118 @@ nvh routing-stats
 
 **Local-first:** Queries estimated under 500 tokens on task types the local model handles well (conversation, Q&A, summarization) route to Ollama/Nemotron on your GPU. No network, no cost, no data leaving your machine. Complex queries escalate to cloud.
 
+### Query Pipeline
+
+```mermaid
+flowchart TB
+    USER[User Query] --> CLASSIFY[Task Classifier<br/>TF-IDF · 13 task types]
+    CLASSIFY --> LOCALCHECK{Local model<br/>good enough?}
+    
+    LOCALCHECK -->|Simple query| LOCAL[Ollama / Nemotron<br/>on your GPU]
+    LOCALCHECK -->|Complex query| SCORE[Score All Providers]
+    
+    SCORE --> ROUTE{Pick Best<br/>Provider}
+    
+    ROUTE --> FREE[Free Providers<br/>Groq · GitHub · LLM7]
+    ROUTE --> PAID[Paid Providers<br/>OpenAI · Anthropic · Google]
+    ROUTE --> LOCAL
+    
+    FREE --> RESPONSE[Response]
+    PAID --> RESPONSE
+    LOCAL --> RESPONSE
+    
+    RESPONSE --> LEARN[Learning Loop<br/>Record outcome · EMA update]
+    LEARN --> |Feeds back into| SCORE
+    
+    RESPONSE -->|--verify flag| VERIFY[Cross-Model<br/>Verification]
+    VERIFY --> FINAL[Verified Response]
+    RESPONSE --> FINAL
+    
+    style LOCAL fill:#76B900,color:#000
+    style LEARN fill:#1a1a2e,color:#76B900,stroke:#76B900
+    style VERIFY fill:#1a1a2e,color:#00bcd4,stroke:#00bcd4
+```
+
+### How nvHive Connects to Your Tools
+
+```mermaid
+flowchart LR
+    subgraph Your Tools
+        CLI[nvh CLI]
+        SDK[Python SDK<br/>import nvh]
+        CC[Claude Code<br/>MCP]
+        OC[OpenClaw<br/>Agent]
+        NC[NemoClaw<br/>Agent]
+        CU[Cursor]
+        APP[Your App<br/>OpenAI SDK]
+    end
+
+    subgraph nvHive Engine
+        API[API Server<br/>:8000]
+        MCP[MCP Server<br/>stdio]
+        PROXY_OAI[OpenAI Proxy<br/>/v1/proxy]
+        PROXY_ANT[Anthropic Proxy<br/>/v1/anthropic]
+        ROUTER[Adaptive Router<br/>+ Learning Loop]
+        COUNCIL[Council Engine<br/>+ Confidence]
+        ESCALATE[Escalation<br/>+ Verification]
+    end
+
+    subgraph Providers
+        GPU[Your GPU<br/>Ollama · Nemotron]
+        FREE_P[Free Cloud<br/>Groq · GitHub · LLM7<br/>Google · Cerebras]
+        PAID_P[Paid Cloud<br/>OpenAI · Anthropic<br/>DeepSeek · Mistral]
+        NIM[NVIDIA NIM<br/>Triton]
+    end
+
+    CLI --> API
+    SDK --> API
+    CC --> MCP
+    OC --> MCP
+    NC --> PROXY_OAI
+    CU --> MCP
+    APP --> PROXY_OAI
+    APP --> PROXY_ANT
+
+    MCP --> API
+    PROXY_OAI --> API
+    PROXY_ANT --> API
+    API --> ROUTER
+    API --> COUNCIL
+    API --> ESCALATE
+    ROUTER --> GPU
+    ROUTER --> FREE_P
+    ROUTER --> PAID_P
+    ROUTER --> NIM
+
+    style GPU fill:#76B900,color:#000
+    style NIM fill:#76B900,color:#000
+    style ROUTER fill:#1a1a2e,color:#76B900,stroke:#76B900
+    style COUNCIL fill:#1a1a2e,color:#00bcd4,stroke:#00bcd4
+```
+
+### Council Consensus Pipeline
+
+```mermaid
+flowchart TB
+    QUERY[User Query] --> AGENTS[Generate Expert Personas<br/>e.g. Backend Engineer, Architect, DBA]
+    
+    AGENTS --> M1[Model 1<br/>Groq / Llama]
+    AGENTS --> M2[Model 2<br/>Google / Gemini]
+    AGENTS --> M3[Model 3<br/>GitHub / GPT-4o]
+    
+    M1 --> COLLECT[Collect Responses<br/>Rate-limit staggered]
+    M2 --> COLLECT
+    M3 --> COLLECT
+    
+    COLLECT --> AGREE[Agreement Analysis<br/>Keyword overlap + LLM judge]
+    AGREE --> SYNTH[Synthesis<br/>Uses non-member provider]
+    
+    SYNTH --> RESULT[Council Response<br/>+ Confidence Score<br/>+ Individual Perspectives]
+    
+    style AGREE fill:#1a1a2e,color:#00bcd4,stroke:#00bcd4
+    style SYNTH fill:#1a1a2e,color:#76B900,stroke:#76B900
+```
+
 ---
 
 ## Council Mode
@@ -214,6 +326,10 @@ status = await nvh.health()
 ## Local GPU Inference with Nemotron
 
 nvHive auto-detects your GPU and routes to [NVIDIA Nemotron](https://build.nvidia.com/nvidia/nemotron-mini) running locally via Ollama. Simple queries hit your GPU by default — no cloud, no cost, no data leaving your machine.
+
+<p align="center">
+  <img src="docs/screenshots/nvidia-demo.gif" alt="nvHive NVIDIA GPU Demo" width="640">
+</p>
 
 ```bash
 # Install Ollama + Nemotron
