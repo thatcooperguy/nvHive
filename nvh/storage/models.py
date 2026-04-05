@@ -144,3 +144,90 @@ class QualityBenchmarkLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow,
     )
+
+
+class RoutingOutcome(Base):
+    """Links every routing decision to its measured outcome."""
+    __tablename__ = "routing_outcomes"
+    __table_args__ = (
+        Index("ix_ro_provider_task", "provider", "task_type"),
+        Index("ix_ro_model_task", "model", "task_type"),
+        Index("ix_ro_created", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=_new_id,
+    )
+    query_log_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True,
+    )
+    provider: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(128))
+    task_type: Mapped[str] = mapped_column(String(32))
+    classification_confidence: Mapped[float] = mapped_column(
+        Numeric(4, 3), default=0.0,
+    )
+    routing_strategy: Mapped[str] = mapped_column(
+        String(16), default="best",
+    )
+    composite_score: Mapped[float] = mapped_column(
+        Numeric(6, 4), default=0.0,
+    )
+    capability_score_used: Mapped[float] = mapped_column(
+        Numeric(4, 3), default=0.0,
+    )
+    quality_score: Mapped[float | None] = mapped_column(
+        Numeric(4, 2), nullable=True,
+    )
+    user_feedback: Mapped[int | None] = mapped_column(
+        Integer, nullable=True,
+    )
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 6), default=Decimal("0"),
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), default="success",
+    )
+    was_fallback: Mapped[bool] = mapped_column(
+        Boolean, default=False,
+    )
+    was_retry: Mapped[bool] = mapped_column(
+        Boolean, default=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow,
+    )
+
+
+class LearnedScore(Base):
+    """EMA capability scores learned from actual query outcomes."""
+    __tablename__ = "learned_scores"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "model", "task_type",
+            name="uq_learned_score",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=_new_id,
+    )
+    provider: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(128))
+    task_type: Mapped[str] = mapped_column(String(32))
+    learned_capability: Mapped[float] = mapped_column(
+        Numeric(6, 4), default=0.0,
+    )
+    learned_latency_ms: Mapped[float] = mapped_column(
+        Numeric(10, 2), default=0.0,
+    )
+    learned_reliability: Mapped[float] = mapped_column(
+        Numeric(6, 4), default=1.0,
+    )
+    sample_count: Mapped[int] = mapped_column(
+        Integer, default=0,
+    )
+    last_updated: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow,
+    )

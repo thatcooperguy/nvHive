@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from nvh.config.settings import CouncilConfig, RoutingRule
 from nvh.core.rate_limiter import ProviderRateManager
@@ -146,6 +147,15 @@ class RoutingEngine:
         self.config = config
         self.registry = registry
         self.rate_manager = rate_manager
+        # Learned scores overlay — populated by LearningEngine
+        self._learned_scores: dict[tuple[str, str, str], Any] = {}
+
+    def set_learned_scores(
+        self,
+        scores: dict[tuple[str, str, str], Any],
+    ) -> None:
+        """Update the in-memory learned scores from the learning engine."""
+        self._learned_scores = scores
 
     def route(
         self,
@@ -274,7 +284,21 @@ class RoutingEngine:
                 best_cap = 0.0
                 for m in models:
                     task_key = classification.task_type.value
-                    cap = m.capability_scores.get(task_key, 0.5)
+                    static_cap = m.capability_scores.get(
+                        task_key, 0.5,
+                    )
+                    # Blend with learned score if available
+                    ls_key = (pname, m.model_id, task_key)
+                    learned = self._learned_scores.get(ls_key)
+                    if learned and learned.sample_count > 0:
+                        from nvh.core.learning import blend_score
+                        cap = blend_score(
+                            static_cap,
+                            learned.learned_capability,
+                            learned.sample_count,
+                        )
+                    else:
+                        cap = static_cap
                     if cap > best_cap:
                         best_cap = cap
                         best_model = m

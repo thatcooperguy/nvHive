@@ -2123,6 +2123,135 @@ def health():
 
 
 # ---------------------------------------------------------------------------
+# nvh routing-stats — learned routing intelligence dashboard
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def routing_stats(
+    provider: str = typer.Option(None, "--provider", "-p", help="Filter by provider name"),
+    task: str = typer.Option(None, "--task", "-t", help="Filter by task type"),
+    reset: bool = typer.Option(False, "--reset", help="Wipe all learned scores"),
+):
+    """Routing intelligence dashboard — learned vs static capability scores.
+
+    Shows how the adaptive learning engine has adjusted provider scores
+    based on real routing outcomes. Use --reset to start fresh.
+
+    Examples:
+        nvh routing-stats
+        nvh routing-stats --provider groq
+        nvh routing-stats --task code_gen
+        nvh routing-stats --reset
+    """
+    async def _run_routing_stats():
+        from nvh.storage import repository as repo
+
+        if reset:
+            confirm = typer.confirm(
+                "This will delete all learned routing scores. Continue?"
+            )
+            if not confirm:
+                console.print("[dim]Aborted.[/dim]")
+                return
+            deleted = await repo.reset_learned_scores()
+            console.print(f"[green]Cleared {deleted} learned score(s).[/green]")
+            return
+
+        stats = await repo.get_routing_stats(provider=provider, task_type=task)
+        total_obs = await repo.get_outcome_count()
+
+        # Determine unique providers in the stats
+        providers_seen = {s["provider"] for s in stats}
+
+        console.print()
+        console.print(
+            "[bold cyan]Routing Intelligence Dashboard[/bold cyan]"
+        )
+        console.print()
+
+        status_label = "[green]ACTIVE[/green]" if total_obs > 0 else "[dim]INACTIVE[/dim]"
+        console.print(
+            f"  Learning: {status_label}"
+            f" ({total_obs} observations across"
+            f" {len(providers_seen)} providers)"
+        )
+        console.print()
+
+        if not stats:
+            console.print(
+                "  [dim]No learned scores yet. Route some queries"
+                " to start learning![/dim]"
+            )
+            return
+
+        table = Table(
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Provider", style="bold")
+        table.add_column("Task Type")
+        table.add_column("Static", justify="right")
+        table.add_column("Learned", justify="right")
+        table.add_column("Samples", justify="right")
+        table.add_column("Delta", justify="right")
+
+        # Try to load static scores for comparison
+        static_scores: dict[tuple[str, str], float] = {}
+        try:
+            from nvh.config.settings import load_config
+            from nvh.core.engine import Engine
+
+            config = load_config()
+            engine = Engine(config=config)
+            await engine.initialize()
+            registry = engine.registry
+            for s in stats:
+                key = (s["provider"], s["task_type"])
+                try:
+                    caps = registry.get_capabilities(s["provider"])
+                    if caps and s["task_type"] in caps:
+                        static_scores[key] = float(caps[s["task_type"]])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        for s in stats:
+            key = (s["provider"], s["task_type"])
+            static = static_scores.get(key)
+            learned = s["learned_capability"]
+
+            static_str = f"{static:.2f}" if static is not None else "[dim]—[/dim]"
+            learned_str = f"{learned:.2f}"
+
+            if static is not None:
+                delta = learned - static
+                if delta > 0:
+                    delta_str = f"[green]+{delta:.2f}[/green]"
+                elif delta < 0:
+                    delta_str = f"[red]{delta:.2f}[/red]"
+                else:
+                    delta_str = f"{delta:.2f}"
+            else:
+                delta_str = "[dim]—[/dim]"
+
+            table.add_row(
+                s["provider"],
+                s["task_type"],
+                static_str,
+                learned_str,
+                str(s["sample_count"]),
+                delta_str,
+            )
+
+        console.print(table)
+        console.print()
+
+    _run(_run_routing_stats())
+
+
+# ---------------------------------------------------------------------------
 # nvh status
 # ---------------------------------------------------------------------------
 

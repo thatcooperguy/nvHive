@@ -6,16 +6,18 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from nvh.storage.models import (
     Base,
     Conversation,
     ConversationMessage,
+    LearnedScore,
     ProviderKeyMeta,
     QualityBenchmarkLog,
     QueryLog,
+    RoutingOutcome,
 )
 
 # Import auth models so they are registered with Base.metadata before
@@ -631,3 +633,196 @@ async def get_benchmark_runs(
             }
             for row in result
         ]
+
+
+# -----------------------------------------------------------------------
+# Adaptive Learning — Routing Outcomes & Learned Scores
+# -----------------------------------------------------------------------
+
+
+async def record_routing_outcome(
+    provider: str,
+    model: str,
+    task_type: str,
+    classification_confidence: float = 0.0,
+    routing_strategy: str = "best",
+    composite_score: float = 0.0,
+    capability_score_used: float = 0.0,
+    quality_score: float | None = None,
+    user_feedback: int | None = None,
+    latency_ms: int = 0,
+    cost_usd: Decimal = Decimal("0"),
+    status: str = "success",
+    was_fallback: bool = False,
+    was_retry: bool = False,
+    query_log_id: str | None = None,
+) -> str:
+    """Record a routing outcome for the learning loop."""
+    await init_db()
+    async with _session_factory() as session:
+        outcome = RoutingOutcome(
+            query_log_id=query_log_id,
+            provider=provider,
+            model=model,
+            task_type=task_type,
+            classification_confidence=classification_confidence,
+            routing_strategy=routing_strategy,
+            composite_score=composite_score,
+            capability_score_used=capability_score_used,
+            quality_score=quality_score,
+            user_feedback=user_feedback,
+            latency_ms=latency_ms,
+            cost_usd=cost_usd,
+            status=status,
+            was_fallback=was_fallback,
+            was_retry=was_retry,
+        )
+        session.add(outcome)
+        await session.commit()
+        await session.refresh(outcome)
+        return outcome.id
+
+
+async def upsert_learned_score(
+    provider: str,
+    model: str,
+    task_type: str,
+    learned_capability: float,
+    learned_latency_ms: float,
+    learned_reliability: float,
+    sample_count: int,
+) -> None:
+    """Insert or update a learned score row."""
+    await init_db()
+    async with _session_factory() as session:
+        result = await session.execute(
+            select(LearnedScore).where(
+                LearnedScore.provider == provider,
+                LearnedScore.model == model,
+                LearnedScore.task_type == task_type,
+            )
+        )
+        existing = result.scalar_one_or_none()
+        now = datetime.now(UTC)
+
+        if existing:
+            existing.learned_capability = learned_capability
+            existing.learned_latency_ms = learned_latency_ms
+            existing.learned_reliability = learned_reliability
+            existing.sample_count = sample_count
+            existing.last_updated = now
+        else:
+            session.add(LearnedScore(
+                provider=provider,
+                model=model,
+                task_type=task_type,
+                learned_capability=learned_capability,
+                learned_latency_ms=learned_latency_ms,
+                learned_reliability=learned_reliability,
+                sample_count=sample_count,
+                last_updated=now,
+            ))
+        await session.commit()
+
+
+async def get_all_learned_scores() -> list[dict]:
+    """Load all learned scores for the in-memory cache."""
+    await init_db()
+    async with _session_factory() as session:
+        result = await session.execute(select(LearnedScore))
+        return [
+            {
+                "provider": row.provider,
+                "model": row.model,
+                "task_type": row.task_type,
+                "learned_capability": float(
+                    row.learned_capability,
+                ),
+                "learned_latency_ms": float(
+                    row.learned_latency_ms,
+                ),
+                "learned_reliability": float(
+                    row.learned_reliability,
+                ),
+                "sample_count": row.sample_count,
+            }
+            for row in result.scalars()
+        ]
+
+
+async def get_routing_stats(
+    provider: str | None = None,
+    task_type: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Get learned scores with optional filters for CLI display."""
+    await init_db()
+    async with _session_factory() as session:
+        query = select(LearnedScore)
+        if provider:
+            query = query.where(LearnedScore.provider == provider)
+        if task_type:
+            query = query.where(
+                LearnedScore.task_type == task_type,
+            )
+        query = query.order_by(
+            LearnedScore.sample_count.desc(),
+        ).limit(limit)
+
+        result = await session.execute(query)
+        return [
+            {
+                "provider": row.provider,
+                "model": row.model,
+                "task_type": row.task_type,
+                "learned_capability": float(
+                    row.learned_capability,
+                ),
+                "learned_latency_ms": float(
+                    row.learned_latency_ms,
+                ),
+                "learned_reliability": float(
+                    row.learned_reliability,
+                ),
+                "sample_count": row.sample_count,
+                "last_updated": str(row.last_updated),
+            }
+            for row in result.scalars()
+        ]
+
+
+async def get_outcome_count() -> int:
+    """Get total routing outcomes recorded."""
+    await init_db()
+    async with _session_factory() as session:
+        result = await session.execute(
+            select(func.count(RoutingOutcome.id))
+        )
+        return result.scalar_one() or 0
+
+
+async def reset_learned_scores() -> int:
+    """Delete all learned scores. Returns the number of rows deleted."""
+    await init_db()
+    async with _session_factory() as session:
+        result = await session.execute(delete(LearnedScore))
+        await session.commit()
+        return result.rowcount or 0
+
+
+async def update_outcome_feedback(
+    outcome_id: str,
+    user_feedback: int,
+) -> None:
+    """Update user feedback on a routing outcome."""
+    await init_db()
+    async with _session_factory() as session:
+        result = await session.execute(
+            select(RoutingOutcome).where(
+                RoutingOutcome.id == outcome_id,
+            )
+        )
+        outcome = result.scalar_one_or_none()
+        if outcome:
+            outcome.user_feedback = user_feedback
+            await session.commit()

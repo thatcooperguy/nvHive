@@ -173,6 +173,7 @@ class Engine:
             )
         self._initialized = False
         self._budget_lock = asyncio.Lock()
+        self.learning = None  # Initialized in initialize()
 
         # Local LLM orchestrator
         from nvh.core.orchestrator import LocalOrchestrator, OrchestrationConfig, OrchestrationMode
@@ -226,6 +227,23 @@ class Engine:
             await self.orchestrator.initialize(self.registry, gpu_vram)
 
             await self.webhooks.start()
+
+            # Initialize adaptive learning engine
+            try:
+                from nvh.core.learning import LearningEngine
+                self.learning = LearningEngine()
+                await self.learning.load_scores()
+                self.router.set_learned_scores(
+                    self.learning.get_score_map(),
+                )
+                logger.info(
+                    "Learning engine initialized (%d learned scores)",
+                    len(self.learning.get_score_map()),
+                )
+            except Exception as e:
+                logger.warning("Learning engine init failed: %s", e)
+                self.learning = None
+
             self._initialized = True
             return enabled
         return self.registry.list_enabled()
@@ -459,6 +477,7 @@ class Engine:
         )
 
         # Response evaluation via local orchestrator (FULL mode only)
+        eval_result: dict | None = None
         from nvh.core.orchestrator import OrchestrationMode as _OMode
         if self.orchestrator.mode == _OMode.FULL and not privacy:
             eval_result = await self.orchestrator.evaluate_response(
@@ -535,7 +554,60 @@ class Engine:
             ),
         )
 
+        # Adaptive learning: record outcome (fire-and-forget)
+        if self.learning and not privacy:
+            import asyncio as _aio
+            _eval_quality = (
+                eval_result.get("quality")
+                if eval_result else None
+            )
+            _aio.create_task(self._record_learning(
+                decision=decision,
+                response=response,
+                quality_score=_eval_quality,
+            ))
+
         return response
+
+    async def _record_learning(
+        self,
+        decision: RoutingDecision,
+        response: CompletionResponse,
+        quality_score: float | None = None,
+        user_feedback: int | None = None,
+    ) -> None:
+        """Record routing outcome for adaptive learning (non-blocking)."""
+        try:
+            await self.learning.record_outcome(
+                provider=response.provider,
+                model=response.model,
+                task_type=decision.task_type.value,
+                classification_confidence=decision.confidence,
+                routing_strategy="best",
+                composite_score=decision.scores.get(
+                    "composite", 0.0,
+                ),
+                capability_score_used=decision.scores.get(
+                    "capability", 0.5,
+                ),
+                quality_score=quality_score,
+                user_feedback=user_feedback,
+                latency_ms=response.latency_ms or 0,
+                cost_usd=response.cost_usd,
+                status=(
+                    "error"
+                    if response.finish_reason == FinishReason.ERROR
+                    else "success"
+                ),
+                was_fallback=bool(response.fallback_from),
+                was_retry=False,
+            )
+            # Refresh router's learned scores
+            self.router.set_learned_scores(
+                self.learning.get_score_map(),
+            )
+        except Exception as e:
+            logger.debug("Learning record failed: %s", e)
 
     # -----------------------------------------------------------------------
     # Council Mode
