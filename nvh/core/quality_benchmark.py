@@ -477,6 +477,7 @@ class QualityBenchmarkRunner:
         max_tokens: int = 2048,
         task_types: list[str] | None = None,
         on_progress: Any = None,
+        pace_seconds: float = 15.0,
     ) -> QualityBenchmarkReport:
         """Run the benchmark across all modes and prompts."""
         run_id = str(uuid.uuid4())[:8]
@@ -497,9 +498,15 @@ class QualityBenchmarkRunner:
         results: list[PromptResult] = []
         total_cost = Decimal("0")
 
+        import asyncio as _aio
+
         for i, prompt in enumerate(prompts):
             if on_progress:
                 on_progress(i + 1, len(prompts), prompt.id)
+
+            # Pace between prompts to respect free-tier rate limits
+            if i > 0 and pace_seconds > 0:
+                await _aio.sleep(pace_seconds)
 
             prompt_result = PromptResult(prompt=prompt)
 
@@ -522,6 +529,10 @@ class QualityBenchmarkRunner:
                         "Benchmark failed for %s mode=%s: %s",
                         prompt.id, mode, e,
                     )
+
+                # Brief pause between modes for rate limit headroom
+                if pace_seconds > 0:
+                    await _aio.sleep(pace_seconds / 3)
 
             results.append(prompt_result)
 
