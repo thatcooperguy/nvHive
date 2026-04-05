@@ -208,6 +208,42 @@ ollama pull llama3.1:8b                          # Pull a model
 
 ---
 
+## Smart Features
+
+### Escalation (`--escalate`)
+
+Starts with a free-tier advisor and automatically escalates to a paid model if the initial response has low confidence. Use it when you want to save money on easy questions but still get high-quality answers on hard ones.
+
+```bash
+nvh ask "What's the time complexity of binary search?" --escalate
+# → Answered by groq (free) — high confidence, no escalation needed
+
+nvh ask "Design a CRDT for a collaborative editor" --escalate
+# → groq answered with low confidence → escalated to anthropic
+```
+
+### Verification (`--verify`)
+
+Cross-checks the answer by sending it to a second model for independent verification. Use it when correctness matters more than speed.
+
+```bash
+nvh ask "Is it safe to use MD5 for password hashing?" --verify
+# → Primary: openai | Verifier: anthropic — both agree: No, use bcrypt/argon2
+```
+
+### Using both together
+
+Combine `--escalate` and `--verify` for maximum reliability on high-stakes questions:
+
+```bash
+nvh ask "What are the tax implications of an LLC vs S-Corp?" --escalate --verify
+# → Free tier was uncertain → escalated to anthropic → verified by openai
+```
+
+This is the most thorough single-query mode: free when possible, premium when needed, verified either way.
+
+---
+
 ## Poll Mode
 
 See how different advisors answer the same question side-by-side:

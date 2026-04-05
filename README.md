@@ -374,6 +374,25 @@ status = await nvh.health()
 
 ---
 
+## Feature Matrix
+
+| Feature | CLI | Python SDK | REST API | MCP | OpenClaw | NemoClaw |
+|---------|:---:|:----------:|:--------:|:---:|:--------:|:--------:|
+| Smart routing | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Council consensus | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Throwdown analysis | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Confidence scoring | ✓ | ✓ | ✓ | ✓ | — | — |
+| Escalation (--escalate) | ✓ | ✓ | ✓ | — | — | — |
+| Verification (--verify) | ✓ | ✓ | ✓ | — | — | — |
+| Local GPU inference | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Adaptive learning | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Provider health | ✓ | ✓ | ✓ | ✓ | — | — |
+| Budget controls | ✓ | — | ✓ | — | ✓ | ✓ |
+| Streaming | ✓ | ✓ | ✓ | — | — | ✓ |
+| Privacy mode | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+
+---
+
 ## Core Commands
 
 | Command | What It Does |
