@@ -2432,6 +2432,85 @@ def routing_stats(
 
 
 # ---------------------------------------------------------------------------
+# nvh history
+# ---------------------------------------------------------------------------
+
+@app.command()
+def history(
+    limit: int = typer.Option(10, "--limit", "-n", help="Number of queries to show"),
+    provider: str | None = typer.Option(None, "--provider", "-p", help="Filter by provider"),
+):
+    """Show recent queries with routing decisions and cost."""
+
+    def _relative_time(dt) -> str:
+        """Format a datetime as a human-friendly relative string."""
+        from datetime import UTC, datetime
+
+        if dt is None:
+            return "?"
+        now = datetime.now(UTC)
+        # Ensure dt is timezone-aware
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        delta = now - dt
+        seconds = int(delta.total_seconds())
+        if seconds < 60:
+            return f"{seconds}s ago"
+        minutes = seconds // 60
+        if minutes < 60:
+            return f"{minutes} min ago"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours} hr ago"
+        days = hours // 24
+        return f"{days}d ago"
+
+    async def _run_history():
+        from nvh.storage.repository import get_recent_queries, init_db
+
+        await init_db()
+        entries = await get_recent_queries(limit=limit, provider=provider)
+
+        if not entries:
+            console.print("[dim]No queries found.[/dim]")
+            return
+
+        table = Table(
+            title="Recent Queries",
+            show_lines=False,
+            padding=(0, 1),
+        )
+        table.add_column("#", style="dim", width=4)
+        table.add_column("Prompt", max_width=40, no_wrap=True)
+        table.add_column("Provider", style="green")
+        table.add_column("Cost", justify="right")
+        table.add_column("Latency", justify="right")
+        table.add_column("When", style="dim")
+
+        for i, entry in enumerate(entries, 1):
+            prompt = entry["prompt"] or f"[{entry['mode']}]"
+            if len(prompt) > 38:
+                prompt = prompt[:35] + "..."
+
+            cost = f"${entry['cost_usd']:.4f}" if entry["cost_usd"] else "$0.0000"
+            latency = f"{entry['latency_ms']}ms" if entry["latency_ms"] else "—"
+            when = _relative_time(entry["created_at"])
+
+            table.add_row(
+                str(i),
+                f'"{prompt}"',
+                entry["provider"],
+                cost,
+                latency,
+                when,
+            )
+
+        console.print(table)
+
+    _run(_run_history())
+
+
+# ---------------------------------------------------------------------------
 # nvh status
 # ---------------------------------------------------------------------------
 

@@ -284,6 +284,56 @@ async def log_query(
         return log
 
 
+async def get_recent_queries(
+    limit: int = 10,
+    provider: str | None = None,
+) -> list[dict]:
+    """Return recent query log entries, newest first.
+
+    Each dict contains: mode, provider, model, cost_usd, latency_ms,
+    created_at, and optionally a prompt snippet from the linked conversation.
+    """
+    async with get_session() as session:
+        # Left-join to conversation messages to grab the user prompt
+        stmt = (
+            select(
+                QueryLog,
+                ConversationMessage.content.label("prompt_text"),
+            )
+            .outerjoin(
+                Conversation,
+                QueryLog.conversation_id == Conversation.id,
+            )
+            .outerjoin(
+                ConversationMessage,
+                (ConversationMessage.conversation_id == Conversation.id)
+                & (ConversationMessage.sequence == 1),
+            )
+        )
+        if provider:
+            stmt = stmt.where(QueryLog.provider == provider)
+        stmt = stmt.order_by(QueryLog.created_at.desc()).limit(limit)
+
+        result = await session.execute(stmt)
+        rows = result.all()
+
+    entries = []
+    for row in rows:
+        ql = row[0]
+        prompt_text = row[1] or ""
+        entries.append({
+            "mode": ql.mode,
+            "provider": ql.provider,
+            "model": ql.model,
+            "cost_usd": ql.cost_usd,
+            "latency_ms": ql.latency_ms,
+            "created_at": ql.created_at,
+            "status": ql.status,
+            "prompt": prompt_text,
+        })
+    return entries
+
+
 async def get_spend(period: str = "daily") -> Decimal:
     """Get total spend for the given period ('daily' or 'monthly')."""
     now = datetime.now(UTC)
