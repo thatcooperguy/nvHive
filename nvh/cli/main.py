@@ -5169,13 +5169,17 @@ def openclaw(
     http: bool = typer.Option(False, "--http", help="Use HTTP transport instead of stdio"),
     port: int = typer.Option(8080, "--port", help="Port for HTTP transport"),
 ):
-    """OpenClaw integration — use NVHive tools in any OpenClaw agent.
+    """OpenClaw / NemoClaw integration — multi-LLM routing for agents.
 
-    Registers nvHive's multi-LLM tools (ask, council, throwdown, etc.)
-    as an MCP server that any OpenClaw agent can call.
+    Anthropic dropped OpenClaw support. nvHive replaces that path
+    and gives agents access to 23 providers, local GPU inference,
+    and council consensus — more than OpenClaw provided.
+
+    For NemoClaw users: nvHive plugs directly into OpenShell Gateway.
+    No OpenClaw dependency. Run `nvh nemoclaw --start` for NemoClaw.
 
     Examples:
-        nvh openclaw              Show setup instructions
+        nvh openclaw              Show setup + migration info
         nvh openclaw --test       Test MCP server connectivity
         nvh openclaw --start      Start the MCP server
         nvh openclaw --config     Generate openclaw.json
@@ -5184,9 +5188,14 @@ def openclaw(
 
     console.print()
     console.print(Panel(
-        "[bold green]NVHive ↔ OpenClaw Integration[/bold green]\n"
-        "Give any OpenClaw agent access to nvHive's multi-LLM tools:\n"
-        "smart routing, council consensus, and throwdown analysis.",
+        "[bold green]NVHive — OpenClaw Migration[/bold green]\n\n"
+        "Anthropic dropped OpenClaw support.\n"
+        "nvHive replaces that path with 23 providers,\n"
+        "local GPU inference, and council consensus.\n\n"
+        "[bold]Migrate:[/bold] nvh migrate --from openclaw\n"
+        "[bold]NemoClaw:[/bold] nvh nemoclaw --start\n"
+        "[bold]Claude Code:[/bold] claude mcp add nvhive"
+        " -- python -m nvh.mcp_server",
         border_style="green",
     ))
 

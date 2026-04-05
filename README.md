@@ -16,35 +16,43 @@ No API keys needed. Works immediately with free providers (Groq, GitHub Models, 
 
 ---
 
-## Coming from OpenClaw?
+## Coming from OpenClaw or NemoClaw?
 
-Anthropic dropped OpenClaw support. Here's how to migrate:
+Anthropic dropped OpenClaw support. NemoClaw agents that routed through OpenClaw to Claude are affected. nvHive replaces that path — and gives you more than OpenClaw had.
 
 ```bash
-# Install + auto-import your existing API keys
 pip install nvhive
-nvh migrate --from openclaw
-
-# Verify everything works
-nvh test --quick
-nvh health
+nvh migrate --from openclaw    # imports your API keys
+nvh health                     # shows your provider resilience
 ```
 
-**Already have code using the Anthropic SDK?** Point it at nvHive instead — nvHive accepts Anthropic API format and routes through any provider:
+**For NemoClaw users** — nvHive plugs directly into OpenShell Gateway. No OpenClaw dependency:
+```bash
+nvh nemoclaw --start           # start nvHive proxy for NemoClaw
+# NemoClaw agents now route through 23 providers + your local GPU
+```
 
+**For Anthropic SDK users** — one env var, zero code changes:
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:8000/v1/anthropic
 nvh serve
-# Your existing code works unchanged. nvHive handles routing.
 ```
 
 **What you get that OpenClaw didn't have:**
-- Automatic failover across 23 providers (not locked to Anthropic)
-- Adaptive routing — learns which models work best for your specific queries
-- Council consensus — 3 models collaborating catch errors a single model misses
-- `nvh health` shows exactly which providers are up and your failover chain
 
-**What's the catch?** nvHive is a routing layer, not a model. Response quality depends on the underlying providers. Free-tier providers have rate limits (Groq: 30 RPM, Google: 15 RPM). For sustained usage, either run Ollama locally (unlimited, free) or add paid provider keys.
+| Feature | OpenClaw | nvHive |
+|---------|----------|--------|
+| Providers | Claude only | 23 providers (25 free) |
+| Failover | None | Automatic across all providers |
+| Local GPU | No | Ollama/Nemotron, private, free |
+| Multi-model consensus | No | Council mode (3+ models) |
+| Adaptive routing | No | Learns from every query |
+| Cost control | No | Budget limits + free routing |
+| Provider health | No | `nvh health` dashboard |
+
+**What's the catch?** nvHive doesn't give you free Claude access — that was OpenClaw's deal with Anthropic, and it's over. If you need Claude specifically, bring your own API key. For everything else, nvHive routes to the best available provider automatically. Free tiers have rate limits (Groq: 30 RPM, Google: 15 RPM). For unlimited local inference, run Ollama.
+
+[Full migration guide (OpenClaw + NemoClaw)](docs/OPENCLAW_MIGRATION.md)
 
 ---
 
