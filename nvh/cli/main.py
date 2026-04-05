@@ -4409,9 +4409,9 @@ def bench(
 @app.command()
 def benchmark(
     mode: str = typer.Option(
-        "all", "-m", "--mode",
+        "single,council-free", "-m", "--mode",
         help=(
-            "Modes to test: single, council-free,"
+            "Modes: single, council-free,"
             " council-premium, throwdown, all"
         ),
     ),
@@ -4595,18 +4595,20 @@ def benchmark(
             # Rich table output
             _display_benchmark_table(report)
 
-        # Export
-        if export_path:
-            ep = Path(export_path)
-            if ep.suffix == ".json":
-                ep.write_text(generate_json_report(report))
-            else:
-                ep.write_text(
-                    generate_markdown_report(report),
-                )
-            console.print(
-                f"\n[green]Exported to {ep}[/green]",
+        # Export — auto-save to ~/.hive/ if no path specified
+        ep = Path(export_path) if export_path else (
+            Path.home() / ".hive" / "benchmark_results.md"
+        )
+        ep.parent.mkdir(parents=True, exist_ok=True)
+        if ep.suffix == ".json":
+            ep.write_text(generate_json_report(report))
+        else:
+            ep.write_text(
+                generate_markdown_report(report),
             )
+        console.print(
+            f"\n[green]Results saved to {ep}[/green]",
+        )
 
         console.print(
             f"\n[dim]Run ID: {report.run_id}"
