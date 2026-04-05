@@ -86,7 +86,7 @@ nvh health           # provider resilience dashboard
 
 **Failover:** If a provider fails, nvHive tries the next in the fallback chain. Every failure feeds back into the health score.
 
-**Local-first:** Simple queries route to Ollama/Nemotron on your GPU — no cloud, no cost, no data leaving your machine.
+**Local-first with NVIDIA GPUs:** Simple queries route to Nemotron on your NVIDIA GPU via Ollama — no cloud, no cost, no data leaving your machine. GPU detection via pynvml reads VRAM, driver version, and CUDA version to select the optimal local model. The `--prefer-nvidia` flag gives a 1.3x routing bonus to keep inference on NVIDIA hardware whenever quality allows.
 
 ---
 
@@ -119,7 +119,7 @@ When one model isn't enough, nvHive runs the same query through multiple provide
 
 **Confidence scoring:** Every council response includes an agreement metric — "3/3 agreed" vs "split decision." Tells you when to trust the consensus.
 
-**Cost:** Council with 3 free providers costs $0. Premium council costs ~3x a single query.
+**Cost:** Council with 3 free providers costs $0. Council with 3 Nemotron variants on a single NVIDIA GPU costs $0 and never leaves your machine. Premium cloud council costs ~3x a single query.
 
 ```bash
 nvh convene "Should we use Redis or Postgres for session storage?"
@@ -245,12 +245,13 @@ flowchart LR
 | Claude Code | `claude mcp add nvhive -- python -m nvh.mcp_server` |
 | Cursor | `nvh integrate --auto` |
 
-### Works With OpenClaw
+### Works With OpenClaw & NemoClaw
 
-nvHive works alongside OpenClaw as a routing layer. OpenClaw handles agent orchestration — nvHive handles provider selection.
+nvHive works alongside OpenClaw as a routing layer, and integrates with [NemoClaw](docs/NEMOCLAW.md) (NVIDIA's agent framework) as both inference provider and MCP tool server.
 
 ```bash
 nvh migrate --from openclaw    # import your existing API keys
+nvh nemoclaw --start           # start proxy for NemoClaw agents
 ```
 
 *Note: Anthropic recently changed billing for third-party tools. See the [integration guide](docs/OPENCLAW_MIGRATION.md) for details.*
