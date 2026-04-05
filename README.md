@@ -222,26 +222,34 @@ nvh ask --escalate --verify "Explain the CAP theorem"
 
 ## Local GPU Inference with Nemotron
 
-nvHive [auto-detects your GPU](docs/GPU_DETECTION.md) and routes to NVIDIA Nemotron running locally via Ollama. It reads your VRAM and selects the optimal model — from nemotron-mini (4GB) to the full 70B (48GB+). Simple queries hit your GPU by default — no cloud, no cost, no data leaving your machine.
+`nvh setup` detects your NVIDIA GPU, recommends the right Nemotron model for your VRAM, and offers to pull it — all in one step. No manual configuration.
 
 <p align="center">
   <img src="docs/screenshots/gpu-detection-demo.gif" alt="nvHive GPU Detection & Model Selection" width="640">
 </p>
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull nemotron-mini
-# nvHive detects it automatically
+nvh setup
+# Step 3/3: Local GPU inference
+#   Detected: NVIDIA GeForce RTX 4090 (24GB VRAM)
+#   Recommended: nemotron-small — great quality/speed balance
+#   Pull nemotron-small now? [Y/n] y
+#   ✓ nemotron-small ready
 ```
 
-**What happens automatically:**
-1. pynvml detects your NVIDIA GPU — reads VRAM, driver, CUDA version, temperature, power draw, PCIe gen, clock speeds
-2. Selects the optimal Nemotron model for your available VRAM
-3. Registers Ollama as a provider with GPU-aware configuration
-4. Simple queries route to Nemotron locally — no network, no cost, private
-5. Complex queries escalate to NIM or cloud when local quality isn't sufficient
-6. `nvh bench` benchmarks your specific GPU with community baselines (e.g. RTX 4090: ~140 tok/s)
-7. The learning loop measures Nemotron's quality on YOUR hardware and adjusts routing thresholds over time
+**What `nvh setup` handles:**
+1. Detects your GPU via pynvml — reads VRAM, driver, CUDA, temperature, power
+2. Recommends the optimal Nemotron model ([full VRAM guide](docs/GPU_DETECTION.md)):
+   - 4-6 GB → nemotron-mini | 6-12 GB → nemotron-small | 24 GB+ → nemotron 70B
+3. Checks if Ollama is installed and running
+4. If model isn't pulled, asks before downloading (never downloads silently)
+5. Registers the model with nvHive's router automatically
+
+**After setup, routing is automatic:**
+- Simple queries → local Nemotron on your GPU (free, private, no network)
+- Complex queries → cloud providers when quality requires it
+- `nvh bench` measures your GPU's actual tok/s with community baselines
+- The learning loop adjusts routing thresholds based on measured quality on YOUR hardware
 
 ### NVIDIA Inference Stack
 
