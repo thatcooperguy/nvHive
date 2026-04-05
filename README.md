@@ -163,32 +163,30 @@ Throwdown goes beyond council. Three passes, each building on the last:
 
 ```mermaid
 flowchart TB
-    QUERY[User Query<br/>"Review this architecture for scalability"] --> PASS1
-
-    subgraph PASS1[Pass 1 — Independent Analysis]
-        A1[Expert 1<br/>Backend Engineer<br/>Groq / Llama]
-        A2[Expert 2<br/>System Architect<br/>Google / Gemini]
-        A3[Expert 3<br/>DevOps Lead<br/>GitHub / GPT-4o]
-    end
-
-    PASS1 --> SYNTH1[Synthesis 1<br/>Combine initial perspectives<br/>Identify key themes + gaps]
-
-    SYNTH1 --> PASS2
-
-    subgraph PASS2[Pass 2 — Cross-Critique]
-        B1[Expert 1<br/>Critiques Synthesis 1]
-        B2[Expert 2<br/>Finds blind spots]
-        B3[Expert 3<br/>Challenges assumptions]
-    end
-
-    PASS2 --> SYNTH2[Synthesis 2<br/>Integrate critiques<br/>Strengthen weak points]
-
-    SYNTH2 --> FINAL[Pass 3 — Final Synthesis<br/>Definitive answer integrating<br/>both passes + all critiques]
-
-    FINAL --> RESULT[Throwdown Result<br/>+ Total cost<br/>+ All perspectives preserved]
-
-    style PASS1 fill:#1a1a2e,stroke:#76B900
-    style PASS2 fill:#1a1a2e,stroke:#00bcd4
+    QUERY[User Query] --> A1[Expert 1 - Groq]
+    QUERY --> A2[Expert 2 - Google]
+    QUERY --> A3[Expert 3 - GitHub]
+    
+    A1 --> S1[Pass 1 Synthesis]
+    A2 --> S1
+    A3 --> S1
+    
+    S1 --> B1[Expert 1 - Critiques]
+    S1 --> B2[Expert 2 - Finds blind spots]
+    S1 --> B3[Expert 3 - Challenges assumptions]
+    
+    B1 --> S2[Pass 2 Synthesis]
+    B2 --> S2
+    B3 --> S2
+    
+    S2 --> FINAL[Final Answer]
+    
+    style A1 fill:#1a1a2e,stroke:#76B900,color:#c8c8c8
+    style A2 fill:#1a1a2e,stroke:#76B900,color:#c8c8c8
+    style A3 fill:#1a1a2e,stroke:#76B900,color:#c8c8c8
+    style B1 fill:#1a1a2e,stroke:#00bcd4,color:#c8c8c8
+    style B2 fill:#1a1a2e,stroke:#00bcd4,color:#c8c8c8
+    style B3 fill:#1a1a2e,stroke:#00bcd4,color:#c8c8c8
     style FINAL fill:#76B900,color:#000
 ```
 
