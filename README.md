@@ -14,6 +14,14 @@ nvh "What is machine learning?"
 
 No API keys needed. Works immediately with free providers (Groq, GitHub Models, LLM7).
 
+<p align="center">
+  <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/terminal-demo.svg" alt="nvHive CLI" width="640">
+</p>
+
 ---
 
 ## Coming from OpenClaw or NemoClaw?
