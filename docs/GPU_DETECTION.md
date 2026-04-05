@@ -10,32 +10,39 @@ nvHive auto-detects your GPU hardware and selects the optimal Nemotron model for
 
 ```mermaid
 flowchart TB
-    START[nvh nvidia / nvh setup] --> DETECT[GPU Detection<br/>pynvml or nvidia-smi]
+    START[nvh setup / nvh nvidia] --> DETECT[GPU Detection<br/>pynvml reads VRAM · driver<br/>CUDA · temp · power · PCIe]
     
-    DETECT --> INFO[Read Hardware Info<br/>GPU model · VRAM · Driver<br/>CUDA · Temperature · Power<br/>PCIe gen · Clock speeds]
+    DETECT --> VRAM{Available VRAM?}
     
-    INFO --> VRAM{Available VRAM?}
+    VRAM -->|No GPU / < 4GB| REC_MINI[Recommend: nemotron-mini<br/>CPU mode · ~2GB RAM]
+    VRAM -->|4 – 6 GB| REC_MINI_GPU[Recommend: nemotron-mini<br/>GPU accelerated]
+    VRAM -->|6 – 12 GB| REC_SMALL[Recommend: nemotron-small<br/>Sweet spot for quality/speed]
+    VRAM -->|12 – 24 GB| REC_DUAL[Recommend: nemotron-small<br/>+ codellama]
+    VRAM -->|24 – 48 GB| REC_FULL[Recommend: nemotron 70B<br/>Quantized]
+    VRAM -->|48 GB+| REC_FLAG[Recommend: nemotron 70B/120B<br/>Full quality]
+
+    REC_MINI --> OLLAMA_CHECK
+    REC_MINI_GPU --> OLLAMA_CHECK
+    REC_SMALL --> OLLAMA_CHECK
+    REC_DUAL --> OLLAMA_CHECK
+    REC_FULL --> OLLAMA_CHECK
+    REC_FLAG --> OLLAMA_CHECK
     
-    VRAM -->|No GPU or < 4GB| MINI[nemotron-mini<br/>CPU mode · ~2GB RAM]
-    VRAM -->|4 – 6 GB| MINI_GPU[nemotron-mini<br/>GPU accelerated]
-    VRAM -->|6 – 12 GB| SMALL[nemotron-small<br/>Recommended sweet spot]
-    VRAM -->|12 – 24 GB| SMALL_PLUS[nemotron-small + codellama<br/>Dual model setup]
-    VRAM -->|24 – 48 GB| FULL[nemotron 70B<br/>Quantized · Full quality]
-    VRAM -->|48 – 80 GB| FULL_HQ[nemotron 70B<br/>High quality · Larger context]
-    VRAM -->|80 GB+| FLAGSHIP[nemotron 120B<br/>Flagship model]
+    OLLAMA_CHECK{Ollama running?}
     
-    MINI --> OLLAMA[Register with Ollama<br/>ollama pull model]
-    MINI_GPU --> OLLAMA
-    SMALL --> OLLAMA
-    SMALL_PLUS --> OLLAMA
-    FULL --> OLLAMA
-    FULL_HQ --> OLLAMA
-    FLAGSHIP --> OLLAMA
+    OLLAMA_CHECK -->|Not installed| INSTALL[Show install command<br/>curl -fsSL ollama.com/install.sh]
+    OLLAMA_CHECK -->|Installed, not running| START_OLL[Show: ollama serve]
+    OLLAMA_CHECK -->|Running| MODEL_CHECK{Model already<br/>pulled?}
     
-    OLLAMA --> ROUTE[nvHive Router<br/>Local model registered<br/>as provider]
+    MODEL_CHECK -->|Yes| READY[Model ready ✓<br/>Registered as provider]
+    MODEL_CHECK -->|No| PULL[Pull model now? Y/n<br/>→ ollama pull nemotron-small]
+    PULL --> READY
     
-    style SMALL fill:#76B900,color:#000
+    READY --> ROUTE[nvHive Router<br/>Local GPU provider active<br/>Learning loop measures quality]
+    
+    style REC_SMALL fill:#76B900,color:#000
     style DETECT fill:#1a1a2e,color:#76B900,stroke:#76B900
+    style READY fill:#76B900,color:#000
     style ROUTE fill:#1a1a2e,color:#76B900,stroke:#76B900
 ```
 
@@ -82,17 +89,29 @@ pip install nvidia-ml-py3
 nvh nvidia
 ```
 
+## Automatic Setup via `nvh setup`
+
+The easiest way to get local inference running is `nvh setup`. Step 3 handles everything:
+
+1. Detects your GPU and recommends the optimal Nemotron model
+2. Checks if Ollama is installed and running
+3. Checks if the recommended model is already pulled
+4. If not, asks: "Pull nemotron-small now? [Y/n]"
+5. After pulling, registers the model with nvHive's router
+
+No manual configuration needed. One wizard, zero to local GPU inference.
+
 ## Commands
 
 ```bash
-# Full GPU + inference stack status
+# Full setup wizard (includes GPU detection + model pull)
+nvh setup
+
+# GPU + inference stack status
 nvh nvidia
 
 # Benchmark your GPU (tokens/sec)
 nvh bench
-
-# Model recommendations based on your hardware
-nvh test    # includes GPU detection + model recommendations
 
 # Force all queries to local GPU
 nvh safe "your question"
