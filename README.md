@@ -2,7 +2,7 @@
 
 **Multi-provider LLM routing that learns from every query.**
 
-![version](https://img.shields.io/badge/version-0.5.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-217%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![models](https://img.shields.io/badge/models-63-purple)
+![version](https://img.shields.io/badge/version-0.5.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-225%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![models](https://img.shields.io/badge/models-63-purple)
 
 nvHive routes LLM queries across 23 providers. It tracks which providers actually perform well for which task types, and adjusts routing based on measured quality — not static config. When a provider is rate-limited, down, or underperforming, queries automatically fail over to the next best option.
 

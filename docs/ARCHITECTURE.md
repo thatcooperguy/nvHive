@@ -92,7 +92,7 @@ graph TB
 | Council | `nvh/core/council.py` | Parallel multi-LLM dispatch and synthesis |
 | Orchestrator | `nvh/core/orchestrator.py` | Local LLM intelligence (routing, eval, compression) |
 | Agent Loop | `nvh/core/agent_loop.py` | Agentic task execution with tool calling |
-| Providers | `nvh/providers/` | 22 LLM provider adapters via LiteLLM |
+| Providers | `nvh/providers/` | 23 LLM provider adapters via LiteLLM |
 | API Server | `nvh/api/server.py` | FastAPI REST + WebSocket server |
 | Proxy | `nvh/api/proxy.py` | OpenAI-compatible API proxy |
 | MCP Server | `nvh/mcp_server.py` | Model Context Protocol tool server |
