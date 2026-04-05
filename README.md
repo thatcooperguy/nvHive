@@ -211,17 +211,39 @@ status = await nvh.health()
 
 ---
 
-## NVIDIA GPU Support
+## Local GPU Inference with Nemotron
 
-nvHive routes to your NVIDIA GPU first. Cloud is the fallback, not the default.
+nvHive auto-detects your GPU and routes to [NVIDIA Nemotron](https://build.nvidia.com/nvidia/nemotron-mini) running locally via Ollama. Simple queries hit your GPU by default — no cloud, no cost, no data leaving your machine.
 
 ```bash
-nvh nvidia              # GPU hardware + inference stack status
-nvh bench               # tokens/sec benchmark with community baselines
-nvh --prefer-nvidia     # 1.3x routing bonus for NVIDIA providers
+# Install Ollama + Nemotron
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull nemotron-mini
+
+# nvHive detects it automatically
+nvh nvidia              # shows GPU, VRAM, local models, inference stack
+nvh bench               # tokens/sec on your hardware
+nvh safe "question"     # force local-only (nothing leaves your machine)
 ```
 
-Supports Ollama/Nemotron (consumer GPUs), NVIDIA NIM (cloud API), and Triton Inference Server (enterprise). Integrates with [NemoClaw](docs/NEMOCLAW.md) as both inference provider and MCP tool server.
+**What happens automatically:**
+1. nvHive detects your GPU (NVIDIA via pynvml, Apple Silicon via system)
+2. Finds Ollama running → registers Nemotron as a provider
+3. Simple queries (conversation, Q&A, summarization) route to Nemotron locally
+4. Complex queries escalate to cloud only when local quality isn't sufficient
+5. The learning loop measures Nemotron's quality on your hardware and adjusts routing thresholds over time
+
+**NVIDIA stack support:**
+
+| Provider | Hardware | Use Case |
+|----------|----------|----------|
+| Ollama/Nemotron | Consumer GPUs (RTX 3060+, 8GB+ VRAM) | Default local inference |
+| NVIDIA NIM | Cloud API (1000 free credits on signup) | Specialized models |
+| Triton Server | Enterprise GPUs (H100/A100) | Production multi-model serving |
+
+`--prefer-nvidia` gives a 1.3x routing bonus to all NVIDIA-backed providers.
+
+Integrates with [NemoClaw](docs/NEMOCLAW.md) as both inference provider and MCP tool server.
 
 ---
 
