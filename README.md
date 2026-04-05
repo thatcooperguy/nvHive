@@ -236,18 +236,45 @@ nvh setup
 ```
 
 **What `nvh setup` handles:**
-1. Detects your GPU via pynvml — reads VRAM, driver, CUDA, temperature, power
-2. Recommends the optimal Nemotron model ([full VRAM guide](docs/GPU_DETECTION.md)):
-   - 4-6 GB → nemotron-mini | 6-12 GB → nemotron-small | 24 GB+ → nemotron 70B
-3. Checks if Ollama is installed and running
-4. If model isn't pulled, asks before downloading (never downloads silently)
-5. Registers the model with nvHive's router automatically
+
+```mermaid
+flowchart TB
+    SETUP[nvh setup] --> DETECT[GPU Detection<br/>pynvml reads VRAM · driver · CUDA]
+    
+    DETECT --> VRAM{Available VRAM?}
+    
+    VRAM -->|< 6 GB| MINI[nemotron-mini]
+    VRAM -->|6 – 12 GB| SMALL[nemotron-small<br/>recommended]
+    VRAM -->|12 – 24 GB| DUAL[nemotron-small<br/>+ codellama]
+    VRAM -->|24 GB+| FULL[nemotron 70B]
+
+    MINI --> CHECK{Ollama running?}
+    SMALL --> CHECK
+    DUAL --> CHECK
+    FULL --> CHECK
+    
+    CHECK -->|Not installed| INSTALL[Show install command]
+    CHECK -->|Not running| START[Show: ollama serve]
+    CHECK -->|Running| PULLED{Model pulled?}
+    
+    PULLED -->|Yes| READY[Ready ✓]
+    PULLED -->|No| ASK[Pull now? Y/n]
+    ASK --> READY
+    
+    READY --> ROUTE[nvHive Router<br/>Local GPU registered<br/>Learning loop active]
+    
+    style SMALL fill:#76B900,color:#000
+    style READY fill:#76B900,color:#000
+    style ROUTE fill:#1a1a2e,color:#76B900,stroke:#76B900
+```
 
 **After setup, routing is automatic:**
 - Simple queries → local Nemotron on your GPU (free, private, no network)
 - Complex queries → cloud providers when quality requires it
 - `nvh bench` measures your GPU's actual tok/s with community baselines
 - The learning loop adjusts routing thresholds based on measured quality on YOUR hardware
+
+[Full GPU detection guide](docs/GPU_DETECTION.md)
 
 ### NVIDIA Inference Stack
 
