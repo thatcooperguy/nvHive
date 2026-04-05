@@ -5301,6 +5301,148 @@ def mcp(
 
 
 # ---------------------------------------------------------------------------
+# nvh nvidia — NVIDIA infrastructure dashboard
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def nvidia():
+    """NVIDIA AI infrastructure dashboard.
+
+    Shows GPU hardware, local models, NIM status, Triton status,
+    and the full NVIDIA inference stack available to nvHive.
+
+    Examples:
+        nvh nvidia
+    """
+    async def _nvidia():
+        from nvh.config.settings import load_config
+        from nvh.core.engine import Engine
+        from nvh.utils.gpu import detect_gpus
+
+        config = load_config()
+        engine = Engine(config=config)
+        await engine.initialize()
+
+        console.print(
+            "\n[bold green]NVIDIA AI Infrastructure[/bold green]\n",
+        )
+
+        # GPU Hardware
+        console.print("[bold]GPU Hardware[/bold]")
+        try:
+            gpus = detect_gpus()
+            if gpus:
+                for gpu in gpus:
+                    console.print(
+                        f"  {gpu.name}"
+                        f" | {gpu.vram_gb:.0f}GB VRAM"
+                        f" ({gpu.memory_free_mb}MB free)"
+                        f" | CUDA {gpu.cuda_version}"
+                        f" | Driver {gpu.driver_version}",
+                    )
+            else:
+                console.print(
+                    "  [dim]No NVIDIA GPU detected"
+                    " (Apple Silicon or CPU-only)[/dim]",
+                )
+        except Exception:
+            console.print(
+                "  [dim]GPU detection unavailable[/dim]",
+            )
+
+        console.print()
+
+        # NVIDIA Providers
+        console.print("[bold]NVIDIA Inference Stack[/bold]")
+        enabled = engine.registry.list_enabled()
+        nvidia_provs = {
+            "ollama": (
+                "Ollama + Nemotron",
+                "Local inference on your GPU",
+            ),
+            "nvidia": (
+                "NVIDIA NIM",
+                "Cloud API (1000 free credits)",
+            ),
+            "triton": (
+                "Triton Inference Server",
+                "Enterprise on-prem serving",
+            ),
+        }
+
+        for key, (name, desc) in nvidia_provs.items():
+            if key in enabled:
+                console.print(
+                    f"  [green]Active[/green]  {name}"
+                    f" — {desc}",
+                )
+            else:
+                console.print(
+                    f"  [dim]Inactive[/dim] {name}"
+                    f" — {desc}",
+                )
+
+        console.print()
+
+        # Local Models
+        if "ollama" in enabled:
+            console.print("[bold]Local Models[/bold]")
+            try:
+                import httpx
+                import os as _os
+                base = _os.environ.get(
+                    "OLLAMA_BASE_URL",
+                    "http://localhost:11434",
+                )
+                r = httpx.get(
+                    f"{base}/api/tags", timeout=5,
+                )
+                if r.status_code == 200:
+                    models = r.json().get("models", [])
+                    if models:
+                        for m in models[:10]:
+                            name = m.get("name", "?")
+                            size = m.get("size", 0)
+                            size_gb = size / (1024**3)
+                            console.print(
+                                f"  {name}"
+                                f" ({size_gb:.1f}GB)",
+                            )
+                    else:
+                        console.print(
+                            "  [dim]No models installed."
+                            " Run: ollama pull"
+                            " nemotron-mini[/dim]",
+                        )
+            except Exception:
+                console.print(
+                    "  [dim]Could not reach Ollama[/dim]",
+                )
+            console.print()
+
+        # prefer-nvidia status
+        pref = config.defaults.prefer_nvidia
+        console.print("[bold]Routing[/bold]")
+        if pref:
+            console.print(
+                "  [green]--prefer-nvidia: ON[/green]"
+                " (1.3x bonus for NVIDIA providers)",
+            )
+        else:
+            console.print(
+                "  --prefer-nvidia: off",
+            )
+            console.print(
+                "  [dim]Enable: nvh config set"
+                " defaults.prefer_nvidia true[/dim]",
+            )
+        console.print()
+
+    _run(_nvidia())
+
+
+# ---------------------------------------------------------------------------
 # hive nemoclaw — NemoClaw integration setup
 # ---------------------------------------------------------------------------
 
