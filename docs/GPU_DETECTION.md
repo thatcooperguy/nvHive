@@ -48,15 +48,18 @@ flowchart TB
 
 ## Model Recommendations by VRAM
 
-| VRAM | Model | Size | Use Case |
-|------|-------|------|----------|
-| No GPU / < 4 GB | `nemotron-mini` | ~2 GB | CPU mode — slow but functional |
-| 4 – 6 GB | `nemotron-mini` | ~2 GB | GPU accelerated, good for simple queries |
-| **6 – 12 GB** | **`nemotron-small`** | **~5 GB** | **Recommended sweet spot — quality + speed** |
-| 12 – 24 GB | `nemotron-small` + `codellama` | ~9 GB | Dual model — general + code specialist |
-| 24 – 48 GB | `nemotron` (70B) | ~40 GB | Full model, quantized |
-| 48 – 80 GB | `nemotron` (70B) | ~40 GB | Full model, higher quality quantization |
-| 80 GB+ | `nemotron:120b` | ~70 GB | Flagship — maximum quality |
+| VRAM | Nemotron | Gemma 4 | Both Fit? | Use Case |
+|------|---------|---------|:---------:|----------|
+| No GPU / < 4 GB | `nemotron-mini` | `gemma4:e2b` | ✓ | CPU mode |
+| 4 – 6 GB | `nemotron-mini` | `gemma4:e4b` | ✓ | GPU accelerated |
+| **6 – 12 GB** | **`nemotron-small`** | **`gemma4:e4b`** | **✓** | **Recommended sweet spot** |
+| 12 – 19 GB | `nemotron-small` | `gemma4:e4b` | ✓ | Both fit comfortably |
+| 20 – 24 GB | `nemotron-small` | `gemma4:26b` | ✓ | Reasoning + multimodal |
+| 24 – 39 GB | `nemotron` (70B) | `gemma4:e4b` | ✓ | Full Nemotron + lightweight Gemma |
+| 40 – 48 GB | `nemotron` (70B) | `gemma4:26b` | ✓ | Both full-size models |
+| 48 GB+ | `nemotron` (70B) | `gemma4:31b` | ✓ | Maximum quality |
+
+**Local council:** Pull both Nemotron and Gemma 4 to run fully local council with two different model architectures. Different architectures catch different blind spots.
 
 Multi-GPU systems: Ollama automatically distributes layers across all detected GPUs.
 
