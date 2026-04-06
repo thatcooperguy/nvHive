@@ -5937,6 +5937,183 @@ def mcp(
 
 
 # ---------------------------------------------------------------------------
+# nvh estimate — GPU performance emulation
+# ---------------------------------------------------------------------------
+
+
+@app.command()
+def estimate(
+    gpu: str | None = typer.Option(
+        None, "--gpu", "-g",
+        help="GPU to estimate for (e.g. rtx_4090, h100_sxm)",
+    ),
+    model: str | None = typer.Option(
+        None, "-m", "--model",
+        help="Model to estimate (e.g. nemotron-small, gemma4:e4b)",
+    ),
+    list_gpus: bool = typer.Option(
+        False, "--list-gpus",
+        help="List all known GPUs",
+    ),
+):
+    """Estimate LLM inference speed on any NVIDIA GPU.
+
+    Predicts tokens/second based on memory bandwidth, architecture
+    IPC, and measured baselines from real hardware.
+
+    Examples:
+        nvh estimate --gpu rtx_4090 --model nemotron-small
+        nvh estimate --gpu rtx_3080
+        nvh estimate --model gemma4:e4b
+        nvh estimate --list-gpus
+    """
+    from nvh.utils.gpu_emulation import (
+        GPU_DATABASE,
+        estimate_all_gpus,
+        estimate_all_models,
+        estimate_performance,
+    )
+
+    if list_gpus:
+        table = Table(
+            title="Known NVIDIA GPUs",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Key", style="bold")
+        table.add_column("Name")
+        table.add_column("Arch")
+        table.add_column("VRAM", justify="right")
+        table.add_column("BW (GB/s)", justify="right")
+        table.add_column("CUDA Cores", justify="right")
+
+        for key in sorted(GPU_DATABASE.keys()):
+            spec = GPU_DATABASE[key]
+            table.add_row(
+                key,
+                spec.name,
+                spec.architecture,
+                f"{spec.vram_gb:.0f} GB",
+                f"{spec.memory_bandwidth_gbps:.0f}",
+                str(spec.cuda_cores),
+            )
+        console.print(table)
+        return
+
+    if gpu and model:
+        est = estimate_performance(gpu, model)
+        if not est:
+            console.print(
+                f"[red]Unknown GPU '{gpu}' or model"
+                f" '{model}'.[/red]"
+                f" Run --list-gpus to see options.",
+            )
+            return
+        console.print(
+            f"\n[bold]{est.gpu_name}[/bold]"
+            f" + {est.model}\n",
+        )
+        if not est.fits_in_vram:
+            console.print(
+                f"  [red]Does not fit in VRAM[/red]"
+                f" ({est.basis})",
+            )
+        else:
+            color = "green" if est.confidence == "measured" else "cyan"
+            console.print(
+                f"  Estimated: [{color}]"
+                f"{est.estimated_toks:.1f} tok/s[/{color}]",
+            )
+            console.print(
+                f"  Confidence: {est.confidence}",
+            )
+            console.print(f"  Basis: {est.basis}")
+            console.print(
+                f"  VRAM headroom:"
+                f" {est.vram_headroom_gb:.1f} GB",
+            )
+        console.print()
+        return
+
+    if gpu:
+        results = estimate_all_models(gpu)
+        spec = GPU_DATABASE.get(gpu)
+        if not spec:
+            console.print(f"[red]Unknown GPU '{gpu}'[/red]")
+            return
+
+        table = Table(
+            title=f"{spec.name} — Estimated Performance",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Model", style="bold")
+        table.add_column("Size", justify="right")
+        table.add_column("tok/s", justify="right")
+        table.add_column("Fits?", justify="center")
+        table.add_column("Confidence")
+
+        for est in results:
+            color = (
+                "green" if est.confidence == "measured"
+                else "cyan" if est.fits_in_vram
+                else "red"
+            )
+            table.add_row(
+                est.model,
+                f"{est.vram_headroom_gb + float(est.estimated_toks > 0) * 0:.0f} GB" if False else "",
+                f"[{color}]{est.estimated_toks:.1f}[/{color}]" if est.fits_in_vram else "[red]—[/red]",
+                "[green]✓[/green]" if est.fits_in_vram else "[red]✗[/red]",
+                est.confidence if est.fits_in_vram else "n/a",
+            )
+
+        console.print(table)
+        return
+
+    if model:
+        results = estimate_all_gpus(model)
+        if not results:
+            console.print(f"[red]Unknown model '{model}'[/red]")
+            return
+
+        table = Table(
+            title=f"{model} — Performance Across GPUs",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("GPU", style="bold")
+        table.add_column("VRAM", justify="right")
+        table.add_column("tok/s", justify="right")
+        table.add_column("Confidence")
+
+        for est in results:
+            color = (
+                "green" if est.confidence == "measured"
+                else "cyan"
+            )
+            table.add_row(
+                est.gpu_name,
+                f"{GPU_DATABASE.get(est.gpu_name.lower().replace(' ', '_'), GPU_DATABASE.get([k for k in GPU_DATABASE if GPU_DATABASE[k].name == est.gpu_name][0] if any(GPU_DATABASE[k].name == est.gpu_name for k in GPU_DATABASE) else '', None)) and ''}",
+                f"[{color}]{est.estimated_toks:.1f}[/{color}]",
+                est.confidence,
+            )
+
+        console.print(table)
+        return
+
+    console.print(
+        "Usage: nvh estimate --gpu rtx_4090"
+        " --model nemotron-small\n"
+        "       nvh estimate --gpu rtx_3080"
+        "  (all models on this GPU)\n"
+        "       nvh estimate --model gemma4:e4b"
+        "  (this model on all GPUs)\n"
+        "       nvh estimate --list-gpus"
+        "  (show all known GPUs)",
+    )
+
+
+# ---------------------------------------------------------------------------
 # nvh nvidia — NVIDIA infrastructure dashboard
 # ---------------------------------------------------------------------------
 
