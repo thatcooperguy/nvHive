@@ -100,6 +100,16 @@ class OllamaProvider:
         )
         content = response.choices[0].message.content or ""
 
+        # Fallback: some models (e.g. Gemma 4) return empty
+        # content through LiteLLM. Call Ollama API directly.
+        if not content and usage.output_tokens > 0:
+            try:
+                content = await self._direct_complete(
+                    msgs, model_name, temperature, max_tokens,
+                )
+            except Exception:
+                pass  # keep empty, don't crash
+
         return CompletionResponse(
             content=content,
             model=response.model or model_name,
@@ -109,6 +119,41 @@ class OllamaProvider:
             latency_ms=elapsed,
             finish_reason=FinishReason.STOP,
         )
+
+    async def _direct_complete(
+        self,
+        messages: list[dict],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """Call Ollama API directly, bypassing LiteLLM.
+
+        Fallback for models where LiteLLM returns empty content
+        (e.g. Gemma 4 with code/structured responses).
+        """
+        import httpx
+
+        # Strip ollama/ prefix for direct API call
+        raw_model = model.removeprefix("ollama/")
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self._base_url}/api/chat",
+                json={
+                    "model": raw_model,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                },
+                timeout=self._timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("message", {}).get("content", "")
 
     async def stream(
         self,
