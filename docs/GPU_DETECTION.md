@@ -151,9 +151,19 @@ Once Ollama is running with a Nemotron model, nvHive's router:
 
 With `--prefer-nvidia`, local NVIDIA providers get a 1.3x routing bonus, keeping more queries on your GPU.
 
-## Supported GPUs
+## Community Baselines
 
-Any NVIDIA GPU with CUDA support works. Performance varies by VRAM and compute capability:
+### Measured: DGX Spark (NVIDIA GB10, 120GB unified memory)
+
+| Model | Family | Size | tok/s | Measured |
+|-------|--------|------|------:|:--------:|
+| nemotron-mini | NVIDIA Nemotron | 2.7 GB | **86.6** | ✓ |
+| gemma3 | Google Gemma 3 | 3.3 GB | **73.4** | ✓ |
+| llama3.1 | Meta Llama 3.1 | 4.9 GB | **48.1** | ✓ |
+| gemma4:e4b | Google Gemma 4 | 9.6 GB | **26.4** | ✓ |
+| nemotron-3-super | NVIDIA Nemotron | 86 GB | **24.8** | ✓ |
+
+### Estimated: Other NVIDIA GPUs
 
 | GPU | VRAM | Expected Performance |
 |-----|------|---------------------|
@@ -166,6 +176,6 @@ Any NVIDIA GPU with CUDA support works. Performance varies by VRAM and compute c
 | A100 | 40/80 GB | ~250 tok/s with nemotron 70B |
 | H100 | 80 GB | ~380 tok/s with nemotron 70B |
 
-Run `nvh bench` to measure your actual performance. Results are compared against community baselines for your GPU model.
+Run `nvh bench` to measure your actual performance and contribute to community baselines.
 
 Apple Silicon (M1/M2/M3/M4) is also supported via Ollama's Metal backend, but without pynvml GPU detection details.
