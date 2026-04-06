@@ -99,10 +99,25 @@ def _detect_gpus_pynvml() -> list[GPUInfo]:
             if isinstance(name, bytes):
                 name = name.decode()
 
-            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            vram_mb = mem_info.total // (1024 * 1024)
-            memory_used = mem_info.used // (1024 * 1024)
-            memory_free = mem_info.free // (1024 * 1024)
+            try:
+                mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                vram_mb = mem_info.total // (1024 * 1024)
+                memory_used = mem_info.used // (1024 * 1024)
+                memory_free = mem_info.free // (1024 * 1024)
+            except Exception:
+                # Unified memory GPUs (GB10/DGX Spark) may not
+                # report VRAM via nvmlDeviceGetMemoryInfo.
+                # Fall back to system RAM as the memory pool.
+                import os
+                try:
+                    total_ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+                    vram_mb = total_ram // (1024 * 1024)
+                    memory_free = vram_mb  # conservative
+                    memory_used = 0
+                except Exception:
+                    vram_mb = 0
+                    memory_free = 0
+                    memory_used = 0
 
             try:
                 util = pynvml.nvmlDeviceGetUtilizationRates(handle)

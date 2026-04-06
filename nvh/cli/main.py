@@ -4460,7 +4460,65 @@ def bench(
 
     # Run quality benchmark if requested
     if quality and not speed_only:
-        benchmark()
+        from nvh.core.quality_benchmark import (
+            BenchmarkMode,
+            QualityBenchmarkRunner,
+            QualityJudge,
+            generate_markdown_report,
+            load_dataset,
+        )
+
+        async def _run_quality():
+            from nvh.config.settings import load_config
+            from nvh.core.engine import Engine
+
+            config = load_config()
+            engine = Engine(config=config)
+            await engine.initialize()
+
+            prompts = load_dataset()
+            if not prompts:
+                console.print(
+                    "[red]No benchmark prompts found.[/red]",
+                )
+                return
+
+            modes_list = [
+                BenchmarkMode.SINGLE,
+                BenchmarkMode.COUNCIL_FREE,
+            ]
+            qj = QualityJudge(engine, judge_provider="auto")
+            runner = QualityBenchmarkRunner(
+                engine, qj, prompts,
+            )
+
+            def on_progress(current, total, pid):
+                console.print(
+                    f"  [dim][{current}/{total}]"
+                    f" {pid}[/dim]",
+                )
+
+            console.print(
+                "\n[bold]Quality Benchmark[/bold]\n",
+            )
+            report = await runner.run(
+                modes=modes_list,
+                temperature=0.0,
+                max_tokens=2048,
+                on_progress=on_progress,
+                pace_seconds=15.0,
+            )
+
+            _display_benchmark_table(report)
+
+            ep = Path.home() / ".hive" / "benchmark_results.md"
+            ep.parent.mkdir(parents=True, exist_ok=True)
+            ep.write_text(generate_markdown_report(report))
+            console.print(
+                f"\n[green]Results saved to {ep}[/green]",
+            )
+
+        _run(_run_quality())
 
 
 # ---------------------------------------------------------------------------
