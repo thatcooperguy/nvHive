@@ -461,7 +461,30 @@ status = await nvh.health()
 
 ---
 
-## Verify It Yourself
+## Benchmark Results
+
+Real data from NVIDIA DGX Spark (GB10, 120GB). Judged by OpenAI with ground truth verification on math prompts.
+
+### Quality: Council vs Single Model
+
+| Mode | Accuracy | Completeness | Coherence | **Overall** | Cost |
+|------|----------|-------------|-----------|---------|------|
+| Single Model (Nemotron Super) | 5.5 | 5.7 | 5.0 | **5.1** | $0.00 |
+| **Council (Free: Ollama + Groq + Google)** | **9.0** | **8.0** | **9.0** | **8.6** | **$0.00** |
+
+Council consensus scored **68% higher** than a single model on the same prompts. Ground truth verification on math problems caught errors the single model made that an LLM judge alone wouldn't have flagged.
+
+### Speed: Models on DGX Spark
+
+| Model | Size | tok/s |
+|-------|------|------:|
+| gemma3 | 3.3 GB | **119.3** |
+| nemotron-mini | 2.7 GB | **85.7** |
+| gemma4 (e4b) | 9.6 GB | **61.7** |
+| llama3.1 | 4.9 GB | **48.2** |
+| nemotron-3-super | 86 GB | **23.6** |
+
+### Run It Yourself
 
 <p align="center">
   <img src="docs/screenshots/bench-demo.gif" alt="nvHive Benchmark Demo" width="640">
@@ -472,11 +495,10 @@ nvh bench              # GPU speed (tokens/sec)
 nvh bench -q           # speed + quality comparison
 nvh health             # provider resilience
 nvh why                # explain last routing decision
-nvh routing-stats      # learning in action
-nvh history            # recent queries with costs
+nvh estimate --gpu rtx_4090   # predict tok/s on any GPU
 ```
 
-16 quality prompts across code generation, debugging, reasoning, math, creative writing, and Q&A. Blind LLM judge. Run it yourself. Publish the results.
+16 prompts across code generation, debugging, reasoning, math, creative writing, and Q&A. LLM judge + ground truth verification. Run it yourself. Publish the results.
 
 ## Learn More
 
