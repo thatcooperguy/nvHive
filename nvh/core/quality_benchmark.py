@@ -369,6 +369,38 @@ class QualityJudge:
             for s in scores
         )
 
+        # Ground truth check: if reference answer exists,
+        # verify it appears in the response. Override the
+        # LLM judge's correctness score if it got it wrong.
+        if has_reference:
+            ref = prompt.reference_answer.strip()
+            ref_variants = [ref]
+            # Handle "X or Y" format in reference answers
+            if " or " in ref:
+                ref_variants = [
+                    v.strip() for v in ref.split(" or ")
+                ]
+            found = any(
+                v.lower() in response_text.lower()
+                for v in ref_variants
+            )
+            if not found:
+                # Override correctness score — LLM judge
+                # can't verify factual truth
+                for s in scores:
+                    if s.dimension == QualityDimension.CORRECTNESS:
+                        s.score = 2.0
+                        s.reasoning = (
+                            f"Ground truth check: reference"
+                            f" answer '{ref}' not found in"
+                            f" response"
+                        )
+                # Recalculate overall with corrected score
+                overall = sum(
+                    s.score * weights.get(s.dimension, 0.0)
+                    for s in scores
+                )
+
         return ResponseEvaluation(
             prompt_id=prompt.id,
             provider=provider,
