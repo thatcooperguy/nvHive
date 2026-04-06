@@ -46,7 +46,11 @@ class OllamaProvider:
         return self._provider_name
 
     def _get_model(self, model: str | None) -> str:
-        return model or self._default_model
+        m = model or self._default_model
+        # LiteLLM requires the ollama/ prefix for routing
+        if m and not m.startswith("ollama/"):
+            m = f"ollama/{m}"
+        return m
 
     def _kwargs(self, model: str) -> dict[str, Any]:
         kw: dict[str, Any] = {"model": model, "api_base": self._base_url}
