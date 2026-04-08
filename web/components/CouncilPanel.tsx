@@ -536,6 +536,16 @@ function LiveCouncilPanel({
         ))}
       </div>
 
+      {/* Synthesis — the answer. Rendered first so it reads like a
+          question/answer flow, with the per-member deliberations below
+          as supporting detail the user can scan if curious. */}
+      <SynthesisPanel
+        status={synthesisStatus}
+        content={synthesisContent}
+        tokens={synthesisTokens}
+        cost={synthesisCost}
+      />
+
       {/* Member streaming panels */}
       <div>
         <div className="section-label mb-3">Council Members</div>
@@ -555,14 +565,6 @@ function LiveCouncilPanel({
           })}
         </div>
       </div>
-
-      {/* Synthesis */}
-      <SynthesisPanel
-        status={synthesisStatus}
-        content={synthesisContent}
-        tokens={synthesisTokens}
-        cost={synthesisCost}
-      />
 
       {/* Failed members */}
       {failedKeys.length > 0 && (

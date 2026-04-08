@@ -50,6 +50,10 @@ export default function CouncilPage() {
   // ── Session state ────────────────────────────────────────────────────────────
   const [phase, setPhase] = useState<SessionPhase>('idle');
   const [error, setError] = useState<string | null>(null);
+  // Frozen copy of the prompt as it was at the moment the user hit submit,
+  // so we can display it as the "question" at the top of the results panel
+  // even while the user edits the textarea for a follow-up.
+  const [submittedPrompt, setSubmittedPrompt] = useState<string>('');
 
   // Member streaming
   const [memberOrder, setMemberOrder] = useState<string[]>([]);
@@ -176,6 +180,7 @@ export default function CouncilPage() {
 
     resetSession();
     completedCostRef.current = 0;
+    setSubmittedPrompt(prompt);
     setPhase('connecting');
     resetStallTimer();
 
@@ -643,7 +648,30 @@ export default function CouncilPage() {
             </div>
 
           ) : (phase === 'streaming' || phase === 'synthesis' || phase === 'done') && memberOrder.length > 0 ? (
-            <div className="card p-5 border-[#76B900]/20">
+            <div className="space-y-4">
+              {/* Submitted question — pinned at the top so the results
+                  read as a question/answer exchange. Frozen at submit
+                  time so editing the prompt textarea for a follow-up
+                  doesn't mutate the header of the current session. */}
+              {submittedPrompt && (
+                <div className="card p-4 border-l-2 border-l-[#76B900]/60">
+                  <div className="flex items-start gap-3">
+                    <div className="w-7 h-7 rounded-md bg-[#76B900]/10 border border-[#76B900]/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <svg className="w-3.5 h-3.5 text-[#76B900]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">You asked</div>
+                      <div className="text-sm text-[#e2e8f0] whitespace-pre-wrap break-words leading-relaxed">
+                        {submittedPrompt}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="card p-5 border-[#76B900]/20">
               <div className="section-label mb-4 flex items-center gap-2 text-[#76B900]">
                 <span>◈</span>
                 <span>Convene</span>
@@ -679,6 +707,7 @@ export default function CouncilPage() {
                 strategy={strategy || 'weighted_consensus'}
                 failedMembers={failedMembers}
               />
+              </div>
             </div>
 
           ) : (
