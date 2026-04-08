@@ -13,11 +13,19 @@ TIMEOUT = 60
 
 
 def run_nvh(*args: str, timeout: int = TIMEOUT) -> subprocess.CompletedProcess:
-    """Run an nvh command and return the result."""
+    """Run an nvh command and return the result.
+
+    Forces UTF-8 decoding so rich/typer's unicode box-drawing output
+    doesn't crash the subprocess reader thread on Windows (where the
+    default is cp1252 and any non-ASCII byte raises UnicodeDecodeError,
+    leaving stdout=None).
+    """
     return subprocess.run(
         [*NVH, *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
     )
 
