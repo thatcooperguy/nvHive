@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import type { QueryMode } from '@/lib/types';
+import { useMemo, useState, useEffect, useRef } from 'react';
+import type { ProviderHealth, QueryMode } from '@/lib/types';
 
 interface Props {
   onSubmit: (params: {
@@ -15,7 +15,10 @@ interface Props {
     stream: boolean;
   }) => void;
   loading?: boolean;
-  providers?: string[];
+  /** Full provider health data — used to sort healthy advisors first
+   *  and show a connection indicator. Falling back to a string[] keeps
+   *  older callers working. */
+  providers?: ProviderHealth[] | string[];
   models?: Array<{ model_id: string; provider: string; display_name: string }>;
   defaultMode?: QueryMode;
   showModeToggle?: boolean;
@@ -47,6 +50,28 @@ export default function QueryInput({
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
   }, [prompt]);
+
+  // Normalize the providers prop into ProviderHealth records and sort
+  // healthy ones first so connected advisors surface at the top of the
+  // dropdown. Stable order within each health bucket (by latency, then
+  // by name) so the same advisor doesn't jump around between renders.
+  const sortedProviders: ProviderHealth[] = useMemo(() => {
+    if (!providers || providers.length === 0) return [];
+    const normalized: ProviderHealth[] = (providers as Array<ProviderHealth | string>).map(p =>
+      typeof p === 'string'
+        ? { name: p, healthy: true, latency_ms: null, models_available: 0, error: null }
+        : p
+    );
+    return normalized.slice().sort((a, b) => {
+      if (a.healthy !== b.healthy) return a.healthy ? -1 : 1;
+      const la = a.latency_ms ?? Number.POSITIVE_INFINITY;
+      const lb = b.latency_ms ?? Number.POSITIVE_INFINITY;
+      if (la !== lb) return la - lb;
+      return a.name.localeCompare(b.name);
+    });
+  }, [providers]);
+
+  const healthyCount = sortedProviders.filter(p => p.healthy).length;
 
   // Filter models by selected provider
   const filteredModels = provider
@@ -129,17 +154,42 @@ export default function QueryInput({
       {/* Provider / Model row */}
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs text-[#475569] mb-1.5">Provider</label>
+          <label className="block text-xs text-[#475569] mb-1.5 flex items-center justify-between">
+            <span>Advisor</span>
+            {sortedProviders.length > 0 && (
+              <span className="font-mono text-[10px] text-[#475569]">
+                <span className="text-[#22c55e]">●</span> {healthyCount} online
+                {healthyCount < sortedProviders.length && (
+                  <> / <span className="text-[#475569]">{sortedProviders.length - healthyCount} offline</span></>
+                )}
+              </span>
+            )}
+          </label>
           <select
             value={provider}
             onChange={e => { setProvider(e.target.value); setModel(''); }}
-            className="input-base w-full px-3 py-2 text-sm"
+            className="input-base w-full px-3 py-2 text-sm font-mono"
             disabled={loading}
           >
-            <option value="">Auto</option>
-            {providers.map(p => (
-              <option key={p} value={p}>{p}</option>
-            ))}
+            <option value="">Auto (best available)</option>
+            {healthyCount > 0 && (
+              <optgroup label="● Connected">
+                {sortedProviders.filter(p => p.healthy).map(p => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}{p.latency_ms != null ? `  ·  ${p.latency_ms}ms` : ''}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {healthyCount < sortedProviders.length && (
+              <optgroup label="○ Offline">
+                {sortedProviders.filter(p => !p.healthy).map(p => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}  ·  offline
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </div>
         <div>
