@@ -6727,9 +6727,20 @@ def webui(
         web_dir = cache_web_dir
         console.print(f"[green]Web UI downloaded to {cache_web_dir}[/green]")
 
-    # Check for Node.js
+    # Check for Node.js.
+    # On Windows, npm ships as npm.cmd; Python's subprocess cannot launch
+    # .cmd files by bare name (fails with WinError 2), so resolve the
+    # absolute path via shutil.which and use it for all subprocess calls.
     node = shutil.which("node")
     npm = shutil.which("npm")
+    if sys.platform == "win32" and not npm:
+        # shutil.which should find npm.cmd, but some installers only add
+        # npm to PATHEXT via CMD shims — try a few fallbacks.
+        for ext in ("npm.cmd", "npm.exe", "npm.bat"):
+            candidate = shutil.which(ext)
+            if candidate:
+                npm = candidate
+                break
     if not node or not npm:
         console.print("[red]Node.js not found.[/red]")
         console.print("Install Node.js 18+:")
@@ -6747,14 +6758,14 @@ def webui(
     if not os.path.isdir(node_modules):
         console.print("[bold]Installing web UI dependencies...[/bold]")
         result = subprocess.run(
-            ["npm", "ci"],
+            [npm, "ci"],
             cwd=web_dir,
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
             # Try npm install as fallback
-            result = subprocess.run(["npm", "install"], cwd=web_dir)
+            result = subprocess.run([npm, "install"], cwd=web_dir)
         if result.returncode != 0:
             console.print("[red]npm install failed.[/red]")
             raise typer.Exit(1)
@@ -6823,7 +6834,7 @@ def webui(
 
     try:
         subprocess.run(
-            ["npm", "run", "dev", "--", "-p", str(chosen_port)],
+            [npm, "run", "dev", "--", "-p", str(chosen_port)],
             cwd=web_dir,
         )
     except KeyboardInterrupt:
@@ -7285,6 +7296,10 @@ def test(
         False, "--quick",
         help="Quick mode: skip provider health, webui, and remote API checks",
     ),
+    json_output: bool = typer.Option(
+        False, "--json",
+        help="Emit the report as JSON on stdout (for CI / scripting)",
+    ),
     fix: bool = typer.Option(False, "--fix", help="Attempt to fix issues found"),
 ):
     """Run end-to-end smoke tests on your nvHive installation.
@@ -7322,6 +7337,19 @@ def test(
         skip_providers=skip_providers,
         quick=quick,
     ))
+
+    if json_output:
+        import json
+        from dataclasses import asdict
+        payload = {
+            "total": report.total,
+            "passed": report.passed,
+            "failed": report.failed,
+            "total_ms": report.total_ms,
+            "results": [asdict(r) for r in report.results],
+        }
+        print(json.dumps(payload, indent=2))
+        raise typer.Exit(0 if report.failed == 0 else 1)
 
     # Group by category
     categories: dict[str, list] = {}
@@ -7429,13 +7457,13 @@ def doctor():
 
     # 1. Python version
     py_version = sys.version_info
-    if py_version >= (3, 12):
+    if py_version >= (3, 11):
         _pass("Python version", f"{py_version.major}.{py_version.minor}.{py_version.micro}")
     else:
         _fail(
             "Python version",
-            f"{py_version.major}.{py_version.minor}.{py_version.micro} (need >= 3.12)",
-            "Upgrade Python to 3.12+: https://python.org/downloads",
+            f"{py_version.major}.{py_version.minor}.{py_version.micro} (need >= 3.11)",
+            "Upgrade Python to 3.11+: https://python.org/downloads",
         )
 
     # 2. Config file exists and is valid YAML

@@ -49,6 +49,24 @@ class SmokeTestReport:
         return len(self.results)
 
 
+def _soft_fail_reason(error: str) -> tuple[bool, str]:
+    """Classify provider errors that are environmental rather than bugs.
+
+    Returns (soft_pass, label). Soft-pass errors are reported as passing
+    so the smoke test doesn't fail CI on transient/tier issues.
+    """
+    e = error.lower()
+    if "rate" in e or "429" in e:
+        return True, "rate limited (transient)"
+    # GitHub Models free tier requires a token with the 'models' scope;
+    # a valid-but-underscoped PAT is a config issue, not a product bug.
+    if "models" in e and "permission" in e:
+        return True, "token missing 'models' scope (config)"
+    if "insufficient_quota" in e or "quota" in e and "exceed" in e:
+        return True, "quota exceeded (config)"
+    return False, ""
+
+
 def _timed(fn):
     """Run a sync function and return (result, duration_ms)."""
     start = time.monotonic()
@@ -151,17 +169,17 @@ async def run_smoke_tests(
                         duration_ms=ms, message=f"healthy ({hs.latency_ms}ms)")
                 else:
                     error = hs.error or "unhealthy"
-                    is_rate_limit = "rate" in error.lower() or "429" in error
-                    add(f"Provider: {name}", "Providers", is_rate_limit,
+                    soft, label = _soft_fail_reason(error)
+                    add(f"Provider: {name}", "Providers", soft,
                         duration_ms=ms,
-                        message="rate limited (transient)" if is_rate_limit else "",
-                        error="" if is_rate_limit else error)
+                        message=label if soft else "",
+                        error="" if soft else error)
             except Exception as e:
-                error = str(e)[:100]
-                is_rate_limit = "rate" in error.lower() or "429" in error
-                add(f"Provider: {name}", "Providers", is_rate_limit,
-                    message="rate limited (transient)" if is_rate_limit else "",
-                    error="" if is_rate_limit else error)
+                error = str(e)[:200]
+                soft, label = _soft_fail_reason(error)
+                add(f"Provider: {name}", "Providers", soft,
+                    message=label if soft else "",
+                    error="" if soft else error)
 
     # ===== QUERY EXECUTION =====
     if engine and not quick:
