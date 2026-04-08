@@ -6846,6 +6846,14 @@ def webui(
         False, "-y", "--yes",
         help="Skip confirmation prompts for --uninstall / --clean",
     ),
+    no_api: bool = typer.Option(
+        False, "--no-api",
+        help="Do not auto-start nvh serve (assume API is managed separately)",
+    ),
+    api_port: int = typer.Option(
+        8000, "--api-port",
+        help="Port the API server is expected to listen on",
+    ),
 ):
     """Install and launch the nvHive web UI.
 
@@ -7126,9 +7134,84 @@ def webui(
     port_suffix = "" if chosen_port == 80 else f":{chosen_port}"
     access_url = f"http://{host_label}{port_suffix}"
 
+    # Step 4: Ensure the API server (nvh serve) is running. The web UI
+    # makes fetch calls to http://localhost:8000 by default, and will
+    # render an empty Advisors/Providers page if the API is down. Auto-
+    # start it in the background unless the user opted out with --no-api.
+    import socket as _socket
+    import time as _time
+
+    def _api_reachable(p: int, timeout: float = 0.5) -> bool:
+        try:
+            with _socket.create_connection(("127.0.0.1", p), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    api_proc: subprocess.Popen | None = None
+    api_already_running = _api_reachable(api_port)
+
+    if no_api:
+        if not api_already_running:
+            console.print(
+                f"  [yellow]![/yellow] --no-api set but nothing is listening on "
+                f"{api_port}; the Advisors/Providers pages will be empty."
+            )
+    elif api_already_running:
+        console.print(f"  [green]✓[/green] API server already running on {api_port}")
+    else:
+        console.print(f"  [bold]Starting API server (nvh serve) on {api_port}...[/bold]")
+        # Resolve the current nvh executable so we launch the same install.
+        nvh_exe = shutil.which("nvh") or sys.executable
+        if nvh_exe.endswith("python.exe") or nvh_exe.endswith("python"):
+            api_cmd = [nvh_exe, "-m", "nvh.cli.main", "serve", "--port", str(api_port)]
+        else:
+            api_cmd = [nvh_exe, "serve", "--port", str(api_port)]
+        try:
+            api_proc = subprocess.Popen(
+                api_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            console.print(
+                f"  [yellow]![/yellow] Could not auto-start API: {e}. "
+                f"Run [bold]nvh serve[/bold] manually in another terminal."
+            )
+            api_proc = None
+
+        if api_proc is not None:
+            # Wait up to ~8s for the API to accept connections.
+            deadline = _time.monotonic() + 8.0
+            while _time.monotonic() < deadline:
+                if _api_reachable(api_port):
+                    console.print(f"  [green]✓[/green] API server ready on {api_port}")
+                    break
+                if api_proc.poll() is not None:
+                    console.print(
+                        f"  [yellow]![/yellow] API server exited early "
+                        f"(code {api_proc.returncode}). The UI will work but "
+                        f"Advisors/Providers pages will be empty until you "
+                        f"run [bold]nvh serve[/bold] manually."
+                    )
+                    api_proc = None
+                    break
+                _time.sleep(0.25)
+            else:
+                console.print(
+                    f"  [yellow]![/yellow] API server did not respond within 8s — "
+                    f"continuing anyway."
+                )
+
     console.print("[bold]Starting nvHive Web UI...[/bold]")
     console.print(f"  WebUI: {access_url}")
-    console.print("  [dim]API server must be running: nvh serve (in another terminal)[/dim]")
+    if api_proc is not None:
+        console.print(
+            f"  [dim]API: http://localhost:{api_port} "
+            f"(auto-started, will stop with Ctrl+C)[/dim]"
+        )
+    elif api_already_running:
+        console.print(f"  [dim]API: http://localhost:{api_port} (already running)[/dim]")
     console.print("  [dim]Press Ctrl+C to stop[/dim]")
     console.print()
 
@@ -7139,6 +7222,20 @@ def webui(
         )
     except KeyboardInterrupt:
         console.print("\n[dim]Web UI stopped.[/dim]")
+    finally:
+        # Tear down the API server if we started it. Never kill an API
+        # that was already running before we got here — that belongs to
+        # whoever launched it.
+        if api_proc is not None and api_proc.poll() is None:
+            console.print("[dim]Stopping auto-started API server...[/dim]")
+            try:
+                api_proc.terminate()
+                try:
+                    api_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    api_proc.kill()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
