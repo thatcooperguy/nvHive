@@ -2209,7 +2209,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) ->
     import uvicorn
 
     uvicorn.run(
-        "council.api.server:app",
+        "nvh.api.server:app",
         host=host,
         port=port,
         reload=reload,
