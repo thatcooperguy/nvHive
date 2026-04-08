@@ -6610,32 +6610,220 @@ def keys(
     console.print()
 
 
+def _detect_install_mode() -> tuple[str, str]:
+    """Detect how NVHive was installed.
+
+    Returns (mode, location) where mode is one of:
+      - "git-clone":  install.sh layout at ~/nvh/repo
+      - "editable":   pip install -e <path>
+      - "pipx":       installed via pipx
+      - "pip":        plain pip install nvhive
+      - "unknown":    couldn't tell
+    """
+    import json
+    import os
+    from pathlib import Path
+
+    # 1. install.sh layout wins if present — that's what `nvh update` used
+    #    historically and we don't want to regress it.
+    nvh_home = os.environ.get("NVH_HOME", os.path.expanduser("~/nvh"))
+    repo_dir = os.path.join(nvh_home, "repo")
+    if os.path.isdir(os.path.join(repo_dir, ".git")):
+        return "git-clone", repo_dir
+
+    # 2. Inspect the installed dist-info for editable / pipx markers.
+    import nvh as _nvh_pkg
+    site = Path(_nvh_pkg.__file__).resolve().parent.parent
+    dist_info = next(site.glob("nvhive-*.dist-info"), None)
+
+    if dist_info is not None:
+        direct_url = dist_info / "direct_url.json"
+        if direct_url.is_file():
+            try:
+                data = json.loads(direct_url.read_text())
+                url = data.get("url", "")
+                if data.get("dir_info", {}).get("editable"):
+                    # url is file:// pointing at the source tree
+                    src = url.replace("file:///", "").replace("file://", "")
+                    return "editable", src
+            except Exception:
+                pass
+
+    # 3. pipx installs live under a "pipx" path segment.
+    if "pipx" in str(site).lower():
+        return "pipx", str(site)
+
+    return "pip", str(site)
+
+
+def _fetch_latest_version_from_github() -> str | None:
+    """Best-effort lookup of the latest version on main.
+
+    Reads ``nvh/__init__.py`` from the raw GitHub URL and extracts
+    ``__version__``. Returns None on any error so callers can treat
+    the version check as purely informational.
+    """
+    try:
+        import re
+        import urllib.request
+        url = (
+            "https://raw.githubusercontent.com/"
+            "thatcooperguy/nvHive/main/nvh/__init__.py"
+        )
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+        m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
 @app.command()
-def update():
-    """Update NVHive to the latest version from GitHub."""
+def update(
+    check: bool = typer.Option(
+        False, "--check",
+        help="Only report current vs latest — do not install anything",
+    ),
+    from_git: bool = typer.Option(
+        False, "--from-git",
+        help="Install straight from GitHub main (get fixes before a PyPI release)",
+    ),
+    yes: bool = typer.Option(
+        False, "-y", "--yes",
+        help="Skip the confirmation prompt",
+    ),
+):
+    """Update NVHive to the latest version.
+
+    Detects how NVHive was installed (git-clone, editable, pipx, pip) and
+    uses the matching upgrade path. API keys (stored in the OS keyring)
+    and config files (~/.config/nvhive or platform equivalent) are NOT
+    touched by any of these upgrade paths, so you will not lose anything.
+
+    Examples:
+        nvh update              Detect install mode and upgrade
+        nvh update --check      Just show current vs latest, no install
+        nvh update --from-git   Force install from GitHub main
+        nvh update -y           Skip the confirmation prompt
+    """
     import os
     import subprocess
 
-    nvh_home = os.environ.get("NVH_HOME", os.path.expanduser("~/nvh"))
-    repo_dir = os.path.join(nvh_home, "repo")
+    mode, location = _detect_install_mode()
+    current = __version__
+    latest = _fetch_latest_version_from_github()
 
-    if os.path.isdir(os.path.join(repo_dir, ".git")):
-        console.print("[bold]Updating NVHive...[/bold]")
-        try:
-            subprocess.run(["git", "-C", repo_dir, "pull", "--quiet"], check=True)
+    console.print()
+    console.print(Panel(
+        f"[bold]NVHive Update[/bold]\n"
+        f"  Current version : [bold]{current}[/bold]\n"
+        f"  Latest on main  : [bold]{latest or '[dim]unknown[/dim]'}[/bold]\n"
+        f"  Install mode    : [bold]{mode}[/bold]\n"
+        f"  Location        : [dim]{location}[/dim]",
+        border_style="cyan",
+    ))
+    console.print(
+        "  [dim]API keys (OS keyring) and config files are preserved by every"
+        " upgrade path below.[/dim]"
+    )
+    console.print()
+
+    if check:
+        if latest and latest != current:
+            console.print(f"[yellow]Update available:[/yellow] {current} → {latest}")
+            raise typer.Exit(0)
+        if latest and latest == current:
+            console.print("[green]Already on the latest version.[/green]")
+        else:
+            console.print("[dim]Could not reach GitHub to check latest version.[/dim]")
+        return
+
+    # Build the command for the detected mode.
+    git_url = "git+https://github.com/thatcooperguy/nvHive.git"
+    if from_git or mode in ("pip", "unknown"):
+        # Plain pip path — or the user explicitly asked for git.
+        if from_git:
+            cmd = [sys.executable, "-m", "pip", "install", "-U", git_url]
+            label = f"pip install -U {git_url}"
+        else:
+            cmd = [sys.executable, "-m", "pip", "install", "-U", "nvhive"]
+            label = "pip install -U nvhive"
+    elif mode == "git-clone":
+        cmd = None  # handled specially below
+        label = f"git pull + pip install -e {location}"
+    elif mode == "editable":
+        cmd = None
+        label = f"git pull in {location}"
+    elif mode == "pipx":
+        if from_git:
+            cmd = ["pipx", "install", "--force", git_url]
+            label = f"pipx install --force {git_url}"
+        else:
+            cmd = ["pipx", "upgrade", "nvhive"]
+            label = "pipx upgrade nvhive"
+    else:
+        console.print(f"[red]Unsupported install mode: {mode}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"  Will run: [bold]{label}[/bold]")
+    if not yes:
+        confirm = typer.confirm("  Proceed?", default=True)
+        if not confirm:
+            console.print("[dim]Cancelled.[/dim]")
+            raise typer.Exit(0)
+    console.print()
+
+    try:
+        if mode == "git-clone":
+            subprocess.run(["git", "-C", location, "pull", "--ff-only"], check=True)
             subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-q", "-e", repo_dir],
+                [sys.executable, "-m", "pip", "install", "-q", "-e", location],
                 check=True,
             )
-            console.print("[green]Updated to latest version.[/green]")
-        except Exception as e:
-            console.print(f"[red]Update failed: {e}[/red]")
-    else:
-        console.print("[dim]Not installed from git. Reinstall with:[/dim]")
-        console.print(
-            "curl -sSL https://raw.githubusercontent.com"
-            "/thatcooperguy/nvHive/main/install.sh | bash"
+        elif mode == "editable" and not from_git:
+            if not os.path.isdir(os.path.join(location, ".git")):
+                console.print(
+                    "[yellow]Editable install but source dir is not a git repo;"
+                    " falling back to pip install -U from GitHub.[/yellow]"
+                )
+                subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-U", git_url],
+                    check=True,
+                )
+            else:
+                subprocess.run(["git", "-C", location, "pull", "--ff-only"], check=True)
+        else:
+            assert cmd is not None
+            subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Update failed (exit {e.returncode}).[/red]")
+        raise typer.Exit(1) from e
+    except FileNotFoundError as e:
+        console.print(f"[red]Update failed: required tool not found — {e}[/red]")
+        raise typer.Exit(1) from e
+
+    # Report new version by re-importing nvh in a subprocess so we pick up
+    # whatever pip just installed (the running interpreter still has the
+    # old __version__ cached in memory).
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", "import nvh; print(nvh.__version__)"],
+            capture_output=True, text=True, check=True,
         )
+        new_version = out.stdout.strip()
+    except Exception:
+        new_version = "?"
+
+    console.print()
+    if new_version == current:
+        console.print(
+            f"[green]Already up to date[/green] (still on {current})."
+        )
+    else:
+        console.print(
+            f"[green]Updated:[/green] {current} → [bold]{new_version}[/bold]"
+        )
+    console.print()
 
 
 # ---------------------------------------------------------------------------
