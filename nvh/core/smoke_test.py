@@ -79,8 +79,14 @@ async def run_smoke_tests(
     test_query: str = "Say hello in one sentence",
     skip_webui: bool = False,
     skip_providers: bool = False,
+    quick: bool = False,
 ) -> SmokeTestReport:
-    """Run the full smoke test suite."""
+    """Run the full smoke test suite.
+
+    When ``quick`` is True, skip everything that touches the network or
+    remote providers: engine queries, API server endpoints, and agent
+    generation. Useful as a fast local sanity check (e.g., post-install).
+    """
     report = SmokeTestReport()
     start = time.monotonic()
 
@@ -158,7 +164,7 @@ async def run_smoke_tests(
                     error="" if is_rate_limit else error)
 
     # ===== QUERY EXECUTION =====
-    if engine:
+    if engine and not quick:
         try:
             resp, ms = await _timed_async(engine.query(test_query))
             add("Smart query", "Query", True,
@@ -183,6 +189,10 @@ async def run_smoke_tests(
                     error="Ollama not running (expected if no GPU)")
 
     # ===== API SERVER =====
+    if quick:
+        # Skip all remote API/WebUI/agent-generation probes in quick mode.
+        report.total_ms = int((time.monotonic() - start) * 1000)
+        return report
     try:
         import httpx
         async with httpx.AsyncClient() as client:
@@ -279,7 +289,7 @@ async def run_smoke_tests(
         add("MCP server module", "MCP", True, message="loads OK")
     except ImportError:
         add("MCP server module", "MCP", False,
-            error='pip install "nvhive[mcp]"')
+            error=r'pip install "nvhive\[mcp]"')
     except Exception:
         add("MCP server module", "MCP", True,
             message="loads OK (MCP SDK not installed)")
@@ -322,7 +332,7 @@ async def run_smoke_tests(
         if gpus:
             gpu = gpus[0]
             add("GPU detection", "Hardware", True,
-                message=f"{gpu.name} ({gpu.vram_total_mb}MB)")
+                message=f"{gpu.name} ({gpu.vram_mb}MB)")
         else:
             add("GPU detection", "Hardware", True,
                 message="No GPU (CPU mode)")

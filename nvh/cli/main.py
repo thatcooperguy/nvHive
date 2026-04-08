@@ -27,6 +27,17 @@ from rich.table import Table
 
 from nvh import __version__
 
+# Fix Windows legacy console (cp1252) Unicode crashes on symbols like ✓/✗.
+# Without this, Rich raises UnicodeEncodeError whenever it tries to print
+# a non-latin1 glyph (reported on Windows 11 via `nvh test`).
+if sys.platform == "win32":
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
 
 def _format_cli_error(e: Exception) -> str:
     """Format an exception into a helpful, actionable CLI error message."""
@@ -86,7 +97,7 @@ app = typer.Typer(
     help="NVHive — Multi-LLM orchestration. Just type: nvh \"your question\"",
     no_args_is_help=False,
 )
-console = Console()
+console = Console(legacy_windows=False) if sys.platform == "win32" else Console()
 
 
 async def _smart_default(prompt: str):
@@ -6652,7 +6663,10 @@ def webui(
     import shutil
     import subprocess
 
-    # Find the web directory
+    # Find the web directory. When nvHive is installed via pip, the web/
+    # folder is not shipped in the wheel, so also check a user cache dir
+    # and offer to download it on first run.
+    cache_web_dir = os.path.expanduser("~/.nvhive/web")
     web_dir = None
     candidates = [
         os.path.join(
@@ -6662,6 +6676,7 @@ def webui(
             "web",
         ),
         os.path.expanduser("~/nvh/repo/web"),
+        cache_web_dir,
         os.path.join(os.getcwd(), "web"),
     ]
     for candidate in candidates:
@@ -6670,10 +6685,47 @@ def webui(
             break
 
     if not web_dir:
-        console.print("[red]Web UI not found.[/red]")
-        console.print("Make sure you installed from source (git clone), not just pip.")
-        console.print("[dim]The web/ directory should be in the repo root.[/dim]")
-        raise typer.Exit(1)
+        # Attempt to download the web/ directory from the upstream repo
+        # so pip-installed users get a working `nvh webui` out of the box.
+        git = shutil.which("git")
+        if not git:
+            console.print("[red]Web UI not found.[/red]")
+            console.print(
+                "Install git so nvHive can fetch the Web UI, "
+                "or install nvHive from source (git clone)."
+            )
+            raise typer.Exit(1)
+
+        console.print("[bold]Downloading Web UI (first run)...[/bold]")
+        os.makedirs(os.path.dirname(cache_web_dir), exist_ok=True)
+        tmp_clone = cache_web_dir + ".tmp"
+        if os.path.isdir(tmp_clone):
+            shutil.rmtree(tmp_clone, ignore_errors=True)
+        result = subprocess.run(
+            [
+                "git", "clone", "--depth", "1",
+                "https://github.com/thatcooperguy/nvHive.git",
+                tmp_clone,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print("[red]Failed to download Web UI.[/red]")
+            console.print(f"[dim]{result.stderr.strip()}[/dim]")
+            raise typer.Exit(1)
+
+        src_web = os.path.join(tmp_clone, "web")
+        if not os.path.isdir(src_web):
+            console.print("[red]Upstream repo has no web/ directory.[/red]")
+            raise typer.Exit(1)
+
+        if os.path.isdir(cache_web_dir):
+            shutil.rmtree(cache_web_dir, ignore_errors=True)
+        shutil.move(src_web, cache_web_dir)
+        shutil.rmtree(tmp_clone, ignore_errors=True)
+        web_dir = cache_web_dir
+        console.print(f"[green]Web UI downloaded to {cache_web_dir}[/green]")
 
     # Check for Node.js
     node = shutil.which("node")
@@ -7229,6 +7281,10 @@ def test(
         False, "--no-providers",
         help="Skip provider health checks",
     ),
+    quick: bool = typer.Option(
+        False, "--quick",
+        help="Quick mode: skip provider health, webui, and remote API checks",
+    ),
     fix: bool = typer.Option(False, "--fix", help="Attempt to fix issues found"),
 ):
     """Run end-to-end smoke tests on your nvHive installation.
@@ -7239,9 +7295,14 @@ def test(
 
     Examples:
         nvh test                  Run all tests
+        nvh test --quick          Fast sanity check (core only, no network)
         nvh test --no-webui       Skip WebUI (if not running)
         nvh test --fix            Try to fix issues automatically
     """
+    # --quick implies skipping webui and provider health checks
+    if quick:
+        skip_webui = True
+        skip_providers = True
     from rich.rule import Rule
 
     from nvh.core.smoke_test import run_smoke_tests
@@ -7259,6 +7320,7 @@ def test(
         webui_url=webui_url,
         skip_webui=skip_webui,
         skip_providers=skip_providers,
+        quick=quick,
     ))
 
     # Group by category
