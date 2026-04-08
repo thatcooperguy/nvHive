@@ -352,12 +352,28 @@ interface SynthesisPanelProps {
 
 function SynthesisPanel({ status, content, tokens, cost, result }: SynthesisPanelProps) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const hasScrolledIntoView = useRef(false);
 
   useEffect(() => {
     if (status === 'streaming' && contentRef.current) {
       contentRef.current.scrollTop = contentRef.current.scrollHeight;
     }
   }, [content, status]);
+
+  // When synthesis first starts, scroll the panel into view. Otherwise
+  // users with many member panels never see the synthesis appear — it
+  // renders below the fold and the "feedback in the center UI" vanishes
+  // as soon as the members push it off-screen.
+  useEffect(() => {
+    if (status !== 'hidden' && !hasScrolledIntoView.current && wrapperRef.current) {
+      hasScrolledIntoView.current = true;
+      wrapperRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    if (status === 'hidden') {
+      hasScrolledIntoView.current = false;
+    }
+  }, [status]);
 
   if (status === 'hidden') return null;
 
@@ -368,7 +384,7 @@ function SynthesisPanel({ status, content, tokens, cost, result }: SynthesisPane
   const displayLatency = result ? result.latency_ms : undefined;
 
   return (
-    <div>
+    <div ref={wrapperRef} className="scroll-mt-4">
       <div className="section-label mb-3 flex items-center gap-2">
         <span className="text-[#3b82f6]">◈</span>
         <span>Synthesis</span>
@@ -378,7 +394,7 @@ function SynthesisPanel({ status, content, tokens, cost, result }: SynthesisPane
           </span>
         )}
       </div>
-      <div className="card p-5 border-t-2 border-t-[#3b82f6] transition-all duration-300">
+      <div className="card p-5 border-2 border-[#3b82f6]/40 bg-[#3b82f6]/[0.02] shadow-[0_0_24px_rgba(59,130,246,0.08)] transition-all duration-300">
         <div className="flex items-center gap-2 mb-3">
           <div className="w-7 h-7 rounded-lg bg-[#3b82f6]/10 flex items-center justify-center">
             <svg className="w-4 h-4 text-[#3b82f6]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
