@@ -1114,10 +1114,75 @@ async def provider_health(
 
 # -- /v1/models ---------------------------------------------------------------
 
+# TTL cache of live model IDs per provider. The static capability catalog
+# in capabilities.yaml drifts out of sync with what providers actually
+# serve (e.g. Groq deprecated gemma2-9b-it but it still sits in the
+# catalog), so we intersect against the provider's current list_models()
+# result. Cached because hitting every provider on every dropdown open
+# is both slow and rude.
+_LIVE_MODELS_CACHE: dict[str, tuple[float, set[str] | None]] = {}
+_LIVE_MODELS_TTL = 300.0  # 5 minutes
+
+
+async def _get_live_model_ids(engine, provider_name: str) -> set[str] | None:
+    """Return the set of live model IDs for a provider, or None if unknown.
+
+    None means "we couldn't determine the live list" (timeout, error, no
+    implementation) — callers should treat that as "don't filter this
+    provider's catalog entries" so we never hide models because of a
+    transient fetch failure.
+    """
+    now = time.monotonic()
+    cached = _LIVE_MODELS_CACHE.get(provider_name)
+    if cached is not None and (now - cached[0]) < _LIVE_MODELS_TTL:
+        return cached[1]
+
+    try:
+        provider = engine.registry.get(provider_name)
+    except Exception:
+        return None
+
+    try:
+        live = await asyncio.wait_for(provider.list_models(), timeout=5.0)
+    except Exception:
+        # Negative cache so we don't keep retrying a broken provider —
+        # shorter TTL (30s) so it recovers quickly once the provider
+        # comes back.
+        _LIVE_MODELS_CACHE[provider_name] = (now - _LIVE_MODELS_TTL + 30.0, None)
+        return None
+
+    ids = {m.model_id for m in live if getattr(m, "model_id", None)}
+    _LIVE_MODELS_CACHE[provider_name] = (now, ids)
+    return ids
+
+
 @app.get("/v1/models", summary="List available models from the capability catalog")
 async def list_models(provider: str | None = None, _auth: None = Depends(require_auth)) -> dict[str, Any]:
     engine = get_engine()
     models = engine.registry.list_models(provider=provider)
+
+    # Group catalog entries by provider, then fetch live model IDs for
+    # each provider in parallel (cached). Filter the catalog to only
+    # include models the provider still serves; providers whose live
+    # list we couldn't fetch pass through unfiltered so we never
+    # blank out the dropdown on a transient error.
+    catalog_providers: set[str] = {m.provider for m in models}
+    live_sets: dict[str, set[str] | None] = {}
+    if catalog_providers:
+        results = await asyncio.gather(
+            *[_get_live_model_ids(engine, p) for p in catalog_providers],
+            return_exceptions=True,
+        )
+        for p, r in zip(catalog_providers, results):
+            live_sets[p] = r if isinstance(r, set) else None
+
+    def _is_available(m) -> bool:
+        live = live_sets.get(m.provider)
+        if live is None:
+            return True  # unknown — keep it
+        return m.model_id in live
+
+    filtered = [m for m in models if _is_available(m)]
 
     model_data = [
         {
@@ -1136,7 +1201,7 @@ async def list_models(provider: str | None = None, _auth: None = Depends(require
             "capability_scores": m.capability_scores,
             "status": m.status,
         }
-        for m in models
+        for m in filtered
     ]
 
     return _response_envelope({"models": model_data, "count": len(model_data)})
