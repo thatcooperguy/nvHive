@@ -403,6 +403,7 @@ export interface FreeProvider {
   configured: boolean;
   env_key?: string;
   placeholder?: string;
+  signup_url?: string;
 }
 
 export interface FreeProvidersResult {
