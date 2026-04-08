@@ -160,7 +160,7 @@ class Engine:
         self.registry = registry or get_registry()
         self.rate_manager = ProviderRateManager()
         self.router = RoutingEngine(self.config, self.registry, self.rate_manager)
-        self.council = CouncilOrchestrator(self.config, self.registry)
+        self.council = CouncilOrchestrator(self.config, self.registry, self.rate_manager)
         self.context = ConversationManager()
         self.cache = ResponseCache(
             max_size=self.config.cache.max_size,

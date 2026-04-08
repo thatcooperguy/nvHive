@@ -230,15 +230,27 @@ async def verify_response(
     Picks a verifier that is NOT the same provider that
     generated the response (independent verification).
     """
-    # Pick a different provider for verification
+    # Pick a different provider for verification — prefer healthy ones so
+    # we don't burn budget on a circuit-broken advisor and mislabel the
+    # response as "unverified".
     available = engine.registry.list_enabled()
+
+    def _healthy(p: str) -> bool:
+        try:
+            return engine.rate_manager.get_health_score(p) >= 0.2
+        except Exception:
+            return True
+
+    healthy = [p for p in available if _healthy(p)]
+    pool = healthy or available  # fall back to all enabled if none are healthy
+
     verifier: str | None = None
-    for p in available:
+    for p in pool:
         if p != response_provider:
             verifier = p
             break
     if not verifier:
-        verifier = available[0] if available else None
+        verifier = pool[0] if pool else None
 
     if not verifier:
         return VerificationResult(

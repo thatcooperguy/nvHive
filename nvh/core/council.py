@@ -52,9 +52,38 @@ class CouncilOrchestrator:
         self,
         config: CouncilConfig,
         registry: ProviderRegistry,
+        rate_manager=None,  # ProviderRateManager | None — optional for health-aware selection
     ):
         self.config = config
         self.registry = registry
+        self.rate_manager = rate_manager
+
+    # Minimum health score for a provider to be considered usable.
+    # 0.0 = circuit breaker open (hard fail); 0.3 = half-open (probing); >0.3 = closed.
+    _MIN_HEALTH = 0.2
+
+    def _is_healthy(self, provider: str) -> bool:
+        """Return True if provider is healthy enough to try.
+
+        Falls back to True when no rate_manager is attached (legacy callers /
+        tests) so behavior is unchanged unless the engine wires one in.
+        """
+        if self.rate_manager is None:
+            return True
+        try:
+            return self.rate_manager.get_health_score(provider) >= self._MIN_HEALTH
+        except Exception:
+            return True
+
+    def _healthy_enabled(self) -> list[str]:
+        """Enabled providers filtered by health score, in registry order.
+
+        If the filter would leave us with nothing, fall back to the full
+        enabled list — better to try a degraded provider than to abort.
+        """
+        enabled = self.registry.list_enabled()
+        healthy = [p for p in enabled if self._is_healthy(p)]
+        return healthy or enabled
 
     def _resolve_members(
         self,
@@ -73,7 +102,7 @@ class CouncilOrchestrator:
             ]
 
         if not provider_names:
-            provider_names = self.registry.list_enabled()
+            provider_names = self._healthy_enabled()
 
         # Assign weights, defaulting to equal
         total_specified = sum(weights.get(p, 0) for p in provider_names)
@@ -624,14 +653,9 @@ class CouncilOrchestrator:
         if quorum_met and synthesize and len(member_responses) > 1:
             await on_event({"type": "synthesis_start"})
 
-            synth_provider_name = self._pick_synthesis_provider(
-                member_responses,
-            )
+            synth_candidates = self._synthesis_candidates(member_responses)
 
-            if synth_provider_name:
-                synth_provider = self.registry.get(synth_provider_name)
-                synth_model = self._get_model_for_provider(synth_provider_name)
-
+            if synth_candidates:
                 # Build synthesis prompt (reuse _weighted_synthesis logic)
                 label_weights: dict[str, float] = {}
                 for m in members:
@@ -687,56 +711,142 @@ class CouncilOrchestrator:
 
                 synthesis_prompt = "".join(synth_parts)
 
-                synth_accumulated = ""
-                synth_last_chunk = None
+                # Rotate through candidates until one succeeds. Each attempt has
+                # its own timeout so a stalled provider can't hang the UI.
+                # Bound attempts to avoid burning through every provider — 3 is
+                # enough to escape transient rate limits without punishing the user.
+                synth_attempts = min(3, len(synth_candidates))
+                synth_per_attempt_timeout = 60.0
+                synth_error: Exception | None = None
+                synth_tried: list[str] = []
 
-                try:
-                    async for chunk in synth_provider.stream(
-                        messages=[Message(role="user", content=synthesis_prompt)],
-                        model=synth_model or None,
-                        temperature=0.3,
-                        max_tokens=4096,
-                    ):
-                        synth_last_chunk = chunk
-                        if chunk.delta:
-                            synth_accumulated += chunk.delta
-                            await on_event({
-                                "type": "synthesis_chunk",
-                                "delta": chunk.delta,
-                                "accumulated": synth_accumulated,
-                            })
-                        if chunk.is_final:
-                            break
+                for synth_attempt in range(synth_attempts):
+                    synth_provider_name = synth_candidates[synth_attempt]
+                    synth_tried.append(synth_provider_name)
+                    synth_provider = self.registry.get(synth_provider_name)
+                    synth_model = self._get_model_for_provider(synth_provider_name)
 
-                    synth_tokens = synth_last_chunk.usage.total_tokens if synth_last_chunk and synth_last_chunk.usage else 0
-                    synth_cost = str(synth_last_chunk.cost_usd) if synth_last_chunk and synth_last_chunk.cost_usd is not None else "0"
+                    # Reset per-attempt state — if we partially streamed before
+                    # failing, the frontend will see a fresh stream below.
+                    synth_accumulated = ""
+                    synth_last_chunk = None
 
-                    synthesis = CompletionResponse(
-                        content=synth_accumulated,
-                        model=synth_last_chunk.model if synth_last_chunk else synth_model,
-                        provider=synth_provider_name,
-                        usage=synth_last_chunk.usage if synth_last_chunk and synth_last_chunk.usage else Usage(),
-                        cost_usd=synth_last_chunk.cost_usd if synth_last_chunk and synth_last_chunk.cost_usd is not None else Decimal("0"),
-                        latency_ms=0,
-                        finish_reason=FinishReason.STOP,
+                    async def _run_synth_stream():
+                        nonlocal synth_accumulated, synth_last_chunk
+                        async for chunk in synth_provider.stream(
+                            messages=[Message(role="user", content=synthesis_prompt)],
+                            model=synth_model or None,
+                            temperature=0.3,
+                            max_tokens=4096,
+                        ):
+                            synth_last_chunk = chunk
+                            if chunk.delta:
+                                synth_accumulated += chunk.delta
+                                await on_event({
+                                    "type": "synthesis_chunk",
+                                    "delta": chunk.delta,
+                                    "accumulated": synth_accumulated,
+                                    "provider": synth_provider_name,
+                                })
+                            if chunk.is_final:
+                                break
+
+                    try:
+                        await asyncio.wait_for(
+                            _run_synth_stream(),
+                            timeout=synth_per_attempt_timeout,
+                        )
+
+                        synth_tokens = synth_last_chunk.usage.total_tokens if synth_last_chunk and synth_last_chunk.usage else 0
+                        synth_cost = str(synth_last_chunk.cost_usd) if synth_last_chunk and synth_last_chunk.cost_usd is not None else "0"
+
+                        synthesis = CompletionResponse(
+                            content=synth_accumulated,
+                            model=synth_last_chunk.model if synth_last_chunk else synth_model,
+                            provider=synth_provider_name,
+                            usage=synth_last_chunk.usage if synth_last_chunk and synth_last_chunk.usage else Usage(),
+                            cost_usd=synth_last_chunk.cost_usd if synth_last_chunk and synth_last_chunk.cost_usd is not None else Decimal("0"),
+                            latency_ms=0,
+                            finish_reason=FinishReason.STOP,
+                        )
+                        synthesis.metadata["strategy"] = strategy
+                        synthesis.metadata["members"] = list(member_responses.keys())
+                        synthesis.metadata["synthesis_provider"] = synth_provider_name
+
+                        if self.rate_manager is not None:
+                            try:
+                                self.rate_manager.record_success(synth_provider_name)
+                            except Exception:
+                                pass
+
+                        await on_event({
+                            "type": "synthesis_complete",
+                            "content": synth_accumulated,
+                            "tokens": synth_tokens,
+                            "cost": synth_cost,
+                            "provider": synth_provider_name,
+                        })
+                        synth_error = None
+                        break
+
+                    except asyncio.TimeoutError as exc:
+                        synth_error = exc
+                        if self.rate_manager is not None:
+                            try:
+                                self.rate_manager.record_failure(synth_provider_name, exc)
+                            except Exception:
+                                pass
+                        await on_event({
+                            "type": "synthesis_retry",
+                            "provider": synth_provider_name,
+                            "error": f"timed out after {synth_per_attempt_timeout:.0f}s",
+                            "attempt": synth_attempt + 1,
+                            "max_attempts": synth_attempts,
+                        })
+                        continue
+                    except Exception as exc:
+                        synth_error = exc
+                        if self.rate_manager is not None:
+                            try:
+                                self.rate_manager.record_failure(synth_provider_name, exc)
+                            except Exception:
+                                pass
+                        await on_event({
+                            "type": "synthesis_retry",
+                            "provider": synth_provider_name,
+                            "error": str(exc),
+                            "attempt": synth_attempt + 1,
+                            "max_attempts": synth_attempts,
+                        })
+                        continue
+
+                # If every attempt failed, surface a terminal error so the
+                # UI stops spinning. Previously this only wrote to
+                # failed_members and the WebSocket never heard about it.
+                if synthesis is None and synth_error is not None:
+                    err_msg = (
+                        f"Synthesis failed after {len(synth_tried)} attempt(s) "
+                        f"across providers: {', '.join(synth_tried)}. "
+                        f"Last error: {synth_error}"
                     )
-                    synthesis.metadata["strategy"] = strategy
-                    synthesis.metadata["members"] = list(member_responses.keys())
-
+                    failed_members["_synthesis"] = err_msg
                     await on_event({
-                        "type": "synthesis_complete",
-                        "content": synth_accumulated,
-                        "tokens": synth_tokens,
-                        "cost": synth_cost,
+                        "type": "error",
+                        "error": err_msg,
+                        "phase": "synthesis",
+                        "tried": synth_tried,
                     })
-
-                except Exception as exc:
-                    failed_members["_synthesis"] = str(exc)
             else:
-                failed_members["_synthesis"] = (
+                err_msg = (
                     "No synthesis provider available — configure a synthesis advisor.\n"
                     "Run: nvh config set council.synthesis_provider groq"
                 )
+                failed_members["_synthesis"] = err_msg
+                await on_event({
+                    "type": "error",
+                    "error": err_msg,
+                    "phase": "synthesis",
+                })
 
         total_cost = member_cost + (synthesis.cost_usd if synthesis else Decimal("0"))
 
@@ -957,21 +1067,24 @@ class CouncilOrchestrator:
         response.metadata["strategy"] = "best_of"
         return response
 
-    def _pick_synthesis_provider(
+    def _synthesis_candidates(
         self,
         member_responses: dict[str, CompletionResponse],
-    ) -> str | None:
-        """Pick the best synthesis provider, preferring non-members.
+    ) -> list[str]:
+        """Build a prioritized list of synthesis providers to try.
 
-        Avoids using a provider that just served as a council member
-        to reduce rate limit conflicts on free tiers.
+        Order:
+          1. Configured `council.synthesis_provider` (if healthy)
+          2. Healthy providers NOT used as council members (fresh rate limits)
+          3. Healthy member providers as last resort
+          4. Unhealthy providers at the tail, only if nothing healthy is left
+
+        Unhealthy = circuit breaker open or health score below `_MIN_HEALTH`.
+        Rate manager is optional; without it, every provider is treated as
+        healthy (legacy behavior).
         """
-        configured = self.config.council.synthesis_provider
-        if configured and self.registry.has(configured):
-            return configured
-
-        # Extract member provider names
-        member_providers = set()
+        # Strip persona suffix to get provider names from labels
+        member_providers: set[str] = set()
         for label in member_responses:
             if ":" in label:
                 member_providers.add(label.split(":")[0])
@@ -980,14 +1093,42 @@ class CouncilOrchestrator:
             else:
                 member_providers.add(label)
 
-        # Prefer non-member providers
-        available = self.registry.list_enabled()
-        for p in available:
-            if p not in member_providers:
-                return p
+        enabled = self.registry.list_enabled()
+        healthy: list[str] = []
+        unhealthy: list[str] = []
 
-        # All providers were members — use first available
-        return available[0] if available else None
+        # 1. Configured synthesis provider first (if registered)
+        configured = self.config.council.synthesis_provider
+        if configured and self.registry.has(configured):
+            if self._is_healthy(configured):
+                healthy.append(configured)
+            else:
+                unhealthy.append(configured)
+
+        # 2. Non-member providers
+        for p in enabled:
+            if p in healthy or p in unhealthy:
+                continue
+            if p in member_providers:
+                continue
+            (healthy if self._is_healthy(p) else unhealthy).append(p)
+
+        # 3. Member providers as last resort
+        for p in enabled:
+            if p in healthy or p in unhealthy:
+                continue
+            (healthy if self._is_healthy(p) else unhealthy).append(p)
+
+        # Healthy first, then unhealthy as a desperate fallback
+        return healthy + unhealthy
+
+    def _pick_synthesis_provider(
+        self,
+        member_responses: dict[str, CompletionResponse],
+    ) -> str | None:
+        """Pick the best synthesis provider. Kept for callers that want a single name."""
+        candidates = self._synthesis_candidates(member_responses)
+        return candidates[0] if candidates else None
 
     async def _synthesis_with_retry(
         self,
@@ -1004,34 +1145,8 @@ class CouncilOrchestrator:
         import logging as _logging
         _log = _logging.getLogger(__name__)
 
-        # Build prioritized provider list for synthesis
-        candidates: list[str] = []
-
-        # 1. Configured synthesis provider
-        configured = self.config.council.synthesis_provider
-        if configured and self.registry.has(configured):
-            candidates.append(configured)
-
-        # 2. Providers NOT used as council members (fresh rate limit)
-        members_used = set(member_responses.keys())
-        # Strip persona suffix to get provider name
-        member_providers = set()
-        for label in members_used:
-            if ":" in label:
-                member_providers.add(label.split(":")[0])
-            elif "#" in label:
-                member_providers.add(label.split("#")[0])
-            else:
-                member_providers.add(label)
-
-        for p in self.registry.list_enabled():
-            if p not in member_providers and p not in candidates:
-                candidates.append(p)
-
-        # 3. Member providers as last resort
-        for p in self.registry.list_enabled():
-            if p not in candidates:
-                candidates.append(p)
+        # Build prioritized, health-aware provider list (shared with streaming path)
+        candidates = self._synthesis_candidates(member_responses)
 
         if not candidates:
             raise ValueError(
@@ -1041,11 +1156,11 @@ class CouncilOrchestrator:
 
         last_error: Exception | None = None
 
-        for attempt in range(max_retries):
-            # Pick provider: rotate through candidates
-            provider_name = candidates[
-                attempt % len(candidates)
-            ]
+        # Try each candidate in order, bounded by max_retries. Don't revisit
+        # providers we already saw fail — that just wastes the user's time.
+        attempts = min(max_retries, len(candidates))
+        for attempt in range(attempts):
+            provider_name = candidates[attempt]
             provider = self.registry.get(provider_name)
             model = self._get_model_for_provider(provider_name)
 
@@ -1056,7 +1171,7 @@ class CouncilOrchestrator:
                     _log.info(
                         "Synthesis retry %d/%d with %s"
                         " (backoff %.0fs)",
-                        attempt + 1, max_retries,
+                        attempt + 1, attempts,
                         provider_name, backoff,
                     )
                     await asyncio.sleep(backoff)
@@ -1078,6 +1193,11 @@ class CouncilOrchestrator:
                 response.metadata["synthesis_provider"] = (
                     provider_name
                 )
+                if self.rate_manager is not None:
+                    try:
+                        self.rate_manager.record_success(provider_name)
+                    except Exception:
+                        pass
                 return response
 
             except Exception as e:
@@ -1086,6 +1206,11 @@ class CouncilOrchestrator:
                     "Synthesis attempt %d failed (%s): %s",
                     attempt + 1, provider_name, e,
                 )
+                if self.rate_manager is not None:
+                    try:
+                        self.rate_manager.record_failure(provider_name, e)
+                    except Exception:
+                        pass
                 continue
 
         # All retries exhausted — raise with context

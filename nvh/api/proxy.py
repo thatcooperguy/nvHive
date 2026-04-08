@@ -38,6 +38,7 @@ NemoClaw integration:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -284,14 +285,33 @@ async def openai_stream_generator(
     }
     yield f"data: {json.dumps(role_chunk)}\n\n".encode()
 
+    # Per-chunk stall timeout — prevents a silent provider from hanging
+    # OpenAI-compatible clients like Continue / Cursor indefinitely.
+    CHUNK_STALL_TIMEOUT = 45.0
+
     try:
-        async for chunk in provider.stream(
+        aiter = provider.stream(
             messages=messages,
             model=decision.model or None,
             temperature=temp,
             max_tokens=max_tok,
             system_prompt=sys_prompt,
-        ):
+        ).__aiter__()
+
+        while True:
+            try:
+                chunk = await asyncio.wait_for(
+                    aiter.__anext__(),
+                    timeout=CHUNK_STALL_TIMEOUT,
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"Provider '{decision.provider}' stalled — no tokens for "
+                    f"{CHUNK_STALL_TIMEOUT:.0f}s"
+                ) from exc
+
             if chunk.delta:
                 content_chunk = {
                     "id": chat_id,
@@ -750,14 +770,32 @@ async def anthropic_stream_generator(
     ).encode()
 
     total_output_tokens = 0
+    # Per-chunk stall timeout — keeps Anthropic-compatible clients from
+    # hanging when a backing provider stalls mid-stream.
+    CHUNK_STALL_TIMEOUT = 45.0
     try:
-        async for chunk in provider.stream(
+        aiter = provider.stream(
             messages=messages,
             model=decision.model or None,
             temperature=temp,
             max_tokens=max_tok,
             system_prompt=sys,
-        ):
+        ).__aiter__()
+
+        while True:
+            try:
+                chunk = await asyncio.wait_for(
+                    aiter.__anext__(),
+                    timeout=CHUNK_STALL_TIMEOUT,
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"Provider '{decision.provider}' stalled — no tokens for "
+                    f"{CHUNK_STALL_TIMEOUT:.0f}s"
+                ) from exc
+
             if chunk.delta:
                 delta_event = {
                     "type": "content_block_delta",

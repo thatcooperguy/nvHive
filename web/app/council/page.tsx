@@ -71,6 +71,13 @@ export default function CouncilPage() {
   // Active WS ref so we can cancel
   const wsRef = useRef<WebSocket | null>(null);
 
+  // Stall watchdog — if no WS message arrives for STALL_TIMEOUT_MS we
+  // assume the backend is wedged and fail the session locally. Defense
+  // in depth: the backend is supposed to always emit a terminal event,
+  // this just guarantees the UI never spins forever regardless.
+  const STALL_TIMEOUT_MS = 120_000;
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ── Bootstrap ────────────────────────────────────────────────────────────────
   useEffect(() => {
     let mounted = true;
@@ -89,7 +96,36 @@ export default function CouncilPage() {
         wsRef.current.close();
         wsRef.current = null;
       }
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
     };
+  }, []);
+
+  // Reset the stall watchdog whenever we receive activity. Called from
+  // every event callback so any progress resets the clock. If it fires,
+  // the session is treated as hung and we surface an error.
+  const resetStallTimer = useCallback(() => {
+    if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
+    stallTimerRef.current = setTimeout(() => {
+      setError(
+        `Session stalled — no activity for ${Math.round(STALL_TIMEOUT_MS / 1000)}s. ` +
+        `The backend may be stuck or the synthesis provider is unresponsive.`
+      );
+      setPhase('error');
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch { /* ignore */ }
+        wsRef.current = null;
+      }
+    }, STALL_TIMEOUT_MS);
+  }, []);
+
+  const clearStallTimer = useCallback(() => {
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
   }, []);
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -141,6 +177,7 @@ export default function CouncilPage() {
     resetSession();
     completedCostRef.current = 0;
     setPhase('connecting');
+    resetStallTimer();
 
     const ws = streamCouncil(
       {
@@ -156,6 +193,7 @@ export default function CouncilPage() {
       },
       {
         onStart: (data: WsCouncilStart) => {
+          resetStallTimer();
           const order = data.members.map(m =>
             m.persona ? `${m.provider}:${m.persona}` : m.provider
           );
@@ -185,6 +223,7 @@ export default function CouncilPage() {
         },
 
         onMemberStart: (member) => {
+          resetStallTimer();
           setMemberStartTimes(prev => ({ ...prev, [member]: Date.now() }));
           setMemberStates(prev => ({
             ...prev,
@@ -205,6 +244,7 @@ export default function CouncilPage() {
         },
 
         onMemberChunk: (member, _delta, accumulated) => {
+          resetStallTimer();
           setMemberStates(prev => ({
             ...prev,
             [member]: prev[member]
@@ -224,6 +264,7 @@ export default function CouncilPage() {
         },
 
         onMemberComplete: (member, content, tokens, cost, latency) => {
+          resetStallTimer();
           setMemberStates(prev => ({
             ...prev,
             [member]: prev[member]
@@ -247,6 +288,7 @@ export default function CouncilPage() {
         },
 
         onMemberFailed: (member, err) => {
+          resetStallTimer();
           setMemberStates(prev => ({
             ...prev,
             [member]: prev[member]
@@ -267,15 +309,18 @@ export default function CouncilPage() {
         },
 
         onSynthesisStart: () => {
+          resetStallTimer();
           setPhase('synthesis');
           setSynthesisStatus('streaming');
         },
 
         onSynthesisChunk: (_delta, accumulated) => {
+          resetStallTimer();
           setSynthesisContent(accumulated);
         },
 
         onSynthesisComplete: (content, tokens, cost) => {
+          resetStallTimer();
           setSynthesisContent(content);
           setSynthesisTokens(tokens);
           setSynthesisCost(cost);
@@ -287,6 +332,7 @@ export default function CouncilPage() {
         },
 
         onComplete: (totalCost, totalLatency, qMet) => {
+          clearStallTimer();
           setLiveTotalCost(totalCost);
           setTotalLatencyMs(totalLatency);
           setQuorumMet(qMet);
@@ -295,6 +341,7 @@ export default function CouncilPage() {
         },
 
         onError: (err) => {
+          clearStallTimer();
           setError(err);
           setPhase('error');
           wsRef.current = null;
@@ -306,6 +353,7 @@ export default function CouncilPage() {
   };
 
   const handleStop = () => {
+    clearStallTimer();
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;

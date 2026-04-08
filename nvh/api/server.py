@@ -314,7 +314,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-ALLOWED_ORIGINS = os.environ.get("HIVE_CORS_ORIGINS", "http://localhost:3000").split(",")
+_DEFAULT_CORS_ORIGINS = [
+    # Common Next.js dev ports
+    "http://localhost:3000", "http://127.0.0.1:3000",
+    "http://localhost:3001", "http://127.0.0.1:3001",
+    "http://localhost:3002", "http://127.0.0.1:3002",
+    "http://localhost:8080", "http://127.0.0.1:8080",
+    # `nvh webui` may bind port 80 and advertise the `nvhive` hostname
+    "http://localhost", "http://127.0.0.1",
+    "http://nvhive", "http://nvhive:3000", "http://nvhive:3001",
+    "http://nvhive:3002", "http://nvhive:8080",
+]
+_cors_env = os.environ.get("HIVE_CORS_ORIGINS")
+ALLOWED_ORIGINS = (
+    [o.strip() for o in _cors_env.split(",") if o.strip()]
+    if _cors_env
+    else _DEFAULT_CORS_ORIGINS
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -441,14 +457,34 @@ async def _sse_query_stream(
     accumulated = ""
     last_chunk: StreamChunk | None = None
 
+    # Per-chunk stall timeout — a silent provider is worse than a failed one
+    # because it freezes the UI. 45s is generous enough for slow cloud
+    # providers but short enough to surface errors before users give up.
+    CHUNK_STALL_TIMEOUT = 45.0
+
     try:
-        async for chunk in provider.stream(
+        aiter = provider.stream(
             messages=messages,
             model=decision.model or None,
             temperature=temp,
             max_tokens=max_tok,
             system_prompt=sys_prompt,
-        ):
+        ).__aiter__()
+
+        while True:
+            try:
+                chunk = await asyncio.wait_for(
+                    aiter.__anext__(),
+                    timeout=CHUNK_STALL_TIMEOUT,
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError(
+                    f"Provider '{decision.provider}' stalled — no tokens for "
+                    f"{CHUNK_STALL_TIMEOUT:.0f}s"
+                ) from exc
+
             last_chunk = chunk
             if chunk.delta:
                 accumulated += chunk.delta
