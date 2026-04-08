@@ -6834,6 +6834,18 @@ def update(
 def webui(
     install_only: bool = typer.Option(False, "--install", help="Install without launching"),
     port: int = typer.Option(3000, "--port", help="Port for the web UI"),
+    uninstall: bool = typer.Option(
+        False, "--uninstall",
+        help="Remove the downloaded Web UI (~/.nvhive/web) and exit",
+    ),
+    clean: bool = typer.Option(
+        False, "--clean",
+        help="Wipe node_modules and .next so the next run rebuilds from source",
+    ),
+    yes: bool = typer.Option(
+        False, "-y", "--yes",
+        help="Skip confirmation prompts for --uninstall / --clean",
+    ),
 ):
     """Install and launch the nvHive web UI.
 
@@ -6847,9 +6859,109 @@ def webui(
         nvh webui              # install (if needed) and launch on port 3000
         nvh webui --install    # install dependencies only
         nvh webui --port 8080  # launch on a different port
+        nvh webui --clean      # wipe node_modules/.next, keep source
+        nvh webui --uninstall  # remove the downloaded Web UI entirely
     """
     import shutil
     import subprocess
+
+    cache_web_dir_early = os.path.expanduser("~/.nvhive/web")
+
+    # --- Safe uninstall / clean paths ---------------------------------
+    # These intentionally only ever touch ~/.nvhive/web (the cache dir
+    # the download path uses). They refuse to touch a source-tree web/
+    # directory, a symlink, or anything that is itself a git repo — in
+    # those cases the user installed from source and we must not nuke
+    # their working tree. Nothing here touches Node/npm, API keys
+    # (OS keyring), or config files.
+    def _dir_size_bytes(path: str) -> int:
+        total = 0
+        for root, _dirs, files in os.walk(path):
+            for f in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, f))
+                except OSError:
+                    pass
+        return total
+
+    def _fmt_bytes(n: int) -> str:
+        for unit in ("B", "KB", "MB", "GB"):
+            if n < 1024:
+                return f"{n:.1f} {unit}"
+            n /= 1024  # type: ignore[assignment]
+        return f"{n:.1f} TB"
+
+    def _safety_check(target: str) -> None:
+        """Raise typer.Exit if target is unsafe to modify."""
+        if os.path.islink(target):
+            console.print(
+                f"[red]Refusing to touch {target}:[/red] it is a symlink. "
+                "Remove it manually if that's intentional."
+            )
+            raise typer.Exit(1)
+        # Only the cache dir is in scope.
+        if os.path.abspath(target) != os.path.abspath(cache_web_dir_early):
+            console.print(
+                f"[red]Refusing to touch {target}:[/red] only "
+                f"{cache_web_dir_early} is managed by this command."
+            )
+            raise typer.Exit(1)
+        # Don't stomp on a user's git checkout if they pointed the
+        # cache dir at one by hand.
+        if os.path.isdir(os.path.join(target, ".git")):
+            console.print(
+                f"[red]Refusing to touch {target}:[/red] it contains a .git "
+                "directory. Remove it manually if that's intentional."
+            )
+            raise typer.Exit(1)
+
+    if uninstall:
+        if not os.path.isdir(cache_web_dir_early):
+            console.print(
+                f"[dim]Nothing to remove — {cache_web_dir_early} does not exist.[/dim]"
+            )
+            raise typer.Exit(0)
+        _safety_check(cache_web_dir_early)
+        size = _dir_size_bytes(cache_web_dir_early)
+        console.print(
+            f"[bold]Will remove[/bold] {cache_web_dir_early} "
+            f"([bold]{_fmt_bytes(size)}[/bold])."
+        )
+        console.print(
+            "[dim]API keys and config files are NOT in this directory "
+            "and will not be touched.[/dim]"
+        )
+        if not yes and not typer.confirm("  Proceed?", default=False):
+            console.print("[dim]Cancelled.[/dim]")
+            raise typer.Exit(0)
+        shutil.rmtree(cache_web_dir_early)
+        console.print(f"[green]Removed.[/green] Freed {_fmt_bytes(size)}.")
+        raise typer.Exit(0)
+
+    if clean:
+        if not os.path.isdir(cache_web_dir_early):
+            console.print(
+                f"[dim]Nothing to clean — {cache_web_dir_early} does not exist.[/dim]"
+            )
+            raise typer.Exit(0)
+        _safety_check(cache_web_dir_early)
+        freed = 0
+        removed: list[str] = []
+        for sub in ("node_modules", ".next"):
+            p = os.path.join(cache_web_dir_early, sub)
+            if os.path.isdir(p) and not os.path.islink(p):
+                freed += _dir_size_bytes(p)
+                shutil.rmtree(p)
+                removed.append(sub)
+        if not removed:
+            console.print("[dim]Nothing to clean — no node_modules/.next found.[/dim]")
+            raise typer.Exit(0)
+        console.print(
+            f"[green]Cleaned {', '.join(removed)}.[/green] "
+            f"Freed {_fmt_bytes(freed)}. Next `nvh webui` run will rebuild."
+        )
+        raise typer.Exit(0)
+    # ------------------------------------------------------------------
 
     # Find the web directory. When nvHive is installed via pip, the web/
     # folder is not shipped in the wheel, so also check a user cache dir
