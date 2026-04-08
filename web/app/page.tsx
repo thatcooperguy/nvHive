@@ -13,6 +13,7 @@ import {
   getGPUInfo,
   getBudgetStatus,
   getConversations,
+  getProviders,
   streamCouncil,
 } from '@/lib/api';
 import type {
@@ -20,6 +21,7 @@ import type {
   ChatMode,
   ConversationSummary,
   MemberStreamState,
+  ProviderHealth,
   WsCouncilStart,
 } from '@/lib/types';
 
@@ -287,6 +289,7 @@ export default function ChatPage() {
   const [mode, setMode] = useState<ChatMode>('single');
   const [selectedModel, setSelectedModel] = useState('');
   const [models, setModels] = useState<Array<{ model_id: string; provider: string; display_name: string; is_local?: boolean; cost_tier?: 'free' | 'low' | 'high' }>>([]);
+  const [providerHealth, setProviderHealth] = useState<ProviderHealth[]>([]);
 
   // Streaming state
   const [streaming, setStreaming] = useState(false);
@@ -307,6 +310,13 @@ export default function ChatPage() {
   const [synthesisStatus, setSynthesisStatus] = useState<'hidden' | 'streaming' | 'complete'>('hidden');
   const wsRef = useRef<WebSocket | null>(null);
   const completedCostRef = useRef(0);
+  // Ref mirror of the live synthesis content. The WebSocket callbacks
+  // are created once at submit time, so reading `synthesisContent`
+  // state inside `onComplete` gives the stale closure value (empty
+  // string on first council run) and wipes the message content the
+  // user just watched stream in. Reading via ref always sees the
+  // current value.
+  const synthesisContentRef = useRef('');
 
   // Remote conversations (from API)
   const [remoteConvs, setRemoteConvs] = useState<ConversationSummary[]>([]);
@@ -320,11 +330,14 @@ export default function ChatPage() {
     setHydrated(true);
   }, []);
 
-  // Load models
+  // Load models and provider health together. We need both to pick a
+  // sensible default model — previously the first model in the list
+  // (often GPT-4o) became default even if its provider was offline,
+  // so the user's first query would fail out of the gate.
   useEffect(() => {
-    getModels()
-      .then(data => {
-        const mapped = data.models.map(m => ({
+    Promise.all([getModels(), getProviders()])
+      .then(([modelData, providerData]) => {
+        const mapped = modelData.models.map(m => ({
           model_id: m.model_id,
           provider: m.provider,
           display_name: m.display_name,
@@ -334,8 +347,17 @@ export default function ChatPage() {
             : 'free' as const,
         }));
         setModels(mapped);
+        setProviderHealth(providerData.providers);
+
+        // Pick the first model whose provider is currently healthy.
+        // Falls back to the raw first model if nothing is healthy
+        // (user will see "offline" labels and know what to fix).
         if (mapped.length > 0 && !selectedModel) {
-          setSelectedModel(mapped[0].model_id);
+          const healthyProviderNames = new Set(
+            providerData.providers.filter(p => p.healthy).map(p => p.name)
+          );
+          const firstHealthy = mapped.find(m => healthyProviderNames.has(m.provider));
+          setSelectedModel((firstHealthy ?? mapped[0]).model_id);
         }
       })
       .catch(() => {});
@@ -694,37 +716,47 @@ export default function ChatPage() {
           onSynthesisStart: () => {
             setCouncilPhase('synthesis');
             setSynthesisStatus('streaming');
+            synthesisContentRef.current = '';
           },
           onSynthesisChunk: (_delta, accumulated) => {
+            synthesisContentRef.current = accumulated;
             setSynthesisContent(accumulated);
             // Update the main message with synthesis content as it streams
             setMessages(prev =>
               prev.map(m => m.id === assistantMsgId ? { ...m, content: accumulated } : m)
             );
           },
-          onSynthesisComplete: (content, tokens, cost) => {
+          onSynthesisComplete: (content, _tokens, cost) => {
+            synthesisContentRef.current = content;
             setSynthesisContent(content);
             setSynthesisStatus('complete');
             completedCostRef.current += parseFloat(cost) || 0;
+            // Lock the final content into the assistant message now —
+            // before onComplete races in with its stale closure.
+            setMessages(prev =>
+              prev.map(m => m.id === assistantMsgId ? { ...m, content } : m)
+            );
           },
           onComplete: (totalCost, _totalLatency, _quorumMet) => {
             setCouncilPhase('done');
             setStreaming(false);
             wsRef.current = null;
 
+            // Read from the ref so we get the live synthesis, not the
+            // closure value captured when handleSubmit was built.
+            const finalContent = synthesisContentRef.current;
             const memberStatesSnapshot = {} as Record<string, { content: string; provider: string; model: string; tokens: number; cost: string; latency_ms?: number }>;
-            // We'll capture final states on next render — for now just mark done
             const finalMsg: ChatMessageType = {
               id: assistantMsgId,
               role: 'assistant',
-              content: synthesisContent,
+              content: finalContent,
               streaming: false,
               mode: 'council',
               cost_usd: totalCost,
               timestamp: Date.now(),
               council_data: {
                 member_responses: memberStatesSnapshot,
-                synthesis: synthesisContent,
+                synthesis: finalContent,
                 total_cost: totalCost,
               },
             };
@@ -1012,6 +1044,7 @@ export default function ChatPage() {
               selectedModel={selectedModel}
               onModelChange={setSelectedModel}
               models={models}
+              providerHealth={providerHealth}
               streaming={streaming}
             />
           </div>

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useCallback, useState } from 'react';
-import type { ChatMode } from '@/lib/types';
+import { useEffect, useMemo, useRef, useCallback, useState } from 'react';
+import type { ChatMode, ProviderHealth } from '@/lib/types';
 
 interface ModelOption {
   model_id: string;
@@ -29,6 +29,10 @@ interface ChatInputProps {
   selectedModel: string;
   onModelChange: (model: string) => void;
   models: ModelOption[];
+  /** Optional provider health from /v1/advisors. When supplied, models
+   *  whose provider is reachable are grouped at the top of the dropdown
+   *  and broken providers are labelled "offline". */
+  providerHealth?: ProviderHealth[];
   streaming: boolean;
   disabled?: boolean;
 }
@@ -87,6 +91,7 @@ export default function ChatInput({
   selectedModel,
   onModelChange,
   models,
+  providerHealth = [],
   streaming,
   disabled = false,
 }: ChatInputProps) {
@@ -211,6 +216,38 @@ export default function ChatInput({
   }, [handleFileSelect]);
 
   const selectedModelInfo = models.find(m => m.model_id === selectedModel);
+
+  // Split models into "connected" and "offline" buckets based on the
+  // health of their backing provider. Local models (ollama/local) are
+  // always treated as connected — they don't route through the same
+  // advisor health system. Within each bucket, models are sorted by
+  // provider latency (fastest first) then display name for stability.
+  const { connectedModels, offlineModels } = useMemo(() => {
+    if (providerHealth.length === 0) {
+      // No health info — fall back to original order, everything "connected"
+      return { connectedModels: models, offlineModels: [] as ModelOption[] };
+    }
+    const healthByName = new Map(providerHealth.map(p => [p.name, p]));
+    const latency = (providerName: string) =>
+      healthByName.get(providerName)?.latency_ms ?? Number.POSITIVE_INFINITY;
+    const isHealthy = (m: ModelOption): boolean => {
+      if (m.is_local) return true;
+      const h = healthByName.get(m.provider);
+      return h ? h.healthy : true;  // unknown provider → give benefit of doubt
+    };
+    const sortFn = (a: ModelOption, b: ModelOption) => {
+      const la = latency(a.provider);
+      const lb = latency(b.provider);
+      if (la !== lb) return la - lb;
+      return a.display_name.localeCompare(b.display_name);
+    };
+    const connected: ModelOption[] = [];
+    const offline: ModelOption[] = [];
+    for (const m of models) (isHealthy(m) ? connected : offline).push(m);
+    connected.sort(sortFn);
+    offline.sort(sortFn);
+    return { connectedModels: connected, offlineModels: offline };
+  }, [models, providerHealth]);
 
   return (
     <div
@@ -426,11 +463,24 @@ export default function ChatInput({
               className="bg-[#111111] border border-[#333333] text-[#999999] text-[10px] font-mono pl-2 pr-6 py-1
                 focus:outline-none focus:border-[#76B900]/60 appearance-none disabled:opacity-50 hover:border-[#444444] transition-colors"
             >
-              {models.map(m => (
-                <option key={m.model_id} value={m.model_id}>
-                  {m.display_name} {m.is_local ? '(local)' : '(cloud)'}
-                </option>
-              ))}
+              {connectedModels.length > 0 && (
+                <optgroup label={offlineModels.length > 0 ? "● Connected" : "Models"}>
+                  {connectedModels.map(m => (
+                    <option key={m.model_id} value={m.model_id}>
+                      {m.display_name} {m.is_local ? '(local)' : '(cloud)'}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {offlineModels.length > 0 && (
+                <optgroup label="○ Offline">
+                  {offlineModels.map(m => (
+                    <option key={m.model_id} value={m.model_id}>
+                      {m.display_name} · offline
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
             {selectedModelInfo && (
               <span
