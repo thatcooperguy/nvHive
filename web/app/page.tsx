@@ -13,15 +13,14 @@ import {
   getGPUInfo,
   getBudgetStatus,
   getConversations,
-  getProviders,
   streamCouncil,
 } from '@/lib/api';
+import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
   ChatMessage as ChatMessageType,
   ChatMode,
   ConversationSummary,
   MemberStreamState,
-  ProviderHealth,
   WsCouncilStart,
 } from '@/lib/types';
 
@@ -289,7 +288,10 @@ export default function ChatPage() {
   const [mode, setMode] = useState<ChatMode>('single');
   const [selectedModel, setSelectedModel] = useState('');
   const [models, setModels] = useState<Array<{ model_id: string; provider: string; display_name: string; is_local?: boolean; cost_tier?: 'free' | 'low' | 'high' }>>([]);
-  const [providerHealth, setProviderHealth] = useState<ProviderHealth[]>([]);
+  // Live-polled provider health — updates every 30s so the "connected/
+  // offline" split in the model picker stays accurate throughout the
+  // session without a manual refresh.
+  const { providers: providerHealth } = useProviderHealth();
 
   // Streaming state
   const [streaming, setStreaming] = useState(false);
@@ -330,14 +332,12 @@ export default function ChatPage() {
     setHydrated(true);
   }, []);
 
-  // Load models and provider health together. We need both to pick a
-  // sensible default model — previously the first model in the list
-  // (often GPT-4o) became default even if its provider was offline,
-  // so the user's first query would fail out of the gate.
+  // Load models once on mount. Provider health is handled separately
+  // by useProviderHealth (polled every 30s).
   useEffect(() => {
-    Promise.all([getModels(), getProviders()])
-      .then(([modelData, providerData]) => {
-        const mapped = modelData.models.map(m => ({
+    getModels()
+      .then(data => {
+        const mapped = data.models.map(m => ({
           model_id: m.model_id,
           provider: m.provider,
           display_name: m.display_name,
@@ -347,21 +347,29 @@ export default function ChatPage() {
             : 'free' as const,
         }));
         setModels(mapped);
-        setProviderHealth(providerData.providers);
-
-        // Pick the first model whose provider is currently healthy.
-        // Falls back to the raw first model if nothing is healthy
-        // (user will see "offline" labels and know what to fix).
-        if (mapped.length > 0 && !selectedModel) {
-          const healthyProviderNames = new Set(
-            providerData.providers.filter(p => p.healthy).map(p => p.name)
-          );
-          const firstHealthy = mapped.find(m => healthyProviderNames.has(m.provider));
-          setSelectedModel((firstHealthy ?? mapped[0]).model_id);
-        }
       })
       .catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Once both models and provider health are loaded, pick a sensible
+  // default: first model whose provider is currently reachable. This
+  // only runs while selectedModel is unset so we don't yank the user's
+  // choice when health polling tells us a different provider came
+  // back online.
+  useEffect(() => {
+    if (selectedModel) return;
+    if (models.length === 0) return;
+    if (providerHealth.length === 0) {
+      // Health not yet loaded — temporarily use the first model so the
+      // UI isn't blank. The next run of this effect (once health
+      // arrives) will upgrade the pick to a healthy one.
+      setSelectedModel(models[0].model_id);
+      return;
+    }
+    const healthyNames = new Set(providerHealth.filter(p => p.healthy).map(p => p.name));
+    const firstHealthy = models.find(m => healthyNames.has(m.provider) || m.is_local);
+    setSelectedModel((firstHealthy ?? models[0]).model_id);
+  }, [models, providerHealth, selectedModel]);
 
   // Try loading remote conversations
   useEffect(() => {

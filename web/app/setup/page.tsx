@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { checkHealth, getProviders, query, getGPUInfo, getRecommendations, getFreeProviders, saveProviderKey } from '@/lib/api';
+import { checkHealth, query, getGPUInfo, getRecommendations, getFreeProviders, saveProviderKey } from '@/lib/api';
+import { useProviderHealth } from '@/lib/useProviderHealth';
 import type { GPUInfo, RecommendationsResult, FreeProvider } from '@/lib/types';
 
 type Step = 'welcome' | 'gpu' | 'local-ai' | 'cloud' | 'test' | 'done';
@@ -166,22 +167,27 @@ export default function SetupPage() {
   const [gpuRecs, setGpuRecs] = useState<RecommendationsResult | null>(null);
   const [gpuLoading, setGpuLoading] = useState(false);
 
+  // Live-polled provider health — drives Ollama status and the
+  // configured-providers list so the setup screen reflects newly
+  // added keys within 30s without requiring a manual refresh.
+  const { providers: polledProviders } = useProviderHealth();
+  useEffect(() => {
+    if (polledProviders.length === 0) return;
+    const ollamaProvider = polledProviders.find(p => p.name === 'ollama');
+    setOllamaStatus(ollamaProvider?.healthy ? 'online' : 'offline');
+    setConfiguredProviders(polledProviders.filter(p => p.healthy).map(p => p.name));
+  }, [polledProviders]);
+
+
   useEffect(() => {
     // Check API health
     checkHealth()
       .then(() => setApiStatus('connected'))
       .catch(() => setApiStatus('disconnected'));
 
-    // Check for providers (which tells us if Ollama is up)
-    getProviders()
-      .then(data => {
-        const ollamaProvider = data.providers.find(p => p.name === 'ollama');
-        setOllamaStatus(ollamaProvider?.healthy ? 'online' : 'offline');
-        setConfiguredProviders(data.providers.filter(p => p.healthy).map(p => p.name));
-      })
-      .catch(() => {
-        setOllamaStatus('offline');
-      });
+    // Ollama status + configured-providers list are now fed by the
+    // polled useProviderHealth hook below, so nothing to do here at
+    // mount time.
 
     // Fetch free providers for cloud step
     setFreeProvidersLoading(true);

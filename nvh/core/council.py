@@ -103,6 +103,23 @@ class CouncilOrchestrator:
 
         if not provider_names:
             provider_names = self._healthy_enabled()
+        else:
+            # Pinned members (explicit config or override) are honored
+            # as-is, but warn loudly about any that are currently
+            # unhealthy so it's not a mystery why the session fails.
+            import logging as _logging
+            _log = _logging.getLogger(__name__)
+            unhealthy = [
+                name for name in provider_names
+                if self.registry.has(name) and not self._is_healthy(name)
+            ]
+            if unhealthy:
+                _log.warning(
+                    "Council includes unhealthy advisors: %s — "
+                    "they will be tried anyway since the caller pinned "
+                    "them explicitly. Expect member_failed events.",
+                    ", ".join(unhealthy),
+                )
 
         # Assign weights, defaulting to equal
         total_specified = sum(weights.get(p, 0) for p in provider_names)

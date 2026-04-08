@@ -19,6 +19,30 @@ import webbrowser
 from decimal import Decimal
 from pathlib import Path
 
+# ----------------------------------------------------------------------
+# Windows asyncio proactor GC crash workaround
+# ----------------------------------------------------------------------
+#
+# Python bug: https://github.com/python/cpython/issues/81485
+#
+# On Windows, when httpx/litellm leave AsyncClient sockets open past
+# the end of the event loop, the garbage collector eventually calls
+# `_ProactorBasePipeTransport.__del__`, which walks attributes of an
+# already-torn-down transport and access-violates (exit code 0xC0000005
+# / 3221225477). `nvh status`, `nvh ask ...`, and most other query
+# commands were all segfaulting on clean exit because of this.
+#
+# We defang `__del__` here — by the time the interpreter is in GC at
+# process exit, we genuinely don't care about "did you close the
+# transport?" warnings; we care about not crashing. Sockets are
+# reclaimed by the OS when the process dies regardless.
+if sys.platform == "win32":
+    try:
+        import asyncio.proactor_events as _proactor_events  # noqa: E402
+        _proactor_events._ProactorBasePipeTransport.__del__ = lambda self: None  # type: ignore[method-assign]
+    except Exception:
+        pass
+
 import typer
 from rich.console import Console
 from rich.markdown import Markdown

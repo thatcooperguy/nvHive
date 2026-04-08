@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import ProviderCard from '@/components/ProviderCard';
-import { getProviders, getModels, getGPUInfo, getRecommendations } from '@/lib/api';
-import type { ProviderHealth, ModelInfo, GPUInfo, RecommendationsResult } from '@/lib/types';
+import { getModels, getGPUInfo, getRecommendations } from '@/lib/api';
+import { useProviderHealth } from '@/lib/useProviderHealth';
+import type { ModelInfo, GPUInfo, RecommendationsResult } from '@/lib/types';
 
 const MODEL_STATUS_COLORS: Record<string, string> = {
   available: '#76B900',
@@ -12,9 +13,9 @@ const MODEL_STATUS_COLORS: Record<string, string> = {
 };
 
 export default function ProvidersPage() {
-  const [providers, setProviders] = useState<ProviderHealth[]>([]);
+  // Live-polled provider health with a manual refresh escape hatch.
+  const { providers, loading, refresh: loadProviders } = useProviderHealth();
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [loading, setLoading] = useState(true);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<string>('');
@@ -23,19 +24,6 @@ export default function ProvidersPage() {
   const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
   const [gpuRecs, setGpuRecs] = useState<RecommendationsResult | null>(null);
   const [gpuLoading, setGpuLoading] = useState(true);
-
-  const loadProviders = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getProviders();
-      setProviders(data.providers);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load providers');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
 
   const loadModels = useCallback(async (provider?: string) => {
     setModelsLoading(true);
@@ -50,7 +38,6 @@ export default function ProvidersPage() {
   }, []);
 
   useEffect(() => {
-    loadProviders();
     loadModels();
     // GPU info for Local AI tab
     setGpuLoading(true);
@@ -61,7 +48,7 @@ export default function ProvidersPage() {
       })
       .catch(() => {})
       .finally(() => setGpuLoading(false));
-  }, [loadProviders, loadModels]);
+  }, [loadModels]);
 
   const handleProviderFilter = (p: string) => {
     setSelectedProvider(p);

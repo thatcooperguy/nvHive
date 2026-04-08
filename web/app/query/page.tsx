@@ -11,11 +11,11 @@ import {
   queryStream,
   runCouncil,
   compare,
-  getProviders,
   getModels,
   getAgentPresets,
   analyzeAgents,
 } from '@/lib/api';
+import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
   CompletionResponse,
   CouncilResult,
@@ -24,7 +24,6 @@ import type {
   RecentQuery,
   AgentPreset,
   AgentPersona,
-  ProviderHealth,
 } from '@/lib/types';
 
 const STORAGE_KEY = 'council_recent_queries';
@@ -44,7 +43,9 @@ function QueryPageInner() {
   const initialPrompt = searchParams.get('prompt') ?? '';
   const initialMode = (searchParams.get('mode') as QueryMode) ?? 'simple';
 
-  const [providers, setProviders] = useState<ProviderHealth[]>([]);
+  // Live-polled provider health (30s interval) so connected/offline
+  // stays accurate throughout the session.
+  const { providers } = useProviderHealth();
   const [models, setModels] = useState<Array<{ model_id: string; provider: string; display_name: string }>>([]);
   const [presets, setPresets] = useState<AgentPreset[]>([]);
 
@@ -68,9 +69,8 @@ function QueryPageInner() {
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([getProviders(), getModels(), getAgentPresets()]).then(([pData, mData, aData]) => {
+    Promise.all([getModels(), getAgentPresets()]).then(([mData, aData]) => {
       if (!mounted) return;
-      setProviders(pData.providers);
       setModels(mData.models.map(m => ({ model_id: m.model_id, provider: m.provider, display_name: m.display_name })));
       setPresets(aData.presets);
     }).catch(() => {});

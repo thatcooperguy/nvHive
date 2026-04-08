@@ -7,8 +7,8 @@ import {
   streamCouncil,
   getAgentPresets,
   analyzeAgents,
-  getProviders,
 } from '@/lib/api';
+import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
   AgentPreset,
   AgentPersona,
@@ -44,7 +44,9 @@ export default function CouncilPage() {
   const [analyzedAgents, setAnalyzedAgents] = useState<AgentPersona[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
 
-  const [providers, setProviders] = useState<string[]>([]);
+  // Live-polled provider health — drives the Advisor Weights sidebar
+  // so users can see which advisors are online before assigning weight.
+  const { providers: providerHealth } = useProviderHealth();
   const [customWeights, setCustomWeights] = useState<Record<string, number>>({});
 
   // ── Session state ────────────────────────────────────────────────────────────
@@ -85,10 +87,9 @@ export default function CouncilPage() {
   // ── Bootstrap ────────────────────────────────────────────────────────────────
   useEffect(() => {
     let mounted = true;
-    Promise.all([getAgentPresets(), getProviders()]).then(([aData, pData]) => {
+    getAgentPresets().then(aData => {
       if (!mounted) return;
       setPresets(aData.presets);
-      setProviders(pData.providers.map(p => p.name));
     }).catch(() => {});
     return () => { mounted = false; };
   }, []);
@@ -571,27 +572,55 @@ export default function CouncilPage() {
               </div>
             </div>
 
-            {/* Provider weights */}
-            {providers.length > 0 && (
+            {/* Advisor weights — sorted by health, healthy first */}
+            {providerHealth.length > 0 && (
               <div className="card p-4 space-y-3">
-                <div className="section-label">Advisor Weights</div>
+                <div className="section-label flex items-center justify-between">
+                  <span>Advisor Weights</span>
+                  <span className="font-mono text-[9px] text-[#475569]">
+                    <span className="text-[#22c55e]">●</span>{' '}
+                    {providerHealth.filter(p => p.healthy).length} online
+                  </span>
+                </div>
                 <div className="text-[10px] font-mono text-[#444444] mb-2">Leave at 0 to use defaults</div>
-                {providers.slice(0, 6).map(p => (
-                  <div key={p}>
+                {[...providerHealth]
+                  .sort((a, b) => {
+                    if (a.healthy !== b.healthy) return a.healthy ? -1 : 1;
+                    const la = a.latency_ms ?? Number.POSITIVE_INFINITY;
+                    const lb = b.latency_ms ?? Number.POSITIVE_INFINITY;
+                    if (la !== lb) return la - lb;
+                    return a.name.localeCompare(b.name);
+                  })
+                  .slice(0, 6)
+                  .map(p => (
+                  <div key={p.name} className={p.healthy ? '' : 'opacity-60'}>
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] font-mono text-[#666666] uppercase">{p}</span>
+                      <span className="text-[10px] font-mono uppercase flex items-center gap-1.5">
+                        <span
+                          className={p.healthy ? 'text-[#22c55e]' : 'text-[#475569]'}
+                          title={p.healthy ? 'Connected' : 'Offline'}
+                        >
+                          {p.healthy ? '●' : '○'}
+                        </span>
+                        <span className={p.healthy ? 'text-[#999999]' : 'text-[#555555]'}>
+                          {p.name}
+                        </span>
+                        {p.healthy && p.latency_ms != null && (
+                          <span className="text-[9px] text-[#475569]">{p.latency_ms}ms</span>
+                        )}
+                      </span>
                       <span className="text-xs font-mono text-[#76B900]">
-                        {(customWeights[p] ?? 0).toFixed(2)}
+                        {(customWeights[p.name] ?? 0).toFixed(2)}
                       </span>
                     </div>
                     <input
                       type="range" min="0" max="2" step="0.05"
-                      value={customWeights[p] ?? 0}
+                      value={customWeights[p.name] ?? 0}
                       onChange={e => {
                         const v = parseFloat(e.target.value);
                         setCustomWeights(prev => v === 0
-                          ? Object.fromEntries(Object.entries(prev).filter(([k]) => k !== p))
-                          : { ...prev, [p]: v }
+                          ? Object.fromEntries(Object.entries(prev).filter(([k]) => k !== p.name))
+                          : { ...prev, [p.name]: v }
                         );
                       }}
                       className="w-full"
