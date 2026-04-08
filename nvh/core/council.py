@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
+
+logger = logging.getLogger(__name__)
 
 from nvh.config.settings import CouncilConfig
 from nvh.providers.base import (
@@ -492,6 +495,7 @@ class CouncilOrchestrator:
         auto_agents: bool = False,
         agent_preset: str | None = None,
         num_agents: int | None = None,
+        budget_check: Callable[[], Awaitable[None]] | None = None,
     ) -> CouncilResponse:
         """Run a council session, streaming per-member tokens via on_event callback.
 
@@ -668,11 +672,32 @@ class CouncilOrchestrator:
         # Synthesis
         synthesis: CompletionResponse | None = None
         if quorum_met and synthesize and len(member_responses) > 1:
-            await on_event({"type": "synthesis_start"})
-
-            synth_candidates = self._synthesis_candidates(member_responses)
+            # Re-check the budget before synthesis. Council members
+            # already consumed budget in parallel; if they collectively
+            # blew through the limit, we don't want synthesis to add
+            # another LLM call on top and silently exceed the cap.
+            # The caller (API layer) passes a budget_check coroutine
+            # so the council orchestrator doesn't need to know about
+            # engine internals.
+            if budget_check is not None:
+                try:
+                    await budget_check()
+                except Exception as budget_exc:
+                    err_msg = f"Budget exceeded before synthesis: {budget_exc}"
+                    failed_members["_synthesis"] = err_msg
+                    await on_event({
+                        "type": "error",
+                        "error": err_msg,
+                        "phase": "synthesis_budget",
+                    })
+                    synth_candidates = []  # skip the synthesis loop below
+                else:
+                    synth_candidates = self._synthesis_candidates(member_responses)
+            else:
+                synth_candidates = self._synthesis_candidates(member_responses)
 
             if synth_candidates:
+                await on_event({"type": "synthesis_start"})
                 # Build synthesis prompt (reuse _weighted_synthesis logic)
                 label_weights: dict[str, float] = {}
                 for m in members:
@@ -793,8 +818,8 @@ class CouncilOrchestrator:
                         if self.rate_manager is not None:
                             try:
                                 self.rate_manager.record_success(synth_provider_name)
-                            except Exception:
-                                pass
+                            except Exception as rec_exc:
+                                logger.debug("rate_manager.record_success failed: %s", rec_exc)
 
                         await on_event({
                             "type": "synthesis_complete",
@@ -811,8 +836,8 @@ class CouncilOrchestrator:
                         if self.rate_manager is not None:
                             try:
                                 self.rate_manager.record_failure(synth_provider_name, exc)
-                            except Exception:
-                                pass
+                            except Exception as rec_exc:
+                                logger.debug("rate_manager.record_failure failed: %s", rec_exc)
                         await on_event({
                             "type": "synthesis_retry",
                             "provider": synth_provider_name,
@@ -826,8 +851,8 @@ class CouncilOrchestrator:
                         if self.rate_manager is not None:
                             try:
                                 self.rate_manager.record_failure(synth_provider_name, exc)
-                            except Exception:
-                                pass
+                            except Exception as rec_exc:
+                                logger.debug("rate_manager.record_failure failed: %s", rec_exc)
                         await on_event({
                             "type": "synthesis_retry",
                             "provider": synth_provider_name,
@@ -1213,8 +1238,8 @@ class CouncilOrchestrator:
                 if self.rate_manager is not None:
                     try:
                         self.rate_manager.record_success(provider_name)
-                    except Exception:
-                        pass
+                    except Exception as rec_exc:
+                        logger.debug("rate_manager.record_success failed: %s", rec_exc)
                 return response
 
             except Exception as e:
@@ -1226,8 +1251,8 @@ class CouncilOrchestrator:
                 if self.rate_manager is not None:
                     try:
                         self.rate_manager.record_failure(provider_name, e)
-                    except Exception:
-                        pass
+                    except Exception as rec_exc:
+                        logger.debug("rate_manager.record_failure failed: %s", rec_exc)
                 continue
 
         # All retries exhausted — raise with context

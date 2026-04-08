@@ -1362,6 +1362,7 @@ async def ws_query(websocket: WebSocket) -> None:
 
     accumulated = ""
     last_chunk: StreamChunk | None = None
+    stream_succeeded = False
 
     try:
         async for chunk in provider.stream(
@@ -1382,6 +1383,7 @@ async def ws_query(websocket: WebSocket) -> None:
             if chunk.is_final:
                 break
 
+        stream_succeeded = True
         complete_payload: dict[str, Any] = {
             "type": "complete",
             "content": accumulated,
@@ -1398,19 +1400,64 @@ async def ws_query(websocket: WebSocket) -> None:
 
         await websocket.send_json(complete_payload)
 
+        # Observability: tell the rate manager about the success so
+        # circuit breakers track WS traffic, and log the query into
+        # the analytics DB so it shows up in /v1/analytics and
+        # /v1/budget/status. Without this the WebSocket path was a
+        # blind spot in every dashboard.
+        try:
+            engine.rate_manager.record_success(decision.provider)
+        except Exception as exc:
+            logger.debug("rate_manager.record_success failed: %s", exc)
+
+        if last_chunk:
+            from nvh.providers.base import CompletionResponse, FinishReason, Usage
+            resp = CompletionResponse(
+                content=accumulated,
+                model=last_chunk.model or decision.model,
+                provider=decision.provider,
+                usage=last_chunk.usage if last_chunk.usage else Usage(),
+                cost_usd=last_chunk.cost_usd if last_chunk.cost_usd is not None else Decimal("0"),
+                latency_ms=0,
+                finish_reason=last_chunk.finish_reason or FinishReason.STOP,
+            )
+            try:
+                await engine._log_query(resp, mode="simple")
+            except Exception as exc:
+                logger.debug("engine._log_query failed for ws_query: %s", exc)
+
     except WebSocketDisconnect:
+        # Client hung up mid-stream. Still record the failure so the
+        # rate manager sees it — a disconnect mid-stream is almost
+        # always caused by provider stall, not a clean client exit.
+        try:
+            engine.rate_manager.record_failure(
+                decision.provider,
+                Exception("client disconnected mid-stream"),
+            )
+        except Exception as exc:
+            logger.debug("rate_manager.record_failure failed: %s", exc)
         return
-    except Exception:
+    except Exception as exc:
         logger.exception("Unexpected error in /v1/ws/query")
         try:
+            engine.rate_manager.record_failure(decision.provider, exc)
+        except Exception as rec_exc:
+            logger.debug("rate_manager.record_failure failed: %s", rec_exc)
+        try:
             await websocket.send_json({"type": "error", "error": "Internal server error"})
-        except Exception:
-            pass
+        except Exception as send_exc:
+            logger.debug("error-send failed in ws_query: %s", send_exc)
     finally:
+        if not stream_succeeded:
+            logger.info(
+                "ws_query terminated without success (provider=%s)",
+                decision.provider,
+            )
         try:
             await websocket.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("websocket.close failed in ws_query: %s", exc)
 
 
 # -- /v1/ws/council -----------------------------------------------------------
@@ -1481,7 +1528,7 @@ async def ws_council(websocket: WebSocket) -> None:
             logger.debug("WebSocket send failed for event type=%s", event.get("type"))
 
     try:
-        await engine.council.run_council_streaming(
+        council_result = await engine.council.run_council_streaming(
             query=prompt,
             on_event=_send,
             members_override=members_override,
@@ -1493,7 +1540,27 @@ async def ws_council(websocket: WebSocket) -> None:
             synthesize=True,
             auto_agents=auto_agents,
             agent_preset=preset,
+            budget_check=engine._check_budget,
         )
+
+        # Observability: log every member response and the synthesis
+        # into the analytics DB so WS councils show up in
+        # /v1/analytics, /v1/budget/status, and conversation history.
+        # Before this, council sessions run via WebSocket were
+        # invisible to every dashboard — the HTTP council path logged,
+        # but the WS path was a total blind spot.
+        if council_result is not None:
+            for resp in council_result.member_responses.values():
+                try:
+                    await engine._log_query(resp, mode="council")
+                except Exception as log_exc:
+                    logger.debug("engine._log_query (council member) failed: %s", log_exc)
+            if council_result.synthesis is not None:
+                try:
+                    await engine._log_query(council_result.synthesis, mode="council")
+                except Exception as log_exc:
+                    logger.debug("engine._log_query (council synthesis) failed: %s", log_exc)
+
     except ValueError as exc:
         await _send({"type": "error", "error": str(exc)})
     except BudgetExceededError as exc:
