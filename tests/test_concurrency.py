@@ -38,7 +38,6 @@ from nvh.providers.base import (
     CompletionResponse,
     FinishReason,
     HealthStatus,
-    Message,
     ModelInfo,
     StreamChunk,
     Usage,

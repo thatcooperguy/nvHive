@@ -287,7 +287,7 @@ async def openai_stream_generator(
 
     # Per-chunk stall timeout — prevents a silent provider from hanging
     # OpenAI-compatible clients like Continue / Cursor indefinitely.
-    CHUNK_STALL_TIMEOUT = 45.0
+    CHUNK_STALL_TIMEOUT = 45.0  # noqa: N806 — local constant, intentional uppercase
 
     try:
         aiter = provider.stream(
@@ -306,7 +306,7 @@ async def openai_stream_generator(
                 )
             except StopAsyncIteration:
                 break
-            except asyncio.TimeoutError as exc:
+            except TimeoutError as exc:
                 raise TimeoutError(
                     f"Provider '{decision.provider}' stalled — no tokens for "
                     f"{CHUNK_STALL_TIMEOUT:.0f}s"
@@ -772,7 +772,7 @@ async def anthropic_stream_generator(
     total_output_tokens = 0
     # Per-chunk stall timeout — keeps Anthropic-compatible clients from
     # hanging when a backing provider stalls mid-stream.
-    CHUNK_STALL_TIMEOUT = 45.0
+    CHUNK_STALL_TIMEOUT = 45.0  # noqa: N806 — local constant, intentional uppercase
     try:
         aiter = provider.stream(
             messages=messages,
@@ -790,7 +790,7 @@ async def anthropic_stream_generator(
                 )
             except StopAsyncIteration:
                 break
-            except asyncio.TimeoutError as exc:
+            except TimeoutError as exc:
                 raise TimeoutError(
                     f"Provider '{decision.provider}' stalled — no tokens for "
                     f"{CHUNK_STALL_TIMEOUT:.0f}s"

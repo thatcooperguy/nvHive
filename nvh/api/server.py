@@ -460,7 +460,7 @@ async def _sse_query_stream(
     # Per-chunk stall timeout — a silent provider is worse than a failed one
     # because it freezes the UI. 45s is generous enough for slow cloud
     # providers but short enough to surface errors before users give up.
-    CHUNK_STALL_TIMEOUT = 45.0
+    CHUNK_STALL_TIMEOUT = 45.0  # noqa: N806 — local constant, intentional uppercase
 
     try:
         aiter = provider.stream(
@@ -479,7 +479,7 @@ async def _sse_query_stream(
                 )
             except StopAsyncIteration:
                 break
-            except asyncio.TimeoutError as exc:
+            except TimeoutError as exc:
                 raise TimeoutError(
                     f"Provider '{decision.provider}' stalled — no tokens for "
                     f"{CHUNK_STALL_TIMEOUT:.0f}s"

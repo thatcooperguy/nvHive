@@ -654,7 +654,7 @@ class CouncilOrchestrator:
                 ),
                 timeout=council_timeout + 5,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             for label in [m.label for m in members]:
                 if label not in member_responses and label not in failed_members:
                     failed_members[label] = "timed out"
@@ -831,7 +831,7 @@ class CouncilOrchestrator:
                         synth_error = None
                         break
 
-                    except asyncio.TimeoutError as exc:
+                    except TimeoutError as exc:
                         synth_error = exc
                         if self.rate_manager is not None:
                             try:

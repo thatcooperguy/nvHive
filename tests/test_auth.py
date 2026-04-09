@@ -13,8 +13,6 @@ test_api.py.
 
 from __future__ import annotations
 
-import os
-from collections.abc import AsyncIterator
 from decimal import Decimal
 from pathlib import Path
 
@@ -38,13 +36,11 @@ from nvh.providers.base import (
     CompletionResponse,
     FinishReason,
     HealthStatus,
-    Message,
     ModelInfo,
     StreamChunk,
     Usage,
 )
 from nvh.providers.registry import ProviderRegistry
-
 
 # ---------------------------------------------------------------------------
 # Minimal mock provider (mirrors test_api.py::SimpleTestProvider)

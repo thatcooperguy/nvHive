@@ -4717,6 +4717,7 @@ def benchmark(
         # Store results
         if store:
             import json as _json
+
             from nvh.storage import repository as repo
             for pr in report.results:
                 for ev in pr.evaluations:
@@ -6237,8 +6238,9 @@ def nvidia():
         if "ollama" in enabled:
             console.print("[bold]Local Models[/bold]")
             try:
-                import httpx
                 import os as _os
+
+                import httpx
                 base = _os.environ.get(
                     "OLLAMA_BASE_URL",
                     "http://localhost:11434",
@@ -7223,8 +7225,8 @@ def webui(
                 _time.sleep(0.25)
             else:
                 console.print(
-                    f"  [yellow]![/yellow] API server did not respond within 8s — "
-                    f"continuing anyway."
+                    "  [yellow]![/yellow] API server did not respond within 8s — "
+                    "continuing anyway."
                 )
 
     console.print("[bold]Starting nvHive Web UI...[/bold]")

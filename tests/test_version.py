@@ -8,15 +8,10 @@ mismatched wheel hits PyPI.
 
 from __future__ import annotations
 
-import sys
+import tomllib
 from pathlib import Path
 
 import nvh
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover — project requires 3.11+ anyway
-    import tomli as tomllib  # type: ignore[no-redef]
 
 
 def _pyproject_version() -> str:

@@ -22,7 +22,6 @@ All tests use mock providers — no network, no real API calls.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from decimal import Decimal
 from pathlib import Path
 
@@ -47,14 +46,12 @@ from nvh.providers.base import (
     CompletionResponse,
     FinishReason,
     HealthStatus,
-    Message,
     ModelInfo,
     ProviderError,
     StreamChunk,
     Usage,
 )
 from nvh.providers.registry import ProviderRegistry
-
 
 # ---------------------------------------------------------------------------
 # Tunable mock provider — behavior controlled via init flags so one fixture
