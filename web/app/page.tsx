@@ -531,6 +531,40 @@ export default function ChatPage() {
     const prompt = inputValue.trim();
     if (!prompt || streaming) return;
 
+    // Pre-flight health gate: in 'single' mode, if the user has a
+    // specific model selected and its backing provider is currently
+    // offline, warn them inline instead of firing a query that will
+    // just error out. Local models (ollama) are always considered
+    // connected since they don't route through the advisor health
+    // system. This catches the "I selected gpt-4o but OpenAI is
+    // rate-limited" failure mode before it wastes a round trip.
+    if (mode === 'single' && selectedModel && providerHealth.length > 0) {
+      const modelInfo = models.find(m => m.model_id === selectedModel);
+      if (modelInfo && !modelInfo.is_local) {
+        const providerStatus = providerHealth.find(p => p.name === modelInfo.provider);
+        if (providerStatus && !providerStatus.healthy) {
+          const firstHealthy = models.find(m => {
+            if (m.is_local) return true;
+            const h = providerHealth.find(p => p.name === m.provider);
+            return h?.healthy;
+          });
+          const message = firstHealthy
+            ? `${modelInfo.provider} is offline. Switch to ${firstHealthy.display_name}?`
+            : `${modelInfo.provider} is offline and no healthy advisors are available. Check /v1/advisors.`;
+          // Non-blocking: browser confirm() is synchronous but keeps
+          // the fix contained to this one line. A nicer inline toast
+          // could replace this later without changing the logic.
+          if (typeof window !== 'undefined' && !window.confirm(
+            `${message}\n\n` +
+            `OK = switch and submit, Cancel = abort.`
+          )) {
+            return;
+          }
+          if (firstHealthy) setSelectedModel(firstHealthy.model_id);
+        }
+      }
+    }
+
     // Ensure we have an active conversation
     let convId = activeConvId;
     if (!convId) {
