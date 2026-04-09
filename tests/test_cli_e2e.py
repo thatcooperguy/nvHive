@@ -19,6 +19,13 @@ def run_nvh(*args: str, timeout: int = TIMEOUT) -> subprocess.CompletedProcess:
     doesn't crash the subprocess reader thread on Windows (where the
     default is cp1252 and any non-ASCII byte raises UnicodeDecodeError,
     leaving stdout=None).
+
+    Forces ``stdin=DEVNULL`` so ``nvh``'s pipe-detection logic never
+    sees an inherited-but-not-closed pytest stdin and hangs in
+    ``sys.stdin.read()``. Windows/macOS CI runners happened to close
+    the child stdin automatically, but ubuntu-latest inherited a
+    non-TTY pipe that stayed open forever — the entire test job wedged
+    for 26+ minutes on that path.
     """
     return subprocess.run(
         [*NVH, *args],
@@ -26,6 +33,7 @@ def run_nvh(*args: str, timeout: int = TIMEOUT) -> subprocess.CompletedProcess:
         text=True,
         encoding="utf-8",
         errors="replace",
+        stdin=subprocess.DEVNULL,
         timeout=timeout,
     )
 
