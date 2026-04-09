@@ -381,15 +381,13 @@ def ws_client(tmp_path: Path, monkeypatch):
     so stubbing the DB layer has no effect on what the test
     actually asserts.
     """
-    from decimal import Decimal as _D
-
     monkeypatch.delenv("HIVE_API_KEY", raising=False)
 
     async def _noop_log_query(*args, **kwargs):
         return None
 
     async def _noop_get_spend(period: str = "daily"):
-        return _D("0")
+        return Decimal("0")
 
     monkeypatch.setattr(repo, "log_query", _noop_log_query)
     monkeypatch.setattr(repo, "get_spend", _noop_get_spend)
