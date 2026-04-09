@@ -53,6 +53,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
+    "pytest-timeout>=2.3",
     "ruff>=0.4",
     "mypy>=1.10",
     "build>=1.0",
@@ -85,6 +86,12 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Default per-test timeout. Any test that hangs longer than this
+# fails loudly with a clear "Timeout" message instead of wedging the
+# CI job for 30+ minutes. 120s is generous for the CLI subprocess
+# tests which spawn `nvh` and can be slow on cold CI runners.
+timeout = 120
+timeout_method = "thread"
 filterwarnings = [
     # aiosqlite worker thread tries to callback after event loop closes during
     # test teardown — harmless race condition, not a real error.
