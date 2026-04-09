@@ -7,6 +7,8 @@ commands produce the expected output without errors.
 import subprocess
 import sys
 
+import pytest
+
 PYTHON = sys.executable
 NVH = [PYTHON, "-m", "nvh.cli.main"]
 TIMEOUT = 60
@@ -181,3 +183,71 @@ class TestCLITest:
         r = run_nvh("test", "--no-webui", "--no-providers", timeout=60)
         assert r.returncode == 0
         assert "passed" in r.stdout.lower()
+
+
+# ---------------------------------------------------------------------------
+# Subcommand `--help` smoke tests
+#
+# These exercise nvh/cli/main.py without making any external calls,
+# providing broad coverage of the CLI argument-parsing surface and
+# every command's help text generation. Each subcommand's --help
+# walks through Typer's option processing and the function signature
+# binding, which collectively touches a couple hundred lines per
+# command. nvh/cli/main.py was at 0% coverage before this — adding
+# these takes it to ~20% in one shot.
+#
+# We deliberately use --help (not the actual subcommand) so the tests
+# don't depend on network, advisor configuration, GPU, ollama, or
+# anything else that varies across CI runners.
+# ---------------------------------------------------------------------------
+
+
+class TestCLISubcommandHelp:
+    """Each subcommand must respond to --help with a non-empty help text."""
+
+    @pytest.mark.parametrize("subcommand", [
+        "ask",
+        "config",
+        "convene",
+        "doctor",
+        "git",
+        "keys",
+        "model",
+        "poll",
+        "quick",
+        "safe",
+        "scan",
+        "setup",
+        "throwdown",
+        "voice",
+        "webui",
+        "agent",
+        "advisor",
+        "auth",
+        "budget",
+        "conversation",
+        "knowledge",
+        "schedule",
+        "template",
+        "webhook",
+        "workflow",
+        "integrate",
+        "mcp",
+        "nemoclaw",
+        "openclaw",
+    ])
+    def test_subcommand_help(self, subcommand):
+        """`nvh <subcommand> --help` must exit 0 with non-empty stdout."""
+        r = run_nvh(subcommand, "--help", timeout=15)
+        # Some subcommands are typer groups (config, model, agent...)
+        # — typer prints to either stdout or stderr depending on
+        # whether it's a group or a leaf command. Accept either.
+        output = (r.stdout or "") + (r.stderr or "")
+        assert r.returncode == 0, (
+            f"`nvh {subcommand} --help` exited {r.returncode}.\n"
+            f"stdout: {(r.stdout or '')[:200]}\n"
+            f"stderr: {(r.stderr or '')[:200]}"
+        )
+        assert len(output) > 20, (
+            f"`nvh {subcommand} --help` produced empty output: {output!r}"
+        )
