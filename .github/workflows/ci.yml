@@ -41,13 +41,13 @@ jobs:
       - name: Coverage (gate)
         # Coverage gate is enforced on Linux + 3.12 only so platform
         # variance in skipped tests doesn't flap the threshold.
-        # Started at 17% in 0.7.0; raised to 28% after the
-        # parameterized provider tests + in-process CLI tests + API
-        # endpoint coverage pass. Ratchet up 1-2% per release as new
-        # tests land — the gate exists to prevent regressions, not
-        # to demand a number we haven't earned yet.
+        # History: 0.7.0 = 17%, 0.8.0 = 28%, 0.9.0 = 30%. Measured
+        # baseline is 31% so there's a 1-point buffer for noise.
+        # Ratchet up 1-2% per release as new tests land. The gate
+        # exists to prevent regressions, not to demand a number we
+        # haven't earned yet.
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        run: python -m pytest tests/ --cov=nvh --cov-report=xml --cov-report=term-missing --cov-fail-under=28
+        run: python -m pytest tests/ --cov=nvh --cov-report=xml --cov-report=term-missing --cov-fail-under=30
       - name: Upload coverage to Codecov
         # Codecov gives PR comments showing coverage delta, plus a
         # trend graph in the project dashboard. Token-less upload
@@ -78,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'
