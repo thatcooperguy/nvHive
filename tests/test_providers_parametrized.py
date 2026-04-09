@@ -34,7 +34,6 @@ from nvh.providers.base import (
     StreamChunk,
 )
 
-
 # ---------------------------------------------------------------------------
 # Provider catalog — module path + class name + default model
 # ---------------------------------------------------------------------------
