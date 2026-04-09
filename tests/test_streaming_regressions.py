@@ -367,15 +367,32 @@ def _make_engine_for_ws(provider_mode: str = "ok"):
 
 @pytest.fixture()
 def ws_client(tmp_path: Path, monkeypatch):
-    """TestClient fixture with mock engine, no auth required (open mode)."""
-    import asyncio
+    """TestClient fixture with mock engine, no auth, no real DB.
+
+    Critical: we stub `repo.log_query` and `repo.get_spend` to async
+    no-ops instead of initializing a real aiosqlite database. The
+    aiosqlite connection pool binds to whatever event loop called
+    `repo.init_db()`, and a TestClient WebSocket test runs the
+    handler on a different loop — on Linux that deterministically
+    deadlocks at the first DB call, on Windows/macOS it happens to
+    work but is still relying on undefined behavior.
+
+    The rate-manager tracking we want to verify is purely in-memory,
+    so stubbing the DB layer has no effect on what the test
+    actually asserts.
+    """
+    from decimal import Decimal as _D
 
     monkeypatch.delenv("HIVE_API_KEY", raising=False)
 
-    db_file = tmp_path / "ws_regression.db"
-    repo._engine = None
-    repo._session_factory = None
-    asyncio.run(repo.init_db(db_path=db_file))
+    async def _noop_log_query(*args, **kwargs):
+        return None
+
+    async def _noop_get_spend(period: str = "daily"):
+        return _D("0")
+
+    monkeypatch.setattr(repo, "log_query", _noop_log_query)
+    monkeypatch.setattr(repo, "get_spend", _noop_get_spend)
 
     engine, provider = _make_engine_for_ws(provider_mode="ok")
     original_engine = server_module._engine
@@ -385,8 +402,6 @@ def ws_client(tmp_path: Path, monkeypatch):
     yield client, engine, provider
 
     server_module._engine = original_engine
-    repo._engine = None
-    repo._session_factory = None
 
 
 class TestWsQueryObservability:
