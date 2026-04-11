@@ -1,20 +1,20 @@
 # nvHive
 
-**Multi-provider LLM routing that learns from every query.**
+**Multi-LLM platform for agentic coding, intelligent routing, and multi-model consensus.**
 
-![version](https://img.shields.io/badge/version-0.12.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-490%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-31%25-yellowgreen)
+![version](https://img.shields.io/badge/version-0.12.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-500%2B%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-31%25-yellowgreen) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 ## Why nvHive
 
-Most AI tools use a single provider. When that provider hits rate limits, changes pricing, or goes down, you're stuck.
-
-nvHive routes queries to the best available provider automatically. It tracks which providers actually perform well for which task types, and adjusts routing based on measured quality — not static config.
+One model, one provider, one perspective — that's how most AI tools work. nvHive runs **multiple models across multiple providers** and makes them collaborate: routing queries to the best available model, running multi-model code reviews, generating tests that verify themselves, and executing coding tasks with plan → execute → verify discipline.
 
 **What makes it different:**
+
+- **Agentic coding.** An AI agent that plans changes, writes code, runs quality gates, and iterates until it passes — all scaling from a 16 GB laptop GPU to a 128 GB DGX Spark.
+- **Multi-model verification.** Two different LLM architectures review independently. Different training data → different blind spots → more bugs caught.
 - **Learns from every query.** The router measures real provider performance. By 20 queries it's routing based on data, not guesses.
-- **Council consensus.** 3+ models collaborate and synthesize. Run Nemotron + Gemma 4 locally for fully private council, or mix local + cloud.
-- **Confidence-gated escalation.** Tries a free model first. Escalates to premium only if the response is uncertain.
-- **Cross-model verification.** A second model independently checks for errors and hallucinations.
+- **23 providers, 6 GPU tiers.** Free-tier cloud, premium cloud, and local GPU inference. Automatically picks the cheapest option that meets quality requirements.
+- **4-layer safety guardrails.** Command blocklist, filesystem boundary enforcement, secrets redaction, and resource limits — the agent can't `rm -rf /` even with `--yes`.
 
 <p align="center">
   <img src="docs/screenshots/terminal-demo.gif" alt="nvHive CLI" width="640">
@@ -40,7 +40,28 @@ nvh agent "Add unit tests for the auth middleware" --dir ./myproject
 nvh agent "Refactor the router to use health-aware selection" -y
 ```
 
-**How it works:** A strong model (cloud or local 70B) plans the task, a local model executes using file and shell tools, then the planner verifies the result. Three phases: plan → execute → verify.
+**How it works:** A strong model (cloud or local 70B) plans the task, a local model executes using file and shell tools, then a reviewer verifies the result. Three phases: plan → execute → verify.
+
+```mermaid
+flowchart LR
+    TASK[Task] --> PLAN[Phase 1: Plan<br/>Orchestrator Model<br/>Nemotron 70B / Cloud]
+
+    PLAN --> EXEC[Phase 2: Execute<br/>Worker Model<br/>Llama 70B / Gemma 27B]
+
+    EXEC --> GATE[Quality Gates<br/>ruff lint + syntax]
+
+    GATE -->|Pass| VERIFY[Phase 3: Verify<br/>Reviewer Model<br/>Qwen 72B / Cloud]
+    GATE -->|Fail| EXEC
+
+    VERIFY -->|Approved| DONE[Done<br/>Files modified<br/>Git commit]
+    VERIFY -->|Needs fix| EXEC
+
+    style PLAN fill:#1a1a2e,color:#76B900,stroke:#76B900
+    style EXEC fill:#1a1a2e,color:#3b82f6,stroke:#3b82f6
+    style VERIFY fill:#1a1a2e,color:#a855f7,stroke:#a855f7
+    style GATE fill:#1a1a2e,color:#f59e0b,stroke:#f59e0b
+    style DONE fill:#76B900,color:#000
+```
 
 **Scales with your hardware — 6 tiers from no-GPU to DGX Spark:**
 
@@ -365,10 +386,10 @@ flowchart TB
 ```mermaid
 flowchart LR
     subgraph Your Tools
-        CLI[nvh CLI]
+        CLI[nvh CLI<br/>agent · review · test-gen]
+        WEBUI[Web Dashboard<br/>nvh webui]
         SDK[Python SDK<br/>import nvh]
         CC[Claude Code<br/>MCP]
-        OC[OpenClaw<br/>Agent]
         NC[NemoClaw<br/>Agent]
         CU[Cursor]
         APP[Your App<br/>OpenAI SDK]
@@ -379,9 +400,10 @@ flowchart LR
         MCP[MCP Server<br/>stdio]
         PROXY_OAI[OpenAI Proxy<br/>/v1/proxy]
         PROXY_ANT[Anthropic Proxy<br/>/v1/anthropic]
+        AGENT[Agent Loop<br/>plan · execute · verify]
         ROUTER[Adaptive Router<br/>+ Learning Loop]
         COUNCIL[Council Engine<br/>+ Confidence]
-        ESCALATE[Escalation<br/>+ Verification]
+        GUARD[Guardrails<br/>4-layer safety]
     end
 
     subgraph Providers
@@ -392,9 +414,9 @@ flowchart LR
     end
 
     CLI --> API
+    WEBUI --> API
     SDK --> API
     CC --> MCP
-    OC --> MCP
     NC --> PROXY_OAI
     CU --> MCP
     APP --> PROXY_OAI
@@ -403,9 +425,11 @@ flowchart LR
     MCP --> API
     PROXY_OAI --> API
     PROXY_ANT --> API
+    API --> AGENT
     API --> ROUTER
     API --> COUNCIL
-    API --> ESCALATE
+    AGENT --> GUARD
+    GUARD --> ROUTER
     ROUTER --> GPU
     ROUTER --> FREE_P
     ROUTER --> PAID_P
@@ -415,6 +439,8 @@ flowchart LR
     style NIM fill:#76B900,color:#000
     style ROUTER fill:#1a1a2e,color:#76B900,stroke:#76B900
     style COUNCIL fill:#1a1a2e,color:#00bcd4,stroke:#00bcd4
+    style AGENT fill:#1a1a2e,color:#a855f7,stroke:#a855f7
+    style GUARD fill:#1a1a2e,color:#ef4444,stroke:#ef4444
 ```
 
 **API Proxies** — point existing SDKs at nvHive:
@@ -471,23 +497,40 @@ status = await nvh.health()
 
 ## Core Commands
 
+### Agentic Coding
+
+| Command | What It Does |
+|---------|-------------|
+| `nvh agent "task"` | Plan, execute, and verify code changes (6 GPU tiers) |
+| `nvh agent --setup` | Pull recommended local models for your GPU |
+| `nvh agent --mode multi` | Force multi-model: separate planner, coder, reviewer |
+| `nvh agent --git` | Auto-create branch + commit changes |
+| `nvh review` | Multi-model code review (staged changes, PRs, commit ranges) |
+| `nvh test-gen file.py` | AI test generation with automatic verification |
+
+### Queries & Council
+
 | Command | What It Does |
 |---------|-------------|
 | `nvh "question"` | Smart route to best available model |
-| `nvh convene "question"` | Council consensus (3+ models) |
+| `nvh convene "question"` | Council consensus (3+ models collaborate) |
 | `nvh throwdown "question"` | Two-pass deep analysis with critique |
+| `nvh poll "question"` | Side-by-side provider comparison |
 | `nvh safe "question"` | Local only — nothing leaves your machine |
 | `nvh ask --escalate` | Try free first, escalate if uncertain |
 | `nvh ask --verify` | Cross-model verification |
+
+### Infrastructure
+
+| Command | What It Does |
+|---------|-------------|
+| `nvh serve` | Start the API server (OpenAI + Anthropic compatible proxy) |
+| `nvh webui` | Launch the web dashboard |
 | `nvh health` | Provider resilience dashboard |
-| `nvh why` | Explain last routing decision |
-| `nvh history` | Recent queries with costs and timing |
-| `nvh bench` | GPU speed test (tokens/sec) |
-| `nvh bench -q` | Speed + quality comparison |
-| `nvh routing-stats` | Learned vs static routing scores |
 | `nvh nvidia` | NVIDIA GPU infrastructure status |
-| `nvh migrate` | Import keys from OpenClaw / Claude Desktop |
+| `nvh bench` | GPU speed test (tokens/sec) |
 | `nvh setup` | Interactive provider setup |
+| `nvh doctor` | Full diagnostic dump for troubleshooting |
 
 [Full command reference](docs/COMMANDS.md) (50+ commands)
 
@@ -551,10 +594,12 @@ nvh estimate --gpu rtx_4090   # predict tok/s on any GPU
 | [Commands](docs/COMMANDS.md) | Full CLI reference (50+ commands) |
 | [Providers](docs/PROVIDERS.md) | 23 providers, rate limits, free tiers |
 | [Council System](docs/COUNCIL.md) | Multi-LLM consensus with confidence scoring |
-| [OpenClaw Integration](docs/OPENCLAW_MIGRATION.md) | Works alongside OpenClaw |
-| [Claude Code](docs/CLAUDE_CODE_INTEGRATION.md) | MCP server setup |
+| [Releasing](docs/RELEASING.md) | Release runbook, version bumps, PyPI publishing |
+| [Windows Troubleshooting](docs/TROUBLESHOOTING_WINDOWS.md) | Encoding, segfaults, port 80, nvh.exe locks |
 | [GPU Detection](docs/GPU_DETECTION.md) | Auto-detection, model selection, OOM protection |
+| [Claude Code](docs/CLAUDE_CODE_INTEGRATION.md) | MCP server setup |
 | [NemoClaw](docs/NEMOCLAW.md) | NVIDIA NemoClaw integration |
+| [OpenClaw Integration](docs/OPENCLAW_MIGRATION.md) | Works alongside OpenClaw |
 | [SDK & API](docs/SDK_API.md) | Python SDK, REST API, proxies |
 | [Architecture](docs/ARCHITECTURE.md) | System design and adaptive learning |
 
