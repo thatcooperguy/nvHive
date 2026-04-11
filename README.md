@@ -2,7 +2,7 @@
 
 **Multi-provider LLM routing that learns from every query.**
 
-![version](https://img.shields.io/badge/version-0.10.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-490%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-31%25-yellowgreen)
+![version](https://img.shields.io/badge/version-0.11.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-490%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-31%25-yellowgreen)
 
 ## Why nvHive
 
@@ -42,21 +42,29 @@ nvh agent "Refactor the router to use health-aware selection" -y
 
 **How it works:** A strong model (cloud or local 70B) plans the task, a local model executes using file and shell tools, then the planner verifies the result. Three phases: plan → execute → verify.
 
-**Scales with your hardware:**
+**Scales with your hardware — 6 tiers from no-GPU to DGX Spark:**
 
-| GPU | VRAM | Tier | Orchestrator | Worker | Setup |
-|-----|------|------|-------------|--------|-------|
-| DGX Spark | 128 GB | Tier 3 | Nemotron 70B (local) | Llama 3.3 70B (local) | `nvh agent --setup` |
-| RTX 6000 Pro BSE | 96 GB | Tier 2 | Cloud (auto) | Llama 3.3 70B (local) | `nvh agent --setup` |
-| RTX 3090 / 4090 | 24 GB | Tier 1 | Cloud (auto) | Gemma 2 27B (local) | `nvh agent --setup` |
-| No GPU | — | Tier 0 | Cloud | Cloud | Nothing to pull |
+| GPU | VRAM | Tier | Models | Mode |
+|-----|------|------|--------|------|
+| DGX Spark | 128 GB | Tier 5 | Nemotron 70B + Llama 70B + Qwen 72B (3 models, all local) | Multi |
+| RTX 6000 Pro BSE | 96 GB | Tier 4 | Cloud planner + Llama 70B coder + Qwen 32B reviewer (dual local) | Multi |
+| A100 / A6000 | 48-80 GB | Tier 3 | Cloud planner + Llama 70B coder (`--mode multi` for dual local) | Auto |
+| RTX 3090 / 4090 | 24 GB | Tier 2 | Cloud planner + Gemma 2 27B coder | Single |
+| RTX 4060 Ti | 16 GB | Tier 1 | Cloud planner + Qwen Coder 7B | Single |
+| No GPU | — | Tier 0 | Fully cloud | Single |
 
 ```bash
-# Remove pulled models when done
-nvh agent --remove
+nvh agent --setup                    # pull recommended models
+nvh agent --remove                   # clean up models
+nvh agent "task" --mode multi        # force multi-model (Tier 3+)
+nvh agent "task" --mode single       # force single model
+nvh agent "task" --git               # auto-branch + commit changes
+nvh agent "task" --no-quality        # skip lint/syntax gates
 ```
 
-The agent auto-detects your GPU tier. Override with `--tier 3` if needed. Use `--no-verify` to skip the verification phase for faster iteration.
+**Multi-model mode** (Tier 4-5, or `--mode multi` on Tier 3): a DIFFERENT model reviews the coder's output, catching bugs the coder's architecture has blind spots for. Cross-model verification is measurably better than self-review.
+
+**Quality gates**: after the agent modifies files, ruff lint + syntax checks run automatically. If they fail, the agent gets the errors and fixes them in a feedback loop.
 
 ---
 

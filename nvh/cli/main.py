@@ -8789,11 +8789,14 @@ def do_task(
 @app.command()
 def agent(
     task: str = typer.Argument("", help="Coding task for the agent to complete"),
-    tier: str | None = typer.Option(None, "--tier", help="Force GPU tier: 0,1,2,3 (auto-detects if omitted)"),
+    tier: str | None = typer.Option(None, "--tier", help="Force GPU tier: 0-5 (auto-detects if omitted)"),
+    mode: str = typer.Option("auto", "--mode", help="Model mode: auto, single, multi"),
     working_dir: str = typer.Option(".", "-d", "--dir", help="Working directory (codebase root)"),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip write confirmations"),
     max_steps: int = typer.Option(10, "--max-steps", help="Maximum agent iterations"),
     no_verify: bool = typer.Option(False, "--no-verify", help="Skip the verification phase"),
+    no_quality: bool = typer.Option(False, "--no-quality", help="Skip lint/syntax quality gates"),
+    git: bool = typer.Option(False, "--git", help="Create branch + commit changes"),
     setup: bool = typer.Option(False, "--setup", help="Pull recommended models for your GPU tier"),
     remove: bool = typer.Option(False, "--remove", help="Remove models pulled by --setup"),
     profile: str | None = typer.Option(None, "--profile", help="Config profile to use"),
@@ -8806,10 +8809,12 @@ def agent(
 
     Automatically scales based on your GPU:
 
-      Tier 3 (128 GB+, DGX Spark):  fully local 70B
-      Tier 2 (48 GB, RTX 6000 Pro): cloud planner + local 32B coder
-      Tier 1 (24 GB, RTX 3090):     cloud planner + local 14B coder
-      Tier 0 (no GPU):              fully cloud
+      Tier 5 (128 GB+, DGX Spark):     fully local: 3 models (plan + code + review)
+      Tier 4 (96 GB, RTX 6000 Pro BSE): dual-model: 70B + 32B local
+      Tier 3 (48 GB, A100/A6000):       cloud planner + local 70B coder (--mode multi for 2 models)
+      Tier 2 (24 GB, RTX 3090/4090):    cloud planner + local 27B coder
+      Tier 1 (16 GB, RTX 4060 Ti):      cloud planner + local 7B coder
+      Tier 0 (no GPU):                  fully cloud
 
     Examples:
 
@@ -8827,6 +8832,8 @@ def agent(
     from nvh.config.settings import load_config
     from nvh.core.agent_loop import AgentStep
     from nvh.core.agentic import (
+        TIER_DESCRIPTIONS,
+        AgentMode,
         AgentTier,
         auto_detect_config,
         build_agent_config,
@@ -8835,13 +8842,20 @@ def agent(
     )
     from nvh.core.engine import Engine
 
+    # Parse mode
+    mode_enum = {
+        "auto": AgentMode.AUTO,
+        "single": AgentMode.SINGLE,
+        "multi": AgentMode.MULTI,
+    }.get(mode, AgentMode.AUTO)
+
     # ── --setup / --remove: pull or remove recommended models ──────────
     if setup or remove:
         from nvh.utils.gpu import detect_gpus
         gpus = detect_gpus()
         total_vram = sum(g.vram_gb for g in gpus) if gpus else 0
         tier_enum = detect_agent_tier(total_vram)
-        agent_config = build_agent_config(tier_enum)
+        agent_config = build_agent_config(tier_enum, mode=mode_enum)
 
         models_to_manage: list[str] = []
         if agent_config.worker_model and "ollama/" in (agent_config.worker_model or ""):
@@ -8916,28 +8930,40 @@ def agent(
                 "1": AgentTier.TIER_1,
                 "2": AgentTier.TIER_2,
                 "3": AgentTier.TIER_3,
+                "4": AgentTier.TIER_4,
+                "5": AgentTier.TIER_5,
             }.get(tier)
             if tier_enum is None:
-                console.print(f"[red]Invalid tier: {tier}. Use 0, 1, 2, or 3.[/red]")
+                console.print(f"[red]Invalid tier: {tier}. Use 0-5.[/red]")
                 raise typer.Exit(1)
-            agent_config = build_agent_config(tier_enum, registry=engine.registry)
+            agent_config = build_agent_config(tier_enum, registry=engine.registry, mode=mode_enum)
         else:
-            agent_config = auto_detect_config(engine)
+            agent_config = auto_detect_config(engine, mode=mode_enum)
 
         agent_config.max_iterations = max_steps
         agent_config.verify_results = not no_verify
+        agent_config.quality_gates = not no_quality
+        agent_config.git_integration = git
 
         work_path = _Path(working_dir).resolve()
 
         # Header
         console.print()
+        tier_desc = TIER_DESCRIPTIONS.get(agent_config.tier, "")
+        reviewer_line = (
+            f"\n[bold]Reviewer:[/bold] {agent_config.reviewer_model}"
+            if agent_config.reviewer_model else ""
+        )
         console.print(Panel(
             f"[bold]Task:[/bold] {task}\n"
-            f"[bold]Tier:[/bold] {agent_config.tier.value} "
-            f"({'fully local' if agent_config.tier == AgentTier.TIER_3 else 'hybrid' if agent_config.tier != AgentTier.TIER_0 else 'fully cloud'})\n"
+            f"[bold]Tier:[/bold] {agent_config.tier.value} — {tier_desc}\n"
+            f"[bold]Mode:[/bold] {agent_config.mode.value}\n"
             f"[bold]Orchestrator:[/bold] {agent_config.orchestrator_model or 'engine default'}\n"
-            f"[bold]Worker:[/bold] {agent_config.worker_model or 'engine default'}\n"
+            f"[bold]Worker:[/bold] {agent_config.worker_model or 'engine default'}"
+            f"{reviewer_line}\n"
             f"[bold]Directory:[/bold] {work_path}\n"
+            f"[bold]Quality gates:[/bold] {'yes' if agent_config.quality_gates else 'no'} | "
+            f"[bold]Git:[/bold] {'yes' if agent_config.git_integration else 'no'} | "
             f"[bold]Verify:[/bold] {'yes' if agent_config.verify_results else 'no'}",
             title="[bold #76B900]Agent Coding (beta)[/bold #76B900]",
             border_style="#76B900",
@@ -9024,12 +9050,21 @@ def agent(
                 for f in result.files_created:
                     console.print(f"  [green]A[/green] {f}")
 
+        # Quality gates
+        if result.quality_gate_passed is not None:
+            gate_color = "green" if result.quality_gate_passed else "red"
+            gate_label = "Passed" if result.quality_gate_passed else "Failed"
+            console.print(f"\n[bold]Quality gates:[/bold] [{gate_color}]{gate_label}[/{gate_color}]")
+            if not result.quality_gate_passed and result.quality_gate_output:
+                console.print(f"[dim]{result.quality_gate_output[:200]}[/dim]")
+
         # Verification status
         if result.verification:
             approved = "APPROVED" in result.verification.upper()
             color = "green" if approved else "yellow"
             label = "Approved" if approved else "Needs review"
-            console.print(f"\n[bold]Verification:[/bold] [{color}]{label}[/{color}]")
+            reviewer = f" (by {result.reviewer_model})" if result.reviewer_model else ""
+            console.print(f"[bold]Verification:[/bold] [{color}]{label}{reviewer}[/{color}]")
 
         # Stats
         status = "[green]completed[/green]" if result.completed else "[yellow]incomplete[/yellow]"

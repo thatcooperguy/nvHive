@@ -45,11 +45,28 @@ logger = logging.getLogger(__name__)
 
 
 class AgentTier(enum.StrEnum):
-    """GPU tier, determines which models and parallelism level to use."""
-    TIER_0 = "tier_0"  # no GPU or <24 GB — fully cloud
-    TIER_1 = "tier_1"  # 24-47 GB (RTX 3090, RTX 4090) — cloud orchestrator, small local worker
-    TIER_2 = "tier_2"  # 48-127 GB (RTX 6000 Pro BSE 96GB, A100 80GB) — cloud orchestrator, 70B worker
-    TIER_3 = "tier_3"  # 128+ GB (DGX Spark, multi-GPU) — fully local, multiple 70B workers
+    """GPU tier — 6 levels from no-GPU to DGX Spark.
+
+    Each tier determines which models can be loaded simultaneously,
+    how many parallel workers to use, and how much to rely on cloud.
+    """
+    TIER_0 = "tier_0"  # no GPU or <16 GB — fully cloud
+    TIER_1 = "tier_1"  # 16-23 GB (RTX 4060 Ti 16GB) — cloud orch, 7B local worker
+    TIER_2 = "tier_2"  # 24-47 GB (RTX 3090, RTX 4090) — cloud orch, 27B local worker
+    TIER_3 = "tier_3"  # 48-95 GB (A100 80GB, RTX A6000 48GB) — cloud orch, 70B worker, user-configurable single/multi
+    TIER_4 = "tier_4"  # 96-127 GB (RTX 6000 Pro BSE 96GB) — cloud orch, dual-model: 70B + 32B
+    TIER_5 = "tier_5"  # 128+ GB (DGX Spark, multi-GPU) — fully local: 3 models, parallel workers
+
+
+# Tier description for display
+TIER_DESCRIPTIONS: dict[AgentTier, str] = {
+    AgentTier.TIER_0: "Fully cloud (no local GPU)",
+    AgentTier.TIER_1: "Cloud orchestrator + 7B local worker",
+    AgentTier.TIER_2: "Cloud orchestrator + 27B local worker",
+    AgentTier.TIER_3: "Cloud orchestrator + 70B local worker (single/multi configurable)",
+    AgentTier.TIER_4: "Cloud orchestrator + dual-model: 70B planner + 32B coder",
+    AgentTier.TIER_5: "Fully local: Nemotron 70B planner + Llama 70B coder + Qwen 72B reviewer",
+}
 
 
 def detect_agent_tier(total_vram_gb: float) -> AgentTier:
@@ -59,10 +76,14 @@ def detect_agent_tier(total_vram_gb: float) -> AgentTier:
     even if no single card hits the threshold alone.
     """
     if total_vram_gb >= 128:
-        return AgentTier.TIER_3
+        return AgentTier.TIER_5
+    if total_vram_gb >= 96:
+        return AgentTier.TIER_4
     if total_vram_gb >= 48:
-        return AgentTier.TIER_2
+        return AgentTier.TIER_3
     if total_vram_gb >= 24:
+        return AgentTier.TIER_2
+    if total_vram_gb >= 16:
         return AgentTier.TIER_1
     return AgentTier.TIER_0
 
@@ -72,41 +93,55 @@ def detect_agent_tier(total_vram_gb: float) -> AgentTier:
 # ---------------------------------------------------------------------------
 
 
-# Model recommendations per tier. Each tuple is (provider, model).
-# None means "use whatever the engine routes to by default" (usually
-# the user's configured default or the smart router's pick).
+# Model recommendations per tier. Each key maps to (provider, model).
+# None means "use whatever the engine routes to by default" (cloud).
 #
-# Model selection priority:
-#   1. Nemotron (NVIDIA-optimized, best on NVIDIA hardware)
-#   2. Llama 3.3 70B (strong general + coding, 128K context)
-#   3. Gemma 2 27B (strong coding, smaller footprint)
-#   4. Qwen 2.5 Coder (specialized for code generation)
+# "reviewer" is optional — only used in multi-model mode (Tier 4-5).
+# When present, a DIFFERENT model verifies the coder's output, which
+# catches bugs the coder's architecture has blind spots for.
 #
 # The build_agent_config() function validates these against the
 # registry and falls back to engine defaults when not available.
 _TIER_MODELS: dict[AgentTier, dict[str, tuple[str | None, str | None]]] = {
-    AgentTier.TIER_3: {
-        # DGX Spark (128 GB+): both orchestrator and worker fully local.
-        # Nemotron 70B for orchestration (NVIDIA-optimized), Llama 70B
-        # as the worker coder. Both fit comfortably with room for
-        # parallel inference.
+    AgentTier.TIER_5: {
+        # DGX Spark (128 GB+): three models loaded simultaneously.
+        # Nemotron 70B for planning (NVIDIA-optimized reasoning),
+        # Llama 3.3 70B for coding (strong general + coding, 128K ctx),
+        # Qwen 2.5 Coder 72B for review (different architecture catches
+        # different bugs). 3 × 40 GB Q4 = 120 GB, 8 GB headroom.
         "orchestrator": ("ollama", "ollama/nemotron:70b"),
         "worker": ("ollama", "ollama/llama3.3:70b"),
+        "reviewer": ("ollama", "ollama/qwen2.5-coder:32b"),
+    },
+    AgentTier.TIER_4: {
+        # RTX 6000 Pro BSE (96 GB): dual-model — 70B planner/reviewer +
+        # 32B coder. 70B Q4 (40 GB) + 32B Q8 (34 GB) = 74 GB, 22 GB
+        # headroom. Cloud handles planning for complex tasks.
+        "orchestrator": (None, None),
+        "worker": ("ollama", "ollama/llama3.3:70b"),
+        "reviewer": ("ollama", "ollama/qwen2.5-coder:32b"),
+    },
+    AgentTier.TIER_3: {
+        # 48-95 GB: single 70B model by default. Can be overridden
+        # to multi-model (Qwen 32B + Gemma 9B) via --mode multi.
+        # Single: Llama 70B Q4 (~40 GB) — one strong model.
+        # Multi: Qwen 32B Q8 (34 GB) + Gemma 9B Q8 (9 GB) = 43 GB.
+        "orchestrator": (None, None),
+        "worker": ("ollama", "ollama/llama3.3:70b"),
+        # Reviewer only used in --mode multi:
+        "reviewer": ("ollama", "ollama/gemma2:9b"),
     },
     AgentTier.TIER_2: {
-        # RTX 6000 Pro BSE (96 GB): cloud orchestrator, local 70B worker.
-        # 96 GB is enough for a 70B model at Q4/Q5 quantization (~40 GB)
-        # with headroom for KV cache. Llama 3.3 70B is the best local
-        # coder at this size.
-        "orchestrator": (None, None),  # engine default (cloud)
-        "worker": ("ollama", "ollama/llama3.3:70b"),
-    },
-    AgentTier.TIER_1: {
-        # RTX 3090 (24 GB): cloud orchestrator, local 14B-27B worker.
-        # Gemma 2 27B at Q4 (~16 GB) or Qwen 2.5 Coder 14B at Q8
-        # (~15 GB). Both fit in 24 GB with room for context.
+        # RTX 3090 / RTX 4090 (24 GB): single local model.
+        # Gemma 2 27B Q4 (~16 GB) — strong coder in 24 GB envelope.
         "orchestrator": (None, None),
         "worker": ("ollama", "ollama/gemma2:27b"),
+    },
+    AgentTier.TIER_1: {
+        # RTX 4060 Ti 16 GB: single small model.
+        # Qwen 2.5 Coder 7B Q8 (~8 GB) — fits with room for context.
+        "orchestrator": (None, None),
+        "worker": ("ollama", "ollama/qwen2.5-coder:7b"),
     },
     AgentTier.TIER_0: {
         # No GPU: everything goes to cloud
@@ -115,23 +150,44 @@ _TIER_MODELS: dict[AgentTier, dict[str, tuple[str | None, str | None]]] = {
     },
 }
 
+# Multi-model alternate models for Tier 3 --mode multi
+_TIER_3_MULTI_MODELS: dict[str, tuple[str | None, str | None]] = {
+    "orchestrator": (None, None),
+    "worker": ("ollama", "ollama/qwen2.5-coder:32b"),
+    "reviewer": ("ollama", "ollama/gemma2:9b"),
+}
+
+
+class AgentMode(enum.StrEnum):
+    """Single-model vs multi-model execution mode."""
+    AUTO = "auto"      # system decides based on task complexity
+    SINGLE = "single"  # one local model for all phases
+    MULTI = "multi"    # separate planner, coder, reviewer models
+
 
 @dataclass
 class AgentConfig:
     """Configuration for a coding agent session."""
     tier: AgentTier
+    mode: AgentMode = AgentMode.AUTO
     orchestrator_provider: str | None = None
     orchestrator_model: str | None = None
     worker_provider: str | None = None
     worker_model: str | None = None
-    max_parallel_workers: int = 1  # reserved for future parallel dispatch
+    reviewer_provider: str | None = None
+    reviewer_model: str | None = None
+    max_parallel_workers: int = 1
     max_iterations: int = 10
     verify_results: bool = True
+    quality_gates: bool = True  # run lint/test after changes
+    git_integration: bool = False  # branch + commit
+    use_memory: bool = True  # cross-session project memory
 
 
 def build_agent_config(
     tier: AgentTier,
     registry=None,
+    mode: AgentMode = AgentMode.AUTO,
 ) -> AgentConfig:
     """Build a concrete config for the given tier.
 
@@ -140,46 +196,64 @@ def build_agent_config(
     when they're not. This means a Tier 1 user without Ollama installed
     still gets a working agent — just fully cloud.
     """
-    tier_models = _TIER_MODELS[tier]
-    orch = tier_models["orchestrator"]
-    work = tier_models["worker"]
+    # For Tier 3 in multi-mode, use the alternate model set
+    if tier == AgentTier.TIER_3 and mode == AgentMode.MULTI:
+        tier_models = _TIER_3_MULTI_MODELS
+    else:
+        tier_models = _TIER_MODELS[tier]
 
-    # Validate providers exist in registry
-    if registry is not None:
-        if orch[0] and not registry.has(orch[0]):
+    def _resolve(role: str) -> tuple[str | None, str | None]:
+        provider, model = tier_models.get(role, (None, None))
+        if registry is not None and provider and not registry.has(provider):
             logger.info(
-                "Tier %s orchestrator %s not in registry — falling back to engine default",
-                tier, orch[0],
+                "Tier %s %s %s not in registry — falling back to cloud",
+                tier, role, provider,
             )
-            orch = (None, None)
-        if work[0] and not registry.has(work[0]):
-            logger.info(
-                "Tier %s worker %s not in registry — falling back to engine default",
-                tier, work[0],
-            )
-            work = (None, None)
+            return (None, None)
+        return (provider, model)
+
+    orch = _resolve("orchestrator")
+    work = _resolve("worker")
+    review = _resolve("reviewer")
+
+    # Determine effective mode
+    effective_mode = mode
+    if mode == AgentMode.AUTO:
+        # Auto: use multi-model on Tier 4+ where it's always beneficial
+        if tier in (AgentTier.TIER_4, AgentTier.TIER_5):
+            effective_mode = AgentMode.MULTI
+        else:
+            effective_mode = AgentMode.SINGLE
 
     return AgentConfig(
         tier=tier,
+        mode=effective_mode,
         orchestrator_provider=orch[0],
         orchestrator_model=orch[1],
         worker_provider=work[0],
         worker_model=work[1],
+        reviewer_provider=review[0] if effective_mode == AgentMode.MULTI else None,
+        reviewer_model=review[1] if effective_mode == AgentMode.MULTI else None,
         max_parallel_workers=_parallel_workers(tier),
     )
 
 
 def _parallel_workers(tier: AgentTier) -> int:
-    """Max concurrent workers per tier (reserved for future use)."""
+    """Max concurrent workers per tier."""
     return {
         AgentTier.TIER_0: 1,
         AgentTier.TIER_1: 1,
-        AgentTier.TIER_2: 2,
-        AgentTier.TIER_3: 4,
+        AgentTier.TIER_2: 1,
+        AgentTier.TIER_3: 1,
+        AgentTier.TIER_4: 2,
+        AgentTier.TIER_5: 4,
     }[tier]
 
 
-def auto_detect_config(engine) -> AgentConfig:
+def auto_detect_config(
+    engine,
+    mode: AgentMode = AgentMode.AUTO,
+) -> AgentConfig:
     """Detect GPU tier and build a config automatically.
 
     Uses the engine's registry to validate provider availability.
@@ -195,7 +269,7 @@ def auto_detect_config(engine) -> AgentConfig:
     tier = detect_agent_tier(total_vram)
     logger.info("Agent tier: %s (%.0f GB VRAM detected)", tier, total_vram)
 
-    return build_agent_config(tier, registry=engine.registry)
+    return build_agent_config(tier, registry=engine.registry, mode=mode)
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +328,12 @@ class CodingResult:
     total_cost_usd: Decimal = Decimal("0")
     duration_ms: int = 0
     tier: AgentTier = AgentTier.TIER_0
+    mode: AgentMode = AgentMode.SINGLE
     worker_model: str = ""
     orchestrator_model: str = ""
+    reviewer_model: str = ""
+    quality_gate_passed: bool | None = None  # None = not run
+    quality_gate_output: str = ""
     error: str = ""
 
 
@@ -432,7 +510,23 @@ async def run_coding_agent(
         if not config.verify_results:
             break
 
-        logger.info("Agent Phase 3: Verifying (orchestrator)")
+        # In multi-model mode, use the dedicated reviewer model so a
+        # DIFFERENT architecture checks the coder's work (catches
+        # blind spots the coder's training data doesn't cover).
+        # In single-model mode, fall back to the orchestrator.
+        verify_provider = (
+            config.reviewer_provider
+            if config.mode == AgentMode.MULTI and config.reviewer_provider
+            else config.orchestrator_provider
+        )
+        verify_model = (
+            config.reviewer_model
+            if config.mode == AgentMode.MULTI and config.reviewer_model
+            else config.orchestrator_model
+        )
+
+        logger.info("Agent Phase 3: Verifying (reviewer=%s/%s)",
+                     verify_provider or "default", verify_model or "default")
 
         # Build a summary of what the worker did
         changes_summary = _build_changes_summary(exec_result)
@@ -450,8 +544,8 @@ async def run_coding_agent(
         try:
             verify_response = await engine.query(
                 prompt=verify_prompt,
-                provider=config.orchestrator_provider,
-                model=config.orchestrator_model,
+                provider=verify_provider,
+                model=verify_model,
                 stream=False,
                 use_cache=False,
             )
@@ -470,9 +564,91 @@ async def run_coding_agent(
         else:
             logger.info("Verification: NEEDS_FIX — max retries reached")
 
-    # ── Assemble result ────────────────────────────────────────────────
+    # ── Phase 4: Quality gates (lint/test) ────────────────────────────
+    quality_passed: bool | None = None
+    quality_output = ""
     modified, created, read = _extract_file_operations(exec_result) if exec_result else ([], [], [])
     commands = _extract_commands(exec_result) if exec_result else []
+
+    if config.quality_gates and (modified or created):
+        quality_passed, quality_output = await _run_quality_gates(
+            working_dir, modified + created,
+        )
+        if quality_passed is False and exec_result and exec_result.completed:
+            # Re-enter the loop with lint/test feedback
+            logger.info("Quality gate failed — feeding errors back to worker")
+            gate_task = (
+                f"{execution_task}\n\n"
+                f"## Quality Gate Failures\n"
+                f"After your changes, the following quality checks failed:\n\n"
+                f"```\n{quality_output[:2000]}\n```\n\n"
+                f"Please fix these issues."
+            )
+            gate_result = await run_agent_loop(
+                task=gate_task,
+                engine=engine,
+                tools=tools,
+                provider=config.worker_provider,
+                model=config.worker_model,
+                max_iterations=5,
+                auto_approve_safe=True,
+                on_step=on_step,
+                confirm_unsafe=confirm_write,
+            )
+            if gate_result.completed:
+                exec_result = gate_result
+                modified, created, read = _extract_file_operations(exec_result)
+                commands = _extract_commands(exec_result)
+                # Re-check quality
+                quality_passed, quality_output = await _run_quality_gates(
+                    working_dir, modified + created,
+                )
+
+    # ── Phase 5: Git integration ───────────────────────────────────────
+    if config.git_integration and (modified or created):
+        try:
+            from nvh.core.agent_git import (
+                commit_agent_changes,
+                create_agent_branch,
+                is_git_repo,
+            )
+            if is_git_repo(working_dir):
+                branch = create_agent_branch(working_dir, task)
+                if branch:
+                    logger.info("Created branch: %s", branch)
+                sha = commit_agent_changes(
+                    working_dir, task, modified, created,
+                )
+                if sha:
+                    logger.info("Committed changes: %s", sha)
+        except ImportError:
+            logger.debug("agent_git module not available — skipping git integration")
+        except Exception as e:
+            logger.warning("Git integration failed: %s", e)
+
+    # ── Phase 6: Save memory ──────────────────────────────────────────
+    if config.use_memory:
+        try:
+            from nvh.core.agent_memory import (
+                load_memory,
+                save_memory,
+                update_memory_from_result,
+            )
+            memory = load_memory(working_dir)
+            # Build a lightweight result proxy for memory update
+            memory = update_memory_from_result(memory, {
+                "task": task,
+                "files_modified": modified,
+                "files_created": created,
+                "completed": exec_result.completed if exec_result else False,
+            })
+            save_memory(memory, working_dir)
+        except ImportError:
+            logger.debug("agent_memory module not available — skipping memory save")
+        except Exception as e:
+            logger.debug("Memory save failed: %s", e)
+
+    # ── Assemble result ────────────────────────────────────────────────
     elapsed = int((time.monotonic() - start_time) * 1000)
 
     return CodingResult(
@@ -490,9 +666,74 @@ async def run_coding_agent(
         total_cost_usd=Decimal("0"),  # TODO: track across engine calls
         duration_ms=elapsed,
         tier=config.tier,
+        mode=config.mode,
         worker_model=config.worker_model or "default",
         orchestrator_model=config.orchestrator_model or "default",
+        reviewer_model=config.reviewer_model or "",
+        quality_gate_passed=quality_passed,
+        quality_gate_output=quality_output,
     )
+
+
+async def _run_quality_gates(
+    working_dir: Path,
+    changed_files: list[str],
+) -> tuple[bool | None, str]:
+    """Run lint and test quality gates on changed files.
+
+    Returns (passed: bool | None, output: str). None means no gates
+    were applicable (no Python files, no test runner found, etc.).
+    """
+    import subprocess
+
+    outputs: list[str] = []
+    all_passed = True
+
+    # Gate 1: ruff lint (Python files only)
+    py_files = [f for f in changed_files if f.endswith(".py")]
+    if py_files:
+        try:
+            result = subprocess.run(
+                ["python", "-m", "ruff", "check", *py_files],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=str(working_dir),
+                timeout=30,
+            )
+            if result.returncode != 0:
+                all_passed = False
+                outputs.append(f"ruff lint FAILED:\n{result.stdout or result.stderr}")
+            else:
+                outputs.append("ruff lint: passed")
+        except FileNotFoundError:
+            outputs.append("ruff: not installed (skipped)")
+        except Exception as e:
+            outputs.append(f"ruff: error ({e})")
+
+    # Gate 2: syntax check (Python files)
+    for f in py_files:
+        try:
+            result = subprocess.run(
+                ["python", "-c", f"import ast; ast.parse(open(r'{f}').read())"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=str(working_dir),
+                timeout=10,
+            )
+            if result.returncode != 0:
+                all_passed = False
+                outputs.append(f"syntax check FAILED for {f}:\n{result.stderr}")
+        except Exception:
+            pass
+
+    if not outputs:
+        return None, ""
+
+    return all_passed, "\n".join(outputs)
 
 
 def _build_changes_summary(result: AgentResult) -> str:

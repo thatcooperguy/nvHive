@@ -14,6 +14,7 @@ import pytest
 
 from nvh.core.agentic import (
     AgentConfig,
+    AgentMode,
     AgentTier,
     CodingResult,
     build_agent_config,
@@ -33,38 +34,51 @@ class TestTierDetection:
         assert detect_agent_tier(0) == AgentTier.TIER_0
 
     def test_tier_0_small_gpu(self):
-        assert detect_agent_tier(16) == AgentTier.TIER_0
+        assert detect_agent_tier(8) == AgentTier.TIER_0
 
-    def test_tier_1_rtx_3090(self):
-        assert detect_agent_tier(24) == AgentTier.TIER_1
+    def test_tier_1_16gb(self):
+        assert detect_agent_tier(16) == AgentTier.TIER_1
 
-    def test_tier_1_rtx_4090(self):
-        assert detect_agent_tier(24) == AgentTier.TIER_1
+    def test_tier_2_rtx_3090(self):
+        assert detect_agent_tier(24) == AgentTier.TIER_2
 
-    def test_tier_2_rtx_6000(self):
-        assert detect_agent_tier(48) == AgentTier.TIER_2
+    def test_tier_2_rtx_4090(self):
+        assert detect_agent_tier(24) == AgentTier.TIER_2
 
-    def test_tier_2_a100_80(self):
-        assert detect_agent_tier(80) == AgentTier.TIER_2
+    def test_tier_3_a100_48(self):
+        assert detect_agent_tier(48) == AgentTier.TIER_3
 
-    def test_tier_3_dgx_spark(self):
-        assert detect_agent_tier(128) == AgentTier.TIER_3
+    def test_tier_3_a100_80(self):
+        assert detect_agent_tier(80) == AgentTier.TIER_3
 
-    def test_tier_3_multi_gpu(self):
-        assert detect_agent_tier(192) == AgentTier.TIER_3
+    def test_tier_4_rtx_6000_pro_bse(self):
+        assert detect_agent_tier(96) == AgentTier.TIER_4
+
+    def test_tier_5_dgx_spark(self):
+        assert detect_agent_tier(128) == AgentTier.TIER_5
+
+    def test_tier_5_multi_gpu(self):
+        assert detect_agent_tier(192) == AgentTier.TIER_5
+
+    def test_boundary_16(self):
+        assert detect_agent_tier(16) == AgentTier.TIER_1
+        assert detect_agent_tier(15.9) == AgentTier.TIER_0
 
     def test_boundary_24(self):
-        """24 GB is the Tier 1 threshold, not Tier 0."""
-        assert detect_agent_tier(24) == AgentTier.TIER_1
-        assert detect_agent_tier(23.9) == AgentTier.TIER_0
+        assert detect_agent_tier(24) == AgentTier.TIER_2
+        assert detect_agent_tier(23.9) == AgentTier.TIER_1
 
     def test_boundary_48(self):
-        assert detect_agent_tier(48) == AgentTier.TIER_2
-        assert detect_agent_tier(47.9) == AgentTier.TIER_1
+        assert detect_agent_tier(48) == AgentTier.TIER_3
+        assert detect_agent_tier(47.9) == AgentTier.TIER_2
+
+    def test_boundary_96(self):
+        assert detect_agent_tier(96) == AgentTier.TIER_4
+        assert detect_agent_tier(95.9) == AgentTier.TIER_3
 
     def test_boundary_128(self):
-        assert detect_agent_tier(128) == AgentTier.TIER_3
-        assert detect_agent_tier(127.9) == AgentTier.TIER_2
+        assert detect_agent_tier(128) == AgentTier.TIER_5
+        assert detect_agent_tier(127.9) == AgentTier.TIER_4
 
 
 # ---------------------------------------------------------------------------
@@ -75,42 +89,61 @@ class TestTierDetection:
 class TestConfigBuilding:
     def test_tier_0_fully_cloud(self):
         config = build_agent_config(AgentTier.TIER_0)
-        # Tier 0: everything defaults to engine (cloud)
         assert config.orchestrator_provider is None
         assert config.worker_provider is None
         assert config.max_parallel_workers == 1
 
-    def test_tier_1_cloud_orch_local_worker(self):
+    def test_tier_1_cloud_orch_small_worker(self):
         config = build_agent_config(AgentTier.TIER_1)
-        assert config.orchestrator_provider is None  # cloud
+        assert config.orchestrator_provider is None
         assert config.worker_provider == "ollama"
-        # Worker should be a coding-capable model (gemma2, qwen, or similar)
         assert config.worker_model is not None
-        assert "ollama/" in config.worker_model
+        assert "7b" in (config.worker_model or "").lower()
 
-    def test_tier_2_cloud_orch_local_32b(self):
+    def test_tier_2_cloud_orch_27b_worker(self):
         config = build_agent_config(AgentTier.TIER_2)
         assert config.orchestrator_provider is None
         assert config.worker_provider == "ollama"
-        assert config.max_parallel_workers == 2
+        assert "27b" in (config.worker_model or "").lower() or "gemma" in (config.worker_model or "").lower()
 
-    def test_tier_3_fully_local(self):
+    def test_tier_3_single_mode_default(self):
         config = build_agent_config(AgentTier.TIER_3)
+        assert config.orchestrator_provider is None
+        assert config.worker_provider == "ollama"
+        assert "70b" in (config.worker_model or "").lower()
+        assert config.reviewer_model is None  # single mode by default
+
+    def test_tier_3_multi_mode(self):
+        config = build_agent_config(AgentTier.TIER_3, mode=AgentMode.MULTI)
+        assert config.worker_provider == "ollama"
+        assert config.reviewer_provider == "ollama"
+        assert config.reviewer_model is not None
+
+    def test_tier_4_dual_model(self):
+        config = build_agent_config(AgentTier.TIER_4)
+        assert config.worker_provider == "ollama"
+        assert config.max_parallel_workers == 2
+        # Auto mode on Tier 4 → multi
+        assert config.mode == AgentMode.MULTI
+        assert config.reviewer_model is not None
+
+    def test_tier_5_fully_local_triple(self):
+        config = build_agent_config(AgentTier.TIER_5)
         assert config.orchestrator_provider == "ollama"
         assert config.worker_provider == "ollama"
+        assert config.reviewer_provider == "ollama"
         assert config.max_parallel_workers == 4
+        # Three different models
+        assert config.orchestrator_model != config.worker_model
 
     def test_fallback_when_ollama_not_in_registry(self):
-        """When Ollama isn't registered, config falls back to cloud."""
         registry = ProviderRegistry()
-        # Don't register ollama
-        config = build_agent_config(AgentTier.TIER_1, registry=registry)
-        assert config.worker_provider is None  # fell back to cloud
+        config = build_agent_config(AgentTier.TIER_2, registry=registry)
+        assert config.worker_provider is None
 
-    def test_tier_3_fallback_when_ollama_missing(self):
+    def test_tier_5_fallback_when_ollama_missing(self):
         registry = ProviderRegistry()
-        config = build_agent_config(AgentTier.TIER_3, registry=registry)
-        # Both should fall back since ollama isn't available
+        config = build_agent_config(AgentTier.TIER_5, registry=registry)
         assert config.orchestrator_provider is None
         assert config.worker_provider is None
 
