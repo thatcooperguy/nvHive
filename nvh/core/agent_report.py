@@ -94,7 +94,7 @@ def format_session_report(
     lines.append("[bold]Cost Breakdown[/bold]")
     lines.append(f"  Local tokens:  {cost_local_tokens:,}")
     lines.append(f"  Cloud tokens:  {cost_cloud_tokens:,}")
-    lines.append(f"  Cloud cost:    ${cost_cloud_usd:.4f}")
+    lines.append(f"  Cloud cost:    ${float(cost_cloud_usd):.4f}")
 
     lines.append("")
     lines.append(f"[bold]Multi-Model Value:[/bold] {multi_model_value}")
