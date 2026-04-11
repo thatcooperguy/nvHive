@@ -2,7 +2,7 @@
 
 **Multi-provider LLM routing that learns from every query.**
 
-![version](https://img.shields.io/badge/version-0.5.1-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-225%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![models](https://img.shields.io/badge/models-63-purple)
+![version](https://img.shields.io/badge/version-0.10.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-490%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-31%25-yellowgreen)
 
 ## Why nvHive
 
@@ -23,6 +23,40 @@ nvHive routes queries to the best available provider automatically. It tracks wh
 <p align="center">
   <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
 </p>
+
+---
+
+## Agentic Coding (Beta)
+
+> **New in 0.10.0** — a multi-model coding agent that plans, executes, and verifies code changes. Scales based on your GPU.
+
+```bash
+# One-time setup: pulls the right models for your GPU
+nvh agent --setup
+
+# Run a coding task
+nvh agent "Fix the streaming timeout bug in council.py"
+nvh agent "Add unit tests for the auth middleware" --dir ./myproject
+nvh agent "Refactor the router to use health-aware selection" -y
+```
+
+**How it works:** A strong model (cloud or local 70B) plans the task, a local model executes using file and shell tools, then the planner verifies the result. Three phases: plan → execute → verify.
+
+**Scales with your hardware:**
+
+| GPU | VRAM | Tier | Orchestrator | Worker | Setup |
+|-----|------|------|-------------|--------|-------|
+| DGX Spark | 128 GB | Tier 3 | Nemotron 70B (local) | Llama 3.3 70B (local) | `nvh agent --setup` |
+| RTX 6000 Pro BSE | 96 GB | Tier 2 | Cloud (auto) | Llama 3.3 70B (local) | `nvh agent --setup` |
+| RTX 3090 / 4090 | 24 GB | Tier 1 | Cloud (auto) | Gemma 2 27B (local) | `nvh agent --setup` |
+| No GPU | — | Tier 0 | Cloud | Cloud | Nothing to pull |
+
+```bash
+# Remove pulled models when done
+nvh agent --remove
+```
+
+The agent auto-detects your GPU tier. Override with `--tier 3` if needed. Use `--no-verify` to skip the verification phase for faster iteration.
 
 ---
 

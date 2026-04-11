@@ -8783,6 +8783,267 @@ def do_task(
 
 
 # ---------------------------------------------------------------------------
+# nvh agent — tier-aware coding agent (beta)
+# ---------------------------------------------------------------------------
+
+@app.command()
+def agent(
+    task: str = typer.Argument("", help="Coding task for the agent to complete"),
+    tier: str | None = typer.Option(None, "--tier", help="Force GPU tier: 0,1,2,3 (auto-detects if omitted)"),
+    working_dir: str = typer.Option(".", "-d", "--dir", help="Working directory (codebase root)"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip write confirmations"),
+    max_steps: int = typer.Option(10, "--max-steps", help="Maximum agent iterations"),
+    no_verify: bool = typer.Option(False, "--no-verify", help="Skip the verification phase"),
+    setup: bool = typer.Option(False, "--setup", help="Pull recommended models for your GPU tier"),
+    remove: bool = typer.Option(False, "--remove", help="Remove models pulled by --setup"),
+    profile: str | None = typer.Option(None, "--profile", help="Config profile to use"),
+):
+    """[beta] Agentic coding — plan, execute, and verify code changes.
+
+    Uses a hierarchical multi-model approach: a strong model (cloud or
+    local 70B) plans and verifies, while a local model executes the
+    changes using file and shell tools.
+
+    Automatically scales based on your GPU:
+
+      Tier 3 (128 GB+, DGX Spark):  fully local 70B
+      Tier 2 (48 GB, RTX 6000 Pro): cloud planner + local 32B coder
+      Tier 1 (24 GB, RTX 3090):     cloud planner + local 14B coder
+      Tier 0 (no GPU):              fully cloud
+
+    Examples:
+
+      nvh agent "Fix the streaming timeout bug in council.py"
+
+      nvh agent "Add unit tests for the auth middleware" --dir /d/GitHub/project
+
+      nvh agent "Refactor the router to filter by health score" --tier 3
+
+      nvh agent "Read the codebase and create a CONTRIBUTING.md" -y
+    """
+    import time as _time
+    from pathlib import Path as _Path
+
+    from nvh.config.settings import load_config
+    from nvh.core.agent_loop import AgentStep
+    from nvh.core.agentic import (
+        AgentTier,
+        auto_detect_config,
+        build_agent_config,
+        detect_agent_tier,
+        run_coding_agent,
+    )
+    from nvh.core.engine import Engine
+
+    # ── --setup / --remove: pull or remove recommended models ──────────
+    if setup or remove:
+        from nvh.utils.gpu import detect_gpus
+        gpus = detect_gpus()
+        total_vram = sum(g.vram_gb for g in gpus) if gpus else 0
+        tier_enum = detect_agent_tier(total_vram)
+        agent_config = build_agent_config(tier_enum)
+
+        models_to_manage: list[str] = []
+        if agent_config.worker_model and "ollama/" in (agent_config.worker_model or ""):
+            # Strip the "ollama/" prefix for the ollama CLI
+            models_to_manage.append(agent_config.worker_model.replace("ollama/", ""))
+        if agent_config.orchestrator_model and "ollama/" in (agent_config.orchestrator_model or ""):
+            orch_model = agent_config.orchestrator_model.replace("ollama/", "")
+            if orch_model not in models_to_manage:
+                models_to_manage.append(orch_model)
+
+        if not models_to_manage:
+            console.print(
+                f"[yellow]Tier {tier_enum.value}: no local models needed "
+                f"(fully cloud). Nothing to {'pull' if setup else 'remove'}.[/yellow]"
+            )
+            return
+
+        action = "Pulling" if setup else "Removing"
+        console.print(
+            f"\n[bold]Agent {action.lower()} for {tier_enum.value} "
+            f"({total_vram:.0f} GB VRAM detected):[/bold]"
+        )
+        for m in models_to_manage:
+            console.print(f"  {'[green]+[/green]' if setup else '[red]-[/red]'} {m}")
+        console.print()
+
+        import shutil
+        ollama_exe = shutil.which("ollama")
+        if not ollama_exe:
+            console.print(
+                "[red]Ollama not found in PATH.[/red]\n"
+                "Install: [bold]curl -fsSL https://ollama.com/install.sh | sh[/bold]"
+            )
+            raise typer.Exit(1)
+
+        import subprocess
+        for m in models_to_manage:
+            cmd = "pull" if setup else "rm"
+            console.print(f"[bold]ollama {cmd} {m}[/bold]")
+            try:
+                subprocess.run(
+                    [ollama_exe, cmd, m],
+                    check=True,
+                    timeout=1800,  # 30 min for large model pulls
+                )
+                console.print("  [green]done[/green]")
+            except subprocess.CalledProcessError as e:
+                console.print(f"  [red]failed (exit {e.returncode})[/red]")
+            except subprocess.TimeoutExpired:
+                console.print("  [red]timed out after 30 minutes[/red]")
+        console.print()
+        console.print(
+            "[green]Setup complete.[/green] Run [bold]nvh agent \"your task\"[/bold] to start."
+            if setup else "[green]Models removed.[/green]"
+        )
+        return
+
+    if not task:
+        console.print("[red]Please provide a task or use --setup / --remove.[/red]")
+        console.print("Example: [bold]nvh agent \"Fix the bug in main.py\"[/bold]")
+        raise typer.Exit(1)
+
+    async def _run_agent():
+        config = load_config(profile=profile)
+        engine = Engine(config=config)
+        await engine.initialize()
+
+        # Determine tier
+        if tier is not None:
+            tier_enum = {
+                "0": AgentTier.TIER_0,
+                "1": AgentTier.TIER_1,
+                "2": AgentTier.TIER_2,
+                "3": AgentTier.TIER_3,
+            }.get(tier)
+            if tier_enum is None:
+                console.print(f"[red]Invalid tier: {tier}. Use 0, 1, 2, or 3.[/red]")
+                raise typer.Exit(1)
+            agent_config = build_agent_config(tier_enum, registry=engine.registry)
+        else:
+            agent_config = auto_detect_config(engine)
+
+        agent_config.max_iterations = max_steps
+        agent_config.verify_results = not no_verify
+
+        work_path = _Path(working_dir).resolve()
+
+        # Header
+        console.print()
+        console.print(Panel(
+            f"[bold]Task:[/bold] {task}\n"
+            f"[bold]Tier:[/bold] {agent_config.tier.value} "
+            f"({'fully local' if agent_config.tier == AgentTier.TIER_3 else 'hybrid' if agent_config.tier != AgentTier.TIER_0 else 'fully cloud'})\n"
+            f"[bold]Orchestrator:[/bold] {agent_config.orchestrator_model or 'engine default'}\n"
+            f"[bold]Worker:[/bold] {agent_config.worker_model or 'engine default'}\n"
+            f"[bold]Directory:[/bold] {work_path}\n"
+            f"[bold]Verify:[/bold] {'yes' if agent_config.verify_results else 'no'}",
+            title="[bold #76B900]Agent Coding (beta)[/bold #76B900]",
+            border_style="#76B900",
+            expand=False,
+        ))
+        console.print()
+
+        start = _time.monotonic()
+        step_count = 0
+
+        def on_step(step: AgentStep) -> None:
+            nonlocal step_count
+            step_count += 1
+            thought_preview = step.thought[:100].rstrip() if step.thought else ""
+            label = f"[bold]Step {step.iteration}[/bold]"
+            if thought_preview and thought_preview != "Task complete":
+                label += f": {thought_preview}{'...' if len(step.thought) > 100 else ''}"
+            console.print(label)
+            for call in step.tool_calls:
+                args_str = ", ".join(
+                    f"{k}={repr(v)[:50]}" for k, v in call.get("args", {}).items()
+                )
+                console.print(
+                    f"  [dim]tool:[/dim] [cyan]{call['tool']}[/cyan]({args_str})"
+                )
+            for result in step.tool_results:
+                if result.success:
+                    preview = result.output[:80].replace("\n", " ").rstrip()
+                    suffix = "..." if len(result.output) > 80 else ""
+                    console.print(f"  [green]ok[/green] [dim]{preview}{suffix}[/dim]")
+                else:
+                    console.print(f"  [red]err[/red] [dim]{result.error[:80]}[/dim]")
+            if not step.tool_calls:
+                console.print("  [dim](no tools -- generating final answer)[/dim]")
+            console.print()
+
+        def confirm_write(tool_name: str, tool_args: dict) -> bool:
+            args_str = ", ".join(
+                f"{k}={repr(v)[:50]}" for k, v in tool_args.items()
+            )
+            console.print(
+                f"\n[yellow]Agent wants to:[/yellow] {tool_name}({args_str})"
+            )
+            try:
+                answer = input("Allow? [y/N]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return False
+            return answer in ("y", "yes")
+
+        result = await run_coding_agent(
+            task=task,
+            engine=engine,
+            config=agent_config,
+            working_dir=work_path,
+            on_step=on_step,
+            confirm_write=None if yes else confirm_write,
+        )
+
+        elapsed = _time.monotonic() - start
+
+        # Result panel
+        if result.error:
+            console.print(Panel(
+                f"[red]{result.error}[/red]",
+                title="[bold red]Agent Error[/bold red]",
+                border_style="red",
+            ))
+        else:
+            console.print(Panel(
+                result.final_summary or "(no summary)",
+                title="[bold green]Result[/bold green]",
+                border_style="green",
+            ))
+
+        # Changes summary
+        if result.files_modified or result.files_created:
+            console.print()
+            if result.files_modified:
+                console.print("[bold]Modified:[/bold]")
+                for f in result.files_modified:
+                    console.print(f"  [yellow]M[/yellow] {f}")
+            if result.files_created:
+                console.print("[bold]Created:[/bold]")
+                for f in result.files_created:
+                    console.print(f"  [green]A[/green] {f}")
+
+        # Verification status
+        if result.verification:
+            approved = "APPROVED" in result.verification.upper()
+            color = "green" if approved else "yellow"
+            label = "Approved" if approved else "Needs review"
+            console.print(f"\n[bold]Verification:[/bold] [{color}]{label}[/{color}]")
+
+        # Stats
+        status = "[green]completed[/green]" if result.completed else "[yellow]incomplete[/yellow]"
+        console.print(
+            f"\n[dim]{result.total_iterations} step(s) | "
+            f"{result.total_tool_calls} tool call(s) | "
+            f"{result.files_read.__len__()} file(s) read | "
+            f"{elapsed:.1f}s | {status}[/dim]"
+        )
+
+    _run(_run_agent())
+
+
+# ---------------------------------------------------------------------------
 # nvh voice — speak your question, hear the answer
 # ---------------------------------------------------------------------------
 
