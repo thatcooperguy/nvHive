@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import glob as globmod
 import os
+import pathlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -76,7 +77,13 @@ class ToolRegistry:
         return "\n".join(lines)
 
     async def execute(self, tool_name: str, arguments: dict) -> ToolResult:
-        """Execute a tool by name with given arguments."""
+        """Execute a tool by name with given arguments.
+
+        Guardrails are checked before execution and cannot be bypassed
+        by --yes or auto_approve_safe. If a guardrail fires, the tool
+        call is rejected and the error is shown to the user (not fed
+        back to the LLM for retry).
+        """
         tool = self._tools.get(tool_name)
         if not tool:
             return ToolResult(
@@ -86,9 +93,58 @@ class ToolRegistry:
                 error=f"Unknown tool: {tool_name}",
             )
 
+        # ── Guardrail checks ──────────────────────────────────────────
+        try:
+            from nvh.core.agent_guardrails import (
+                GuardrailError,
+                check_command,
+                check_file_read,
+                check_path,
+                check_write_size,
+                redact_secrets,
+                truncate_output,
+            )
+
+            workspace = pathlib.Path(self.workspace)
+
+            if tool_name == "shell" or tool_name == "run_code":
+                cmd = arguments.get("command", "")
+                check_command(cmd)
+
+            if tool_name == "read_file":
+                path = arguments.get("path", "")
+                check_file_read(path)
+                check_path(self._resolve_path(path), workspace)
+
+            if tool_name == "write_file":
+                path = arguments.get("path", "")
+                content = arguments.get("content", "")
+                check_path(self._resolve_path(path), workspace)
+                check_write_size(content, path)
+
+        except GuardrailError as e:
+            return ToolResult(
+                tool_name=tool_name,
+                success=False,
+                output="",
+                error=f"GUARDRAIL: {e}",
+            )
+        except ImportError:
+            pass  # guardrails module not available — proceed without
+
         try:
             result = await tool.handler(**arguments)
-            return ToolResult(tool_name=tool_name, success=True, output=str(result))
+            output = str(result)
+
+            # Redact any secrets from the output before it goes back
+            # to the LLM context
+            try:
+                output = redact_secrets(output)
+                output = truncate_output(output)
+            except Exception:
+                pass
+
+            return ToolResult(tool_name=tool_name, success=True, output=output)
         except Exception as e:
             return ToolResult(tool_name=tool_name, success=False, output="", error=str(e))
 
