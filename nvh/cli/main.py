@@ -9079,6 +9079,159 @@ def agent(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# nvh review — AI code review (beta)
+# ---------------------------------------------------------------------------
+
+@app.command()
+def review(
+    source: str = typer.Argument("staged", help="What to review: staged, HEAD~N..HEAD, or PR number"),
+    tier: str | None = typer.Option(None, "--tier", help="Force GPU tier: 0-5"),
+    mode: str = typer.Option("auto", "--mode", help="Model mode: auto, single, multi"),
+    working_dir: str = typer.Option(".", "-d", "--dir", help="Working directory"),
+    profile: str | None = typer.Option(None, "--profile", help="Config profile"),
+):
+    """[beta] AI-powered code review with multi-model cross-verification.
+
+    Reviews code changes using one or more LLM models. In multi-model mode,
+    two different architectures review independently — catching bugs that
+    self-review misses.
+
+    Examples:
+
+      nvh review                          # review staged changes
+      nvh review HEAD~3..HEAD             # review last 3 commits
+      nvh review 42                       # review GitHub PR #42
+      nvh review --mode multi             # two models review independently
+    """
+    from pathlib import Path as _Path
+
+    from nvh.config.settings import load_config
+    from nvh.core.agentic import (
+        AgentMode,
+        AgentTier,
+        auto_detect_config,
+        build_agent_config,
+    )
+    from nvh.core.engine import Engine
+
+    async def _run_review():
+        config = load_config(profile=profile)
+        engine = Engine(config=config)
+        await engine.initialize()
+
+        mode_enum = {"auto": AgentMode.AUTO, "single": AgentMode.SINGLE, "multi": AgentMode.MULTI}.get(mode, AgentMode.AUTO)
+
+        if tier is not None:
+            tier_map = {str(i): t for i, t in enumerate([AgentTier.TIER_0, AgentTier.TIER_1, AgentTier.TIER_2, AgentTier.TIER_3, AgentTier.TIER_4, AgentTier.TIER_5])}
+            agent_config = build_agent_config(tier_map.get(tier, AgentTier.TIER_0), registry=engine.registry, mode=mode_enum)
+        else:
+            agent_config = auto_detect_config(engine, mode=mode_enum)
+
+        work_path = _Path(working_dir).resolve()
+
+        try:
+            from nvh.core.agent_review import review_changes
+            result = await review_changes(engine, agent_config, work_path, source)
+        except ImportError:
+            console.print("[red]Code review module not available.[/red]")
+            raise typer.Exit(1)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+
+        # Display results
+        console.print()
+        status = "[green]Approved[/green]" if result.approved else "[yellow]Changes requested[/yellow]"
+        console.print(Panel(
+            f"[bold]Review:[/bold] {status}\n"
+            f"[bold]Summary:[/bold] {result.summary}\n"
+            f"[bold]Findings:[/bold] {len(result.findings)}\n"
+            f"[bold]Models:[/bold] {', '.join(result.reviewer_models)}",
+            title="[bold #76B900]Code Review (beta)[/bold #76B900]",
+            border_style="#76B900",
+        ))
+
+        for finding in result.findings:
+            sev_color = {"high": "red", "medium": "yellow", "low": "cyan", "info": "dim"}.get(finding.severity, "white")
+            loc = f"{finding.file}:{finding.line}" if finding.line else finding.file
+            console.print(f"\n  [{sev_color}]{finding.severity.upper()}[/{sev_color}] [{sev_color}]{finding.category}[/{sev_color}] at {loc}")
+            console.print(f"    {finding.issue}")
+            if finding.suggestion:
+                console.print(f"    [dim]Fix: {finding.suggestion}[/dim]")
+
+        console.print(f"\n[dim]{len(result.findings)} finding(s) | {result.duration_ms}ms[/dim]")
+
+    _run(_run_review())
+
+
+# ---------------------------------------------------------------------------
+# nvh test-gen — AI test generation (beta)
+# ---------------------------------------------------------------------------
+
+@app.command("test-gen")
+def test_gen(
+    target: str = typer.Argument(..., help="File path, --coverage-gaps, or --for-pr"),
+    tier: str | None = typer.Option(None, "--tier", help="Force GPU tier: 0-5"),
+    working_dir: str = typer.Option(".", "-d", "--dir", help="Working directory"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip write confirmations"),
+    profile: str | None = typer.Option(None, "--profile", help="Config profile"),
+):
+    """[beta] AI-powered test generation with automatic verification.
+
+    Reads source code, identifies untested paths, generates pytest tests,
+    runs them, and iterates until they pass. Uses quality gates to ensure
+    the generated tests actually work.
+
+    Examples:
+
+      nvh test-gen nvh/core/council.py            # tests for a specific file
+      nvh test-gen --coverage-gaps                 # find and fill coverage gaps
+      nvh test-gen nvh/api/server.py -y            # auto-approve test writes
+    """
+    from pathlib import Path as _Path
+
+    from nvh.config.settings import load_config
+    from nvh.core.agentic import auto_detect_config
+    from nvh.core.engine import Engine
+
+    async def _run_testgen():
+        config = load_config(profile=profile)
+        engine = Engine(config=config)
+        await engine.initialize()
+        agent_config = auto_detect_config(engine)
+        work_path = _Path(working_dir).resolve()
+
+        try:
+            from nvh.core.agent_testgen import generate_tests
+        except ImportError:
+            console.print("[red]Test generation module not available.[/red]")
+            raise typer.Exit(1)
+
+        console.print(Panel(
+            f"[bold]Target:[/bold] {target}\n"
+            f"[bold]Tier:[/bold] {agent_config.tier.value}\n"
+            f"[bold]Worker:[/bold] {agent_config.worker_model or 'engine default'}",
+            title="[bold #76B900]Test Generation (beta)[/bold #76B900]",
+            border_style="#76B900",
+            expand=False,
+        ))
+
+        result = await generate_tests(engine, agent_config, work_path, target)
+
+        # Display results
+        if result.test_file:
+            console.print(f"\n[green]Tests written to:[/green] {result.test_file}")
+        console.print(f"[bold]Generated:[/bold] {result.tests_generated} test(s)")
+        console.print(f"[bold]Passing:[/bold] [green]{result.tests_passing}[/green] | [bold]Failing:[/bold] [red]{result.tests_failing}[/red]")
+        if result.coverage_after is not None:
+            console.print(f"[bold]Coverage:[/bold] {result.coverage_before or 0:.0f}% → {result.coverage_after:.0f}%")
+        console.print(f"[dim]{result.duration_ms}ms | model: {result.model_used}[/dim]")
+
+    _run(_run_testgen())
+
+
+# ---------------------------------------------------------------------------
 # nvh voice — speak your question, hear the answer
 # ---------------------------------------------------------------------------
 

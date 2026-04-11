@@ -2,7 +2,7 @@
 
 **Multi-provider LLM routing that learns from every query.**
 
-![version](https://img.shields.io/badge/version-0.11.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-490%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-31%25-yellowgreen)
+![version](https://img.shields.io/badge/version-0.12.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-490%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-31%25-yellowgreen)
 
 ## Why nvHive
 
@@ -65,6 +65,26 @@ nvh agent "task" --no-quality        # skip lint/syntax gates
 **Multi-model mode** (Tier 4-5, or `--mode multi` on Tier 3): a DIFFERENT model reviews the coder's output, catching bugs the coder's architecture has blind spots for. Cross-model verification is measurably better than self-review.
 
 **Quality gates**: after the agent modifies files, ruff lint + syntax checks run automatically. If they fail, the agent gets the errors and fixes them in a feedback loop.
+
+### Code Review (`nvh review`)
+
+```bash
+nvh review                     # review staged changes
+nvh review HEAD~3..HEAD        # review last 3 commits
+nvh review 42                  # review GitHub PR #42
+nvh review --mode multi        # two models review independently
+```
+
+Multi-model code review: two different LLM architectures review independently, then findings are synthesized. Catches bugs that self-review and single-model review miss.
+
+### Test Generation (`nvh test-gen`)
+
+```bash
+nvh test-gen nvh/core/council.py     # generate tests for a file
+nvh test-gen --coverage-gaps         # find and fill coverage gaps
+```
+
+Reads your code, identifies untested paths, generates pytest tests, runs them, and iterates until they pass. The agent that improves itself — it writes the tests that verify its own future changes.
 
 ---
 
