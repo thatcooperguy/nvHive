@@ -34,8 +34,8 @@ clear
 
 echo ""
 echo "  ╔══════════════════════════════════════════╗"
-echo "  ║   nvHive v0.5.0 — Terminal Demo          ║"
-echo "  ║   Multi-provider LLM routing              ║"
+echo "  ║   nvHive v0.12.0 — Terminal Demo         ║"
+echo "  ║   Multi-LLM Platform                     ║"
 echo "  ╚══════════════════════════════════════════╝"
 echo ""
 pause 2
