@@ -125,17 +125,28 @@ console = Console(legacy_windows=False) if sys.platform == "win32" else Console(
 
 
 async def _smart_default(prompt: str):
-    """Smart default handler — detects actions vs questions, routes accordingly.
+    """Smart default handler — the universal nvh entry point.
+
+    Detects intent from the prompt and automatically picks the best
+    strategy based on what advisors are available. Users never need
+    to pick a mode — nvhive assembles the right team for each task.
 
     Flow:
-    1. Check if the prompt is a SYSTEM ACTION (install, open, find, kill, etc.)
-       → If yes, execute the action directly via tools (no LLM needed)
-    2. If it's a QUESTION, route based on profile mode setting
-       → ask, convene, poll, or throwdown
+    1. SYSTEM ACTION? (install, open, find, kill) → execute directly
+    2. CODING TASK? (fix, refactor, add, implement, write) → agent mode
+    3. CODE REVIEW? (review, check, audit) → review mode
+    4. TEST REQUEST? (test, add tests, coverage) → test-gen mode
+    5. COMPLEX QUESTION + 3+ healthy advisors? → council (auto-team)
+    6. SIMPLE QUESTION → single best advisor
+
+    In performant mode (default), the number of healthy advisors drives
+    the sophistication: more advisors = multi-model verification,
+    council synthesis, cross-architecture review. In cost mode, stick
+    to the cheapest healthy provider.
     """
     from nvh.config.settings import load_config
 
-    # --- Step 1: Check if this is a system action, not a question ---
+    # --- Step 1: System actions (no LLM needed) ---
     from nvh.core.action_detector import detect_action
     from nvh.core.engine import Engine
     action = detect_action(prompt)
@@ -143,23 +154,126 @@ async def _smart_default(prompt: str):
         await _execute_action(action)
         return
 
-    # --- Step 2: It's a question — route to LLM ---
+    # --- Step 2: Initialize engine and detect what's available ---
     config = load_config()
     engine = Engine(config=config)
     await engine.initialize()
 
-    # Determine default mode from config (fallback to "ask")
-    default_mode = getattr(config.defaults, "mode", "ask")
+    healthy_advisors = [
+        p for p in engine.registry.list_enabled()
+        if engine.rate_manager.get_health_score(p) >= 0.2
+    ]
+    num_advisors = len(healthy_advisors)
+    optimize = getattr(config.defaults, "mode", "performant")
+    is_performant = optimize != "cost"
 
-    if default_mode == "convene":
-        console.print("[dim][convene → auto-agents][/dim]\n")
+    # --- Step 3: Detect intent from the prompt ---
+    intent = _classify_intent(prompt)
+
+    # --- Step 4: Route to the right mode ---
+    if intent == "coding":
+        console.print(f"[dim][agent → coding task detected | {num_advisors} advisor(s)][/dim]\n")
+        try:
+            from pathlib import Path as _Path
+
+            from nvh.core.agent_loop import AgentStep
+            from nvh.core.agentic import AgentMode, auto_detect_config, run_coding_agent
+
+            mode = AgentMode.MULTI if (is_performant and num_advisors >= 2) else AgentMode.SINGLE
+            agent_config = auto_detect_config(engine, mode=mode)
+            agent_config.quality_gates = True
+
+            def on_step(step: AgentStep) -> None:
+                thought = step.thought[:100].rstrip() if step.thought else ""
+                label = f"[bold]Step {step.iteration}[/bold]"
+                if thought and thought != "Task complete":
+                    label += f": {thought}"
+                console.print(label)
+                for call in step.tool_calls:
+                    args_str = ", ".join(f"{k}={repr(v)[:50]}" for k, v in call.get("args", {}).items())
+                    console.print(f"  [dim]tool:[/dim] [cyan]{call['tool']}[/cyan]({args_str})")
+                for result in step.tool_results:
+                    if result.success:
+                        preview = result.output[:80].replace("\n", " ").rstrip()
+                        console.print(f"  [green]ok[/green] [dim]{preview}{'...' if len(result.output) > 80 else ''}[/dim]")
+                    else:
+                        console.print(f"  [red]err[/red] [dim]{result.error[:80]}[/dim]")
+                console.print()
+
+            result = await run_coding_agent(
+                task=prompt,
+                engine=engine,
+                config=agent_config,
+                working_dir=_Path(".").resolve(),
+                on_step=on_step,
+            )
+            if result.error:
+                console.print(f"[red]{result.error}[/red]")
+            else:
+                console.print(Panel(result.final_summary or "(completed)", title="[bold green]Result[/bold green]", border_style="green"))
+                if result.files_modified or result.files_created:
+                    for f in result.files_modified:
+                        console.print(f"  [yellow]M[/yellow] {f}")
+                    for f in result.files_created:
+                        console.print(f"  [green]A[/green] {f}")
+            console.print(f"\n[dim]{result.total_iterations} step(s) | {result.total_tool_calls} tool(s) | {result.duration_ms}ms[/dim]")
+        except Exception as e:
+            console.print(_format_cli_error(e))
+
+    elif intent == "review":
+        console.print(f"[dim][review → {num_advisors} advisor(s)][/dim]\n")
+        try:
+            from pathlib import Path as _Path
+
+            from nvh.core.agent_review import review_changes
+            from nvh.core.agentic import AgentMode, auto_detect_config
+
+            mode = AgentMode.MULTI if (is_performant and num_advisors >= 2) else AgentMode.SINGLE
+            agent_config = auto_detect_config(engine, mode=mode)
+            result = await review_changes(engine, agent_config, _Path(".").resolve(), "staged")
+
+            status = "[green]Approved[/green]" if result.approved else "[yellow]Changes requested[/yellow]"
+            console.print(f"[bold]{status}[/bold] — {result.summary}\n")
+            for finding in result.findings:
+                sev_color = {"high": "red", "medium": "yellow", "low": "cyan", "info": "dim"}.get(finding.severity, "white")
+                loc = f"{finding.file}:{finding.line}" if finding.line else finding.file
+                console.print(f"  [{sev_color}]{finding.severity.upper()}[/{sev_color}] {finding.category} at {loc}")
+                console.print(f"    {finding.issue}")
+            console.print(f"\n[dim]{len(result.findings)} finding(s) | {', '.join(result.reviewer_models)} | {result.duration_ms}ms[/dim]")
+        except Exception as e:
+            console.print(_format_cli_error(e))
+
+    elif intent == "testgen":
+        console.print(f"[dim][test-gen → {num_advisors} advisor(s)][/dim]\n")
+        try:
+            from pathlib import Path as _Path
+
+            from nvh.core.agent_testgen import generate_tests
+            from nvh.core.agentic import auto_detect_config
+
+            agent_config = auto_detect_config(engine)
+            # Extract target file from the prompt if mentioned
+            import re
+            file_match = re.search(r'(\S+\.py)', prompt)
+            target = file_match.group(1) if file_match else "--coverage-gaps"
+
+            result = await generate_tests(engine, agent_config, _Path(".").resolve(), target)
+            if result.test_file:
+                console.print(f"[green]Tests written to:[/green] {result.test_file}")
+            console.print(f"[bold]Generated:[/bold] {result.tests_generated} | [green]Passing:[/green] {result.tests_passing} | [red]Failing:[/red] {result.tests_failing}")
+            console.print(f"\n[dim]{result.duration_ms}ms | model: {result.model_used}[/dim]")
+        except Exception as e:
+            console.print(_format_cli_error(e))
+
+    elif intent == "complex" and is_performant and num_advisors >= 3:
+        # Complex question + enough advisors → council automatically
+        console.print(f"[dim][council → {num_advisors} advisors, auto-team][/dim]\n")
         try:
             result = await engine.run_council(
                 prompt=prompt,
                 auto_agents=True,
                 synthesize=True,
             )
-            # Display synthesis
             if result.synthesis:
                 console.print(result.synthesis.content)
                 confidence_part = ""
@@ -181,63 +295,12 @@ async def _smart_default(prompt: str):
         except Exception as e:
             console.print(_format_cli_error(e))
 
-    elif default_mode == "poll":
-        console.print("[dim][poll → all advisors][/dim]\n")
-        try:
-            results = await engine.compare(prompt=prompt)
-            for pname, resp in results.items():
-                header = f"{pname}/{resp.model}  {resp.latency_ms}ms  ${resp.cost_usd:.4f}"
-                console.print(Panel(resp.content, title=header, border_style="cyan"))
-        except Exception as e:
-            console.print(_format_cli_error(e))
-
-    elif default_mode == "throwdown":
-        console.print("[dim][throwdown → two-pass deep analysis][/dim]\n")
-        try:
-            pass1 = await engine.run_council(
-                prompt=prompt,
-                auto_agents=True,
-                synthesize=True,
-            )
-            critique_prompt = (
-                f"Original question: {prompt}\n\n"
-                f"A council of AI experts produced this initial analysis:\n\n"
-                f"{pass1.synthesis.content if pass1.synthesis else 'No synthesis available'}\n\n"
-                "Now critique this analysis. What did the experts miss? "
-                "What assumptions are wrong? Provide a refined, improved answer."
-            )
-            pass2 = await engine.run_council(
-                prompt=critique_prompt,
-                auto_agents=True,
-                synthesize=True,
-            )
-            final_prompt = (
-                f"Original question: {prompt}\n\n"
-                f"Pass 1 analysis:\n{pass1.synthesis.content if pass1.synthesis else ''}\n\n"
-                f"Pass 2 critique:\n{pass2.synthesis.content if pass2.synthesis else ''}\n\n"
-                "Produce a definitive final answer integrating the best insights from both passes."
-            )
-            final = await engine.query(prompt=final_prompt, stream=False)
-            console.print(Panel(
-                final.content,
-                title="[bold green]THROWDOWN RESULT[/bold green]",
-                border_style="green",
-            ))
-            total_cost = (
-                pass1.total_cost_usd
-                + pass2.total_cost_usd
-                + (final.cost_usd if final else Decimal("0"))
-            )
-            console.print(f"\n[dim]Total cost: ${total_cost:.4f}[/dim]")
-        except Exception as e:
-            console.print(_format_cli_error(e))
-
     else:
-        # Default: ask — smart route to best advisor
+        # Simple question or cost mode → single best advisor
         try:
-            # Get routing decision first so we can show the mode indicator
             decision = engine.router.route(prompt)
-            console.print(f"[dim][ask → {decision.provider}/{decision.model}][/dim]\n")
+            mode_label = "ask" if num_advisors <= 2 else "ask (simple)"
+            console.print(f"[dim][{mode_label} → {decision.provider}/{decision.model}][/dim]\n")
             resp = await engine.query(prompt=prompt, stream=False)
             console.print(resp.content)
             meta_parts = [
@@ -252,6 +315,71 @@ async def _smart_default(prompt: str):
             console.print(f"\n[dim]{' | '.join(meta_parts)}[/dim]")
         except Exception as e:
             console.print(_format_cli_error(e))
+
+
+def _classify_intent(prompt: str) -> str:
+    """Classify the user's prompt into an intent category.
+
+    Returns one of: "coding", "review", "testgen", "complex", "simple"
+
+    This is deliberately keyword-based for speed and reliability.
+    The TF-IDF classifier in action_detector.py handles system actions;
+    this handles LLM-destined prompts.
+    """
+    p = prompt.lower().strip()
+
+    # Coding task indicators — the user wants code changed
+    coding_patterns = [
+        r'\b(fix|refactor|implement|add|create|write|build|update|change|modify|remove|delete|rename|move|extract|inline|optimize)\b.*(code|function|method|class|file|module|endpoint|api|bug|error|test|feature)',
+        r'\b(fix|refactor|implement|add|create|build)\b.*\.(py|js|ts|tsx|jsx|go|rs|java|cpp|c|rb|sh)\b',
+        r'\bfix\s+(the|this|my|a)\b',
+        r'\badd\s+(a|the)?\s*(new\s+)?(endpoint|route|function|method|class|test|feature)\b',
+        r'\brefactor\b',
+        r'\bimplement\b',
+    ]
+
+    # Review indicators
+    review_patterns = [
+        r'\breview\b.*\b(change|code|pr|pull|commit|diff|staged)\b',
+        r'\breview\s+(my|the|this)\b',
+        r'\bcheck\s+(my|the|this)\s+(code|changes|pr|diff)\b',
+        r'\baudit\s+(the|this|my)\s*(code|security|codebase)\b',
+    ]
+
+    # Test generation indicators
+    testgen_patterns = [
+        r'\b(add|write|create|generate)\s+(unit\s+)?tests?\b',
+        r'\btest\s+(coverage|generation|gen)\b',
+        r'\bcoverage\s+gaps?\b',
+        r'\btest.gen\b',
+    ]
+
+    # Complex question indicators (benefit from council)
+    complex_patterns = [
+        r'\b(compare|vs|versus|trade.?off|pros?\s+and\s+cons?|should\s+(we|i)|which\s+is\s+better|debate|evaluate|analyze|architect)\b',
+        r'\b(design|architecture|strategy|approach|recommend|suggest)\b.*\b(for|to|about)\b',
+        r'\bexplain.*(how|why|when).*\b(work|different|compare|scale|perform)\b',
+    ]
+
+    import re
+
+    for pattern in coding_patterns:
+        if re.search(pattern, p):
+            return "coding"
+
+    for pattern in review_patterns:
+        if re.search(pattern, p):
+            return "review"
+
+    for pattern in testgen_patterns:
+        if re.search(pattern, p):
+            return "testgen"
+
+    for pattern in complex_patterns:
+        if re.search(pattern, p):
+            return "complex"
+
+    return "simple"
 
 async def _execute_action(action):
     """Execute a detected system action directly — no LLM needed."""

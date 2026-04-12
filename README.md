@@ -1,19 +1,27 @@
 # nvHive
 
-**Multi-LLM platform for agentic coding, intelligent routing, and multi-model consensus.**
+**One command. Every AI model you have. Automatically assembled into the best team for each task.**
 
 ![version](https://img.shields.io/badge/version-0.12.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-500%2B%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-31%25-yellowgreen) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 ## Why nvHive
 
-One model, one provider, one perspective — that's how most AI tools work. nvHive runs **multiple models across multiple providers** and makes them collaborate: routing queries to the best available model, running multi-model code reviews, generating tests that verify themselves, and executing coding tasks with plan → execute → verify discipline.
+```bash
+nvh "What is a binary search tree?"              # → answers (single best advisor)
+nvh "Fix the timeout bug in council.py"          # → auto-detects coding task → agent mode
+nvh "Review my staged changes"                   # → auto-detects review → multi-model review
+nvh "Add tests for the auth module"              # → auto-detects test request → test generation
+nvh "Should we use Redis or Postgres?"           # → auto-detects debate → council (3+ advisors)
+```
+
+**You type one command. nvHive figures out the rest.** It detects what you're asking for, checks which advisors are healthy, and assembles the best team for the task — automatically. More advisors connected = smarter behavior, with zero configuration.
 
 **What makes it different:**
 
-- **Agentic coding.** An AI agent that plans changes, writes code, runs quality gates, and iterates until it passes — all scaling from a 16 GB laptop GPU to a 128 GB DGX Spark.
-- **Multi-model verification.** Two different LLM architectures review independently. Different training data → different blind spots → more bugs caught.
-- **Learns from every query.** The router measures real provider performance. By 20 queries it's routing based on data, not guesses.
-- **23 providers, 6 GPU tiers.** Free-tier cloud, premium cloud, and local GPU inference. Automatically picks the cheapest option that meets quality requirements.
+- **Automatic orchestration.** nvHive doesn't just route to one model — it assembles the right team. Coding tasks get a planner + coder + reviewer. Complex questions get a council. Simple questions get the fastest advisor. All automatic.
+- **Task-aware advisor selection.** Each provider has strengths. Coding tasks go to the best coders. Reasoning goes to the best reasoners. Reviews use different architectures for diversity. The learning engine tracks real performance per provider per task type.
+- **Scales with what you have.** 1 provider? Single-model answers. 3+ providers? Council automatically on complex questions, multi-model verification on code. Local GPU? Free inference, used alongside cloud. DGX Spark? Three 70B models running in parallel, fully local.
+- **Performant by default.** Uses all available advisors to maximize quality — within reason. Simple questions don't trigger council. Budget limits are always enforced. Switch to cost mode (`nvh config set defaults.mode cost`) to minimize spend.
 - **4-layer safety guardrails.** Command blocklist, filesystem boundary enforcement, secrets redaction, and resource limits — the agent can't `rm -rf /` even with `--yes`.
 
 <p align="center">
