@@ -39,15 +39,13 @@ jobs:
       - name: Test
         run: python -m pytest tests/ -v --tb=short
       - name: Coverage (gate)
-        # Coverage gate is enforced on Linux + 3.12 only so platform
-        # variance in skipped tests doesn't flap the threshold.
-        # History: 0.7.0 = 17%, 0.8.0 = 28%, 0.9.0 = 30%. Measured
-        # baseline is 31% so there's a 1-point buffer for noise.
-        # Ratchet up 1-2% per release as new tests land. The gate
-        # exists to prevent regressions, not to demand a number we
-        # haven't earned yet.
+        # Coverage gate on business logic (CLI presentation excluded).
+        # History: 0.7.0=17%, 0.8.0=28%, 0.9.0=30%, 0.14.0=51%.
+        # CLI layer (main.py, repl.py, completions.py, conversations.py)
+        # is excluded via [tool.coverage.run] omit in pyproject.toml —
+        # those are smoke-tested via subprocess, not unit-tested.
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        run: python -m pytest tests/ --cov=nvh --cov-report=xml --cov-report=term-missing --cov-fail-under=30
+        run: python -m pytest tests/ --cov=nvh --cov-report=xml --cov-report=term-missing --cov-fail-under=49
       - name: Upload coverage to Codecov
         # Codecov gives PR comments showing coverage delta, plus a
         # trend graph in the project dashboard. Token-less upload

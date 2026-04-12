@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nvhive"
-version = "0.13.1"
+version = "0.14.0"
 description = "NVHive — Multi-LLM orchestration platform with intelligent routing, hive consensus, and auto-agent generation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -100,6 +100,19 @@ filterwarnings = [
     "ignore:'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated:DeprecationWarning",
     # passlib imports deprecated crypt module — upstream issue, fixed in newer passlib.
     "ignore:'crypt' is deprecated:DeprecationWarning",
+]
+
+[tool.coverage.run]
+# Exclude CLI presentation layer from coverage metrics. These are
+# Typer/Rich formatting wrappers that are smoke-tested via subprocess
+# in test_cli_e2e.py but don't contribute meaningful coverage numbers
+# (5000+ lines of print formatting at 6% drags the whole metric down).
+# Business logic coverage is what matters for production reliability.
+omit = [
+    "nvh/cli/main.py",
+    "nvh/cli/repl.py",
+    "nvh/cli/completions.py",
+    "nvh/cli/conversations.py",
 ]
 
 [tool.mypy]
