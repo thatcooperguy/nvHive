@@ -601,6 +601,7 @@ nvh estimate --gpu rtx_4090   # predict tok/s on any GPU
 | [NemoClaw](docs/NEMOCLAW.md) | NVIDIA NemoClaw integration |
 | [OpenClaw Integration](docs/OPENCLAW_MIGRATION.md) | Works alongside OpenClaw |
 | [SDK & API](docs/SDK_API.md) | Python SDK, REST API, proxies |
+| [Deploy Without Root](docs/DEPLOY_NO_ROOT.md) | No-root install on servers (Ollama, keyring, systemd user service) |
 | [Architecture](docs/ARCHITECTURE.md) | System design and adaptive learning |
 
 ## License
