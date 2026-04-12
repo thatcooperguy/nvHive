@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from decimal import Decimal
 from pathlib import Path
@@ -269,46 +268,42 @@ class TestToolRegistry:
         assert "read_file" in desc
         assert len(desc) > 50
 
-    def test_read_file(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_read_file(self, tmp_path: Path) -> None:
         (tmp_path / "hello.txt").write_text("world")
         reg = ToolRegistry(workspace=str(tmp_path), include_system=False)
         tool = reg.get("read_file")
         assert tool is not None
-        result = asyncio.get_event_loop().run_until_complete(
-            tool.handler(path="hello.txt"),
-        )
+        result = await tool.handler(path="hello.txt")
         assert result == "world"
 
-    def test_write_file(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_write_file(self, tmp_path: Path) -> None:
         reg = ToolRegistry(workspace=str(tmp_path), include_system=False)
         tool = reg.get("write_file")
         assert tool is not None
-        result = asyncio.get_event_loop().run_until_complete(
-            tool.handler(path="out.txt", content="data"),
-        )
+        result = await tool.handler(path="out.txt", content="data")
         assert "4 chars" in result
         assert (tmp_path / "out.txt").read_text() == "data"
 
-    def test_list_files(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_list_files(self, tmp_path: Path) -> None:
         (tmp_path / "a.py").write_text("x")
         (tmp_path / "b.py").write_text("y")
         reg = ToolRegistry(workspace=str(tmp_path), include_system=False)
         tool = reg.get("list_files")
         assert tool is not None
-        result = asyncio.get_event_loop().run_until_complete(
-            tool.handler(pattern="*.py"),
-        )
+        result = await tool.handler(pattern="*.py")
         assert "a.py" in result
         assert "b.py" in result
 
-    def test_search_files(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_search_files(self, tmp_path: Path) -> None:
         (tmp_path / "code.py").write_text("def hello_world():\n    pass\n")
         reg = ToolRegistry(workspace=str(tmp_path), include_system=False)
         tool = reg.get("search_files")
         assert tool is not None
-        result = asyncio.get_event_loop().run_until_complete(
-            tool.handler(query="hello_world", pattern="*.py"),
-        )
+        result = await tool.handler(query="hello_world", pattern="*.py")
         assert "hello_world" in result
 
     def test_path_traversal_blocked(self, tmp_path: Path) -> None:
@@ -320,10 +315,9 @@ class TestToolRegistry:
         reg = ToolRegistry(workspace=str(tmp_path), include_system=False)
         assert reg.get("nonexistent") is None
 
-    def test_execute_unknown_tool(self, tmp_path: Path) -> None:
+    @pytest.mark.asyncio
+    async def test_execute_unknown_tool(self, tmp_path: Path) -> None:
         reg = ToolRegistry(workspace=str(tmp_path), include_system=False)
-        result = asyncio.get_event_loop().run_until_complete(
-            reg.execute("no_such_tool", {}),
-        )
+        result = await reg.execute("no_such_tool", {})
         assert not result.success
         assert "Unknown tool" in result.error
