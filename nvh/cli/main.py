@@ -328,15 +328,22 @@ def _classify_intent(prompt: str) -> str:
     """
     p = prompt.lower().strip()
 
-    # Coding task indicators — the user wants code changed
-    coding_patterns = [
-        r'\b(fix|refactor|implement|add|create|write|build|update|change|modify|remove|delete|rename|move|extract|inline|optimize)\b.*(code|function|method|class|file|module|endpoint|api|bug|error|test|feature)',
-        r'\b(fix|refactor|implement|add|create|build)\b.*\.(py|js|ts|tsx|jsx|go|rs|java|cpp|c|rb|sh)\b',
-        r'\bfix\s+(the|this|my|a)\b',
-        r'\badd\s+(a|the)?\s*(new\s+)?(endpoint|route|function|method|class|test|feature)\b',
-        r'\brefactor\b',
-        r'\bimplement\b',
+    import re
+
+    # ORDER MATTERS: more specific intents are checked first so
+    # "add tests" matches testgen (specific) not coding (generic).
+
+    # Test generation — checked FIRST because "add tests" would
+    # otherwise match the generic coding pattern "add + noun"
+    testgen_patterns = [
+        r'\b(add|write|create|generate)\s+(unit\s+)?tests?\b',
+        r'\btest\s+(coverage|generation|gen)\b',
+        r'\bcoverage\s+gaps?\b',
+        r'\btest.gen\b',
     ]
+    for pattern in testgen_patterns:
+        if re.search(pattern, p):
+            return "testgen"
 
     # Review indicators
     review_patterns = [
@@ -345,36 +352,29 @@ def _classify_intent(prompt: str) -> str:
         r'\bcheck\s+(my|the|this)\s+(code|changes|pr|diff)\b',
         r'\baudit\s+(the|this|my)\s*(code|security|codebase)\b',
     ]
-
-    # Test generation indicators
-    testgen_patterns = [
-        r'\b(add|write|create|generate)\s+(unit\s+)?tests?\b',
-        r'\btest\s+(coverage|generation|gen)\b',
-        r'\bcoverage\s+gaps?\b',
-        r'\btest.gen\b',
-    ]
-
-    # Complex question indicators (benefit from council)
-    complex_patterns = [
-        r'\b(compare|vs|versus|trade.?off|pros?\s+and\s+cons?|should\s+(we|i)|which\s+is\s+better|debate|evaluate|analyze|architect)\b',
-        r'\b(design|architecture|strategy|approach|recommend|suggest)\b.*\b(for|to|about)\b',
-        r'\bexplain.*(how|why|when).*\b(work|different|compare|scale|perform)\b',
-    ]
-
-    import re
-
-    for pattern in coding_patterns:
-        if re.search(pattern, p):
-            return "coding"
-
     for pattern in review_patterns:
         if re.search(pattern, p):
             return "review"
 
-    for pattern in testgen_patterns:
+    # Coding task — the user wants code changed
+    coding_patterns = [
+        r'\b(fix|refactor|implement|add|create|write|build|update|change|modify|remove|delete|rename|move|extract|inline|optimize)\b.*(code|function|method|class|file|module|endpoint|api|bug|error|feature|provider|parser|field|handler|config|route|component|service|model|schema|migration|script|command|tool|plugin|hook|middleware|decorator|fixture|helper|util|wrapper|adapter|client|server|view|page|template|style)',
+        r'\b(fix|refactor|implement|add|create|build|update|remove)\b.*\.(py|js|ts|tsx|jsx|go|rs|java|cpp|c|rb|sh)\b',
+        r'\bfix\s+(the|this|my|a)\b',
+        r'\badd\s+(a|the)?\s*(new\s+)?(endpoint|route|function|method|class|feature|provider|handler|middleware)\b',
+        r'\brefactor\b',
+        r'\bimplement\b',
+    ]
+    for pattern in coding_patterns:
         if re.search(pattern, p):
-            return "testgen"
+            return "coding"
 
+    # Complex question indicators (benefit from council)
+    complex_patterns = [
+        r'\b(compare|vs|versus|trade.?off|pros?\s+and\s+cons?|should\s+(we|i)|which\s+is\s+better|debate|evaluate|analyze|architect)\b',
+        r'\b(design|architecture|strategy|approach|recommend|suggest)\b.*\b(for|to|about|a|the|scalab|system|service|platform)\b',
+        r'\bexplain.*(how|why|when).*\b(work|different|compare|scale|perform)\b',
+    ]
     for pattern in complex_patterns:
         if re.search(pattern, p):
             return "complex"
