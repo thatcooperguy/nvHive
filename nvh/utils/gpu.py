@@ -822,7 +822,7 @@ def _parse_compute_capability(gpu_name: str) -> tuple[int, int]:
         return (9, 0)
 
     # Ada Lovelace (CC 8.9)
-    if any(x in name for x in ["RTX 40", "RTX 6000 ADA", "RTX A6000 ADA", "L4", "L40"]):
+    if any(x in name for x in ["RTX 40", "RTX 6000 ADA", "RTX A6000 ADA", "RTX 6000 PRO", "L4", "L40"]):
         return (8, 9)
 
     # Ampere (CC 8.0/8.6)
