@@ -9442,8 +9442,6 @@ def workspace(
         console.print("[red]Workspace module not available.[/red]")
         raise typer.Exit(1)
 
-    ws_path = _Path(".nvhive")
-
     if action == "add" and paths:
         ws = create_workspace([_Path(p).resolve() for p in paths], name=name)
         save_workspace(ws, _Path("."))
