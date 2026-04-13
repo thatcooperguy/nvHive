@@ -33,6 +33,43 @@ class TestCodingIntent:
         "Optimize the TF-IDF classifier for speed",
         "Fix this bug in main.py",
         "Add error handling to the webhook endpoint",
+        # debug/troubleshoot/investigate
+        "Help me debug this weird issue",
+        "Debug the flaky websocket connection",
+        "Troubleshoot the auth failures in production",
+        "Investigate why memory usage keeps growing",
+        # help me + coding verb
+        "Help me fix this broken endpoint",
+        "Help me write a retry wrapper",
+        "Help me build a CLI parser",
+        # why is ... broken/failing
+        "Why is the API failing on large payloads?",
+        "Why are my tests crashing on CI?",
+        "Why does the server keep erroring out?",
+        # make ... work/faster/better
+        "Make the search endpoint faster",
+        "Make this query work with PostgreSQL",
+        "Make the parser better at handling edge cases",
+        # how do I + coding verb
+        "How do I implement pagination?",
+        "How do I connect to the Redis cluster?",
+        "How do I integrate Stripe payments?",
+        "How do I deploy to AWS Lambda?",
+        "How do I setup the dev environment?",
+        # file extensions without a verb
+        "Something is wrong with utils.py",
+        "The layout.css is all messed up",
+        "Check out routes.ts for the bug",
+        # error/exception/crash/bug context
+        "There's a TypeError exception in the handler",
+        "Getting a crash when uploading large files",
+        "Bug in the auth middleware after the refactor",
+        "Error with the database connection on startup",
+        # migrate/upgrade/convert/port
+        "Migrate the codebase from Flask to FastAPI",
+        "Upgrade the ORM to SQLAlchemy 2.0",
+        "Convert the callback API to async/await",
+        "Port the Go service to Rust",
     ])
     def test_detects_coding_tasks(self, prompt):
         assert _classify_intent(prompt) == "coding", f"Expected 'coding' for: {prompt}"
@@ -48,6 +85,16 @@ class TestReviewIntent:
         "Review the changes I just made",
         "Audit the security of this codebase",
         "Check this code for issues",
+        # look at my code/changes
+        "Look at my code and tell me if it's right",
+        "Look at this changes before I push",
+        # what do you think of this code
+        "What do you think of this code?",
+        "What do you think of my implementation?",
+        # is this code correct/safe/good
+        "Is this code correct?",
+        "Is my code safe for production?",
+        "Is this implementation good enough?",
     ])
     def test_detects_review_requests(self, prompt):
         assert _classify_intent(prompt) == "review", f"Expected 'review' for: {prompt}"
@@ -63,6 +110,13 @@ class TestTestgenIntent:
         "Create tests for the API endpoints",
         "Add test coverage for the streaming code",
         "coverage gaps",
+        # test coverage without "add"
+        "We need better test coverage",
+        # how to test this
+        "How to test this endpoint?",
+        # need tests for
+        "Need tests for the new parser",
+        "I need tests for the auth module",
     ])
     def test_detects_test_requests(self, prompt):
         assert _classify_intent(prompt) == "testgen", f"Expected 'testgen' for: {prompt}"
@@ -79,6 +133,15 @@ class TestComplexIntent:
         "Design a scalable notification system",
         "Which is better for our use case: REST or GraphQL?",
         "Recommend an architecture for real-time analytics",
+        # "what's the best way to"
+        "What's the best way to handle authentication?",
+        "What's the best approach for caching?",
+        # "how should I approach"
+        "How should I approach database sharding?",
+        "How should I structure the microservices?",
+        # Multi-part questions with "and" + "?"
+        "Should I use SQLite and how does it compare to Postgres?",
+        "What framework should I pick and what ORM goes with it?",
     ])
     def test_detects_complex_questions(self, prompt):
         assert _classify_intent(prompt) == "complex", f"Expected 'complex' for: {prompt}"

@@ -50,6 +50,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from nvh import __version__
+from nvh.config.settings import DEFAULT_CONFIG_PATH
 
 # Fix Windows legacy console (cp1252) Unicode crashes on symbols like ✓/✗.
 # Without this, Rich raises UnicodeEncodeError whenever it tries to print
@@ -275,7 +276,7 @@ async def _smart_default(prompt: str):
             personas = generate_agents(prompt, num_agents=min(num_advisors, 5))
             assignments = match_agents_to_providers(personas, engine)
             if assignments:
-                console.print(f"[dim][council → assembling expert team][/dim]\n")
+                console.print("[dim][council → assembling expert team][/dim]\n")
                 console.print(format_team_report(assignments))
                 console.print()
             else:
@@ -355,6 +356,9 @@ def _classify_intent(prompt: str) -> str:
         r'\btest\s+(coverage|generation|gen)\b',
         r'\bcoverage\s+gaps?\b',
         r'\btest.gen\b',
+        r'\btest\s+coverage\b',
+        r'\bhow\s+to\s+test\s+(this|that|it|the)\b',
+        r'\bneed\s+tests?\s+(for|on|in)\b',
     ]
     for pattern in testgen_patterns:
         if re.search(pattern, p):
@@ -366,6 +370,9 @@ def _classify_intent(prompt: str) -> str:
         r'\breview\s+(my|the|this)\b',
         r'\bcheck\s+(my|the|this)\s+(code|changes|pr|diff)\b',
         r'\baudit\s+(the|this|my)\s*(code|security|codebase)\b',
+        r'\blook\s+at\s+(my|the|this)\s+(code|changes|diff|pr|pull)\b',
+        r'\bwhat\s+do\s+you\s+think\s+of\s+(this|my|the)\s+(code|implementation|solution|approach)\b',
+        r'\bis\s+(this|my|the)\s+(code|implementation|solution)\s+(correct|safe|good|ok|secure|clean)\b',
     ]
     for pattern in review_patterns:
         if re.search(pattern, p):
@@ -379,6 +386,23 @@ def _classify_intent(prompt: str) -> str:
         r'\badd\s+(a|the)?\s*(new\s+)?(endpoint|route|function|method|class|feature|provider|handler|middleware)\b',
         r'\brefactor\b',
         r'\bimplement\b',
+        # "debug/troubleshoot/investigate" + any context
+        r'\b(debug|troubleshoot|investigate)\b.+',
+        # "help me" + coding verb
+        r'\bhelp\s+me\s+(fix|write|build|debug|implement|create|refactor|deploy|setup|set\s+up)\b',
+        # "why is ... broken/failing/crashing/erroring"
+        r'\bwhy\s+(is|are|does|do)\b.+\b(broken|failing|crashing|erroring|not\s+working)\b',
+        # "make ... work/faster/better"
+        r'\bmake\b.+\b(work|faster|better|slower|efficient)\b',
+        # "how do I" + coding verb
+        r'\bhow\s+do\s+i\s+(implement|connect|integrate|deploy|setup|set\s+up|configure|build|fix|debug)\b',
+        # File extensions mentioned even without a verb
+        r'\.\b(py|js|ts|tsx|jsx|go|rs|java|cpp|c|rb|sh|css|html|vue|svelte|kt|swift|scala|sql)\b',
+        # Error/exception/crash/bug context
+        r'\b(error|exception|crash|bug|traceback|stack\s*trace|segfault|panic)\b.*\b(in|with|when|from|on|at|after|before|during)\b',
+        r'\b(in|with|when|from|on|at)\b.*\b(error|exception|crash|bug|traceback|stack\s*trace|segfault|panic)\b',
+        # Migration/upgrade/convert/port (require "from" or a direct object to avoid matching "should we migrate")
+        r'\b(migrate|upgrade|convert|port)\s+(the|from|my|our|this)\b',
     ]
     for pattern in coding_patterns:
         if re.search(pattern, p):
@@ -389,6 +413,12 @@ def _classify_intent(prompt: str) -> str:
         r'\b(compare|vs|versus|trade.?off|pros?\s+and\s+cons?|should\s+(we|i)|which\s+is\s+better|debate|evaluate|analyze|architect)\b',
         r'\b(design|architecture|strategy|approach|recommend|suggest)\b.*\b(for|to|about|a|the|scalab|system|service|platform)\b',
         r'\bexplain.*(how|why|when).*\b(work|different|compare|scale|perform)\b',
+        # "what's the best way to"
+        r'\bwhat.?s\s+the\s+best\s+(way|approach|method|practice)\b',
+        # "how should I approach"
+        r'\bhow\s+should\s+i\s+(approach|handle|structure|organize|design)\b',
+        # Multi-part questions (contain "and" + question mark)
+        r'\band\b.*\?',
     ]
     for pattern in complex_patterns:
         if re.search(pattern, p):
@@ -10844,6 +10874,22 @@ def tour(
 # Entry point — catches unknown commands and treats them as prompts
 # ---------------------------------------------------------------------------
 
+_FIRST_RUN_ENV_KEYS = (
+    "GROQ_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+    "GITHUB_TOKEN",
+)
+
+
+def _is_first_run() -> bool:
+    """Return True when no config file exists and no provider API keys are set."""
+    if DEFAULT_CONFIG_PATH.exists():
+        return False
+    return not any(os.environ.get(k) for k in _FIRST_RUN_ENV_KEYS)
+
+
 def main():
     """Entry point — routes between subcommands and bare prompts.
 
@@ -10854,6 +10900,17 @@ def main():
     nvh ask "question"      → subcommand
     """
     args = sys.argv[1:]
+
+    # First-run detection: if no config and no API keys, run guided setup.
+    # Skip when the user passed flags (--help, --version) or explicit subcommands.
+    if not args or (args and not args[0].startswith("-")):
+        if _is_first_run():
+            console = Console()
+            console.print("\n  Welcome to nvHive! Let's get you set up.\n  Detecting your system...\n")
+            setup()
+            # If no args were given the setup is all we needed; exit.
+            if not args:
+                return
 
     if not args:
         # If stdin is piped (not a TTY), auto-engage pipe mode

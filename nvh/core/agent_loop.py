@@ -81,6 +81,77 @@ Rules:
 """
 
 
+def _summarize_tool_result(result: ToolResult, max_chars: int = 200) -> str:
+    """Summarize a tool result for context compression.
+
+    If the output is short enough, return it as-is. Otherwise, return a
+    truncated version with the total character count.  For ``read_file``
+    results the summary includes the filename and approximate line count.
+    """
+    text = result.output if result.success else result.error
+
+    if len(text) <= max_chars:
+        return text
+
+    # Special handling for read_file — extract filename & line count
+    if result.tool_name == "read_file":
+        lines = text.splitlines()
+        line_count = len(lines)
+        # Try to grab a filename hint from the first line
+        first_line = lines[0].strip() if lines else ""
+        return (
+            f"read_file result ({line_count} lines): "
+            f"{first_line[:80]}... ({len(text)} chars total)"
+        )
+
+    return text[:100] + f"... ({len(text)} chars total)"
+
+
+def _compress_history(steps: list[AgentStep], keep_full: int = 2) -> str:
+    """Compress agent history, keeping the last *keep_full* steps in full.
+
+    Older steps are reduced to one-line summaries so the LLM still knows
+    what happened without paying for the full token cost.
+    """
+    if len(steps) <= keep_full:
+        # Everything is recent — return full details
+        parts: list[str] = []
+        for s in steps:
+            results_text = "\n".join(
+                f"  Tool: {r.tool_name} — "
+                f"{'Output' if r.success else 'Error'}: "
+                f"{r.output if r.success else r.error}"
+                for r in s.tool_results
+            )
+            parts.append(f"Step {s.iteration}:\n{results_text}")
+        return "\n".join(parts)
+
+    # Summarise older steps
+    compressed: list[str] = []
+    older = steps[:-keep_full]
+    recent = steps[-keep_full:]
+
+    for s in older:
+        tool_names = ", ".join(
+            f"{tc.get('tool', '?')}({', '.join(str(v) for v in tc.get('args', {}).values())})"
+            for tc in s.tool_calls
+        )
+        status = "success" if all(r.success for r in s.tool_results) else "partial failure"
+        compressed.append(f"Step {s.iteration}: Used {tool_names} → {status}")
+
+    # Full details for recent steps
+    for s in recent:
+        results_text = "\n".join(
+            f"  Tool: {r.tool_name}\n"
+            f"  {'Output' if r.success else 'Error'}: "
+            f"{r.output if r.success else r.error}"
+            for r in s.tool_results
+        )
+        compressed.append(f"Step {s.iteration} (full):\n{results_text}")
+
+    return "\n".join(compressed)
+
+
 def _extract_tool_calls(response_text: str) -> list[dict]:
     """Extract tool_call JSON blocks from LLM response text."""
     calls = []
@@ -251,21 +322,46 @@ async def run_agent_loop(
         if on_step:
             on_step(step)
 
-        # Feed tool results back to the agent
-        results_text = "\n".join(
-            f"Tool: {r.tool_name}\n"
-            f"{'Output' if r.success else 'Error'}: {r.output if r.success else r.error}\n"
-            for r in tool_results
-        )
-
+        # Feed tool results back to the agent.
+        # After the 3rd iteration, compress older history to save tokens.
         messages.append(Message(role="assistant", content=response_text))
-        messages.append(Message(
-            role="user",
-            content=(
-                f"Tool results:\n{results_text}\n\n"
-                "Continue with the task. If complete, provide your final answer without any tool calls."
-            ),
-        ))
+
+        if iteration < 3:
+            # First 3 iterations: include full tool results
+            results_text = "\n".join(
+                f"Tool: {r.tool_name}\n"
+                f"{'Output' if r.success else 'Error'}: {r.output if r.success else r.error}\n"
+                for r in tool_results
+            )
+            messages.append(Message(
+                role="user",
+                content=(
+                    f"Tool results:\n{results_text}\n\n"
+                    "Continue with the task. If complete, provide your final answer without any tool calls."
+                ),
+            ))
+        else:
+            # Compress: summarise current results and rebuild context
+            summarized_results = "\n".join(
+                f"Tool: {r.tool_name}\n"
+                f"{'Output' if r.success else 'Error'}: {_summarize_tool_result(r)}\n"
+                for r in tool_results
+            )
+            history_summary = _compress_history(steps, keep_full=2)
+
+            # Rebuild messages: keep system-level original task + compressed history
+            messages = [
+                Message(role="user", content=f"Task: {task}"),
+                Message(
+                    role="user",
+                    content=(
+                        f"Progress so far (compressed):\n{history_summary}\n\n"
+                        f"Latest tool results:\n{summarized_results}\n\n"
+                        "Continue with the task. If complete, provide "
+                        "your final answer without any tool calls."
+                    ),
+                ),
+            ]
 
     # Hit max iterations
     return AgentResult(
