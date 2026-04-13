@@ -2,9 +2,7 @@
 
 **One command. Every AI model you have. Automatically assembled into the best team for each task.**
 
-![version](https://img.shields.io/badge/version-0.27.1-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-1714%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-62%25-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
-
-**Council scored 68% higher than a single model — at $0 cost.** Three free providers (Ollama + Groq + Google) running in parallel outperformed a single Nemotron Super on accuracy, completeness, and coherence. Real benchmark on NVIDIA DGX Spark. [See full results below.](#benchmark-results)
+![version](https://img.shields.io/badge/version-0.27.1-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 ```bash
 nvh "What is a binary search tree?"              # → answers (single best advisor)
@@ -13,6 +11,14 @@ nvh "Review my staged changes"                   # → auto-detects review → m
 nvh "Add tests for the auth module"              # → auto-detects test request → test generation
 nvh "Should we use Redis or Postgres?"           # → auto-detects debate → council (3+ advisors)
 ```
+
+<p align="center">
+  <img src="docs/screenshots/terminal-demo.gif" alt="nvHive CLI" width="640">
+</p>
+
+---
+
+## Get Started
 
 ```bash
 pip install nvhive
@@ -28,66 +34,9 @@ pip install nvhive[vision]   # desktop control (pyautogui)
 pip install nvhive[browser]  # browser automation (playwright)
 ```
 
----
-
-## Why nvHive
-
-**You type one command. nvHive figures out the rest.** It detects what you're asking for, checks which advisors are healthy, and assembles the best team for the task — automatically. More advisors connected = smarter behavior, with zero configuration.
-
-**What makes it different:**
-
-- **Smart team assembly.** nvHive doesn't just route to one model — it generates expert agents based on your question and matches each one to the best LLM for their specialty. A "Security Engineer" agent gets routed to a provider strong at security tasks. A "Database Expert" gets one suited to database queries. Based on adaptive routing data once sufficient queries are collected, with curated defaults for new installations.
-- **Automatic orchestration.** Coding tasks get a planner + coder + reviewer. Complex questions get a council of specialists. Simple questions get the fastest advisor. All automatic based on intent detection and available advisors.
-- **Scales with what you have.** 1 provider? Single-model answers. 3+ providers? Council automatically on complex questions, multi-model verification on code. Local GPU? Free inference alongside cloud. DGX Spark? Three 70B models in parallel, fully local.
-- **Performant by default.** Uses all available advisors within reason. Simple questions don't trigger council. Budget limits always enforced. Switch to cost mode for minimal spend.
-- **4-layer safety guardrails.** Command blocklist, filesystem boundary enforcement, secrets redaction, and resource limits — guardrails block destructive commands like `rm -rf /`.
-
-```mermaid
-flowchart LR
-    Q[Your Query] --> R{Smart Router}
-    R -->|Simple| F["FREE\nLocal GPU / Groq / GitHub\n$0.00"]
-    R -->|Coding| C["CHEAP\nFree cloud + local agent\n$0.00–$0.05"]
-    R -->|Complex| S["SMART\nMulti-model council\n$0.00–$0.15"]
-    R -->|Escalation| P["PREMIUM\nOnly when needed\nAuto-escalate"]
-    F --> L["Adaptive routing\nRouting improves over time"]
-    C --> L
-    S --> L
-    P --> L
-```
-
-### Architecture Overview
-
-```mermaid
-flowchart TB
-    P[User Prompt] --> I{Intent Detection}
-    I -->|simple| LLM[Single LLM Query]
-    I -->|coding| D[Decompose Task]
-    I -->|iterative| D
-    I -->|review| REV[Dual-Model Review]
-    I -->|council| CON[Council Assembly]
-    D --> G[Generate Expert Agents]
-    G --> M[Match Agent → Best LLM]
-    M --> PAR[Parallel Execution]
-    PAR --> REF{Agent needs specialist?}
-    REF -->|REFER| SP[Spawn Specialist]
-    SP --> PAR
-    REF -->|No| SYN[Synthesize Results]
-    SYN --> QA{QA Gate}
-    QA -->|PASSED| OUT[Output + Files]
-    QA -->|FAILED| FB[Feed Errors Back]
-    FB -->|Budget OK| G
-    FB -->|Budget exceeded| OUT
-```
-
-<p align="center">
-  <img src="docs/screenshots/terminal-demo.gif" alt="nvHive CLI" width="640">
-</p>
-
 <p align="center">
   <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
 </p>
-
----
 
 ### First-Run Setup
 
@@ -126,6 +75,80 @@ nvh convene "Redis vs Postgres for sessions?"
 nvHive detects NVIDIA GPUs via pynvml (VRAM, driver, CUDA version, temperature, power draw) and selects the optimal Nemotron model for your hardware. Simple queries stay local. Complex queries escalate to cloud only when needed. The adaptive routing engine measures your GPU's quality over time and adjusts routing thresholds automatically.
 
 </details>
+
+---
+
+## Why nvHive
+
+**Council scored 68% higher than a single model — at $0 cost.** Three free providers (Ollama + Groq + Google) running in parallel outperformed a single Nemotron Super on accuracy, completeness, and coherence. Real benchmark on NVIDIA DGX Spark. [See full results below.](#benchmark-results)
+
+**You type one command. nvHive figures out the rest.** It detects what you're asking for, checks which advisors are healthy, and assembles the best team for the task — automatically. More advisors connected = smarter behavior, with zero configuration.
+
+**What makes it different:**
+
+- **Smart team assembly.** nvHive doesn't just route to one model — it generates expert agents based on your question and matches each one to the best LLM for their specialty. A "Security Engineer" agent gets routed to a provider strong at security tasks. A "Database Expert" gets one suited to database queries. Based on adaptive routing data once sufficient queries are collected, with curated defaults for new installations.
+- **Automatic orchestration.** Coding tasks get a planner + coder + reviewer. Complex questions get a council of specialists. Simple questions get the fastest advisor. All automatic based on intent detection and available advisors.
+- **Scales with what you have.** 1 provider? Single-model answers. 3+ providers? Council automatically on complex questions, multi-model verification on code. Local GPU? Free inference alongside cloud. DGX Spark? Three 70B models in parallel, fully local.
+- **Performant by default.** Uses all available advisors within reason. Simple questions don't trigger council. Budget limits always enforced. Switch to cost mode for minimal spend.
+- **4-layer safety guardrails.** Command blocklist, filesystem boundary enforcement, secrets redaction, and resource limits — guardrails block destructive commands like `rm -rf /`.
+
+```mermaid
+flowchart LR
+    Q[Your Query] --> R{Smart Router}
+    R -->|Simple| F["FREE\nLocal GPU / Groq / GitHub\n$0.00"]
+    R -->|Coding| C["CHEAP\nFree cloud + local agent\n$0.00–$0.05"]
+    R -->|Complex| S["SMART\nMulti-model council\n$0.00–$0.15"]
+    R -->|Escalation| P["PREMIUM\nOnly when needed\nAuto-escalate"]
+    F --> L["Adaptive routing\nRouting improves over time"]
+    C --> L
+    S --> L
+    P --> L
+```
+
+---
+
+## How It Works
+
+### Architecture Overview
+
+```mermaid
+flowchart TB
+    P[User Prompt] --> I{Intent Detection}
+    I -->|simple| LLM[Single LLM Query]
+    I -->|coding| D[Decompose Task]
+    I -->|iterative| D
+    I -->|review| REV[Dual-Model Review]
+    I -->|council| CON[Council Assembly]
+    D --> G[Generate Expert Agents]
+    G --> M[Match Agent → Best LLM]
+    M --> PAR[Parallel Execution]
+    PAR --> REF{Agent needs specialist?}
+    REF -->|REFER| SP[Spawn Specialist]
+    SP --> PAR
+    REF -->|No| SYN[Synthesize Results]
+    SYN --> QA{QA Gate}
+    QA -->|PASSED| OUT[Output + Files]
+    QA -->|FAILED| FB[Feed Errors Back]
+    FB -->|Budget OK| G
+    FB -->|Budget exceeded| OUT
+```
+
+### Query Pipeline
+
+**Task classification:** TF-IDF cosine similarity against an 88-example training corpus (13 task types), with regex-pattern fallback when confidence is below threshold.
+
+**Provider scoring:** Weighted composite — capability (40%), cost (30%), latency (20%), health (10%). Capability scores start from static estimates and are refined to measured performance via exponential moving average.
+
+### Provider Routing
+
+**Adaptive routing:** After every query, nvHive records the outcome and updates scores. By 20 queries per provider/model/task combination, routing is fully data-driven. Each request is scored across capability (40%), cost (30%), latency (20%), and health (10%), then routed to the highest-scoring provider. On failure, nvHive tries the next provider in the fallback chain, and every failure feeds back into the health score.
+
+```bash
+nvh routing-stats    # see learned vs static scores
+nvh health           # provider resilience dashboard
+```
+
+**Local-first with NVIDIA GPUs:** Simple queries route to Nemotron on your NVIDIA GPU via Ollama — no cloud, no cost, no data leaving your machine. GPU detection via pynvml reads VRAM, driver version, and CUDA version to select the optimal local model. The `--prefer-nvidia` flag gives a 1.3x routing bonus to keep inference on NVIDIA hardware whenever quality allows.
 
 ---
 
@@ -214,35 +237,6 @@ nvh test-gen --coverage-gaps         # find and fill coverage gaps
 ```
 
 Reads your code, identifies untested paths, generates pytest tests, runs them, and iterates until they pass. The agent that improves itself — it writes the tests that verify its own future changes.
-
----
-
-## Security Model
-
-4-layer guardrails protect your system. Agents are designed to keep within the project directory, block destructive commands, and prevent secret leakage. Docker sandbox adds container isolation.
-
-**How the guardrails work:** Every agent command passes through four layers in sequence. First, a blocklist rejects known-dangerous commands (rm -rf, mkfs, etc.). Second, path boundary enforcement checks that all file operations stay within the project directory. Third, secrets redaction strips API keys and credentials from agent context. Fourth, resource limits cap execution time and memory. If `--sandbox` is enabled, commands run inside a Docker container with memory/CPU limits, no network access, and a non-root user. All executions are checkpointed so changes can be rolled back on failure.
-
----
-
-## How It Works
-
-### Query Pipeline
-
-**Task classification:** TF-IDF cosine similarity against an 88-example training corpus (13 task types), with regex-pattern fallback when confidence is below threshold.
-
-**Provider scoring:** Weighted composite — capability (40%), cost (30%), latency (20%), health (10%). Capability scores start from static estimates and are refined to measured performance via exponential moving average.
-
-### Provider Routing
-
-**Adaptive routing:** After every query, nvHive records the outcome and updates scores. By 20 queries per provider/model/task combination, routing is fully data-driven. Each request is scored across capability (40%), cost (30%), latency (20%), and health (10%), then routed to the highest-scoring provider. On failure, nvHive tries the next provider in the fallback chain, and every failure feeds back into the health score.
-
-```bash
-nvh routing-stats    # see learned vs static scores
-nvh health           # provider resilience dashboard
-```
-
-**Local-first with NVIDIA GPUs:** Simple queries route to Nemotron on your NVIDIA GPU via Ollama — no cloud, no cost, no data leaving your machine. GPU detection via pynvml reads VRAM, driver version, and CUDA version to select the optimal local model. The `--prefer-nvidia` flag gives a 1.3x routing bonus to keep inference on NVIDIA hardware whenever quality allows.
 
 ---
 
@@ -367,6 +361,14 @@ nvh nemoclaw --start           # start proxy for NemoClaw agents
 ```
 
 *Note: Anthropic recently changed billing for third-party tools. See the [integration guide](docs/OPENCLAW_MIGRATION.md) for details.*
+
+---
+
+## Security Model
+
+4-layer guardrails protect your system. Agents are designed to keep within the project directory, block destructive commands, and prevent secret leakage. Docker sandbox adds container isolation.
+
+**How the guardrails work:** Every agent command passes through four layers in sequence. First, a blocklist rejects known-dangerous commands (rm -rf, mkfs, etc.). Second, path boundary enforcement checks that all file operations stay within the project directory. Third, secrets redaction strips API keys and credentials from agent context. Fourth, resource limits cap execution time and memory. If `--sandbox` is enabled, commands run inside a Docker container with memory/CPU limits, no network access, and a non-root user. All executions are checkpointed so changes can be rolled back on failure.
 
 ---
 
