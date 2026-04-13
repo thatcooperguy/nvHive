@@ -451,8 +451,8 @@ async def run_smoke_tests(
 
     # ===== BROWSER + VISION TOOLS REGISTERED =====
     try:
-        from nvh.core.tools import ToolRegistry as _TR
-        tr = _TR(include_system=True)
+        from nvh.core.tools import ToolRegistry
+        tr = ToolRegistry(include_system=True)
         tool_names = [t.name for t in tr.list_tools()]
         browser_expected = {"browser_navigate", "browser_screenshot",
                            "browser_fill_form", "http_request",
@@ -484,6 +484,7 @@ async def run_smoke_tests(
     # ===== CONFIG YAML VALIDATION =====
     try:
         from pathlib import Path as _Path
+
         import yaml as _yaml
         config_dirs = [
             _Path.home() / ".config" / "nvhive",

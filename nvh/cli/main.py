@@ -2669,8 +2669,8 @@ def drift(
         nvh drift --reroute
     """
     async def _run_drift():
-        from nvh.core.engine import Engine
         from nvh.core.drift_detector import format_drift_alerts
+        from nvh.core.engine import Engine
 
         engine = Engine()
         await engine.initialize()
