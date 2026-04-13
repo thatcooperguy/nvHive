@@ -267,7 +267,22 @@ async def _smart_default(prompt: str):
 
     elif intent == "complex" and is_performant and num_advisors >= 3:
         # Complex question + enough advisors → council automatically
-        console.print(f"[dim][council → {num_advisors} advisors, auto-team][/dim]\n")
+        # Smart agent-to-LLM matching: each expert persona gets the
+        # best LLM for their specialty based on learning engine data
+        try:
+            from nvh.core.agent_matching import format_team_report, match_agents_to_providers
+            from nvh.core.agents import generate_agents
+            personas = generate_agents(prompt, num_agents=min(num_advisors, 5))
+            assignments = match_agents_to_providers(personas, engine)
+            if assignments:
+                console.print(f"[dim][council → assembling expert team][/dim]\n")
+                console.print(format_team_report(assignments))
+                console.print()
+            else:
+                console.print(f"[dim][council → {num_advisors} advisors, auto-team][/dim]\n")
+        except Exception:
+            console.print(f"[dim][council → {num_advisors} advisors, auto-team][/dim]\n")
+
         try:
             result = await engine.run_council(
                 prompt=prompt,

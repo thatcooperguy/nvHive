@@ -2,7 +2,7 @@
 
 **One command. Every AI model you have. Automatically assembled into the best team for each task.**
 
-![version](https://img.shields.io/badge/version-0.12.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-1086%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-62%25-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
+![version](https://img.shields.io/badge/version-0.16.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-1086%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-62%25-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 ## Why nvHive
 
@@ -18,11 +18,33 @@ nvh "Should we use Redis or Postgres?"           # → auto-detects debate → c
 
 **What makes it different:**
 
-- **Automatic orchestration.** nvHive doesn't just route to one model — it assembles the right team. Coding tasks get a planner + coder + reviewer. Complex questions get a council. Simple questions get the fastest advisor. All automatic.
-- **Task-aware advisor selection.** Each provider has strengths. Coding tasks go to the best coders. Reasoning goes to the best reasoners. Reviews use different architectures for diversity. The learning engine tracks real performance per provider per task type.
-- **Scales with what you have.** 1 provider? Single-model answers. 3+ providers? Council automatically on complex questions, multi-model verification on code. Local GPU? Free inference, used alongside cloud. DGX Spark? Three 70B models running in parallel, fully local.
-- **Performant by default.** Uses all available advisors to maximize quality — within reason. Simple questions don't trigger council. Budget limits are always enforced. Switch to cost mode (`nvh config set defaults.mode cost`) to minimize spend.
+- **Smart team assembly.** nvHive doesn't just route to one model — it generates expert agents based on your question and matches each one to the best LLM for their specialty. A "Security Engineer" agent gets the LLM that scores highest on security tasks. A "Database Expert" gets the best at database queries. All based on real performance data from the learning engine.
+- **Automatic orchestration.** Coding tasks get a planner + coder + reviewer. Complex questions get a council of specialists. Simple questions get the fastest advisor. All automatic based on intent detection and available advisors.
+- **Scales with what you have.** 1 provider? Single-model answers. 3+ providers? Council automatically on complex questions, multi-model verification on code. Local GPU? Free inference alongside cloud. DGX Spark? Three 70B models in parallel, fully local.
+- **Performant by default.** Uses all available advisors within reason. Simple questions don't trigger council. Budget limits always enforced. Switch to cost mode for minimal spend.
 - **4-layer safety guardrails.** Command blocklist, filesystem boundary enforcement, secrets redaction, and resource limits — the agent can't `rm -rf /` even with `--yes`.
+
+```mermaid
+flowchart LR
+    QUERY[User Query] --> INTENT[Intent Detection<br/>coding · review · council]
+    INTENT --> AGENTS[Generate Expert Agents<br/>based on topic keywords]
+
+    AGENTS --> MATCH[Match Agents to LLMs<br/>learning engine scores]
+
+    MATCH --> A1[Security Engineer<br/>→ Claude<br/>best at security]
+    MATCH --> A2[Database Expert<br/>→ GPT-4o<br/>best at databases]
+    MATCH --> A3[Backend Architect<br/>→ Llama 70B local<br/>strong coding]
+
+    A1 --> SYNTH[Synthesize<br/>best of each expert]
+    A2 --> SYNTH
+    A3 --> SYNTH
+
+    SYNTH --> RESULT[Unified Answer<br/>all perspectives integrated]
+
+    style MATCH fill:#1a1a2e,color:#76B900,stroke:#76B900
+    style SYNTH fill:#1a1a2e,color:#3b82f6,stroke:#3b82f6
+    style RESULT fill:#76B900,color:#000
+```
 
 <p align="center">
   <img src="docs/screenshots/terminal-demo.gif" alt="nvHive CLI" width="640">
