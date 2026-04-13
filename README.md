@@ -52,27 +52,21 @@ Works immediately with LLM7 (no signup). Run `nvh setup` to add free providers l
 <summary><b>NVIDIA GPU Quick Start</b> — local inference on your hardware</summary>
 
 ```bash
-# 1. Install Ollama + Nemotron
+# 1. Install Ollama (if not already installed)
 curl -fsSL https://ollama.com/install.sh | sh
-ollama pull nemotron-mini        # 4.1GB, runs on 8GB+ VRAM
 
-# 2. Install nvHive
+# 2. Install and run nvHive — it handles the rest
 pip install nvhive
-
-# 3. nvHive auto-detects your GPU and Nemotron
-nvh nvidia                       # GPU info + inference stack status
-nvh bench                        # benchmark your GPU (tokens/sec)
-
-# 4. Queries route to your GPU by default
-nvh "Explain quicksort"          # → local Nemotron, $0, private
-nvh safe "Analyze this code"     # → forced local, nothing leaves machine
-nvh --prefer-nvidia "question"   # → 1.3x bonus for NVIDIA providers
-
-# 5. Council on your GPU — 3 models, $0, fully private
-nvh convene "Redis vs Postgres for sessions?"
+nvh    # first-run setup auto-detects your GPU, recommends + pulls the right models
 ```
 
-nvHive detects NVIDIA GPUs via pynvml (VRAM, driver, CUDA version, temperature, power draw) and selects the optimal Nemotron model for your hardware. Simple queries stay local. Complex queries escalate to cloud only when needed. The adaptive routing engine measures your GPU's quality over time and adjusts routing thresholds automatically.
+That's it. The guided setup detects your GPU via pynvml (VRAM, driver, CUDA version), recommends models sized for your hardware, and offers to pull them. After setup:
+
+- Simple queries route to your GPU automatically — $0, private, nothing leaves your machine
+- Complex queries escalate to cloud only when local models aren't confident enough
+- `nvh safe "question"` forces all inference local — guaranteed no cloud
+- `nvh bench` measures your GPU's actual tok/s against community baselines
+- The adaptive routing engine measures quality over time and adjusts thresholds automatically
 
 </details>
 
