@@ -11042,7 +11042,14 @@ _FIRST_RUN_ENV_KEYS = (
 
 
 def _is_first_run() -> bool:
-    """Return True when no config file exists and no provider API keys are set."""
+    """Return True when no config file exists and no provider API keys are set.
+
+    Skips on CI and in test environments to avoid triggering setup()
+    on fresh CI runners where no config exists by design.
+    """
+    # Never trigger in CI or test environments
+    if os.environ.get("CI") or os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("GITHUB_ACTIONS"):
+        return False
     if DEFAULT_CONFIG_PATH.exists():
         return False
     return not any(os.environ.get(k) for k in _FIRST_RUN_ENV_KEYS)
