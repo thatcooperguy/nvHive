@@ -9405,6 +9405,166 @@ def test_gen(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# nvh workspace — multi-repo management (beta)
+# ---------------------------------------------------------------------------
+
+@app.command()
+def workspace(
+    action: str = typer.Argument("list", help="Action: add, list, scan, remove"),
+    paths: list[str] = typer.Argument(None, help="Repo paths to add"),
+    name: str = typer.Option("", "--name", help="Workspace name"),
+):
+    """[beta] Manage multi-repo workspaces for cross-repo agent operations.
+
+    Read across multiple repositories to build consolidated context.
+    The agent can understand dependencies between repos and suggest
+    coordinated changes.
+
+    Examples:
+
+      nvh workspace add ~/backend ~/frontend ~/shared-lib
+      nvh workspace list
+      nvh workspace scan
+      nvh workspace remove
+    """
+    from pathlib import Path as _Path
+
+    try:
+        from nvh.core.workspace import (
+            create_workspace,
+            format_workspace_context,
+            load_workspace,
+            save_workspace,
+            scan_workspace,
+        )
+    except ImportError:
+        console.print("[red]Workspace module not available.[/red]")
+        raise typer.Exit(1)
+
+    ws_path = _Path(".nvhive")
+
+    if action == "add" and paths:
+        ws = create_workspace([_Path(p).resolve() for p in paths], name=name)
+        save_workspace(ws, _Path("."))
+        console.print(f"[green]Workspace created with {len(ws.repos)} repo(s).[/green]")
+        for r in ws.repos:
+            console.print(f"  {r.name}: {r.file_count} files, {r.language}")
+
+    elif action == "list":
+        ws = load_workspace(_Path("."))
+        if ws is None:
+            console.print("[dim]No workspace configured. Use: nvh workspace add ~/repo1 ~/repo2[/dim]")
+            return
+        console.print(f"[bold]Workspace:[/bold] {ws.name or '(unnamed)'}")
+        for r in ws.repos:
+            console.print(f"  {r.name}: {r.file_count} files, {r.language} {'(readonly)' if r.readonly else ''}")
+
+    elif action == "scan":
+        ws = load_workspace(_Path("."))
+        if ws is None:
+            console.print("[red]No workspace. Use: nvh workspace add ~/repo1 ~/repo2[/red]")
+            raise typer.Exit(1)
+        summary = scan_workspace(ws)
+        console.print(format_workspace_context(ws, summary))
+
+    elif action == "remove":
+        ws_file = _Path(".nvhive/workspace.json")
+        if ws_file.exists():
+            ws_file.unlink()
+            console.print("[green]Workspace removed.[/green]")
+        else:
+            console.print("[dim]No workspace to remove.[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# nvh snapshot — save/restore environment state
+# ---------------------------------------------------------------------------
+
+@app.command()
+def snapshot(
+    action: str = typer.Argument("save", help="Action: save, restore, list"),
+    path: str = typer.Option("nvhive-snapshot.tar.gz", "-o", "--output", help="Snapshot file path"),
+):
+    """Save or restore nvHive state for ephemeral cloud VMs.
+
+    Captures config, learned scores, agent memory, and database into a
+    tarball. Restore on a new VM to resume where you left off.
+
+    Examples:
+
+      nvh snapshot save                           # save to nvhive-snapshot.tar.gz
+      nvh snapshot save -o ~/backups/state.tar.gz # custom path
+      nvh snapshot restore -o state.tar.gz        # restore from tarball
+      nvh snapshot list -o state.tar.gz           # list contents
+    """
+    from pathlib import Path as _Path
+
+    try:
+        from nvh.core.snapshot import list_snapshot_contents, restore_snapshot, save_snapshot
+    except ImportError:
+        console.print("[red]Snapshot module not available.[/red]")
+        raise typer.Exit(1)
+
+    snap_path = _Path(path)
+
+    if action == "save":
+        info = save_snapshot(snap_path)
+        if info.error:
+            console.print(f"[red]Error: {info.error}[/red]")
+        else:
+            size_kb = info.total_size_bytes / 1024
+            console.print(f"[green]Snapshot saved:[/green] {snap_path}")
+            console.print(f"  {len(info.files)} files, {size_kb:.1f} KB")
+
+    elif action == "restore":
+        if not snap_path.exists():
+            console.print(f"[red]File not found: {snap_path}[/red]")
+            raise typer.Exit(1)
+        info = restore_snapshot(snap_path)
+        if info.error:
+            console.print(f"[red]Error: {info.error}[/red]")
+        else:
+            console.print(f"[green]Restored {len(info.files)} files.[/green]")
+
+    elif action == "list":
+        if not snap_path.exists():
+            console.print(f"[red]File not found: {snap_path}[/red]")
+            raise typer.Exit(1)
+        files = list_snapshot_contents(snap_path)
+        for f in files:
+            console.print(f"  {f}")
+
+
+# ---------------------------------------------------------------------------
+# nvh costs — usage and cost reporting
+# ---------------------------------------------------------------------------
+
+@app.command()
+def costs(
+    period: str = typer.Argument("today", help="Period: today, week, month"),
+):
+    """Show usage costs, savings from local inference, and recommendations.
+
+    Examples:
+
+      nvh costs              # today's costs
+      nvh costs week         # this week
+      nvh costs month        # this month
+    """
+    async def _run():
+        try:
+            from nvh.core.cost_tracker import format_cost_report, get_cost_report
+        except ImportError:
+            console.print("[red]Cost tracker not available.[/red]")
+            return
+        report = await get_cost_report(period)
+        console.print(format_cost_report(report))
+
+    _run(_run())
+
+
+# ---------------------------------------------------------------------------
 # nvh voice — speak your question, hear the answer
 # ---------------------------------------------------------------------------
 
