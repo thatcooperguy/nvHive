@@ -389,6 +389,7 @@ async def run_coding_agent(
     on_step: Any = None,
     confirm_write: Any = None,
     system_prompt: str | None = None,
+    on_token: Any = None,
 ) -> CodingResult:
     """Run the three-phase coding agent loop.
 
@@ -433,13 +434,21 @@ async def run_coding_agent(
     )
 
     try:
-        plan_response = await engine.query(
-            prompt=plan_prompt,
-            provider=config.orchestrator_provider,
-            model=config.orchestrator_model,
-            stream=False,
-            use_cache=False,
-        )
+        if on_token is not None:
+            plan_response = await engine.query_stream(
+                prompt=plan_prompt,
+                provider=config.orchestrator_provider,
+                model=config.orchestrator_model,
+                on_token=on_token,
+            )
+        else:
+            plan_response = await engine.query(
+                prompt=plan_prompt,
+                provider=config.orchestrator_provider,
+                model=config.orchestrator_model,
+                stream=False,
+                use_cache=False,
+            )
         plan = plan_response.content
     except Exception as e:
         logger.error("Planning phase failed: %s", e)
@@ -542,13 +551,21 @@ async def run_coding_agent(
         )
 
         try:
-            verify_response = await engine.query(
-                prompt=verify_prompt,
-                provider=verify_provider,
-                model=verify_model,
-                stream=False,
-                use_cache=False,
-            )
+            if on_token is not None:
+                verify_response = await engine.query_stream(
+                    prompt=verify_prompt,
+                    provider=verify_provider,
+                    model=verify_model,
+                    on_token=on_token,
+                )
+            else:
+                verify_response = await engine.query(
+                    prompt=verify_prompt,
+                    provider=verify_provider,
+                    model=verify_model,
+                    stream=False,
+                    use_cache=False,
+                )
             verification = verify_response.content
         except Exception as e:
             logger.warning("Verification failed: %s", e)

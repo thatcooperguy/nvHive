@@ -125,7 +125,7 @@ app = typer.Typer(
 console = Console(legacy_windows=False) if sys.platform == "win32" else Console()
 
 
-async def _smart_default(prompt: str):
+async def _smart_default(prompt: str, *, force_iterative: bool = False):
     """Smart default handler — the universal nvh entry point.
 
     Detects intent from the prompt and automatically picks the best
@@ -134,11 +134,12 @@ async def _smart_default(prompt: str):
 
     Flow:
     1. SYSTEM ACTION? (install, open, find, kill) → execute directly
-    2. CODING TASK? (fix, refactor, add, implement, write) → agent mode
-    3. CODE REVIEW? (review, check, audit) → review mode
-    4. TEST REQUEST? (test, add tests, coverage) → test-gen mode
-    5. COMPLEX QUESTION + 3+ healthy advisors? → council (auto-team)
-    6. SIMPLE QUESTION → single best advisor
+    2. --iterative or complex coding? → iterative multi-agent QA loop
+    3. CODING TASK? (fix, refactor, add, implement, write) → agent mode
+    4. CODE REVIEW? (review, check, audit) → review mode
+    5. TEST REQUEST? (test, add tests, coverage) → test-gen mode
+    6. COMPLEX QUESTION + 3+ healthy advisors? → council (auto-team)
+    7. SIMPLE QUESTION → single best advisor
 
     In performant mode (default), the number of healthy advisors drives
     the sophistication: more advisors = multi-model verification,
@@ -172,6 +173,33 @@ async def _smart_default(prompt: str):
     intent = _classify_intent(prompt)
 
     # --- Step 4: Route to the right mode ---
+
+    # Iterative QA loop — forced via --iterative or auto for complex coding
+    use_iterative = force_iterative or (
+        intent == "iterative_coding" and is_performant and num_advisors >= 2
+    )
+    if use_iterative:
+        console.print(
+            f"[dim][iterative → multi-agent QA loop | {num_advisors} advisor(s)][/dim]\n"
+        )
+        try:
+            from nvh.core.iterative_loop import format_iterative_result, iterative_solve
+
+            def _on_progress(stage: str, message: str, fraction: float) -> None:
+                pct = int(fraction * 100)
+                console.print(f"  [dim][{pct:3d}%][/dim] {message}")
+
+            result = await iterative_solve(
+                task=prompt,
+                engine=engine,
+                working_dir=Path(".").resolve(),
+                on_progress=_on_progress,
+            )
+            console.print(format_iterative_result(result))
+        except Exception as e:
+            console.print(_format_cli_error(e))
+        return
+
     if intent == "coding":
         console.print(f"[dim][agent → coding task detected | {num_advisors} advisor(s)][/dim]\n")
         try:
@@ -201,16 +229,24 @@ async def _smart_default(prompt: str):
                         console.print(f"  [red]err[/red] [dim]{result.error[:80]}[/dim]")
                 console.print()
 
+            import sys as _sys
+
+            def _stream_token(delta: str) -> None:
+                _sys.stdout.write(delta)
+                _sys.stdout.flush()
+
             result = await run_coding_agent(
                 task=prompt,
                 engine=engine,
                 config=agent_config,
                 working_dir=_Path(".").resolve(),
                 on_step=on_step,
+                on_token=_stream_token,
             )
             if result.error:
-                console.print(f"[red]{result.error}[/red]")
+                console.print(f"\n[red]{result.error}[/red]")
             else:
+                console.print()  # newline after streamed output
                 console.print(Panel(result.final_summary or "(completed)", title="[bold green]Result[/bold green]", border_style="green"))
                 if result.files_modified or result.files_created:
                     for f in result.files_modified:
@@ -336,7 +372,7 @@ async def _smart_default(prompt: str):
 def _classify_intent(prompt: str) -> str:
     """Classify the user's prompt into an intent category.
 
-    Returns one of: "coding", "review", "testgen", "complex", "simple"
+    Returns one of: "iterative_coding", "coding", "review", "testgen", "complex", "simple"
 
     This is deliberately keyword-based for speed and reliability.
     The TF-IDF classifier in action_detector.py handles system actions;
@@ -377,6 +413,19 @@ def _classify_intent(prompt: str) -> str:
     for pattern in review_patterns:
         if re.search(pattern, p):
             return "review"
+
+    # Complex coding — tasks that benefit from iterative multi-agent solving
+    # (multi-step, cross-cutting, or explicitly architectural coding tasks)
+    iterative_patterns = [
+        r'\b(architect|redesign|rewrite|overhaul|rearchitect)\b',
+        r'\b(refactor|migrate|convert|port)\b.*\b(entire|whole|all|full|codebase|project|system)\b',
+        r'\b(build|create|implement)\s+(a\s+)?(full|complete|entire|end.to.end|whole)\b',
+        r'\b(fix|debug|investigate)\b.*\b(multiple|several|all|every|across)\b',
+        r'\b(design\s+and\s+implement|plan\s+and\s+build|architect\s+and\s+code)\b',
+    ]
+    for pattern in iterative_patterns:
+        if re.search(pattern, p):
+            return "iterative_coding"
 
     # Coding task — the user wants code changed
     coding_patterns = [
@@ -9186,6 +9235,12 @@ def agent(
                 return False
             return answer in ("y", "yes")
 
+        import sys as _sys
+
+        def _stream_token(delta: str) -> None:
+            _sys.stdout.write(delta)
+            _sys.stdout.flush()
+
         result = await run_coding_agent(
             task=task,
             engine=engine,
@@ -9193,7 +9248,9 @@ def agent(
             working_dir=work_path,
             on_step=on_step,
             confirm_write=None if yes else confirm_write,
+            on_token=_stream_token,
         )
+        console.print()  # newline after streamed output
 
         elapsed = _time.monotonic() - start
 
@@ -11066,16 +11123,20 @@ def main():
     """
     args = sys.argv[1:]
 
-    # First-run detection: if no config and no API keys, run guided setup.
-    # Skip when the user passed flags (--help, --version) or explicit subcommands.
-    if not args or (args and not args[0].startswith("-")):
-        if _is_first_run():
-            console = Console()
-            console.print("\n  Welcome to nvHive! Let's get you set up.\n  Detecting your system...\n")
-            setup()
-            # If no args were given the setup is all we needed; exit.
-            if not args:
-                return
+    # --skip-setup: suppress first-run guided setup
+    if "--skip-setup" in args:
+        args = [a for a in args if a != "--skip-setup"]
+        sys.argv = [sys.argv[0]] + args
+    else:
+        # First-run detection: if no config and no API keys, run guided setup.
+        # Skip when the user passed flags (--help, --version) or explicit subcommands.
+        if not args or (args and not args[0].startswith("-")):
+            if _is_first_run():
+                from nvh.cli.setup import guided_setup
+                guided_setup()
+                # If no args were given the setup is all we needed; exit.
+                if not args:
+                    return
 
     if not args:
         # If stdin is piped (not a TTY), auto-engage pipe mode
@@ -11087,7 +11148,8 @@ def main():
         return
 
     # Flags like --help, --version should go to Typer directly
-    if args[0].startswith("-"):
+    # (but --iterative is ours — strip it and continue to bare-prompt routing)
+    if args[0].startswith("-") and args[0] != "--iterative":
         app()
         return
 
@@ -11134,15 +11196,22 @@ def main():
             return
 
         # It's a bare prompt — route to smart default
-        prompt = " ".join(args)
+        # Check for --iterative flag
+        force_iterative = "--iterative" in args
+        remaining_args = [a for a in args if a != "--iterative"]
+        prompt = " ".join(remaining_args)
+
+        if not prompt:
+            _run(_launch_default_repl())
+            return
 
         # Check for system actions first
         from nvh.core.action_detector import detect_action
         action = detect_action(prompt)
-        if action:
+        if action and not force_iterative:
             _run(_execute_action(action))
         else:
-            _run(_smart_default(prompt))
+            _run(_smart_default(prompt, force_iterative=force_iterative))
 
 
 if __name__ == "__main__":

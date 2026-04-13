@@ -213,7 +213,18 @@ class ToolRegistry:
             return output
 
         async def shell(command: str) -> str:
-            """Run a shell command (sandboxed)."""
+            """Run a shell command (sandboxed).
+
+            When Docker sandbox mode is enabled (--sandbox or NVH_SANDBOX=1),
+            commands run inside a Docker container for full isolation.
+            Otherwise falls through to the existing SandboxExecutor.
+            """
+            try:
+                from nvh.core.docker_sandbox import run_in_sandbox, sandbox_enabled
+                if sandbox_enabled():
+                    return await run_in_sandbox(command, self.workspace)
+            except ImportError:
+                pass
             return await run_code(command, language="bash")
 
         # Register all

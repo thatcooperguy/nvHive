@@ -72,7 +72,8 @@ class TestCodingIntent:
         "Port the Go service to Rust",
     ])
     def test_detects_coding_tasks(self, prompt):
-        assert _classify_intent(prompt) == "coding", f"Expected 'coding' for: {prompt}"
+        result = _classify_intent(prompt)
+        assert result in ("coding", "iterative_coding"), f"Expected coding intent for: {prompt}, got {result}"
 
 
 class TestReviewIntent:

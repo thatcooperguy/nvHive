@@ -159,7 +159,8 @@ async def run_parallel_pipeline(
             logger.debug("VRAM check failed: %s", e)
 
     if on_progress and cloud_models:
-        on_progress("vram", f"{len(cloud_models)} cloud model(s) run in parallel (no VRAM needed).", 0.25)
+        n = len(cloud_models)
+        on_progress("vram", f"{n} cloud model(s) run in parallel (no VRAM needed).", 0.25)
 
     # ── Phase 4: Execute subtasks ──────────────────────────────────
     if on_progress:
@@ -197,6 +198,70 @@ async def run_parallel_pipeline(
     for dep in dependent:
         r = await _execute_subtask(dep, engine, working_dir, on_progress)
         results.append(r)
+
+    # ── Phase 4b: Recursive referral spawning ────────────────────
+    # Check if any agent requested a specialist via REFER: pattern
+    from nvh.core.recursive_agents import (
+        AgentResponse,
+        detect_referrals,
+        run_with_referrals,
+    )
+
+    has_referrals = any(
+        detect_referrals(r.content, r.role, 0) for r in results if r.success
+    )
+
+    if has_referrals:
+        if on_progress:
+            on_progress("referrals", "Agents requested specialists — spawning referrals...", 0.7)
+
+        # Convert SubTaskResults to AgentResponses for the referral engine
+        initial_responses = [
+            AgentResponse(
+                role=r.role,
+                provider=r.provider,
+                model=r.model,
+                content=r.content,
+                depth=0,
+                duration_ms=r.duration_ms,
+                cost_usd=r.cost_usd,
+            )
+            for r in results
+            if r.success
+        ]
+
+        referral_result = await run_with_referrals(
+            task=task,
+            engine=engine,
+            initial_responses=initial_responses,
+            max_depth=2,
+            on_referral=lambda ref: on_progress(
+                "referrals",
+                f"  Spawning {ref.requested_role} (referred by {ref.requesting_agent})",
+                0.75,
+            ) if on_progress else None,
+        )
+
+        # Append spawned agent responses back as SubTaskResults
+        for resp in referral_result.responses:
+            if resp.spawned_from:  # only add the newly spawned ones
+                results.append(SubTaskResult(
+                    role=resp.role,
+                    provider=resp.provider,
+                    model=resp.model,
+                    is_local=False,
+                    content=resp.content,
+                    success=bool(resp.content and not resp.content.startswith("(Referral failed")),
+                    duration_ms=resp.duration_ms,
+                    cost_usd=resp.cost_usd,
+                ))
+
+        if on_progress:
+            on_progress(
+                "referrals",
+                f"Referral spawning complete — {referral_result.spawned_agents} specialist(s).",
+                0.8,
+            )
 
     # ── Phase 5: Post-QA ───────────────────────────────────────────
     if on_progress:

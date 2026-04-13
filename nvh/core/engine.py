@@ -661,6 +661,76 @@ class Engine:
 
         return response
 
+    async def query_stream(
+        self,
+        prompt: str,
+        provider: str | None = None,
+        model: str | None = None,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        on_token: Any = None,
+    ) -> CompletionResponse:
+        """Stream a query, calling on_token(delta) for each chunk.
+
+        Returns the final collected CompletionResponse. This is a
+        thin wrapper that sets up routing/messages like query() but
+        uses stream_to_callback instead of collecting silently.
+        """
+        await self.initialize()
+
+        temp = temperature if temperature is not None else self.config.defaults.temperature
+        max_tok = max_tokens or self.config.defaults.max_tokens
+        sys_prompt = self._build_system_prompt(system_prompt or self.config.defaults.system_prompt)
+
+        await self._check_budget()
+
+        # Route
+        decision = self.router.route(
+            query=prompt,
+            provider_override=provider,
+            model_override=model,
+            strategy="best",
+        )
+
+        # Build messages
+        messages: list[Message] = []
+        if sys_prompt:
+            messages.append(Message(role="system", content=sys_prompt))
+        messages.append(Message(role="user", content=prompt))
+
+        # Get the provider and stream
+        fallback_chain = self._get_fallback_chain(decision.provider)
+        for i, provider_name in enumerate(fallback_chain):
+            if not self.registry.has(provider_name):
+                continue
+            try:
+                self.rate_manager.check_available(provider_name)
+            except Exception:
+                continue
+
+            prov = self.registry.get(provider_name)
+            pconfig = self.config.providers.get(provider_name)
+            pmodel = decision.model if i == 0 else (pconfig.default_model if pconfig else "")
+
+            try:
+                from nvh.utils.streaming import stream_to_callback
+                stream_iter = prov.stream(
+                    messages=messages,
+                    model=pmodel or None,
+                    temperature=temp,
+                    max_tokens=max_tok,
+                    system_prompt=sys_prompt,
+                )
+                response = await stream_to_callback(stream_iter, on_token=on_token)
+                self.rate_manager.record_success(provider_name)
+                return response
+            except Exception as exc:
+                logger.warning("Stream failed on %s: %s", provider_name, exc)
+                continue
+
+        raise ProviderError("All providers failed during streaming")
+
     def _save_last_query_context(
         self,
         decision: RoutingDecision,

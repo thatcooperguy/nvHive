@@ -56,9 +56,9 @@ flowchart LR
 
 ---
 
-## Agentic Coding (Beta)
+## Agentic Coding
 
-> **New in 0.10.0** — a multi-model coding agent that plans, executes, and verifies code changes. Scales based on your GPU.
+> Multi-model coding agent with recursive spawning, iterative QA convergence, parallel execution, and vision/browser tools. Scales from no-GPU to DGX Spark.
 
 ```bash
 # One-time setup: pulls the right models for your GPU
@@ -68,30 +68,55 @@ nvh agent --setup
 nvh agent "Fix the streaming timeout bug in council.py"
 nvh agent "Add unit tests for the auth middleware" --dir ./myproject
 nvh agent "Refactor the router to use health-aware selection" -y
+
+# Advanced: sandbox, workspace, parallel pipeline
+nvh agent "Build the notification service" --sandbox     # Docker-isolated execution
+nvh agent "task" --workspace ./api,./frontend             # multi-repo context
 ```
 
-**How it works:** A strong model (cloud or local 70B) plans the task, a local model executes using file and shell tools, then a reviewer verifies the result. Three phases: plan → execute → verify.
+**How it works:** Intent detection classifies the task, the orchestrator generates expert agents matched to the best LLMs, agents run in parallel where possible, recursive referral spawning fills knowledge gaps on-demand, and an iterative QA loop refines until convergence.
 
 ```mermaid
 flowchart LR
-    TASK[Task] --> PLAN[Phase 1: Plan<br/>Orchestrator Model<br/>Nemotron 70B / Cloud]
+    TASK[Task] --> INTENT[Intent Detection<br/>13 task types]
 
-    PLAN --> EXEC[Phase 2: Execute<br/>Worker Model<br/>Llama 70B / Gemma 27B]
+    INTENT --> DECOMPOSE[Decompose<br/>into subtasks]
 
-    EXEC --> GATE[Quality Gates<br/>ruff lint + syntax]
+    DECOMPOSE --> MATCH[Match Agents → LLMs<br/>learning engine scores]
 
-    GATE -->|Pass| VERIFY[Phase 3: Verify<br/>Reviewer Model<br/>Qwen 72B / Cloud]
-    GATE -->|Fail| EXEC
+    MATCH --> PAR[Parallel Pipeline<br/>independent subtasks<br/>run concurrently]
 
-    VERIFY -->|Approved| DONE[Done<br/>Files modified<br/>Git commit]
-    VERIFY -->|Needs fix| EXEC
+    PAR --> RECURSE[Recursive Spawning<br/>agents request specialists<br/>on-demand via REFER:]
 
-    style PLAN fill:#1a1a2e,color:#76B900,stroke:#76B900
-    style EXEC fill:#1a1a2e,color:#3b82f6,stroke:#3b82f6
-    style VERIFY fill:#1a1a2e,color:#a855f7,stroke:#a855f7
-    style GATE fill:#1a1a2e,color:#f59e0b,stroke:#f59e0b
+    RECURSE --> QA{Iterative QA<br/>PASSED?}
+
+    QA -->|PARTIAL / FAILED| FEEDBACK[QA feedback<br/>→ new agents<br/>→ next round]
+    FEEDBACK --> PAR
+
+    QA -->|PASSED| DONE[Converged<br/>Files modified<br/>Git commit]
+
+    style INTENT fill:#1a1a2e,color:#76B900,stroke:#76B900
+    style PAR fill:#1a1a2e,color:#3b82f6,stroke:#3b82f6
+    style RECURSE fill:#1a1a2e,color:#a855f7,stroke:#a855f7
+    style QA fill:#1a1a2e,color:#f59e0b,stroke:#f59e0b
     style DONE fill:#76B900,color:#000
 ```
+
+### Key Capabilities (post-0.11.1)
+
+| Feature | What It Does |
+|---------|-------------|
+| **Recursive Agent Spawning** | Agents self-identify knowledge gaps and emit `REFER: Need a Database Expert for sharding` — the system dynamically spawns the specialist, gets the answer, and feeds it back. Max depth prevents infinite recursion. |
+| **Iterative QA Convergence** | Generate agents → run with referrals → post-QA reviews → if gaps found, spawn new agents informed by feedback → repeat until PASSED or budget exhausted. |
+| **Parallel Pipeline** | Decomposes tasks into independent subtasks, runs them concurrently (bounded semaphore), respects dependencies, VRAM-aware model swapping with context preservation. |
+| **Vision + Desktop Control** | Screenshot capture, image analysis via vision LLMs (GPT-4o, Claude, Gemini, LLaVA), OCR, mouse/keyboard automation with pyautogui. Agents can see and interact with GUIs. |
+| **Browser Automation** | Headless browser navigation, screenshots, form filling via Playwright. HTTP requests, process management, Docker tools. |
+| **Docker Sandbox** | `--sandbox` flag runs agent shell commands inside a Docker container — memory-limited, CPU-limited, no network by default, non-root user. Falls back to local if Docker unavailable. |
+| **Execution Checkpoints** | File state snapshots before execution. Automatic rollback on failure — restores modified files, deletes newly created ones. |
+| **LLM Drift Detection** | Monitors provider quality over time using EMA. Alerts when a provider drops >20% vs historical average. Auto-reroutes traffic away from degraded providers. |
+| **Code Analysis** | Static analysis for code smells (long functions, deep nesting, complex conditionals, magic numbers, missing docstrings), tech debt scoring, complexity hotspots, missing test detection. |
+| **Multi-Repo Workspaces** | `--workspace` aggregates multiple repos into a single agent context. Cross-repo import detection, language detection, shared file patterns. Read-only support for reference repos. |
+| **VS Code Extension** | Agent tasks, code review, test generation, council queries, and explain — all from the VS Code sidebar. Auto-starts `nvh serve` if needed. |
 
 **Scales with your hardware — 6 tiers from no-GPU to DGX Spark:**
 
@@ -531,12 +556,16 @@ status = await nvh.health()
 
 | Command | What It Does |
 |---------|-------------|
-| `nvh agent "task"` | Plan, execute, and verify code changes (6 GPU tiers) |
+| `nvh agent "task"` | Recursive agents + iterative QA convergence (6 GPU tiers) |
 | `nvh agent --setup` | Pull recommended local models for your GPU |
 | `nvh agent --mode multi` | Force multi-model: separate planner, coder, reviewer |
+| `nvh agent --sandbox` | Execute shell commands inside a Docker container |
+| `nvh agent --workspace ./a,./b` | Multi-repo context for cross-project tasks |
 | `nvh agent --git` | Auto-create branch + commit changes |
 | `nvh review` | Multi-model code review (staged changes, PRs, commit ranges) |
 | `nvh test-gen file.py` | AI test generation with automatic verification |
+| `nvh analyze ./src` | Code smells, tech debt score, complexity hotspots |
+| `nvh drift` | Check for LLM quality degradation across providers |
 
 ### Queries & Council
 
