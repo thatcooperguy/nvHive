@@ -55,6 +55,16 @@ class ToolRegistry:
                 register_system_tools(self)
             except Exception:
                 pass  # system tools are optional
+            try:
+                from nvh.core.browser_tools import register_browser_tools
+                register_browser_tools(self)
+            except Exception:
+                pass  # browser tools are optional
+            try:
+                from nvh.core.vision_tools import register_vision_tools
+                register_vision_tools(self)
+            except Exception:
+                pass  # vision tools are optional
 
     def register(self, tool: Tool) -> None:
         self._tools[tool.name] = tool

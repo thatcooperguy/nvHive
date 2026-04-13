@@ -64,6 +64,23 @@ if sys.platform == "win32":
             pass
 
 
+def _check_serve_deps() -> bool:
+    """Return True if server dependencies (fastapi, uvicorn) are installed.
+
+    If missing, prints a helpful install message and returns False.
+    """
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+    except ImportError:
+        console.print(
+            "[red]Server dependencies are not installed.[/red]\n"
+            "  Install them with: [bold]pip install nvhive\\[serve][/bold]"
+        )
+        return False
+    return True
+
+
 def _format_cli_error(e: Exception) -> str:
     """Format an exception into a helpful, actionable CLI error message."""
     from nvh.providers.base import (
@@ -822,7 +839,7 @@ def _make_advisor_cmd(advisor_name: str):
 # Register all advisor names as commands
 for _adv_name in KNOWN_ADVISORS:
     if _adv_name != "mock":  # skip mock from top-level
-        app.command(_adv_name)(_make_advisor_cmd(_adv_name))
+        app.command(_adv_name, rich_help_panel="Providers")(_make_advisor_cmd(_adv_name))
 
 
 # ---------------------------------------------------------------------------
@@ -887,7 +904,7 @@ def _read_stdin() -> str:
 # hive ask
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Query Modes")
 def ask(
     prompt: str | None = typer.Argument(None, help="The prompt to send to the LLM"),
     provider: str | None = typer.Option(None, "-p", "--advisor", help="Advisor to use"),
@@ -1176,7 +1193,7 @@ def ask(
 # Focus Modes
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Query Modes")
 def code(
     prompt: str | None = typer.Argument(None),
     file: str | None = typer.Option(None, "-f", "--file"),
@@ -1258,7 +1275,7 @@ def code(
     _run(_run_code())
 
 
-@app.command()
+@app.command(rich_help_panel="Query Modes")
 def write(
     prompt: str | None = typer.Argument(None),
     tone: str = typer.Option("professional", help="Tone: casual, professional, academic, creative"),
@@ -1319,7 +1336,7 @@ def write(
     _run(_run_write())
 
 
-@app.command()
+@app.command(rich_help_panel="Query Modes")
 def research(
     prompt: str | None = typer.Argument(None),
 ):
@@ -1405,7 +1422,7 @@ def research(
     _run(_run_research())
 
 
-@app.command()
+@app.command(rich_help_panel="Query Modes")
 def math(
     prompt: str | None = typer.Argument(None),
 ):
@@ -1551,7 +1568,7 @@ _CLIP_ACTIONS = {
 }
 
 
-@app.command()
+@app.command(rich_help_panel="Query Modes")
 def clip(
     action: str = typer.Argument("ask", help="What to do: ask, explain, fix, summarize, translate"),
     advisor: str | None = typer.Option(None, "-a"),
@@ -1631,7 +1648,7 @@ def clip(
 # hive convene (hive mode)
 # ---------------------------------------------------------------------------
 
-@app.command("convene")
+@app.command("convene", rich_help_panel="Multi-Model")
 def convene_cmd(
     prompt: str = typer.Argument(..., help="The prompt to send to the hive"),
     members: str | None = typer.Option(None, "--members", help="Comma-separated advisor list"),
@@ -1855,7 +1872,7 @@ def convene_cmd(
 # hive poll
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Multi-Model")
 def poll(
     prompt: str = typer.Argument(..., help="The prompt to poll across advisors"),
     providers: str | None = typer.Option(None, "--advisors", help="Comma-separated advisor list"),
@@ -1937,7 +1954,7 @@ def poll(
 # nvh batch — run multiple prompts from a file and collect structured results
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Multi-Model")
 def batch(
     file: str = typer.Argument(..., help="File containing prompts (txt, json, or yaml)"),
     output: str | None = typer.Option(
@@ -2214,7 +2231,7 @@ def batch(
 # nvh throwdown — two-pass deep analysis with all APIs and agents
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Multi-Model")
 def throwdown(
     prompt: str = typer.Argument(..., help="The question for the throwdown"),
     cabinet: str | None = typer.Option(None, "--cabinet", "-c", help="Agent cabinet to use"),
@@ -2374,7 +2391,7 @@ def throwdown(
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(rich_help_panel="Other")
 def why():
     """Explain why the last query was routed the way it was.
 
@@ -2511,7 +2528,7 @@ def why():
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def health():
     """Provider health + resilience dashboard.
 
@@ -2621,7 +2638,7 @@ def health():
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def routing_stats(
     provider: str = typer.Option(None, "--provider", "-p", help="Filter by provider name"),
     task: str = typer.Option(None, "--task", "-t", help="Filter by task type"),
@@ -2749,7 +2766,7 @@ def routing_stats(
 # nvh history
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def history(
     limit: int = typer.Option(10, "--limit", "-n", help="Number of queries to show"),
     provider: str | None = typer.Option(None, "--provider", "-p", help="Filter by provider"),
@@ -2828,7 +2845,7 @@ def history(
 # nvh status
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def status():
     """Quick system status — advisors, GPU, budget, and models at a glance."""
     from rich.rule import Rule
@@ -2962,7 +2979,7 @@ def status():
 # nvh quick
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Query Modes")
 def quick(
     prompt: str = typer.Argument(..., help="Question to answer quickly"),
 ):
@@ -3017,7 +3034,7 @@ def quick(
 # ~100k chars ≈ ~25-30k tokens, safe for most model context windows.
 _PIPE_MAX_CHARS = 100_000
 
-@app.command()
+@app.command(rich_help_panel="Query Modes")
 def pipe(
     prompt: str | None = typer.Argument(None, help="Prompt to prepend to stdin content"),
     provider: str | None = typer.Option(None, "-a", "--provider", help="Provider to use"),
@@ -3119,7 +3136,7 @@ def _run_pipe_command(
 # nvh safe — local-only private mode
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Query Modes")
 def safe(
     prompt: str = typer.Argument(..., help="Question to answer privately using local models only"),
     model: str | None = typer.Option(None, "-m", "--model", help="Local model to use"),
@@ -3244,7 +3261,7 @@ ACCOUNT_SIGNUP = [
 ]
 
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def setup(
     email: str | None = typer.Option(None, "--email", "-e", help="Your email for provider signups"),
     all_providers: bool = typer.Option(
@@ -3694,7 +3711,7 @@ from datetime import UTC  # noqa: E402
 
 from nvh.cli.conversations import conversation_app  # noqa: E402
 
-app.add_typer(conversation_app, name="conversation")
+app.add_typer(conversation_app, name="conversation", rich_help_panel="Subcommands")
 
 
 # ---------------------------------------------------------------------------
@@ -3702,7 +3719,7 @@ app.add_typer(conversation_app, name="conversation")
 # ---------------------------------------------------------------------------
 
 config_app = typer.Typer(help="Manage configuration")
-app.add_typer(config_app, name="config")
+app.add_typer(config_app, name="config", rich_help_panel="Subcommands")
 
 
 @config_app.command("init")
@@ -4149,7 +4166,7 @@ def config_diff(
 # ---------------------------------------------------------------------------
 
 advisor_app = typer.Typer(help="Manage LLM advisors")
-app.add_typer(advisor_app, name="advisor")
+app.add_typer(advisor_app, name="advisor", rich_help_panel="Subcommands")
 
 
 @advisor_app.command("list")
@@ -4410,7 +4427,7 @@ def advisor_login(
 # ---------------------------------------------------------------------------
 
 budget_app = typer.Typer(help="Budget and cost management")
-app.add_typer(budget_app, name="budget")
+app.add_typer(budget_app, name="budget", rich_help_panel="Subcommands")
 
 
 @budget_app.command("status")
@@ -4465,7 +4482,7 @@ def budget_status():
     _run(_run_budget())
 
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def savings():
     """Show how much money you've saved by using local models."""
     async def _run_savings():
@@ -4542,7 +4559,7 @@ def savings():
 # nvh plugins
 # ---------------------------------------------------------------------------
 
-@app.command("plugins")
+@app.command("plugins", rich_help_panel="Other")
 def list_plugins():
     """List installed plugins."""
     from nvh.plugins.manager import PluginManager
@@ -4572,7 +4589,7 @@ def list_plugins():
 # nvh bench
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def bench(
     model: str | None = typer.Option(
         None, "-m", "--model",
@@ -4840,7 +4857,7 @@ def bench(
 # ---------------------------------------------------------------------------
 
 
-@app.command(hidden=True)
+@app.command(hidden=True, rich_help_panel="Admin")
 def benchmark(
     mode: str = typer.Option(
         "single,council-free", "-m", "--mode",
@@ -5114,7 +5131,7 @@ def _display_benchmark_table(report):
 # ---------------------------------------------------------------------------
 
 model_app = typer.Typer(help="Browse available models")
-app.add_typer(model_app, name="model")
+app.add_typer(model_app, name="model", rich_help_panel="Subcommands")
 
 
 @model_app.command("list")
@@ -5159,7 +5176,7 @@ def model_list(
 # ---------------------------------------------------------------------------
 
 agent_app = typer.Typer(help="Manage auto-generated agent personas")
-app.add_typer(agent_app, name="agent")
+app.add_typer(agent_app, name="agent", rich_help_panel="Subcommands")
 
 
 @agent_app.command("presets")
@@ -5216,7 +5233,7 @@ def agent_analyze(
 # hive repl
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Other")
 def repl(
     provider: str | None = typer.Option(None, "-p", "--advisor", help="Starting advisor"),
     model: str | None = typer.Option(None, "-m", "--model", help="Starting model"),
@@ -5256,7 +5273,7 @@ def repl(
 # ---------------------------------------------------------------------------
 
 webhook_app = typer.Typer(help="Manage webhook notifications")
-app.add_typer(webhook_app, name="webhook")
+app.add_typer(webhook_app, name="webhook", rich_help_panel="Subcommands")
 
 
 @webhook_app.command("list")
@@ -5366,7 +5383,7 @@ def webhook_add(
 # ---------------------------------------------------------------------------
 
 auth_app = typer.Typer(help="User authentication management")
-app.add_typer(auth_app, name="auth")
+app.add_typer(auth_app, name="auth", rich_help_panel="Subcommands")
 
 
 @auth_app.command("create-user")
@@ -5522,7 +5539,7 @@ def auth_revoke_token(
 # hive serve
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Infrastructure")
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address"),
     port: int = typer.Option(8000, "--port", help="Port number"),
@@ -5553,6 +5570,8 @@ def serve(
             console.print(f"[red]✗[/red] {msg}")
         return
 
+    if not _check_serve_deps():
+        raise typer.Exit(1)
     from nvh.api.server import run_server
     from nvh.integrations.hostname import is_hostname_configured
     host_label = "nvhive" if is_hostname_configured() else host
@@ -5562,7 +5581,7 @@ def serve(
     run_server(host=host, port=port, reload=reload)
 
 
-@app.command()
+@app.command(rich_help_panel="Infrastructure")
 def service(
     action: str = typer.Argument("status", help="Action: status, stop, uninstall"),
 ):
@@ -5620,7 +5639,7 @@ def service(
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def migrate(
     source: str = typer.Option(
         "auto", "--from",
@@ -5805,7 +5824,7 @@ def migrate(
 
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def integrate(
     auto: bool = typer.Option(
         False, "--auto", "-y",
@@ -5973,7 +5992,7 @@ def integrate(
 # hive openclaw — OpenClaw integration setup
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Infrastructure")
 def openclaw(
     test: bool = typer.Option(False, "--test", help="Test if the MCP server is reachable"),
     start: bool = typer.Option(False, "--start", help="Start the MCP server for OpenClaw"),
@@ -6198,7 +6217,7 @@ def openclaw(
 # hive mcp — MCP server for Claude Code, Cursor, OpenClaw
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Infrastructure")
 def mcp(
     transport: str = typer.Option(
         "stdio", "--transport", "-t",
@@ -6256,7 +6275,7 @@ def mcp(
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def estimate(
     gpu: str | None = typer.Option(
         None, "--gpu", "-g",
@@ -6433,7 +6452,7 @@ def estimate(
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(rich_help_panel="Providers")
 def nvidia():
     """NVIDIA AI infrastructure dashboard.
 
@@ -6575,7 +6594,7 @@ def nvidia():
 # hive nemoclaw — NemoClaw integration setup
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Infrastructure")
 def nemoclaw(
     host: str = typer.Option("127.0.0.1", "--host", help="NVHive proxy bind address"),
     port: int = typer.Option(8000, "--port", help="NVHive proxy port"),
@@ -6662,6 +6681,8 @@ def nemoclaw(
         console.print()
         _print_openshell_commands(host, port)
         console.print()
+        if not _check_serve_deps():
+            raise typer.Exit(1)
         from nvh.api.server import run_server
         run_server(host=host, port=port, reload=False)
         return
@@ -6819,13 +6840,13 @@ def _print_openshell_commands(host: str, port: int):
 # hive version
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def version():
     """Show NVHive version."""
     console.print(f"NVHive v{__version__}")
 
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def keys(
     open_all: bool = typer.Option(False, "--open", help="Open all signup pages in browser"),
 ):
@@ -6983,7 +7004,7 @@ def _fetch_latest_version_from_github() -> str | None:
         return None
 
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def update(
     check: bool = typer.Option(
         False, "--check",
@@ -7135,7 +7156,7 @@ def update(
 # nvh webui — install and launch the web interface
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Infrastructure")
 def webui(
     install_only: bool = typer.Option(False, "--install", help="Install without launching"),
     port: int = typer.Option(3000, "--port", help="Port for the web UI"),
@@ -7456,6 +7477,15 @@ def webui(
     api_proc: subprocess.Popen | None = None
     api_already_running = _api_reachable(api_port)
 
+    # If serve deps are missing and the API isn't already running externally,
+    # treat as --no-api so the web UI still launches (without API features).
+    if not no_api and not api_already_running and not _check_serve_deps():
+        console.print(
+            "  [yellow]![/yellow] Skipping API auto-start. "
+            "The web UI will work but Advisors/Providers pages will be empty."
+        )
+        no_api = True
+
     if no_api:
         if not api_already_running:
             console.print(
@@ -7547,7 +7577,7 @@ def webui(
 # nvh debug — full diagnostic dump for troubleshooting
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def debug(
     output: str | None = typer.Option(
         None, "-o", "--output",
@@ -7985,7 +8015,7 @@ def debug(
 # hive test — end-to-end smoke test
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def test(
     api_url: str = typer.Option("http://localhost:8000", "--api", help="API server URL"),
     webui_url: str = typer.Option("http://localhost:3000", "--webui", help="WebUI URL"),
@@ -8124,7 +8154,7 @@ def test(
 # hive doctor
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def doctor():
     """Run comprehensive system diagnostic."""
     import os
@@ -8498,7 +8528,7 @@ def doctor():
 # ---------------------------------------------------------------------------
 
 template_app = typer.Typer(help="Manage prompt templates")
-app.add_typer(template_app, name="template")
+app.add_typer(template_app, name="template", rich_help_panel="Subcommands")
 
 
 @template_app.command("list")
@@ -8652,7 +8682,7 @@ def template_create(
 # ---------------------------------------------------------------------------
 
 workflow_app = typer.Typer(help="Manage and run workflow pipelines")
-app.add_typer(workflow_app, name="workflow")
+app.add_typer(workflow_app, name="workflow", rich_help_panel="Subcommands")
 
 
 @workflow_app.command("list")
@@ -8828,7 +8858,7 @@ def workflow_show(
 # hive completions
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def completions(
     shell: str = typer.Argument("bash", help="Shell: bash, zsh, fish"),
     install: bool = typer.Option(False, "--install", help="Auto-install into shell config"),
@@ -8875,7 +8905,7 @@ def _reload_hint(shell: str) -> None:
 # nvh do — agentic hands-free task execution
 # ---------------------------------------------------------------------------
 
-@app.command("do")
+@app.command("do", rich_help_panel="Core")
 def do_task(
     task: str = typer.Argument(..., help="Task for the agent to complete"),
     advisor: str | None = typer.Option(None, "-a", "--advisor", help="Specific advisor to use"),
@@ -9065,7 +9095,7 @@ def do_task(
 # nvh agent — tier-aware coding agent (beta)
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Core")
 def agent(
     task: str = typer.Argument("", help="Coding task for the agent to complete"),
     tier: str | None = typer.Option(None, "--tier", help="Force GPU tier: 0-5 (auto-detects if omitted)"),
@@ -9370,7 +9400,7 @@ def agent(
 # nvh review — AI code review (beta)
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Core")
 def review(
     source: str = typer.Argument("staged", help="What to review: staged, HEAD~N..HEAD, or PR number"),
     tier: str | None = typer.Option(None, "--tier", help="Force GPU tier: 0-5"),
@@ -9456,7 +9486,7 @@ def review(
 # nvh test-gen — AI test generation (beta)
 # ---------------------------------------------------------------------------
 
-@app.command("test-gen")
+@app.command("test-gen", rich_help_panel="Core")
 def test_gen(
     target: str = typer.Argument(..., help="File path, --coverage-gaps, or --for-pr"),
     tier: str | None = typer.Option(None, "--tier", help="Force GPU tier: 0-5"),
@@ -9523,7 +9553,7 @@ def test_gen(
 # nvh workspace — multi-repo management (beta)
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Subcommands")
 def workspace(
     action: str = typer.Argument("list", help="Action: add, list, scan, remove"),
     paths: list[str] = typer.Argument(None, help="Repo paths to add"),
@@ -9593,7 +9623,7 @@ def workspace(
 # nvh snapshot — save/restore environment state
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def snapshot(
     action: str = typer.Argument("save", help="Action: save, restore, list"),
     path: str = typer.Option("nvhive-snapshot.tar.gz", "-o", "--output", help="Snapshot file path"),
@@ -9652,7 +9682,7 @@ def snapshot(
 # nvh costs — usage and cost reporting
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def costs(
     period: str = typer.Argument("today", help="Period: today, week, month"),
 ):
@@ -9680,7 +9710,7 @@ def costs(
 # nvh voice — speak your question, hear the answer
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Media")
 def voice(
     duration: int = typer.Option(10, "-d", "--duration", help="Recording duration in seconds"),
     stt: str = typer.Option("groq", "--stt", help="Speech-to-text provider: groq, local"),
@@ -9770,7 +9800,7 @@ def voice(
 # nvh imagine — generate an image from a text description
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Media")
 def imagine(
     prompt: str = typer.Argument(..., help="Text description of the image to generate"),
     output: str = typer.Option(
@@ -9826,7 +9856,7 @@ def imagine(
 # nvh screenshot — take a screenshot and analyse it
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Media")
 def screenshot(
     advisor: str | None = typer.Option(None, "-a", "--advisor", help="Advisor to use for analysis"),
     model: str | None = typer.Option(None, "-m", "--model", help="Model to use"),
@@ -9948,7 +9978,7 @@ def screenshot(
 # nvh learn — ingest documents into the knowledge base
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Media")
 def learn(
     path: str = typer.Argument(..., help="File or directory to ingest into the knowledge base"),
 ):
@@ -10024,7 +10054,7 @@ def learn(
 # ---------------------------------------------------------------------------
 
 knowledge_app = typer.Typer(help="Manage the RAG knowledge base")
-app.add_typer(knowledge_app, name="knowledge")
+app.add_typer(knowledge_app, name="knowledge", rich_help_panel="Subcommands")
 
 
 @knowledge_app.command("list")
@@ -10117,7 +10147,7 @@ def knowledge_remove(
 # ---------------------------------------------------------------------------
 
 schedule_app = typer.Typer(help="Schedule recurring AI tasks")
-app.add_typer(schedule_app, name="schedule")
+app.add_typer(schedule_app, name="schedule", rich_help_panel="Subcommands")
 
 
 @schedule_app.command("add")
@@ -10331,7 +10361,7 @@ def schedule_start(
 # ---------------------------------------------------------------------------
 
 git_app = typer.Typer(help="AI-powered git operations (commit messages, reviews, history).")
-app.add_typer(git_app, name="git")
+app.add_typer(git_app, name="git", rich_help_panel="Subcommands")
 
 
 def _git_run(cmd: str) -> tuple[str, int]:
@@ -10575,7 +10605,7 @@ def git_explain(
 # nvh scan — AI analysis of a codebase
 # ---------------------------------------------------------------------------
 
-@app.command()
+@app.command(rich_help_panel="Core")
 def scan(
     path: str = typer.Argument(".", help="Directory to scan (default: current directory)"),
     focus: str = typer.Option(
@@ -10755,6 +10785,19 @@ def scan(
         else:
             focus_context = "\n## Static scan: no obvious sensitive patterns found."
 
+    elif focus == "quality":
+        # Run local static code analysis via code_analysis module
+        try:
+            from nvh.core.code_analysis import analyze_directory, format_analysis_report
+            analysis_report = analyze_directory(target)
+            focus_context = (
+                "\n## Local Static Analysis\n```\n"
+                + format_analysis_report(analysis_report)
+                + "\n```"
+            )
+        except Exception as e:
+            focus_context = f"\n## Local static analysis unavailable: {e}"
+
     elif focus == "dependencies":
         dep_files_content: list[str] = []
         for df in [
@@ -10862,7 +10905,7 @@ def scan(
 # ---------------------------------------------------------------------------
 
 
-@app.command()
+@app.command(rich_help_panel="Admin")
 def tour(
     skip: list[int] = typer.Option(
         [], "--skip", "-s", help="Steps to skip (1, 2, or 3)"
