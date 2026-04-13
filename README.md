@@ -36,7 +36,7 @@ pip install nvhive[browser]  # browser automation (playwright)
 
 **What makes it different:**
 
-- **Smart team assembly.** nvHive doesn't just route to one model — it generates expert agents based on your question and matches each one to the best LLM for their specialty. A "Security Engineer" agent gets the LLM that scores highest on security tasks. A "Database Expert" gets the best at database queries. Based on adaptive routing data once sufficient queries are collected, with curated defaults for new installations.
+- **Smart team assembly.** nvHive doesn't just route to one model — it generates expert agents based on your question and matches each one to the best LLM for their specialty. A "Security Engineer" agent gets routed to a provider strong at security tasks. A "Database Expert" gets one suited to database queries. Based on adaptive routing data once sufficient queries are collected, with curated defaults for new installations.
 - **Automatic orchestration.** Coding tasks get a planner + coder + reviewer. Complex questions get a council of specialists. Simple questions get the fastest advisor. All automatic based on intent detection and available advisors.
 - **Scales with what you have.** 1 provider? Single-model answers. 3+ providers? Council automatically on complex questions, multi-model verification on code. Local GPU? Free inference alongside cloud. DGX Spark? Three 70B models in parallel, fully local.
 - **Performant by default.** Uses all available advisors within reason. Simple questions don't trigger council. Budget limits always enforced. Switch to cost mode for minimal spend.
@@ -252,7 +252,7 @@ When one model isn't enough, nvHive runs the same query through multiple provide
 
 **Why this works:** Different models have different blind spots. Council mode surfaces all perspectives and synthesizes the best of each.
 
-**Confidence scoring:** Every council response includes an agreement metric — "3/3 agreed" vs "split decision." Tells you when to trust the consensus.
+**Confidence scoring:** Every council response includes an agreement metric (e.g., "Strong consensus" vs "Split decision") based on pairwise response similarity. Tells you when to trust the consensus.
 
 **Cost:** Council with 3 free providers costs $0. Council with 3 Nemotron variants on a single NVIDIA GPU costs $0 and never leaves your machine. Premium cloud council costs ~3x a single query.
 
@@ -463,7 +463,7 @@ Real data from NVIDIA DGX Spark (GB10, 120GB). Judged by OpenAI with ground trut
 | Single Model (Nemotron Super) | 5.5 | 5.7 | 5.0 | **5.1** | $0.00 |
 | **Council (Free: Ollama + Groq + Google)** | **9.0** | **8.0** | **9.0** | **8.6** | **$0.00** |
 
-Council consensus scored **68% higher** than a single model on the same prompts. Ground truth verification on math problems caught errors the single model made that an LLM judge alone wouldn't have flagged.
+In our reference benchmark (16 prompts, DGX Spark hardware, judged by OpenAI), council consensus scored **68% higher** than a single model on the same prompts. Ground truth verification on math problems caught errors the single model missed. Results will vary by hardware and workload — run `nvh bench` to measure on your setup.
 
 ### Speed: Models on DGX Spark
 
