@@ -197,7 +197,7 @@ async def _smart_default(prompt: str, *, force_iterative: bool = False):
     )
     if use_iterative:
         console.print(
-            f"[dim][iterative → multi-agent QA loop | {num_advisors} advisor(s)][/dim]\n"
+            f"[bold dim][[bold green]iterative[/bold green] → multi-agent QA loop | {num_advisors} advisor(s)][/bold dim]\n"
         )
         try:
             from rich.live import Live
@@ -275,7 +275,7 @@ async def _smart_default(prompt: str, *, force_iterative: bool = False):
         return
 
     if intent == "coding":
-        console.print(f"[dim][agent → coding task detected | {num_advisors} advisor(s)][/dim]\n")
+        console.print(f"[bold dim][[green]agent[/green] → coding task detected | {num_advisors} advisor(s)][/bold dim]\n")
         try:
             from pathlib import Path as _Path
 
@@ -332,7 +332,7 @@ async def _smart_default(prompt: str, *, force_iterative: bool = False):
             console.print(_format_cli_error(e))
 
     elif intent == "review":
-        console.print(f"[dim][review → {num_advisors} advisor(s)][/dim]\n")
+        console.print(f"[bold dim][[yellow]review[/yellow] → {num_advisors} advisor(s)][/bold dim]\n")
         try:
             from pathlib import Path as _Path
 
@@ -355,7 +355,7 @@ async def _smart_default(prompt: str, *, force_iterative: bool = False):
             console.print(_format_cli_error(e))
 
     elif intent == "testgen":
-        console.print(f"[dim][test-gen → {num_advisors} advisor(s)][/dim]\n")
+        console.print(f"[bold dim][[blue]test-gen[/blue] → {num_advisors} advisor(s)][/bold dim]\n")
         try:
             from pathlib import Path as _Path
 
@@ -386,13 +386,13 @@ async def _smart_default(prompt: str, *, force_iterative: bool = False):
             personas = generate_agents(prompt, num_agents=min(num_advisors, 5))
             assignments = match_agents_to_providers(personas, engine)
             if assignments:
-                console.print("[dim][council → assembling expert team][/dim]\n")
+                console.print("[bold dim][[magenta]council[/magenta] → assembling expert team][/bold dim]\n")
                 console.print(format_team_report(assignments))
                 console.print()
             else:
-                console.print(f"[dim][council → {num_advisors} advisors, auto-team][/dim]\n")
+                console.print(f"[bold dim][[magenta]council[/magenta] → {num_advisors} advisors, auto-team][/bold dim]\n")
         except Exception:
-            console.print(f"[dim][council → {num_advisors} advisors, auto-team][/dim]\n")
+            console.print(f"[bold dim][[magenta]council[/magenta] → {num_advisors} advisors, auto-team][/bold dim]\n")
 
         try:
             result = await engine.run_council(
@@ -410,10 +410,10 @@ async def _smart_default(prompt: str, *, force_iterative: bool = False):
                     if summary:
                         confidence_part += f" — {summary}"
                 console.print(
-                    f"\n[dim]Agents: {', '.join(result.agents_used)}"
-                    f" | Cost: ${result.total_cost_usd:.4f}"
-                    f" | {result.total_latency_ms}ms"
-                    f"{confidence_part}[/dim]"
+                    f"\n[bold]Agents:[/bold] [dim]{', '.join(result.agents_used)}[/dim]"
+                    f" | [bold]Cost:[/bold] [dim]${result.total_cost_usd:.4f}[/dim]"
+                    f" | [bold]Latency:[/bold] [dim]{result.total_latency_ms}ms[/dim]"
+                    f"{confidence_part}"
                 )
             else:
                 for label, resp in result.member_responses.items():
@@ -426,19 +426,20 @@ async def _smart_default(prompt: str, *, force_iterative: bool = False):
         try:
             decision = engine.router.route(prompt)
             mode_label = "ask" if num_advisors <= 2 else "ask (simple)"
-            console.print(f"[dim][{mode_label} → {decision.provider}/{decision.model}][/dim]\n")
-            resp = await engine.query(prompt=prompt, stream=False)
+            console.print(f"[bold dim][[cyan]ask[/cyan] → {decision.provider}/{decision.model}][/bold dim]\n")
+            with console.status(f"Querying {decision.provider}...", spinner="dots"):
+                resp = await engine.query(prompt=prompt, stream=False)
             console.print(resp.content)
-            meta_parts = [
-                f"Advisor: {resp.provider}",
-                f"Model: {resp.model}",
-                f"Tokens: {resp.usage.input_tokens}/{resp.usage.output_tokens}",
-                f"Cost: ${resp.cost_usd:.4f}",
-                f"{resp.latency_ms}ms",
-            ]
             if resp.fallback_from:
-                meta_parts.insert(0, f"[yellow]Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
-            console.print(f"\n[dim]{' | '.join(meta_parts)}[/dim]")
+                console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
+            meta_parts = [
+                f"[bold]Advisor:[/bold] [dim]{resp.provider}[/dim]",
+                f"[bold]Model:[/bold] [dim]{resp.model}[/dim]",
+                f"[bold]Tokens:[/bold] [dim]{resp.usage.input_tokens}/{resp.usage.output_tokens}[/dim]",
+                f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim]",
+                f"[bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]",
+            ]
+            console.print(f"\n{' | '.join(meta_parts)}")
         except Exception as e:
             console.print(_format_cli_error(e))
 
@@ -785,10 +786,12 @@ def _make_advisor_cmd(advisor_name: str):
                         print(resp.content, end="")
                     else:
                         console.print(resp.content)
-                        console.print(f"\n[dim]{resp.provider}/{resp.model} | "
-                                     f"{resp.usage.input_tokens}"
-                                     f"/{resp.usage.output_tokens} tokens | "
-                                     f"${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]")
+                        if resp.fallback_from:
+                            console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
+                        console.print(f"\n[bold]Provider:[/bold] [dim]{resp.provider}/{resp.model}[/dim] | "
+                                     f"[bold]Tokens:[/bold] [dim]{resp.usage.input_tokens}"
+                                     f"/{resp.usage.output_tokens}[/dim] | "
+                                     f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]")
                 except Exception as e:
                     console.print(_format_cli_error(e))
             _run(_ask())
@@ -860,24 +863,26 @@ def _print_metadata(resp, show: bool = True):
     """Print response metadata (provider, model, tokens, cost, latency)."""
     if not show:
         return
+    # Show failover on its own line if present
+    if resp.fallback_from:
+        console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
+
     parts = []
     if resp.provider:
-        parts.append(f"Provider: {resp.provider}")
+        parts.append(f"[bold]Provider:[/bold] [dim]{resp.provider}[/dim]")
     if resp.model:
-        parts.append(f"Model: {resp.model}")
+        parts.append(f"[bold]Model:[/bold] [dim]{resp.model}[/dim]")
     if resp.usage.total_tokens:
-        parts.append(f"Tokens: {resp.usage.input_tokens} in / {resp.usage.output_tokens} out")
+        parts.append(f"[bold]Tokens:[/bold] [dim]{resp.usage.input_tokens} in / {resp.usage.output_tokens} out[/dim]")
     if resp.cost_usd:
-        parts.append(f"Cost: ${resp.cost_usd:.4f}")
+        parts.append(f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim]")
     if resp.latency_ms:
-        parts.append(f"Latency: {resp.latency_ms}ms")
+        parts.append(f"[bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]")
     if resp.cache_hit:
-        parts.append("(cached)")
-    if resp.fallback_from:
-        parts.append(f"(fallback from {resp.fallback_from})")
+        parts.append("[dim](cached)[/dim]")
 
     if parts:
-        console.print(f"\n[dim]{' | '.join(parts)}[/dim]")
+        console.print(f"\n{' | '.join(parts)}")
 
 
 def _format_output(content: str, fmt: str) -> None:
@@ -1115,38 +1120,40 @@ def ask(
                     if chunk.is_final and not quiet:
                         elapsed = int((time.monotonic() - start) * 1000)
                         console.print()  # newline
-                        parts = [f"Provider: {decision.provider}", f"Model: {pmodel}"]
+                        parts = [f"[bold]Provider:[/bold] [dim]{decision.provider}[/dim]", f"[bold]Model:[/bold] [dim]{pmodel}[/dim]"]
                         if chunk.usage:
                             parts.append(
-                                f"Tokens: {chunk.usage.input_tokens}"
-                                f" in / {chunk.usage.output_tokens} out"
+                                f"[bold]Tokens:[/bold] [dim]{chunk.usage.input_tokens}"
+                                f" in / {chunk.usage.output_tokens} out[/dim]"
                             )
                         if chunk.cost_usd:
-                            parts.append(f"Cost: ${chunk.cost_usd:.4f}")
-                        parts.append(f"Latency: {elapsed}ms")
-                        console.print(f"\n[dim]{' | '.join(parts)}[/dim]")
+                            parts.append(f"[bold]Cost:[/bold] [dim]${chunk.cost_usd:.4f}[/dim]")
+                        parts.append(f"[bold]Latency:[/bold] [dim]{elapsed}ms[/dim]")
+                        console.print(f"\n{' | '.join(parts)}")
             except Exception as e:
                 console.print(f"\n{_format_cli_error(e)}")
                 raise typer.Exit(1)
         else:
             # Non-streaming
             try:
-                resp = await engine.query(
-                    prompt=full_prompt,
-                    provider=provider,
-                    model=model,
-                    system_prompt=system,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    stream=False,
-                    use_cache=not no_cache and not privacy,
-                    strategy=strategy,
-                    conversation_id=None if privacy else conversation,
-                    continue_last=False if privacy else continue_,
-                    privacy=privacy,
-                    escalate=escalate,
-                    verify=verify,
-                )
+                _ask_advisor = provider or "advisor"
+                with console.status(f"Querying {_ask_advisor}...", spinner="dots"):
+                    resp = await engine.query(
+                        prompt=full_prompt,
+                        provider=provider,
+                        model=model,
+                        system_prompt=system,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        stream=False,
+                        use_cache=not no_cache and not privacy,
+                        strategy=strategy,
+                        conversation_id=None if privacy else conversation,
+                        continue_last=False if privacy else continue_,
+                        privacy=privacy,
+                        escalate=escalate,
+                        verify=verify,
+                    )
 
                 # Show escalation info before the response
                 if resp.metadata.get("escalated") and not quiet:
@@ -1265,9 +1272,11 @@ def code(
                 stream=False,
             )
             console.print(Markdown(resp.content))
+            if resp.fallback_from:
+                console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
             console.print(
-                f"\n[dim]Advisor: {resp.provider} | Model: {resp.model} | "
-                f"Cost: ${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]"
+                f"\n[bold]Advisor:[/bold] [dim]{resp.provider}[/dim] | [bold]Model:[/bold] [dim]{resp.model}[/dim] | "
+                f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]"
             )
         except Exception as e:
             console.print(_format_cli_error(e))
@@ -1326,9 +1335,11 @@ def write(
                 stream=False,
             )
             console.print(resp.content)
+            if resp.fallback_from:
+                console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
             console.print(
-                f"\n[dim]Advisor: {resp.provider} | Model: {resp.model} | "
-                f"Cost: ${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]"
+                f"\n[bold]Advisor:[/bold] [dim]{resp.provider}[/dim] | [bold]Model:[/bold] [dim]{resp.model}[/dim] | "
+                f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]"
             )
         except Exception as e:
             console.print(_format_cli_error(e))
@@ -1382,9 +1393,11 @@ def research(
                     stream=False,
                 )
                 console.print(Markdown(search_resp.content))
+                if search_resp.fallback_from:
+                    console.print(f"\n[yellow]↪ Failover: {search_resp.fallback_from} → {search_resp.provider}[/yellow]")
                 console.print(
-                    f"\n[dim]Advisor: {search_resp.provider} | Model: {search_resp.model} | "
-                    f"Cost: ${search_resp.cost_usd:.4f} | {search_resp.latency_ms}ms[/dim]"
+                    f"\n[bold]Advisor:[/bold] [dim]{search_resp.provider}[/dim] | [bold]Model:[/bold] [dim]{search_resp.model}[/dim] | "
+                    f"[bold]Cost:[/bold] [dim]${search_resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{search_resp.latency_ms}ms[/dim]"
                 )
                 return
             except Exception:
@@ -1409,9 +1422,9 @@ def research(
                     if summary:
                         confidence_part += f" — {summary}"
                 console.print(
-                    f"\n[dim]Agents: {', '.join(result.agents_used)} | "
-                    f"Cost: ${result.total_cost_usd:.4f} | {result.total_latency_ms}ms"
-                    f"{confidence_part}[/dim]"
+                    f"\n[bold]Agents:[/bold] [dim]{', '.join(result.agents_used)}[/dim] | "
+                    f"[bold]Cost:[/bold] [dim]${result.total_cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{result.total_latency_ms}ms[/dim]"
+                    f"{confidence_part}"
                 )
             else:
                 for label, resp in result.member_responses.items():
@@ -1483,9 +1496,11 @@ def math(
                 stream=False,
             )
             console.print(Markdown(resp.content))
+            if resp.fallback_from:
+                console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
             console.print(
-                f"\n[dim]Advisor: {resp.provider} | Model: {resp.model} | "
-                f"Cost: ${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]"
+                f"\n[bold]Advisor:[/bold] [dim]{resp.provider}[/dim] | [bold]Model:[/bold] [dim]{resp.model}[/dim] | "
+                f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]"
             )
         except Exception as e:
             console.print(_format_cli_error(e))
@@ -1628,9 +1643,11 @@ def clip(
                 stream=False,
             )
             console.print(resp.content)
+            if resp.fallback_from:
+                console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
             console.print(
-                f"\n[dim]Advisor: {resp.provider} | Model: {resp.model} | "
-                f"Cost: ${resp.cost_usd:.4f} | {resp.latency_ms}ms[/dim]"
+                f"\n[bold]Advisor:[/bold] [dim]{resp.provider}[/dim] | [bold]Model:[/bold] [dim]{resp.model}[/dim] | "
+                f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]"
             )
             if copy:
                 try:
