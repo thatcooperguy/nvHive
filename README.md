@@ -26,44 +26,39 @@ nvh "Should we use Redis or Postgres?"           # → auto-detects debate → c
 
 ```mermaid
 flowchart LR
-    QUERY[User Query] --> INTENT[Intent Detection<br/>coding · review · council]
-    INTENT --> AGENTS[Generate Expert Agents<br/>based on topic keywords]
-
-    AGENTS --> MATCH[Match Agents to LLMs<br/>learning engine scores]
-
-    MATCH --> A1[Security Engineer<br/>→ Claude<br/>best at security]
-    MATCH --> A2[Database Expert<br/>→ GPT-4o<br/>best at databases]
-    MATCH --> A3[Backend Architect<br/>→ Llama 70B local<br/>strong coding]
-
-    A1 --> SYNTH[Synthesize<br/>best of each expert]
-    A2 --> SYNTH
-    A3 --> SYNTH
-
-    SYNTH --> RESULT[Unified Answer<br/>all perspectives integrated]
-
-    style MATCH fill:#1a1a2e,color:#76B900,stroke:#76B900
-    style SYNTH fill:#1a1a2e,color:#3b82f6,stroke:#3b82f6
-    style RESULT fill:#76B900,color:#000
+    Q[Your Query] --> R{Smart Router}
+    R -->|Simple| F["FREE\nLocal GPU / Groq / GitHub\n$0.00"]
+    R -->|Coding| C["CHEAP\nFree cloud + local agent\n$0.00–$0.05"]
+    R -->|Complex| S["SMART\nMulti-model council\n$0.00–$0.15"]
+    R -->|Escalation| P["PREMIUM\nOnly when needed\nAuto-escalate"]
+    F --> L["Learning loop\nRouting improves over time"]
+    C --> L
+    S --> L
+    P --> L
 ```
 
 ### Architecture Overview
 
 ```mermaid
 flowchart TB
-    User[User Prompt] --> Intent[Intent Detection]
-    Intent --> |simple| LLM[Single LLM Query]
-    Intent --> |coding| Agent[Agent Assembly]
-    Intent --> |iterative| Iter[Iterative Loop]
-    Intent --> |review| Review[Code Review]
-    Intent --> |testgen| TestGen[Test Generation]
-    Agent --> Match[Match Agents to LLMs]
-    Iter --> Match
-    Match --> Pipeline[Parallel Pipeline]
-    Pipeline --> Referrals[Recursive Referrals]
-    Referrals --> QA{QA Gate}
-    QA -->|PASSED| Output[Final Output]
-    QA -->|FAILED| Feedback[Feed Back]
-    Feedback --> Pipeline
+    P[User Prompt] --> I{Intent Detection}
+    I -->|simple| LLM[Single LLM Query]
+    I -->|coding| D[Decompose Task]
+    I -->|iterative| D
+    I -->|review| REV[Dual-Model Review]
+    I -->|council| CON[Council Assembly]
+    D --> G[Generate Expert Agents]
+    G --> M[Match Agent → Best LLM]
+    M --> PAR[Parallel Execution]
+    PAR --> REF{Agent needs specialist?}
+    REF -->|REFER| SP[Spawn Specialist]
+    SP --> PAR
+    REF -->|No| SYN[Synthesize Results]
+    SYN --> QA{QA Gate}
+    QA -->|PASSED| OUT[Output + Files]
+    QA -->|FAILED| FB[Feed Errors Back]
+    FB -->|Budget OK| G
+    FB -->|Budget exceeded| OUT
 ```
 
 <p align="center">
@@ -73,6 +68,62 @@ flowchart TB
 <p align="center">
   <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive Web Dashboard" width="640">
 </p>
+
+---
+
+## Get Started
+
+```bash
+pip install nvhive
+nvh setup              # configure providers (validates keys)
+nvh health             # check what's available
+nvh "your question"    # try it
+```
+
+```bash
+# With optional extras
+pip install nvhive[all]      # vision + browser automation
+pip install nvhive[vision]   # desktop control (pyautogui)
+pip install nvhive[browser]  # browser automation (playwright)
+```
+
+### First-Run Setup
+
+On first run, `nvh` automatically launches guided setup:
+- Detects GPU hardware and VRAM tier
+- Shows provider status (which API keys are configured)
+- Prompts for missing API keys with validation
+- Offers to pull recommended Ollama models for your GPU
+
+Works immediately with LLM7 (no signup). Run `nvh setup` to add free providers like Groq and GitHub Models.
+
+<details>
+<summary><b>NVIDIA GPU Quick Start</b> — local inference on your hardware</summary>
+
+```bash
+# 1. Install Ollama + Nemotron
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull nemotron-mini        # 4.1GB, runs on 8GB+ VRAM
+
+# 2. Install nvHive
+pip install nvhive
+
+# 3. nvHive auto-detects your GPU and Nemotron
+nvh nvidia                       # GPU info + inference stack status
+nvh bench                        # benchmark your GPU (tokens/sec)
+
+# 4. Queries route to your GPU by default
+nvh "Explain quicksort"          # → local Nemotron, $0, private
+nvh safe "Analyze this code"     # → forced local, nothing leaves machine
+nvh --prefer-nvidia "question"   # → 1.3x bonus for NVIDIA providers
+
+# 5. Council on your GPU — 3 models, $0, fully private
+nvh convene "Redis vs Postgres for sessions?"
+```
+
+nvHive detects NVIDIA GPUs via pynvml (VRAM, driver, CUDA version, temperature, power draw) and selects the optimal Nemotron model for your hardware. Simple queries stay local. Complex queries escalate to cloud only when needed. The learning loop measures your GPU's quality over time and adjusts routing thresholds automatically.
+
+</details>
 
 ---
 
@@ -95,49 +146,7 @@ nvh agent "task" --workspace ./api,./frontend             # multi-repo context
 nvh agent "refactor the auth module" --sandbox  # runs in Docker container
 ```
 
-**How it works:** Intent detection classifies the task, the orchestrator generates expert agents matched to the best LLMs, agents run in parallel where possible, recursive referral spawning fills knowledge gaps on-demand, and an iterative QA loop refines until convergence.
-
-```mermaid
-flowchart LR
-    TASK[Task] --> INTENT[Intent Detection<br/>13 task types]
-
-    INTENT --> DECOMPOSE[Decompose<br/>into subtasks]
-
-    DECOMPOSE --> MATCH[Match Agents → LLMs<br/>learning engine scores]
-
-    MATCH --> PAR[Parallel Pipeline<br/>independent subtasks<br/>run concurrently]
-
-    PAR --> RECURSE[Recursive Spawning<br/>agents request specialists<br/>on-demand via REFER:]
-
-    RECURSE --> QA{Iterative QA<br/>PASSED?}
-
-    QA -->|PARTIAL / FAILED| FEEDBACK[QA feedback<br/>→ new agents<br/>→ next round]
-    FEEDBACK --> PAR
-
-    QA -->|PASSED| DONE[Converged<br/>Files modified<br/>Git commit]
-
-    style INTENT fill:#1a1a2e,color:#76B900,stroke:#76B900
-    style PAR fill:#1a1a2e,color:#3b82f6,stroke:#3b82f6
-    style RECURSE fill:#1a1a2e,color:#a855f7,stroke:#a855f7
-    style QA fill:#1a1a2e,color:#f59e0b,stroke:#f59e0b
-    style DONE fill:#76B900,color:#000
-```
-
-### Iterative QA Loop
-
-The iterative QA loop drives tasks to convergence through multiple rounds of generation, execution, and review. Enable with `--iterative` and control spend with `budget_usd`.
-
-```mermaid
-flowchart LR
-    A[Task] --> B[Generate Agents]
-    B --> C[Execute + Recursive Referrals]
-    C --> D[Synthesize]
-    D --> E{QA Review}
-    E -->|PASSED| F[Done]
-    E -->|PARTIAL/FAILED| G[Feed Feedback]
-    G --> B
-    E -->|Budget Exceeded| F
-```
+**How it works:** Intent detection classifies the task, the orchestrator generates expert agents matched to the best LLMs, agents run in parallel where possible, recursive referral spawning fills knowledge gaps on-demand, and an iterative QA loop refines until convergence. See the [Architecture Overview](#architecture-overview) diagram above for the full flow.
 
 ```bash
 nvh agent "task" --iterative               # enable iterative QA convergence
@@ -206,59 +215,24 @@ Reads your code, identifies untested paths, generates pytest tests, runs them, a
 
 ---
 
-## Get Started
+## Security Model
 
-```bash
-pip install nvhive
-nvh setup              # configure providers (validates keys)
-nvh health             # check what's available
-nvh "your question"    # try it
+4-layer guardrails protect your system. Agents cannot escape the project directory, run destructive commands, or leak secrets. Docker sandbox adds container isolation.
+
+```mermaid
+flowchart TB
+    CMD[Agent Command] --> B1{Blocklist}
+    B1 -->|"rm -rf, mkfs..."| BLOCK[BLOCKED]
+    B1 -->|OK| B2{Path Boundary}
+    B2 -->|Outside project| BLOCK
+    B2 -->|OK| B3[Secrets Redaction]
+    B3 --> B4[Resource Limits]
+    B4 --> SB{--sandbox?}
+    SB -->|Yes| DOC[Docker Container\nMemory/CPU limited\nNo network\nNon-root]
+    SB -->|No| LOC[Local Execution]
+    DOC --> CP[Checkpoint + Rollback]
+    LOC --> CP
 ```
-
-```bash
-# With optional extras
-pip install nvhive[all]      # vision + browser automation
-pip install nvhive[vision]   # desktop control (pyautogui)
-pip install nvhive[browser]  # browser automation (playwright)
-```
-
-### First-Run Setup
-
-On first run, `nvh` automatically launches guided setup:
-- Detects GPU hardware and VRAM tier
-- Shows provider status (which API keys are configured)
-- Prompts for missing API keys with validation
-- Offers to pull recommended Ollama models for your GPU
-
-Works immediately with LLM7 (no signup). Run `nvh setup` to add free providers like Groq and GitHub Models.
-
-<details>
-<summary><b>NVIDIA GPU Quick Start</b> — local inference on your hardware</summary>
-
-```bash
-# 1. Install Ollama + Nemotron
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull nemotron-mini        # 4.1GB, runs on 8GB+ VRAM
-
-# 2. Install nvHive
-pip install nvhive
-
-# 3. nvHive auto-detects your GPU and Nemotron
-nvh nvidia                       # GPU info + inference stack status
-nvh bench                        # benchmark your GPU (tokens/sec)
-
-# 4. Queries route to your GPU by default
-nvh "Explain quicksort"          # → local Nemotron, $0, private
-nvh safe "Analyze this code"     # → forced local, nothing leaves machine
-nvh --prefer-nvidia "question"   # → 1.3x bonus for NVIDIA providers
-
-# 5. Council on your GPU — 3 models, $0, fully private
-nvh convene "Redis vs Postgres for sessions?"
-```
-
-nvHive detects NVIDIA GPUs via pynvml (VRAM, driver, CUDA version, temperature, power draw) and selects the optimal Nemotron model for your hardware. Simple queries stay local. Complex queries escalate to cloud only when needed. The learning loop measures your GPU's quality over time and adjusts routing thresholds automatically.
-
-</details>
 
 ---
 
@@ -302,6 +276,28 @@ flowchart TB
 **Task classification:** TF-IDF cosine similarity against a 90-example training corpus (13 task types). Semantic understanding, not keyword matching.
 
 **Provider scoring:** Weighted composite — capability (40%), cost (30%), latency (20%), health (10%). Capability scores start from static estimates and converge to measured performance via exponential moving average.
+
+### Provider Routing
+
+```mermaid
+flowchart LR
+    R[Request] --> S[Score Providers]
+    S --> C["Capability 40%"]
+    S --> CO["Cost 30%"]
+    S --> LA["Latency 20%"]
+    S --> H["Health 10%"]
+    C --> RANK[Weighted Rank]
+    CO --> RANK
+    LA --> RANK
+    H --> RANK
+    RANK --> B[Best Provider]
+    B -->|Success| REC[Record + Learn]
+    B -->|Failure| FALL[Fallback Chain]
+    FALL --> B
+    REC --> DR{Drift?}
+    DR -->|Yes| ALERT[Auto-Reroute]
+    DR -->|No| DONE[Done]
+```
 
 **Adaptive learning:** After every query, nvHive records the outcome and updates scores. By 20 queries per provider/task pair, routing is fully data-driven.
 
@@ -416,6 +412,15 @@ nvh ask --escalate --verify "Explain the CAP theorem"
 ## Local GPU Inference with Nemotron
 
 `nvh setup` detects your NVIDIA GPU, selects which models fit in your VRAM, and pulls them automatically. Supports both [NVIDIA Nemotron](https://build.nvidia.com/) and [Google Gemma 4](https://ai.google.dev/gemma) (NVIDIA-optimized) for local council with two different architectures.
+
+```mermaid
+flowchart LR
+    V{VRAM} -->|"0 GB"| CL[Cloud Only\nFree tiers first]
+    V -->|"8-24 GB"| SM[Small Local\n7B models + cloud]
+    V -->|"24-48 GB"| MD[Medium Local\n27B + cloud planner]
+    V -->|"48-96 GB"| LG[Large Local\n70B + cloud orchestrator]
+    V -->|"128 GB+"| DG[Full Local\nAll models, $0, private]
+```
 
 <p align="center">
   <img src="docs/screenshots/gpu-detection-demo.gif" alt="nvHive GPU Detection & Model Selection" width="640">
