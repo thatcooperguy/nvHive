@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from nvh.cli.setup import (
@@ -13,6 +14,7 @@ from nvh.cli.setup import (
     _ollama_running,
     _store_key,
     _validate_key,
+    load_env_keys,
 )
 
 
@@ -57,10 +59,28 @@ class TestStoreKey:
             "nvhive", "groq_api_key", "my_secret",
         )
 
-    def test_returns_false_when_keyring_raises(self):
+    def test_falls_back_to_env_file_when_keyring_raises(self, tmp_path):
         mock_keyring = MagicMock()
         mock_keyring.set_password.side_effect = Exception("no backend")
-        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+        with (
+            patch.dict("sys.modules", {"keyring": mock_keyring}),
+            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", tmp_path),
+        ):
+            result = _store_key("groq", "GROQ_API_KEY", "my_secret")
+        # Falls back to .env file — should succeed
+        assert result is True
+        assert (tmp_path / ".env").exists()
+
+    def test_returns_false_when_both_keyring_and_env_fail(self):
+        mock_keyring = MagicMock()
+        mock_keyring.set_password.side_effect = Exception("no backend")
+        # Use a mock that raises on mkdir and path operations
+        mock_dir = MagicMock()
+        mock_dir.__truediv__ = MagicMock(side_effect=OSError("cannot create"))
+        with (
+            patch.dict("sys.modules", {"keyring": mock_keyring}),
+            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", mock_dir),
+        ):
             result = _store_key("groq", "GROQ_API_KEY", "my_secret")
         assert result is False
 
@@ -183,3 +203,94 @@ class TestCoreProviders:
             assert display
             assert env_var
             assert url.startswith("https://")
+
+
+# ---------------------------------------------------------------------------
+# Edge-case tests: no GPU, no Ollama, no keyring, headless .env fallback
+# ---------------------------------------------------------------------------
+
+
+class TestNoGpuSetup:
+    """Ensure setup handles systems with no GPU gracefully."""
+
+    def test_detect_gpu_returns_safe_defaults_when_nvidia_smi_missing(self):
+        """Simulate a system where GPU detection completely fails."""
+        with patch("nvh.cli.setup._detect_gpu_info", return_value=([], 0.0, "tier_0", "Fully cloud (no local GPU)")):
+            from nvh.cli.setup import _detect_gpu_info
+            gpus, vram, tier, desc = _detect_gpu_info()
+        assert gpus == []
+        assert vram == 0.0
+        assert tier == "tier_0"
+
+    def test_no_vram_skips_model_recommendations(self):
+        """With 0 VRAM, _get_recommended_models should return empty list."""
+        with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
+            recs = _get_recommended_models(0.0)
+        assert recs == []
+
+
+class TestNoOllamaSetup:
+    """Ensure setup handles missing Ollama gracefully."""
+
+    def test_ollama_not_installed_returns_false(self):
+        """httpx connection refused simulates Ollama not installed."""
+        mock_httpx = MagicMock()
+        mock_httpx.get.side_effect = ConnectionError("Connection refused")
+        with patch.dict("sys.modules", {"httpx": mock_httpx}):
+            running, models = _ollama_running()
+        assert running is False
+        assert models == []
+
+    def test_ollama_not_installed_no_httpx(self):
+        """Even if httpx itself fails to import, we get safe defaults."""
+        with patch.dict("sys.modules", {"httpx": None}):
+            running, models = _ollama_running()
+        assert running is False
+        assert models == []
+
+
+class TestNoKeyringFallback:
+    """Ensure _store_key falls back to .env file when keyring is unavailable."""
+
+    def test_store_key_writes_env_file_when_keyring_fails(self, tmp_path):
+        """On headless Ubuntu with no keyring, keys are written to .env."""
+        mock_keyring = MagicMock()
+        mock_keyring.set_password.side_effect = Exception("No suitable keyring backend")
+
+        env_file = tmp_path / ".env"
+        with (
+            patch.dict("sys.modules", {"keyring": mock_keyring}),
+            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", tmp_path),
+        ):
+            result = _store_key("groq", "GROQ_API_KEY", "gsk_test123")
+
+        assert result is True
+        assert env_file.exists()
+        content = env_file.read_text()
+        assert "GROQ_API_KEY=gsk_test123" in content
+
+    def test_load_env_keys_populates_environ(self, tmp_path):
+        """load_env_keys reads .env and sets missing env vars."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("TEST_SETUP_KEY=abc123\n")
+
+        os.environ.pop("TEST_SETUP_KEY", None)
+        with patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", tmp_path):
+            load_env_keys()
+
+        assert os.environ.get("TEST_SETUP_KEY") == "abc123"
+        # Cleanup
+        os.environ.pop("TEST_SETUP_KEY", None)
+
+    def test_load_env_keys_does_not_overwrite_existing(self, tmp_path):
+        """Existing env vars take precedence over .env file values."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("MY_KEY=from_file\n")
+
+        os.environ["MY_KEY"] = "from_env"
+        with patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", tmp_path):
+            load_env_keys()
+
+        assert os.environ["MY_KEY"] == "from_env"
+        # Cleanup
+        os.environ.pop("MY_KEY", None)

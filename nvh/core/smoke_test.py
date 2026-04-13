@@ -403,6 +403,41 @@ async def run_smoke_tests(
     except Exception as e:
         add("Agent generation", "Agents", False, error=str(e)[:80])
 
+    # ===== ALL 18 CORE FEATURE IMPORTS =====
+    _CORE_FEATURES = [
+        ("nvh.core.engine", "Engine"),
+        ("nvh.core.router", "RoutingEngine"),
+        ("nvh.core.council", "CouncilOrchestrator"),
+        ("nvh.core.agents", "generate_agents"),
+        ("nvh.core.tools", "ToolRegistry"),
+        ("nvh.core.browser_tools", "register_browser_tools"),
+        ("nvh.core.vision_tools", "register_vision_tools"),
+        ("nvh.core.docker_sandbox", "is_docker_available"),
+        ("nvh.core.agent_loop", "run_agent_loop"),
+        ("nvh.core.agent_guardrails", "check_command"),
+        ("nvh.core.code_graph", "build_import_graph"),
+        ("nvh.core.learning", "LearningEngine"),
+        ("nvh.core.smart_query", "query_with_escalation"),
+        ("nvh.core.orchestrator", "LocalOrchestrator"),
+        ("nvh.core.action_detector", "detect_action"),
+        ("nvh.core.cost_tracker", "CostReport"),
+        ("nvh.core.parallel_pipeline", "run_parallel_pipeline"),
+        ("nvh.core.workflows", "run_workflow"),
+    ]
+    passed_imports = 0
+    for mod_path, symbol in _CORE_FEATURES:
+        try:
+            import importlib
+            mod = importlib.import_module(mod_path)
+            assert hasattr(mod, symbol), f"{symbol} not found in {mod_path}"
+            passed_imports += 1
+        except Exception as e:
+            add(f"Import {mod_path}.{symbol}", "Core Features", False,
+                error=str(e)[:80])
+    add("Core feature imports", "Core Features",
+        passed_imports == len(_CORE_FEATURES),
+        message=f"{passed_imports}/{len(_CORE_FEATURES)} imported OK")
+
     # ===== TOOL SYSTEM =====
     try:
         from nvh.core.tools import ToolRegistry
@@ -413,6 +448,91 @@ async def run_smoke_tests(
             message=f"{len(tools)} tools ({len(safe)} safe)")
     except Exception as e:
         add("Tool registry", "Tools", False, error=str(e)[:80])
+
+    # ===== BROWSER + VISION TOOLS REGISTERED =====
+    try:
+        from nvh.core.tools import ToolRegistry as _TR
+        tr = _TR(include_system=True)
+        tool_names = [t.name for t in tr.list_tools()]
+        browser_expected = {"browser_navigate", "browser_screenshot",
+                           "browser_fill_form", "http_request",
+                           "docker_ps", "docker_run"}
+        vision_expected = {"capture_screenshot", "analyze_image",
+                          "read_text_from_image", "mouse_move",
+                          "mouse_click", "keyboard_type",
+                          "keyboard_press", "scroll"}
+        browser_found = browser_expected & set(tool_names)
+        vision_found = vision_expected & set(tool_names)
+        add("Browser tools registered", "Tools",
+            len(browser_found) == len(browser_expected),
+            message=f"{len(browser_found)}/{len(browser_expected)} browser tools")
+        add("Vision tools registered", "Tools",
+            len(vision_found) == len(vision_expected),
+            message=f"{len(vision_found)}/{len(vision_expected)} vision tools")
+    except Exception as e:
+        add("Browser+Vision tools", "Tools", False, error=str(e)[:80])
+
+    # ===== DOCKER AVAILABILITY =====
+    try:
+        from nvh.core.docker_sandbox import is_docker_available
+        docker_ok = is_docker_available()
+        add("Docker availability", "Security", True,
+            message=f"docker: {'available' if docker_ok else 'not available (OK)'}")
+    except Exception as e:
+        add("Docker availability", "Security", False, error=str(e)[:80])
+
+    # ===== CONFIG YAML VALIDATION =====
+    try:
+        from pathlib import Path as _Path
+        import yaml as _yaml
+        config_dirs = [
+            _Path.home() / ".config" / "nvhive",
+            _Path.home() / ".nvhive",
+        ]
+        yaml_checked = 0
+        yaml_valid = 0
+        for d in config_dirs:
+            if d.exists():
+                for yf in d.glob("*.yaml"):
+                    yaml_checked += 1
+                    with open(yf) as f:
+                        _yaml.safe_load(f)
+                    yaml_valid += 1
+                for yf in d.glob("*.yml"):
+                    yaml_checked += 1
+                    with open(yf) as f:
+                        _yaml.safe_load(f)
+                    yaml_valid += 1
+        # Also validate bundled config
+        bundled = _Path(__file__).parent.parent / "config"
+        if bundled.exists():
+            for yf in list(bundled.glob("*.yaml")) + list(bundled.glob("*.yml")):
+                yaml_checked += 1
+                with open(yf) as f:
+                    _yaml.safe_load(f)
+                yaml_valid += 1
+        add("Config YAML validation", "Config",
+            yaml_valid == yaml_checked,
+            message=f"{yaml_valid}/{yaml_checked} YAML files valid")
+    except Exception as e:
+        add("Config YAML validation", "Config", False, error=str(e)[:80])
+
+    # ===== PROVIDER REACHABILITY (5s timeout) =====
+    if engine and not skip_providers:
+        enabled = engine.registry.list_enabled()
+        any_reachable = False
+        for name in enabled:
+            try:
+                provider = engine.registry.get(name)
+                hs, ms = await _timed_async(provider.health_check())
+                if hs.healthy and ms <= 5000:
+                    any_reachable = True
+                    break
+            except Exception:
+                continue
+        add("Provider reachable (5s)", "Providers", any_reachable,
+            message="at least one provider responds within 5s"
+            if any_reachable else "no provider responded within 5s")
 
     # ===== API QUERY EXECUTION =====
     try:

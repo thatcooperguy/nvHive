@@ -175,6 +175,10 @@ class Engine:
         self._budget_lock = asyncio.Lock()
         self.learning = None  # Initialized in initialize()
 
+        # Drift detection state
+        self.score_history: dict[tuple[str, str], list[float]] = {}
+        self.provider_weights: dict[str, float] = {}
+
         # Local LLM orchestrator
         from nvh.core.orchestrator import LocalOrchestrator, OrchestrationConfig, OrchestrationMode
         orch_mode = OrchestrationMode(self.config.defaults.orchestration_mode)
@@ -242,6 +246,10 @@ class Engine:
             except Exception as e:
                 logger.warning("Learning engine init failed: %s", e)
                 self.learning = None
+
+            # Seed provider_weights so drift rerouting has entries to adjust
+            for name in enabled:
+                self.provider_weights.setdefault(name, 1.0)
 
             self._initialized = True
             return enabled
@@ -773,6 +781,13 @@ class Engine:
         user_feedback: int | None = None,
     ) -> None:
         """Record routing outcome for adaptive learning (non-blocking)."""
+        # Append to score_history for drift detection
+        task_key = (response.provider, decision.task_type.value)
+        score = quality_score if quality_score is not None else (
+            1.0 if response.finish_reason != FinishReason.ERROR else 0.0
+        )
+        self.score_history.setdefault(task_key, []).append(score)
+
         try:
             await self.learning.record_outcome(
                 provider=response.provider,
@@ -804,6 +819,40 @@ class Engine:
             )
         except Exception as e:
             logger.debug("Learning record failed: %s", e)
+
+    # -----------------------------------------------------------------------
+    # Drift Detection
+    # -----------------------------------------------------------------------
+
+    def check_drift(self) -> list:
+        """Check for provider quality drift based on accumulated score history.
+
+        Returns a list of :class:`~nvh.core.drift_detector.DriftAlert` objects.
+        """
+        from nvh.core.drift_detector import check_for_drift
+
+        alerts = check_for_drift(self)
+        if alerts:
+            logger.warning(
+                "Drift detected for %d provider/task pairs",
+                len(alerts),
+            )
+        return alerts
+
+    def auto_reroute(self) -> list[str]:
+        """Detect drift and automatically deprioritize degraded providers.
+
+        Returns a list of human-readable action strings describing what changed.
+        """
+        from nvh.core.drift_detector import auto_reroute
+
+        alerts = self.check_drift()
+        if not alerts:
+            return []
+        actions = auto_reroute(self, alerts)
+        for action in actions:
+            logger.info("Drift reroute: %s", action)
+        return actions
 
     # -----------------------------------------------------------------------
     # Council Mode

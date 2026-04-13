@@ -2634,6 +2634,48 @@ def health():
 
 
 # ---------------------------------------------------------------------------
+# nvh drift — model quality drift detection
+# ---------------------------------------------------------------------------
+
+
+@app.command(rich_help_panel="Admin")
+def drift(
+    reroute: bool = typer.Option(False, "--reroute", help="Auto-deprioritize degraded providers"),
+):
+    """Detect provider quality drift and optionally reroute.
+
+    Compares recent query scores to historical averages.
+    Alerts when a provider's quality drops >20%.
+
+    Examples:
+        nvh drift
+        nvh drift --reroute
+    """
+    async def _run_drift():
+        from nvh.core.engine import Engine
+        from nvh.core.drift_detector import format_drift_alerts
+
+        engine = Engine()
+        await engine.initialize()
+
+        alerts = engine.check_drift()
+        output = format_drift_alerts(alerts)
+        if not alerts:
+            console.print(f"[green]{output}[/green]")
+        else:
+            console.print(f"[yellow]{output}[/yellow]")
+
+        if reroute and alerts:
+            actions = engine.auto_reroute()
+            console.print()
+            console.print("[bold]Reroute actions:[/bold]")
+            for action in actions:
+                console.print(f"  {action}")
+
+    _run(_run_drift())
+
+
+# ---------------------------------------------------------------------------
 # nvh routing-stats — learned routing intelligence dashboard
 # ---------------------------------------------------------------------------
 
@@ -11222,6 +11264,13 @@ def main():
     nvh ask "question"      → subcommand
     """
     args = sys.argv[1:]
+
+    # Load API keys from ~/.hive/.env (headless fallback for keyring)
+    try:
+        from nvh.cli.setup import load_env_keys
+        load_env_keys()
+    except Exception:
+        pass
 
     # --skip-setup: suppress first-run guided setup
     if "--skip-setup" in args:

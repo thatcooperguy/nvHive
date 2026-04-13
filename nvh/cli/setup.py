@@ -18,6 +18,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from nvh.config.settings import DEFAULT_CONFIG_DIR
+
 # ---------------------------------------------------------------------------
 # Provider definitions — the four core providers plus Ollama
 # ---------------------------------------------------------------------------
@@ -34,6 +36,30 @@ CORE_PROVIDERS = [
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def load_env_keys() -> None:
+    """Load API keys from ~/.hive/.env into os.environ (if not already set).
+
+    This is the fallback for headless servers where keyring is unavailable.
+    Keys written by _store_key() are picked up here on subsequent runs.
+    """
+    try:
+        env_file = DEFAULT_CONFIG_DIR / ".env"
+        if not env_file.exists():
+            return
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            var, _, val = line.partition("=")
+            var = var.strip()
+            val = val.strip()
+            # Don't overwrite existing env vars
+            if var and val and not os.environ.get(var):
+                os.environ[var] = val
+    except Exception:
+        pass
+
 
 def _check_provider_key(name: str, env_var: str) -> str | None:
     """Return the API key if configured (env or keyring), else None."""
@@ -53,11 +79,40 @@ def _check_provider_key(name: str, env_var: str) -> str | None:
 
 
 def _store_key(name: str, env_var: str, key: str) -> bool:
-    """Store an API key. Returns True on success."""
+    """Store an API key via keyring or .env fallback. Returns True on success."""
     # Try keyring first
     try:
         import keyring
         keyring.set_password("nvhive", f"{name}_api_key", key)
+        return True
+    except Exception:
+        pass
+
+    # Fallback: write to ~/.hive/.env (works on headless servers with no keyring)
+    try:
+        env_file = DEFAULT_CONFIG_DIR / ".env"
+        DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Read existing lines, update or append
+        existing_lines: list[str] = []
+        if env_file.exists():
+            existing_lines = env_file.read_text().splitlines()
+
+        updated = False
+        for i, line in enumerate(existing_lines):
+            if line.startswith(f"{env_var}="):
+                existing_lines[i] = f"{env_var}={key}"
+                updated = True
+                break
+        if not updated:
+            existing_lines.append(f"{env_var}={key}")
+
+        env_file.write_text("\n".join(existing_lines) + "\n")
+        # Restrict permissions on Unix (best-effort)
+        try:
+            env_file.chmod(0o600)
+        except OSError:
+            pass
         return True
     except Exception:
         pass
@@ -216,6 +271,9 @@ def guided_setup(console: Console | None = None) -> None:
     if console is None:
         console = Console()
 
+    # Load any keys previously saved to ~/.hive/.env (headless fallback)
+    load_env_keys()
+
     console.print()
     console.print(
         Panel(
@@ -332,13 +390,13 @@ def guided_setup(console: Console | None = None) -> None:
             stored = _store_key(name, env_var, key)
             if stored:
                 configured_providers[name] = key
-                console.print(f"  [green]Saved {display} key to keychain.[/green]")
+                console.print(f"  [green]Saved {display} key.[/green]")
             else:
-                # Keyring unavailable — set in env for this session and advise
+                # Both keyring and .env fallback failed — set in env for session
                 os.environ[env_var] = key
                 configured_providers[name] = key
                 console.print(
-                    f"  [yellow]Keychain unavailable.[/yellow] Key set for this session.\n"
+                    f"  [yellow]Could not persist key.[/yellow] Key set for this session only.\n"
                     f"  [dim]To persist: export {env_var}=<your-key>  (add to shell profile)[/dim]"
                 )
     else:
