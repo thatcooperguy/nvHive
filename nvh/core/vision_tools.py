@@ -91,8 +91,24 @@ def register_vision_tools(registry) -> None:
             if path.exists():
                 size_kb = path.stat().st_size / 1024
                 return f"Screenshot saved: {path} ({size_kb:.1f} KB)"
-            return "Screenshot failed — no suitable tool found. Install: scrot (Linux), or use built-in (Windows/macOS)"
+            return (
+                "Screenshot failed — no suitable tool found. "
+                "Install: scrot (Linux), or use built-in (Windows/macOS). "
+                "On headless servers, a display (X11/Wayland) is required — use Xvfb."
+            )
+        except KeyError as e:
+            if "display" in str(e).lower():
+                return (
+                    "Screenshot requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
+            return f"Screenshot failed: {e}"
         except Exception as e:
+            if "display" in str(e).lower():
+                return (
+                    "Screenshot requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
             return f"Screenshot failed: {e}"
 
     async def analyze_image(image_path: str, question: str = "Describe what you see in this image.") -> str:
@@ -165,8 +181,20 @@ def register_vision_tools(registry) -> None:
             pyautogui.moveTo(ix, iy, duration=0.3)
             return f"Mouse moved to ({ix}, {iy})"
         except ImportError:
-            return "pyautogui not installed. Install: pip install pyautogui"
+            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
+        except KeyError as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
+            return f"Mouse move failed: {e}"
         except Exception as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
             return f"Mouse move failed: {e}"
 
     async def mouse_click(x: str = "", y: str = "", button: str = "left") -> str:
@@ -189,8 +217,20 @@ def register_vision_tools(registry) -> None:
                 pos = pyautogui.position()
                 return f"Clicked {button} at current position ({pos.x}, {pos.y})"
         except ImportError:
-            return "pyautogui not installed. Install: pip install pyautogui"
+            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
+        except KeyError as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
+            return f"Click failed: {e}"
         except Exception as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
             return f"Click failed: {e}"
 
     async def keyboard_type(text: str, interval: str = "0.05") -> str:
@@ -207,8 +247,20 @@ def register_vision_tools(registry) -> None:
             pyautogui.typewrite(text, interval=float(interval))
             return f"Typed {len(text)} characters"
         except ImportError:
-            return "pyautogui not installed. Install: pip install pyautogui"
+            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
+        except KeyError as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
+            return f"Type failed: {e}"
         except Exception as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
             return f"Type failed: {e}"
 
     async def keyboard_press(key: str) -> str:
@@ -228,8 +280,20 @@ def register_vision_tools(registry) -> None:
                 pyautogui.press(key)
             return f"Pressed: {key}"
         except ImportError:
-            return "pyautogui not installed. Install: pip install pyautogui"
+            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
+        except KeyError as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
+            return f"Key press failed: {e}"
         except Exception as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
             return f"Key press failed: {e}"
 
     async def scroll(direction: str = "down", amount: str = "3") -> str:
@@ -250,8 +314,20 @@ def register_vision_tools(registry) -> None:
             pyautogui.scroll(clicks)
             return f"Scrolled {direction} by {abs(clicks)}"
         except ImportError:
-            return "pyautogui not installed. Install: pip install pyautogui"
+            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
+        except KeyError as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
+            return f"Scroll failed: {e}"
         except Exception as e:
+            if "display" in str(e).lower():
+                return (
+                    "Desktop control requires a display (X11/Wayland). "
+                    "On headless servers, use Xvfb."
+                )
             return f"Scroll failed: {e}"
 
     # ── Register all tools ────────────────────────────────────────

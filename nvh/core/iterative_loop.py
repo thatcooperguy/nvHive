@@ -79,6 +79,7 @@ async def iterative_solve(
     max_agents_per_round: int = 5,
     max_referral_depth: int = 2,
     max_total_agents: int = 15,
+    budget_usd: float = 1.0,
     on_progress=None,
 ) -> IterativeResult:
     """Run the iterative refinement loop until QA passes or budget exhausts.
@@ -88,6 +89,8 @@ async def iterative_solve(
     2. Run with recursive referral spawning
     3. Synthesize all agent outputs
     4. Post-QA evaluates: PASSED → stop, else → next round with feedback
+
+    The loop also stops early if cumulative cost exceeds *budget_usd*.
     """
     start = time.monotonic()
     rounds: list[IterationRound] = []
@@ -95,8 +98,25 @@ async def iterative_solve(
     total_agents = 0
     total_spawned = 0
     final_synthesis = ""
+    cumulative_cost = Decimal("0")
+    budget_limit = Decimal(str(budget_usd))
 
     for round_num in range(1, max_rounds + 1):
+        # ── Budget gate ──
+        if cumulative_cost >= budget_limit:
+            logger.warning(
+                "Stopping iterative solve: cumulative cost $%.4f "
+                "exceeds budget $%.2f",
+                cumulative_cost,
+                budget_limit,
+            )
+            if on_progress:
+                on_progress(
+                    "budget_exceeded",
+                    f"Budget exceeded (${cumulative_cost:.4f} / ${budget_limit:.2f})",
+                    1.0,
+                )
+            break
         round_start = time.monotonic()
 
         if on_progress:
@@ -254,6 +274,8 @@ async def iterative_solve(
             duration_ms=round_elapsed,
             cost_usd=round_cost,
         ))
+
+        cumulative_cost += round_cost
 
         if on_progress:
             on_progress(

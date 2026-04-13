@@ -59,6 +59,16 @@ dev = [
     "build>=1.0",
     "twine>=5.0",
 ]
+vision = [
+    "pyautogui>=0.9.54",
+]
+browser = [
+    "playwright>=1.40",
+]
+all = [
+    "pyautogui>=0.9.54",
+    "playwright>=1.40",
+]
 
 [project.urls]
 Homepage = "https://github.com/thatcooperguy/nvHive"

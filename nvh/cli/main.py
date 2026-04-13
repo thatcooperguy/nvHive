@@ -183,18 +183,75 @@ async def _smart_default(prompt: str, *, force_iterative: bool = False):
             f"[dim][iterative → multi-agent QA loop | {num_advisors} advisor(s)][/dim]\n"
         )
         try:
-            from nvh.core.iterative_loop import format_iterative_result, iterative_solve
+            from rich.live import Live
+            from rich.text import Text
+
+            from nvh.core.iterative_loop import (
+                IterativeResult,
+                format_iterative_result,
+                iterative_solve,
+            )
+
+            # ── Rich live progress panel for iterative solve ──
+            _live_lines: list[str] = []
+
+            def _build_live_panel() -> Panel:
+                markup = "\n".join(_live_lines)
+                body = Text.from_markup(markup) if _live_lines else Text("Starting...")
+                return Panel(body, title="[bold]Iterative Solve[/bold]", border_style="blue")
 
             def _on_progress(stage: str, message: str, fraction: float) -> None:
-                pct = int(fraction * 100)
-                console.print(f"  [dim][{pct:3d}%][/dim] {message}")
+                verdict_colors = {"PASSED": "green", "PARTIAL": "yellow", "FAILED": "red"}
+                if stage.startswith("round_"):
+                    # Extract verdict from message like "Round 2: PARTIAL"
+                    for v, c in verdict_colors.items():
+                        if v in message:
+                            message = message.replace(v, f"[{c}]{v}[/{c}]")
+                            break
+                elif stage == "budget_exceeded":
+                    message = f"[red]{message}[/red]"
 
-            result = await iterative_solve(
-                task=prompt,
-                engine=engine,
-                working_dir=Path(".").resolve(),
-                on_progress=_on_progress,
-            )
+                pct = int(fraction * 100)
+                _live_lines.append(f"  [dim][{pct:3d}%][/dim] {message}")
+                live.update(_build_live_panel())
+
+            def _on_round_detail(rnd) -> None:
+                """Called after each round to show agent details."""
+                verdict_colors = {"PASSED": "green", "PARTIAL": "yellow", "FAILED": "red"}
+                vc = verdict_colors.get(rnd.qa_verdict, "white")
+                _live_lines.append(
+                    f"        Agents: [cyan]{', '.join(rnd.agents_used)}[/cyan]"
+                )
+                if rnd.spawned_agents:
+                    _live_lines.append(
+                        f"        Spawned: [magenta]{', '.join(rnd.spawned_agents)}[/magenta]"
+                    )
+                _live_lines.append(
+                    f"        Verdict: [{vc}]{rnd.qa_verdict}[/{vc}]"
+                    f"  [dim](${rnd.cost_usd:.4f}, {rnd.duration_ms}ms)[/dim]"
+                )
+                live.update(_build_live_panel())
+
+            with Live(_build_live_panel(), console=console, refresh_per_second=4) as live:
+                result: IterativeResult = await iterative_solve(
+                    task=prompt,
+                    engine=engine,
+                    working_dir=Path(".").resolve(),
+                    on_progress=_on_progress,
+                )
+                # After solve completes, add per-round detail lines
+                for rnd in result.rounds:
+                    _on_round_detail(rnd)
+                live.update(_build_live_panel())
+
+            # ── Final synthesis panel ──
+            console.print()
+            console.print(Panel(
+                Markdown(result.final_synthesis),
+                title="[bold green]Final Synthesis[/bold green]" if result.converged
+                else "[bold yellow]Final Synthesis (not converged)[/bold yellow]",
+                border_style="green" if result.converged else "yellow",
+            ))
             console.print(format_iterative_result(result))
         except Exception as e:
             console.print(_format_cli_error(e))
