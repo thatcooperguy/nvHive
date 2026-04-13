@@ -40,13 +40,44 @@ pip install nvhive[browser]  # browser automation (playwright)
 
 ### First-Run Setup
 
-On first run, `nvh` automatically launches guided setup:
-- Detects GPU hardware and VRAM tier
-- Shows provider status (which API keys are configured)
-- Prompts for missing API keys with validation
-- Offers to pull recommended Ollama models for your GPU
+On first run, `nvh` automatically launches a guided 4-step setup:
 
-Works immediately with LLM7 (no signup). Run `nvh setup` to add free providers like Groq and GitHub Models.
+```mermaid
+flowchart TB
+    START["nvh (first run)"] --> S1["Step 1: Hardware Detection
+    GPU model, VRAM, driver, CUDA
+    → assigns tier (0-5)"]
+    S1 --> S2["Step 2: Provider Status
+    Shows which API keys are configured
+    Groq ✓ | OpenAI ✗ | Anthropic ✗ | Google ✓"]
+    S2 --> S3["Step 3: API Keys (optional)
+    Prompts for missing keys
+    Validates each key in real-time
+    Stores in keyring or ~/.hive/.env"]
+    S3 --> S4["Step 4: Local Models (optional)
+    Recommends Ollama models for your VRAM
+    Offers to pull them automatically
+    Skip if no GPU or Ollama"]
+    S4 --> DONE["Setup Complete
+    Config saved → nvh ready to use
+    nvh webui → launch dashboard
+    nvh setup → re-run anytime"]
+```
+
+Works immediately with LLM7 (no signup needed). Every step is skippable — press Enter to skip. Run `nvh setup` anytime to reconfigure.
+
+**GPU tier → model recommendations:**
+
+| VRAM | Tier | What nvh recommends | Behavior |
+|------|------|-------------------|----------|
+| 0 GB (no GPU) | Tier 0 | Cloud only | Free tiers first (Groq, LLM7, GitHub) |
+| 8–16 GB | Tier 1 | `nemotron-mini` / `qwen2.5:7b` | Simple queries local, complex → cloud |
+| 16–24 GB | Tier 2 | `gemma3:12b` / `mistral-small` | Most Q&A local, coding → cloud assist |
+| 24–48 GB | Tier 3 | `gemma4:27b` / `qwen2.5:32b` | Local worker + cloud orchestrator |
+| 48–96 GB | Tier 4 | `llama3.3:70b` + `qwen2.5:32b` | Dual-model: 70B planner + 32B coder |
+| 128 GB+ | Tier 5 | 3× 70B models | Full local council, $0, fully private |
+
+Setup auto-detects your VRAM and recommends from this table. You choose what to pull.
 
 <details>
 <summary><b>NVIDIA GPU Quick Start</b> — local inference on your hardware</summary>
