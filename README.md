@@ -2,9 +2,9 @@
 
 **One command. Every AI model you have. Automatically assembled into the best team for each task.**
 
-![version](https://img.shields.io/badge/version-0.26.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-1673%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-62%25-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
+![version](https://img.shields.io/badge/version-0.27.1-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-1714%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-62%25-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
-## Why nvHive
+**Council scored 68% higher than a single model — at $0 cost.** Three free providers (Ollama + Groq + Google) running in parallel outperformed a single Nemotron Super on accuracy, completeness, and coherence. Real benchmark on NVIDIA DGX Spark. [See full results below.](#benchmark-results)
 
 ```bash
 nvh "What is a binary search tree?"              # → answers (single best advisor)
@@ -14,15 +14,33 @@ nvh "Add tests for the auth module"              # → auto-detects test request
 nvh "Should we use Redis or Postgres?"           # → auto-detects debate → council (3+ advisors)
 ```
 
+```bash
+pip install nvhive
+nvh setup              # configure providers (validates keys)
+nvh health             # check what's available
+nvh "your question"    # try it
+```
+
+```bash
+# With optional extras
+pip install nvhive[all]      # vision + browser automation
+pip install nvhive[vision]   # desktop control (pyautogui)
+pip install nvhive[browser]  # browser automation (playwright)
+```
+
+---
+
+## Why nvHive
+
 **You type one command. nvHive figures out the rest.** It detects what you're asking for, checks which advisors are healthy, and assembles the best team for the task — automatically. More advisors connected = smarter behavior, with zero configuration.
 
 **What makes it different:**
 
-- **Smart team assembly.** nvHive doesn't just route to one model — it generates expert agents based on your question and matches each one to the best LLM for their specialty. A "Security Engineer" agent gets the LLM that scores highest on security tasks. A "Database Expert" gets the best at database queries. All based on real performance data from the learning engine.
+- **Smart team assembly.** nvHive doesn't just route to one model — it generates expert agents based on your question and matches each one to the best LLM for their specialty. A "Security Engineer" agent gets the LLM that scores highest on security tasks. A "Database Expert" gets the best at database queries. Based on adaptive routing data once sufficient queries are collected, with curated defaults for new installations.
 - **Automatic orchestration.** Coding tasks get a planner + coder + reviewer. Complex questions get a council of specialists. Simple questions get the fastest advisor. All automatic based on intent detection and available advisors.
 - **Scales with what you have.** 1 provider? Single-model answers. 3+ providers? Council automatically on complex questions, multi-model verification on code. Local GPU? Free inference alongside cloud. DGX Spark? Three 70B models in parallel, fully local.
 - **Performant by default.** Uses all available advisors within reason. Simple questions don't trigger council. Budget limits always enforced. Switch to cost mode for minimal spend.
-- **4-layer safety guardrails.** Command blocklist, filesystem boundary enforcement, secrets redaction, and resource limits — the agent can't `rm -rf /` even with `--yes`.
+- **4-layer safety guardrails.** Command blocklist, filesystem boundary enforcement, secrets redaction, and resource limits — guardrails block destructive commands like `rm -rf /`.
 
 ```mermaid
 flowchart LR
@@ -31,7 +49,7 @@ flowchart LR
     R -->|Coding| C["CHEAP\nFree cloud + local agent\n$0.00–$0.05"]
     R -->|Complex| S["SMART\nMulti-model council\n$0.00–$0.15"]
     R -->|Escalation| P["PREMIUM\nOnly when needed\nAuto-escalate"]
-    F --> L["Learning loop\nRouting improves over time"]
+    F --> L["Adaptive routing\nRouting improves over time"]
     C --> L
     S --> L
     P --> L
@@ -71,22 +89,6 @@ flowchart TB
 
 ---
 
-## Get Started
-
-```bash
-pip install nvhive
-nvh setup              # configure providers (validates keys)
-nvh health             # check what's available
-nvh "your question"    # try it
-```
-
-```bash
-# With optional extras
-pip install nvhive[all]      # vision + browser automation
-pip install nvhive[vision]   # desktop control (pyautogui)
-pip install nvhive[browser]  # browser automation (playwright)
-```
-
 ### First-Run Setup
 
 On first run, `nvh` automatically launches guided setup:
@@ -121,7 +123,7 @@ nvh --prefer-nvidia "question"   # → 1.3x bonus for NVIDIA providers
 nvh convene "Redis vs Postgres for sessions?"
 ```
 
-nvHive detects NVIDIA GPUs via pynvml (VRAM, driver, CUDA version, temperature, power draw) and selects the optimal Nemotron model for your hardware. Simple queries stay local. Complex queries escalate to cloud only when needed. The learning loop measures your GPU's quality over time and adjusts routing thresholds automatically.
+nvHive detects NVIDIA GPUs via pynvml (VRAM, driver, CUDA version, temperature, power draw) and selects the optimal Nemotron model for your hardware. Simple queries stay local. Complex queries escalate to cloud only when needed. The adaptive routing engine measures your GPU's quality over time and adjusts routing thresholds automatically.
 
 </details>
 
@@ -129,7 +131,7 @@ nvHive detects NVIDIA GPUs via pynvml (VRAM, driver, CUDA version, temperature, 
 
 ## Agentic Coding
 
-> Multi-model coding agent with recursive spawning, iterative QA convergence, parallel execution, and vision/browser tools. Scales from no-GPU to DGX Spark.
+> Multi-model coding agent with dynamic expert referral, iterative QA refinement, parallel execution, and vision/browser tools. Scales from no-GPU to DGX Spark.
 
 ```bash
 # One-time setup: pulls the right models for your GPU
@@ -146,10 +148,10 @@ nvh agent "task" --workspace ./api,./frontend             # multi-repo context
 nvh agent "refactor the auth module" --sandbox  # runs in Docker container
 ```
 
-**How it works:** Intent detection classifies the task, the orchestrator generates expert agents matched to the best LLMs, agents run in parallel where possible, recursive referral spawning fills knowledge gaps on-demand, and an iterative QA loop refines until convergence. See the [Architecture Overview](#architecture-overview) diagram above for the full flow.
+**How it works:** Intent detection classifies the task, the orchestrator generates expert agents matched to the best LLMs, agents run in parallel where possible, dynamic expert referral fills knowledge gaps on-demand, and an iterative QA loop refines until the task is completed. See the [Architecture Overview](#architecture-overview) diagram above for the full flow.
 
 ```bash
-nvh agent "task" --iterative               # enable iterative QA convergence
+nvh agent "task" --iterative               # enable iterative QA refinement
 nvh agent "task" --iterative --budget 2.50  # cap spend at $2.50
 ```
 
@@ -157,8 +159,8 @@ nvh agent "task" --iterative --budget 2.50  # cap spend at $2.50
 
 | Feature | What It Does |
 |---------|-------------|
-| **Recursive Agent Spawning** | Agents self-identify knowledge gaps and emit `REFER: Need a Database Expert for sharding` — the system dynamically spawns the specialist, gets the answer, and feeds it back. Max depth prevents infinite recursion. |
-| **Iterative QA Convergence** | Generate agents → run with referrals → post-QA reviews → if gaps found, spawn new agents informed by feedback → repeat until PASSED or budget exhausted. |
+| **Dynamic Expert Referral** | Agents self-identify knowledge gaps and emit `REFER: Need a Database Expert for sharding` — the system dynamically spawns the specialist, gets the answer, and feeds it back. Max depth prevents infinite recursion. |
+| **Iterative QA Refinement** | Generate agents → run with referrals → post-QA reviews → if gaps found, spawn new agents informed by feedback → repeat until PASSED or budget exhausted. |
 | **Parallel Pipeline** | Decomposes tasks into independent subtasks, runs them concurrently (bounded semaphore), respects dependencies, VRAM-aware model swapping with context preservation. |
 | **Vision + Desktop Control** | Screenshot capture, image analysis via vision LLMs (GPT-4o, Claude, Gemini, LLaVA), OCR, mouse/keyboard automation with pyautogui. Agents can see and interact with GUIs. |
 | **Browser Automation** | Headless browser navigation, screenshots, form filling via Playwright. HTTP requests, process management, Docker tools. |
@@ -217,22 +219,9 @@ Reads your code, identifies untested paths, generates pytest tests, runs them, a
 
 ## Security Model
 
-4-layer guardrails protect your system. Agents cannot escape the project directory, run destructive commands, or leak secrets. Docker sandbox adds container isolation.
+4-layer guardrails protect your system. Agents are designed to keep within the project directory, block destructive commands, and prevent secret leakage. Docker sandbox adds container isolation.
 
-```mermaid
-flowchart TB
-    CMD[Agent Command] --> B1{Blocklist}
-    B1 -->|"rm -rf, mkfs..."| BLOCK[BLOCKED]
-    B1 -->|OK| B2{Path Boundary}
-    B2 -->|Outside project| BLOCK
-    B2 -->|OK| B3[Secrets Redaction]
-    B3 --> B4[Resource Limits]
-    B4 --> SB{--sandbox?}
-    SB -->|Yes| DOC[Docker Container\nMemory/CPU limited\nNo network\nNon-root]
-    SB -->|No| LOC[Local Execution]
-    DOC --> CP[Checkpoint + Rollback]
-    LOC --> CP
-```
+**How the guardrails work:** Every agent command passes through four layers in sequence. First, a blocklist rejects known-dangerous commands (rm -rf, mkfs, etc.). Second, path boundary enforcement checks that all file operations stay within the project directory. Third, secrets redaction strips API keys and credentials from agent context. Fourth, resource limits cap execution time and memory. If `--sandbox` is enabled, commands run inside a Docker container with memory/CPU limits, no network access, and a non-root user. All executions are checkpointed so changes can be rolled back on failure.
 
 ---
 
@@ -240,73 +229,18 @@ flowchart TB
 
 ### Query Pipeline
 
-```mermaid
-flowchart TB
-    USER[User Query] --> CLASSIFY[Task Classifier<br/>TF-IDF · 13 task types]
-    CLASSIFY --> LOCALCHECK{Local GPU<br/>good enough?}
-    
-    LOCALCHECK -->|Simple query| GPU[NVIDIA GPU via Ollama<br/>Nemotron + Gemma 4<br/>Two architectures locally]
-    LOCALCHECK -->|Complex query| SCORE[Score All Providers<br/>capability · cost · latency · health]
-    
-    SCORE --> ROUTE{Pick Best<br/>Provider}
-    
-    ROUTE --> FREE[Free Providers<br/>LLM7 · Groq · GitHub]
-    ROUTE --> PAID[Premium Providers<br/>OpenAI · Anthropic · Google]
-    ROUTE --> NIM[NVIDIA NIM<br/>Triton]
-    ROUTE --> GPU
-    
-    FREE --> RESPONSE[Response]
-    PAID --> RESPONSE
-    NIM --> RESPONSE
-    GPU --> RESPONSE
-    
-    RESPONSE --> LEARN[Learning Loop<br/>Record outcome · EMA update<br/>Adjusts GPU routing thresholds]
-    LEARN -->|Feeds back into| SCORE
-    
-    RESPONSE -->|--verify flag| VERIFY[Cross-Model<br/>Verification]
-    VERIFY --> FINAL[Verified Response]
-    RESPONSE --> FINAL
-    
-    style GPU fill:#76B900,color:#000
-    style NIM fill:#76B900,color:#000
-    style LEARN fill:#1a1a2e,color:#76B900,stroke:#76B900
-    style VERIFY fill:#1a1a2e,color:#00bcd4,stroke:#00bcd4
-```
+**Task classification:** TF-IDF cosine similarity against an 88-example training corpus (13 task types), with regex-pattern fallback when confidence is below threshold.
 
-**Task classification:** TF-IDF cosine similarity against a 90-example training corpus (13 task types). Semantic understanding, not keyword matching.
-
-**Provider scoring:** Weighted composite — capability (40%), cost (30%), latency (20%), health (10%). Capability scores start from static estimates and converge to measured performance via exponential moving average.
+**Provider scoring:** Weighted composite — capability (40%), cost (30%), latency (20%), health (10%). Capability scores start from static estimates and are refined to measured performance via exponential moving average.
 
 ### Provider Routing
 
-```mermaid
-flowchart LR
-    R[Request] --> S[Score Providers]
-    S --> C["Capability 40%"]
-    S --> CO["Cost 30%"]
-    S --> LA["Latency 20%"]
-    S --> H["Health 10%"]
-    C --> RANK[Weighted Rank]
-    CO --> RANK
-    LA --> RANK
-    H --> RANK
-    RANK --> B[Best Provider]
-    B -->|Success| REC[Record + Learn]
-    B -->|Failure| FALL[Fallback Chain]
-    FALL --> B
-    REC --> DR{Drift?}
-    DR -->|Yes| ALERT[Auto-Reroute]
-    DR -->|No| DONE[Done]
-```
-
-**Adaptive learning:** After every query, nvHive records the outcome and updates scores. By 20 queries per provider/task pair, routing is fully data-driven.
+**Adaptive routing:** After every query, nvHive records the outcome and updates scores. By 20 queries per provider/model/task combination, routing is fully data-driven. Each request is scored across capability (40%), cost (30%), latency (20%), and health (10%), then routed to the highest-scoring provider. On failure, nvHive tries the next provider in the fallback chain, and every failure feeds back into the health score.
 
 ```bash
 nvh routing-stats    # see learned vs static scores
 nvh health           # provider resilience dashboard
 ```
-
-**Failover:** If a provider fails, nvHive tries the next in the fallback chain. Every failure feeds back into the health score.
 
 **Local-first with NVIDIA GPUs:** Simple queries route to Nemotron on your NVIDIA GPU via Ollama — no cloud, no cost, no data leaving your machine. GPU detection via pynvml reads VRAM, driver version, and CUDA version to select the optimal local model. The `--prefer-nvidia` flag gives a 1.3x routing bonus to keep inference on NVIDIA hardware whenever quality allows.
 
@@ -314,28 +248,7 @@ nvh health           # provider resilience dashboard
 
 ## Council Mode
 
-```mermaid
-flowchart TB
-    QUERY[User Query] --> AGENTS[Generate Expert Personas<br/>e.g. Backend Engineer, Architect, DBA]
-    
-    AGENTS --> M1[Model 1<br/>Groq / Llama]
-    AGENTS --> M2[Model 2<br/>Google / Gemini]
-    AGENTS --> M3[Model 3<br/>GitHub / GPT-4o]
-    
-    M1 --> COLLECT[Collect Responses<br/>Rate-limit staggered]
-    M2 --> COLLECT
-    M3 --> COLLECT
-    
-    COLLECT --> AGREE[Agreement Analysis<br/>Keyword overlap + LLM judge]
-    AGREE --> SYNTH[Synthesis<br/>Uses non-member provider]
-    
-    SYNTH --> RESULT[Council Response<br/>+ Confidence Score<br/>+ Individual Perspectives]
-    
-    style AGREE fill:#1a1a2e,color:#00bcd4,stroke:#00bcd4
-    style SYNTH fill:#1a1a2e,color:#76B900,stroke:#76B900
-```
-
-When one model isn't enough, nvHive runs the same query through multiple providers in parallel, then synthesizes their responses.
+When one model isn't enough, nvHive runs the same query through multiple providers in parallel, then synthesizes their responses. Expert personas are generated for the query (e.g., Backend Engineer, Architect, DBA), each assigned to a different model. Responses are collected, analyzed for agreement using keyword overlap and an LLM judge, and then synthesized by a non-member provider (where available) into a final council response with a confidence score and individual perspectives.
 
 **Why this works:** Different models have different blind spots. Council mode surfaces all perspectives and synthesizes the best of each.
 
@@ -350,36 +263,7 @@ nvh convene "Should we use Redis or Postgres for session storage?"
 
 ### Throwdown Mode — Two-Pass Deep Analysis
 
-Throwdown goes beyond council. Three passes, each building on the last:
-
-```mermaid
-flowchart TB
-    QUERY[User Query] --> A1[Expert 1 - Nemotron<br/>local GPU]
-    QUERY --> A2[Expert 2 - Gemma 4<br/>local GPU]
-    QUERY --> A3[Expert 3 - Groq<br/>cloud free]
-    
-    A1 --> S1[Pass 1 Synthesis]
-    A2 --> S1
-    A3 --> S1
-    
-    S1 --> B1[Expert 1 - Critiques]
-    S1 --> B2[Expert 2 - Finds blind spots]
-    S1 --> B3[Expert 3 - Challenges assumptions]
-    
-    B1 --> S2[Pass 2 Synthesis]
-    B2 --> S2
-    B3 --> S2
-    
-    S2 --> FINAL[Final Answer]
-    
-    style A1 fill:#1a1a2e,stroke:#76B900,color:#c8c8c8
-    style A2 fill:#1a1a2e,stroke:#76B900,color:#c8c8c8
-    style A3 fill:#1a1a2e,stroke:#76B900,color:#c8c8c8
-    style B1 fill:#1a1a2e,stroke:#00bcd4,color:#c8c8c8
-    style B2 fill:#1a1a2e,stroke:#00bcd4,color:#c8c8c8
-    style B3 fill:#1a1a2e,stroke:#00bcd4,color:#c8c8c8
-    style FINAL fill:#76B900,color:#000
-```
+Throwdown goes beyond council. Three passes, each building on the last. In the first pass, three experts analyze the query independently. In the second pass, each expert critiques the others — finding blind spots and challenging assumptions. The final synthesis integrates all perspectives into a single, thoroughly vetted answer.
 
 ```bash
 nvh throwdown "Review this architecture for scalability issues"
@@ -401,7 +285,7 @@ nvh ask --escalate "Design a distributed lock manager"
 
 # Cross-model verification: a second model checks the answer
 nvh ask --verify "Is eval() safe in Python?"
-# → groq answers → google verifies ✓ (9/10, no issues)
+# → groq answers → google verifies (9/10, no issues)
 
 # Both together: cheapest possible verified answer
 nvh ask --escalate --verify "Explain the CAP theorem"
@@ -413,14 +297,7 @@ nvh ask --escalate --verify "Explain the CAP theorem"
 
 `nvh setup` detects your NVIDIA GPU, selects which models fit in your VRAM, and pulls them automatically. Supports both [NVIDIA Nemotron](https://build.nvidia.com/) and [Google Gemma 4](https://ai.google.dev/gemma) (NVIDIA-optimized) for local council with two different architectures.
 
-```mermaid
-flowchart LR
-    V{VRAM} -->|"0 GB"| CL[Cloud Only\nFree tiers first]
-    V -->|"8-24 GB"| SM[Small Local\n7B models + cloud]
-    V -->|"24-48 GB"| MD[Medium Local\n27B + cloud planner]
-    V -->|"48-96 GB"| LG[Large Local\n70B + cloud orchestrator]
-    V -->|"128 GB+"| DG[Full Local\nAll models, $0, private]
-```
+VRAM determines which models run locally: with no VRAM you get cloud-only routing (free tiers first); 8-24 GB runs small 7B models locally alongside cloud; 24-48 GB runs medium 27B models with a cloud planner; 48-96 GB runs large 70B models with a cloud orchestrator; and 128 GB+ (DGX Spark) runs all models locally at $0, fully private.
 
 <p align="center">
   <img src="docs/screenshots/gpu-detection-demo.gif" alt="nvHive GPU Detection & Model Selection" width="640">
@@ -436,48 +313,14 @@ nvh setup
 #   Local council ready — multiple models for consensus
 ```
 
-**What `nvh setup` handles:**
-
-```mermaid
-flowchart TB
-    SETUP[nvh setup] --> DETECT[GPU Detection<br/>pynvml reads VRAM · driver · CUDA]
-    
-    DETECT --> VRAM{Available VRAM?}
-    
-    VRAM -->|< 6 GB| MINI[nemotron-mini<br/>+ gemma4:e2b]
-    VRAM -->|6 – 12 GB| SMALL[nemotron-small<br/>+ gemma4:e4b]
-    VRAM -->|12 – 48 GB| CHOICE{User choice}
-    VRAM -->|48 GB+| FULL[nemotron 70B<br/>+ gemma4:31b]
-
-    CHOICE -->|Both for council| DUAL[nemotron-small<br/>+ gemma4:26b]
-    CHOICE -->|Single model| SINGLE[nemotron 70B only]
-
-    MINI --> CHECK{Ollama running?}
-    SMALL --> CHECK
-    DUAL --> CHECK
-    SINGLE --> CHECK
-    FULL --> CHECK
-    
-    CHECK -->|Not installed| INSTALL[Show install command]
-    CHECK -->|Not running| START[Show: ollama serve]
-    CHECK -->|Running| PULL[Auto-pull all<br/>models that fit]
-    
-    PULL --> READY[Ready ✓<br/>Local council enabled]
-    
-    READY --> ROUTE[nvHive Router<br/>Two model architectures<br/>Learning loop active]
-    
-    style SMALL fill:#76B900,color:#000
-    style DUAL fill:#76B900,color:#000
-    style READY fill:#76B900,color:#000
-    style ROUTE fill:#1a1a2e,color:#76B900,stroke:#76B900
-```
+**What `nvh setup` handles:** GPU detection via pynvml reads your VRAM, driver, and CUDA version. Based on available VRAM, it selects the optimal models — small models for modest GPUs, dual-architecture setups (Nemotron + Gemma 4) for mid-range cards, and full 70B models for high-end hardware. It checks whether Ollama is installed and running, then auto-pulls all models that fit. Once complete, the adaptive routing engine tracks each model's quality on your specific hardware.
 
 **After setup, routing is automatic:**
 - Simple queries → local Nemotron or Gemma 4 on your GPU (free, private)
 - Council mode → both models collaborate locally, catching different blind spots
 - Complex queries → cloud providers when local quality isn't sufficient
 - `nvh bench` measures your GPU's actual tok/s with community baselines
-- The learning loop measures each model's quality on YOUR hardware
+- The adaptive routing engine measures each model's quality on YOUR hardware
 
 [Full GPU detection + VRAM guide](docs/GPU_DETECTION.md)
 
@@ -500,65 +343,7 @@ flowchart TB
 
 ### How nvHive Connects to Your Tools
 
-```mermaid
-flowchart LR
-    subgraph Your Tools
-        CLI[nvh CLI<br/>agent · review · test-gen]
-        WEBUI[Web Dashboard<br/>nvh webui]
-        SDK[Python SDK<br/>import nvh]
-        CC[Claude Code<br/>MCP]
-        NC[NemoClaw<br/>Agent]
-        CU[Cursor]
-        APP[Your App<br/>OpenAI SDK]
-    end
-
-    subgraph nvHive Engine
-        API[API Server<br/>:8000]
-        MCP[MCP Server<br/>stdio]
-        PROXY_OAI[OpenAI Proxy<br/>/v1/proxy]
-        PROXY_ANT[Anthropic Proxy<br/>/v1/anthropic]
-        AGENT[Agent Loop<br/>plan · execute · verify]
-        ROUTER[Adaptive Router<br/>+ Learning Loop]
-        COUNCIL[Council Engine<br/>+ Confidence]
-        GUARD[Guardrails<br/>4-layer safety]
-    end
-
-    subgraph Providers
-        GPU[Your GPU<br/>Ollama · Nemotron]
-        FREE_P[Free Cloud<br/>Groq · GitHub · LLM7<br/>Google · Cerebras]
-        PAID_P[Paid Cloud<br/>OpenAI · Anthropic<br/>DeepSeek · Mistral]
-        NIM[NVIDIA NIM<br/>Triton]
-    end
-
-    CLI --> API
-    WEBUI --> API
-    SDK --> API
-    CC --> MCP
-    NC --> PROXY_OAI
-    CU --> MCP
-    APP --> PROXY_OAI
-    APP --> PROXY_ANT
-
-    MCP --> API
-    PROXY_OAI --> API
-    PROXY_ANT --> API
-    API --> AGENT
-    API --> ROUTER
-    API --> COUNCIL
-    AGENT --> GUARD
-    GUARD --> ROUTER
-    ROUTER --> GPU
-    ROUTER --> FREE_P
-    ROUTER --> PAID_P
-    ROUTER --> NIM
-
-    style GPU fill:#76B900,color:#000
-    style NIM fill:#76B900,color:#000
-    style ROUTER fill:#1a1a2e,color:#76B900,stroke:#76B900
-    style COUNCIL fill:#1a1a2e,color:#00bcd4,stroke:#00bcd4
-    style AGENT fill:#1a1a2e,color:#a855f7,stroke:#a855f7
-    style GUARD fill:#1a1a2e,color:#ef4444,stroke:#ef4444
-```
+nvHive exposes multiple integration surfaces: a CLI (`nvh`), a web dashboard (`nvh webui`), a Python SDK (`import nvh`), an MCP server for Claude Code, and OpenAI/Anthropic-compatible API proxies. All integrations feed through the same adaptive router, council engine, and 4-layer guardrails, routing to your local GPU, free cloud providers, paid cloud, or NVIDIA NIM as appropriate.
 
 **API Proxies** — point existing SDKs at nvHive:
 
@@ -567,7 +352,6 @@ flowchart LR
 | Anthropic | `ANTHROPIC_BASE_URL=http://localhost:8000/v1/anthropic` |
 | OpenAI | `OPENAI_BASE_URL=http://localhost:8000/v1/proxy` |
 | Claude Code | `claude mcp add nvhive -- python -m nvh.mcp_server` |
-| Cursor | `nvh integrate --auto` |
 
 ### Works With OpenClaw & NemoClaw
 
@@ -618,7 +402,7 @@ status = await nvh.health()
 
 | Command | What It Does |
 |---------|-------------|
-| `nvh agent "task"` | Recursive agents + iterative QA convergence (6 GPU tiers) |
+| `nvh agent "task"` | Dynamic expert referral + iterative QA refinement (6 GPU tiers) |
 | `nvh agent --setup` | Pull recommended local models for your GPU |
 | `nvh agent --mode multi` | Force multi-model: separate planner, coder, reviewer |
 | `nvh agent --sandbox` | Execute shell commands inside a Docker container |
@@ -726,7 +510,18 @@ nvh estimate --gpu rtx_4090   # predict tok/s on any GPU
 | [Web UI](docs/WEBUI.md) | Web UI |
 | [Agent Tools](docs/TOOLS.md) | Agent tools |
 | [Configuration](docs/CONFIGURATION.md) | Configuration |
-| [Architecture](docs/ARCHITECTURE.md) | System design and adaptive learning |
+| [Architecture](docs/ARCHITECTURE.md) | System design and adaptive routing |
+
+---
+
+## Important Notes
+
+- **Data Privacy**: When using cloud providers, queries are transmitted to third-party APIs (OpenAI, Anthropic, Google, Groq, etc.) subject to each provider's privacy policy. Use `nvh safe` or `--prefer-nvidia` to keep all inference local.
+- **AI Accuracy**: AI-generated outputs may contain errors. Review agent-modified files before committing to production. nvHive provides guardrails and rollback but does not guarantee output correctness.
+- **Provider Liability**: nvHive is a routing and orchestration layer. Response quality, availability, and pricing are determined by third-party providers and subject to change.
+- **Security**: Safety guardrails use pattern-matching heuristics and may not catch all edge cases. For sensitive environments, use `--sandbox` with Docker isolation.
+- **Benchmarks**: Benchmark results measured on NVIDIA DGX Spark reference hardware. Results vary by hardware, provider, and workload.
+- **QA Gate**: The iterative QA reviewer is an LLM judge (not a static analysis tool). QA verdicts are probabilistic assessments, not deterministic guarantees.
 
 ## License
 
