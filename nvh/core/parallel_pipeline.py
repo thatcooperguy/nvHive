@@ -314,7 +314,6 @@ def _match_subtasks_to_llms(subtasks: list[dict], engine) -> list[dict]:
     """Match each subtask to the best LLM using agent_matching."""
     try:
         from nvh.core.agent_matching import _score_provider_for_role
-        pass  # agent_matching handles the scoring
     except ImportError:
         pass
 

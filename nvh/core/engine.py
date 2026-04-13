@@ -184,9 +184,8 @@ class Engine:
         from nvh.core.context_files import find_context_files
         self._context_files = find_context_files()
         if self._context_files:
-            import logging
             names = [f.name for f in self._context_files]
-            logging.getLogger(__name__).info(f"Loaded context files: {names}")
+            logger.info(f"Loaded context files: {names}")
 
     def _build_system_prompt(self, user_prompt: str | None = None) -> str | None:
         """Build system prompt with COUNCIL.md context injected.
@@ -250,8 +249,6 @@ class Engine:
 
     def _auto_detect_providers(self) -> list[str]:
         """Fallback: auto-detect providers that need no configuration."""
-        import logging
-        log = logging.getLogger(__name__)
         detected = []
 
         # LLM7 — always available (anonymous API, no signup)
@@ -260,16 +257,15 @@ class Engine:
             provider = LLM7Provider()
             self.registry.register("llm7", provider)
             detected.append("llm7")
-            log.info("Auto-detected: LLM7 (anonymous, no signup needed)")
+            logger.info("Auto-detected: LLM7 (anonymous, no signup needed)")
         except Exception:
             pass
 
         # Ollama — check if running locally (supports OLLAMA_BASE_URL override)
+        import os
         try:
-            import os as _os_env
-
             import httpx
-            ollama_url = _os_env.environ.get(
+            ollama_url = os.environ.get(
                 "OLLAMA_BASE_URL", "http://localhost:11434",
             )
             resp = httpx.get(f"{ollama_url}/api/tags", timeout=2)
@@ -278,12 +274,11 @@ class Engine:
                 provider = OllamaProvider(base_url=ollama_url)
                 self.registry.register("ollama", provider)
                 detected.append("ollama")
-                log.info("Auto-detected: Ollama (local, running on %s)", ollama_url)
+                logger.info("Auto-detected: Ollama (local, running on %s)", ollama_url)
         except Exception:
             pass
 
         # Check for API keys in environment AND keyring
-        import os
         env_providers = {
             "GROQ_API_KEY": ("groq", "nvh.providers.groq_provider", "GroqProvider"),
             "GITHUB_TOKEN": ("github", "nvh.providers.github_provider", "GitHubProvider"),
@@ -326,7 +321,7 @@ class Engine:
                     provider = cls(api_key=key)
                     self.registry.register(name, provider)
                     detected.append(name)
-                    log.info("Auto-detected: %s (API key found)", name)
+                    logger.info("Auto-detected: %s (API key found)", name)
                 except Exception:
                     pass
 
@@ -349,8 +344,6 @@ class Engine:
 
         Tests multiple endpoints in parallel and returns True if any respond.
         """
-        import asyncio
-
         import httpx
 
         endpoints = [
@@ -456,13 +449,11 @@ class Engine:
         if not _effective_provider:
             is_online = await self._check_connectivity()
             if not is_online:
-                import logging
-                _log = logging.getLogger(__name__)
                 enabled = self.registry.list_enabled()
                 for _local in ("ollama", "llm7"):
                     if _local in enabled:
                         _effective_provider = _local
-                        _log.info(
+                        logger.info(
                             "Offline detected — auto-routing to local provider: %s",
                             _effective_provider,
                         )
@@ -483,8 +474,7 @@ class Engine:
             orch_result = await self.orchestrator.smart_route(prompt, available)
             if orch_result and orch_result.get("advisor") in available:
                 _orchestrated_provider = orch_result["advisor"]
-                import logging as _logging
-                _logging.getLogger(__name__).debug(
+                logger.debug(
                     "Orchestrator routed to %s: %s",
                     _orchestrated_provider,
                     orch_result.get("reason", ""),
@@ -627,12 +617,11 @@ class Engine:
 
         # Adaptive learning: record outcome (fire-and-forget)
         if self.learning and not privacy:
-            import asyncio as _aio
             _eval_quality = (
                 eval_result.get("quality")
                 if eval_result else None
             )
-            _aio.create_task(self._record_learning(
+            asyncio.create_task(self._record_learning(
                 decision=decision,
                 response=response,
                 quality_score=_eval_quality,
@@ -928,7 +917,6 @@ class Engine:
         target_providers = providers or self.registry.list_enabled()
         messages = [Message(role="user", content=prompt)]
 
-        import asyncio
         tasks = {}
         for pname in target_providers:
             if not self.registry.has(pname):
@@ -1205,7 +1193,6 @@ class Engine:
         conversation_id: str | None = None,
     ) -> None:
         """Log a query to the database."""
-        import logging as _logging
         try:
             await repo.log_query(
                 mode=mode,
@@ -1221,7 +1208,7 @@ class Engine:
                 conversation_id=conversation_id,
             )
         except Exception as e:
-            _logging.getLogger(__name__).warning(f"Failed to log query: {e}")
+            logger.warning(f"Failed to log query: {e}")
 
     async def get_budget_status(self) -> dict[str, Any]:
         """Get current budget status."""

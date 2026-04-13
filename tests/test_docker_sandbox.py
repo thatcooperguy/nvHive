@@ -18,6 +18,38 @@ from nvh.core.docker_sandbox import (
     sandbox_enabled,
 )
 
+
+async def _wait_for_timeout(coro, **kwargs):
+    """Replacement for asyncio.wait_for that closes the coroutine, then raises."""
+    coro.close()
+    raise TimeoutError
+
+
+def _make_proc_mock(
+    stdout: bytes = b"",
+    stderr: bytes = b"",
+    returncode: int = 0,
+    communicate_side_effect=None,
+) -> MagicMock:
+    """Build a MagicMock that mimics asyncio.subprocess.Process.
+
+    Uses ``spec=asyncio.subprocess.Process`` so that no spurious child
+    mocks are auto-created on attribute access, which would otherwise
+    produce "coroutine … was never awaited" RuntimeWarnings.
+
+    * ``kill()`` is synchronous (MagicMock) — matches the real API.
+    * ``communicate()`` and ``wait()`` are AsyncMock — they are awaited.
+    """
+    proc = MagicMock(spec=asyncio.subprocess.Process)
+    if communicate_side_effect is not None:
+        proc.communicate = AsyncMock(side_effect=communicate_side_effect)
+    else:
+        proc.communicate = AsyncMock(return_value=(stdout, stderr))
+    proc.returncode = returncode
+    proc.kill = MagicMock()
+    proc.wait = AsyncMock()
+    return proc
+
 # ---------------------------------------------------------------------------
 # is_docker_available
 # ---------------------------------------------------------------------------
@@ -82,51 +114,39 @@ class TestSandboxEnabled:
 class TestRunLocally:
     @pytest.mark.asyncio
     async def test_successful_command(self):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(
-            return_value=(b"hello world", b"")
-        )
-        mock_proc.returncode = 0
-        mock_proc.kill = AsyncMock()
-        mock_proc.wait = AsyncMock()
+        mock_proc = _make_proc_mock(stdout=b"hello world")
+        mock_create = AsyncMock(return_value=mock_proc)
 
-        with patch("asyncio.create_subprocess_shell", return_value=mock_proc):
+        with patch("asyncio.create_subprocess_shell", new=mock_create):
             result = await _run_locally("echo hello", "/tmp", timeout=10)
         assert result == "hello world"
 
     @pytest.mark.asyncio
     async def test_command_with_stderr(self):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(
-            return_value=(b"out", b"warn")
-        )
-        mock_proc.returncode = 0
-        mock_proc.kill = AsyncMock()
-        mock_proc.wait = AsyncMock()
+        mock_proc = _make_proc_mock(stdout=b"out", stderr=b"warn")
+        mock_create = AsyncMock(return_value=mock_proc)
 
-        with patch("asyncio.create_subprocess_shell", return_value=mock_proc):
+        with patch("asyncio.create_subprocess_shell", new=mock_create):
             result = await _run_locally("cmd", "/tmp", timeout=10)
         assert "out" in result
         assert "warn" in result
 
     @pytest.mark.asyncio
     async def test_timeout(self):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
-        mock_proc.kill = AsyncMock()
-        mock_proc.wait = AsyncMock()
+        mock_proc = _make_proc_mock(communicate_side_effect=asyncio.TimeoutError)
+        mock_create = AsyncMock(return_value=mock_proc)
 
-        with patch("asyncio.create_subprocess_shell", return_value=mock_proc):
-            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("asyncio.create_subprocess_shell", new=mock_create):
+            with patch("asyncio.wait_for", new=_wait_for_timeout):
                 result = await _run_locally("sleep 999", "/tmp", timeout=1)
         assert "[TIMEOUT]" in result
 
     @pytest.mark.asyncio
     async def test_exception(self):
-        with patch(
-            "asyncio.create_subprocess_shell",
-            side_effect=OSError("no shell"),
-        ):
+        async def _raise(*args, **kwargs):
+            raise OSError("no shell")
+
+        with patch("asyncio.create_subprocess_shell", new=_raise):
             result = await _run_locally("echo x", "/tmp", timeout=10)
         assert "[ERROR]" in result
 
@@ -139,15 +159,14 @@ class TestRunLocally:
 class TestRunInDocker:
     @pytest.mark.asyncio
     async def test_successful_docker_run(self):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(
-            return_value=(b"container output", b"")
-        )
-        mock_proc.returncode = 0
-        mock_proc.kill = AsyncMock()
-        mock_proc.wait = AsyncMock()
+        mock_proc = _make_proc_mock(stdout=b"container output")
+        captured_args: list[tuple] = []
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        async def _fake_exec(*args, **kwargs):
+            captured_args.append(args)
+            return mock_proc
+
+        with patch("asyncio.create_subprocess_exec", new=_fake_exec):
             result = await _run_in_docker(
                 "python -c 'print(1)'",
                 "/tmp/project",
@@ -161,7 +180,7 @@ class TestRunInDocker:
         assert result == "container output"
 
         # Verify docker command was constructed correctly
-        call_args = mock_exec.call_args[0]
+        call_args = captured_args[0]
         assert call_args[0] == "docker"
         assert "run" in call_args
         assert "--rm" in call_args
@@ -171,13 +190,11 @@ class TestRunInDocker:
 
     @pytest.mark.asyncio
     async def test_docker_timeout(self):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_proc.kill = AsyncMock()
-        mock_proc.wait = AsyncMock()
+        mock_proc = _make_proc_mock()
+        mock_exec = AsyncMock(return_value=mock_proc)
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("asyncio.create_subprocess_exec", new=mock_exec):
+            with patch("asyncio.wait_for", new=_wait_for_timeout):
                 result = await _run_in_docker(
                     "sleep 999", "/tmp", 5, DEFAULT_IMAGE, False, "512m", False,
                 )
@@ -187,15 +204,10 @@ class TestRunInDocker:
 
     @pytest.mark.asyncio
     async def test_docker_with_stderr(self):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(
-            return_value=(b"ok", b"warning: something")
-        )
-        mock_proc.returncode = 0
-        mock_proc.kill = AsyncMock()
-        mock_proc.wait = AsyncMock()
+        mock_proc = _make_proc_mock(stdout=b"ok", stderr=b"warning: something")
+        mock_exec = AsyncMock(return_value=mock_proc)
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("asyncio.create_subprocess_exec", new=mock_exec):
             result = await _run_in_docker(
                 "cmd", "/tmp", 60, DEFAULT_IMAGE, False, "512m", False,
             )
@@ -205,13 +217,10 @@ class TestRunInDocker:
 
     @pytest.mark.asyncio
     async def test_docker_nonzero_exit_no_output(self):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_proc.returncode = 1
-        mock_proc.kill = AsyncMock()
-        mock_proc.wait = AsyncMock()
+        mock_proc = _make_proc_mock(returncode=1)
+        mock_exec = AsyncMock(return_value=mock_proc)
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("asyncio.create_subprocess_exec", new=mock_exec):
             result = await _run_in_docker(
                 "false", "/tmp", 60, DEFAULT_IMAGE, False, "512m", False,
             )
@@ -220,37 +229,39 @@ class TestRunInDocker:
 
     @pytest.mark.asyncio
     async def test_docker_network_enabled(self):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
-        mock_proc.returncode = 0
-        mock_proc.kill = AsyncMock()
-        mock_proc.wait = AsyncMock()
+        mock_proc = _make_proc_mock(stdout=b"ok")
+        captured_args: list[tuple] = []
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        async def _fake_exec(*args, **kwargs):
+            captured_args.append(args)
+            return mock_proc
+
+        with patch("asyncio.create_subprocess_exec", new=_fake_exec):
             await _run_in_docker(
                 "curl example.com", "/tmp", 60, DEFAULT_IMAGE,
                 network=True, memory_limit="512m", read_only_mount=False,
             )
 
-        call_args = mock_exec.call_args[0]
+        call_args = captured_args[0]
         # --network none should NOT be present when network=True
         assert "--network" not in call_args
 
     @pytest.mark.asyncio
     async def test_docker_read_only_mount(self):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"ok", b""))
-        mock_proc.returncode = 0
-        mock_proc.kill = AsyncMock()
-        mock_proc.wait = AsyncMock()
+        mock_proc = _make_proc_mock(stdout=b"ok")
+        captured_args: list[tuple] = []
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        async def _fake_exec(*args, **kwargs):
+            captured_args.append(args)
+            return mock_proc
+
+        with patch("asyncio.create_subprocess_exec", new=_fake_exec):
             await _run_in_docker(
                 "ls", "/tmp/project", 60, DEFAULT_IMAGE,
                 network=False, memory_limit="512m", read_only_mount=True,
             )
 
-        call_args = mock_exec.call_args[0]
+        call_args = captured_args[0]
         # Find the -v argument and verify :ro suffix
         v_idx = list(call_args).index("-v")
         mount_arg = call_args[v_idx + 1]
@@ -259,14 +270,16 @@ class TestRunInDocker:
     @pytest.mark.asyncio
     async def test_docker_binary_gone_falls_back(self):
         """If docker binary vanishes mid-run, fall back to local."""
-        with patch(
-            "asyncio.create_subprocess_exec",
-            side_effect=FileNotFoundError("docker not found"),
-        ):
+
+        async def _raise(*args, **kwargs):
+            raise FileNotFoundError("docker not found")
+
+        mock_local = AsyncMock(return_value="local fallback")
+        with patch("asyncio.create_subprocess_exec", new=_raise):
             with patch(
                 "nvh.core.docker_sandbox._run_locally",
-                return_value="local fallback",
-            ) as mock_local:
+                new=mock_local,
+            ):
                 result = await _run_in_docker(
                     "echo hi", "/tmp", 60, DEFAULT_IMAGE, False, "512m", False,
                 )
@@ -283,11 +296,12 @@ class TestRunInDocker:
 class TestRunInSandbox:
     @pytest.mark.asyncio
     async def test_uses_docker_when_available(self):
+        mock_docker = AsyncMock(return_value="docker output")
         with patch("nvh.core.docker_sandbox.is_docker_available", return_value=True):
             with patch(
                 "nvh.core.docker_sandbox._run_in_docker",
-                return_value="docker output",
-            ) as mock_docker:
+                new=mock_docker,
+            ):
                 result = await run_in_sandbox("echo hi", "/tmp/project")
 
         assert result == "docker output"
@@ -295,11 +309,12 @@ class TestRunInSandbox:
 
     @pytest.mark.asyncio
     async def test_falls_back_to_local(self):
+        mock_local = AsyncMock(return_value="local output")
         with patch("nvh.core.docker_sandbox.is_docker_available", return_value=False):
             with patch(
                 "nvh.core.docker_sandbox._run_locally",
-                return_value="local output",
-            ) as mock_local:
+                new=mock_local,
+            ):
                 result = await run_in_sandbox("echo hi", "/tmp/project")
 
         assert result == "local output"
@@ -307,11 +322,12 @@ class TestRunInSandbox:
 
     @pytest.mark.asyncio
     async def test_passes_timeout(self):
+        mock_docker = AsyncMock(return_value="ok")
         with patch("nvh.core.docker_sandbox.is_docker_available", return_value=True):
             with patch(
                 "nvh.core.docker_sandbox._run_in_docker",
-                return_value="ok",
-            ) as mock_docker:
+                new=mock_docker,
+            ):
                 await run_in_sandbox("cmd", "/tmp", timeout=120)
 
         _, kwargs = mock_docker.call_args
@@ -320,16 +336,18 @@ class TestRunInSandbox:
 
     @pytest.mark.asyncio
     async def test_passes_custom_image(self):
+        mock_docker = AsyncMock(return_value="ok")
         with patch("nvh.core.docker_sandbox.is_docker_available", return_value=True):
             with patch(
                 "nvh.core.docker_sandbox._run_in_docker",
-                return_value="ok",
-            ) as mock_docker:
+                new=mock_docker,
+            ):
                 await run_in_sandbox("cmd", "/tmp", image="node:20-slim")
 
-        call_args = mock_docker.call_args
+        call_kwargs = mock_docker.call_args[1]
+        call_pos = mock_docker.call_args[0]
         # image should appear in the call
-        assert "node:20-slim" in call_args[0] or call_args[1].get("image") == "node:20-slim"
+        assert "node:20-slim" in call_pos or call_kwargs.get("image") == "node:20-slim"
 
     @pytest.mark.asyncio
     async def test_default_timeout_is_60(self):
