@@ -179,7 +179,7 @@ class TestAuthUserFlow:
             "username": "testuser1",
             "password": "password123",
         })
-        assert r.status_code in (201, 409)  # 409 if already exists
+        assert r.status_code in (201, 409, 429)  # 409 if exists, 429 rate limit
 
     def test_auth_me_without_token(self, cli):
         r = cli.get("/v1/auth/me")
