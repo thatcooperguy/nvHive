@@ -2,7 +2,7 @@
 
 **One command. Every AI model you have. Automatically assembled into the best team for each task.**
 
-![version](https://img.shields.io/badge/version-0.16.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-1086%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-62%25-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
+![version](https://img.shields.io/badge/version-0.26.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![tests](https://img.shields.io/badge/tests-1673%20passing-brightgreen) ![providers](https://img.shields.io/badge/providers-23-orange) ![coverage](https://img.shields.io/badge/coverage-62%25-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 ## Why nvHive
 
@@ -46,6 +46,26 @@ flowchart LR
     style RESULT fill:#76B900,color:#000
 ```
 
+### Architecture Overview
+
+```mermaid
+flowchart TB
+    User[User Prompt] --> Intent[Intent Detection]
+    Intent --> |simple| LLM[Single LLM Query]
+    Intent --> |coding| Agent[Agent Assembly]
+    Intent --> |iterative| Iter[Iterative Loop]
+    Intent --> |review| Review[Code Review]
+    Intent --> |testgen| TestGen[Test Generation]
+    Agent --> Match[Match Agents to LLMs]
+    Iter --> Match
+    Match --> Pipeline[Parallel Pipeline]
+    Pipeline --> Referrals[Recursive Referrals]
+    Referrals --> QA{QA Gate}
+    QA -->|PASSED| Output[Final Output]
+    QA -->|FAILED| Feedback[Feed Back]
+    Feedback --> Pipeline
+```
+
 <p align="center">
   <img src="docs/screenshots/terminal-demo.gif" alt="nvHive CLI" width="640">
 </p>
@@ -72,6 +92,7 @@ nvh agent "Refactor the router to use health-aware selection" -y
 # Advanced: sandbox, workspace, parallel pipeline
 nvh agent "Build the notification service" --sandbox     # Docker-isolated execution
 nvh agent "task" --workspace ./api,./frontend             # multi-repo context
+nvh agent "refactor the auth module" --sandbox  # runs in Docker container
 ```
 
 **How it works:** Intent detection classifies the task, the orchestrator generates expert agents matched to the best LLMs, agents run in parallel where possible, recursive referral spawning fills knowledge gaps on-demand, and an iterative QA loop refines until convergence.
@@ -102,7 +123,28 @@ flowchart LR
     style DONE fill:#76B900,color:#000
 ```
 
-### Key Capabilities (post-0.11.1)
+### Iterative QA Loop
+
+The iterative QA loop drives tasks to convergence through multiple rounds of generation, execution, and review. Enable with `--iterative` and control spend with `budget_usd`.
+
+```mermaid
+flowchart LR
+    A[Task] --> B[Generate Agents]
+    B --> C[Execute + Recursive Referrals]
+    C --> D[Synthesize]
+    D --> E{QA Review}
+    E -->|PASSED| F[Done]
+    E -->|PARTIAL/FAILED| G[Feed Feedback]
+    G --> B
+    E -->|Budget Exceeded| F
+```
+
+```bash
+nvh agent "task" --iterative               # enable iterative QA convergence
+nvh agent "task" --iterative --budget 2.50  # cap spend at $2.50
+```
+
+### Key Capabilities
 
 | Feature | What It Does |
 |---------|-------------|
@@ -172,6 +214,21 @@ nvh setup              # configure providers (validates keys)
 nvh health             # check what's available
 nvh "your question"    # try it
 ```
+
+```bash
+# With optional extras
+pip install nvhive[all]      # vision + browser automation
+pip install nvhive[vision]   # desktop control (pyautogui)
+pip install nvhive[browser]  # browser automation (playwright)
+```
+
+### First-Run Setup
+
+On first run, `nvh` automatically launches guided setup:
+- Detects GPU hardware and VRAM tier
+- Shows provider status (which API keys are configured)
+- Prompts for missing API keys with validation
+- Offers to pull recommended Ollama models for your GPU
 
 Works immediately with LLM7 (no signup). Run `nvh setup` to add free providers like Groq and GitHub Models.
 
@@ -661,6 +718,9 @@ nvh estimate --gpu rtx_4090   # predict tok/s on any GPU
 | [OpenClaw Integration](docs/OPENCLAW_MIGRATION.md) | Works alongside OpenClaw |
 | [SDK & API](docs/SDK_API.md) | Python SDK, REST API, proxies |
 | [Deploy Without Root](docs/DEPLOY_NO_ROOT.md) | No-root install on servers (Ollama, keyring, systemd user service) |
+| [Web UI](docs/WEBUI.md) | Web UI |
+| [Agent Tools](docs/TOOLS.md) | Agent tools |
+| [Configuration](docs/CONFIGURATION.md) | Configuration |
 | [Architecture](docs/ARCHITECTURE.md) | System design and adaptive learning |
 
 ## License

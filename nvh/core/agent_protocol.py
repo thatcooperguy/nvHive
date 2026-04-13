@@ -190,3 +190,19 @@ def parse_review_result(response: str) -> ReviewResult | None:
     if "NEEDS_FIX" in upper:
         return ReviewResult(verdict="NEEDS_FIX", issues=[])
     return None
+
+
+def parse_qa_verdict(text: str) -> str:
+    """Parse a QA verdict from response text.
+
+    Looks for PASSED, PARTIAL, or FAILED in the text (case-insensitive).
+    Returns the matching verdict string, defaulting to "FAILED".
+
+    This is the single source of truth for post-QA verdict parsing,
+    used by iterative_loop, autonomous, and parallel_pipeline.
+    """
+    upper = text.upper()
+    for v in ("PASSED", "PARTIAL", "FAILED"):
+        if v in upper:
+            return v
+    return "FAILED"

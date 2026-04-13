@@ -12,7 +12,6 @@ from nvh.core.agent_loop import AgentResult, AgentStep
 from nvh.core.agentic import (
     _build_changes_summary,
     _extract_commands,
-    _extract_file_operations,
 )
 from nvh.core.council import CouncilMember, CouncilOrchestrator
 from nvh.core.learning import (
@@ -169,68 +168,7 @@ class TestWeightedSynthesis:
 # ===========================================================================
 
 
-class TestExtractFileOperations:
-    def test_read_then_write_is_modified(self):
-        step = AgentStep(
-            iteration=1,
-            thought="",
-            tool_calls=[
-                {"tool": "read_file", "args": {"path": "a.py"}},
-                {"tool": "write_file", "args": {"path": "a.py"}},
-            ],
-            tool_results=[
-                ToolResult(tool_name="read_file", success=True, output="x"),
-                ToolResult(tool_name="write_file", success=True, output="ok"),
-            ],
-            response="",
-        )
-        modified, created, read = _extract_file_operations(
-            _make_agent_result([step]),
-        )
-        assert "a.py" in modified
-        assert "a.py" in read
-
-    def test_write_without_read_is_created(self):
-        step = AgentStep(
-            iteration=1,
-            thought="",
-            tool_calls=[
-                {"tool": "write_file", "args": {"path": "new.py"}},
-            ],
-            tool_results=[
-                ToolResult(
-                    tool_name="write_file", success=True, output="ok",
-                ),
-            ],
-            response="",
-        )
-        _, created, _ = _extract_file_operations(
-            _make_agent_result([step]),
-        )
-        assert "new.py" in created
-
-    def test_failed_write_not_tracked(self):
-        step = AgentStep(
-            iteration=1,
-            thought="",
-            tool_calls=[
-                {"tool": "write_file", "args": {"path": "fail.py"}},
-            ],
-            tool_results=[
-                ToolResult(
-                    tool_name="write_file",
-                    success=False,
-                    output="",
-                    error="err",
-                ),
-            ],
-            response="",
-        )
-        modified, created, _ = _extract_file_operations(
-            _make_agent_result([step]),
-        )
-        assert "fail.py" not in modified
-        assert "fail.py" not in created
+# TestExtractFileOperations lives in test_coverage_80_batch6.py (more thorough copy).
 
 
 class TestExtractCommands:

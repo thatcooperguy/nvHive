@@ -96,11 +96,9 @@ def _parse_qa_verdict(response: str) -> tuple[str, str]:
 
 
 def _parse_post_qa_verdict(response: str) -> str:
-    upper = response.upper()
-    for v in ("PASSED", "PARTIAL", "FAILED"):
-        if v in upper:
-            return v
-    return "FAILED"
+    from nvh.core.agent_protocol import parse_qa_verdict
+
+    return parse_qa_verdict(response)
 
 
 def _resp_text(response: Any) -> str:

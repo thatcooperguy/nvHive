@@ -244,11 +244,9 @@ async def iterative_solve(
             )
             qa_content = qa_resp.content
 
-            verdict = "PARTIAL"
-            if "PASSED" in qa_content.upper():
-                verdict = "PASSED"
-            elif "FAILED" in qa_content.upper():
-                verdict = "FAILED"
+            from nvh.core.agent_protocol import parse_qa_verdict
+
+            verdict = parse_qa_verdict(qa_content)
 
             improvements = []
             for line in qa_content.split("\n"):

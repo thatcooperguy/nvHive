@@ -37,7 +37,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SubTaskResult:
-    """Result of one agent's work on a subtask."""
+    """Result of one agent's work on a subtask.
+
+    Note: This shares a similar shape with recursive_agents.AgentResponse.
+    The two are intentionally separate: SubTaskResult tracks file operations
+    and success/error state for agentic pipelines, while AgentResponse tracks
+    referral chains and spawn depth for recursive expert routing.
+    Conversion between them happens in run_parallel_pipeline (phase 4b).
+    """
     role: str
     provider: str
     model: str
@@ -430,11 +437,9 @@ async def _integration_qa(
         resp = await engine.query(prompt=prompt, stream=False, use_cache=False)
         content = resp.content
 
-        verdict = "PARTIAL"
-        if "PASSED" in content.upper():
-            verdict = "PASSED"
-        elif "FAILED" in content.upper():
-            verdict = "FAILED"
+        from nvh.core.agent_protocol import parse_qa_verdict
+
+        verdict = parse_qa_verdict(content)
 
         improvements = []
         in_improvements = False
