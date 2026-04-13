@@ -8,17 +8,22 @@ from nvh.cli.main import _is_first_run
 
 
 def test_first_run_detected(tmp_path):
-    """Config missing + no env vars → returns True."""
+    """Config missing + no env vars + no CI → returns True."""
     fake_config = tmp_path / "config.yaml"
+    # Clear all keys that _is_first_run checks (API keys AND CI markers)
     env = {k: "" for k in (
         "GROQ_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
         "GOOGLE_API_KEY", "GITHUB_TOKEN",
+        "CI", "PYTEST_CURRENT_TEST", "GITHUB_ACTIONS",
     )}
     with (
         patch("nvh.cli.main.DEFAULT_CONFIG_PATH", fake_config),
         patch.dict("os.environ", env, clear=False),
     ):
-        # Make sure the env keys are truly empty
+        # Also need to unset CI vars that may be inherited
+        import os
+        for k in ("CI", "PYTEST_CURRENT_TEST", "GITHUB_ACTIONS"):
+            os.environ.pop(k, None)
         assert _is_first_run() is True
 
 
