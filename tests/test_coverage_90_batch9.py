@@ -209,6 +209,7 @@ class TestEngineQuery:
             with (
                 patch("httpx.get", side_effect=Exception("no connection")),
                 patch.dict("os.environ", {}, clear=True),
+                patch.object(engine, "_try_start_ollama"),
             ):
                 result = engine._auto_detect_providers()
 
