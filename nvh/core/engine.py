@@ -220,6 +220,15 @@ class Engine:
             if not enabled:
                 enabled = self._auto_detect_providers()
 
+            # If Ollama is configured but not reachable, try to auto-start it
+            if "ollama" in enabled:
+                try:
+                    import httpx as _httpx
+                    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+                    _httpx.get(f"{ollama_url}/api/tags", timeout=2)
+                except Exception:
+                    self._try_start_ollama()
+
             # Initialize local orchestrator
             gpu_vram = 0
             try:
@@ -269,23 +278,97 @@ class Engine:
         except Exception:
             pass
 
-        # Ollama — check if running locally (supports OLLAMA_BASE_URL override)
+        # Ollama — try to start if installed, then check if running
         import os
+        ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        ollama_running = False
         try:
             import httpx
-            ollama_url = os.environ.get(
-                "OLLAMA_BASE_URL", "http://localhost:11434",
-            )
             resp = httpx.get(f"{ollama_url}/api/tags", timeout=2)
             if resp.status_code == 200:
+                ollama_running = True
+        except Exception:
+            # Not running — try to auto-start
+            self._try_start_ollama()
+            try:
+                resp = httpx.get(f"{ollama_url}/api/tags", timeout=2)
+                if resp.status_code == 200:
+                    ollama_running = True
+            except Exception:
+                pass
+
+        if ollama_running:
+            try:
                 from nvh.providers.ollama_provider import OllamaProvider
                 provider = OllamaProvider(base_url=ollama_url)
                 self.registry.register("ollama", provider)
                 detected.append("ollama")
                 logger.info("Auto-detected: Ollama (local, running on %s)", ollama_url)
-        except Exception:
-            pass
+            except Exception:
+                pass
 
+        # Detect cloud providers from env vars / keyring
+        self._auto_detect_env_providers(detected)
+
+        return detected
+
+    def _try_start_ollama(self) -> None:
+        """Try to start a locally-installed Ollama in the background."""
+        import subprocess
+        import time
+        from pathlib import Path
+
+        try:
+            from nvh.cli.setup import _find_ollama_binary
+        except Exception:
+            return
+
+        ollama_bin = _find_ollama_binary()
+        if not ollama_bin:
+            return
+
+        nvh_home = Path.home() / ".nvh"
+        models_dir = nvh_home / "models"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        log_path = nvh_home / "ollama.log"
+
+        env = os.environ.copy()
+        env["OLLAMA_MODELS"] = str(models_dir)
+
+        # Add CUDA libs from local install
+        lib_dir = nvh_home / "lib" / "ollama"
+        if lib_dir.is_dir():
+            existing_ld = env.get("LD_LIBRARY_PATH", "")
+            env["LD_LIBRARY_PATH"] = f"{lib_dir}:{existing_ld}" if existing_ld else str(lib_dir)
+
+        try:
+            log_file = open(log_path, "a")
+            subprocess.Popen(
+                [ollama_bin, "serve"],
+                stdout=log_file,
+                stderr=log_file,
+                env=env,
+                start_new_session=True,
+            )
+            logger.info("Auto-starting Ollama from %s", ollama_bin)
+
+            # Wait up to 10 seconds
+            import httpx as _httpx
+            ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            for _ in range(10):
+                time.sleep(1)
+                try:
+                    resp = _httpx.get(f"{ollama_url}/api/tags", timeout=2)
+                    if resp.status_code == 200:
+                        logger.info("Ollama auto-started successfully")
+                        return
+                except Exception:
+                    pass
+            logger.warning("Ollama started but not responding after 10s — check %s", log_path)
+        except Exception as exc:
+            logger.debug("Could not auto-start Ollama: %s", exc)
+
+    def _auto_detect_env_providers(self, detected: list[str]) -> None:
         # Check for API keys in environment AND keyring
         env_providers = {
             "GROQ_API_KEY": ("groq", "nvh.providers.groq_provider", "GroqProvider"),
@@ -332,8 +415,6 @@ class Engine:
                     logger.info("Auto-detected: %s (API key found)", name)
                 except Exception:
                     pass
-
-        return detected
 
     # -----------------------------------------------------------------------
     # Connectivity Check

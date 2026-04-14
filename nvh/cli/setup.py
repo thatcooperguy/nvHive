@@ -343,6 +343,7 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
     nvh_home = Path.home() / ".nvh"
     models_dir = nvh_home / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
+    log_path = nvh_home / "ollama.log"
 
     env = os.environ.copy()
     env["OLLAMA_MODELS"] = str(models_dir)
@@ -355,10 +356,11 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
 
     console.print("  Starting Ollama...")
     try:
-        subprocess.Popen(
+        log_file = open(log_path, "w")
+        proc = subprocess.Popen(
             [ollama_bin, "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
             env=env,
             start_new_session=True,
         )
@@ -366,15 +368,29 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
         console.print(f"  [red]Failed to start Ollama: {exc}[/red]")
         return False
 
-    # Wait up to 10 seconds for Ollama to be ready
-    for i in range(10):
+    # Wait up to 15 seconds for Ollama to be ready
+    for i in range(15):
         time.sleep(1)
+        # Check if process died
+        if proc.poll() is not None:
+            log_file.close()
+            console.print(f"  [red]Ollama exited with code {proc.returncode}.[/red]")
+            try:
+                tail = log_path.read_text().strip().splitlines()[-5:]
+                for line in tail:
+                    console.print(f"  [dim]{line}[/dim]")
+            except Exception:
+                pass
+            console.print(f"  [dim]Full log: {log_path}[/dim]")
+            return False
         running, _ = _ollama_running()
         if running:
             console.print("  [green]Ollama is running.[/green]")
+            console.print(f"  [dim]Log: {log_path}[/dim]")
             return True
 
     console.print("  [yellow]Ollama started but not responding yet. It may need more time.[/yellow]")
+    console.print(f"  [dim]Check log: {log_path}[/dim]")
     return False
 
 
