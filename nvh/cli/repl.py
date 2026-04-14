@@ -252,6 +252,54 @@ async def _run_do_command_async(task: str, session: ReplSession, engine: Engine)
         console.print(f"[dim yellow]Note: {result.error}[/dim yellow]\n")
 
 
+def _natural_to_command(text: str) -> str | None:
+    """Map natural language to a REPL slash command.
+
+    Returns the equivalent slash command string if matched, None otherwise.
+    """
+    import re
+
+    t = text.lower().strip()
+
+    # Conversation management
+    if t in ("clear", "start over", "new conversation", "reset", "clear history"):
+        return "/clear"
+    if re.match(r"^(?:show|check)\s+(?:the\s+)?(?:cost|spending|bill)|^how\s+much\s+(?:did|does|has)", t):
+        return "/cost"
+    if re.match(r"^(?:show|view)\s+(?:conversation\s+)?history", t):
+        return "/history"
+
+    # Memory
+    if re.match(r"^(?:show|list|what\s+do\s+you)\s+(?:my\s+)?memor", t):
+        return "/memories"
+    if m := re.match(r"^(?:remember|don'?t\s+forget)\s+(?:that\s+)?(.+)$", t):
+        return f"/remember {m.group(1)}"
+    if m := re.match(r"^forget\s+(?:about\s+)?(.+)$", t):
+        return f"/forget {m.group(1)}"
+
+    # Provider/model switching
+    if m := re.match(r"^(?:use|switch\s+to|change\s+to)\s+(openai|anthropic|groq|google|gemini|ollama)\b", t):
+        return f"/advisor {m.group(1)}"
+    if m := re.match(r"^(?:use|switch\s+to|change\s+to)\s+(?:model\s+)?(gpt-4o|claude[^\s]*|gemini[^\s]*|llama[^\s]*|nemotron[^\s]*|gemma[^\s]*)\b", t):
+        return f"/model {m.group(1)}"
+
+    # Modes
+    if re.match(r"^(?:ask\s+)?(?:everyone|all\s+(?:advisors|models)|council)", t):
+        return "/convene"
+    if re.match(r"^(?:show|list|what)\s+tools", t):
+        return "/tools"
+
+    # Setup
+    if re.match(r"^(?:run\s+)?setup$|^configure\s+(?:providers|api\s+keys)$|^reconfigure$", t):
+        return "/setup"
+
+    # Help
+    if t in ("help", "commands", "what can you do"):
+        return "/help"
+
+    return None
+
+
 def _is_task_input(text: str) -> bool:
     """Detect if user input is a task/instruction (not a question).
 
@@ -830,6 +878,13 @@ async def run_repl(
         # Empty input
         if not user_input:
             continue
+
+        # --- Natural language → slash command mapping ---
+        if not user_input.startswith("/"):
+            mapped_cmd = _natural_to_command(user_input)
+            if mapped_cmd:
+                console.print(f"[dim][→ {mapped_cmd}][/dim]")
+                user_input = mapped_cmd
 
         # --- Inline command ---
         if user_input.startswith("/"):

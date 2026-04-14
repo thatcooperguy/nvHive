@@ -1259,6 +1259,87 @@ async def analytics(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     return _response_envelope(data)
 
 
+# -- /v1/smart — auto-detect intent and route appropriately -------------------
+
+@app.post("/v1/smart", summary="Smart query — auto-detects actions, tasks, and questions")
+async def smart_query(request: QueryRequest, _auth: None = Depends(require_auth)) -> Any:
+    """Smart endpoint: detects if the prompt is an action, a multi-step task,
+    or a question, and routes accordingly.
+
+    - Actions (open, install, etc.) → execute immediately via tools
+    - Tasks (setup X, take screenshot, etc.) → run agent loop
+    - Questions → standard LLM query
+    """
+    engine = get_engine()
+    prompt = request.prompt
+
+    # 1. Check for system actions
+    from nvh.core.action_detector import detect_action
+    action = detect_action(prompt)
+    if action:
+        try:
+            from nvh.core.tools import ToolRegistry
+            tools = ToolRegistry()
+            result = await tools.execute(action.tool_name, action.arguments)
+            return _response_envelope({
+                "type": "action",
+                "action": action.tool_name,
+                "output": result.output if result.success else result.error,
+                "success": result.success,
+            })
+        except Exception as exc:
+            return _response_envelope({
+                "type": "action",
+                "action": action.tool_name,
+                "output": str(exc),
+                "success": False,
+            })
+
+    # 2. Check for task-like inputs → agent loop
+    from nvh.cli.repl import _is_task_input
+    if _is_task_input(prompt):
+        try:
+            from nvh.core.agent_loop import run_agent_loop
+            result = await run_agent_loop(
+                task=prompt,
+                engine=engine,
+                max_iterations=15,
+            )
+            return _response_envelope({
+                "type": "agent",
+                "task": prompt,
+                "output": result.final_response,
+                "completed": result.completed,
+                "steps": result.total_iterations,
+                "tool_calls": result.total_tool_calls,
+            })
+        except Exception as exc:
+            return _response_envelope({
+                "type": "agent",
+                "task": prompt,
+                "output": str(exc),
+                "completed": False,
+            })
+
+    # 3. Regular question → LLM query
+    try:
+        response = await engine.query(
+            prompt=prompt,
+            provider=request.provider,
+            model=request.model,
+            system_prompt=request.system_prompt,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            stream=False,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+    result = _serialize_completion(response)
+    result["type"] = "query"
+    return _response_envelope(result)
+
+
 # -- /v1/agents ---------------------------------------------------------------
 
 @app.get("/v1/agents/presets", summary="List available agent presets and their roles")

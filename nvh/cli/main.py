@@ -11388,7 +11388,14 @@ def main():
         if action and not force_iterative:
             _run(_execute_action(action))
         else:
-            _run(_smart_default(prompt, force_iterative=force_iterative))
+            # Auto-escalate task-like inputs to agent mode
+            from nvh.cli.repl import _is_task_input
+            if _is_task_input(prompt) and not force_iterative:
+                # Route to nvh do
+                sys.argv = [sys.argv[0], "do", prompt]
+                app()
+            else:
+                _run(_smart_default(prompt, force_iterative=force_iterative))
 
 
 if __name__ == "__main__":
