@@ -285,6 +285,7 @@ def _install_ollama(console: Console) -> str | None:
     try:
         import shutil
         import tarfile
+
         import zstandard
 
         dctx = zstandard.ZstdDecompressor()
@@ -404,7 +405,6 @@ def _pull_model(console: Console, model: str, ollama_bin: str) -> bool:
     Falls back to a plain spinner if parsing fails.
     """
     import subprocess
-    import re
 
     from rich.progress import (
         BarColumn,
@@ -417,8 +417,9 @@ def _pull_model(console: Console, model: str, ollama_bin: str) -> bool:
 
     # Use the Ollama HTTP API for pull — it streams JSON progress
     try:
-        import httpx
         import json
+
+        import httpx
 
         base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         with Progress(
