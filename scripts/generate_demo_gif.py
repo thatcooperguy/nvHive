@@ -1,12 +1,12 @@
 """Generate terminal demo GIF for README with typing animation.
 
-Matches the exact style of existing nvHive GIFs (gpu-detection-demo.gif,
-bench-demo.gif): black background, dark title bar, green $ prompt,
-green block cursor, character-by-character typing.
+Matches the exact style of existing nvHive GIFs: black background,
+dark title bar, NVIDIA green prompt, bright text, smooth anti-aliased
+font, generous timing between commands.
 
 Usage:
     python scripts/generate_demo_gif.py
-    # Output: docs/screenshots/terminal-demo.gif
+    # Output: docs/screenshots/terminal-demo-v2.gif
 """
 
 from __future__ import annotations
@@ -16,31 +16,38 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 # ---------------------------------------------------------------------------
-# Style — matched to existing nvHive GIFs
+# Style — sampled from gpu-detection-demo.gif
 # ---------------------------------------------------------------------------
 WIDTH = 640
 HEIGHT = 551
-FONT_SIZE = 13
-LINE_HEIGHT = 17
-PAD_X = 12
-PAD_TOP = 38
-BG = "#000000"
-TITLE_BAR_BG = "#1a1a1a"
-TITLE_BAR_H = 28
-GREEN = "#4ec900"
-BRIGHT_GREEN = "#3fb950"
-CYAN = "#58a6ff"
-WHITE = "#d4d4d4"
-GRAY = "#888888"
-DIM = "#555555"
-YELLOW = "#e5c07b"
-RED = "#e06c75"
-CURSOR_COLOR = "#4ec900"
+FONT_SIZE = 14
+LINE_HEIGHT = 20
+PAD_X = 14
+PAD_TOP = 40
+BG = "#0a0a0a"
+TITLE_BAR_BG = "#1c1c1c"
+TITLE_BAR_H = 30
 
-OUTPUT = Path("docs/screenshots/terminal-demo.gif")
-TYPING_MS = 32
+# Colors sampled from existing GIFs
+NVIDIA_GREEN = "#78bd00"   # prompt $
+BRIGHT_GREEN = "#80cb02"   # success text
+CYAN = "#61afef"           # step indicators
+WHITE = "#d7d7d7"          # regular text
+LIGHT_GRAY = "#b0b0b0"    # secondary text
+GRAY = "#808080"           # dim text
+DIM = "#5a5a5a"            # very dim
+YELLOW = "#e5c07b"         # warnings
+RED = "#e06c75"            # traffic light
+CURSOR_COLOR = "#78bd00"
+
+OUTPUT = Path("docs/screenshots/terminal-demo-v2.gif")
+
+# Timing — matched to existing GIFs (~125ms base)
+TYPING_MS = 50        # per character
 CURSOR_BLINK = 500
-LINE_PAUSE = 60
+COMMAND_WAIT = 2000   # pause after command output before next
+SECTION_WAIT = 2500   # pause between sections
+LINE_DELAY = 120      # per output line
 
 
 def _get_font(size: int = FONT_SIZE) -> ImageFont.FreeTypeFont:
@@ -68,23 +75,21 @@ class Terminal:
         # Title bar
         draw.rounded_rectangle([(0, 0), (WIDTH, TITLE_BAR_H)], radius=8, fill=TITLE_BAR_BG)
         draw.rectangle([(0, TITLE_BAR_H - 4), (WIDTH, TITLE_BAR_H)], fill=TITLE_BAR_BG)
-        # Traffic lights
-        draw.ellipse([(10, 8), (22, 20)], fill="#ff5f56")
-        draw.ellipse([(28, 8), (40, 20)], fill="#ffbd2e")
-        draw.ellipse([(46, 8), (58, 20)], fill="#27c93f")
-        # Title
-        draw.text((WIDTH // 2, 7), self.title, fill="#666666", font=FONT, anchor="mt")
+        draw.ellipse([(10, 9), (22, 21)], fill="#ff5f56")
+        draw.ellipse([(28, 9), (40, 21)], fill="#ffbd2e")
+        draw.ellipse([(46, 9), (58, 21)], fill="#27c93f")
+        draw.text((WIDTH // 2, 8), self.title, fill="#707070", font=FONT, anchor="mt")
 
         # Lines
         y = PAD_TOP
-        max_lines = (HEIGHT - PAD_TOP - 8) // LINE_HEIGHT
+        max_lines = (HEIGHT - PAD_TOP - 10) // LINE_HEIGHT
         visible = self.lines[-max_lines:] if len(self.lines) > max_lines else self.lines
 
         for color, text in visible:
             draw.text((PAD_X, y), text, fill=color, font=FONT)
             y += LINE_HEIGHT
 
-        # Cursor block
+        # Cursor
         if cursor and visible:
             last_color, last_text = visible[-1]
             cx = cursor_x if cursor_x is not None else len(last_text)
@@ -92,16 +97,16 @@ class Terminal:
             bbox = FONT.getbbox(text_before)
             cursor_px = PAD_X + (bbox[2] if bbox else 0)
             cursor_y = PAD_TOP + (len(visible) - 1) * LINE_HEIGHT
-            if cursor_y < HEIGHT - 16:
+            if cursor_y < HEIGHT - 20:
                 draw.rectangle(
-                    [(cursor_px, cursor_y), (cursor_px + 7, cursor_y + LINE_HEIGHT - 3)],
+                    [(cursor_px, cursor_y + 1), (cursor_px + 8, cursor_y + LINE_HEIGHT - 2)],
                     fill=CURSOR_COLOR,
                 )
 
         return img
 
-    def add_frame(self, duration: int, cursor: bool = False, cursor_x: int | None = None):
-        self.frames.append((self._render(cursor=cursor, cursor_x=cursor_x), duration))
+    def frame(self, ms: int, cursor: bool = False, cursor_x: int | None = None):
+        self.frames.append((self._render(cursor=cursor, cursor_x=cursor_x), ms))
 
     def pause(self, ms: int, cursor: bool = True):
         elapsed = 0
@@ -109,27 +114,27 @@ class Terminal:
         cx = len(self.lines[-1][1]) if self.lines else 0
         while elapsed < ms:
             t = min(CURSOR_BLINK, ms - elapsed)
-            self.add_frame(t, cursor=cursor and blink, cursor_x=cx)
+            self.frame(t, cursor=cursor and blink, cursor_x=cx)
             blink = not blink
             elapsed += t
 
     def type_cmd(self, prompt: str, command: str):
-        self.lines.append((GREEN, prompt + " "))
-        self.add_frame(150, cursor=True, cursor_x=len(prompt) + 1)
+        self.lines.append((NVIDIA_GREEN, prompt + " "))
+        self.frame(300, cursor=True, cursor_x=len(prompt) + 1)
         current = prompt + " "
         for ch in command:
             current += ch
             self.lines[-1] = (WHITE, current)
-            self.add_frame(TYPING_MS, cursor=True, cursor_x=len(current))
-        self.pause(350)
+            self.frame(TYPING_MS, cursor=True, cursor_x=len(current))
+        self.pause(600)
 
-    def out(self, color: str, text: str, delay: int = LINE_PAUSE):
+    def out(self, color: str, text: str, delay: int = LINE_DELAY):
         self.lines.append((color, text))
-        self.add_frame(delay)
+        self.frame(delay)
 
     def blank(self):
         self.lines.append((WHITE, ""))
-        self.add_frame(30)
+        self.frame(60)
 
     def clear(self):
         self.lines.clear()
@@ -148,50 +153,58 @@ class Terminal:
 def main():
     t = Terminal("nvHive — First Run")
 
-    # --- 3s pause with blinking cursor ---
-    t.lines.append((GREEN, "$ "))
+    # --- 3s opening pause with blinking cursor ---
+    t.lines.append((NVIDIA_GREEN, "$ "))
     t.pause(3000)
     t.lines.pop()
 
-    # --- Install ---
+    # === INSTALL ===
     t.type_cmd("$", "pip install nvhive")
-    t.out(GRAY, "Successfully installed nvhive-0.29.3")
-    t.pause(600)
+    t.out(LIGHT_GRAY, "Successfully installed nvhive-0.29.3")
+    t.pause(COMMAND_WAIT)
+
     t.blank()
     t.type_cmd("$", "nvh")
-    t.pause(400)
+    t.pause(800)
 
-    # --- Step 1 ---
+    # === STEP 1: Hardware + Local AI ===
     t.blank()
     t.out(BRIGHT_GREEN, "Step 1/3: Hardware + Local AI")
     t.blank()
-    t.out(DIM, "  GPU          NVIDIA GeForce RTX 4080 (48 GB VRAM)")
-    t.out(DIM, "  Total VRAM   48 GB")
-    t.out(DIM, "  Agent Tier   tier_3 - Cloud orch + 70B local")
-    t.pause(1200)
+    t.out(LIGHT_GRAY, "  GPU          NVIDIA GeForce RTX 4080 (48 GB VRAM)")
+    t.out(LIGHT_GRAY, "  Total VRAM   48 GB")
+    t.out(LIGHT_GRAY, "  Agent Tier   tier_3 - Cloud orch + 70B local")
+    t.pause(SECTION_WAIT)
 
+    # Ollama download
     t.blank()
     t.out(WHITE, "  Download Ollama? [Y/n] Y")
     t.out(WHITE, "  Downloading Ollama (~2 GB)...")
-    t.out(CYAN, "  Ollama ████████████████████ 2.1/2.1 GB 247 MB/s")
+    t.pause(400)
+    t.out(CYAN, "  Ollama ████████████████████ 2.1/2.1 GB  247 MB/s")
     t.out(BRIGHT_GREEN, "  Installed to ~/.nvh/bin/ollama")
+    t.pause(600)
     t.out(WHITE, "  Starting Ollama...")
     t.out(BRIGHT_GREEN, "  Ollama is running.")
-    t.pause(1000)
+    t.pause(COMMAND_WAIT)
 
+    # Model pulls
     t.blank()
     t.out(WHITE, "  Recommended models (48 GB VRAM):")
-    t.out(DIM, "    available  llama3.3:70b")
-    t.out(DIM, "    available  llama3.2-vision")
+    t.out(GRAY, "    available  llama3.3:70b")
+    t.out(GRAY, "    available  llama3.2-vision")
+    t.blank()
     t.out(WHITE, "  Pull 2 model(s)? [Y/n] Y")
-    t.out(CYAN, "  llama3.3:70b ███████████████ 40/40 GB")
+    t.pause(400)
+    t.out(CYAN, "  llama3.3:70b ████████████████ 40/40 GB  185 MB/s")
     t.out(BRIGHT_GREEN, "  Pulled llama3.3:70b.")
-    t.out(CYAN, "  llama3.2-vision █████████████ 7/7 GB")
+    t.pause(300)
+    t.out(CYAN, "  llama3.2-vision ██████████████ 7/7 GB  210 MB/s")
     t.out(BRIGHT_GREEN, "  Pulled llama3.2-vision.")
     t.out(BRIGHT_GREEN, "  Desktop agent: ready")
-    t.pause(1800)
+    t.pause(SECTION_WAIT)
 
-    # --- Step 2 ---
+    # === STEP 2: Provider status ===
     t.clear()
     t.out(BRIGHT_GREEN, "Step 2/3: Provider status")
     t.blank()
@@ -201,86 +214,102 @@ def main():
     t.out(YELLOW, "  Anthropic       not configured")
     t.out(YELLOW, "  Google Gemini   not configured")
     t.out(BRIGHT_GREEN, "  Ollama (local)  running (2 models)")
-    t.pause(1800)
+    t.pause(SECTION_WAIT)
 
-    # --- Step 3 ---
+    # === STEP 3: API keys ===
     t.clear()
     t.out(BRIGHT_GREEN, "Step 3/3: Configure API keys")
     t.blank()
-    t.out(DIM, "  Desktop agent is ready!")
-    t.out(DIM, "  I'll open each signup page in your browser")
-    t.out(DIM, "  and watch your clipboard for the key.")
+    t.out(GRAY, "  Desktop agent is ready!")
+    t.out(GRAY, "  I'll open signup pages and watch your clipboard.")
     t.blank()
     t.out(WHITE, "  Open Groq signup page? [Y/n] Y")
-    t.out(DIM, "  Opened https://console.groq.com/keys")
-    t.out(DIM, "  Agent: I see the Groq API Keys page...")
-    t.out(DIM, "  Watching clipboard...")
+    t.out(GRAY, "  Opened https://console.groq.com/keys")
+    t.pause(600)
+    t.out(GRAY, "  Agent: I see the Groq API Keys page...")
+    t.out(GRAY, "  Watching clipboard...")
+    t.pause(800)
     t.out(BRIGHT_GREEN, "  Detected key: gsk_xR...CmLa")
     t.out(BRIGHT_GREEN, "  Saved Groq key.")
-    t.pause(2000)
+    t.pause(COMMAND_WAIT)
 
     t.blank()
     t.out(BRIGHT_GREEN, "  Setup complete! 4 providers, 48 GB VRAM,")
     t.out(BRIGHT_GREEN, "  desktop agent ready.")
-    t.pause(2500)
+    t.pause(SECTION_WAIT)
 
-    # --- REPL ---
+    # === REPL ===
     t.clear()
     t.out(CYAN, "  ──── NVHive ────")
     t.out(WHITE, "  Advisors: groq, openai, anthropic, google, ollama")
-    t.out(DIM, "  Model: auto   mode: ask")
+    t.out(GRAY, "  Model: auto   mode: ask")
     t.blank()
-    t.pause(1200)
+    t.pause(COMMAND_WAIT)
 
+    # Question
     t.type_cmd(">", "what GPU do I have?")
-    t.out(DIM, "  [ask -> ollama/nemotron]")
+    t.out(GRAY, "  [ask -> ollama/nemotron]")
+    t.blank()
     t.out(WHITE, "  You have an NVIDIA RTX 4080 with 48 GB VRAM.")
     t.out(WHITE, "  Running CUDA 12.4. Tier 3: 70B models locally.")
-    t.out(DIM, "  Advisor: ollama | Cost: $0.00 | 290ms")
-    t.pause(1500)
+    t.blank()
+    t.out(GRAY, "  Advisor: ollama | Cost: $0.00 | 290ms")
+    t.pause(COMMAND_WAIT)
 
+    # Desktop agent
     t.blank()
     t.type_cmd(">", "take a screenshot")
-    t.out(DIM, "  [agent mode]")
+    t.out(GRAY, "  [agent mode]")
+    t.blank()
     t.out(CYAN, "  Step 1: capture_screenshot -> 245 KB")
     t.out(CYAN, "  Step 2: analyze_image [llama3.2-vision]")
-    t.out(WHITE, "  Ubuntu desktop with Konsole open.")
-    t.out(WHITE, "  Firefox visible behind terminal.")
-    t.out(DIM, "  2 steps | 8.3s | completed")
-    t.pause(1500)
+    t.blank()
+    t.out(WHITE, "  Ubuntu desktop with Konsole terminal open.")
+    t.out(WHITE, "  Firefox visible behind it. Taskbar shows 2:15 PM.")
+    t.blank()
+    t.out(GRAY, "  2 steps | 8.3s | completed")
+    t.pause(COMMAND_WAIT)
 
+    # Natural language command
     t.blank()
     t.type_cmd(">", "use anthropic")
-    t.out(DIM, "  [-> /advisor anthropic]")
-    t.pause(600)
+    t.out(GRAY, "  [-> /advisor anthropic]")
+    t.out(LIGHT_GRAY, "  Advisor set to anthropic")
+    t.pause(COMMAND_WAIT)
 
+    # Action
     t.blank()
     t.type_cmd(">", "open firefox")
-    t.out(DIM, "  [action -> Open application]")
+    t.out(GRAY, "  [action -> Open application]")
     t.out(BRIGHT_GREEN, "  Opened: firefox")
-    t.pause(800)
+    t.pause(COMMAND_WAIT)
 
+    # Task
     t.blank()
     t.type_cmd(">", "setup comfyui")
-    t.out(DIM, "  [agent mode]")
+    t.out(GRAY, "  [agent mode]")
+    t.blank()
     t.out(CYAN, "  Step 1: shell -> git clone ComfyUI")
     t.out(CYAN, "  Step 2: shell -> pip install -r requirements.txt")
     t.out(CYAN, "  Step 3: shell -> python main.py &")
     t.out(CYAN, "  Step 4: screenshot -> ComfyUI running :8188")
-    t.out(DIM, "  4 steps | 42s | completed")
-    t.pause(2500)
+    t.blank()
+    t.out(GRAY, "  4 steps | 42s | completed")
+    t.pause(SECTION_WAIT)
 
-    # --- End ---
+    # === End card ===
     t.clear()
     t.blank()
     t.blank()
-    t.out(WHITE, "  ╔═══════════════════════════════════════╗")
-    t.out(WHITE, "  ║                                       ║")
-    t.out(BRIGHT_GREEN, "  ║   pip install nvhive                  ║")
-    t.out(WHITE, "  ║   github.com/thatcooperguy/nvHive      ║")
-    t.out(WHITE, "  ║                                       ║")
-    t.out(WHITE, "  ╚═══════════════════════════════════════╝")
-    t.pause(4000, cursor=False)
+    t.blank()
+    t.blank()
+    t.out(WHITE, "     ╔═══════════════════════════════════════╗")
+    t.out(WHITE, "     ║                                       ║")
+    t.out(BRIGHT_GREEN, "     ║     pip install nvhive                ║")
+    t.out(WHITE, "     ║     github.com/thatcooperguy/nvHive    ║")
+    t.out(WHITE, "     ║                                       ║")
+    t.out(WHITE, "     ╚═══════════════════════════════════════╝")
+    t.pause(5000, cursor=False)
 
     t.save()
 
