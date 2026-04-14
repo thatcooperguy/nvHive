@@ -11282,10 +11282,21 @@ def main():
     """
     args = sys.argv[1:]
 
-    # Load API keys from ~/.hive/.env (headless fallback for keyring)
+    # Load API keys from keyring / ~/.hive/.env before config interpolation
     try:
         from nvh.cli.setup import load_env_keys
         load_env_keys()
+    except Exception:
+        pass
+
+    # Suppress noisy LiteLLM info/debug messages (e.g. "Give Feedback" banners)
+    try:
+        import litellm
+        litellm.suppress_debug_info = True
+        import logging
+        logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+        logging.getLogger("LiteLLM Router").setLevel(logging.WARNING)
+        logging.getLogger("LiteLLM Proxy").setLevel(logging.WARNING)
     except Exception:
         pass
 

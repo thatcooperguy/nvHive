@@ -38,11 +38,30 @@ CORE_PROVIDERS = [
 # ---------------------------------------------------------------------------
 
 def load_env_keys() -> None:
-    """Load API keys from ~/.hive/.env into os.environ (if not already set).
+    """Load API keys from keyring and ~/.hive/.env into os.environ.
 
-    This is the fallback for headless servers where keyring is unavailable.
-    Keys written by _store_key() are picked up here on subsequent runs.
+    Checks keyring first (primary storage), then falls back to .env file
+    (headless fallback). Keys are set in os.environ so that config YAML
+    ``${VAR}`` interpolation can resolve them without warnings.
     """
+    # --- Keyring: load all known provider keys into os.environ -----------
+    _KEYRING_KEYS = [
+        ("groq", "GROQ_API_KEY"),
+        ("openai", "OPENAI_API_KEY"),
+        ("anthropic", "ANTHROPIC_API_KEY"),
+        ("google", "GOOGLE_API_KEY"),
+    ]
+    try:
+        import keyring
+        for name, env_var in _KEYRING_KEYS:
+            if not os.environ.get(env_var):
+                val = keyring.get_password("nvhive", f"{name}_api_key")
+                if val:
+                    os.environ[env_var] = val
+    except Exception:
+        pass
+
+    # --- .env file: fallback for headless servers without keyring --------
     try:
         env_file = DEFAULT_CONFIG_DIR / ".env"
         if not env_file.exists():
@@ -54,7 +73,7 @@ def load_env_keys() -> None:
             var, _, val = line.partition("=")
             var = var.strip()
             val = val.strip()
-            # Don't overwrite existing env vars
+            # Don't overwrite existing env vars (keyring may have set them above)
             if var and val and not os.environ.get(var):
                 os.environ[var] = val
     except Exception:
@@ -154,6 +173,126 @@ def _ollama_running() -> tuple[bool, list[str]]:
             return True, models
     except Exception:
         pass
+    return False, []
+
+
+def _find_ollama_binary() -> str | None:
+    """Return path to an existing Ollama binary, or None."""
+    import shutil
+
+    # Check PATH first (system install)
+    which = shutil.which("ollama")
+    if which:
+        return which
+
+    # Check nvhive-local install location
+    nvh_home = Path.home() / ".nvh"
+    local_bin = nvh_home / "ollama"
+    if local_bin.exists() and os.access(str(local_bin), os.X_OK):
+        return str(local_bin)
+
+    return None
+
+
+def _install_ollama(console: Console) -> str | None:
+    """Download the Ollama binary to ~/.nvh/ollama. Returns path or None."""
+    import platform
+    import subprocess
+
+    if platform.system() != "Linux":
+        console.print(
+            "  [yellow]Auto-install is only supported on Linux.[/yellow]\n"
+            "  [dim]Install manually: https://ollama.com/download[/dim]"
+        )
+        return None
+
+    nvh_home = Path.home() / ".nvh"
+    nvh_home.mkdir(parents=True, exist_ok=True)
+    ollama_bin = nvh_home / "ollama"
+
+    console.print("  Downloading Ollama...")
+    try:
+        result = subprocess.run(
+            ["curl", "-fsSL", "https://ollama.com/download/ollama-linux-amd64",
+             "-o", str(ollama_bin)],
+            capture_output=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            console.print("  [red]Download failed.[/red]")
+            return None
+        ollama_bin.chmod(0o755)
+        console.print(f"  [green]Installed Ollama to {ollama_bin}[/green]")
+        return str(ollama_bin)
+    except Exception as exc:
+        console.print(f"  [red]Download failed: {exc}[/red]")
+        return None
+
+
+def _start_ollama(console: Console, ollama_bin: str) -> bool:
+    """Start 'ollama serve' in the background. Returns True if it comes up."""
+    import subprocess
+    import time
+
+    nvh_home = Path.home() / ".nvh"
+    models_dir = nvh_home / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env["OLLAMA_MODELS"] = str(models_dir)
+
+    console.print("  Starting Ollama...")
+    try:
+        subprocess.Popen(
+            [ollama_bin, "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+        )
+    except Exception as exc:
+        console.print(f"  [red]Failed to start Ollama: {exc}[/red]")
+        return False
+
+    # Wait up to 10 seconds for Ollama to be ready
+    for i in range(10):
+        time.sleep(1)
+        running, _ = _ollama_running()
+        if running:
+            console.print("  [green]Ollama is running.[/green]")
+            return True
+
+    console.print("  [yellow]Ollama started but not responding yet. It may need more time.[/yellow]")
+    return False
+
+
+def _ensure_ollama(console: Console) -> tuple[bool, list[str]]:
+    """Ensure Ollama is installed and running. Returns (running, models)."""
+    # Already running?
+    running, models = _ollama_running()
+    if running:
+        return running, models
+
+    # Find or install the binary
+    ollama_bin = _find_ollama_binary()
+    if not ollama_bin:
+        try:
+            answer = console.input(
+                "  Ollama is not installed. Download it now? [Y/n] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer in ("n", "no"):
+            return False, []
+        ollama_bin = _install_ollama(console)
+        if not ollama_bin:
+            return False, []
+
+    # Binary exists but not running — start it
+    console.print()
+    started = _start_ollama(console, ollama_bin)
+    if started:
+        return _ollama_running()
     return False, []
 
 
@@ -412,6 +551,11 @@ def guided_setup(console: Console | None = None) -> None:
     console.print("[bold green]Step 4/4:[/bold green] Local AI models\n")
 
     if total_vram > 0:
+        # Ensure Ollama is installed and running (auto-install if needed)
+        if not ollama_up:
+            ollama_up, ollama_models = _ensure_ollama(console)
+            console.print()
+
         recommended = _get_recommended_models(total_vram)
         if recommended and ollama_up:
             console.print(
@@ -435,17 +579,18 @@ def guided_setup(console: Console | None = None) -> None:
                 console.print()
                 try:
                     pull = console.input(
-                        f"  Pull {len(missing)} recommended model(s)? [y/N] "
+                        f"  Pull {len(missing)} recommended model(s)? [Y/n] "
                     ).strip().lower()
                 except (EOFError, KeyboardInterrupt):
-                    pull = ""
+                    pull = "n"
 
-                if pull in ("y", "yes"):
+                if pull not in ("n", "no"):
                     import subprocess
+                    ollama_bin = _find_ollama_binary() or "ollama"
                     for model in missing:
                         console.print(f"  Pulling {model}...")
                         result = subprocess.run(
-                            ["ollama", "pull", model],
+                            [ollama_bin, "pull", model],
                             capture_output=False,
                         )
                         if result.returncode == 0:
@@ -463,8 +608,8 @@ def guided_setup(console: Console | None = None) -> None:
 
         elif recommended and not ollama_up:
             console.print(
-                "  [yellow]Ollama is not running.[/yellow] "
-                "Start it to use local models:\n"
+                "  [yellow]Could not start Ollama.[/yellow] "
+                "You can start it manually later:\n"
             )
             console.print("    ollama serve")
             console.print()
