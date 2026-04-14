@@ -252,7 +252,7 @@ async def _run_do_command_async(task: str, session: ReplSession, engine: Engine)
         console.print(f"[dim yellow]Note: {result.error}[/dim yellow]\n")
 
 
-def _handle_command(line: str, session: ReplSession):
+def _handle_command(line: str, session: ReplSession, engine: "Engine | None" = None):
     """
     Process a /command line.
     Returns True if the REPL should continue, False if it should exit.
@@ -405,10 +405,11 @@ def _handle_command(line: str, session: ReplSession):
     elif cmd == "/setup":
         from nvh.cli.setup import guided_setup
         guided_setup(console)
-        # Reload env keys so the REPL picks up any newly configured providers
+        # Reload env keys so config interpolation picks them up
         from nvh.cli.setup import load_env_keys
         load_env_keys()
-        console.print("[dim]Setup complete. New providers are available for this session.[/dim]")
+        # Signal the REPL loop to reinitialize the engine
+        return ("setup_reinit",)
 
     elif cmd in ("/code", "/write", "/research", "/math"):
         focus_name = cmd[1:]  # strip leading "/"
@@ -777,7 +778,7 @@ async def run_repl(
 
         # --- Inline command ---
         if user_input.startswith("/"):
-            result = _handle_command(user_input, session)
+            result = _handle_command(user_input, session, engine=engine)
             # /do returns a ("do", task) sentinel to run asynchronously
             if isinstance(result, tuple) and result[0] == "do":
                 try:
@@ -786,6 +787,17 @@ async def run_repl(
                     console.print("\n[yellow]  Agent cancelled.[/yellow]")
                 except Exception as exc:
                     console.print(f"[red]Agent error: {exc}[/red]")
+                continue
+            # /setup returns a reinit signal — reload config and providers
+            if isinstance(result, tuple) and result[0] == "setup_reinit":
+                try:
+                    from nvh.config.settings import load_config
+                    engine.config = load_config()
+                    engine._initialized = False
+                    await engine.initialize()
+                    console.print("[dim]Setup complete. Providers reloaded for this session.[/dim]")
+                except Exception as exc:
+                    console.print(f"[yellow]Provider reload failed: {exc}[/yellow]")
                 continue
             if not result:
                 _print_savings_summary(session)
