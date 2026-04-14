@@ -13,7 +13,7 @@ nvh "setup comfyui"                              # → agent installs, configure
 ```
 
 <p align="center">
-  <img src="docs/screenshots/terminal-demo.gif" alt="nvHive CLI" width="640">
+  <img src="docs/screenshots/terminal-demo-v2.gif" alt="nvHive CLI" width="640">
 </p>
 
 ---
