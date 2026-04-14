@@ -210,23 +210,68 @@ def _install_ollama(console: Console) -> str | None:
     nvh_home.mkdir(parents=True, exist_ok=True)
     ollama_bin = nvh_home / "ollama"
 
+    url = "https://ollama.com/download/ollama-linux-amd64"
     console.print("  Downloading Ollama...")
+
+    try:
+        import httpx
+        from rich.progress import (
+            BarColumn,
+            DownloadColumn,
+            Progress,
+            TextColumn,
+            TimeRemainingColumn,
+            TransferSpeedColumn,
+        )
+
+        with httpx.stream("GET", url, follow_redirects=True, timeout=600) as resp:
+            resp.raise_for_status()
+            total = int(resp.headers.get("content-length", 0))
+
+            with Progress(
+                TextColumn("  "),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Ollama", total=total or None)
+                with open(ollama_bin, "wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=65536):
+                        f.write(chunk)
+                        progress.update(task, advance=len(chunk))
+
+        if ollama_bin.exists() and ollama_bin.stat().st_size > 1_000_000:
+            ollama_bin.chmod(0o755)
+            console.print(f"  [green]Installed Ollama to {ollama_bin}[/green]")
+            return str(ollama_bin)
+
+    except Exception as exc:
+        pass
+
+    # Fallback: try curl
     try:
         result = subprocess.run(
-            ["curl", "-fsSL", "https://ollama.com/download/ollama-linux-amd64",
-             "-o", str(ollama_bin)],
-            capture_output=True,
-            timeout=120,
+            ["curl", "-fSL", "--progress-bar", url, "-o", str(ollama_bin)],
+            timeout=600,
         )
-        if result.returncode != 0:
-            console.print("  [red]Download failed.[/red]")
-            return None
-        ollama_bin.chmod(0o755)
-        console.print(f"  [green]Installed Ollama to {ollama_bin}[/green]")
-        return str(ollama_bin)
-    except Exception as exc:
-        console.print(f"  [red]Download failed: {exc}[/red]")
-        return None
+        if result.returncode == 0 and ollama_bin.exists() and ollama_bin.stat().st_size > 1_000_000:
+            ollama_bin.chmod(0o755)
+            console.print(f"  [green]Installed Ollama to {ollama_bin}[/green]")
+            return str(ollama_bin)
+    except Exception:
+        pass
+
+    # Clean up partial download
+    if ollama_bin.exists():
+        ollama_bin.unlink()
+    console.print(
+        "  [red]Download failed.[/red] Install manually:\n"
+        "    curl -fsSL https://ollama.com/install.sh | sh"
+    )
+    return None
 
 
 def _start_ollama(console: Console, ollama_bin: str) -> bool:
@@ -263,6 +308,89 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
             return True
 
     console.print("  [yellow]Ollama started but not responding yet. It may need more time.[/yellow]")
+    return False
+
+
+def _pull_model(console: Console, model: str, ollama_bin: str) -> bool:
+    """Pull an Ollama model with a Rich progress bar.
+
+    Parses ``ollama pull`` stderr/stdout which emits lines like:
+        pulling abc123... 45% |██      | 1.2 GB/2.7 GB
+    Falls back to a plain spinner if parsing fails.
+    """
+    import subprocess
+    import re
+
+    from rich.progress import (
+        BarColumn,
+        DownloadColumn,
+        Progress,
+        TextColumn,
+        TimeRemainingColumn,
+        TransferSpeedColumn,
+    )
+
+    # Use the Ollama HTTP API for pull — it streams JSON progress
+    try:
+        import httpx
+        import json
+
+        base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        with Progress(
+            TextColumn("  "),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task(model, total=None)
+
+            with httpx.stream(
+                "POST",
+                f"{base}/api/pull",
+                json={"name": model},
+                timeout=None,
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    status = data.get("status", "")
+                    total = data.get("total")
+                    completed = data.get("completed")
+
+                    if total and total > 0:
+                        progress.update(task, total=total, completed=completed or 0)
+                    progress.update(task, description=f"{model}: {status}")
+
+        console.print(f"  [green]Pulled {model}.[/green]")
+        return True
+
+    except Exception:
+        pass
+
+    # Fallback: plain subprocess call
+    console.print(f"  Pulling {model} (this may take a while)...")
+    try:
+        result = subprocess.run(
+            [ollama_bin, "pull", model],
+            capture_output=False,
+            timeout=1800,
+        )
+        if result.returncode == 0:
+            console.print(f"  [green]Pulled {model}.[/green]")
+            return True
+    except Exception:
+        pass
+
+    console.print(f"  [yellow]Failed to pull {model}.[/yellow]")
     return False
 
 
@@ -585,18 +713,9 @@ def guided_setup(console: Console | None = None) -> None:
                     pull = "n"
 
                 if pull not in ("n", "no"):
-                    import subprocess
                     ollama_bin = _find_ollama_binary() or "ollama"
                     for model in missing:
-                        console.print(f"  Pulling {model}...")
-                        result = subprocess.run(
-                            [ollama_bin, "pull", model],
-                            capture_output=False,
-                        )
-                        if result.returncode == 0:
-                            console.print(f"  [green]Pulled {model}.[/green]")
-                        else:
-                            console.print(f"  [yellow]Failed to pull {model}.[/yellow]")
+                        _pull_model(console, model, ollama_bin)
                 else:
                     console.print("  [dim]Skipped model pull.[/dim]")
                     if missing:
