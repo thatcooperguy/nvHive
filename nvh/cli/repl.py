@@ -46,6 +46,7 @@ HELP_TEXT = """
   [cyan]/memories[/cyan]              List all stored memories
   [cyan]/tools[/cyan]                 Toggle tool use on/off and show available tools
   [cyan]/do <task>[/cyan]             Run agent loop on a task (hands-free mode)
+  [cyan]/setup[/cyan]                 Re-run guided setup (GPU, providers, Ollama)
   [cyan]/code[/cyan]                  Switch to coding focus for the next message
   [cyan]/write[/cyan]                 Switch to writing focus for the next message
   [cyan]/research[/cyan]              Switch to research focus for the next message
@@ -400,6 +401,14 @@ def _handle_command(line: str, session: ReplSession):
         else:
             # Return the coroutine — run_repl will await it
             return ("do", arg)
+
+    elif cmd == "/setup":
+        from nvh.cli.setup import guided_setup
+        guided_setup(console)
+        # Reload env keys so the REPL picks up any newly configured providers
+        from nvh.cli.setup import load_env_keys
+        load_env_keys()
+        console.print("[dim]Setup complete. New providers are available for this session.[/dim]")
 
     elif cmd in ("/code", "/write", "/research", "/math"):
         focus_name = cmd[1:]  # strip leading "/"
