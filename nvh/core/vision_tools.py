@@ -36,9 +36,137 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _ensure_display() -> bool:
+    """Ensure DISPLAY is set on Linux for pyautogui/screenshot tools.
+
+    Auto-detects DISPLAY from X11 sockets if not already set.
+    Returns True if a display is available.
+    """
+    import os
+    import sys
+
+    if sys.platform != "linux":
+        return True
+    if os.environ.get("DISPLAY"):
+        return True
+
+    # Check X11 sockets
+    x11_dir = Path("/tmp/.X11-unix")
+    if x11_dir.exists():
+        for sock in sorted(x11_dir.iterdir()):
+            if sock.name.startswith("X"):
+                display = f":{sock.name[1:]}"
+                os.environ["DISPLAY"] = display
+                logger.info("Auto-detected DISPLAY=%s", display)
+                # Also set XAUTHORITY if present
+                xauth = Path.home() / ".Xauthority"
+                if xauth.exists() and not os.environ.get("XAUTHORITY"):
+                    os.environ["XAUTHORITY"] = str(xauth)
+                return True
+    return False
+
+
+def _detect_ollama_vision_model() -> str | None:
+    """Check if Ollama has a vision-capable model installed."""
+    import os
+
+    try:
+        import httpx
+        base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        resp = httpx.get(f"{base}/api/tags", timeout=3)
+        if resp.status_code == 200:
+            models = [m.get("name", "") for m in resp.json().get("models", [])]
+            # Known vision-capable models, in preference order
+            vision_models = [
+                "minicpm-v", "llava", "llama3.2-vision", "bakllava",
+                "moondream", "llava-llama3", "llava-phi3",
+            ]
+            for vm in vision_models:
+                for installed in models:
+                    if vm in installed:
+                        return installed
+    except Exception:
+        pass
+    return None
+
+
+async def _analyze_with_ollama(image_data: str, question: str, model: str) -> str | None:
+    """Call Ollama's native vision API directly."""
+    import os
+
+    try:
+        import httpx
+        base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{base}/api/chat",
+                json={
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": question,
+                        "images": [image_data],
+                    }],
+                    "stream": False,
+                },
+                timeout=120,
+            )
+            if resp.status_code == 200:
+                return resp.json().get("message", {}).get("content", "")
+    except Exception as exc:
+        logger.debug("Ollama vision failed: %s", exc)
+    return None
+
+
+async def _analyze_with_cloud(image_data: str, mime: str, question: str) -> str | None:
+    """Fall back to cloud vision LLM via litellm (GPT-4o, Gemini, Claude)."""
+    try:
+        import litellm
+
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": question},
+                {"type": "image_url", "image_url": {
+                    "url": f"data:{mime};base64,{image_data}",
+                }},
+            ],
+        }]
+
+        # Try providers in order: Gemini (free), then OpenAI, then Anthropic
+        import os
+        models_to_try = []
+        if os.environ.get("GOOGLE_API_KEY"):
+            models_to_try.append("gemini/gemini-2.0-flash")
+        if os.environ.get("OPENAI_API_KEY"):
+            models_to_try.append("gpt-4o")
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            models_to_try.append("claude-sonnet-4-6")
+
+        for model in models_to_try:
+            try:
+                resp = await litellm.acompletion(
+                    model=model,
+                    messages=messages,
+                    max_tokens=1024,
+                    timeout=30,
+                )
+                content = resp.choices[0].message.content
+                if content:
+                    return content
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.debug("Cloud vision failed: %s", exc)
+    return None
+
+
 def register_vision_tools(registry) -> None:
     """Register vision and desktop control tools into a ToolRegistry."""
     from nvh.core.tools import Tool
+
+    # Auto-detect display for Linux desktop environments
+    _ensure_display()
 
     # ── EYES: Screenshot + Image Analysis ─────────────────────────
 
@@ -114,9 +242,8 @@ def register_vision_tools(registry) -> None:
     async def analyze_image(image_path: str, question: str = "Describe what you see in this image.") -> str:
         """Analyze an image using a vision-capable LLM.
 
-        Reads the image, encodes it as base64, and sends to a
-        vision-capable model for analysis. Works with screenshots,
-        diagrams, UI mockups, error messages, etc.
+        Tries local Ollama vision model first (minicpm-v, llava, etc.),
+        then falls back to cloud APIs (Gemini, GPT-4o, Claude).
 
         Args:
             image_path: Path to the image file
@@ -142,15 +269,27 @@ def register_vision_tools(registry) -> None:
             }.get(suffix, "image/png")
 
             size_kb = path.stat().st_size / 1024
+
+            # Try local Ollama vision model first
+            vision_model = _detect_ollama_vision_model()
+            if vision_model:
+                result = await _analyze_with_ollama(image_data, question, vision_model)
+                if result:
+                    return f"[Vision: {vision_model}, {size_kb:.1f} KB]\n{result}"
+
+            # Fall back to cloud vision APIs
+            result = await _analyze_with_cloud(image_data, mime, question)
+            if result:
+                return f"[Vision: cloud, {size_kb:.1f} KB]\n{result}"
+
             return (
-                f"[Image loaded: {path.name}, {size_kb:.1f} KB, {mime}]\n"
-                f"Question: {question}\n"
-                f"Note: To analyze this image, send it to a vision-capable "
-                f"model (GPT-4o, Claude, Gemini) with the question. "
-                f"Base64 data length: {len(image_data)} chars."
+                f"[Image loaded: {path.name}, {size_kb:.1f} KB]\n"
+                "No vision model available. Install one locally:\n"
+                "  ollama pull minicpm-v\n"
+                "Or configure a cloud API key (OpenAI, Google, Anthropic)."
             )
         except Exception as e:
-            return f"Failed to load image: {e}"
+            return f"Failed to analyze image: {e}"
 
     async def read_text_from_image(image_path: str) -> str:
         """Extract visible text from an image (OCR via LLM).

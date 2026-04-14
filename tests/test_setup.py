@@ -151,10 +151,11 @@ class TestGetRecommendedModels:
             recs = _get_recommended_models(24.0)
         assert "gemma2:27b" in recs
 
-    def test_96gb_gets_two_models(self):
+    def test_96gb_gets_multiple_models(self):
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
             recs = _get_recommended_models(96.0)
-        assert len(recs) == 2
+        assert len(recs) >= 2
+        assert "minicpm-v" in recs  # vision model included
 
 
 class TestValidateKey:

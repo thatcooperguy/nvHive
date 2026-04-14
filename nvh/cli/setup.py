@@ -518,16 +518,19 @@ def _get_recommended_models(total_vram: float) -> list[str]:
         pass
 
     # Fallback: manual recommendations by VRAM
+    # minicpm-v (~5GB) is included for desktop agent vision capabilities
     if total_vram >= 128:
-        return ["nemotron:70b", "llama3.3:70b", "qwen2.5-coder:32b"]
+        return ["nemotron:70b", "llama3.3:70b", "qwen2.5-coder:32b", "minicpm-v"]
     if total_vram >= 96:
-        return ["llama3.3:70b", "qwen2.5-coder:32b"]
+        return ["llama3.3:70b", "qwen2.5-coder:32b", "minicpm-v"]
     if total_vram >= 48:
-        return ["llama3.3:70b"]
+        return ["llama3.3:70b", "minicpm-v"]
     if total_vram >= 24:
-        return ["gemma2:27b"]
+        return ["gemma2:27b", "minicpm-v"]
     if total_vram >= 16:
-        return ["qwen2.5-coder:7b"]
+        return ["qwen2.5-coder:7b", "minicpm-v"]
+    if total_vram >= 8:
+        return ["minicpm-v"]
     return []
 
 

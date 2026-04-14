@@ -58,6 +58,24 @@ class AgentResult:
     error: str = ""
 
 
+DESKTOP_AGENT_SUPPLEMENT = """
+You can also control the desktop computer. For visual/GUI tasks, follow this workflow:
+1. Use capture_screenshot to see the current screen state
+2. Use analyze_image on the screenshot to understand what is visible (UI elements, text, coordinates)
+3. Based on the analysis, use mouse_click, keyboard_type, keyboard_press, or scroll to interact
+4. Take another screenshot to verify your action worked
+5. Repeat until the task is complete
+
+Desktop tips:
+- Always screenshot BEFORE and AFTER actions to verify state
+- When clicking, ask analyze_image to identify the target element's approximate x,y coordinates
+- For installing software: use the shell tool to run git clone, pip install, etc.
+- For launching apps: use the shell tool, then use screenshots to verify the app opened
+- Wait briefly between actions for the UI to update (the tools have built-in delays)
+- Use keyboard_press for hotkeys like "ctrl+c", "alt+tab", "enter"
+"""
+
+
 AGENT_SYSTEM_PROMPT = """You are an autonomous AI agent with access to tools. You can read files, write files, search the web, run code, and more.
 
 When you need to use a tool, respond with a JSON tool call block like this:
@@ -70,7 +88,7 @@ You can make multiple tool calls in one response. After each tool call, you'll s
 
 Available tools:
 {tool_descriptions}
-
+{desktop_supplement}
 Rules:
 - Think step by step about what you need to do
 - Use tools to gather information before answering
@@ -207,8 +225,11 @@ async def run_agent_loop(
         tools = ToolRegistry()
 
     # Build system prompt with tool descriptions
+    # Include desktop agent guidance if vision/desktop tools are available
+    has_desktop = tools.get("capture_screenshot") is not None
     system_prompt = AGENT_SYSTEM_PROMPT.format(
-        tool_descriptions=tools.get_tool_descriptions()
+        tool_descriptions=tools.get_tool_descriptions(),
+        desktop_supplement=DESKTOP_AGENT_SUPPLEMENT if has_desktop else "",
     )
 
     # Conversation history for the agent
