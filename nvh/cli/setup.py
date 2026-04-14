@@ -521,8 +521,10 @@ def _get_recommended_models(total_vram: float) -> list[str]:
         pass
 
     # Fallback: manual recommendations by VRAM
-    # llama3.2-vision (~7GB) included for desktop agent — best spatial grounding
-    # minicpm-v (~5GB) for tighter VRAM budgets
+    # Each tier fits text + vision model concurrently:
+    #   llama3.2-vision (~7GB) — best spatial grounding for desktop agent
+    #   minicpm-v (~5GB) — good vision, smaller footprint
+    #   moondream (~2GB) — basic vision for very tight VRAM
     if total_vram >= 128:
         return ["nemotron:70b", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision"]
     if total_vram >= 96:
@@ -533,8 +535,12 @@ def _get_recommended_models(total_vram: float) -> list[str]:
         return ["gemma2:27b", "llama3.2-vision"]
     if total_vram >= 16:
         return ["qwen2.5-coder:7b", "minicpm-v"]
+    if total_vram >= 12:
+        return ["qwen2.5-coder:7b", "minicpm-v"]  # 5GB + 5GB = 10GB, fits in 12
     if total_vram >= 8:
-        return ["minicpm-v"]
+        return ["nemotron-mini", "moondream"]  # 4GB + 2GB = 6GB, fits in 8
+    if total_vram >= 4:
+        return ["moondream"]  # 2GB vision-only, cloud fallback for text
     return []
 
 
