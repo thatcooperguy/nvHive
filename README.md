@@ -2,14 +2,14 @@
 
 **One command. Every AI model you have. Automatically assembled into the best team for each task.**
 
-![version](https://img.shields.io/badge/version-0.27.1-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
+![version](https://img.shields.io/badge/version-0.29.3-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 ```bash
 nvh "What is a binary search tree?"              # → answers (single best advisor)
 nvh "Fix the timeout bug in council.py"          # → auto-detects coding task → agent mode
-nvh "Review my staged changes"                   # → auto-detects review → multi-model review
-nvh "Add tests for the auth module"              # → auto-detects test request → test generation
 nvh "Should we use Redis or Postgres?"           # → auto-detects debate → council (3+ advisors)
+nvh "take a screenshot and describe my desktop"  # → desktop agent (vision + tools)
+nvh "setup comfyui"                              # → agent installs, configures, launches
 ```
 
 <p align="center">
@@ -22,16 +22,15 @@ nvh "Should we use Redis or Postgres?"           # → auto-detects debate → c
 
 ```bash
 pip install nvhive
-nvh setup              # configure providers (validates keys)
-nvh health             # check what's available
-nvh "your question"    # try it
+nvh                    # first-run setup auto-detects GPU, installs local AI, configures providers
+nvh "your question"    # just ask — nvhive figures out the rest
 ```
 
 ```bash
-# With optional extras
-pip install nvhive[all]      # vision + browser automation
-pip install nvhive[vision]   # desktop control (pyautogui)
-pip install nvhive[browser]  # browser automation (playwright)
+# With desktop agent (vision + mouse/keyboard control)
+pip install "nvhive[vision]"      # screenshot, click, type, scroll
+pip install "nvhive[browser]"     # headless browser automation (playwright)
+pip install "nvhive[all]"         # everything
 ```
 
 <p align="center">
@@ -40,64 +39,64 @@ pip install nvhive[browser]  # browser automation (playwright)
 
 ### First-Run Setup
 
-On first run, `nvh` automatically launches a guided 4-step setup:
+On first run, `nvh` automatically launches a guided 3-step setup:
 
 ```mermaid
 flowchart TB
-    START["nvh (first run)"] --> S1["Step 1: Hardware Detection
-    GPU model, VRAM, driver, CUDA
-    → assigns tier (0-5)"]
+    START["nvh (first run)"] --> S1["Step 1: Hardware + Local AI
+    Detect GPU → install Ollama → pull models
+    Text model + vision model for your VRAM
+    Desktop agent ready when vision loads"]
     S1 --> S2["Step 2: Provider Status
-    Shows which API keys are configured
-    Groq ✓ | OpenAI ✗ | Anthropic ✗ | Google ✓"]
-    S2 --> S3["Step 3: API Keys (optional)
-    Prompts for missing keys
-    Validates each key in real-time
-    Stores in keyring or ~/.hive/.env"]
-    S3 --> S4["Step 4: Local Models (optional)
-    Recommends Ollama models for your VRAM
-    Offers to pull them automatically
-    Skip if no GPU or Ollama"]
-    S4 --> DONE["Setup Complete
-    Config saved → nvh ready to use
-    nvh webui → launch dashboard
-    nvh setup → re-run anytime"]
+    Accurate view — Ollama already running
+    Groq ✗ | OpenAI ✗ | Ollama ✓ (3 models)"]
+    S2 --> S3["Step 3: Configure API Keys
+    Desktop agent opens browser for you
+    Watches clipboard for API keys
+    Takes screenshot to verify page loaded"]
+    S3 --> DONE["Setup Complete
+    Local AI + cloud providers ready
+    Desktop agent available
+    nvh 'take a screenshot' → works"]
 ```
 
-Works immediately with LLM7 (no signup needed). Every step is skippable — press Enter to skip. Run `nvh setup` anytime to reconfigure.
+Works immediately with local models (no signup needed). Every step is skippable — press Enter to skip. Run `nvh setup` or `/setup` in the REPL anytime to reconfigure.
 
 **GPU tier → model recommendations:**
 
-| VRAM | Tier | What nvh recommends | Behavior |
-|------|------|-------------------|----------|
-| 0 GB (no GPU) | Tier 0 | Cloud only | Free tiers first (Groq, LLM7, GitHub) |
-| 8–16 GB | Tier 1 | `nemotron-mini` / `qwen2.5:7b` | Simple queries local, complex → cloud |
-| 16–24 GB | Tier 2 | `gemma3:12b` / `mistral-small` | Most Q&A local, coding → cloud assist |
-| 24–48 GB | Tier 3 | `gemma4:27b` / `qwen2.5:32b` | Local worker + cloud orchestrator |
-| 48–96 GB | Tier 4 | `llama3.3:70b` + `qwen2.5:32b` | Dual-model: 70B planner + 32B coder |
-| 128 GB+ | Tier 5 | 3× 70B models | Full local council, $0, fully private |
+| VRAM | Text Model | Vision Model | Behavior |
+|------|-----------|-------------|----------|
+| 0 GB (no GPU) | Cloud only | Cloud fallback | Free tiers first (Groq, LLM7, GitHub) |
+| 4 GB | Cloud fallback | `moondream` (2 GB) | Vision-only local, text via cloud |
+| 8 GB | `nemotron-mini` (4 GB) | `moondream` (2 GB) | Basic local + desktop agent |
+| 12 GB | `qwen2.5-coder:7b` (5 GB) | `minicpm-v` (5 GB) | Coding + vision local |
+| 16 GB | `qwen2.5-coder:7b` (5 GB) | `minicpm-v` (5 GB) | Coding + vision local |
+| 24 GB | `gemma2:27b` (16 GB) | `llama3.2-vision` (7 GB) | Strong text + best vision |
+| 48 GB | `llama3.3:70b` (40 GB) | `llama3.2-vision` (7 GB) | Full power local |
+| 96+ GB | `llama3.3:70b` + `qwen2.5-coder:32b` | `llama3.2-vision` | Multi-model local |
+| 128+ GB | 3 text models | `llama3.2-vision` | Full local council, $0 |
 
-Setup auto-detects your VRAM and recommends from this table. You choose what to pull.
+Setup auto-detects your VRAM and recommends models that fit concurrently. No root/sudo needed — Ollama installs to `~/.nvh/`.
 
 <details>
-<summary><b>NVIDIA GPU Quick Start</b> — local inference on your hardware</summary>
+<summary><b>NVIDIA GPU Quick Start</b> — local inference + desktop agent on your hardware</summary>
 
 ```bash
-# 1. Install Ollama (if not already installed)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# 2. Install and run nvHive — it handles the rest
-pip install nvhive
-nvh    # first-run setup auto-detects your GPU, recommends + pulls the right models
+# Install nvHive with desktop agent support — no root needed
+pip install "nvhive[vision]"
+nvh    # setup auto-detects GPU, installs Ollama, pulls models, configures everything
 ```
 
-That's it. The guided setup detects your GPU via pynvml (VRAM, driver, CUDA version), recommends models sized for your hardware, and offers to pull them. After setup:
+That's it. Setup auto-installs Ollama (no root/sudo), downloads the right models for your GPU, and enables the desktop agent. After setup:
 
 - Simple queries route to your GPU automatically — $0, private, nothing leaves your machine
 - Complex queries escalate to cloud only when local models aren't confident enough
-- `nvh safe "question"` forces all inference local — guaranteed no cloud
-- `nvh bench` measures your GPU's actual tok/s against community baselines
-- The adaptive routing engine measures quality over time and adjusts thresholds automatically
+- **Desktop agent** takes screenshots, controls mouse/keyboard, and installs software
+- `nvh "take a screenshot"` → vision model analyzes your screen
+- `nvh "setup comfyui"` → agent clones, installs, and launches the app
+- The adaptive routing engine measures quality over time and adjusts automatically
+
+Works on Ubuntu, Windows, macOS. No root required — installs to `~/.nvh/`.
 
 </details>
 
@@ -174,6 +173,41 @@ nvh health           # provider resilience dashboard
 ```
 
 **Local-first with NVIDIA GPUs:** Simple queries route to Nemotron on your NVIDIA GPU via Ollama — no cloud, no cost, no data leaving your machine. GPU detection via pynvml reads VRAM, driver version, and CUDA version to select the optimal local model. The `--prefer-nvidia` flag gives a 1.3x routing bonus to keep inference on NVIDIA hardware whenever quality allows.
+
+---
+
+## Desktop Agent
+
+> AI that can see your screen, control your mouse and keyboard, install software, and navigate browsers — powered by local vision models.
+
+```bash
+# In the REPL — just talk naturally
+nvh
+> take a screenshot and describe what you see
+> setup comfyui
+> open firefox and go to github.com
+> click on the search bar and type "nvhive"
+```
+
+```bash
+# From the CLI — same natural language
+nvh "take a screenshot and describe my desktop"
+nvh "install numpy"
+nvh "open a terminal and run nvidia-smi"
+```
+
+**How it works:** nvhive auto-detects whether your input is a question, a simple action, or a multi-step task:
+
+| Input | Detection | What happens |
+|-------|-----------|-------------|
+| "what is python?" | Question | Sent to LLM directly |
+| "open firefox" | Simple action | Executes immediately |
+| "take a screenshot" | Task | Agent loop: screenshot → vision analysis → report |
+| "setup comfyui" | Task | Agent loop: git clone → pip install → launch → verify |
+
+**Vision pipeline:** screenshot (pyautogui) → local vision model (llama3.2-vision / minicpm-v) → coordinate estimation → mouse/keyboard action → verify with another screenshot. Falls back to cloud vision (GPT-4o, Gemini, Claude) if no local vision model.
+
+**No root needed.** Works on Linux (X11), macOS, and Windows. Install with `pip install "nvhive[vision]"`.
 
 ---
 
