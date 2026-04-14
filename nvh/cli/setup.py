@@ -728,11 +728,9 @@ def guided_setup(console: Console | None = None) -> None:
     """Run the first-run guided setup menu.
 
     Steps:
-    1. Detect GPU tier and display it
-    2. Show available providers and which have API keys configured
-    3. Install Ollama + pull local AI models (enables desktop agent)
-    4. Configure API keys (with desktop agent assist if available)
-    5. Save config to the default config path
+    1. Detect GPU + install Ollama + pull local models (combined hardware step)
+    2. Show provider status (Ollama now running, shows accurate picture)
+    3. Configure API keys (with desktop agent assist if vision model available)
 
     The entire setup is skippable by pressing Enter at each prompt.
     """
@@ -746,18 +744,18 @@ def guided_setup(console: Console | None = None) -> None:
     console.print(
         Panel(
             "[bold]Welcome to nvHive[/bold]\n\n"
-            "This one-time setup detects your hardware, configures AI providers,\n"
-            "and gets you ready to go. Press [bold]Enter[/bold] to skip any step.",
+            "This one-time setup detects your hardware, sets up local AI,\n"
+            "and configures cloud providers. Press [bold]Enter[/bold] to skip any step.",
             border_style="green",
             padding=(1, 2),
         )
     )
 
     # ------------------------------------------------------------------
-    # Step 1: GPU detection
+    # Step 1: Hardware + Local AI (combined)
     # ------------------------------------------------------------------
     console.print()
-    console.print("[bold green]Step 1/4:[/bold green] Detecting hardware\n")
+    console.print("[bold green]Step 1/3:[/bold green] Hardware + Local AI\n")
 
     gpus, total_vram, tier_name, tier_desc = _detect_gpu_info()
 
@@ -775,56 +773,14 @@ def guided_setup(console: Console | None = None) -> None:
     gpu_table.add_row("Agent Tier", f"{tier_name} - {tier_desc}")
     console.print(gpu_table)
 
-    # ------------------------------------------------------------------
-    # Step 2: Show provider status
-    # ------------------------------------------------------------------
-    console.print()
-    console.print("[bold green]Step 2/4:[/bold green] Checking AI providers\n")
-
-    provider_table = Table(box=None, padding=(0, 2), show_header=True)
-    provider_table.add_column("Provider", style="bold")
-    provider_table.add_column("Status")
-    provider_table.add_column("Signup")
-
-    configured_providers: dict[str, str] = {}  # name -> key (masked)
-
-    for name, display, env_var, url in CORE_PROVIDERS:
-        key = _check_provider_key(name, env_var)
-        if key:
-            configured_providers[name] = key
-            masked = key[:4] + "..." + key[-4:] if len(key) > 8 else "***"
-            provider_table.add_row(display, f"[green]configured[/green] ({masked})", "")
-        else:
-            provider_table.add_row(display, "[yellow]not configured[/yellow]", f"[dim]{url}[/dim]")
-
-    # Ollama status
-    ollama_up, ollama_models = _ollama_running()
-    if ollama_up:
-        provider_table.add_row(
-            "Ollama (local)",
-            f"[green]running[/green] ({len(ollama_models)} models)",
-            "",
-        )
-    else:
-        provider_table.add_row(
-            "Ollama (local)",
-            "[dim]not running[/dim]",
-            "[dim]https://ollama.com[/dim]",
-        )
-
-    console.print(provider_table)
-
-    # ------------------------------------------------------------------
-    # Step 3: Local models (Ollama) — BEFORE API keys so desktop agent
-    # is available to assist with browser-based key setup
-    # ------------------------------------------------------------------
-    console.print()
-    console.print("[bold green]Step 3/4:[/bold green] Local AI models\n")
-
     has_vision_model = False
+    ollama_up = False
+    ollama_models: list[str] = []
 
     if total_vram > 0:
-        # Ensure Ollama is installed and running (auto-install if needed)
+        console.print()
+        # Ensure Ollama is installed and running
+        ollama_up, ollama_models = _ollama_running()
         if not ollama_up:
             ollama_up, ollama_models = _ensure_ollama(console)
             console.print()
@@ -835,9 +791,7 @@ def guided_setup(console: Console | None = None) -> None:
                 f"  Recommended models for your GPU ({total_vram:.0f} GB VRAM):\n"
             )
             for model in recommended:
-                installed = any(
-                    model in m for m in ollama_models
-                )
+                installed = any(model in m for m in ollama_models)
                 if installed:
                     console.print(f"    [green]installed[/green]  {model}")
                 else:
@@ -861,6 +815,8 @@ def guided_setup(console: Console | None = None) -> None:
                     ollama_bin = _find_ollama_binary() or "ollama"
                     for model in missing:
                         _pull_model(console, model, ollama_bin)
+                    # Refresh model list after pulling
+                    ollama_up, ollama_models = _ollama_running()
                 else:
                     console.print("  [dim]Skipped model pull.[/dim]")
                     if missing:
@@ -873,6 +829,8 @@ def guided_setup(console: Console | None = None) -> None:
             # Check if a vision model is now available
             from nvh.core.vision_tools import _detect_ollama_vision_model
             has_vision_model = _detect_ollama_vision_model() is not None
+            if has_vision_model:
+                console.print("  [green]Desktop agent: ready (vision model loaded)[/green]")
 
         elif recommended and not ollama_up:
             console.print(
@@ -888,12 +846,50 @@ def guided_setup(console: Console | None = None) -> None:
             console.print("  [dim]No model recommendations for this GPU tier.[/dim]")
     else:
         console.print(
-            "  [dim]No GPU detected. nvHive will use cloud providers.[/dim]\n"
+            "\n  [dim]No GPU detected. nvHive will use cloud providers.[/dim]\n"
             "  [dim]Install Ollama for CPU-based local inference: https://ollama.com[/dim]"
         )
 
     # ------------------------------------------------------------------
-    # Step 4: Configure API keys (with desktop agent assist)
+    # Step 2: Show provider status (now accurate — Ollama is running)
+    # ------------------------------------------------------------------
+    console.print()
+    console.print("[bold green]Step 2/3:[/bold green] Provider status\n")
+
+    provider_table = Table(box=None, padding=(0, 2), show_header=True)
+    provider_table.add_column("Provider", style="bold")
+    provider_table.add_column("Status")
+    provider_table.add_column("Signup")
+
+    configured_providers: dict[str, str] = {}
+
+    for name, display, env_var, url in CORE_PROVIDERS:
+        key = _check_provider_key(name, env_var)
+        if key:
+            configured_providers[name] = key
+            masked = key[:4] + "..." + key[-4:] if len(key) > 8 else "***"
+            provider_table.add_row(display, f"[green]configured[/green] ({masked})", "")
+        else:
+            provider_table.add_row(display, "[yellow]not configured[/yellow]", f"[dim]{url}[/dim]")
+
+    # Ollama status (now should be running from Step 1)
+    if ollama_up:
+        provider_table.add_row(
+            "Ollama (local)",
+            f"[green]running[/green] ({len(ollama_models)} models)",
+            "",
+        )
+    else:
+        provider_table.add_row(
+            "Ollama (local)",
+            "[dim]not running[/dim]",
+            "[dim]https://ollama.com[/dim]",
+        )
+
+    console.print(provider_table)
+
+    # ------------------------------------------------------------------
+    # Step 3: Configure API keys (with desktop agent assist)
     # ------------------------------------------------------------------
     unconfigured = [
         (name, display, env_var, url)
@@ -903,7 +899,7 @@ def guided_setup(console: Console | None = None) -> None:
 
     if unconfigured:
         console.print()
-        console.print("[bold green]Step 4/4:[/bold green] Configure API keys\n")
+        console.print("[bold green]Step 3/3:[/bold green] Configure API keys\n")
 
         # Detect if we have a desktop (can open browser + read clipboard)
         has_desktop = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
@@ -913,8 +909,8 @@ def guided_setup(console: Console | None = None) -> None:
             console.print(
                 "  [dim]Desktop agent is ready! For each provider I'll:[/dim]\n"
                 "  [dim]  1. Open the signup page in your browser[/dim]\n"
-                "  [dim]  2. Watch your clipboard for the API key[/dim]\n"
-                "  [dim]  3. Take a screenshot to verify the page loaded[/dim]\n"
+                "  [dim]  2. Take a screenshot to verify the page[/dim]\n"
+                "  [dim]  3. Watch your clipboard for the API key[/dim]\n"
                 "  [dim]Press Enter to skip any provider.[/dim]\n"
             )
         elif has_desktop and clipboard_works:
@@ -963,7 +959,6 @@ def guided_setup(console: Console | None = None) -> None:
                             )
                             _ensure_display()
 
-                            # Take a screenshot
                             import pyautogui
                             screenshot_path = Path.home() / ".nvh" / "setup_screenshot.png"
                             img = pyautogui.screenshot()
@@ -979,8 +974,8 @@ def guided_setup(console: Console | None = None) -> None:
                                         _analyze_with_ollama(
                                             img_data,
                                             f"I opened the {display} API key page. "
-                                            f"Describe what you see. Is there a visible API key? "
-                                            f"If so, read it exactly.",
+                                            f"Describe what you see briefly. Is there a visible "
+                                            f"API key on screen? If so, read it exactly.",
                                             vm,
                                         )
                                     )
@@ -997,7 +992,6 @@ def guided_setup(console: Console | None = None) -> None:
                         key = detected
                     else:
                         console.print("  [dim]No key detected from clipboard.[/dim]")
-                        # Fall back to manual input
                         try:
                             key = console.input(
                                 f"  Paste {display} API key manually (or Enter to skip): "
@@ -1037,7 +1031,6 @@ def guided_setup(console: Console | None = None) -> None:
             # Quick validation for providers with known test endpoints
             valid = _validate_key(name, key, console)
             if valid is False:
-                # Explicit rejection — skip
                 continue
 
             stored = _store_key(name, env_var, key)
@@ -1045,7 +1038,6 @@ def guided_setup(console: Console | None = None) -> None:
                 configured_providers[name] = key
                 console.print(f"  [green]Saved {display} key.[/green]")
             else:
-                # Both keyring and .env fallback failed — set in env for session
                 os.environ[env_var] = key
                 configured_providers[name] = key
                 console.print(
@@ -1055,7 +1047,7 @@ def guided_setup(console: Console | None = None) -> None:
     else:
         console.print()
         console.print(
-            "[bold green]Step 4/4:[/bold green] All core providers already configured.\n"
+            "[bold green]Step 3/3:[/bold green] All core providers already configured.\n"
         )
 
     # ------------------------------------------------------------------
