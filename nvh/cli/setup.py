@@ -185,18 +185,24 @@ def _find_ollama_binary() -> str | None:
     if which:
         return which
 
-    # Check nvhive-local install location
+    # Check nvhive-local install locations (new layout: bin/ollama, legacy: ollama)
     nvh_home = Path.home() / ".nvh"
-    local_bin = nvh_home / "ollama"
-    if local_bin.exists() and os.access(str(local_bin), os.X_OK):
-        return str(local_bin)
+    for candidate in [nvh_home / "bin" / "ollama", nvh_home / "ollama"]:
+        if candidate.exists() and os.access(str(candidate), os.X_OK):
+            return str(candidate)
 
     return None
 
 
 def _install_ollama(console: Console) -> str | None:
-    """Download the Ollama binary to ~/.nvh/ollama. Returns path or None."""
+    """Download and install Ollama to ~/.nvh/. Returns binary path or None.
+
+    Ollama ships as a .tar.zst archive containing bin/ollama plus CUDA libs.
+    We extract to ~/.nvh/ so the binary ends up at ~/.nvh/bin/ollama.
+    Requires ``zstd`` on the system (apt install zstd / dnf install zstd).
+    """
     import platform
+    import shutil
     import subprocess
 
     if platform.system() != "Linux":
@@ -206,12 +212,29 @@ def _install_ollama(console: Console) -> str | None:
         )
         return None
 
+    # Detect architecture
+    import struct
+    arch = "arm64" if struct.calcsize("P") * 8 == 64 and platform.machine() in ("aarch64", "arm64") else "amd64"
+
     nvh_home = Path.home() / ".nvh"
     nvh_home.mkdir(parents=True, exist_ok=True)
-    ollama_bin = nvh_home / "ollama"
+    ollama_bin = nvh_home / "bin" / "ollama"
 
-    url = "https://ollama.com/download/ollama-linux-amd64"
+    # Check for zstd (required to extract the archive)
+    if not shutil.which("zstd"):
+        console.print(
+            "  [yellow]zstd is required to install Ollama but was not found.[/yellow]\n"
+            "  [dim]Install it first:  sudo apt install zstd  (or dnf install zstd)[/dim]\n"
+            "  [dim]Then re-run /setup[/dim]"
+        )
+        return None
+
+    url = f"https://ollama.com/download/ollama-linux-{arch}.tar.zst"
+    archive_path = nvh_home / f"ollama-linux-{arch}.tar.zst"
+
+    # --- Download with Rich progress bar ---
     console.print("  Downloading Ollama...")
+    downloaded = False
 
     try:
         import httpx
@@ -238,39 +261,62 @@ def _install_ollama(console: Console) -> str | None:
                 console=console,
             ) as progress:
                 task = progress.add_task("Ollama", total=total or None)
-                with open(ollama_bin, "wb") as f:
-                    for chunk in resp.iter_bytes(chunk_size=65536):
+                with open(archive_path, "wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=131072):
                         f.write(chunk)
                         progress.update(task, advance=len(chunk))
 
-        if ollama_bin.exists() and ollama_bin.stat().st_size > 1_000_000:
-            ollama_bin.chmod(0o755)
-            console.print(f"  [green]Installed Ollama to {ollama_bin}[/green]")
-            return str(ollama_bin)
-
-    except Exception as exc:
-        pass
-
-    # Fallback: try curl
-    try:
-        result = subprocess.run(
-            ["curl", "-fSL", "--progress-bar", url, "-o", str(ollama_bin)],
-            timeout=600,
-        )
-        if result.returncode == 0 and ollama_bin.exists() and ollama_bin.stat().st_size > 1_000_000:
-            ollama_bin.chmod(0o755)
-            console.print(f"  [green]Installed Ollama to {ollama_bin}[/green]")
-            return str(ollama_bin)
+        if archive_path.exists() and archive_path.stat().st_size > 1_000_000:
+            downloaded = True
     except Exception:
         pass
 
-    # Clean up partial download
+    # Fallback: try curl with progress bar
+    if not downloaded:
+        try:
+            result = subprocess.run(
+                ["curl", "-fSL", "--progress-bar", url, "-o", str(archive_path)],
+                timeout=600,
+            )
+            if result.returncode == 0 and archive_path.exists() and archive_path.stat().st_size > 1_000_000:
+                downloaded = True
+        except Exception:
+            pass
+
+    if not downloaded:
+        archive_path.unlink(missing_ok=True)
+        console.print(
+            "  [red]Download failed.[/red] Install manually:\n"
+            "    curl -fsSL https://ollama.com/install.sh | sh"
+        )
+        return None
+
+    # --- Extract tar.zst to ~/.nvh/ ---
+    console.print("  Extracting Ollama...")
+    try:
+        result = subprocess.run(
+            ["bash", "-c", f"zstd -d < '{archive_path}' | tar xf - -C '{nvh_home}'"],
+            capture_output=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            console.print(f"  [red]Extraction failed: {result.stderr.decode(errors='replace').strip()}[/red]")
+            archive_path.unlink(missing_ok=True)
+            return None
+    except Exception as exc:
+        console.print(f"  [red]Extraction failed: {exc}[/red]")
+        archive_path.unlink(missing_ok=True)
+        return None
+
+    # Clean up archive
+    archive_path.unlink(missing_ok=True)
+
     if ollama_bin.exists():
-        ollama_bin.unlink()
-    console.print(
-        "  [red]Download failed.[/red] Install manually:\n"
-        "    curl -fsSL https://ollama.com/install.sh | sh"
-    )
+        ollama_bin.chmod(0o755)
+        console.print(f"  [green]Installed Ollama to {ollama_bin}[/green]")
+        return str(ollama_bin)
+
+    console.print("  [red]Binary not found after extraction.[/red]")
     return None
 
 
@@ -285,6 +331,12 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
 
     env = os.environ.copy()
     env["OLLAMA_MODELS"] = str(models_dir)
+
+    # Add CUDA libs from local install (tar.zst extracts lib/ollama/)
+    lib_dir = nvh_home / "lib" / "ollama"
+    if lib_dir.is_dir():
+        existing_ld = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = f"{lib_dir}:{existing_ld}" if existing_ld else str(lib_dir)
 
     console.print("  Starting Ollama...")
     try:
