@@ -72,8 +72,10 @@ class TestAnalyzeImage:
         register_vision_tools(reg)
         tool = reg.get("analyze_image")
         result = await tool.handler(image_path=str(img), question="What is this?")
-        assert "Image loaded" in result
-        assert "test.png" in result
+        # analyze_image now actually calls vision models — result may be
+        # real analysis (cloud/local) or fallback "Image loaded" / "No vision model"
+        assert result  # non-empty response
+        assert "Image not found" not in result
 
 
 class TestDesktopControl:

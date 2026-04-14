@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -279,7 +280,6 @@ class Engine:
             pass
 
         # Ollama — try to start if installed, then check if running
-        import os
         ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         ollama_running = False
         try:
@@ -371,6 +371,7 @@ class Engine:
             logger.debug("Could not auto-start Ollama: %s", exc)
 
     def _auto_detect_env_providers(self, detected: list[str]) -> None:
+        """Detect cloud providers from env vars and keyring."""
         # Check for API keys in environment AND keyring
         env_providers = {
             "GROQ_API_KEY": ("groq", "nvh.providers.groq_provider", "GroqProvider"),

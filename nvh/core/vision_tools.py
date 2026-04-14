@@ -237,8 +237,8 @@ def register_vision_tools(registry) -> None:
 
         # Fallback: platform-specific tools
         try:
-            import sys
             import subprocess
+            import sys
             if sys.platform == "win32":
                 ps_cmd = (
                     f'Add-Type -AssemblyName System.Windows.Forms; '

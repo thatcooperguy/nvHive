@@ -355,7 +355,7 @@ def _is_task_input(text: str) -> bool:
     return False
 
 
-def _handle_command(line: str, session: ReplSession, engine: "Engine | None" = None):
+def _handle_command(line: str, session: ReplSession, engine: Engine | None = None):
     """
     Process a /command line.
     Returns True if the REPL should continue, False if it should exit.
