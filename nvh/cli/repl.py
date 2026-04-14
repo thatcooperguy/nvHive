@@ -252,6 +252,61 @@ async def _run_do_command_async(task: str, session: ReplSession, engine: Engine)
         console.print(f"[dim yellow]Note: {result.error}[/dim yellow]\n")
 
 
+def _is_task_input(text: str) -> bool:
+    """Detect if user input is a task/instruction (not a question).
+
+    Tasks are imperative instructions that require tool use — things like
+    "take a screenshot", "install comfyui", "setup my dev environment".
+    Questions go to the LLM directly.
+    """
+    import re
+
+    text_lower = text.lower().strip()
+
+    # Skip if it's clearly a question
+    if text.endswith("?"):
+        return False
+    question_starters = (
+        "what ", "who ", "when ", "where ", "why ", "how ",
+        "can you explain", "tell me about", "describe ",
+        "compare ", "what's ", "is there", "are there",
+        "do you", "does ", "did ", "will ", "would ",
+        "could you explain", "help me understand",
+    )
+    if any(text_lower.startswith(q) for q in question_starters):
+        return False
+
+    # Match task-like patterns — imperative verbs that need tools
+    task_patterns = [
+        r"^(?:take|capture)\s+(?:a\s+)?screenshot",
+        r"^(?:setup|set\s+up|install|configure|deploy)\s+",
+        r"^(?:download|clone|fetch|pull)\s+",
+        r"^(?:create|make|build|generate)\s+(?:a\s+)?(?:new\s+)?(?:folder|directory|file|project|env|venv)",
+        r"^(?:click|type|press|scroll|move\s+(?:the\s+)?mouse)",
+        r"^(?:open|launch|start|run)\s+.+\s+(?:and|then)\s+",  # multi-step: "open X and do Y"
+        r"^(?:go\s+to|navigate\s+to|visit)\s+.+\s+(?:and|then)\s+",
+        r"^(?:find|search|look\s+for)\s+.+\s+(?:and|then)\s+",
+        r"^(?:check|verify|test|debug|troubleshoot)\s+(?:if|whether|that|why)",
+        r"^(?:update|upgrade|change|modify|edit|fix)\s+.+\s+(?:to|so\s+that|in|on)",
+    ]
+    for pattern in task_patterns:
+        if re.search(pattern, text_lower):
+            return True
+
+    # Multi-step indicators (contain sequencing words)
+    if re.search(r"\b(?:then|after\s+that|next|also|and\s+then|finally)\b", text_lower):
+        # Only if it also starts with an action verb
+        action_starts = (
+            "open", "launch", "start", "run", "install", "setup", "set up",
+            "download", "clone", "create", "take", "capture", "click",
+            "type", "go to", "navigate", "find", "search",
+        )
+        if any(text_lower.startswith(a) for a in action_starts):
+            return True
+
+    return False
+
+
 def _handle_command(line: str, session: ReplSession, engine: "Engine | None" = None):
     """
     Process a /command line.
@@ -838,6 +893,18 @@ async def run_repl(
                     console.print(f"[red]{result.error}[/red]")
             except Exception as e:
                 console.print(f"[red]Error: {e}[/red]")
+            continue
+
+        # --- Auto-escalate task-like inputs to agent loop ---
+        # If it's not a question, auto-route to /do for multi-step execution
+        if _is_task_input(user_input) and session.tools_enabled is not False:
+            console.print(f"[dim][agent mode → {user_input[:60]}{'...' if len(user_input) > 60 else ''}][/dim]")
+            try:
+                await asyncio.shield(_run_do_command_async(user_input, session, engine))
+            except KeyboardInterrupt:
+                console.print("\n[yellow]  Agent cancelled.[/yellow]")
+            except Exception as exc:
+                console.print(f"[red]Agent error: {exc}[/red]")
             continue
 
         # --- Query ---
