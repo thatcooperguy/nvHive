@@ -1,23 +1,35 @@
 #!/bin/sh
 # Terminal demo recording script for README GIF
 #
+# Records the full nvHive first-run experience: GPU detection, Ollama install,
+# model pulls, desktop agent API key setup, and natural language commands.
+#
 # How to record:
-#   1. Install asciinema: brew install asciinema
-#   2. Start recording: asciinema rec terminal-demo.cast
-#   3. Run this script: sh scripts/demo-terminal.sh
-#   4. Stop recording: exit (or Ctrl+D)
-#   5. Convert to GIF: agg terminal-demo.cast docs/screenshots/terminal-demo.gif
-#      (install agg: cargo install agg)
 #
-# Or use any screen recorder (OBS, Kap, etc.) pointed at your terminal.
+#   Option A — VHS (recommended, produces GIF directly):
+#     go install github.com/charmbracelet/vhs@latest
+#     vhs scripts/demo-setup.tape
 #
-# IMPORTANT: Make sure providers are set up first:
-#   export GROQ_API_KEY=your_key
-#   nvh health  (verify providers are live)
+#   Option B — asciinema + agg:
+#     pip install asciinema
+#     asciinema rec terminal-demo.cast
+#     sh scripts/demo-terminal.sh
+#     exit
+#     cargo install agg
+#     agg terminal-demo.cast docs/screenshots/terminal-demo.gif
+#
+#   Option C — screen recorder (OBS, peek, etc.)
+#     Just run this script and record your terminal.
+#
+# PREREQUISITES:
+#   - NVIDIA GPU available (nvidia-smi works)
+#   - Internet connection
+#   - For full demo: remove ~/.hive/config.yaml to trigger first-run setup
+#   - For API key demo: have at least one provider account ready
 
 # Slow typing effect
 type_slow() {
-    printf "\033[1;32m❯\033[0m "
+    printf "\033[1;32m$\033[0m "
     for char in $(echo "$1" | sed 's/\(.\)/\1\n/g'); do
         printf "%s" "$char"
         sleep 0.04
@@ -34,64 +46,87 @@ clear
 
 echo ""
 echo "  ╔══════════════════════════════════════════╗"
-echo "  ║   nvHive v0.12.0 — Terminal Demo         ║"
-echo "  ║   Multi-LLM Platform                     ║"
+echo "  ║   nvHive v0.29 — Full Setup Demo         ║"
+echo "  ║   GPU + Local AI + Desktop Agent          ║"
 echo "  ╚══════════════════════════════════════════╝"
 echo ""
 pause 2
 
-# 1. Health check — show resilience
+# 1. Install
 echo ""
-echo "  ── Provider Health ──"
+echo "  ── Install ──"
 echo ""
-type_slow "nvh health"
-nvh health 2>/dev/null
-pause 3
-
-# 2. Simple query with routing info
-echo ""
-echo "  ── Smart Routing ──"
-echo ""
-type_slow 'nvh "What is a binary search tree?"'
-nvh "What is a binary search tree?" 2>/dev/null
-pause 3
-
-# 3. Escalation demo
-echo ""
-echo "  ── Confidence-Gated Escalation ──"
-echo ""
-type_slow 'nvh ask --escalate "Design a distributed consensus algorithm"'
-nvh ask --escalate "Design a distributed consensus algorithm" 2>/dev/null
-pause 3
-
-# 4. Council with confidence
-echo ""
-echo "  ── Council Consensus ──"
-echo ""
-type_slow 'nvh convene "Should we use SQL or NoSQL for a real-time analytics platform?"'
-nvh convene "Should we use SQL or NoSQL for a real-time analytics platform?" 2>/dev/null
-pause 3
-
-# 5. Routing intelligence
-echo ""
-echo "  ── Adaptive Routing Intelligence ──"
-echo ""
-type_slow "nvh routing-stats"
-nvh routing-stats 2>/dev/null
-pause 3
-
-# 6. NVIDIA dashboard
-echo ""
-echo "  ── NVIDIA Infrastructure ──"
-echo ""
-type_slow "nvh nvidia"
-nvh nvidia 2>/dev/null
+type_slow 'pip install "nvhive[vision]"'
+echo "  Successfully installed nvhive-0.29.3"
 pause 2
 
+# 2. First run — triggers setup
 echo ""
-echo "  ╔══════════════════════════════════════════╗"
-echo "  ║   pip install nvhive                      ║"
-echo "  ║   github.com/thatcooperguy/nvHive         ║"
-echo "  ╚══════════════════════════════════════════╝"
+echo "  ── First Run Setup ──"
+echo ""
+type_slow "nvh"
+nvh 2>/dev/null
+pause 3
+
+# 3. After setup — natural language queries
+echo ""
+echo "  ── Natural Language ──"
+echo ""
+type_slow 'nvh "What GPU do I have?"'
+nvh "What GPU do I have?" 2>/dev/null
+pause 3
+
+# 4. Desktop agent — screenshot
+echo ""
+echo "  ── Desktop Agent ──"
+echo ""
+type_slow 'nvh "take a screenshot and describe my desktop"'
+nvh "take a screenshot and describe my desktop" 2>/dev/null
+pause 3
+
+# 5. Interactive REPL — natural language commands
+echo ""
+echo "  ── Interactive REPL ──"
+echo ""
+type_slow "nvh"
+echo ""
+echo "  ──── NVHive ────"
+echo "  Advisors: groq (free), openai, anthropic, google (free), ollama (free)"
+echo "  Model: auto   mode: ask"
+echo ""
+echo "  Just type your question and press Enter."
+echo ""
+pause 2
+
+# Natural language → command
+echo ""
+type_slow "use anthropic"
+echo "  [→ /advisor anthropic]"
+echo "  Advisor set to anthropic"
+pause 2
+
+# Action
+echo ""
+type_slow "open firefox"
+echo "  [action → Open application or URL]"
+echo "  Opened: firefox"
+pause 2
+
+# Task
+echo ""
+type_slow "setup comfyui"
+echo "  [agent mode → setup comfyui]"
+echo "  Step 1: shell → git clone https://github.com/comfyanonymous/ComfyUI"
+echo "  Step 2: shell → pip install -r requirements.txt"
+echo "  Step 3: shell → python main.py &"
+echo "  Step 4: capture_screenshot → ComfyUI running on localhost:8188"
+echo "  4 step(s) | 5 tool call(s) | 42.1s | completed"
+pause 3
+
+echo ""
+echo "  ╔══════════════════════════════════════════════╗"
+echo "  ║   pip install \"nvhive[vision]\"                ║"
+echo "  ║   github.com/thatcooperguy/nvHive             ║"
+echo "  ╚══════════════════════════════════════════════╝"
 echo ""
 pause 3
