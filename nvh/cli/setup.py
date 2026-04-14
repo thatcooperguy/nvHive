@@ -730,8 +730,8 @@ def guided_setup(console: Console | None = None) -> None:
     Steps:
     1. Detect GPU tier and display it
     2. Show available providers and which have API keys configured
-    3. Prompt user to enter API keys for unconfigured providers
-    4. If local GPU detected, offer to pull recommended Ollama models
+    3. Install Ollama + pull local AI models (enables desktop agent)
+    4. Configure API keys (with desktop agent assist if available)
     5. Save config to the default config path
 
     The entire setup is skippable by pressing Enter at each prompt.
@@ -815,7 +815,85 @@ def guided_setup(console: Console | None = None) -> None:
     console.print(provider_table)
 
     # ------------------------------------------------------------------
-    # Step 3: Prompt for missing API keys
+    # Step 3: Local models (Ollama) — BEFORE API keys so desktop agent
+    # is available to assist with browser-based key setup
+    # ------------------------------------------------------------------
+    console.print()
+    console.print("[bold green]Step 3/4:[/bold green] Local AI models\n")
+
+    has_vision_model = False
+
+    if total_vram > 0:
+        # Ensure Ollama is installed and running (auto-install if needed)
+        if not ollama_up:
+            ollama_up, ollama_models = _ensure_ollama(console)
+            console.print()
+
+        recommended = _get_recommended_models(total_vram)
+        if recommended and ollama_up:
+            console.print(
+                f"  Recommended models for your GPU ({total_vram:.0f} GB VRAM):\n"
+            )
+            for model in recommended:
+                installed = any(
+                    model in m for m in ollama_models
+                )
+                if installed:
+                    console.print(f"    [green]installed[/green]  {model}")
+                else:
+                    console.print(f"    [dim]available[/dim]   {model}")
+
+            # Ask to pull missing models
+            missing = [
+                m for m in recommended
+                if not any(m in existing for existing in ollama_models)
+            ]
+            if missing:
+                console.print()
+                try:
+                    pull = console.input(
+                        f"  Pull {len(missing)} recommended model(s)? [Y/n] "
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    pull = "n"
+
+                if pull not in ("n", "no"):
+                    ollama_bin = _find_ollama_binary() or "ollama"
+                    for model in missing:
+                        _pull_model(console, model, ollama_bin)
+                else:
+                    console.print("  [dim]Skipped model pull.[/dim]")
+                    if missing:
+                        console.print("  [dim]You can pull later with:[/dim]")
+                        for m in missing:
+                            console.print(f"    [dim]ollama pull {m}[/dim]")
+            else:
+                console.print("\n  [green]All recommended models already installed.[/green]")
+
+            # Check if a vision model is now available
+            from nvh.core.vision_tools import _detect_ollama_vision_model
+            has_vision_model = _detect_ollama_vision_model() is not None
+
+        elif recommended and not ollama_up:
+            console.print(
+                "  [yellow]Could not start Ollama.[/yellow] "
+                "You can start it manually later:\n"
+            )
+            console.print("    ollama serve")
+            console.print()
+            console.print("  Then pull recommended models:")
+            for model in recommended:
+                console.print(f"    ollama pull {model}")
+        elif not recommended:
+            console.print("  [dim]No model recommendations for this GPU tier.[/dim]")
+    else:
+        console.print(
+            "  [dim]No GPU detected. nvHive will use cloud providers.[/dim]\n"
+            "  [dim]Install Ollama for CPU-based local inference: https://ollama.com[/dim]"
+        )
+
+    # ------------------------------------------------------------------
+    # Step 4: Configure API keys (with desktop agent assist)
     # ------------------------------------------------------------------
     unconfigured = [
         (name, display, env_var, url)
@@ -825,13 +903,21 @@ def guided_setup(console: Console | None = None) -> None:
 
     if unconfigured:
         console.print()
-        console.print("[bold green]Step 3/4:[/bold green] Configure API keys\n")
+        console.print("[bold green]Step 4/4:[/bold green] Configure API keys\n")
 
         # Detect if we have a desktop (can open browser + read clipboard)
         has_desktop = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
         clipboard_works = bool(_get_clipboard() or has_desktop)
 
-        if has_desktop and clipboard_works:
+        if has_desktop and clipboard_works and has_vision_model:
+            console.print(
+                "  [dim]Desktop agent is ready! For each provider I'll:[/dim]\n"
+                "  [dim]  1. Open the signup page in your browser[/dim]\n"
+                "  [dim]  2. Watch your clipboard for the API key[/dim]\n"
+                "  [dim]  3. Take a screenshot to verify the page loaded[/dim]\n"
+                "  [dim]Press Enter to skip any provider.[/dim]\n"
+            )
+        elif has_desktop and clipboard_works:
             console.print(
                 "  [dim]For each provider, I'll open the signup page in your browser.[/dim]\n"
                 "  [dim]Just copy the API key — I'll detect it from your clipboard.[/dim]\n"
@@ -862,6 +948,48 @@ def guided_setup(console: Console | None = None) -> None:
                 opened = _open_in_browser(url)
                 if opened:
                     console.print(f"  [dim]Opened {url}[/dim]")
+
+                    # If we have a vision model, take a screenshot to verify
+                    if has_vision_model:
+                        import time as _time
+                        _time.sleep(3)  # wait for browser to load
+                        try:
+                            import asyncio
+
+                            from nvh.core.vision_tools import (
+                                _analyze_with_ollama,
+                                _detect_ollama_vision_model,
+                                _ensure_display,
+                            )
+                            _ensure_display()
+
+                            # Take a screenshot
+                            import pyautogui
+                            screenshot_path = Path.home() / ".nvh" / "setup_screenshot.png"
+                            img = pyautogui.screenshot()
+                            img.save(str(screenshot_path))
+
+                            if screenshot_path.exists():
+                                import base64
+                                with open(screenshot_path, "rb") as f:
+                                    img_data = base64.b64encode(f.read()).decode("utf-8")
+                                vm = _detect_ollama_vision_model()
+                                if vm:
+                                    analysis = asyncio.get_event_loop().run_until_complete(
+                                        _analyze_with_ollama(
+                                            img_data,
+                                            f"I opened the {display} API key page. "
+                                            f"Describe what you see. Is there a visible API key? "
+                                            f"If so, read it exactly.",
+                                            vm,
+                                        )
+                                    )
+                                    if analysis:
+                                        console.print(f"  [dim]Agent: {analysis[:200]}[/dim]")
+                                screenshot_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass  # vision assist is best-effort
+
                     detected = _watch_clipboard_for_key(console, name, timeout_seconds=60)
                     if detected:
                         masked = detected[:6] + "..." + detected[-4:]
@@ -927,78 +1055,7 @@ def guided_setup(console: Console | None = None) -> None:
     else:
         console.print()
         console.print(
-            "[bold green]Step 3/4:[/bold green] All core providers already configured.\n"
-        )
-
-    # ------------------------------------------------------------------
-    # Step 4: Local models (Ollama)
-    # ------------------------------------------------------------------
-    console.print()
-    console.print("[bold green]Step 4/4:[/bold green] Local AI models\n")
-
-    if total_vram > 0:
-        # Ensure Ollama is installed and running (auto-install if needed)
-        if not ollama_up:
-            ollama_up, ollama_models = _ensure_ollama(console)
-            console.print()
-
-        recommended = _get_recommended_models(total_vram)
-        if recommended and ollama_up:
-            console.print(
-                f"  Recommended models for your GPU ({total_vram:.0f} GB VRAM):\n"
-            )
-            for model in recommended:
-                installed = any(
-                    model in m for m in ollama_models
-                )
-                if installed:
-                    console.print(f"    [green]installed[/green]  {model}")
-                else:
-                    console.print(f"    [dim]available[/dim]   {model}")
-
-            # Ask to pull missing models
-            missing = [
-                m for m in recommended
-                if not any(m in existing for existing in ollama_models)
-            ]
-            if missing:
-                console.print()
-                try:
-                    pull = console.input(
-                        f"  Pull {len(missing)} recommended model(s)? [Y/n] "
-                    ).strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    pull = "n"
-
-                if pull not in ("n", "no"):
-                    ollama_bin = _find_ollama_binary() or "ollama"
-                    for model in missing:
-                        _pull_model(console, model, ollama_bin)
-                else:
-                    console.print("  [dim]Skipped model pull.[/dim]")
-                    if missing:
-                        console.print("  [dim]You can pull later with:[/dim]")
-                        for m in missing:
-                            console.print(f"    [dim]ollama pull {m}[/dim]")
-            else:
-                console.print("\n  [green]All recommended models already installed.[/green]")
-
-        elif recommended and not ollama_up:
-            console.print(
-                "  [yellow]Could not start Ollama.[/yellow] "
-                "You can start it manually later:\n"
-            )
-            console.print("    ollama serve")
-            console.print()
-            console.print("  Then pull recommended models:")
-            for model in recommended:
-                console.print(f"    ollama pull {model}")
-        elif not recommended:
-            console.print("  [dim]No model recommendations for this GPU tier.[/dim]")
-    else:
-        console.print(
-            "  [dim]No GPU detected. nvHive will use cloud providers.[/dim]\n"
-            "  [dim]Install Ollama for CPU-based local inference: https://ollama.com[/dim]"
+            "[bold green]Step 4/4:[/bold green] All core providers already configured.\n"
         )
 
     # ------------------------------------------------------------------
@@ -1018,6 +1075,8 @@ def guided_setup(console: Console | None = None) -> None:
     summary.append(f"{n_configured} provider(s) configured")
     if total_vram > 0:
         summary.append(f", {total_vram:.0f} GB VRAM detected")
+    if has_vision_model:
+        summary.append(", desktop agent ready")
     summary.append(".")
     console.print(Panel(summary, border_style="green"))
 
@@ -1025,7 +1084,8 @@ def guided_setup(console: Console | None = None) -> None:
     console.print("  [bold]Next steps:[/bold]")
     console.print('    Try a query:             [bold]nvh "What is the meaning of life?"[/bold]')
     console.print("    Launch interactive chat:  [bold]nvh[/bold]")
-    console.print("    Run the full setup:       [bold]nvh setup --all[/bold]")
+    if has_vision_model:
+        console.print("    Desktop agent:           [bold]nvh \"take a screenshot\"[/bold]")
     console.print("    Edit config:              [bold]nvh config edit[/bold]")
     console.print()
 
