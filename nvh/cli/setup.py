@@ -198,11 +198,10 @@ def _install_ollama(console: Console) -> str | None:
     """Download and install Ollama to ~/.nvh/. Returns binary path or None.
 
     Ollama ships as a .tar.zst archive containing bin/ollama plus CUDA libs.
-    We extract to ~/.nvh/ so the binary ends up at ~/.nvh/bin/ollama.
-    Requires ``zstd`` on the system (apt install zstd / dnf install zstd).
+    We stream-download with a Rich progress bar, then decompress and extract
+    using the ``zstandard`` Python package — no root or system tools needed.
     """
     import platform
-    import shutil
     import subprocess
 
     if platform.system() != "Linux":
@@ -213,27 +212,17 @@ def _install_ollama(console: Console) -> str | None:
         return None
 
     # Detect architecture
-    import struct
-    arch = "arm64" if struct.calcsize("P") * 8 == 64 and platform.machine() in ("aarch64", "arm64") else "amd64"
+    arch = "arm64" if platform.machine() in ("aarch64", "arm64") else "amd64"
 
     nvh_home = Path.home() / ".nvh"
     nvh_home.mkdir(parents=True, exist_ok=True)
     ollama_bin = nvh_home / "bin" / "ollama"
 
-    # Check for zstd (required to extract the archive)
-    if not shutil.which("zstd"):
-        console.print(
-            "  [yellow]zstd is required to install Ollama but was not found.[/yellow]\n"
-            "  [dim]Install it first:  sudo apt install zstd  (or dnf install zstd)[/dim]\n"
-            "  [dim]Then re-run /setup[/dim]"
-        )
-        return None
-
     url = f"https://ollama.com/download/ollama-linux-{arch}.tar.zst"
     archive_path = nvh_home / f"ollama-linux-{arch}.tar.zst"
 
     # --- Download with Rich progress bar ---
-    console.print("  Downloading Ollama...")
+    console.print("  Downloading Ollama (this is ~2 GB — includes CUDA libraries)...")
     downloaded = False
 
     try:
@@ -291,24 +280,50 @@ def _install_ollama(console: Console) -> str | None:
         )
         return None
 
-    # --- Extract tar.zst to ~/.nvh/ ---
-    console.print("  Extracting Ollama...")
+    # --- Extract tar.zst using Python (no system zstd needed) ---
+    console.print("  Extracting Ollama (this may take a moment)...")
     try:
-        result = subprocess.run(
-            ["bash", "-c", f"zstd -d < '{archive_path}' | tar xf - -C '{nvh_home}'"],
-            capture_output=True,
-            timeout=120,
-        )
-        if result.returncode != 0:
-            console.print(f"  [red]Extraction failed: {result.stderr.decode(errors='replace').strip()}[/red]")
-            archive_path.unlink(missing_ok=True)
-            return None
+        import shutil
+        import tarfile
+        import zstandard
+
+        dctx = zstandard.ZstdDecompressor()
+        with open(archive_path, "rb") as compressed:
+            with dctx.stream_reader(compressed) as reader:
+                with tarfile.open(fileobj=reader, mode="r|") as tar:
+                    # Extract only bin/ and lib/ — skip anything unexpected
+                    for member in tar:
+                        # Security: prevent path traversal
+                        if member.name.startswith("/") or ".." in member.name:
+                            continue
+                        tar.extract(member, path=str(nvh_home))
+
+        console.print("  [green]Extraction complete.[/green]")
     except Exception as exc:
         console.print(f"  [red]Extraction failed: {exc}[/red]")
-        archive_path.unlink(missing_ok=True)
-        return None
 
-    # Clean up archive
+        # Fallback: try system zstd + tar if Python extraction failed
+        if shutil.which("zstd"):
+            console.print("  Retrying with system zstd...")
+            try:
+                result = subprocess.run(
+                    ["bash", "-c", f"zstd -d < '{archive_path}' | tar xf - -C '{nvh_home}'"],
+                    capture_output=True,
+                    timeout=120,
+                )
+                if result.returncode == 0:
+                    console.print("  [green]Extraction complete.[/green]")
+                else:
+                    archive_path.unlink(missing_ok=True)
+                    return None
+            except Exception:
+                archive_path.unlink(missing_ok=True)
+                return None
+        else:
+            archive_path.unlink(missing_ok=True)
+            return None
+
+    # Clean up archive to free disk space
     archive_path.unlink(missing_ok=True)
 
     if ollama_bin.exists():
