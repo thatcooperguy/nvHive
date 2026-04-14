@@ -155,7 +155,7 @@ class TestGetRecommendedModels:
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
             recs = _get_recommended_models(96.0)
         assert len(recs) >= 2
-        assert "minicpm-v" in recs  # vision model included
+        assert any(v in recs for v in ["llama3.2-vision", "minicpm-v"])  # vision model included
 
 
 class TestValidateKey:

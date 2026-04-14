@@ -61,18 +61,28 @@ class AgentResult:
 DESKTOP_AGENT_SUPPLEMENT = """
 You can also control the desktop computer. For visual/GUI tasks, follow this workflow:
 1. Use capture_screenshot to see the current screen state
-2. Use analyze_image on the screenshot to understand what is visible (UI elements, text, coordinates)
+2. Use analyze_image on the screenshot to understand what is visible
 3. Based on the analysis, use mouse_click, keyboard_type, keyboard_press, or scroll to interact
 4. Take another screenshot to verify your action worked
 5. Repeat until the task is complete
 
+Coordinate estimation for clicking:
+- When asking analyze_image for element positions, ask: "What percentage from the left
+  edge and top edge of the screen is the [element]?" (e.g., "the OK button is at ~75%
+  from left, ~85% from top")
+- First determine screen resolution with: shell "xdpyinfo | grep dimensions" or
+  shell "xrandr | grep '*'"
+- Then compute pixel coordinates: x = percentage * width, y = percentage * height
+- Raw pixel coordinate guesses from vision models are unreliable — always use
+  relative positioning and compute the actual pixels yourself
+
 Desktop tips:
 - Always screenshot BEFORE and AFTER actions to verify state
-- When clicking, ask analyze_image to identify the target element's approximate x,y coordinates
 - For installing software: use the shell tool to run git clone, pip install, etc.
 - For launching apps: use the shell tool, then use screenshots to verify the app opened
-- Wait briefly between actions for the UI to update (the tools have built-in delays)
 - Use keyboard_press for hotkeys like "ctrl+c", "alt+tab", "enter"
+- Before destructive actions (closing windows, pressing Enter on dialogs), explain
+  what you are about to do
 """
 
 

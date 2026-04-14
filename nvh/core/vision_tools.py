@@ -6,34 +6,29 @@ Gives the agent eyes and hands:
   read text from images (OCR-like via LLM)
 - HANDS: move mouse, click, type text, press keys, scroll
 
-Vision analysis uses the existing multi-model infrastructure — the
-image is sent to a vision-capable LLM (GPT-4o, Claude, Gemini, or
-local LLaVA) via the engine's query method.
+Vision analysis tries local Ollama vision models first (llama3.2-vision,
+minicpm-v, llava), then falls back to cloud APIs (GPT-4o, Gemini, Claude).
 
 Desktop control uses pyautogui (cross-platform) with safety bounds:
-- 2-second delay before any mouse/keyboard action (failsafe)
-- Restricted to the active window (no system-level interaction)
+- 0.5-second pause before mouse/keyboard actions
 - All actions logged for audit trail
 - Guardrail-gated (requires confirmation unless --yes)
-
-These tools integrate into the parallel pipeline: an agent can
-take a screenshot, analyze it with a vision LLM, decide what to
-click, and execute — all in the agent loop.
-
-Usage:
-    from nvh.core.vision_tools import register_vision_tools
-    register_vision_tools(registry)
-    # Now the agent can use: screenshot, analyze_image, mouse_click, etc.
 """
 
 from __future__ import annotations
 
 import base64
 import logging
-import subprocess
+import time as _time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Vision model cache (avoids querying /api/tags on every analyze_image call)
+# ---------------------------------------------------------------------------
+_vision_model_cache: tuple[float, str | None] = (0.0, None)
+_VISION_CACHE_TTL = 60.0  # seconds
 
 
 def _ensure_display() -> bool:
@@ -67,9 +62,15 @@ def _ensure_display() -> bool:
 
 
 def _detect_ollama_vision_model() -> str | None:
-    """Check if Ollama has a vision-capable model installed."""
+    """Check if Ollama has a vision-capable model installed (cached)."""
+    global _vision_model_cache
     import os
 
+    now = _time.monotonic()
+    if now - _vision_model_cache[0] < _VISION_CACHE_TTL:
+        return _vision_model_cache[1]
+
+    result = None
     try:
         import httpx
         base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -77,17 +78,23 @@ def _detect_ollama_vision_model() -> str | None:
         if resp.status_code == 200:
             models = [m.get("name", "") for m in resp.json().get("models", [])]
             # Known vision-capable models, in preference order
+            # llama3.2-vision first — best spatial/coordinate grounding
             vision_models = [
-                "minicpm-v", "llava", "llama3.2-vision", "bakllava",
-                "moondream", "llava-llama3", "llava-phi3",
+                "llama3.2-vision", "minicpm-v", "llava", "bakllava",
+                "llava-llama3", "llava-phi3", "moondream",
             ]
             for vm in vision_models:
                 for installed in models:
                     if vm in installed:
-                        return installed
+                        result = installed
+                        break
+                if result:
+                    break
     except Exception:
         pass
-    return None
+
+    _vision_model_cache = (now, result)
+    return result
 
 
 async def _analyze_with_ollama(image_data: str, question: str, model: str) -> str | None:
@@ -109,7 +116,7 @@ async def _analyze_with_ollama(image_data: str, question: str, model: str) -> st
                     }],
                     "stream": False,
                 },
-                timeout=120,
+                timeout=60,
             )
             if resp.status_code == 200:
                 return resp.json().get("message", {}).get("content", "")
@@ -133,13 +140,13 @@ async def _analyze_with_cloud(image_data: str, mime: str, question: str) -> str 
             ],
         }]
 
-        # Try providers in order: Gemini (free), then OpenAI, then Anthropic
+        # Try providers in order: GPT-4o (best spatial accuracy), Gemini, Claude
         import os
         models_to_try = []
-        if os.environ.get("GOOGLE_API_KEY"):
-            models_to_try.append("gemini/gemini-2.0-flash")
         if os.environ.get("OPENAI_API_KEY"):
             models_to_try.append("gpt-4o")
+        if os.environ.get("GOOGLE_API_KEY"):
+            models_to_try.append("gemini/gemini-2.0-flash")
         if os.environ.get("ANTHROPIC_API_KEY"):
             models_to_try.append("claude-sonnet-4-6")
 
@@ -154,11 +161,39 @@ async def _analyze_with_cloud(image_data: str, mime: str, question: str) -> str 
                 content = resp.choices[0].message.content
                 if content:
                     return content
-            except Exception:
+            except Exception as exc:
+                logger.debug("Cloud vision (%s) failed: %s", model, exc)
                 continue
     except Exception as exc:
         logger.debug("Cloud vision failed: %s", exc)
     return None
+
+
+def _desktop_action(func_name: str):
+    """Decorator for desktop control tools — handles common errors."""
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            try:
+                import pyautogui
+                pyautogui.FAILSAFE = True
+                pyautogui.PAUSE = 0.5
+                return await func(pyautogui, *args, **kwargs)
+            except ImportError:
+                return (
+                    "pyautogui not installed. Install: pip install 'nvhive[vision]'\n"
+                    "Also needed: pip install python-xlib Pillow"
+                )
+            except Exception as e:
+                if "display" in str(e).lower() or "DISPLAY" in str(e):
+                    return (
+                        "Desktop control requires a display (X11/Wayland). "
+                        "On headless servers, use Xvfb."
+                    )
+                return f"{func_name} failed: {e}"
+        wrapper.__name__ = func.__name__
+        wrapper.__doc__ = func.__doc__
+        return wrapper
+    return decorator
 
 
 def register_vision_tools(registry) -> None:
@@ -179,11 +214,32 @@ def register_vision_tools(registry) -> None:
         """
         path = Path(output_path)
 
-        # Try platform-appropriate screenshot tools
+        # Parse region if provided
+        region_tuple = None
+        if region:
+            try:
+                parts = [int(p.strip()) for p in region.split(",")]
+                if len(parts) == 4:
+                    region_tuple = tuple(parts)
+            except ValueError:
+                pass
+
+        # Primary method: pyautogui.screenshot() — no external binaries needed
+        try:
+            import pyautogui
+            img = pyautogui.screenshot(region=region_tuple)
+            img.save(str(path))
+            if path.exists() and path.stat().st_size > 0:
+                size_kb = path.stat().st_size / 1024
+                return f"Screenshot saved: {path} ({size_kb:.1f} KB)"
+        except Exception as e:
+            logger.debug("pyautogui screenshot failed: %s", e)
+
+        # Fallback: platform-specific tools
         try:
             import sys
+            import subprocess
             if sys.platform == "win32":
-                # PowerShell screenshot
                 ps_cmd = (
                     f'Add-Type -AssemblyName System.Windows.Forms; '
                     f'[System.Windows.Forms.Screen]::PrimaryScreen | '
@@ -192,58 +248,41 @@ def register_vision_tools(registry) -> None:
                     f'$g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); '
                     f'$b.Save("{path.resolve()}") }}'
                 )
-                subprocess.run(
-                    ["powershell", "-Command", ps_cmd],
-                    capture_output=True, timeout=10,
-                )
+                subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, timeout=10)
             elif sys.platform == "darwin":
-                subprocess.run(
-                    ["screencapture", "-x", str(path)],
-                    capture_output=True, timeout=10,
-                )
+                subprocess.run(["screencapture", "-x", str(path)], capture_output=True, timeout=10)
             else:
-                # Linux — try multiple tools
-                for tool in ["scrot", "gnome-screenshot", "import"]:
+                # Linux — try KDE spectacle, then scrot, gnome-screenshot, import
+                for tool_cmd in [
+                    ["spectacle", "-b", "-n", "-o", str(path)],
+                    ["scrot", str(path)],
+                    ["gnome-screenshot", "-f", str(path)],
+                    ["import", "-window", "root", str(path)],
+                ]:
                     try:
-                        if tool == "scrot":
-                            subprocess.run([tool, str(path)], capture_output=True, timeout=10)
-                        elif tool == "gnome-screenshot":
-                            subprocess.run([tool, "-f", str(path)], capture_output=True, timeout=10)
-                        elif tool == "import":
-                            subprocess.run([tool, "-window", "root", str(path)], capture_output=True, timeout=10)
-                        if path.exists():
+                        subprocess.run(tool_cmd, capture_output=True, timeout=10)
+                        if path.exists() and path.stat().st_size > 0:
                             break
                     except FileNotFoundError:
                         continue
 
-            if path.exists():
+            if path.exists() and path.stat().st_size > 0:
                 size_kb = path.stat().st_size / 1024
                 return f"Screenshot saved: {path} ({size_kb:.1f} KB)"
-            return (
-                "Screenshot failed — no suitable tool found. "
-                "Install: scrot (Linux), or use built-in (Windows/macOS). "
-                "On headless servers, a display (X11/Wayland) is required — use Xvfb."
-            )
-        except KeyError as e:
-            if "display" in str(e).lower():
-                return (
-                    "Screenshot requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Screenshot failed: {e}"
         except Exception as e:
-            if "display" in str(e).lower():
-                return (
-                    "Screenshot requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Screenshot failed: {e}"
+            logger.debug("Fallback screenshot failed: %s", e)
+
+        return (
+            "Screenshot failed — no suitable method found.\n"
+            "Install: pip install 'nvhive[vision]' (needs pyautogui + Pillow + python-xlib)\n"
+            "Or install spectacle/scrot on Linux."
+        )
 
     async def analyze_image(image_path: str, question: str = "Describe what you see in this image.") -> str:
         """Analyze an image using a vision-capable LLM.
 
-        Tries local Ollama vision model first (minicpm-v, llava, etc.),
-        then falls back to cloud APIs (Gemini, GPT-4o, Claude).
+        Tries local Ollama vision model first (llama3.2-vision, minicpm-v, etc.),
+        then falls back to cloud APIs (GPT-4o, Gemini, Claude).
 
         Args:
             image_path: Path to the image file
@@ -252,6 +291,11 @@ def register_vision_tools(registry) -> None:
         path = Path(image_path)
         if not path.exists():
             return f"Image not found: {image_path}"
+
+        # Guard against huge files
+        file_size = path.stat().st_size
+        if file_size > 20 * 1024 * 1024:
+            return f"Image too large ({file_size / 1024 / 1024:.1f} MB). Max 20 MB."
 
         try:
             with open(path, "rb") as f:
@@ -268,9 +312,9 @@ def register_vision_tools(registry) -> None:
                 ".bmp": "image/bmp",
             }.get(suffix, "image/png")
 
-            size_kb = path.stat().st_size / 1024
+            size_kb = file_size / 1024
 
-            # Try local Ollama vision model first
+            # Try local Ollama vision model first (cached detection)
             vision_model = _detect_ollama_vision_model()
             if vision_model:
                 result = await _analyze_with_ollama(image_data, question, vision_model)
@@ -285,18 +329,14 @@ def register_vision_tools(registry) -> None:
             return (
                 f"[Image loaded: {path.name}, {size_kb:.1f} KB]\n"
                 "No vision model available. Install one locally:\n"
-                "  ollama pull minicpm-v\n"
+                "  ollama pull llama3.2-vision\n"
                 "Or configure a cloud API key (OpenAI, Google, Anthropic)."
             )
         except Exception as e:
             return f"Failed to analyze image: {e}"
 
     async def read_text_from_image(image_path: str) -> str:
-        """Extract visible text from an image (OCR via LLM).
-
-        Uses a vision LLM to read text from screenshots, error
-        messages, terminal output captured as images, etc.
-        """
+        """Extract visible text from an image (OCR via LLM)."""
         return await analyze_image(
             image_path,
             "Read ALL visible text from this image. Return the text exactly "
@@ -305,176 +345,58 @@ def register_vision_tools(registry) -> None:
 
     # ── HANDS: Mouse + Keyboard Control ───────────────────────────
 
-    async def mouse_move(x: str, y: str) -> str:
-        """Move the mouse cursor to screen coordinates (x, y).
+    @_desktop_action("Mouse move")
+    async def mouse_move(pyautogui, x: str, y: str) -> str:
+        """Move the mouse cursor to screen coordinates (x, y)."""
+        ix, iy = int(x), int(y)
+        pyautogui.moveTo(ix, iy, duration=0.3)
+        return f"Mouse moved to ({ix}, {iy})"
 
-        Args:
-            x: X coordinate (pixels from left)
-            y: Y coordinate (pixels from top)
-        """
-        try:
-            import pyautogui
-            pyautogui.FAILSAFE = True
-            pyautogui.PAUSE = 0.5
-            ix, iy = int(x), int(y)
-            pyautogui.moveTo(ix, iy, duration=0.3)
-            return f"Mouse moved to ({ix}, {iy})"
-        except ImportError:
-            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
-        except KeyError as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Mouse move failed: {e}"
-        except Exception as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Mouse move failed: {e}"
+    @_desktop_action("Click")
+    async def mouse_click(pyautogui, x: str = "", y: str = "", button: str = "left") -> str:
+        """Click the mouse at current position or specified coordinates."""
+        if x and y:
+            pyautogui.click(int(x), int(y), button=button)
+            return f"Clicked {button} at ({x}, {y})"
+        else:
+            pyautogui.click(button=button)
+            pos = pyautogui.position()
+            return f"Clicked {button} at current position ({pos.x}, {pos.y})"
 
-    async def mouse_click(x: str = "", y: str = "", button: str = "left") -> str:
-        """Click the mouse at current position or specified coordinates.
+    @_desktop_action("Type")
+    async def keyboard_type(pyautogui, text: str, interval: str = "0.05") -> str:
+        """Type text using the keyboard."""
+        # Use write() for full Unicode support (typewrite is ASCII-only)
+        pyautogui.write(text, interval=float(interval))
+        return f"Typed {len(text)} characters"
 
-        Args:
-            x: Optional X coordinate (clicks current position if empty)
-            y: Optional Y coordinate
-            button: "left", "right", or "middle"
-        """
-        try:
-            import pyautogui
-            pyautogui.FAILSAFE = True
-            pyautogui.PAUSE = 0.5
-            if x and y:
-                pyautogui.click(int(x), int(y), button=button)
-                return f"Clicked {button} at ({x}, {y})"
-            else:
-                pyautogui.click(button=button)
-                pos = pyautogui.position()
-                return f"Clicked {button} at current position ({pos.x}, {pos.y})"
-        except ImportError:
-            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
-        except KeyError as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Click failed: {e}"
-        except Exception as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Click failed: {e}"
+    @_desktop_action("Key press")
+    async def keyboard_press(pyautogui, key: str) -> str:
+        """Press a single key or key combination (e.g., enter, ctrl+c, alt+tab)."""
+        if "+" in key:
+            keys = [k.strip() for k in key.split("+")]
+            pyautogui.hotkey(*keys)
+        else:
+            pyautogui.press(key)
+        return f"Pressed: {key}"
 
-    async def keyboard_type(text: str, interval: str = "0.05") -> str:
-        """Type text using the keyboard.
-
-        Args:
-            text: Text to type
-            interval: Seconds between keystrokes (default 0.05)
-        """
-        try:
-            import pyautogui
-            pyautogui.FAILSAFE = True
-            pyautogui.PAUSE = 0.3
-            pyautogui.typewrite(text, interval=float(interval))
-            return f"Typed {len(text)} characters"
-        except ImportError:
-            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
-        except KeyError as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Type failed: {e}"
-        except Exception as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Type failed: {e}"
-
-    async def keyboard_press(key: str) -> str:
-        """Press a single key or key combination.
-
-        Args:
-            key: Key name (e.g., "enter", "tab", "ctrl+c", "alt+f4")
-        """
-        try:
-            import pyautogui
-            pyautogui.FAILSAFE = True
-            pyautogui.PAUSE = 0.3
-            if "+" in key:
-                keys = [k.strip() for k in key.split("+")]
-                pyautogui.hotkey(*keys)
-            else:
-                pyautogui.press(key)
-            return f"Pressed: {key}"
-        except ImportError:
-            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
-        except KeyError as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Key press failed: {e}"
-        except Exception as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Key press failed: {e}"
-
-    async def scroll(direction: str = "down", amount: str = "3") -> str:
-        """Scroll the mouse wheel.
-
-        Args:
-            direction: "up" or "down"
-            amount: Number of scroll clicks
-        """
-        try:
-            import pyautogui
-            pyautogui.FAILSAFE = True
-            clicks = int(amount)
-            if direction == "up":
-                clicks = abs(clicks)
-            else:
-                clicks = -abs(clicks)
-            pyautogui.scroll(clicks)
-            return f"Scrolled {direction} by {abs(clicks)}"
-        except ImportError:
-            return "pyautogui not installed. Install: pip install 'nvhive[vision]'"
-        except KeyError as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Scroll failed: {e}"
-        except Exception as e:
-            if "display" in str(e).lower():
-                return (
-                    "Desktop control requires a display (X11/Wayland). "
-                    "On headless servers, use Xvfb."
-                )
-            return f"Scroll failed: {e}"
+    @_desktop_action("Scroll")
+    async def scroll(pyautogui, direction: str = "down", amount: str = "3") -> str:
+        """Scroll the mouse wheel up or down."""
+        clicks = int(amount)
+        if direction == "up":
+            clicks = abs(clicks)
+        else:
+            clicks = -abs(clicks)
+        pyautogui.scroll(clicks)
+        return f"Scrolled {direction} by {abs(clicks)}"
 
     # ── Register all tools ────────────────────────────────────────
 
     # EYES (safe — read-only observation)
     registry.register(Tool(
         name="capture_screenshot",
-        description="Capture a screenshot of the desktop",
+        description="Capture a screenshot of the desktop. Use region='x,y,w,h' for a specific area.",
         parameters={"type": "object", "properties": {
             "output_path": {"type": "string"},
             "region": {"type": "string"},
@@ -484,11 +406,11 @@ def register_vision_tools(registry) -> None:
     ))
     registry.register(Tool(
         name="analyze_image",
-        description="Analyze an image using a vision LLM (describe, read text, check UI)",
+        description="Analyze an image using a vision LLM — describe content, read text, identify UI elements and their coordinates",
         parameters={"type": "object", "properties": {
             "image_path": {"type": "string"},
             "question": {"type": "string"},
-        }},
+        }, "required": ["image_path"]},
         handler=analyze_image,
         safe=True,
     ))
@@ -497,7 +419,7 @@ def register_vision_tools(registry) -> None:
         description="Extract visible text from an image (OCR via vision LLM)",
         parameters={"type": "object", "properties": {
             "image_path": {"type": "string"},
-        }},
+        }, "required": ["image_path"]},
         handler=read_text_from_image,
         safe=True,
     ))
@@ -508,7 +430,7 @@ def register_vision_tools(registry) -> None:
         description="Move the mouse cursor to screen coordinates",
         parameters={"type": "object", "properties": {
             "x": {"type": "string"}, "y": {"type": "string"},
-        }},
+        }, "required": ["x", "y"]},
         handler=mouse_move,
         safe=False,
     ))
@@ -524,11 +446,11 @@ def register_vision_tools(registry) -> None:
     ))
     registry.register(Tool(
         name="keyboard_type",
-        description="Type text using the keyboard",
+        description="Type text using the keyboard (supports Unicode)",
         parameters={"type": "object", "properties": {
             "text": {"type": "string"},
             "interval": {"type": "string"},
-        }},
+        }, "required": ["text"]},
         handler=keyboard_type,
         safe=False,
     ))
@@ -537,7 +459,7 @@ def register_vision_tools(registry) -> None:
         description="Press a key or key combination (e.g., enter, ctrl+c, alt+tab)",
         parameters={"type": "object", "properties": {
             "key": {"type": "string"},
-        }},
+        }, "required": ["key"]},
         handler=keyboard_press,
         safe=False,
     ))

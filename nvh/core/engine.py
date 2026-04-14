@@ -334,6 +334,7 @@ class Engine:
 
         env = os.environ.copy()
         env["OLLAMA_MODELS"] = str(models_dir)
+        env["OLLAMA_HOST"] = "127.0.0.1:11434"  # bind to localhost only
 
         # Add CUDA libs from local install
         lib_dir = nvh_home / "lib" / "ollama"
@@ -350,6 +351,7 @@ class Engine:
                 env=env,
                 start_new_session=True,
             )
+            log_file.close()  # child inherited the fd, parent can close
             logger.info("Auto-starting Ollama from %s", ollama_bin)
 
             # Wait up to 10 seconds

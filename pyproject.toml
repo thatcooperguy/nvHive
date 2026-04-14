@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nvhive"
-version = "0.28.0"
+version = "0.28.1"
 description = "NVHive — Multi-LLM orchestration platform with intelligent routing, hive consensus, and auto-agent generation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -70,6 +70,8 @@ dev = [
 ]
 vision = [
     "pyautogui>=0.9.54",
+    "python-xlib>=0.33; sys_platform == 'linux'",
+    "Pillow>=10.0",
 ]
 browser = [
     "playwright>=1.40",
@@ -80,6 +82,8 @@ all = [
     "passlib[bcrypt]>=1.7",
     "nvidia-ml-py3>=7.352.0",
     "pyautogui>=0.9.54",
+    "python-xlib>=0.33; sys_platform == 'linux'",
+    "Pillow>=10.0",
     "playwright>=1.40",
 ]
 
