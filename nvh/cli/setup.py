@@ -538,6 +538,117 @@ def _get_recommended_models(total_vram: float) -> list[str]:
     return []
 
 
+def _open_in_browser(url: str) -> bool:
+    """Open a URL in the default browser. Returns True on success."""
+    try:
+        import subprocess
+        import sys
+
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif sys.platform == "win32":
+            os.startfile(url)
+        else:
+            # Linux — try xdg-open, then common browsers
+            for cmd in ["xdg-open", "firefox", "google-chrome", "chromium-browser"]:
+                try:
+                    subprocess.Popen(
+                        [cmd, url],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    return True
+                except FileNotFoundError:
+                    continue
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _get_clipboard() -> str:
+    """Read the system clipboard. Returns empty string on failure."""
+    try:
+        import subprocess
+        import sys
+
+        if sys.platform == "darwin":
+            result = subprocess.run(["pbpaste"], capture_output=True, text=True, timeout=2)
+            return result.stdout.strip()
+        elif sys.platform == "win32":
+            result = subprocess.run(
+                ["powershell", "-Command", "Get-Clipboard"],
+                capture_output=True, text=True, timeout=2,
+            )
+            return result.stdout.strip()
+        else:
+            # Linux — try xclip, then xsel
+            for cmd in [["xclip", "-selection", "clipboard", "-o"], ["xsel", "--clipboard", "--output"]]:
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+                    if result.returncode == 0:
+                        return result.stdout.strip()
+                except FileNotFoundError:
+                    continue
+    except Exception:
+        pass
+    return ""
+
+
+# API key patterns — prefix → min length
+_KEY_PATTERNS = {
+    "groq": (["gsk_"], 20),
+    "openai": (["sk-"], 20),
+    "anthropic": (["sk-ant-"], 20),
+    "google": (["AIza"], 20),
+}
+
+
+def _looks_like_api_key(text: str, provider: str) -> bool:
+    """Check if text looks like an API key for the given provider."""
+    text = text.strip()
+    prefixes, min_len = _KEY_PATTERNS.get(provider, ([], 20))
+    if len(text) < min_len:
+        return False
+    if prefixes:
+        return any(text.startswith(p) for p in prefixes)
+    # Generic: long alphanumeric string
+    return len(text) >= 20 and text.isascii()
+
+
+def _watch_clipboard_for_key(
+    console: Console, provider: str, timeout_seconds: int = 60,
+) -> str | None:
+    """Watch the clipboard for an API key. Returns key or None on timeout."""
+    import time
+
+    initial_clipboard = _get_clipboard()
+    console.print(
+        f"  [dim]Watching clipboard for {timeout_seconds}s — "
+        f"copy your API key from the browser...[/dim]"
+    )
+
+    start = time.monotonic()
+    last_dot = start
+    while time.monotonic() - start < timeout_seconds:
+        time.sleep(0.5)
+        current = _get_clipboard()
+
+        # Check if clipboard changed and contains a key
+        if current and current != initial_clipboard:
+            if _looks_like_api_key(current, provider):
+                return current
+
+        # Print a dot every 5 seconds to show we're still watching
+        if time.monotonic() - last_dot >= 5:
+            console.print("  [dim].[/dim]", end="")
+            last_dot = time.monotonic()
+
+    console.print()
+    return None
+
+
 def _write_config(configured_providers: dict[str, str]) -> Path:
     """Write a minimal config.yaml enabling the configured providers.
 
@@ -715,18 +826,75 @@ def guided_setup(console: Console | None = None) -> None:
     if unconfigured:
         console.print()
         console.print("[bold green]Step 3/4:[/bold green] Configure API keys\n")
-        console.print(
-            "  [dim]Paste each key and press Enter. Press Enter with no input to skip.[/dim]\n"
-        )
+
+        # Detect if we have a desktop (can open browser + read clipboard)
+        has_desktop = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+        clipboard_works = bool(_get_clipboard() or has_desktop)
+
+        if has_desktop and clipboard_works:
+            console.print(
+                "  [dim]For each provider, I'll open the signup page in your browser.[/dim]\n"
+                "  [dim]Just copy the API key — I'll detect it from your clipboard.[/dim]\n"
+                "  [dim]Press Enter to skip any provider.[/dim]\n"
+            )
+        else:
+            console.print(
+                "  [dim]Paste each key and press Enter. Press Enter with no input to skip.[/dim]\n"
+            )
 
         for name, display, env_var, url in unconfigured:
-            try:
-                key = console.input(
-                    f"  {display} API key ([dim]{url}[/dim]): "
-                ).strip()
-            except (EOFError, KeyboardInterrupt):
-                console.print("\n  [dim]Setup interrupted.[/dim]")
-                break
+            key = ""
+
+            if has_desktop and clipboard_works:
+                # Smart mode: open browser + watch clipboard
+                try:
+                    answer = console.input(
+                        f"  Open {display} signup page in browser? [Y/n] "
+                    ).strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    console.print("\n  [dim]Setup interrupted.[/dim]")
+                    break
+
+                if answer in ("n", "no"):
+                    console.print(f"  [dim]Skipped {display}[/dim]")
+                    continue
+
+                opened = _open_in_browser(url)
+                if opened:
+                    console.print(f"  [dim]Opened {url}[/dim]")
+                    detected = _watch_clipboard_for_key(console, name, timeout_seconds=60)
+                    if detected:
+                        masked = detected[:6] + "..." + detected[-4:]
+                        console.print(f"  [green]Detected key: {masked}[/green]")
+                        key = detected
+                    else:
+                        console.print("  [dim]No key detected from clipboard.[/dim]")
+                        # Fall back to manual input
+                        try:
+                            key = console.input(
+                                f"  Paste {display} API key manually (or Enter to skip): "
+                            ).strip()
+                        except (EOFError, KeyboardInterrupt):
+                            console.print("\n  [dim]Setup interrupted.[/dim]")
+                            break
+                else:
+                    console.print(f"  [dim]Could not open browser. URL: {url}[/dim]")
+                    try:
+                        key = console.input(
+                            f"  Paste {display} API key: "
+                        ).strip()
+                    except (EOFError, KeyboardInterrupt):
+                        console.print("\n  [dim]Setup interrupted.[/dim]")
+                        break
+            else:
+                # Headless mode: manual paste
+                try:
+                    key = console.input(
+                        f"  {display} API key ([dim]{url}[/dim]): "
+                    ).strip()
+                except (EOFError, KeyboardInterrupt):
+                    console.print("\n  [dim]Setup interrupted.[/dim]")
+                    break
 
             if not key:
                 console.print(f"  [dim]Skipped {display}[/dim]")
