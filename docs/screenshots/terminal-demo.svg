@@ -1,65 +1,74 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 720" font-family="'SF Mono','Menlo','Monaco','Courier New',monospace" font-size="13">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 780" font-family="'SF Mono','Menlo','Monaco','Courier New',monospace" font-size="13">
   <!-- Terminal Window -->
-  <rect width="820" height="720" rx="10" fill="#1a1a2e"/>
+  <rect width="820" height="780" rx="10" fill="#1a1a2e"/>
   <!-- Title Bar -->
   <rect width="820" height="36" rx="10" fill="#16213e"/>
   <rect y="26" width="820" height="10" fill="#16213e"/>
   <circle cx="20" cy="18" r="6" fill="#ff5f56"/>
   <circle cx="40" cy="18" r="6" fill="#ffbd2e"/>
   <circle cx="60" cy="18" r="6" fill="#27c93f"/>
-  <text x="410" y="22" fill="#a0a0b0" text-anchor="middle" font-size="12">nvHive v0.5.0 — Terminal</text>
+  <text x="410" y="22" fill="#a0a0b0" text-anchor="middle" font-size="12">nvHive v0.29 — Terminal</text>
 
-  <!-- Section 1: Install + Query -->
+  <!-- Section 1: Install + Natural Language -->
   <text x="20" y="62" fill="#76B900" font-weight="bold">$</text>
-  <text x="36" y="62" fill="#e0e0e0">pip install nvhive</text>
+  <text x="36" y="62" fill="#e0e0e0">pip install "nvhive[vision]"</text>
   <text x="20" y="84" fill="#76B900" font-weight="bold">$</text>
   <text x="36" y="84" fill="#e0e0e0">nvh "What is a binary search tree?"</text>
-  <text x="20" y="104" fill="#888">  [ask → groq/llama-3.3-70b]</text>
+  <text x="20" y="104" fill="#888">  [ask → ollama/nemotron]</text>
   <text x="20" y="126" fill="#c8c8c8">  A binary search tree is a data structure where each node has</text>
-  <text x="20" y="144" fill="#c8c8c8">  at most two children. Left child values are less than the parent,</text>
-  <text x="20" y="162" fill="#c8c8c8">  right child values are greater. This enables O(log n) search.</text>
-  <text x="20" y="184" fill="#666">  Advisor: groq | Tokens: 24/87 | Cost: $0.0000 | 520ms</text>
+  <text x="20" y="144" fill="#c8c8c8">  at most two children. Left &lt; parent &lt; right. O(log n) search.</text>
+  <text x="20" y="166" fill="#666">  Advisor: ollama | Tokens: 24/87 | Cost: $0.0000 | 320ms</text>
 
   <!-- Divider -->
-  <line x1="20" y1="202" x2="800" y2="202" stroke="#333" stroke-width="1"/>
+  <line x1="20" y1="184" x2="800" y2="184" stroke="#333" stroke-width="1"/>
 
-  <!-- Section 2: Health Dashboard -->
-  <text x="20" y="224" fill="#76B900" font-weight="bold">$</text>
-  <text x="36" y="224" fill="#e0e0e0">nvh health</text>
-
-  <text x="20" y="250" fill="#00bcd4" font-weight="bold">  Provider   Status    Health   Fallback Chain</text>
-  <line x1="20" y1="256" x2="500" y2="256" stroke="#444" stroke-width="1"/>
-  <text x="20" y="272" fill="#27c93f">  groq       Healthy    100%    #1</text>
-  <text x="20" y="290" fill="#27c93f">  github     Healthy    100%    #2</text>
-  <text x="20" y="308" fill="#27c93f">  google     Healthy    100%    #3</text>
-  <text x="20" y="326" fill="#27c93f">  openai     Healthy    100%    #4</text>
-  <text x="20" y="344" fill="#27c93f">  llm7       Healthy    100%    #5</text>
-  <text x="20" y="368" fill="#27c93f" font-weight="bold">  5/5 providers healthy — Resilient</text>
-  <text x="20" y="386" fill="#666">  Fallback chain: groq → github → google → openai → llm7</text>
-
-  <!-- Divider -->
-  <line x1="20" y1="404" x2="800" y2="404" stroke="#333" stroke-width="1"/>
-
-  <!-- Section 3: Council with Confidence -->
-  <text x="20" y="426" fill="#76B900" font-weight="bold">$</text>
-  <text x="36" y="426" fill="#e0e0e0">nvh convene "Should we use Redis or Postgres for sessions?"</text>
-  <text x="20" y="446" fill="#888">  [convene → auto-agents: Backend Engineer, Architect, DBA]</text>
-  <text x="20" y="468" fill="#c8c8c8">  For session storage, PostgreSQL is the recommended choice for</text>
-  <text x="20" y="486" fill="#c8c8c8">  most teams. Redis offers sub-ms latency but adds operational</text>
-  <text x="20" y="504" fill="#c8c8c8">  complexity. PostgreSQL provides ACID guarantees and eliminates</text>
-  <text x="20" y="522" fill="#c8c8c8">  a separate infrastructure dependency. Use Redis only if you</text>
-  <text x="20" y="540" fill="#c8c8c8">  need &gt;10K sessions/sec or sub-millisecond reads.</text>
-  <text x="20" y="562" fill="#00bcd4">  Confidence: 87% — Strong consensus across 3 models</text>
-  <text x="20" y="580" fill="#666">  Agents: Backend Engineer, Architect, DBA | Cost: $0.0000 | 3.2s</text>
+  <!-- Section 2: Desktop Agent -->
+  <text x="20" y="206" fill="#76B900" font-weight="bold">$</text>
+  <text x="36" y="206" fill="#e0e0e0">nvh "take a screenshot and describe my desktop"</text>
+  <text x="20" y="226" fill="#888">  [agent mode → take a screenshot and describe my desktop]</text>
+  <text x="20" y="248" fill="#00bcd4">  Step 1:</text>
+  <text x="90" y="248" fill="#c8c8c8">capture_screenshot → screenshot.png (245.3 KB)</text>
+  <text x="20" y="268" fill="#00bcd4">  Step 2:</text>
+  <text x="90" y="268" fill="#c8c8c8">analyze_image → [Vision: llama3.2-vision:11b]</text>
+  <text x="20" y="290" fill="#c8c8c8">  I see an Ubuntu desktop with KDE Plasma. There is a Konsole</text>
+  <text x="20" y="308" fill="#c8c8c8">  terminal window open showing the nvhive REPL. The taskbar at</text>
+  <text x="20" y="326" fill="#c8c8c8">  the bottom shows Firefox, Files, and System Settings icons.</text>
+  <text x="20" y="348" fill="#666">  2 step(s) | 2 tool call(s) | 8.3s | completed</text>
 
   <!-- Divider -->
-  <line x1="20" y1="598" x2="800" y2="598" stroke="#333" stroke-width="1"/>
+  <line x1="20" y1="366" x2="800" y2="366" stroke="#333" stroke-width="1"/>
 
-  <!-- Section 4: Escalation + Verification -->
-  <text x="20" y="620" fill="#76B900" font-weight="bold">$</text>
-  <text x="36" y="620" fill="#e0e0e0">nvh ask --escalate --verify "Is eval() safe in Python?"</text>
-  <text x="20" y="640" fill="#ffbd2e">  Escalated: groq → openai (initial confidence: 38%)</text>
-  <text x="20" y="662" fill="#c8c8c8">  No. eval() executes arbitrary code and is a code injection vector.</text>
-  <text x="20" y="680" fill="#c8c8c8">  Use ast.literal_eval() for data parsing, or json.loads() for JSON.</text>
-  <text x="20" y="702" fill="#27c93f">  Verified ✓ by google (9/10) — no issues found</text>
+  <!-- Section 3: Natural Language Commands -->
+  <text x="20" y="388" fill="#76B900" font-weight="bold">$</text>
+  <text x="36" y="388" fill="#e0e0e0">nvh</text>
+  <text x="20" y="414" fill="#00bcd4" font-weight="bold">  ──── NVHive ────</text>
+  <text x="20" y="434" fill="#c8c8c8">  Advisors: groq (free), openai, anthropic, google (free), ollama (free)</text>
+  <text x="20" y="454" fill="#c8c8c8">  Model: auto   mode: ask</text>
+
+  <text x="20" y="482" fill="#76B900">  &gt;</text>
+  <text x="36" y="482" fill="#e0e0e0">use anthropic</text>
+  <text x="20" y="502" fill="#888">  [→ /advisor anthropic]</text>
+  <text x="20" y="522" fill="#888">  Advisor set to anthropic</text>
+
+  <text x="20" y="548" fill="#76B900">  &gt;</text>
+  <text x="36" y="548" fill="#e0e0e0">open firefox</text>
+  <text x="20" y="568" fill="#888">  [action → Open application or URL]</text>
+  <text x="20" y="588" fill="#27c93f">  Opened: firefox</text>
+
+  <text x="20" y="614" fill="#76B900">  &gt;</text>
+  <text x="36" y="614" fill="#e0e0e0">setup comfyui</text>
+  <text x="20" y="634" fill="#888">  [agent mode → setup comfyui]</text>
+  <text x="20" y="654" fill="#00bcd4">  Step 1:</text>
+  <text x="90" y="654" fill="#c8c8c8">shell → git clone https://github.com/comfyanonymous/ComfyUI</text>
+  <text x="20" y="674" fill="#00bcd4">  Step 2:</text>
+  <text x="90" y="674" fill="#c8c8c8">shell → pip install -r requirements.txt</text>
+  <text x="20" y="694" fill="#00bcd4">  Step 3:</text>
+  <text x="90" y="694" fill="#c8c8c8">shell → python main.py &amp;</text>
+  <text x="20" y="714" fill="#00bcd4">  Step 4:</text>
+  <text x="90" y="714" fill="#c8c8c8">capture_screenshot → ComfyUI is running on localhost:8188</text>
+  <text x="20" y="736" fill="#666">  4 step(s) | 5 tool call(s) | 42.1s | completed</text>
+
+  <!-- Bottom bar -->
+  <rect y="754" width="820" height="26" rx="0" fill="#16213e"/>
+  <text x="20" y="770" fill="#76B900" font-size="11">3 queries | $0.0000 total | GPU: RTX 4080 48GB | Ollama: 3 models</text>
 </svg>

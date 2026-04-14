@@ -118,15 +118,17 @@ Works on Ubuntu, Windows, macOS. No root required — installs to `~/.nvh/`.
 
 ```mermaid
 flowchart LR
-    Q[Your Query] --> R{Smart Router}
+    Q[Your Input] --> R{Smart Router}
+    R -->|Action| A["INSTANT\n'open firefox' · 'install numpy'\nDirect tool execution"]
+    R -->|Task| T["AGENT\n'take screenshot' · 'setup comfyui'\nVision + tools loop"]
     R -->|Simple| F["FREE\nLocal GPU / Groq / GitHub\n$0.00"]
     R -->|Coding| C["CHEAP\nFree cloud + local agent\n$0.00–$0.05"]
     R -->|Complex| S["SMART\nMulti-model council\n$0.00–$0.15"]
-    R -->|Escalation| P["PREMIUM\nOnly when needed\nAuto-escalate"]
-    F --> L["Adaptive routing\nRouting improves over time"]
+    A --> L["Adaptive routing\nRouting improves over time"]
+    T --> L
+    F --> L
     C --> L
     S --> L
-    P --> L
 ```
 
 ---
@@ -137,24 +139,27 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    P[User Prompt] --> I{Intent Detection}
+    P[User Input] --> I{Intent Detection}
+    I -->|action| ACT["Direct Execution\n'open X' · 'install X' · 'kill X'"]
+    I -->|task| AGENT["Desktop Agent Loop\nscreenshot → vision → click → verify"]
     I -->|simple| LLM[Single LLM Query]
     I -->|coding| D[Decompose Task]
-    I -->|iterative| D
-    I -->|review| REV[Dual-Model Review]
     I -->|council| CON[Council Assembly]
+    AGENT --> TOOLS{Tools}
+    TOOLS --> SCR[Screenshot + Vision]
+    TOOLS --> KB[Mouse + Keyboard]
+    TOOLS --> SH[Shell + Browser]
+    SCR --> AGENT
+    KB --> AGENT
+    SH --> AGENT
     D --> G[Generate Expert Agents]
     G --> M[Match Agent → Best LLM]
     M --> PAR[Parallel Execution]
-    PAR --> REF{Agent needs specialist?}
-    REF -->|REFER| SP[Spawn Specialist]
-    SP --> PAR
-    REF -->|No| SYN[Synthesize Results]
+    PAR --> SYN[Synthesize Results]
     SYN --> QA{QA Gate}
-    QA -->|PASSED| OUT[Output + Files]
+    QA -->|PASSED| OUT[Output]
     QA -->|FAILED| FB[Feed Errors Back]
     FB -->|Budget OK| G
-    FB -->|Budget exceeded| OUT
 ```
 
 ### Query Pipeline
