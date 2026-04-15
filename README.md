@@ -41,26 +41,44 @@ pip install "nvhive[all]"         # everything
 
 On first run, `nvh` automatically launches a guided 3-step setup:
 
-```mermaid
-flowchart TB
-    START["nvh (first run)"] --> S1["Step 1: Hardware + Local AI
-    Detect GPU → install Ollama → pull models
-    Text model + vision model for your VRAM
-    Desktop agent ready when vision loads"]
-    S1 --> S2["Step 2: Provider Status
-    Accurate view — Ollama already running
-    Groq ✗ | OpenAI ✗ | Ollama ✓ (3 models)"]
-    S2 --> S3["Step 3: Configure API Keys
-    Desktop agent opens browser for you
-    Watches clipboard for API keys
-    Takes screenshot to verify page loaded"]
-    S3 --> DONE["Setup Complete
-    Local AI + cloud providers ready
-    Desktop agent available
-    nvh 'take a screenshot' → works"]
-```
+<table>
+<tr>
+<td align="center" width="30%">
+<h3>Step 1</h3>
+<b>Hardware + Local AI</b>
+<br><br>
+Detect GPU (VRAM, CUDA, tier)<br>
+Install Ollama (no root needed)<br>
+Pull text + vision models<br>
+<br>
+<code>Desktop agent: ready</code>
+</td>
+<td align="center" width="5%"><b>--></b></td>
+<td align="center" width="30%">
+<h3>Step 2</h3>
+<b>Provider Status</b>
+<br><br>
+Ollama running (2 models)<br>
+Cloud providers: configured?<br>
+Accurate view — local is live<br>
+<br>
+<code>Ollama (local) running</code>
+</td>
+<td align="center" width="5%"><b>--></b></td>
+<td align="center" width="30%">
+<h3>Step 3</h3>
+<b>API Keys (agent-assisted)</b>
+<br><br>
+Opens signup page in browser<br>
+Takes screenshot to verify<br>
+Watches clipboard for key<br>
+<br>
+<code>Detected key: gsk_...CmLa</code>
+</td>
+</tr>
+</table>
 
-Works immediately with local models (no signup needed). Every step is skippable — press Enter to skip. Run `nvh setup` or `/setup` in the REPL anytime to reconfigure.
+Works immediately with local models (no signup needed). Every step is skippable — press Enter to skip. Run `nvh setup` or type `setup` in the REPL anytime to reconfigure.
 
 **GPU tier → model recommendations:**
 

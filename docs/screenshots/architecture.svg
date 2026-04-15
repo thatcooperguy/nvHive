@@ -1,329 +1,281 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1400" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#0f1923"/>
-      <stop offset="100%" style="stop-color:#1a0a2e"/>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a1628"/>
+      <stop offset="100%" style="stop-color:#1a0a30"/>
     </linearGradient>
-    <linearGradient id="greenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#76B900"/>
-      <stop offset="100%" style="stop-color:#4a8c00"/>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#76B900"/><stop offset="100%" style="stop-color:#5a9400"/>
     </linearGradient>
-    <linearGradient id="blueGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#2196F3"/>
-      <stop offset="100%" style="stop-color:#1565C0"/>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2979FF"/><stop offset="100%" style="stop-color:#1565C0"/>
     </linearGradient>
-    <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#9C27B0"/>
-      <stop offset="100%" style="stop-color:#6A1B9A"/>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#AA00FF"/><stop offset="100%" style="stop-color:#7B1FA2"/>
     </linearGradient>
-    <linearGradient id="orangeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#FF9800"/>
-      <stop offset="100%" style="stop-color:#E65100"/>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF6D00"/><stop offset="100%" style="stop-color:#E65100"/>
     </linearGradient>
-    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#00BCD4"/>
-      <stop offset="100%" style="stop-color:#00838F"/>
+    <linearGradient id="g5" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00E5FF"/><stop offset="100%" style="stop-color:#0097A7"/>
     </linearGradient>
-    <linearGradient id="redGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#f44336"/>
-      <stop offset="100%" style="stop-color:#c62828"/>
+    <linearGradient id="g6" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFD600"/><stop offset="100%" style="stop-color:#F9A825"/>
     </linearGradient>
-    <linearGradient id="tealGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#009688"/>
-      <stop offset="100%" style="stop-color:#00695C"/>
+    <linearGradient id="g7" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#E040FB"/><stop offset="100%" style="stop-color:#9C27B0"/>
     </linearGradient>
-    <filter id="shadow">
-      <feDropShadow dx="2" dy="3" stdDeviation="4" flood-opacity="0.3"/>
-    </filter>
-    <filter id="glow">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
+    <linearGradient id="g8" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1DE9B6"/><stop offset="100%" style="stop-color:#00897B"/>
+    </linearGradient>
+    <linearGradient id="g9" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF5252"/><stop offset="100%" style="stop-color:#C62828"/>
+    </linearGradient>
   </defs>
 
-  <!-- Background -->
-  <rect width="1100" height="1400" fill="url(#bgGrad)"/>
+  <rect width="1100" height="1400" fill="url(#bg)"/>
 
   <!-- Title -->
-  <text x="550" y="45" text-anchor="middle" fill="#76B900" font-size="28" font-weight="bold" filter="url(#glow)">nvHive — Full Stack Architecture</text>
-  <text x="550" y="70" text-anchor="middle" fill="#8899aa" font-size="14">From pip install to GPU inference — every layer explained</text>
+  <text x="550" y="48" text-anchor="middle" fill="#76B900" font-size="30" font-weight="bold">nvHive Full Stack</text>
+  <text x="550" y="72" text-anchor="middle" fill="#7788aa" font-size="14">pip install to GPU inference — 9 layers, all automatic</text>
 
-  <!-- ============================================================ -->
-  <!-- LAYER 1: INSTALL (top) -->
-  <!-- ============================================================ -->
-  <rect x="30" y="90" width="1040" height="100" rx="16" fill="#1a2a1a" stroke="#76B900" stroke-width="2" filter="url(#shadow)"/>
-  <text x="60" y="118" fill="#76B900" font-size="20" font-weight="bold">1. Install</text>
-  <text x="200" y="118" fill="#8899aa" font-size="13">One command, everything you need</text>
+  <!-- ======== LAYER 1: INSTALL ======== -->
+  <rect x="30" y="92" width="1040" height="95" rx="18" fill="#122a12" stroke="#76B900" stroke-width="2.5"/>
+  <rect x="50" y="104" width="28" height="28" rx="14" fill="url(#g1)"/>
+  <text x="64" y="124" text-anchor="middle" fill="white" font-size="16" font-weight="bold">1</text>
+  <text x="92" y="124" fill="#76B900" font-size="22" font-weight="bold">INSTALL</text>
+  <text x="250" y="124" fill="#7a9a5a" font-size="13">One command. Everything you need.</text>
 
-  <!-- pip install box -->
-  <rect x="60" y="132" width="240" height="42" rx="10" fill="url(#greenGrad)" filter="url(#shadow)"/>
-  <text x="180" y="158" text-anchor="middle" fill="white" font-size="15" font-weight="bold">$ pip install nvhive</text>
+  <rect x="50" y="140" width="220" height="36" rx="8" fill="url(#g1)"/>
+  <text x="160" y="163" text-anchor="middle" fill="white" font-size="14" font-weight="bold">$ pip install nvhive</text>
 
-  <!-- Extras -->
-  <rect x="320" y="132" width="150" height="42" rx="10" fill="#2a3a2a" stroke="#76B900" stroke-width="1"/>
-  <text x="395" y="150" text-anchor="middle" fill="#76B900" font-size="11" font-weight="bold">[vision]</text>
-  <text x="395" y="165" text-anchor="middle" fill="#8899aa" font-size="10">screenshot + mouse</text>
+  <rect x="290" y="140" width="120" height="36" rx="8" fill="#1a3a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="350" y="158" text-anchor="middle" fill="#9ccc65" font-size="12" font-weight="bold">[vision]</text>
+  <text x="350" y="172" text-anchor="middle" fill="#6a8a4a" font-size="9">mouse + screen</text>
 
-  <rect x="490" y="132" width="150" height="42" rx="10" fill="#2a3a2a" stroke="#76B900" stroke-width="1"/>
-  <text x="565" y="150" text-anchor="middle" fill="#76B900" font-size="11" font-weight="bold">[browser]</text>
-  <text x="565" y="165" text-anchor="middle" fill="#8899aa" font-size="10">playwright automation</text>
+  <rect x="425" y="140" width="120" height="36" rx="8" fill="#1a3a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="485" y="158" text-anchor="middle" fill="#9ccc65" font-size="12" font-weight="bold">[browser]</text>
+  <text x="485" y="172" text-anchor="middle" fill="#6a8a4a" font-size="9">playwright</text>
 
-  <rect x="660" y="132" width="150" height="42" rx="10" fill="#2a3a2a" stroke="#76B900" stroke-width="1"/>
-  <text x="735" y="150" text-anchor="middle" fill="#76B900" font-size="11" font-weight="bold">[serve]</text>
-  <text x="735" y="165" text-anchor="middle" fill="#8899aa" font-size="10">REST API + WebUI</text>
+  <rect x="560" y="140" width="120" height="36" rx="8" fill="#1a3a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="620" y="158" text-anchor="middle" fill="#9ccc65" font-size="12" font-weight="bold">[serve]</text>
+  <text x="620" y="172" text-anchor="middle" fill="#6a8a4a" font-size="9">API + WebUI</text>
 
-  <rect x="830" y="132" width="150" height="42" rx="10" fill="url(#greenGrad)" filter="url(#shadow)"/>
-  <text x="905" y="150" text-anchor="middle" fill="white" font-size="11" font-weight="bold">[all]</text>
-  <text x="905" y="165" text-anchor="middle" fill="white" font-size="10">everything included</text>
+  <rect x="695" y="140" width="120" height="36" rx="8" fill="url(#g1)"/>
+  <text x="755" y="163" text-anchor="middle" fill="white" font-size="12" font-weight="bold">[all]</text>
 
-  <!-- Arrow down -->
-  <polygon points="550,195 540,195 550,210 560,195" fill="#76B900"/>
+  <!-- Arrow -->
+  <polygon points="550,192 542,192 550,204 558,192" fill="#76B900"/>
 
-  <!-- ============================================================ -->
-  <!-- LAYER 2: SETUP -->
-  <!-- ============================================================ -->
-  <rect x="30" y="218" width="1040" height="130" rx="16" fill="#1a1a2e" stroke="#2196F3" stroke-width="2" filter="url(#shadow)"/>
-  <text x="60" y="246" fill="#2196F3" font-size="20" font-weight="bold">2. First-Run Setup</text>
-  <text x="310" y="246" fill="#8899aa" font-size="13">3 steps, fully automatic, no root needed</text>
+  <!-- ======== LAYER 2: SETUP ======== -->
+  <rect x="30" y="212" width="1040" height="118" rx="18" fill="#0a1a3a" stroke="#2979FF" stroke-width="2.5"/>
+  <rect x="50" y="224" width="28" height="28" rx="14" fill="url(#g2)"/>
+  <text x="64" y="244" text-anchor="middle" fill="white" font-size="16" font-weight="bold">2</text>
+  <text x="92" y="244" fill="#2979FF" font-size="22" font-weight="bold">SETUP</text>
+  <text x="220" y="244" fill="#5588bb" font-size="13">3 steps. No root. Fully automatic.</text>
 
-  <!-- Step boxes -->
-  <rect x="60" y="260" width="300" height="72" rx="12" fill="url(#blueGrad)" filter="url(#shadow)"/>
-  <text x="80" y="285" fill="white" font-size="14" font-weight="bold">Step 1: Hardware + Local AI</text>
-  <text x="80" y="303" fill="#bbddff" font-size="11">Detect GPU -> install Ollama -> pull models</text>
-  <text x="80" y="319" fill="#bbddff" font-size="11">Text model + vision model for your VRAM</text>
+  <rect x="50" y="260" width="310" height="58" rx="12" fill="url(#g2)"/>
+  <text x="205" y="282" text-anchor="middle" fill="white" font-size="14" font-weight="bold">Step 1: Hardware + Local AI</text>
+  <text x="205" y="300" text-anchor="middle" fill="#a0c8ff" font-size="11">GPU detect -> Ollama -> pull models</text>
 
-  <polygon points="365,296 375,296 375,290 385,296 375,302 375,296" fill="#2196F3"/>
+  <text x="373" y="293" fill="#2979FF" font-size="20" font-weight="bold">-></text>
 
-  <rect x="400" y="260" width="260" height="72" rx="12" fill="url(#blueGrad)" filter="url(#shadow)"/>
-  <text x="420" y="285" fill="white" font-size="14" font-weight="bold">Step 2: Provider Status</text>
-  <text x="420" y="303" fill="#bbddff" font-size="11">Ollama running (2 models)</text>
-  <text x="420" y="319" fill="#bbddff" font-size="11">Cloud providers: configured?</text>
+  <rect x="398" y="260" width="260" height="58" rx="12" fill="url(#g2)"/>
+  <text x="528" y="282" text-anchor="middle" fill="white" font-size="14" font-weight="bold">Step 2: Provider Status</text>
+  <text x="528" y="300" text-anchor="middle" fill="#a0c8ff" font-size="11">Ollama running + cloud check</text>
 
-  <polygon points="665,296 675,296 675,290 685,296 675,302 675,296" fill="#2196F3"/>
+  <text x="671" y="293" fill="#2979FF" font-size="20" font-weight="bold">-></text>
 
-  <rect x="700" y="260" width="340" height="72" rx="12" fill="url(#blueGrad)" filter="url(#shadow)"/>
-  <text x="720" y="285" fill="white" font-size="14" font-weight="bold">Step 3: API Keys (agent-assisted)</text>
-  <text x="720" y="303" fill="#bbddff" font-size="11">Desktop agent opens browser for you</text>
-  <text x="720" y="319" fill="#bbddff" font-size="11">Clipboard detection + vision verification</text>
+  <rect x="696" y="260" width="340" height="58" rx="12" fill="url(#g2)"/>
+  <text x="866" y="282" text-anchor="middle" fill="white" font-size="14" font-weight="bold">Step 3: API Keys (Agent-Assisted)</text>
+  <text x="866" y="300" text-anchor="middle" fill="#a0c8ff" font-size="11">Opens browser + clipboard detection</text>
 
-  <!-- Arrow down -->
-  <polygon points="550,353 540,353 550,368 560,353" fill="#2196F3"/>
+  <polygon points="550,335 542,335 550,347 558,335" fill="#2979FF"/>
 
-  <!-- ============================================================ -->
-  <!-- LAYER 3: USER INTERFACES -->
-  <!-- ============================================================ -->
-  <rect x="30" y="376" width="1040" height="110" rx="16" fill="#2e1a2e" stroke="#9C27B0" stroke-width="2" filter="url(#shadow)"/>
-  <text x="60" y="404" fill="#CE93D8" font-size="20" font-weight="bold">3. User Interfaces</text>
-  <text x="310" y="404" fill="#8899aa" font-size="13">4 ways to interact — all support natural language</text>
+  <!-- ======== LAYER 3: INTERFACES ======== -->
+  <rect x="30" y="355" width="1040" height="100" rx="18" fill="#1e0a30" stroke="#AA00FF" stroke-width="2.5"/>
+  <rect x="50" y="367" width="28" height="28" rx="14" fill="url(#g3)"/>
+  <text x="64" y="387" text-anchor="middle" fill="white" font-size="16" font-weight="bold">3</text>
+  <text x="92" y="387" fill="#AA00FF" font-size="22" font-weight="bold">INTERFACES</text>
+  <text x="310" y="387" fill="#8855aa" font-size="13">4 ways in. All natural language.</text>
 
-  <rect x="60" y="418" width="220" height="52" rx="10" fill="url(#purpleGrad)" filter="url(#shadow)"/>
-  <text x="170" y="440" text-anchor="middle" fill="white" font-size="14" font-weight="bold">CLI</text>
-  <text x="170" y="458" text-anchor="middle" fill="#e0c0f0" font-size="11">nvh "take a screenshot"</text>
+  <rect x="50" y="403" width="220" height="40" rx="10" fill="url(#g3)"/>
+  <text x="160" y="428" text-anchor="middle" fill="white" font-size="13" font-weight="bold">CLI:  nvh "question"</text>
 
-  <rect x="300" y="418" width="220" height="52" rx="10" fill="url(#purpleGrad)" filter="url(#shadow)"/>
-  <text x="410" y="440" text-anchor="middle" fill="white" font-size="14" font-weight="bold">Interactive REPL</text>
-  <text x="410" y="458" text-anchor="middle" fill="#e0c0f0" font-size="11">> setup comfyui</text>
+  <rect x="290" y="403" width="220" height="40" rx="10" fill="url(#g3)"/>
+  <text x="400" y="428" text-anchor="middle" fill="white" font-size="13" font-weight="bold">REPL:  > setup comfyui</text>
 
-  <rect x="540" y="418" width="220" height="52" rx="10" fill="url(#purpleGrad)" filter="url(#shadow)"/>
-  <text x="650" y="440" text-anchor="middle" fill="white" font-size="14" font-weight="bold">WebUI</text>
-  <text x="650" y="458" text-anchor="middle" fill="#e0c0f0" font-size="11">localhost:3000 dashboard</text>
+  <rect x="530" y="403" width="220" height="40" rx="10" fill="url(#g3)"/>
+  <text x="640" y="428" text-anchor="middle" fill="white" font-size="13" font-weight="bold">WebUI:  localhost:3000</text>
 
-  <rect x="780" y="418" width="260" height="52" rx="10" fill="url(#purpleGrad)" filter="url(#shadow)"/>
-  <text x="910" y="440" text-anchor="middle" fill="white" font-size="14" font-weight="bold">MCP / API</text>
-  <text x="910" y="458" text-anchor="middle" fill="#e0c0f0" font-size="11">Claude Code, Cursor, REST</text>
+  <rect x="770" y="403" width="270" height="40" rx="10" fill="url(#g3)"/>
+  <text x="905" y="428" text-anchor="middle" fill="white" font-size="13" font-weight="bold">API / MCP:  Claude, Cursor</text>
 
-  <!-- Arrow down -->
-  <polygon points="550,491 540,491 550,506 560,491" fill="#9C27B0"/>
+  <polygon points="550,460 542,460 550,472 558,460" fill="#AA00FF"/>
 
-  <!-- ============================================================ -->
-  <!-- LAYER 4: INTENT DETECTION -->
-  <!-- ============================================================ -->
-  <rect x="30" y="514" width="1040" height="110" rx="16" fill="#2e2a1a" stroke="#FF9800" stroke-width="2" filter="url(#shadow)"/>
-  <text x="60" y="542" fill="#FFB74D" font-size="20" font-weight="bold">4. Intent Detection</text>
-  <text x="310" y="542" fill="#8899aa" font-size="13">Understands what you want — no commands needed</text>
+  <!-- ======== LAYER 4: INTENT ======== -->
+  <rect x="30" y="480" width="1040" height="100" rx="18" fill="#2a1a0a" stroke="#FF6D00" stroke-width="2.5"/>
+  <rect x="50" y="492" width="28" height="28" rx="14" fill="url(#g4)"/>
+  <text x="64" y="512" text-anchor="middle" fill="white" font-size="16" font-weight="bold">4</text>
+  <text x="92" y="512" fill="#FF6D00" font-size="22" font-weight="bold">INTENT DETECTION</text>
+  <text x="410" y="512" fill="#aa6600" font-size="13">Understands what you want. No commands needed.</text>
 
-  <rect x="60" y="556" width="190" height="52" rx="10" fill="url(#orangeGrad)" filter="url(#shadow)"/>
-  <text x="155" y="575" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Action Detector</text>
-  <text x="155" y="596" text-anchor="middle" fill="#ffe0b0" font-size="10">"open firefox" -> instant</text>
+  <rect x="50" y="528" width="180" height="40" rx="10" fill="url(#g4)"/>
+  <text x="140" y="548" text-anchor="middle" fill="white" font-size="11" font-weight="bold">Action: "open X"</text>
+  <text x="140" y="562" text-anchor="middle" fill="#ffc880" font-size="9">-> instant tool call</text>
 
-  <rect x="270" y="556" width="190" height="52" rx="10" fill="url(#orangeGrad)" filter="url(#shadow)"/>
-  <text x="365" y="575" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Task Detector</text>
-  <text x="365" y="596" text-anchor="middle" fill="#ffe0b0" font-size="10">"setup X" -> agent loop</text>
+  <rect x="250" y="528" width="180" height="40" rx="10" fill="url(#g4)"/>
+  <text x="340" y="548" text-anchor="middle" fill="white" font-size="11" font-weight="bold">Task: "setup X"</text>
+  <text x="340" y="562" text-anchor="middle" fill="#ffc880" font-size="9">-> agent loop</text>
 
-  <rect x="480" y="556" width="190" height="52" rx="10" fill="url(#orangeGrad)" filter="url(#shadow)"/>
-  <text x="575" y="575" text-anchor="middle" fill="white" font-size="12" font-weight="bold">NL Command Map</text>
-  <text x="575" y="596" text-anchor="middle" fill="#ffe0b0" font-size="10">"use anthropic" -> /advisor</text>
+  <rect x="450" y="528" width="180" height="40" rx="10" fill="url(#g4)"/>
+  <text x="540" y="548" text-anchor="middle" fill="white" font-size="11" font-weight="bold">NL Map: "use X"</text>
+  <text x="540" y="562" text-anchor="middle" fill="#ffc880" font-size="9">-> /advisor command</text>
 
-  <rect x="690" y="556" width="190" height="52" rx="10" fill="url(#orangeGrad)" filter="url(#shadow)"/>
-  <text x="785" y="575" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Task Classifier</text>
-  <text x="785" y="596" text-anchor="middle" fill="#ffe0b0" font-size="10">TF-IDF, 13 task types</text>
+  <rect x="650" y="528" width="180" height="40" rx="10" fill="url(#g4)"/>
+  <text x="740" y="548" text-anchor="middle" fill="white" font-size="11" font-weight="bold">Classify: TF-IDF</text>
+  <text x="740" y="562" text-anchor="middle" fill="#ffc880" font-size="9">-> 13 task types</text>
 
-  <rect x="900" y="556" width="140" height="52" rx="10" fill="url(#orangeGrad)" filter="url(#shadow)"/>
-  <text x="970" y="575" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Question?</text>
-  <text x="970" y="596" text-anchor="middle" fill="#ffe0b0" font-size="10">-> direct to LLM</text>
+  <rect x="850" y="528" width="180" height="40" rx="10" fill="url(#g4)"/>
+  <text x="940" y="548" text-anchor="middle" fill="white" font-size="11" font-weight="bold">Question?</text>
+  <text x="940" y="562" text-anchor="middle" fill="#ffc880" font-size="9">-> direct LLM query</text>
 
-  <!-- Arrow down -->
-  <polygon points="550,629 540,629 550,644 560,629" fill="#FF9800"/>
+  <polygon points="550,585 542,585 550,597 558,585" fill="#FF6D00"/>
 
-  <!-- ============================================================ -->
-  <!-- LAYER 5: EXECUTION MODES -->
-  <!-- ============================================================ -->
-  <rect x="30" y="652" width="1040" height="130" rx="16" fill="#1a2e2e" stroke="#00BCD4" stroke-width="2" filter="url(#shadow)"/>
-  <text x="60" y="680" fill="#4DD0E1" font-size="20" font-weight="bold">5. Execution Modes</text>
-  <text x="310" y="680" fill="#8899aa" font-size="13">5 ways to handle your request</text>
+  <!-- ======== LAYER 5: EXECUTION ======== -->
+  <rect x="30" y="605" width="1040" height="120" rx="18" fill="#0a2020" stroke="#00E5FF" stroke-width="2.5"/>
+  <rect x="50" y="617" width="28" height="28" rx="14" fill="url(#g5)"/>
+  <text x="64" y="637" text-anchor="middle" fill="white" font-size="16" font-weight="bold">5</text>
+  <text x="92" y="637" fill="#00E5FF" font-size="22" font-weight="bold">EXECUTION MODES</text>
+  <text x="400" y="637" fill="#008899" font-size="13">5 ways to handle your request.</text>
 
-  <rect x="60" y="694" width="180" height="72" rx="10" fill="url(#cyanGrad)" filter="url(#shadow)"/>
-  <text x="150" y="718" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Direct Action</text>
-  <text x="150" y="735" text-anchor="middle" fill="#b0e8f0" font-size="10">open, install, kill</text>
-  <text x="150" y="750" text-anchor="middle" fill="#b0e8f0" font-size="10">instant execution</text>
+  <rect x="50" y="653" width="185" height="60" rx="10" fill="url(#g5)"/>
+  <text x="142" y="676" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Instant</text>
+  <text x="142" y="696" text-anchor="middle" fill="#88eeff" font-size="10">open, install, kill</text>
 
-  <rect x="260" y="694" width="180" height="72" rx="10" fill="url(#cyanGrad)" filter="url(#shadow)"/>
-  <text x="350" y="718" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Desktop Agent</text>
-  <text x="350" y="735" text-anchor="middle" fill="#b0e8f0" font-size="10">screenshot -> vision</text>
-  <text x="350" y="750" text-anchor="middle" fill="#b0e8f0" font-size="10">-> click -> verify</text>
+  <rect x="250" y="653" width="185" height="60" rx="10" fill="url(#g5)"/>
+  <text x="342" y="676" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Desktop Agent</text>
+  <text x="342" y="696" text-anchor="middle" fill="#88eeff" font-size="10">screen -> vision -> click</text>
 
-  <rect x="460" y="694" width="180" height="72" rx="10" fill="url(#cyanGrad)" filter="url(#shadow)"/>
-  <text x="550" y="718" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Single Query</text>
-  <text x="550" y="735" text-anchor="middle" fill="#b0e8f0" font-size="10">best advisor</text>
-  <text x="550" y="750" text-anchor="middle" fill="#b0e8f0" font-size="10">smart routing</text>
+  <rect x="450" y="653" width="185" height="60" rx="10" fill="url(#g5)"/>
+  <text x="542" y="676" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Query</text>
+  <text x="542" y="696" text-anchor="middle" fill="#88eeff" font-size="10">best advisor, routed</text>
 
-  <rect x="660" y="694" width="180" height="72" rx="10" fill="url(#cyanGrad)" filter="url(#shadow)"/>
-  <text x="750" y="718" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Agentic Coding</text>
-  <text x="750" y="735" text-anchor="middle" fill="#b0e8f0" font-size="10">plan -> execute</text>
-  <text x="750" y="750" text-anchor="middle" fill="#b0e8f0" font-size="10">-> review -> QA</text>
+  <rect x="650" y="653" width="185" height="60" rx="10" fill="url(#g5)"/>
+  <text x="742" y="676" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Coding Agent</text>
+  <text x="742" y="696" text-anchor="middle" fill="#88eeff" font-size="10">plan -> code -> review</text>
 
-  <rect x="860" y="694" width="180" height="72" rx="10" fill="url(#cyanGrad)" filter="url(#shadow)"/>
-  <text x="950" y="718" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Council</text>
-  <text x="950" y="735" text-anchor="middle" fill="#b0e8f0" font-size="10">3+ advisors</text>
-  <text x="950" y="750" text-anchor="middle" fill="#b0e8f0" font-size="10">weighted synthesis</text>
+  <rect x="850" y="653" width="185" height="60" rx="10" fill="url(#g5)"/>
+  <text x="942" y="676" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Council</text>
+  <text x="942" y="696" text-anchor="middle" fill="#88eeff" font-size="10">3+ models synthesized</text>
 
-  <!-- Arrow down -->
-  <polygon points="550,787 540,787 550,802 560,787" fill="#00BCD4"/>
+  <polygon points="550,730 542,730 550,742 558,730" fill="#00E5FF"/>
 
-  <!-- ============================================================ -->
-  <!-- LAYER 6: SMART ROUTING + TOOLS (side by side) -->
-  <!-- ============================================================ -->
+  <!-- ======== LAYER 6: ROUTER ======== -->
+  <rect x="30" y="750" width="505" height="138" rx="18" fill="#20200a" stroke="#FFD600" stroke-width="2.5"/>
+  <rect x="50" y="762" width="28" height="28" rx="14" fill="url(#g6)"/>
+  <text x="64" y="782" text-anchor="middle" fill="#1a1a00" font-size="16" font-weight="bold">6</text>
+  <text x="92" y="782" fill="#FFD600" font-size="20" font-weight="bold">SMART ROUTER</text>
 
-  <!-- Routing -->
-  <rect x="30" y="810" width="500" height="160" rx="16" fill="#2e2e1a" stroke="#FFD600" stroke-width="2" filter="url(#shadow)"/>
-  <text x="60" y="838" fill="#FFD600" font-size="18" font-weight="bold">6. Smart Router</text>
+  <rect x="50" y="800" width="220" height="34" rx="8" fill="#3a3a10" stroke="#FFD600" stroke-width="1.5"/>
+  <text x="160" y="822" text-anchor="middle" fill="#FFD600" font-size="12" font-weight="bold">Capability 40%</text>
 
-  <rect x="60" y="852" width="200" height="40" rx="8" fill="#3a3a1a" stroke="#FFD600" stroke-width="1"/>
-  <text x="160" y="868" text-anchor="middle" fill="#FFD600" font-size="11" font-weight="bold">Capability 40%</text>
-  <text x="160" y="883" text-anchor="middle" fill="#bbaa66" font-size="10">model strengths per task</text>
+  <rect x="290" y="800" width="220" height="34" rx="8" fill="#3a3a10" stroke="#FFD600" stroke-width="1.5"/>
+  <text x="400" y="822" text-anchor="middle" fill="#FFD600" font-size="12" font-weight="bold">Cost 30%</text>
 
-  <rect x="280" y="852" width="220" height="40" rx="8" fill="#3a3a1a" stroke="#FFD600" stroke-width="1"/>
-  <text x="390" y="868" text-anchor="middle" fill="#FFD600" font-size="11" font-weight="bold">Cost 30% + Latency 20%</text>
-  <text x="390" y="883" text-anchor="middle" fill="#bbaa66" font-size="10">cheapest + fastest wins</text>
+  <rect x="50" y="844" width="220" height="34" rx="8" fill="#3a3a10" stroke="#FFD600" stroke-width="1.5"/>
+  <text x="160" y="866" text-anchor="middle" fill="#FFD600" font-size="12" font-weight="bold">Latency 20%</text>
 
-  <rect x="60" y="902" width="200" height="40" rx="8" fill="#3a3a1a" stroke="#FFD600" stroke-width="1"/>
-  <text x="160" y="918" text-anchor="middle" fill="#FFD600" font-size="11" font-weight="bold">Health 10%</text>
-  <text x="160" y="933" text-anchor="middle" fill="#bbaa66" font-size="10">uptime + error rates</text>
+  <rect x="290" y="844" width="220" height="34" rx="8" fill="#3a3a10" stroke="#FFD600" stroke-width="1.5"/>
+  <text x="400" y="866" text-anchor="middle" fill="#FFD600" font-size="12" font-weight="bold">Adaptive Learning</text>
 
-  <rect x="280" y="902" width="220" height="40" rx="8" fill="#3a3a1a" stroke="#FFD600" stroke-width="1"/>
-  <text x="390" y="918" text-anchor="middle" fill="#FFD600" font-size="11" font-weight="bold">Adaptive Learning</text>
-  <text x="390" y="933" text-anchor="middle" fill="#bbaa66" font-size="10">EMA scores, 20 queries -> data-driven</text>
+  <!-- ======== LAYER 7: TOOLS ======== -->
+  <rect x="555" y="750" width="515" height="138" rx="18" fill="#0a200a" stroke="#76B900" stroke-width="2.5"/>
+  <rect x="575" y="762" width="28" height="28" rx="14" fill="url(#g1)"/>
+  <text x="589" y="782" text-anchor="middle" fill="white" font-size="16" font-weight="bold">7</text>
+  <text x="617" y="782" fill="#76B900" font-size="20" font-weight="bold">TOOLS</text>
 
-  <!-- Tools -->
-  <rect x="550" y="810" width="520" height="160" rx="16" fill="#1a2e1a" stroke="#76B900" stroke-width="2" filter="url(#shadow)"/>
-  <text x="580" y="838" fill="#76B900" font-size="18" font-weight="bold">7. Tool Registry</text>
+  <rect x="575" y="800" width="145" height="34" rx="8" fill="#1a3a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="647" y="822" text-anchor="middle" fill="#9ccc65" font-size="12" font-weight="bold">Vision</text>
 
-  <rect x="580" y="852" width="140" height="52" rx="8" fill="#2a3a2a" stroke="#76B900" stroke-width="1"/>
-  <text x="650" y="872" text-anchor="middle" fill="#76B900" font-size="11" font-weight="bold">Vision</text>
-  <text x="650" y="893" text-anchor="middle" fill="#88aa88" font-size="9">screenshot, analyze</text>
+  <rect x="730" y="800" width="145" height="34" rx="8" fill="#1a3a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="802" y="822" text-anchor="middle" fill="#9ccc65" font-size="12" font-weight="bold">Desktop</text>
 
-  <rect x="730" y="852" width="140" height="52" rx="8" fill="#2a3a2a" stroke="#76B900" stroke-width="1"/>
-  <text x="800" y="872" text-anchor="middle" fill="#76B900" font-size="11" font-weight="bold">Desktop</text>
-  <text x="800" y="893" text-anchor="middle" fill="#88aa88" font-size="9">mouse, keyboard, scroll</text>
+  <rect x="885" y="800" width="155" height="34" rx="8" fill="#1a3a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="962" y="822" text-anchor="middle" fill="#9ccc65" font-size="12" font-weight="bold">Browser</text>
 
-  <rect x="880" y="852" width="160" height="52" rx="8" fill="#2a3a2a" stroke="#76B900" stroke-width="1"/>
-  <text x="960" y="872" text-anchor="middle" fill="#76B900" font-size="11" font-weight="bold">Browser</text>
-  <text x="960" y="893" text-anchor="middle" fill="#88aa88" font-size="9">navigate, forms, HTTP</text>
+  <rect x="575" y="844" width="145" height="34" rx="8" fill="#1a3a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="647" y="866" text-anchor="middle" fill="#9ccc65" font-size="12" font-weight="bold">System</text>
 
-  <rect x="580" y="914" width="140" height="42" rx="8" fill="#2a3a2a" stroke="#76B900" stroke-width="1"/>
-  <text x="650" y="934" text-anchor="middle" fill="#76B900" font-size="11" font-weight="bold">System</text>
-  <text x="650" y="948" text-anchor="middle" fill="#88aa88" font-size="9">shell, files, clipboard</text>
+  <rect x="730" y="844" width="145" height="34" rx="8" fill="#1a3a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="802" y="866" text-anchor="middle" fill="#9ccc65" font-size="12" font-weight="bold">Code</text>
 
-  <rect x="730" y="914" width="140" height="42" rx="8" fill="#2a3a2a" stroke="#76B900" stroke-width="1"/>
-  <text x="800" y="934" text-anchor="middle" fill="#76B900" font-size="11" font-weight="bold">Code</text>
-  <text x="800" y="948" text-anchor="middle" fill="#88aa88" font-size="9">read, write, search, run</text>
+  <rect x="885" y="844" width="155" height="34" rx="8" fill="#1a3a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="962" y="866" text-anchor="middle" fill="#9ccc65" font-size="12" font-weight="bold">Web Search</text>
 
-  <rect x="880" y="914" width="160" height="42" rx="8" fill="#2a3a2a" stroke="#76B900" stroke-width="1"/>
-  <text x="960" y="934" text-anchor="middle" fill="#76B900" font-size="11" font-weight="bold">Web</text>
-  <text x="960" y="948" text-anchor="middle" fill="#88aa88" font-size="9">search, fetch, imagine</text>
+  <polygon points="550,893 542,893 550,905 558,893" fill="#76B900"/>
 
-  <!-- Arrow down -->
-  <polygon points="550,975 540,975 550,990 560,975" fill="#76B900"/>
+  <!-- ======== LAYER 8: PROVIDERS ======== -->
+  <rect x="30" y="913" width="1040" height="110" rx="18" fill="#150a28" stroke="#E040FB" stroke-width="2.5"/>
+  <rect x="50" y="925" width="28" height="28" rx="14" fill="url(#g7)"/>
+  <text x="64" y="945" text-anchor="middle" fill="white" font-size="16" font-weight="bold">8</text>
+  <text x="92" y="945" fill="#E040FB" font-size="22" font-weight="bold">AI PROVIDERS</text>
+  <text x="350" y="945" fill="#884488" font-size="13">Local-first. 23+ providers. Cloud fallback.</text>
 
-  <!-- ============================================================ -->
-  <!-- LAYER 7: AI PROVIDERS -->
-  <!-- ============================================================ -->
-  <rect x="30" y="998" width="1040" height="120" rx="16" fill="#1a1a2e" stroke="#7C4DFF" stroke-width="2" filter="url(#shadow)"/>
-  <text x="60" y="1026" fill="#B388FF" font-size="20" font-weight="bold">8. AI Providers</text>
-  <text x="280" y="1026" fill="#8899aa" font-size="13">Local-first, cloud fallback, 23+ providers supported</text>
+  <rect x="50" y="961" width="300" height="50" rx="12" fill="url(#g1)"/>
+  <text x="200" y="983" text-anchor="middle" fill="white" font-size="15" font-weight="bold">Local — $0 Private</text>
+  <text x="200" y="1001" text-anchor="middle" fill="#c8e8a8" font-size="10">Ollama: nemotron, llama3.3, vision</text>
 
-  <rect x="60" y="1040" width="300" height="62" rx="12" fill="url(#greenGrad)" filter="url(#shadow)"/>
-  <text x="210" y="1062" text-anchor="middle" fill="white" font-size="14" font-weight="bold">Local — $0, Private</text>
-  <text x="210" y="1082" text-anchor="middle" fill="#c8e8a8" font-size="11">Ollama: nemotron, llama3.3:70b, llama3.2-vision</text>
+  <rect x="380" y="961" width="280" height="50" rx="12" fill="url(#g2)"/>
+  <text x="520" y="983" text-anchor="middle" fill="white" font-size="15" font-weight="bold">Free Cloud — $0</text>
+  <text x="520" y="1001" text-anchor="middle" fill="#a0c8ff" font-size="10">Groq, Gemini, LLM7, GitHub</text>
 
-  <rect x="390" y="1040" width="280" height="62" rx="12" fill="url(#blueGrad)" filter="url(#shadow)"/>
-  <text x="530" y="1062" text-anchor="middle" fill="white" font-size="14" font-weight="bold">Free Cloud — $0</text>
-  <text x="530" y="1082" text-anchor="middle" fill="#a8d8f8" font-size="11">Groq, Google Gemini, LLM7, GitHub</text>
+  <rect x="690" y="961" width="350" height="50" rx="12" fill="url(#g7)"/>
+  <text x="865" y="983" text-anchor="middle" fill="white" font-size="15" font-weight="bold">Cloud — Pay per token</text>
+  <text x="865" y="1001" text-anchor="middle" fill="#e0b0f8" font-size="10">OpenAI, Anthropic, Mistral, Cohere + 15 more</text>
 
-  <rect x="700" y="1040" width="340" height="62" rx="12" fill="url(#purpleGrad)" filter="url(#shadow)"/>
-  <text x="870" y="1062" text-anchor="middle" fill="white" font-size="14" font-weight="bold">Cloud — Pay per token</text>
-  <text x="870" y="1082" text-anchor="middle" fill="#d8b8f8" font-size="11">OpenAI, Anthropic, Mistral, Cohere + 15 more</text>
+  <polygon points="550,1028 542,1028 550,1040 558,1028" fill="#E040FB"/>
 
-  <!-- Arrow down -->
-  <polygon points="550,1123 540,1123 550,1138 560,1123" fill="#7C4DFF"/>
+  <!-- ======== LAYER 9: INFRASTRUCTURE ======== -->
+  <rect x="30" y="1048" width="1040" height="105" rx="18" fill="#0a1a18" stroke="#1DE9B6" stroke-width="2.5"/>
+  <rect x="50" y="1060" width="28" height="28" rx="14" fill="url(#g8)"/>
+  <text x="64" y="1080" text-anchor="middle" fill="#0a1a18" font-size="16" font-weight="bold">9</text>
+  <text x="92" y="1080" fill="#1DE9B6" font-size="22" font-weight="bold">INFRASTRUCTURE</text>
 
-  <!-- ============================================================ -->
-  <!-- LAYER 8: INFRASTRUCTURE + HARDWARE -->
-  <!-- ============================================================ -->
-  <rect x="30" y="1146" width="1040" height="120" rx="16" fill="#1e1e1e" stroke="#78909C" stroke-width="2" filter="url(#shadow)"/>
-  <text x="60" y="1174" fill="#B0BEC5" font-size="20" font-weight="bold">9. Infrastructure + Hardware</text>
+  <rect x="50" y="1098" width="160" height="42" rx="10" fill="url(#g8)"/>
+  <text x="130" y="1124" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Ollama Server</text>
 
-  <rect x="60" y="1190" width="180" height="58" rx="10" fill="url(#tealGrad)" filter="url(#shadow)"/>
-  <text x="150" y="1214" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Ollama Server</text>
-  <text x="150" y="1232" text-anchor="middle" fill="#a0d8d0" font-size="10">~/.nvh/bin + CUDA libs</text>
+  <rect x="225" y="1098" width="140" height="42" rx="10" fill="url(#g8)"/>
+  <text x="295" y="1124" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Config + Keys</text>
 
-  <rect x="260" y="1190" width="160" height="58" rx="10" fill="url(#tealGrad)" filter="url(#shadow)"/>
-  <text x="340" y="1214" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Config</text>
-  <text x="340" y="1232" text-anchor="middle" fill="#a0d8d0" font-size="10">keyring + .env + YAML</text>
+  <rect x="380" y="1098" width="140" height="42" rx="10" fill="url(#g8)"/>
+  <text x="450" y="1124" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Cache + Budget</text>
 
-  <rect x="440" y="1190" width="140" height="58" rx="10" fill="url(#tealGrad)" filter="url(#shadow)"/>
-  <text x="510" y="1214" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Cache</text>
-  <text x="510" y="1232" text-anchor="middle" fill="#a0d8d0" font-size="10">SQLite + budget</text>
+  <rect x="535" y="1098" width="140" height="42" rx="10" fill="url(#g8)"/>
+  <text x="605" y="1124" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Guardrails</text>
 
-  <rect x="600" y="1190" width="150" height="58" rx="10" fill="url(#tealGrad)" filter="url(#shadow)"/>
-  <text x="675" y="1214" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Guardrails</text>
-  <text x="675" y="1232" text-anchor="middle" fill="#a0d8d0" font-size="10">blocklist + secrets</text>
+  <rect x="690" y="1098" width="160" height="42" rx="10" fill="url(#g9)"/>
+  <text x="770" y="1124" text-anchor="middle" fill="white" font-size="12" font-weight="bold">NVIDIA GPU</text>
 
-  <rect x="770" y="1190" width="140" height="58" rx="10" fill="url(#redGrad)" filter="url(#shadow)"/>
-  <text x="840" y="1214" text-anchor="middle" fill="white" font-size="12" font-weight="bold">NVIDIA GPU</text>
-  <text x="840" y="1232" text-anchor="middle" fill="#f0b0a0" font-size="10">pynvml + CUDA</text>
+  <rect x="865" y="1098" width="170" height="42" rx="10" fill="#1a2828" stroke="#1DE9B6" stroke-width="1.5"/>
+  <text x="950" y="1124" text-anchor="middle" fill="#1DE9B6" font-size="12" font-weight="bold">X11 + Clipboard</text>
 
-  <rect x="930" y="1190" width="110" height="58" rx="10" fill="#2a2a3a" stroke="#78909C" stroke-width="1"/>
-  <text x="985" y="1214" text-anchor="middle" fill="#B0BEC5" font-size="12" font-weight="bold">Display</text>
-  <text x="985" y="1232" text-anchor="middle" fill="#8899aa" font-size="10">X11 + clipboard</text>
+  <!-- ======== VRAM BAR ======== -->
+  <rect x="30" y="1175" width="1040" height="60" rx="14" fill="#0a0a15" stroke="#76B900" stroke-width="2"/>
+  <text x="55" y="1200" fill="#76B900" font-size="14" font-weight="bold">VRAM:</text>
 
-  <!-- ============================================================ -->
-  <!-- VRAM TIER BAR AT BOTTOM -->
-  <!-- ============================================================ -->
-  <rect x="30" y="1282" width="1040" height="50" rx="12" fill="#111" stroke="#76B900" stroke-width="1"/>
-  <text x="60" y="1305" fill="#76B900" font-size="12" font-weight="bold">VRAM Tiers:</text>
-  <rect x="170" y="1294" width="60" height="22" rx="6" fill="#333"/><text x="200" y="1309" text-anchor="middle" fill="#aaa" font-size="9">4 GB</text>
-  <rect x="240" y="1294" width="60" height="22" rx="6" fill="#3a3a1a"/><text x="270" y="1309" text-anchor="middle" fill="#cc9" font-size="9">8 GB</text>
-  <rect x="310" y="1294" width="60" height="22" rx="6" fill="#3a3a1a"/><text x="340" y="1309" text-anchor="middle" fill="#cc9" font-size="9">12 GB</text>
-  <rect x="380" y="1294" width="60" height="22" rx="6" fill="#2a3a2a"/><text x="410" y="1309" text-anchor="middle" fill="#8c8" font-size="9">16 GB</text>
-  <rect x="450" y="1294" width="60" height="22" rx="6" fill="#2a3a2a"/><text x="480" y="1309" text-anchor="middle" fill="#8c8" font-size="9">24 GB</text>
-  <rect x="520" y="1294" width="80" height="22" rx="6" fill="url(#greenGrad)"/><text x="560" y="1309" text-anchor="middle" fill="white" font-size="9" font-weight="bold">48 GB</text>
-  <rect x="610" y="1294" width="60" height="22" rx="6" fill="#2a3a2a"/><text x="640" y="1309" text-anchor="middle" fill="#8c8" font-size="9">96 GB</text>
-  <rect x="680" y="1294" width="70" height="22" rx="6" fill="#2a3a2a"/><text x="715" y="1309" text-anchor="middle" fill="#8c8" font-size="9">128+ GB</text>
+  <rect x="120" y="1190" width="55" height="28" rx="7" fill="#222"/><text x="147" y="1209" text-anchor="middle" fill="#777" font-size="11">4 GB</text>
+  <rect x="185" y="1190" width="55" height="28" rx="7" fill="#2a2a10"/><text x="212" y="1209" text-anchor="middle" fill="#bb9" font-size="11">8 GB</text>
+  <rect x="250" y="1190" width="60" height="28" rx="7" fill="#2a2a10"/><text x="280" y="1209" text-anchor="middle" fill="#bb9" font-size="11">12 GB</text>
+  <rect x="320" y="1190" width="60" height="28" rx="7" fill="#1a3a1a"/><text x="350" y="1209" text-anchor="middle" fill="#8c8" font-size="11">16 GB</text>
+  <rect x="390" y="1190" width="60" height="28" rx="7" fill="#1a3a1a"/><text x="420" y="1209" text-anchor="middle" fill="#8c8" font-size="11">24 GB</text>
+  <rect x="460" y="1190" width="80" height="28" rx="7" fill="url(#g1)"/><text x="500" y="1209" text-anchor="middle" fill="white" font-size="11" font-weight="bold">48 GB</text>
+  <rect x="550" y="1190" width="60" height="28" rx="7" fill="#1a3a1a"/><text x="580" y="1209" text-anchor="middle" fill="#8c8" font-size="11">96 GB</text>
+  <rect x="620" y="1190" width="75" height="28" rx="7" fill="#1a3a1a"/><text x="657" y="1209" text-anchor="middle" fill="#8c8" font-size="11">128+ GB</text>
 
-  <text x="790" y="1309" fill="#666" font-size="10">moondream -> minicpm-v -> llama3.2-vision -> full local council</text>
+  <text x="720" y="1206" fill="#556" font-size="11">moondream -> minicpm-v -> llama3.2-vision -> full local council</text>
 
   <!-- Footer -->
-  <text x="550" y="1375" text-anchor="middle" fill="#445566" font-size="12">nvHive v0.29 — github.com/thatcooperguy/nvHive — pip install nvhive</text>
-  <text x="550" y="1393" text-anchor="middle" fill="#334455" font-size="10">No root needed. Linux, macOS, Windows. Local-first, cloud fallback.</text>
+  <text x="550" y="1270" text-anchor="middle" fill="#76B900" font-size="16" font-weight="bold">pip install nvhive</text>
+  <text x="550" y="1292" text-anchor="middle" fill="#445566" font-size="12">github.com/thatcooperguy/nvHive | No root needed | Linux, macOS, Windows</text>
 </svg>
