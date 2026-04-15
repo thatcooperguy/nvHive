@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 320" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a1628"/><stop offset="100%" style="stop-color:#1a0a30"/>
+    </linearGradient>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#76B900"/><stop offset="100%" style="stop-color:#5a9400"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2979FF"/><stop offset="100%" style="stop-color:#1565C0"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#AA00FF"/><stop offset="100%" style="stop-color:#7B1FA2"/>
+    </linearGradient>
+    <linearGradient id="g4" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1DE9B6"/><stop offset="100%" style="stop-color:#00897B"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1100" height="320" rx="16" fill="url(#bg)"/>
+
+  <text x="550" y="35" text-anchor="middle" fill="#76B900" font-size="22" font-weight="bold">First-Run Setup</text>
+  <text x="550" y="55" text-anchor="middle" fill="#7788aa" font-size="12">3 steps. No root. Fully automatic. Every step skippable.</text>
+
+  <!-- Step 1 -->
+  <rect x="30" y="75" width="300" height="180" rx="14" fill="#122a12" stroke="#76B900" stroke-width="2"/>
+  <rect x="50" y="90" width="36" height="36" rx="18" fill="url(#g1)"/>
+  <text x="68" y="115" text-anchor="middle" fill="white" font-size="18" font-weight="bold">1</text>
+  <text x="100" y="112" fill="#76B900" font-size="18" font-weight="bold">Hardware + Local AI</text>
+
+  <text x="50" y="145" fill="#9ccc65" font-size="12">Detect GPU (VRAM, CUDA, tier)</text>
+  <text x="50" y="167" fill="#9ccc65" font-size="12">Install Ollama (no root needed)</text>
+  <text x="50" y="189" fill="#9ccc65" font-size="12">Pull text + vision models</text>
+  <text x="50" y="211" fill="#9ccc65" font-size="12">Progress bars for downloads</text>
+
+  <rect x="50" y="225" width="260" height="22" rx="6" fill="url(#g1)"/>
+  <text x="180" y="240" text-anchor="middle" fill="white" font-size="11" font-weight="bold">Desktop agent: ready</text>
+
+  <!-- Arrow 1->2 -->
+  <polygon points="340,165 352,155 352,160 375,160 375,170 352,170 352,175" fill="#76B900"/>
+
+  <!-- Step 2 -->
+  <rect x="385" y="75" width="280" height="180" rx="14" fill="#0a1a3a" stroke="#2979FF" stroke-width="2"/>
+  <rect x="405" y="90" width="36" height="36" rx="18" fill="url(#g2)"/>
+  <text x="423" y="115" text-anchor="middle" fill="white" font-size="18" font-weight="bold">2</text>
+  <text x="455" y="112" fill="#2979FF" font-size="18" font-weight="bold">Provider Status</text>
+
+  <text x="405" y="145" fill="#64b5f6" font-size="12">Groq            not configured</text>
+  <text x="405" y="167" fill="#64b5f6" font-size="12">OpenAI          not configured</text>
+  <text x="405" y="189" fill="#64b5f6" font-size="12">Anthropic       not configured</text>
+
+  <rect x="405" y="206" width="240" height="22" rx="6" fill="url(#g2)"/>
+  <text x="525" y="221" text-anchor="middle" fill="white" font-size="11" font-weight="bold">Ollama (local)  running (2 models)</text>
+
+  <!-- Arrow 2->3 -->
+  <polygon points="675,165 687,155 687,160 710,160 710,170 687,170 687,175" fill="#2979FF"/>
+
+  <!-- Step 3 -->
+  <rect x="720" y="75" width="350" height="180" rx="14" fill="#1e0a30" stroke="#AA00FF" stroke-width="2"/>
+  <rect x="740" y="90" width="36" height="36" rx="18" fill="url(#g3)"/>
+  <text x="758" y="115" text-anchor="middle" fill="white" font-size="18" font-weight="bold">3</text>
+  <text x="790" y="112" fill="#AA00FF" font-size="18" font-weight="bold">API Keys (Agent-Assisted)</text>
+
+  <text x="740" y="145" fill="#ce93d8" font-size="12">Opens signup page in browser</text>
+  <text x="740" y="167" fill="#ce93d8" font-size="12">Takes screenshot to verify page</text>
+  <text x="740" y="189" fill="#ce93d8" font-size="12">Watches clipboard for API key</text>
+  <text x="740" y="211" fill="#ce93d8" font-size="12">Falls back to manual paste</text>
+
+  <rect x="740" y="225" width="310" height="22" rx="6" fill="url(#g3)"/>
+  <text x="895" y="240" text-anchor="middle" fill="white" font-size="11" font-weight="bold">Detected key: gsk_xR...CmLa  Saved!</text>
+
+  <!-- Bottom bar -->
+  <rect x="30" y="272" width="1040" height="36" rx="10" fill="url(#g4)" opacity="0.9"/>
+  <text x="550" y="295" text-anchor="middle" fill="white" font-size="14" font-weight="bold">Setup complete!  4 providers configured  |  48 GB VRAM  |  Desktop agent ready  |  nvh "take a screenshot"</text>
+</svg>

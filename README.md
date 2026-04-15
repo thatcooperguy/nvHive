@@ -41,42 +41,9 @@ pip install "nvhive[all]"         # everything
 
 On first run, `nvh` automatically launches a guided 3-step setup:
 
-<table>
-<tr>
-<td align="center" width="30%">
-<h3>Step 1</h3>
-<b>Hardware + Local AI</b>
-<br><br>
-Detect GPU (VRAM, CUDA, tier)<br>
-Install Ollama (no root needed)<br>
-Pull text + vision models<br>
-<br>
-<code>Desktop agent: ready</code>
-</td>
-<td align="center" width="5%"><b>--></b></td>
-<td align="center" width="30%">
-<h3>Step 2</h3>
-<b>Provider Status</b>
-<br><br>
-Ollama running (2 models)<br>
-Cloud providers: configured?<br>
-Accurate view — local is live<br>
-<br>
-<code>Ollama (local) running</code>
-</td>
-<td align="center" width="5%"><b>--></b></td>
-<td align="center" width="30%">
-<h3>Step 3</h3>
-<b>API Keys (agent-assisted)</b>
-<br><br>
-Opens signup page in browser<br>
-Takes screenshot to verify<br>
-Watches clipboard for key<br>
-<br>
-<code>Detected key: gsk_...CmLa</code>
-</td>
-</tr>
-</table>
+<p align="center">
+  <img src="docs/screenshots/setup-flow.svg" alt="nvHive 3-Step Setup Flow" width="900">
+</p>
 
 Works immediately with local models (no signup needed). Every step is skippable — press Enter to skip. Run `nvh setup` or type `setup` in the REPL anytime to reconfigure.
 
@@ -134,27 +101,9 @@ Works on Ubuntu, Windows, macOS. No root required — installs to `~/.nvh/`.
 - **Performant by default.** Uses all available advisors within reason. Simple questions don't trigger council. Budget limits always enforced. Switch to cost mode for minimal spend.
 - **4-layer safety guardrails.** Command blocklist, filesystem boundary enforcement, secrets redaction, and resource limits — guardrails block destructive commands like `rm -rf /`.
 
-<table>
-<tr>
-<td align="center" width="20%"><b>Your Input</b><br><code>nvh "..."</code></td>
-<td align="center" width="5%">--></td>
-<td align="center" width="15%"><b>Smart Router</b><br>intent + routing</td>
-<td align="center" width="5%">--></td>
-<td width="55%">
-
-| | Mode | Cost | Example |
-|:--:|:--|:--:|:--|
-| **-->** | **Instant** | $0.00 | "open firefox", "install numpy" |
-| **-->** | **Agent** | $0.00 | "take screenshot", "setup comfyui" |
-| **-->** | **Free** | $0.00 | Local GPU, Groq, Gemini, GitHub |
-| **-->** | **Cheap** | ~$0.02 | Coding agent with free cloud assist |
-| **-->** | **Council** | ~$0.10 | 3+ advisors debating complex questions |
-
-</td>
-</tr>
-</table>
-
-*Routing improves over time — after 20 queries per provider, it's fully data-driven.*
+<p align="center">
+  <img src="docs/screenshots/smart-router.svg" alt="nvHive Smart Router" width="900">
+</p>
 
 ---
 
@@ -170,52 +119,17 @@ Works on Ubuntu, Windows, macOS. No root required — installs to `~/.nvh/`.
 
 ## How It Works
 
-### What Happens When You Type
+### Smart Routing
 
-You type something. nvHive figures out the rest.
+You type something. nvHive detects your intent and picks the right mode — no commands to memorize.
 
-<table>
-<tr>
-<td width="50%" valign="top">
+<p align="center">
+  <img src="docs/screenshots/smart-router.svg" alt="nvHive Smart Router — Input to Execution" width="900">
+</p>
 
-**You say** | **nvHive does**
-:--|:--
-`open firefox` | Instant action — opens it now
-`install numpy` | Instant action — pip install
-`take a screenshot` | Desktop agent — screenshot + vision LLM describes it
-`setup comfyui` | Desktop agent — git clone, install, launch, verify
-`what is python?` | Routes to best LLM, answers directly
-`compare Redis vs Postgres` | Council — 3+ advisors debate, synthesized answer
-`fix the bug in auth.py` | Coding agent — plan, code, review, QA gate
+**Zero commands to memorize.** Same natural language across CLI, REPL, WebUI, and API. Routing improves over time — after 20 queries per provider, it's fully data-driven.
 
-</td>
-<td width="50%" valign="top">
-
-**The 5 Execution Modes:**
-
-| Mode | Trigger | What it does |
-|:--:|:--|:--|
-| **Instant** | "open", "install", "kill" | Direct tool call, no LLM needed |
-| **Agent** | "setup", "take screenshot" | Multi-step loop: tool -> observe -> decide -> repeat |
-| **Query** | Questions | Smart-routed to best provider |
-| **Coding** | Code tasks | Plan -> execute -> review -> QA gate |
-| **Council** | Complex / debate | 3+ models in parallel, weighted synthesis |
-
-</td>
-</tr>
-</table>
-
-> **Zero commands to memorize.** No `/do`, no `/tools`, no special syntax. nvHive detects intent from natural language and picks the right mode automatically. Same behavior across CLI, REPL, WebUI, and API.
-
-### Query Pipeline
-
-**Task classification:** TF-IDF cosine similarity against an 88-example training corpus (13 task types), with regex-pattern fallback when confidence is below threshold.
-
-**Provider scoring:** Weighted composite — capability (40%), cost (30%), latency (20%), health (10%). Capability scores start from static estimates and are refined to measured performance via exponential moving average.
-
-### Provider Routing
-
-**Adaptive routing:** After every query, nvHive records the outcome and updates scores. By 20 queries per provider/model/task combination, routing is fully data-driven. Each request is scored across capability (40%), cost (30%), latency (20%), and health (10%), then routed to the highest-scoring provider. On failure, nvHive tries the next provider in the fallback chain, and every failure feeds back into the health score.
+**How routing works:** Each request is scored across capability (40%), cost (30%), latency (20%), and health (10%), then routed to the highest-scoring provider. On failure, nvHive tries the next provider in the fallback chain.
 
 ```bash
 nvh routing-stats    # see learned vs static scores
