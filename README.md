@@ -116,20 +116,27 @@ Works on Ubuntu, Windows, macOS. No root required — installs to `~/.nvh/`.
 - **Performant by default.** Uses all available advisors within reason. Simple questions don't trigger council. Budget limits always enforced. Switch to cost mode for minimal spend.
 - **4-layer safety guardrails.** Command blocklist, filesystem boundary enforcement, secrets redaction, and resource limits — guardrails block destructive commands like `rm -rf /`.
 
-```mermaid
-flowchart LR
-    Q[Your Input] --> R{Smart Router}
-    R -->|Action| A["INSTANT\n'open firefox' · 'install numpy'\nDirect tool execution"]
-    R -->|Task| T["AGENT\n'take screenshot' · 'setup comfyui'\nVision + tools loop"]
-    R -->|Simple| F["FREE\nLocal GPU / Groq / GitHub\n$0.00"]
-    R -->|Coding| C["CHEAP\nFree cloud + local agent\n$0.00–$0.05"]
-    R -->|Complex| S["SMART\nMulti-model council\n$0.00–$0.15"]
-    A --> L["Adaptive routing\nRouting improves over time"]
-    T --> L
-    F --> L
-    C --> L
-    S --> L
-```
+<table>
+<tr>
+<td align="center" width="20%"><b>Your Input</b><br><code>nvh "..."</code></td>
+<td align="center" width="5%">--></td>
+<td align="center" width="15%"><b>Smart Router</b><br>intent + routing</td>
+<td align="center" width="5%">--></td>
+<td width="55%">
+
+| | Mode | Cost | Example |
+|:--:|:--|:--:|:--|
+| **-->** | **Instant** | $0.00 | "open firefox", "install numpy" |
+| **-->** | **Agent** | $0.00 | "take screenshot", "setup comfyui" |
+| **-->** | **Free** | $0.00 | Local GPU, Groq, Gemini, GitHub |
+| **-->** | **Cheap** | ~$0.02 | Coding agent with free cloud assist |
+| **-->** | **Council** | ~$0.10 | 3+ advisors debating complex questions |
+
+</td>
+</tr>
+</table>
+
+*Routing improves over time — after 20 queries per provider, it's fully data-driven.*
 
 ---
 
@@ -145,32 +152,42 @@ flowchart LR
 
 ## How It Works
 
-### Architecture Overview
+### What Happens When You Type
 
-```mermaid
-flowchart TB
-    P[User Input] --> I{Intent Detection}
-    I -->|action| ACT["Direct Execution\n'open X' · 'install X' · 'kill X'"]
-    I -->|task| AGENT["Desktop Agent Loop\nscreenshot → vision → click → verify"]
-    I -->|simple| LLM[Single LLM Query]
-    I -->|coding| D[Decompose Task]
-    I -->|council| CON[Council Assembly]
-    AGENT --> TOOLS{Tools}
-    TOOLS --> SCR[Screenshot + Vision]
-    TOOLS --> KB[Mouse + Keyboard]
-    TOOLS --> SH[Shell + Browser]
-    SCR --> AGENT
-    KB --> AGENT
-    SH --> AGENT
-    D --> G[Generate Expert Agents]
-    G --> M[Match Agent → Best LLM]
-    M --> PAR[Parallel Execution]
-    PAR --> SYN[Synthesize Results]
-    SYN --> QA{QA Gate}
-    QA -->|PASSED| OUT[Output]
-    QA -->|FAILED| FB[Feed Errors Back]
-    FB -->|Budget OK| G
-```
+You type something. nvHive figures out the rest.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**You say** | **nvHive does**
+:--|:--
+`open firefox` | Instant action — opens it now
+`install numpy` | Instant action — pip install
+`take a screenshot` | Desktop agent — screenshot + vision LLM describes it
+`setup comfyui` | Desktop agent — git clone, install, launch, verify
+`what is python?` | Routes to best LLM, answers directly
+`compare Redis vs Postgres` | Council — 3+ advisors debate, synthesized answer
+`fix the bug in auth.py` | Coding agent — plan, code, review, QA gate
+
+</td>
+<td width="50%" valign="top">
+
+**The 5 Execution Modes:**
+
+| Mode | Trigger | What it does |
+|:--:|:--|:--|
+| **Instant** | "open", "install", "kill" | Direct tool call, no LLM needed |
+| **Agent** | "setup", "take screenshot" | Multi-step loop: tool -> observe -> decide -> repeat |
+| **Query** | Questions | Smart-routed to best provider |
+| **Coding** | Code tasks | Plan -> execute -> review -> QA gate |
+| **Council** | Complex / debate | 3+ models in parallel, weighted synthesis |
+
+</td>
+</tr>
+</table>
+
+> **Zero commands to memorize.** No `/do`, no `/tools`, no special syntax. nvHive detects intent from natural language and picks the right mode automatically. Same behavior across CLI, REPL, WebUI, and API.
 
 ### Query Pipeline
 
