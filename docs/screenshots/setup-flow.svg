@@ -1,69 +1,87 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 300" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 320" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#111111"/><stop offset="100%" style="stop-color:#0a0a0a"/>
+    <linearGradient id="sf-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#111"/><stop offset="100%" style="stop-color:#0a0a0a"/>
     </linearGradient>
-    <linearGradient id="nv" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="sf-nv" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" style="stop-color:#76B900"/><stop offset="100%" style="stop-color:#5a8f00"/>
     </linearGradient>
   </defs>
 
-  <rect width="1100" height="300" rx="12" fill="url(#bg)"/>
+  <rect width="1100" height="320" rx="12" fill="url(#sf-bg)"/>
 
-  <text x="550" y="32" text-anchor="middle" fill="#76B900" font-size="20" font-weight="bold">FIRST-RUN SETUP</text>
-  <text x="550" y="52" text-anchor="middle" fill="#666" font-size="11">3 steps. No root. Fully automatic. Every step skippable.</text>
+  <!-- Title -->
+  <text x="550" y="30" text-anchor="middle" fill="#76B900" font-size="22" font-weight="bold" letter-spacing="3">FIRST-RUN SETUP</text>
+  <line x1="380" y1="40" x2="720" y2="40" stroke="#76B900" stroke-width="1" opacity="0.4"/>
+  <text x="550" y="58" text-anchor="middle" fill="#555" font-size="12">3 steps  |  No root  |  Fully automatic  |  Every step skippable</text>
 
   <!-- Step 1 -->
-  <rect x="30" y="72" width="310" height="170" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
-  <rect x="30" y="72" width="310" height="4" rx="2" fill="#76B900"/>
-  <rect x="48" y="90" width="30" height="30" rx="15" fill="url(#nv)"/>
-  <text x="63" y="112" text-anchor="middle" fill="white" font-size="16" font-weight="bold">1</text>
-  <text x="90" y="108" fill="white" font-size="16" font-weight="bold">Hardware + Local AI</text>
+  <rect x="30" y="78" width="310" height="185" rx="10" fill="#161616" stroke="#2a2a2a" stroke-width="1"/>
+  <rect x="30" y="78" width="310" height="3" fill="#76B900"/>
+  <rect x="48" y="98" width="32" height="32" rx="16" fill="url(#sf-nv)"/>
+  <text x="64" y="121" text-anchor="middle" fill="white" font-size="17" font-weight="bold">1</text>
+  <text x="92" y="118" fill="white" font-size="17" font-weight="bold">Hardware + Local AI</text>
 
-  <text x="50" y="140" fill="#aaa" font-size="12">Detect GPU, VRAM, CUDA, driver</text>
-  <text x="50" y="160" fill="#aaa" font-size="12">Install Ollama to ~/.nvh/</text>
-  <text x="50" y="180" fill="#aaa" font-size="12">Pull text + vision models</text>
-  <text x="50" y="200" fill="#aaa" font-size="12">Progress bars for all downloads</text>
+  <circle cx="58" cy="148" r="3" fill="#76B900"/>
+  <text x="70" y="152" fill="#bbb" font-size="13">Detect GPU, VRAM, CUDA</text>
+  <circle cx="58" cy="172" r="3" fill="#76B900"/>
+  <text x="70" y="176" fill="#bbb" font-size="13">Install Ollama to ~/.nvh/</text>
+  <circle cx="58" cy="196" r="3" fill="#76B900"/>
+  <text x="70" y="200" fill="#bbb" font-size="13">Pull text + vision models</text>
+  <circle cx="58" cy="220" r="3" fill="#76B900"/>
+  <text x="70" y="224" fill="#bbb" font-size="13">Rich progress bars</text>
 
-  <rect x="50" y="214" width="270" height="20" rx="4" fill="#1a1a1a" stroke="#76B900" stroke-width="1"/>
-  <text x="185" y="228" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">Desktop agent: ready</text>
+  <rect x="48" y="238" width="275" height="18" rx="4" fill="#111" stroke="#76B900" stroke-width="1"/>
+  <text x="185" y="251" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">DESKTOP AGENT: READY</text>
 
-  <!-- Arrow 1->2 -->
-  <polygon points="350,157 362,150 362,153 385,153 385,161 362,161 362,164" fill="#76B900"/>
+  <!-- Arrow 1 -> 2 -->
+  <line x1="348" y1="170" x2="388" y2="170" stroke="#76B900" stroke-width="2"/>
+  <polygon points="388,164 400,170 388,176" fill="#76B900"/>
 
   <!-- Step 2 -->
-  <rect x="395" y="72" width="270" height="170" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
-  <rect x="395" y="72" width="270" height="4" rx="2" fill="#76B900"/>
-  <rect x="413" y="90" width="30" height="30" rx="15" fill="url(#nv)"/>
-  <text x="428" y="112" text-anchor="middle" fill="white" font-size="16" font-weight="bold">2</text>
-  <text x="455" y="108" fill="white" font-size="16" font-weight="bold">Provider Status</text>
+  <rect x="408" y="78" width="260" height="185" rx="10" fill="#161616" stroke="#2a2a2a" stroke-width="1"/>
+  <rect x="408" y="78" width="260" height="3" fill="#76B900"/>
+  <rect x="426" y="98" width="32" height="32" rx="16" fill="url(#sf-nv)"/>
+  <text x="442" y="121" text-anchor="middle" fill="white" font-size="17" font-weight="bold">2</text>
+  <text x="470" y="118" fill="white" font-size="17" font-weight="bold">Provider Status</text>
 
-  <text x="415" y="140" fill="#888" font-size="12">Groq</text><text x="550" y="140" fill="#666" font-size="12">not configured</text>
-  <text x="415" y="160" fill="#888" font-size="12">OpenAI</text><text x="550" y="160" fill="#666" font-size="12">not configured</text>
-  <text x="415" y="180" fill="#888" font-size="12">Anthropic</text><text x="550" y="180" fill="#666" font-size="12">not configured</text>
+  <text x="428" y="152" fill="#888" font-size="13">Groq</text>
+  <text x="540" y="152" fill="#555" font-size="13">not configured</text>
+  <text x="428" y="176" fill="#888" font-size="13">OpenAI</text>
+  <text x="540" y="176" fill="#555" font-size="13">not configured</text>
+  <text x="428" y="200" fill="#888" font-size="13">Anthropic</text>
+  <text x="540" y="200" fill="#555" font-size="13">not configured</text>
+  <text x="428" y="224" fill="#888" font-size="13">Google</text>
+  <text x="540" y="224" fill="#555" font-size="13">not configured</text>
 
-  <rect x="415" y="198" width="230" height="20" rx="4" fill="#1a1a1a" stroke="#76B900" stroke-width="1"/>
-  <text x="530" y="212" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">Ollama (local)  running  2 models</text>
+  <rect x="428" y="238" width="220" height="18" rx="4" fill="#111" stroke="#76B900" stroke-width="1"/>
+  <text x="538" y="251" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">OLLAMA  RUNNING  2 MODELS</text>
 
-  <!-- Arrow 2->3 -->
-  <polygon points="675,157 687,150 687,153 710,153 710,161 687,161 687,164" fill="#76B900"/>
+  <!-- Arrow 2 -> 3 -->
+  <line x1="676" y1="170" x2="716" y2="170" stroke="#76B900" stroke-width="2"/>
+  <polygon points="716,164 728,170 716,176" fill="#76B900"/>
 
   <!-- Step 3 -->
-  <rect x="720" y="72" width="350" height="170" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
-  <rect x="720" y="72" width="350" height="4" rx="2" fill="#76B900"/>
-  <rect x="738" y="90" width="30" height="30" rx="15" fill="url(#nv)"/>
-  <text x="753" y="112" text-anchor="middle" fill="white" font-size="16" font-weight="bold">3</text>
-  <text x="780" y="108" fill="white" font-size="16" font-weight="bold">API Keys (Agent-Assisted)</text>
+  <rect x="736" y="78" width="334" height="185" rx="10" fill="#161616" stroke="#2a2a2a" stroke-width="1"/>
+  <rect x="736" y="78" width="334" height="3" fill="#76B900"/>
+  <rect x="754" y="98" width="32" height="32" rx="16" fill="url(#sf-nv)"/>
+  <text x="770" y="121" text-anchor="middle" fill="white" font-size="17" font-weight="bold">3</text>
+  <text x="798" y="118" fill="white" font-size="17" font-weight="bold">API Keys</text>
+  <text x="897" y="118" fill="#666" font-size="13">(agent-assisted)</text>
 
-  <text x="740" y="140" fill="#aaa" font-size="12">Opens signup page in your browser</text>
-  <text x="740" y="160" fill="#aaa" font-size="12">Takes screenshot to verify page</text>
-  <text x="740" y="180" fill="#aaa" font-size="12">Watches clipboard for API key</text>
-  <text x="740" y="200" fill="#aaa" font-size="12">Falls back to manual paste if needed</text>
+  <circle cx="754" cy="148" r="3" fill="#76B900"/>
+  <text x="766" y="152" fill="#bbb" font-size="13">Opens signup page in browser</text>
+  <circle cx="754" cy="172" r="3" fill="#76B900"/>
+  <text x="766" y="176" fill="#bbb" font-size="13">Screenshots page to verify</text>
+  <circle cx="754" cy="196" r="3" fill="#76B900"/>
+  <text x="766" y="200" fill="#bbb" font-size="13">Watches clipboard for key</text>
+  <circle cx="754" cy="220" r="3" fill="#76B900"/>
+  <text x="766" y="224" fill="#bbb" font-size="13">Falls back to manual paste</text>
 
-  <rect x="740" y="214" width="310" height="20" rx="4" fill="#1a1a1a" stroke="#76B900" stroke-width="1"/>
-  <text x="895" y="228" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">Detected key: gsk_xR...CmLa  Saved!</text>
+  <rect x="754" y="238" width="298" height="18" rx="4" fill="#111" stroke="#76B900" stroke-width="1"/>
+  <text x="903" y="251" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">DETECTED KEY: gsk_xR...CmLa  SAVED</text>
 
-  <!-- Bottom bar -->
-  <rect x="30" y="258" width="1040" height="30" rx="8" fill="url(#nv)"/>
-  <text x="550" y="278" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Setup complete!  4 providers  |  48 GB VRAM  |  Desktop agent ready  |  nvh "take a screenshot"</text>
+  <!-- Bottom completion bar -->
+  <rect x="30" y="280" width="1040" height="28" rx="8" fill="url(#sf-nv)"/>
+  <text x="550" y="299" text-anchor="middle" fill="white" font-size="12" font-weight="bold" letter-spacing="1">SETUP COMPLETE   |   4 PROVIDERS   |   48 GB VRAM   |   DESKTOP AGENT READY</text>
 </svg>

@@ -1,108 +1,109 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 300" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 310" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#111111"/><stop offset="100%" style="stop-color:#0a0a0a"/>
+    <linearGradient id="sr-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#111"/><stop offset="100%" style="stop-color:#0a0a0a"/>
     </linearGradient>
-    <linearGradient id="nv" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="sr-nv" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" style="stop-color:#76B900"/><stop offset="100%" style="stop-color:#5a8f00"/>
     </linearGradient>
   </defs>
 
-  <rect width="1100" height="300" rx="12" fill="url(#bg)"/>
+  <rect width="1100" height="310" rx="12" fill="url(#sr-bg)"/>
 
-  <!-- Input box -->
-  <rect x="30" y="30" width="160" height="240" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
-  <rect x="30" y="30" width="160" height="4" rx="2" fill="#76B900"/>
-  <text x="110" y="70" text-anchor="middle" fill="white" font-size="15" font-weight="bold">Your Input</text>
-  <text x="110" y="100" text-anchor="middle" fill="#666" font-size="11">nvh "..."</text>
-  <text x="110" y="120" text-anchor="middle" fill="#666" font-size="11">> question</text>
-  <text x="110" y="140" text-anchor="middle" fill="#666" font-size="11">POST /v1/smart</text>
-  <line x1="55" y1="158" x2="165" y2="158" stroke="#222" stroke-width="1"/>
-  <text x="110" y="180" text-anchor="middle" fill="#555" font-size="10">CLI</text>
-  <text x="110" y="196" text-anchor="middle" fill="#555" font-size="10">REPL</text>
-  <text x="110" y="212" text-anchor="middle" fill="#555" font-size="10">WebUI</text>
-  <text x="110" y="228" text-anchor="middle" fill="#555" font-size="10">API / MCP</text>
+  <!-- Title -->
+  <text x="550" y="28" text-anchor="middle" fill="#76B900" font-size="22" font-weight="bold" letter-spacing="3">SMART ROUTING</text>
+  <line x1="390" y1="38" x2="710" y2="38" stroke="#76B900" stroke-width="1" opacity="0.4"/>
 
-  <!-- Arrow -->
-  <polygon points="200,150 212,143 212,146 230,146 230,154 212,154 212,157" fill="#76B900"/>
+  <!-- Input -->
+  <rect x="30" y="55" width="160" height="235" rx="10" fill="#161616" stroke="#2a2a2a" stroke-width="1"/>
+  <rect x="30" y="55" width="3" height="235" fill="#76B900"/>
+  <text x="110" y="85" text-anchor="middle" fill="white" font-size="16" font-weight="bold">Your Input</text>
+  <line x1="50" y1="95" x2="170" y2="95" stroke="#222" stroke-width="1"/>
+  <text x="110" y="120" text-anchor="middle" fill="#76B900" font-size="12" font-weight="bold">nvh "..."</text>
+  <text x="110" y="145" text-anchor="middle" fill="#666" font-size="11">> natural language</text>
+  <text x="110" y="168" text-anchor="middle" fill="#666" font-size="11">POST /v1/smart</text>
+  <line x1="50" y1="182" x2="170" y2="182" stroke="#222" stroke-width="1"/>
+  <text x="110" y="205" text-anchor="middle" fill="#444" font-size="11">CLI  |  REPL</text>
+  <text x="110" y="225" text-anchor="middle" fill="#444" font-size="11">WebUI  |  API</text>
+  <text x="110" y="245" text-anchor="middle" fill="#444" font-size="11">MCP  |  Cursor</text>
 
-  <!-- Router box -->
-  <rect x="240" y="30" width="180" height="240" rx="10" fill="#161616" stroke="#76B900" stroke-width="2"/>
-  <rect x="240" y="30" width="180" height="4" rx="2" fill="#76B900"/>
-  <text x="330" y="65" text-anchor="middle" fill="#76B900" font-size="15" font-weight="bold">Smart Router</text>
-  <line x1="265" y1="78" x2="395" y2="78" stroke="#222" stroke-width="1"/>
-  <text x="330" y="100" text-anchor="middle" fill="#888" font-size="11">Intent detection</text>
-  <text x="330" y="120" text-anchor="middle" fill="#888" font-size="11">Task classification</text>
-  <line x1="265" y1="133" x2="395" y2="133" stroke="#222" stroke-width="1"/>
-  <text x="330" y="153" text-anchor="middle" fill="#888" font-size="11">Capability  40%</text>
-  <text x="330" y="173" text-anchor="middle" fill="#888" font-size="11">Cost  30%</text>
-  <text x="330" y="193" text-anchor="middle" fill="#888" font-size="11">Latency  20%</text>
-  <text x="330" y="213" text-anchor="middle" fill="#888" font-size="11">Health  10%</text>
-  <line x1="265" y1="226" x2="395" y2="226" stroke="#222" stroke-width="1"/>
-  <text x="330" y="248" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">Learns from every query</text>
+  <!-- Arrow input -> router -->
+  <line x1="198" y1="172" x2="238" y2="172" stroke="#76B900" stroke-width="2"/>
+  <polygon points="238,166 250,172 238,178" fill="#76B900"/>
 
-  <!-- Arrows out -->
-  <line x1="430" y1="66" x2="470" y2="66" stroke="#76B900" stroke-width="1.5"/>
-  <line x1="430" y1="114" x2="470" y2="114" stroke="#76B900" stroke-width="1.5"/>
-  <line x1="430" y1="162" x2="470" y2="162" stroke="#76B900" stroke-width="1.5"/>
-  <line x1="430" y1="206" x2="470" y2="206" stroke="#76B900" stroke-width="1.5"/>
-  <line x1="430" y1="248" x2="470" y2="248" stroke="#76B900" stroke-width="1.5"/>
+  <!-- Router -->
+  <rect x="258" y="55" width="180" height="235" rx="10" fill="#161616" stroke="#76B900" stroke-width="2"/>
+  <rect x="258" y="55" width="3" height="235" fill="#76B900"/>
+  <text x="348" y="82" text-anchor="middle" fill="#76B900" font-size="16" font-weight="bold">Smart Router</text>
+  <line x1="278" y1="92" x2="418" y2="92" stroke="#222" stroke-width="1"/>
+
+  <text x="348" y="115" text-anchor="middle" fill="#999" font-size="11">Intent detection</text>
+  <text x="348" y="135" text-anchor="middle" fill="#999" font-size="11">Task classification</text>
+  <line x1="278" y1="148" x2="418" y2="148" stroke="#222" stroke-width="1"/>
+  <text x="278" y="170" fill="#666" font-size="11">Capability</text>
+  <text x="380" y="170" fill="#76B900" font-size="11" font-weight="bold">40%</text>
+  <text x="278" y="190" fill="#666" font-size="11">Cost</text>
+  <text x="380" y="190" fill="#76B900" font-size="11" font-weight="bold">30%</text>
+  <text x="278" y="210" fill="#666" font-size="11">Latency</text>
+  <text x="380" y="210" fill="#76B900" font-size="11" font-weight="bold">20%</text>
+  <text x="278" y="230" fill="#666" font-size="11">Health</text>
+  <text x="380" y="230" fill="#76B900" font-size="11" font-weight="bold">10%</text>
+  <line x1="278" y1="242" x2="418" y2="242" stroke="#222" stroke-width="1"/>
+  <text x="348" y="265" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">LEARNS FROM</text>
+  <text x="348" y="280" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">EVERY QUERY</text>
+
+  <!-- Arrows router -> modes -->
+  <line x1="446" y1="82" x2="486" y2="82" stroke="#76B900" stroke-width="1.5"/>
+  <line x1="446" y1="128" x2="486" y2="128" stroke="#76B900" stroke-width="1.5"/>
+  <line x1="446" y1="174" x2="486" y2="174" stroke="#76B900" stroke-width="1.5"/>
+  <line x1="446" y1="220" x2="486" y2="220" stroke="#76B900" stroke-width="1.5"/>
+  <line x1="446" y1="264" x2="486" y2="264" stroke="#76B900" stroke-width="1.5"/>
 
   <!-- Mode boxes -->
-  <rect x="480" y="46" width="200" height="40" rx="8" fill="url(#nv)"/>
-  <text x="580" y="64" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Instant</text>
-  <text x="580" y="80" text-anchor="middle" fill="#c8e8a8" font-size="10">open, install, kill — $0.00</text>
+  <rect x="494" y="62" width="196" height="40" rx="8" fill="url(#sr-nv)"/>
+  <text x="592" y="79" text-anchor="middle" fill="white" font-size="14" font-weight="bold">Instant</text>
+  <text x="592" y="96" text-anchor="middle" fill="#c0dd88" font-size="10">open, install, kill  |  $0.00</text>
 
-  <rect x="480" y="94" width="200" height="40" rx="8" fill="#1a2a1a" stroke="#76B900" stroke-width="1.5"/>
-  <text x="580" y="112" text-anchor="middle" fill="#76B900" font-size="13" font-weight="bold">Desktop Agent</text>
-  <text x="580" y="128" text-anchor="middle" fill="#5a8a3a" font-size="10">screenshot, vision, click — $0.00</text>
+  <rect x="494" y="108" width="196" height="40" rx="8" fill="#1a2a1a" stroke="#76B900" stroke-width="1.5"/>
+  <text x="592" y="125" text-anchor="middle" fill="#76B900" font-size="14" font-weight="bold">Desktop Agent</text>
+  <text x="592" y="142" text-anchor="middle" fill="#4a7a2a" font-size="10">screenshot, vision, click  |  $0.00</text>
 
-  <rect x="480" y="142" width="200" height="40" rx="8" fill="#1a1a1a" stroke="#444" stroke-width="1.5"/>
-  <text x="580" y="160" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Query</text>
-  <text x="580" y="176" text-anchor="middle" fill="#777" font-size="10">best advisor, routed — $0.00</text>
+  <rect x="494" y="154" width="196" height="40" rx="8" fill="#1a1a1a" stroke="#333" stroke-width="1"/>
+  <text x="592" y="171" text-anchor="middle" fill="#ddd" font-size="14" font-weight="bold">Query</text>
+  <text x="592" y="188" text-anchor="middle" fill="#666" font-size="10">best advisor, routed  |  $0.00</text>
 
-  <rect x="480" y="190" width="200" height="40" rx="8" fill="#1a1a1a" stroke="#444" stroke-width="1.5"/>
-  <text x="580" y="208" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Coding Agent</text>
-  <text x="580" y="224" text-anchor="middle" fill="#777" font-size="10">plan, code, review, QA — ~$0.02</text>
+  <rect x="494" y="200" width="196" height="40" rx="8" fill="#1a1a1a" stroke="#333" stroke-width="1"/>
+  <text x="592" y="217" text-anchor="middle" fill="#ddd" font-size="14" font-weight="bold">Coding Agent</text>
+  <text x="592" y="234" text-anchor="middle" fill="#666" font-size="10">plan, code, review  |  ~$0.02</text>
 
-  <rect x="480" y="232" width="200" height="40" rx="8" fill="#1a1a1a" stroke="#444" stroke-width="1.5"/>
-  <text x="580" y="250" text-anchor="middle" fill="white" font-size="13" font-weight="bold">Council</text>
-  <text x="580" y="266" text-anchor="middle" fill="#777" font-size="10">3+ models, synthesized — ~$0.10</text>
+  <rect x="494" y="244" width="196" height="40" rx="8" fill="#1a1a1a" stroke="#333" stroke-width="1"/>
+  <text x="592" y="261" text-anchor="middle" fill="#ddd" font-size="14" font-weight="bold">Council</text>
+  <text x="592" y="278" text-anchor="middle" fill="#666" font-size="10">3+ models, synthesized  |  ~$0.10</text>
 
-  <!-- Examples -->
-  <rect x="710" y="30" width="360" height="240" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
-  <rect x="710" y="30" width="360" height="4" rx="2" fill="#76B900"/>
-  <text x="890" y="58" text-anchor="middle" fill="#888" font-size="13" font-weight="bold">Examples</text>
+  <!-- Examples panel -->
+  <rect x="720" y="55" width="350" height="235" rx="10" fill="#161616" stroke="#2a2a2a" stroke-width="1"/>
+  <rect x="720" y="55" width="3" height="235" fill="#76B900"/>
+  <text x="895" y="80" text-anchor="middle" fill="#888" font-size="14" font-weight="bold">Examples</text>
+  <line x1="740" y1="90" x2="1050" y2="90" stroke="#222" stroke-width="1"/>
 
-  <text x="730" y="84" fill="#76B900" font-size="12">$</text>
-  <text x="745" y="84" fill="#ddd" font-size="12">open firefox</text>
-  <text x="980" y="84" fill="#555" font-size="11">instant</text>
+  <text x="740" y="115" fill="#76B900" font-size="13">$</text><text x="758" y="115" fill="#ddd" font-size="13">open firefox</text>
+  <text x="980" y="115" fill="#444" font-size="11">instant</text>
 
-  <text x="730" y="110" fill="#76B900" font-size="12">$</text>
-  <text x="745" y="110" fill="#ddd" font-size="12">take a screenshot</text>
-  <text x="980" y="110" fill="#555" font-size="11">agent</text>
+  <text x="740" y="142" fill="#76B900" font-size="13">$</text><text x="758" y="142" fill="#ddd" font-size="13">take a screenshot</text>
+  <text x="980" y="142" fill="#444" font-size="11">agent</text>
 
-  <text x="730" y="136" fill="#76B900" font-size="12">$</text>
-  <text x="745" y="136" fill="#ddd" font-size="12">what is python?</text>
-  <text x="980" y="136" fill="#555" font-size="11">query</text>
+  <text x="740" y="169" fill="#76B900" font-size="13">$</text><text x="758" y="169" fill="#ddd" font-size="13">what is python?</text>
+  <text x="980" y="169" fill="#444" font-size="11">query</text>
 
-  <text x="730" y="162" fill="#76B900" font-size="12">$</text>
-  <text x="745" y="162" fill="#ddd" font-size="12">fix the bug in auth.py</text>
-  <text x="980" y="162" fill="#555" font-size="11">coding</text>
+  <text x="740" y="196" fill="#76B900" font-size="13">$</text><text x="758" y="196" fill="#ddd" font-size="13">fix bug in auth.py</text>
+  <text x="980" y="196" fill="#444" font-size="11">coding</text>
 
-  <text x="730" y="188" fill="#76B900" font-size="12">$</text>
-  <text x="745" y="188" fill="#ddd" font-size="12">compare Redis vs Postgres</text>
-  <text x="980" y="188" fill="#555" font-size="11">council</text>
+  <text x="740" y="223" fill="#76B900" font-size="13">$</text><text x="758" y="223" fill="#ddd" font-size="13">Redis vs Postgres?</text>
+  <text x="980" y="223" fill="#444" font-size="11">council</text>
 
-  <text x="730" y="214" fill="#76B900" font-size="12">$</text>
-  <text x="745" y="214" fill="#ddd" font-size="12">setup comfyui</text>
-  <text x="980" y="214" fill="#555" font-size="11">agent</text>
+  <text x="740" y="250" fill="#76B900" font-size="13">$</text><text x="758" y="250" fill="#ddd" font-size="13">setup comfyui</text>
+  <text x="980" y="250" fill="#444" font-size="11">agent</text>
 
-  <text x="730" y="240" fill="#76B900" font-size="12">$</text>
-  <text x="745" y="240" fill="#ddd" font-size="12">use anthropic</text>
-  <text x="980" y="240" fill="#555" font-size="11">/advisor</text>
-
-  <text x="730" y="262" fill="#76B900" font-size="12">$</text>
-  <text x="745" y="262" fill="#ddd" font-size="12">clear</text>
-  <text x="980" y="262" fill="#555" font-size="11">/clear</text>
+  <text x="740" y="277" fill="#76B900" font-size="13">$</text><text x="758" y="277" fill="#ddd" font-size="13">use anthropic</text>
+  <text x="980" y="277" fill="#444" font-size="11">/advisor</text>
 </svg>

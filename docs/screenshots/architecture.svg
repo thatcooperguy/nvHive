@@ -1,14 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 1200" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+    <linearGradient id="ar-bg" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" style="stop-color:#111111"/><stop offset="100%" style="stop-color:#0a0a0a"/>
     </linearGradient>
-    <linearGradient id="nv" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="ar-nv" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" style="stop-color:#76B900"/><stop offset="100%" style="stop-color:#5a8f00"/>
     </linearGradient>
   </defs>
 
-  <rect width="1100" height="1200" fill="url(#bg)"/>
+  <rect width="1100" height="1200" fill="url(#ar-bg)"/>
 
   <text x="550" y="40" text-anchor="middle" fill="#76B900" font-size="26" font-weight="bold">nvHive Full Stack Architecture</text>
   <text x="550" y="62" text-anchor="middle" fill="#555" font-size="12">pip install to GPU inference — 9 layers, all automatic</text>
@@ -16,12 +16,12 @@
   <!-- Layer 1: Install -->
   <rect x="30" y="82" width="1040" height="80" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
   <rect x="30" y="82" width="5" height="80" rx="2" fill="#76B900"/>
-  <rect x="48" y="95" width="26" height="26" rx="13" fill="url(#nv)"/>
+  <rect x="48" y="95" width="26" height="26" rx="13" fill="url(#ar-nv)"/>
   <text x="61" y="114" text-anchor="middle" fill="white" font-size="14" font-weight="bold">1</text>
   <text x="86" y="112" fill="white" font-size="18" font-weight="bold">INSTALL</text>
   <text x="220" y="112" fill="#555" font-size="12">One command. Everything you need.</text>
 
-  <rect x="48" y="130" width="190" height="24" rx="6" fill="url(#nv)"/>
+  <rect x="48" y="130" width="190" height="24" rx="6" fill="url(#ar-nv)"/>
   <text x="143" y="147" text-anchor="middle" fill="white" font-size="12" font-weight="bold">$ pip install nvhive</text>
 
   <rect x="255" y="130" width="90" height="24" rx="6" fill="#1a1a1a" stroke="#76B900" stroke-width="1"/>
@@ -30,7 +30,7 @@
   <text x="400" y="146" text-anchor="middle" fill="#76B900" font-size="10">[browser]</text>
   <rect x="455" y="130" width="90" height="24" rx="6" fill="#1a1a1a" stroke="#76B900" stroke-width="1"/>
   <text x="500" y="146" text-anchor="middle" fill="#76B900" font-size="10">[serve]</text>
-  <rect x="555" y="130" width="90" height="24" rx="6" fill="url(#nv)"/>
+  <rect x="555" y="130" width="90" height="24" rx="6" fill="url(#ar-nv)"/>
   <text x="600" y="146" text-anchor="middle" fill="white" font-size="10" font-weight="bold">[all]</text>
 
   <polygon points="550,167 544,167 550,177 556,167" fill="#333"/>
@@ -38,7 +38,7 @@
   <!-- Layer 2: Setup -->
   <rect x="30" y="184" width="1040" height="80" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
   <rect x="30" y="184" width="5" height="80" rx="2" fill="#76B900"/>
-  <rect x="48" y="197" width="26" height="26" rx="13" fill="url(#nv)"/>
+  <rect x="48" y="197" width="26" height="26" rx="13" fill="url(#ar-nv)"/>
   <text x="61" y="216" text-anchor="middle" fill="white" font-size="14" font-weight="bold">2</text>
   <text x="86" y="214" fill="white" font-size="18" font-weight="bold">SETUP</text>
   <text x="185" y="214" fill="#555" font-size="12">3 steps. No root. Automatic.</text>
@@ -57,7 +57,7 @@
   <!-- Layer 3: Interfaces -->
   <rect x="30" y="286" width="1040" height="80" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
   <rect x="30" y="286" width="5" height="80" rx="2" fill="#76B900"/>
-  <rect x="48" y="299" width="26" height="26" rx="13" fill="url(#nv)"/>
+  <rect x="48" y="299" width="26" height="26" rx="13" fill="url(#ar-nv)"/>
   <text x="61" y="318" text-anchor="middle" fill="white" font-size="14" font-weight="bold">3</text>
   <text x="86" y="316" fill="white" font-size="18" font-weight="bold">INTERFACES</text>
   <text x="280" y="316" fill="#555" font-size="12">4 ways in. All natural language.</text>
@@ -76,7 +76,7 @@
   <!-- Layer 4: Intent -->
   <rect x="30" y="388" width="1040" height="80" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
   <rect x="30" y="388" width="5" height="80" rx="2" fill="#76B900"/>
-  <rect x="48" y="401" width="26" height="26" rx="13" fill="url(#nv)"/>
+  <rect x="48" y="401" width="26" height="26" rx="13" fill="url(#ar-nv)"/>
   <text x="61" y="420" text-anchor="middle" fill="white" font-size="14" font-weight="bold">4</text>
   <text x="86" y="418" fill="white" font-size="18" font-weight="bold">INTENT DETECTION</text>
   <text x="380" y="418" fill="#555" font-size="12">Understands what you want. No commands needed.</text>
@@ -97,11 +97,11 @@
   <!-- Layer 5: Execution Modes -->
   <rect x="30" y="490" width="1040" height="90" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
   <rect x="30" y="490" width="5" height="90" rx="2" fill="#76B900"/>
-  <rect x="48" y="503" width="26" height="26" rx="13" fill="url(#nv)"/>
+  <rect x="48" y="503" width="26" height="26" rx="13" fill="url(#ar-nv)"/>
   <text x="61" y="522" text-anchor="middle" fill="white" font-size="14" font-weight="bold">5</text>
   <text x="86" y="520" fill="white" font-size="18" font-weight="bold">EXECUTION MODES</text>
 
-  <rect x="48" y="540" width="180" height="30" rx="6" fill="url(#nv)"/>
+  <rect x="48" y="540" width="180" height="30" rx="6" fill="url(#ar-nv)"/>
   <text x="138" y="560" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Instant</text>
   <rect x="243" y="540" width="180" height="30" rx="6" fill="#1a2a1a" stroke="#76B900" stroke-width="1.5"/>
   <text x="333" y="560" text-anchor="middle" fill="#76B900" font-size="12" font-weight="bold">Desktop Agent</text>
@@ -117,7 +117,7 @@
   <!-- Layer 6+7: Router + Tools side by side -->
   <rect x="30" y="602" width="505" height="120" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
   <rect x="30" y="602" width="5" height="120" rx="2" fill="#76B900"/>
-  <rect x="48" y="615" width="26" height="26" rx="13" fill="url(#nv)"/>
+  <rect x="48" y="615" width="26" height="26" rx="13" fill="url(#ar-nv)"/>
   <text x="61" y="634" text-anchor="middle" fill="white" font-size="14" font-weight="bold">6</text>
   <text x="86" y="632" fill="white" font-size="16" font-weight="bold">SMART ROUTER</text>
 
@@ -130,7 +130,7 @@
 
   <rect x="555" y="602" width="515" height="120" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
   <rect x="555" y="602" width="5" height="120" rx="2" fill="#76B900"/>
-  <rect x="573" y="615" width="26" height="26" rx="13" fill="url(#nv)"/>
+  <rect x="573" y="615" width="26" height="26" rx="13" fill="url(#ar-nv)"/>
   <text x="586" y="634" text-anchor="middle" fill="white" font-size="14" font-weight="bold">7</text>
   <text x="611" y="632" fill="white" font-size="16" font-weight="bold">TOOL REGISTRY</text>
 
@@ -152,12 +152,12 @@
   <!-- Layer 8: Providers -->
   <rect x="30" y="744" width="1040" height="90" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
   <rect x="30" y="744" width="5" height="90" rx="2" fill="#76B900"/>
-  <rect x="48" y="757" width="26" height="26" rx="13" fill="url(#nv)"/>
+  <rect x="48" y="757" width="26" height="26" rx="13" fill="url(#ar-nv)"/>
   <text x="61" y="776" text-anchor="middle" fill="white" font-size="14" font-weight="bold">8</text>
   <text x="86" y="774" fill="white" font-size="18" font-weight="bold">AI PROVIDERS</text>
   <text x="310" y="774" fill="#555" font-size="12">Local-first. 23+ providers. Cloud fallback.</text>
 
-  <rect x="48" y="796" width="300" height="28" rx="6" fill="url(#nv)"/>
+  <rect x="48" y="796" width="300" height="28" rx="6" fill="url(#ar-nv)"/>
   <text x="198" y="815" text-anchor="middle" fill="white" font-size="12" font-weight="bold">Local — $0 Private</text>
 
   <rect x="368" y="796" width="260" height="28" rx="6" fill="#1a2a1a" stroke="#76B900" stroke-width="1"/>
@@ -171,7 +171,7 @@
   <!-- Layer 9: Infrastructure -->
   <rect x="30" y="856" width="1040" height="85" rx="10" fill="#161616" stroke="#333" stroke-width="1.5"/>
   <rect x="30" y="856" width="5" height="85" rx="2" fill="#76B900"/>
-  <rect x="48" y="869" width="26" height="26" rx="13" fill="url(#nv)"/>
+  <rect x="48" y="869" width="26" height="26" rx="13" fill="url(#ar-nv)"/>
   <text x="61" y="888" text-anchor="middle" fill="white" font-size="14" font-weight="bold">9</text>
   <text x="86" y="886" fill="white" font-size="18" font-weight="bold">INFRASTRUCTURE</text>
 
@@ -183,7 +183,7 @@
   <text x="418" y="923" text-anchor="middle" fill="#aaa" font-size="10">Cache + Budget</text>
   <rect x="498" y="906" width="130" height="26" rx="5" fill="#1a1a1a" stroke="#444" stroke-width="1"/>
   <text x="563" y="923" text-anchor="middle" fill="#aaa" font-size="10">Guardrails</text>
-  <rect x="643" y="906" width="145" height="26" rx="5" fill="url(#nv)"/>
+  <rect x="643" y="906" width="145" height="26" rx="5" fill="url(#ar-nv)"/>
   <text x="715" y="923" text-anchor="middle" fill="white" font-size="10" font-weight="bold">NVIDIA GPU</text>
   <rect x="803" y="906" width="130" height="26" rx="5" fill="#1a1a1a" stroke="#444" stroke-width="1"/>
   <text x="868" y="923" text-anchor="middle" fill="#aaa" font-size="10">X11 + Clipboard</text>
@@ -202,7 +202,7 @@
   <text x="327" y="990" text-anchor="middle" fill="#888" font-size="10">16 GB</text>
   <rect x="365" y="975" width="55" height="22" rx="5" fill="#1a1a1a" stroke="#444" stroke-width="1"/>
   <text x="392" y="990" text-anchor="middle" fill="#888" font-size="10">24 GB</text>
-  <rect x="430" y="975" width="65" height="22" rx="5" fill="url(#nv)"/>
+  <rect x="430" y="975" width="65" height="22" rx="5" fill="url(#ar-nv)"/>
   <text x="462" y="990" text-anchor="middle" fill="white" font-size="10" font-weight="bold">48 GB</text>
   <rect x="505" y="975" width="55" height="22" rx="5" fill="#1a1a1a" stroke="#444" stroke-width="1"/>
   <text x="532" y="990" text-anchor="middle" fill="#888" font-size="10">96 GB</text>
