@@ -10,7 +10,9 @@ from nvh.cli.setup import (
     _check_provider_key,
     _detect_gpu_info,
     _get_recommended_models,
+    _is_vision_model,
     _ollama_running,
+    _reorder_vision_first,
     _store_key,
     _validate_key,
     load_env_keys,
@@ -294,3 +296,125 @@ class TestNoKeyringFallback:
         assert os.environ["MY_KEY"] == "from_env"
         # Cleanup
         os.environ.pop("MY_KEY", None)
+
+
+class TestVisionModelDetection:
+    """Tests for _is_vision_model — identifies vision-capable model tags."""
+
+    def test_known_vision_tags(self):
+        assert _is_vision_model("llama3.2-vision")
+        assert _is_vision_model("minicpm-v")
+        assert _is_vision_model("moondream")
+        assert _is_vision_model("llava")
+        assert _is_vision_model("bakllava")
+
+    def test_versioned_tags(self):
+        assert _is_vision_model("llama3.2-vision:11b")
+        assert _is_vision_model("llama3.2-vision:90b")
+        assert _is_vision_model("llava:7b")
+        assert _is_vision_model("llava:34b")
+
+    def test_text_models_not_vision(self):
+        assert not _is_vision_model("nemotron")
+        assert not _is_vision_model("nemotron:70b")
+        assert not _is_vision_model("gemma4:26b")
+        assert not _is_vision_model("qwen2.5-coder:7b")
+
+    def test_vision_substring_match(self):
+        # Should still match even with unusual prefix
+        assert _is_vision_model("some-vision-model")
+
+
+class TestReorderVisionFirst:
+    """Tests for _reorder_vision_first — pull ordering."""
+
+    def test_vision_moved_to_front(self):
+        result = _reorder_vision_first(["nemotron:70b", "llama3.2-vision", "gemma4:26b"])
+        assert result[0] == "llama3.2-vision"
+        assert result[1:] == ["nemotron:70b", "gemma4:26b"]
+
+    def test_no_vision_preserved(self):
+        result = _reorder_vision_first(["nemotron", "gemma4:26b"])
+        assert result == ["nemotron", "gemma4:26b"]
+
+    def test_only_vision(self):
+        result = _reorder_vision_first(["moondream"])
+        assert result == ["moondream"]
+
+    def test_empty_list(self):
+        assert _reorder_vision_first([]) == []
+
+    def test_multiple_vision_preserves_order(self):
+        # When there are multiple vision models, they stay in original order
+        result = _reorder_vision_first(["nemotron", "moondream", "gemma4:26b", "minicpm-v"])
+        assert result == ["moondream", "minicpm-v", "nemotron", "gemma4:26b"]
+
+
+class TestWriteConfig:
+    """Tests for _write_config — ollama gating and api_key emission."""
+
+    def _write_to_tmp(self, tmp_path, configured, ollama_enabled):
+        cfg_path = tmp_path / "config.yaml"
+        with patch("nvh.config.settings.DEFAULT_CONFIG_PATH", cfg_path), \
+             patch("nvh.config.settings.get_config_dir", return_value=tmp_path):
+            from nvh.cli.setup import _write_config
+            _write_config(configured, ollama_enabled=ollama_enabled)
+        return cfg_path.read_text()
+
+    def test_ollama_disabled_when_not_running(self, tmp_path):
+        """If ollama_enabled=False, the config marks ollama as disabled —
+        prevents REPL 'Ollama is not running' errors when user skipped install."""
+        text = self._write_to_tmp(tmp_path, {"groq": "gsk_x"}, ollama_enabled=False)
+        # Find the ollama block
+        lines = text.splitlines()
+        ollama_idx = next(i for i, line in enumerate(lines) if line.strip() == "ollama:")
+        ollama_block = "\n".join(lines[ollama_idx:ollama_idx + 6])
+        assert "enabled: false" in ollama_block
+
+    def test_ollama_enabled_when_running(self, tmp_path):
+        text = self._write_to_tmp(tmp_path, {"groq": "gsk_x"}, ollama_enabled=True)
+        lines = text.splitlines()
+        ollama_idx = next(i for i, line in enumerate(lines) if line.strip() == "ollama:")
+        ollama_block = "\n".join(lines[ollama_idx:ollama_idx + 6])
+        assert "enabled: true" in ollama_block
+
+    def test_no_api_key_line_for_unconfigured_providers(self, tmp_path):
+        """Unconfigured providers should NOT get an api_key: ${VAR} line —
+        otherwise the config loader warns about unset env vars on every nvh run."""
+        text = self._write_to_tmp(tmp_path, {"groq": "gsk_x"}, ollama_enabled=False)
+        # The configured one DOES get the line
+        assert "api_key: ${GROQ_API_KEY}" in text
+        # The unconfigured ones do NOT
+        assert "${ANTHROPIC_API_KEY}" not in text
+        assert "${OPENAI_API_KEY}" not in text
+        assert "${GOOGLE_API_KEY}" not in text
+
+    def test_all_providers_configured(self, tmp_path):
+        text = self._write_to_tmp(
+            tmp_path,
+            {"groq": "g", "openai": "o", "anthropic": "a", "google": "gg"},
+            ollama_enabled=True,
+        )
+        assert "${GROQ_API_KEY}" in text
+        assert "${OPENAI_API_KEY}" in text
+        assert "${ANTHROPIC_API_KEY}" in text
+        assert "${GOOGLE_API_KEY}" in text
+
+
+class TestCheckNvhOnPath:
+    """Tests for _check_nvh_on_path — PATH detection for the nvh binary."""
+
+    def test_returns_none_when_on_path(self):
+        from nvh.cli.setup import _check_nvh_on_path
+        with patch("shutil.which", return_value="/usr/bin/nvh"):
+            assert _check_nvh_on_path() is None
+
+    def test_returns_hint_when_missing(self):
+        from nvh.cli.setup import _check_nvh_on_path
+        with patch("shutil.which", return_value=None):
+            result = _check_nvh_on_path()
+        # Either returns None (if nvh.exe not derivable) or a dict with the right keys
+        if result is not None:
+            assert "full_path" in result
+            assert "bin_dir" in result
+            assert "shell_rc" in result

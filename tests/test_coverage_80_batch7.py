@@ -348,6 +348,62 @@ class TestGPU:
         tiers = {r.tier for r in recs}
         assert "multi-gpu" in tiers
 
+    # ---- Vision model tier tests ----
+
+    @patch("nvh.utils.gpu.detect_system_memory")
+    def test_vision_model_included_on_8gb(self, mock_mem):
+        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+
+        mock_mem.return_value = SystemMemoryInfo(32.0, 24.0, 16.0)
+        gpu = self._make_gpu("RTX 4060", 8192)
+        recs = recommend_models(gpus=[gpu])
+        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
+        assert "moondream" in vision_models
+
+    @patch("nvh.utils.gpu.detect_system_memory")
+    def test_vision_model_on_16gb_is_minicpm(self, mock_mem):
+        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+
+        mock_mem.return_value = SystemMemoryInfo(32.0, 24.0, 16.0)
+        gpu = self._make_gpu("RTX 4070 Ti", 16384)
+        recs = recommend_models(gpus=[gpu])
+        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
+        assert "minicpm-v" in vision_models
+
+    @patch("nvh.utils.gpu.detect_system_memory")
+    def test_vision_model_on_48gb_is_llama32_vision(self, mock_mem):
+        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+
+        mock_mem.return_value = SystemMemoryInfo(64.0, 48.0, 32.0)
+        gpu = self._make_gpu("RTX 6000 Ada", 48 * 1024)
+        recs = recommend_models(gpus=[gpu])
+        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
+        assert "llama3.2-vision" in vision_models
+
+    @patch("nvh.utils.gpu.detect_system_memory")
+    def test_vision_model_turing_swap(self, mock_mem):
+        """On Turing (CC 7.5), high-VRAM tier should swap to minicpm-v
+        because llama3.2-vision BF16 paths degrade badly without tensor cores."""
+        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+
+        mock_mem.return_value = SystemMemoryInfo(64.0, 48.0, 32.0)
+        # RTX 2080 Ti = Turing, CC 7.5
+        gpu = self._make_gpu("RTX 2080 Ti", 24 * 1024)
+        recs = recommend_models(gpus=[gpu])
+        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
+        assert "minicpm-v" in vision_models
+        assert "llama3.2-vision" not in vision_models
+
+    @patch("nvh.utils.gpu.detect_system_memory")
+    def test_no_vision_model_below_4gb(self, mock_mem):
+        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+
+        mock_mem.return_value = SystemMemoryInfo(8.0, 4.0, 2.0)
+        gpu = self._make_gpu("GTX 1050", 2 * 1024)
+        recs = recommend_models(gpus=[gpu])
+        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
+        assert vision_models == []
+
 
 # ---------------------------------------------------------------------------
 # 5. nvh/integrations/cloud_session.py

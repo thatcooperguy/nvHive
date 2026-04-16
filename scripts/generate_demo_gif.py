@@ -160,7 +160,7 @@ def main():
 
     # === INSTALL ===
     t.type_cmd("$", "pip install nvhive")
-    t.out(LIGHT_GRAY, "Successfully installed nvhive-0.29.3")
+    t.out(LIGHT_GRAY, "Successfully installed nvhive-0.30.0")
     t.pause(COMMAND_WAIT)
 
     t.blank()

@@ -556,7 +556,70 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
             tier="multi-gpu",
         )
 
+    # Vision model — appended so the desktop-agent screenshot path works.
+    # Ollama loads models on demand, so co-residency with the text models is
+    # not required (Ollama will swap them in/out as needed).
+    vision_rec = _recommend_vision_model(total_vram_gb, gpus)
+    if vision_rec is not None:
+        recommendations.append(vision_rec)
+
     return recommendations
+
+
+def _recommend_vision_model(
+    total_vram_gb: float,
+    gpus: list[GPUInfo],
+) -> ModelRecommendation | None:
+    """Pick a vision-capable Ollama model appropriate for the GPU tier.
+
+    Tier rules (approximate Q4 sizes):
+      - < 4 GB   : skip (cloud vision only)
+      - 4 – 12 GB: moondream (~2 GB) — basic vision, fits alongside small text
+      - 12 – 24  : minicpm-v (~5 GB) — better quality, still light
+      - 24 – 80  : llama3.2-vision (~7 GB, 11B) — strong spatial grounding
+      - 80 GB+   : llama3.2-vision (safer than 90B which is flaky in Ollama)
+
+    Architecture swap: on Turing (CC < 8.0), llama3.2-vision uses BF16
+    paths that degrade badly, so prefer minicpm-v there.
+    """
+    if total_vram_gb < 4:
+        return None
+
+    # Compute capability for arch-aware swap. Use primary GPU.
+    cc = _parse_compute_capability(gpus[0].name) if gpus else (0, 0)
+    turing_or_older = cc < (8, 0) and cc != (0, 0)
+
+    if total_vram_gb < 12:
+        return ModelRecommendation(
+            model="moondream",
+            reason="moondream — 2 GB vision model, fits alongside small text models",
+            vram_required_gb=2.0,
+            tier="vision-mini",
+        )
+    if total_vram_gb < 24:
+        return ModelRecommendation(
+            model="minicpm-v",
+            reason="minicpm-v — 5 GB vision model, good quality for the tier",
+            vram_required_gb=5.0,
+            tier="vision-small",
+        )
+    # 24 GB+ tier — prefer llama3.2-vision unless Turing
+    if turing_or_older:
+        return ModelRecommendation(
+            model="minicpm-v",
+            reason=(
+                "minicpm-v — Turing lacks BF16 acceleration, "
+                "so llama3.2-vision would be slow here"
+            ),
+            vram_required_gb=5.0,
+            tier="vision-small",
+        )
+    return ModelRecommendation(
+        model="llama3.2-vision",
+        reason="llama3.2-vision — 7 GB, best spatial grounding for desktop agent",
+        vram_required_gb=7.0,
+        tier="vision",
+    )
 
 
 @dataclass

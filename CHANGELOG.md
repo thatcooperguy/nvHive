@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.30.0] - 2026-04-16
+
+### Added
+- **Vision model tier in `recommend_models()`** — `nvh/utils/gpu.py` now returns
+  a per-VRAM vision-capable Ollama model alongside the Nemotron + Gemma text
+  pair. Tiers: moondream (4–12GB), minicpm-v (12–24GB), llama3.2-vision
+  (24GB+). Turing (CC < 8.0) auto-swaps to minicpm-v since llama3.2-vision
+  BF16 paths degrade without tensor cores.
+- **`nvh openclaw --install` / `nvh nemoclaw --install`** — one-shot commands
+  that pip-install the tool, run `register_openclaw()` / `register_nemoclaw()`,
+  and smoke-test. Conda/micromamba/venv safe via `sys.executable -m pip`.
+- **`nvh doctor --fix`** — when Ollama is enabled in config but daemon isn't
+  reachable, interactively offer a restart using the hardened `_start_ollama`.
+- **PATH check in `nvh doctor`** — new diagnostic row that detects
+  conda/mamba/venv and suggests `micromamba activate <env>` rather than
+  editing `.bashrc`.
+- **Conda/micromamba aware `install.sh`** — detects active env via
+  `$MAMBA_ROOT_PREFIX`/`$CONDA_PREFIX`/`$VIRTUAL_ENV` and offers to install
+  into the active env instead of creating a fresh `~/nvh/venv`. Escape hatch:
+  `NVH_FORCE_VENV=1` to keep old behavior.
+- **REPL Ollama auto-restart** — the "Ollama is not running" error now
+  prompts `Restart Ollama now? [Y/n]` and retries via `setup._start_ollama`.
+
+### Fixed
+- **Vision model pull ordering** — setup now pulls vision models first so the
+  desktop-agent screenshot assist is usable in step 3 (API-key config) even
+  if the large 70B text pull is still downloading.
+- **Ollama daemon detachment** — `_start_ollama` now passes
+  `stdin=subprocess.DEVNULL` and `close_fds=True` alongside
+  `start_new_session=True`, so the daemon survives when the setup CLI or SSH
+  session exits.
+- **Config no longer unconditionally enables Ollama** — `_write_config` now
+  re-probes Ollama reachability right before writing and only emits
+  `enabled: true` when the daemon is actually up. Prevents the REPL error
+  "Ollama is not running at http://localhost:11434" when the user skipped
+  the Ollama install.
+- **Spurious "env var is not set" warnings** — `_write_config` no longer
+  emits `api_key: ${GROQ_API_KEY}` lines for providers the user didn't
+  configure. The YAML loader was warning about every unset var on every
+  `nvh` invocation.
+- **PATH-not-found after setup** — setup now detects when `nvh` isn't on
+  PATH and prints env-appropriate instructions (`micromamba activate pyenv`
+  for conda users, `export PATH=...` for system installs). "Next steps"
+  output falls back to the full path so the user can copy-paste something
+  that works.
+
+### Tests
+- 134/134 passing across `test_setup.py`, `test_openclaw.py`,
+  `test_nemoclaw.py`, `test_coverage_80_batch7.py`, `test_first_run.py`.
+- 220/220 passing on the broader `test_cli_inprocess.py` + `test_cli_e2e.py`
+  subset (5:56 runtime).
+- New tests: vision tier detection (5), vision-pull ordering (5), config
+  writer gating (4), PATH check (2), openclaw/nemoclaw pip helpers (4).
+
 ## [0.9.0] - 2026-04-09
 
 ### Added

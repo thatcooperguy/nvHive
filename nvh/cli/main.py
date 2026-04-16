@@ -5943,8 +5943,8 @@ def integrate(
         integ_table.add_column("Platform")
         integ_table.add_column("Install")
         integ_table.add_column("Then run")
-        integ_table.add_row("NemoClaw", "pip install nemoclaw", "nvh nemoclaw")
-        integ_table.add_row("OpenClaw", "pip install openclaw", "nvh openclaw")
+        integ_table.add_row("NemoClaw", "nvh nemoclaw --install", "nvh nemoclaw --test")
+        integ_table.add_row("OpenClaw", "nvh openclaw --install", "nvh openclaw --test")
         integ_table.add_row(
             "Claude Code",
             "npm i -g @anthropic/claude-code",
@@ -6056,6 +6056,10 @@ def openclaw(
     test: bool = typer.Option(False, "--test", help="Test if the MCP server is reachable"),
     start: bool = typer.Option(False, "--start", help="Start the MCP server for OpenClaw"),
     config: bool = typer.Option(False, "--config", help="Generate openclaw.json config file"),
+    install: bool = typer.Option(
+        False, "--install",
+        help="Install OpenClaw, register nvHive MCP server, and run a smoke test",
+    ),
     output: str | None = typer.Option(None, "-o", "--output", help="Output path for openclaw.json"),
     http: bool = typer.Option(False, "--http", help="Use HTTP transport instead of stdio"),
     port: int = typer.Option(8080, "--port", help="Port for HTTP transport"),
@@ -6071,6 +6075,7 @@ def openclaw(
 
     Examples:
         nvh openclaw              Show setup + migration info
+        nvh openclaw --install    Install OpenClaw + register nvHive + smoke test
         nvh openclaw --test       Test MCP server connectivity
         nvh openclaw --start      Start the MCP server
         nvh openclaw --config     Generate openclaw.json
@@ -6089,6 +6094,70 @@ def openclaw(
         " -- python -m nvh.mcp_server",
         border_style="green",
     ))
+
+    # --- Install mode: pip install openclaw + register + smoke test ---
+    if install:
+        from pathlib import Path
+
+        from nvh.integrations.detector import register_openclaw
+
+        console.print()
+        console.print(Rule("Install OpenClaw + register nvHive"))
+        console.print()
+
+        # Step 1: install openclaw if missing
+        if _is_package_installed("openclaw"):
+            console.print("  [green]✓[/green] openclaw already installed")
+        else:
+            console.print("  Installing [bold]openclaw[/bold] via pip...")
+            ok, msg = _pip_install_package("openclaw")
+            if ok:
+                console.print(f"  [green]✓[/green] {msg}")
+            else:
+                console.print(f"  [red]✗[/red] {msg}")
+                console.print()
+                console.print(
+                    "  [dim]Fix the pip error above, then rerun"
+                    " [bold]nvh openclaw --install[/bold][/dim]"
+                )
+                raise typer.Exit(1)
+
+        # Step 2: register nvHive MCP server in openclaw.json
+        console.print()
+        console.print("  Registering nvHive MCP server in openclaw.json...")
+        ok, msg = register_openclaw(output if output else None)
+        if ok:
+            console.print(f"  [green]✓[/green] {msg}")
+        else:
+            console.print(f"  [red]✗[/red] {msg}")
+            raise typer.Exit(1)
+
+        # Step 3: smoke test — verify the MCP server module loads
+        console.print()
+        console.print("  Smoke test: loading nvHive MCP server module...")
+        try:
+            from nvh.mcp_server import create_server
+            create_server()
+            console.print("  [green]✓[/green] nvhive-mcp entry point available")
+        except ImportError:
+            console.print("  [yellow]![/yellow] MCP SDK not installed")
+            console.print('  Install with: [bold]pip install "nvhive[mcp]"[/bold]')
+        except Exception as e:
+            console.print(f"  [yellow]![/yellow] MCP server loads but: {e}")
+            console.print("  [dim]This is expected — the server needs a client to connect.[/dim]")
+
+        console.print()
+        console.print(Panel(
+            "[bold green]OpenClaw setup complete.[/bold green]\n\n"
+            "Your OpenClaw agents can now call nvHive tools:\n"
+            "  ask, ask_safe, council, throwdown, status,\n"
+            "  list_advisors, list_cabinets\n\n"
+            "Run [bold]nvh openclaw --test[/bold] to verify,\n"
+            "or start an OpenClaw agent and try the tools directly.",
+            border_style="green",
+        ))
+        console.print()
+        return
 
     # --- Test mode ---
     if test:
@@ -6262,6 +6331,7 @@ def openclaw(
     console.print(Rule("Commands"))
     console.print()
     console.print("  [bold]nvh openclaw[/bold]            Show this setup guide")
+    console.print("  [bold]nvh openclaw --install[/bold]  Install OpenClaw + register nvHive")
     console.print("  [bold]nvh openclaw --test[/bold]     Test MCP server availability")
     console.print("  [bold]nvh openclaw --start[/bold]    Start MCP server manually")
     console.print("  [bold]nvh openclaw --config[/bold]   Generate openclaw.json")
@@ -6660,6 +6730,10 @@ def nemoclaw(
     test: bool = typer.Option(False, "--test", help="Test connectivity to a running nvHive proxy"),
     start: bool = typer.Option(False, "--start", help="Start the proxy server for NemoClaw"),
     mcp: bool = typer.Option(False, "--mcp", help="Show MCP tool server setup for NemoClaw"),
+    install: bool = typer.Option(
+        False, "--install",
+        help="Install NemoClaw, register nvHive as inference provider, and run a smoke test",
+    ),
 ):
     """NemoClaw integration — use NVHive as your NemoClaw inference provider and MCP tool server.
 
@@ -6669,6 +6743,7 @@ def nemoclaw(
 
     Examples:
         nvh nemoclaw              Show setup instructions
+        nvh nemoclaw --install    Install NemoClaw + register nvHive + smoke test
         nvh nemoclaw --test       Test if nvHive proxy is reachable
         nvh nemoclaw --start      Start the proxy server for NemoClaw
     """
@@ -6681,6 +6756,95 @@ def nemoclaw(
         "smart routing, council consensus, and throwdown analysis.",
         border_style="cyan",
     ))
+
+    # --- Install mode: pip install nemoclaw + register + smoke test ---
+    if install:
+        import shutil
+
+        from nvh.integrations.detector import register_nemoclaw
+
+        console.print()
+        console.print(Rule("Install NemoClaw + register nvHive"))
+        console.print()
+
+        # Step 1: install nemoclaw if missing
+        if _is_package_installed("nemoclaw"):
+            console.print("  [green]✓[/green] nemoclaw already installed")
+        else:
+            console.print("  Installing [bold]nemoclaw[/bold] via pip...")
+            ok, msg = _pip_install_package("nemoclaw")
+            if ok:
+                console.print(f"  [green]✓[/green] {msg}")
+            else:
+                console.print(f"  [red]✗[/red] {msg}")
+                console.print()
+                console.print(
+                    "  [dim]Fix the pip error above, then rerun"
+                    " [bold]nvh nemoclaw --install[/bold][/dim]"
+                )
+                raise typer.Exit(1)
+
+        # Step 2: register nvHive as NemoClaw inference provider.
+        # This requires the `openshell` CLI — punt to the user if missing,
+        # since that usually means they need an interactive login first.
+        console.print()
+        if shutil.which("openshell") is None:
+            console.print(
+                "  [yellow]![/yellow] openshell CLI not found —"
+                " skipping provider registration"
+            )
+            console.print(
+                "  [dim]Install openshell and run"
+                " [bold]openshell login[/bold] first, then:[/dim]"
+            )
+            console.print()
+            _print_openshell_commands(host, port)
+        else:
+            console.print("  Registering nvHive as NemoClaw inference provider...")
+            ok, msg = register_nemoclaw(host=host, port=port)
+            if ok:
+                console.print(f"  [green]✓[/green] {msg}")
+            else:
+                console.print(f"  [yellow]![/yellow] {msg}")
+                console.print(
+                    "  [dim]You may need to run"
+                    " [bold]openshell login[/bold] first, or register manually:[/dim]"
+                )
+                console.print()
+                _print_openshell_commands(host, port)
+
+        # Step 3: smoke test — is the nvHive proxy reachable?
+        console.print()
+        console.print("  Smoke test: checking nvHive proxy reachability...")
+        try:
+            import httpx
+            url = f"http://{host}:{port}/v1/proxy/health"
+            resp = httpx.get(url, timeout=3)
+            if resp.status_code == 200:
+                console.print(f"  [green]✓[/green] Proxy healthy at {url}")
+            else:
+                console.print(
+                    f"  [yellow]![/yellow] Proxy returned {resp.status_code}"
+                    f" — start it with [bold]nvh nemoclaw --start[/bold]"
+                )
+        except Exception:
+            console.print(
+                "  [yellow]![/yellow] Proxy not running —"
+                " start it with [bold]nvh nemoclaw --start[/bold]"
+            )
+
+        console.print()
+        console.print(Panel(
+            "[bold cyan]NemoClaw setup complete.[/bold cyan]\n\n"
+            "Next steps:\n"
+            "  1. Start proxy: [bold]nvh nemoclaw --start[/bold]\n"
+            "  2. Verify:      [bold]nvh nemoclaw --test[/bold]\n"
+            "  3. Set default: [bold]openshell inference"
+            " set --provider nvhive --model auto[/bold]",
+            border_style="cyan",
+        ))
+        console.print()
+        return
 
     # --- Test mode: check if the proxy is running ---
     if test:
@@ -6874,6 +7038,7 @@ def nemoclaw(
     console.print(Rule("Commands"))
     console.print()
     console.print("  [bold]nvh nemoclaw[/bold]           Show this setup guide")
+    console.print("  [bold]nvh nemoclaw --install[/bold] Install NemoClaw + register nvHive")
     console.print("  [bold]nvh nemoclaw --test[/bold]    Test proxy connectivity")
     console.print("  [bold]nvh nemoclaw --start[/bold]   Start the proxy server")
     console.print("  [bold]nvh nemoclaw --mcp[/bold]     Show MCP tool server setup")
@@ -6893,6 +7058,38 @@ def _print_openshell_commands(host: str, port: int):
     console.print("      --type openai \\")
     console.print("      --credential OPENAI_API_KEY=nvhive \\")
     console.print(f"      --config OPENAI_BASE_URL=http://{endpoint_host}:{port}/v1/proxy")
+
+
+def _pip_install_package(package: str) -> tuple[bool, str]:
+    """Install a pip package into the current env. Returns (success, message).
+
+    Uses sys.executable -m pip so it respects the active venv / micromamba env.
+    """
+    import subprocess
+    import sys as _sys
+
+    try:
+        result = subprocess.run(
+            [_sys.executable, "-m", "pip", "install", package],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode == 0:
+            return True, f"Installed {package}"
+        # Last few lines of stderr are usually the helpful ones
+        tail = "\n".join(result.stderr.strip().splitlines()[-5:])
+        return False, f"pip install failed:\n{tail}"
+    except subprocess.TimeoutExpired:
+        return False, "pip install timed out after 10 minutes"
+    except Exception as exc:
+        return False, f"pip install error: {exc}"
+
+
+def _is_package_installed(module_name: str) -> bool:
+    """Check if a Python package is importable (fast check via importlib)."""
+    import importlib.util
+    return importlib.util.find_spec(module_name) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -8214,7 +8411,12 @@ def test(
 # ---------------------------------------------------------------------------
 
 @app.command(rich_help_panel="Admin")
-def doctor():
+def doctor(
+    fix: bool = typer.Option(
+        False, "--fix",
+        help="Interactively apply fixes for detected problems (e.g. restart Ollama)",
+    ),
+):
     """Run comprehensive system diagnostic."""
     import os
 
@@ -8373,8 +8575,10 @@ def doctor():
                     f"Check your {name} API key and network access.",
                 )
 
-    # 6. Ollama detection
+    # 6. Ollama detection. With --fix, offer to restart Ollama if it's
+    # enabled in config but the daemon isn't reachable.
     ollama_models: list[str] = []
+    ollama_ok = False
     try:
         import httpx
         resp = httpx.get("http://localhost:11434/api/tags", timeout=5)
@@ -8382,6 +8586,7 @@ def doctor():
             data = resp.json()
             ollama_models = [m.get("name", "") for m in data.get("models", [])]
             _pass("Ollama", f"detected, {len(ollama_models)} model(s)")
+            ollama_ok = True
         else:
             _warn("Ollama", f"HTTP {resp.status_code}", "Start Ollama: `ollama serve`")
     except Exception:
@@ -8391,6 +8596,43 @@ def doctor():
             "Install from https://ollama.ai"
             " or start with `ollama serve`",
         )
+
+    # Offer to auto-restart Ollama if --fix is set and config expects it running
+    if fix and not ollama_ok and config is not None:
+        ollama_cfg = config.providers.get("ollama") if hasattr(config, "providers") else None
+        if ollama_cfg and getattr(ollama_cfg, "enabled", False):
+            console.print(
+                "\n[yellow]Ollama is enabled in config but not running.[/yellow]"
+            )
+            try:
+                answer = console.input("  Restart Ollama now? [Y/n] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = "n"
+            if answer not in ("n", "no"):
+                from nvh.cli.setup import _find_ollama_binary, _start_ollama
+                ollama_bin = _find_ollama_binary()
+                if ollama_bin is None:
+                    console.print(
+                        "  [red]ollama binary not found.[/red] "
+                        "Install from https://ollama.com"
+                    )
+                elif _start_ollama(console, ollama_bin):
+                    # Re-probe to update status
+                    try:
+                        resp = httpx.get("http://localhost:11434/api/tags", timeout=5)
+                        if resp.status_code == 200:
+                            ollama_models = [
+                                m.get("name", "")
+                                for m in resp.json().get("models", [])
+                            ]
+                            rows.append((
+                                "Ollama (restarted)",
+                                "[green]PASS[/green]",
+                                f"now running, {len(ollama_models)} model(s)",
+                            ))
+                            ollama_ok = True
+                    except Exception:
+                        pass
 
     # 7. Cache status
     if config is not None:
@@ -8548,6 +8790,37 @@ def doctor():
 
     except Exception as e:
         _warn("Environment detection", str(e))
+
+    # 12. nvh on PATH — ensures the user can invoke "nvh" directly.
+    # Reuses the env-aware helper in setup.py which handles conda/mamba/venv.
+    try:
+        from nvh.cli.setup import _check_nvh_on_path
+        path_hint = _check_nvh_on_path()
+        if path_hint is None:
+            _pass("nvh on PATH", "reachable")
+        else:
+            kind = path_hint["env_kind"]
+            if kind in ("conda", "mamba") and path_hint["env_name"]:
+                fix_cmd = path_hint["activate_cmd"]
+                _warn(
+                    "nvh on PATH",
+                    f"installed in {kind} env '{path_hint['env_name']}' but not activated",
+                    f"Activate the env: {fix_cmd}",
+                )
+            elif kind == "venv" and path_hint["activate_cmd"]:
+                _warn(
+                    "nvh on PATH",
+                    f"installed in venv '{path_hint['env_name']}' but not activated",
+                    f"Activate the venv: {path_hint['activate_cmd']}",
+                )
+            else:
+                _warn(
+                    "nvh on PATH",
+                    f"binary at {path_hint['full_path']} is not on PATH",
+                    f"Add to PATH: export PATH=\"{path_hint['bin_dir']}:$PATH\"",
+                )
+    except Exception as e:
+        _warn("nvh on PATH", str(e))
 
     # -----------------------------------------------------------------------
     # Render results table

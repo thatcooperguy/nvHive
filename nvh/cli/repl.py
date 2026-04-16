@@ -152,6 +152,41 @@ def _read_line(prompt_markup: str) -> str | None:
         return None
 
 
+def _try_restart_ollama_interactive(console: Console) -> bool:
+    """Ask the user if we should restart Ollama, and do so if they accept.
+
+    Returns True if Ollama came back up, False otherwise. Reuses the hardened
+    _start_ollama from setup.py so the spawned daemon survives when this
+    process (or the user's SSH session) exits.
+    """
+    try:
+        answer = console.input(
+            "\n  [yellow]Restart Ollama now? [Y/n][/yellow] "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if answer in ("n", "no"):
+        return False
+
+    from nvh.cli.setup import _find_ollama_binary, _ollama_running, _start_ollama
+
+    # Quick pre-check: maybe it came back up on its own
+    running, _ = _ollama_running()
+    if running:
+        return True
+
+    ollama_bin = _find_ollama_binary()
+    if ollama_bin is None:
+        console.print(
+            "  [red]Could not find the ollama binary.[/red]\n"
+            "  [dim]Install it with: curl -fsSL"
+            " https://ollama.com/install.sh | sh[/dim]"
+        )
+        return False
+
+    return _start_ollama(console, ollama_bin)
+
+
 def _read_multiline() -> str:
     """Read lines until a \"\"\" terminator is encountered."""
     console.print('[dim]  (multi-line mode — end block with """ on its own line)[/dim]')
@@ -1052,7 +1087,27 @@ async def run_repl(
             session.system_prompt = _orig_system
             continue
         except Exception as exc:
-            console.print(f"\n[red]Error: {exc}[/red]")
+            exc_text = str(exc)
+            # Detect Ollama-not-running and offer a one-key restart.
+            # ProviderUnavailableError from ollama_provider raises with
+            # this exact substring, so string match is safe here.
+            if "Ollama is not running" in exc_text:
+                console.print(f"\n[red]Error: {exc}[/red]")
+                if _try_restart_ollama_interactive(console):
+                    # Pop the user message so they can re-enter the query
+                    # (retrying silently might surprise the user more than
+                    # asking them to resubmit).
+                    if session.history and session.history[-1]["role"] == "user":
+                        session.history.pop()
+                    session.turn -= 1
+                    session.system_prompt = _orig_system
+                    console.print(
+                        "[green]Ollama is back up.[/green] "
+                        "[dim]Re-enter your query to retry.[/dim]"
+                    )
+                    continue
+            else:
+                console.print(f"\n[red]Error: {exc}[/red]")
             # Revert turn count — the query failed
             if session.history and session.history[-1]["role"] == "user":
                 session.history.pop()

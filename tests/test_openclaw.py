@@ -77,3 +77,53 @@ def test_write_openclaw_config_no_merge(tmp_path):
     data = json.loads(output.read_text())
     assert "nvhive" in data["mcpServers"]
     assert "other-tool" not in data["mcpServers"]  # overwritten
+
+
+# ---------------------------------------------------------------------------
+# CLI helpers used by --install flag
+# ---------------------------------------------------------------------------
+
+
+def test_pip_install_helper_success(tmp_path):
+    """_pip_install_package returns (True, message) on successful install."""
+    from unittest.mock import MagicMock, patch
+
+    from nvh.cli.main import _pip_install_package
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stderr = ""
+    with patch("subprocess.run", return_value=mock_result):
+        ok, msg = _pip_install_package("somepackage")
+
+    assert ok is True
+    assert "somepackage" in msg
+
+
+def test_pip_install_helper_failure():
+    """_pip_install_package returns (False, stderr-tail) on failure."""
+    from unittest.mock import MagicMock, patch
+
+    from nvh.cli.main import _pip_install_package
+
+    mock_result = MagicMock()
+    mock_result.returncode = 1
+    mock_result.stderr = "line 1\nline 2\nERROR: Could not find package"
+    with patch("subprocess.run", return_value=mock_result):
+        ok, msg = _pip_install_package("bogus-pkg")
+
+    assert ok is False
+    assert "Could not find package" in msg
+
+
+def test_is_package_installed_for_existing():
+    """_is_package_installed returns True for a known-importable package."""
+    from nvh.cli.main import _is_package_installed
+    # json is always available
+    assert _is_package_installed("json") is True
+
+
+def test_is_package_installed_for_missing():
+    """_is_package_installed returns False for a non-existent module."""
+    from nvh.cli.main import _is_package_installed
+    assert _is_package_installed("this_module_does_not_exist_xyz") is False

@@ -61,6 +61,52 @@ PYTHON=$(find_python) || {
 echo -e "${D}Python: $($PYTHON --version 2>&1) [$PYTHON]${N}"
 
 # ---------------------------------------------------------------------------
+# Detect active conda/micromamba/venv — if one is active, offer to install
+# into it instead of creating a fresh venv at ~/nvh/venv. This avoids the
+# common case of users pip-installing into their existing env and ending up
+# with `nvh` at ~/<env>/bin/nvh, not on PATH unless the env is activated.
+# ---------------------------------------------------------------------------
+ACTIVE_ENV_KIND=""; ACTIVE_ENV_NAME=""; ACTIVE_ENV_PATH=""
+if [ -n "${MAMBA_ROOT_PREFIX:-}" ] && [ -n "${CONDA_PREFIX:-}" ]; then
+    ACTIVE_ENV_KIND="micromamba"
+    ACTIVE_ENV_NAME="${CONDA_DEFAULT_ENV:-$(basename "$CONDA_PREFIX")}"
+    ACTIVE_ENV_PATH="$CONDA_PREFIX"
+elif [ -n "${CONDA_PREFIX:-}" ]; then
+    ACTIVE_ENV_KIND="conda"
+    ACTIVE_ENV_NAME="${CONDA_DEFAULT_ENV:-$(basename "$CONDA_PREFIX")}"
+    ACTIVE_ENV_PATH="$CONDA_PREFIX"
+elif [ -n "${VIRTUAL_ENV:-}" ]; then
+    ACTIVE_ENV_KIND="venv"
+    ACTIVE_ENV_NAME="$(basename "$VIRTUAL_ENV")"
+    ACTIVE_ENV_PATH="$VIRTUAL_ENV"
+fi
+
+USE_ACTIVE_ENV=false
+if [ -n "$ACTIVE_ENV_KIND" ] && [ -z "${NVH_FORCE_VENV:-}" ]; then
+    echo -e "${Y}Detected active $ACTIVE_ENV_KIND env: ${G}$ACTIVE_ENV_NAME${N}"
+    echo -e "${D}  ($ACTIVE_ENV_PATH)${N}"
+    # Default to Yes when we have a TTY; otherwise install into the active env
+    # (non-interactive, e.g. piped-from-curl, preserves the user's choice to
+    # activate an env before running the installer).
+    if [ -t 0 ]; then
+        read -r -p "  Install into this env instead of ~/nvh/venv? [Y/n] " ANSWER
+        case "${ANSWER:-Y}" in
+            n|N|no|NO) USE_ACTIVE_ENV=false ;;
+            *)         USE_ACTIVE_ENV=true ;;
+        esac
+    else
+        USE_ACTIVE_ENV=true
+    fi
+fi
+
+if [ "$USE_ACTIVE_ENV" = "true" ]; then
+    NVH_VENV="$ACTIVE_ENV_PATH"
+    PYTHON="$ACTIVE_ENV_PATH/bin/python"
+    [ -x "$PYTHON" ] || PYTHON="$ACTIVE_ENV_PATH/bin/python3"
+    echo -e "${G}Installing into $ACTIVE_ENV_KIND env '$ACTIVE_ENV_NAME'${N}"
+fi
+
+# ---------------------------------------------------------------------------
 # Detect GPU
 # ---------------------------------------------------------------------------
 GPU_NAME=""; VRAM_GB=0
@@ -187,18 +233,31 @@ else
     curl -sSL https://github.com/thatcooperguy/nvHive/archive/refs/heads/main.tar.gz | tar xz -C "$NVH_REPO" --strip-components=1
 fi
 
-# Create venv
-echo -e "${B}Creating Python environment...${N}"
-$PYTHON -m venv "$NVH_VENV"
-source "$NVH_VENV/bin/activate"
-pip install -q --upgrade pip 2>/dev/null
+# Create venv (skip when installing into an already-active env)
+if [ "$USE_ACTIVE_ENV" = "true" ]; then
+    echo -e "${B}Using existing $ACTIVE_ENV_KIND env: $ACTIVE_ENV_NAME${N}"
+    # Env is already activated by the user's shell; just upgrade pip in-place.
+    "$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
+else
+    echo -e "${B}Creating Python environment...${N}"
+    $PYTHON -m venv "$NVH_VENV"
+    source "$NVH_VENV/bin/activate"
+    pip install -q --upgrade pip 2>/dev/null
+fi
 
 # Install
 echo -e "${B}Installing NVHive (~60s)...${N}"
-pip install -q -e "$NVH_REPO" 2>/dev/null || {
-    echo -e "${R}Install failed. Check Python version (need 3.12+).${N}"
-    exit 1
-}
+if [ "$USE_ACTIVE_ENV" = "true" ]; then
+    "$PYTHON" -m pip install -q -e "$NVH_REPO" 2>/dev/null || {
+        echo -e "${R}Install failed. Check Python version (need 3.12+).${N}"
+        exit 1
+    }
+else
+    pip install -q -e "$NVH_REPO" 2>/dev/null || {
+        echo -e "${R}Install failed. Check Python version (need 3.12+).${N}"
+        exit 1
+    }
+fi
 
 # Verify
 command -v nvh &>/dev/null || {
@@ -276,15 +335,22 @@ CFGEOF
     echo -e "${G}Config created: $HIVE_DIR/config.yaml${N}"
 fi
 
-# Set up .bashrc
-RC="$HOME/.bashrc"; [ -f "$HOME/.zshrc" ] && RC="$HOME/.zshrc"
-grep -q "nvh/venv/bin" "$RC" 2>/dev/null || {
-    echo "" >> "$RC"
-    echo "# NVHive — Multi-LLM Orchestration" >> "$RC"
-    echo "export PATH=\"$NVH_VENV/bin:\$PATH\"" >> "$RC"
-    echo "# Auto-start Ollama on login if installed" >> "$RC"
-    echo "[ -f \"$NVH_HOME/ollama\" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null 2>&1 && OLLAMA_MODELS=\"$NVH_HOME/models\" \"$NVH_HOME/ollama\" serve &>/dev/null &" >> "$RC"
-}
+# Set up .bashrc — only when we own the venv. If the user installed into
+# their existing conda/mamba/venv, they'll activate it themselves; adding a
+# PATH export would shadow their own activation logic.
+if [ "$USE_ACTIVE_ENV" = "true" ]; then
+    echo -e "${D}Skipping .bashrc PATH edit — using existing $ACTIVE_ENV_KIND env.${N}"
+    echo -e "${D}  Remember to activate '$ACTIVE_ENV_NAME' before running nvh.${N}"
+else
+    RC="$HOME/.bashrc"; [ -f "$HOME/.zshrc" ] && RC="$HOME/.zshrc"
+    grep -q "nvh/venv/bin" "$RC" 2>/dev/null || {
+        echo "" >> "$RC"
+        echo "# NVHive — Multi-LLM Orchestration" >> "$RC"
+        echo "export PATH=\"$NVH_VENV/bin:\$PATH\"" >> "$RC"
+        echo "# Auto-start Ollama on login if installed" >> "$RC"
+        echo "[ -f \"$NVH_HOME/ollama\" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null 2>&1 && OLLAMA_MODELS=\"$NVH_HOME/models\" \"$NVH_HOME/ollama\" serve &>/dev/null &" >> "$RC"
+    }
+fi
 
 # ---------------------------------------------------------------------------
 # Set up Ollama (local AI) — only if we have a GPU
@@ -326,6 +392,16 @@ echo -e "${G}╔═════════════════════�
 echo -e "${G}║       NVHive is ready!               ║${N}"
 echo -e "${G}╚══════════════════════════════════════╝${N}"
 echo ""
+if [ "$USE_ACTIVE_ENV" = "true" ]; then
+    case "$ACTIVE_ENV_KIND" in
+        micromamba) ACT="micromamba activate $ACTIVE_ENV_NAME" ;;
+        conda)      ACT="conda activate $ACTIVE_ENV_NAME" ;;
+        venv)       ACT="source $ACTIVE_ENV_PATH/bin/activate" ;;
+    esac
+    echo -e "  ${Y}Env:${N} installed into $ACTIVE_ENV_KIND env ${G}$ACTIVE_ENV_NAME${N}"
+    echo -e "  ${Y}Next shell:${N} run ${G}$ACT${N} before using nvh"
+    echo ""
+fi
 echo -e "  ${G}nvh${N}            Start chatting (works immediately)"
 echo -e "  ${G}nvh setup${N}      Add more free AI providers"
 echo -e "  ${G}nvh bench${N}      Benchmark your GPU"

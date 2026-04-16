@@ -359,12 +359,19 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
     console.print("  Starting Ollama...")
     try:
         log_file = open(log_path, "w")
+        # Fully detach from the parent terminal so Ollama survives when the
+        # setup CLI exits (and when the user's SSH session disconnects):
+        #  - start_new_session=True  → new process group, shields from SIGHUP
+        #  - stdin=DEVNULL           → no inherited TTY, no hang on close
+        #  - close_fds=True          → don't leak inherited descriptors
         proc = subprocess.Popen(
             [ollama_bin, "serve"],
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=log_file,
             env=env,
             start_new_session=True,
+            close_fds=True,
         )
         log_file.close()  # child inherited the fd, parent can close
     except Exception as exc:
@@ -508,6 +515,44 @@ def _ensure_ollama(console: Console) -> tuple[bool, list[str]]:
     if started:
         return _ollama_running()
     return False, []
+
+
+# Known vision-capable Ollama model tags. Used for pull ordering so the
+# desktop-agent screenshot assist is available during API-key setup even
+# if the large text models are still downloading.
+_VISION_MODEL_TAGS = {
+    "moondream",
+    "minicpm-v",
+    "llama3.2-vision",
+    "llama3.2-vision:11b",
+    "llama3.2-vision:90b",
+    "llava",
+    "llava:7b",
+    "llava:13b",
+    "llava:34b",
+    "bakllava",
+}
+
+
+def _is_vision_model(tag: str) -> bool:
+    """Return True if the tag refers to a vision-capable model.
+
+    Matches exact known tags and any tag whose base (before ':') is known.
+    """
+    if tag in _VISION_MODEL_TAGS:
+        return True
+    base = tag.split(":", 1)[0]
+    return base in _VISION_MODEL_TAGS or "-vision" in base or "llava" in base
+
+
+def _reorder_vision_first(models: list[str]) -> list[str]:
+    """Pull order: vision models first, then text models.
+
+    Preserves relative order within each group.
+    """
+    vision = [m for m in models if _is_vision_model(m)]
+    text = [m for m in models if not _is_vision_model(m)]
+    return vision + text
 
 
 def _get_recommended_models(total_vram: float) -> list[str]:
@@ -655,8 +700,18 @@ def _watch_clipboard_for_key(
     return None
 
 
-def _write_config(configured_providers: dict[str, str]) -> Path:
+def _write_config(
+    configured_providers: dict[str, str],
+    ollama_enabled: bool = False,
+) -> Path:
     """Write a minimal config.yaml enabling the configured providers.
+
+    Args:
+        configured_providers: Map of provider name → API key for providers the
+            user configured during setup.
+        ollama_enabled: True only if Ollama is actually installed and running.
+            When False, the ollama advisor is emitted with enabled=false so the
+            REPL doesn't try to talk to a port where nothing is listening.
 
     Returns the path to the written file.
     """
@@ -709,9 +764,15 @@ def _write_config(configured_providers: dict[str, str]) -> Path:
     }
 
     for name, info in advisor_defs.items():
-        enabled = name in configured_providers or name == "ollama"
+        if name == "ollama":
+            enabled = ollama_enabled
+        else:
+            enabled = name in configured_providers
         lines.append(f"  {name}:")
-        if info.get("env"):
+        # Only emit the api_key interpolation for providers we've actually
+        # configured — otherwise the YAML loader warns about unset env vars
+        # on every nvh invocation.
+        if info.get("env") and enabled:
             lines.append(f"    api_key: ${{{info['env']}}}")
         if info.get("base_url"):
             lines.append(f"    base_url: {info['base_url']}")
@@ -803,11 +864,14 @@ def guided_setup(console: Console | None = None) -> None:
                 else:
                     console.print(f"    [dim]available[/dim]   {model}")
 
-            # Ask to pull missing models
+            # Ask to pull missing models. Vision model goes first so the
+            # desktop-agent assist in step 3 is ready even if the big text
+            # model pull is still running or fails.
             missing = [
                 m for m in recommended
                 if not any(m in existing for existing in ollama_models)
             ]
+            missing = _reorder_vision_first(missing)
             if missing:
                 console.print()
                 try:
@@ -1057,10 +1121,13 @@ def guided_setup(console: Console | None = None) -> None:
         )
 
     # ------------------------------------------------------------------
-    # Save config
+    # Save config — re-check Ollama status right before writing, so we don't
+    # enable a provider whose daemon has since exited (prevents the REPL
+    # error "Ollama is not running at http://localhost:11434").
     # ------------------------------------------------------------------
     console.print()
-    config_path = _write_config(configured_providers)
+    final_ollama_up, _ = _ollama_running()
+    config_path = _write_config(configured_providers, ollama_enabled=final_ollama_up)
     console.print(f"  [green]Config saved to {config_path}[/green]")
 
     # ------------------------------------------------------------------
@@ -1078,14 +1145,125 @@ def guided_setup(console: Console | None = None) -> None:
     summary.append(".")
     console.print(Panel(summary, border_style="green"))
 
+    # ------------------------------------------------------------------
+    # PATH check — warn if the `nvh` binary isn't reachable from the shell.
+    # Give env-appropriate advice: activate the conda/mamba/venv env if
+    # detected, otherwise suggest editing the shell rc.
+    # ------------------------------------------------------------------
+    nvh_cmd = "nvh"
+    path_hint = _check_nvh_on_path()
+    if path_hint is not None:
+        nvh_cmd = path_hint["full_path"]
+        console.print()
+        kind = path_hint["env_kind"]
+        if kind in ("conda", "mamba", "venv") and path_hint["activate_cmd"]:
+            label = {"conda": "conda", "mamba": "micromamba", "venv": "venv"}[kind]
+            console.print(Panel(
+                f"[yellow]The [bold]nvh[/bold] command is not on your PATH.[/yellow]\n\n"
+                f"Installed in {label} env [bold]{path_hint['env_name']}[/bold] at:\n"
+                f"  {path_hint['full_path']}\n\n"
+                f"Activate the env to put [bold]nvh[/bold] on PATH:\n"
+                f"  [dim]$[/dim] [bold]{path_hint['activate_cmd']}[/bold]\n\n"
+                f"Or run by full path (e.g. [bold]{path_hint['full_path']}[/bold]).",
+                border_style="yellow",
+            ))
+        else:
+            console.print(Panel(
+                f"[yellow]The [bold]nvh[/bold] command is not on your PATH.[/yellow]\n\n"
+                f"Installed at: [bold]{path_hint['full_path']}[/bold]\n\n"
+                f"To use [bold]nvh[/bold] directly, add its directory to PATH:\n"
+                f"  [dim]$[/dim] echo 'export PATH=\"{path_hint['bin_dir']}:$PATH\"'"
+                f" >> {path_hint['shell_rc']}\n"
+                f"  [dim]$[/dim] source {path_hint['shell_rc']}\n\n"
+                f"Or run commands by full path (e.g. [bold]{path_hint['full_path']}[/bold]).",
+                border_style="yellow",
+            ))
+
     console.print()
     console.print("  [bold]Next steps:[/bold]")
-    console.print('    Try a query:             [bold]nvh "What is the meaning of life?"[/bold]')
-    console.print("    Launch interactive chat:  [bold]nvh[/bold]")
+    console.print(f'    Try a query:             [bold]{nvh_cmd} "What is the meaning of life?"[/bold]')
+    console.print(f"    Launch interactive chat:  [bold]{nvh_cmd}[/bold]")
     if has_vision_model:
-        console.print("    Desktop agent:           [bold]nvh \"take a screenshot\"[/bold]")
-    console.print("    Edit config:              [bold]nvh config edit[/bold]")
+        console.print(f"    Desktop agent:           [bold]{nvh_cmd} \"take a screenshot\"[/bold]")
+    console.print(f"    Edit config:              [bold]{nvh_cmd} config edit[/bold]")
     console.print()
+
+
+def _check_nvh_on_path() -> dict[str, str] | None:
+    """Check whether the `nvh` binary is reachable via PATH.
+
+    Returns None if everything is fine. Otherwise returns a dict with:
+      - full_path: absolute path to the nvh entry-point script
+      - bin_dir: directory containing the script
+      - env_kind: one of 'conda', 'mamba', 'venv', 'system'
+      - env_name: active conda/mamba env name, or '' for venv/system
+      - shell_rc: best-guess shell init file to append an export to
+      - activate_cmd: idiomatic activation command for the detected env type
+    """
+    import shutil
+    import sys
+
+    if shutil.which("nvh") is not None:
+        return None
+
+    # Derive the nvh script location from sys.executable's bin dir
+    py_bin_dir = Path(sys.executable).parent
+    nvh_path = py_bin_dir / ("nvh.exe" if sys.platform == "win32" else "nvh")
+    if not nvh_path.exists():
+        # Fall back to sys.prefix/bin (venv/virtualenv layout)
+        alt = Path(sys.prefix) / ("Scripts" if sys.platform == "win32" else "bin") / (
+            "nvh.exe" if sys.platform == "win32" else "nvh"
+        )
+        if alt.exists():
+            nvh_path = alt
+        else:
+            return None  # can't locate it, nothing useful to say
+
+    # Detect what kind of Python environment we're in, so we can give the
+    # right "how to put nvh on PATH" advice. Conda/mamba users should
+    # activate their env — editing .bashrc would break when they switch envs.
+    env_kind = "system"
+    env_name = ""
+    activate_cmd = ""
+
+    conda_env = os.environ.get("CONDA_DEFAULT_ENV", "")
+    conda_prefix = os.environ.get("CONDA_PREFIX", "")
+    mamba_root = os.environ.get("MAMBA_ROOT_PREFIX", "")
+    virtual_env = os.environ.get("VIRTUAL_ENV", "")
+
+    if mamba_root or (conda_prefix and "micromamba" in conda_prefix.lower()):
+        env_kind = "mamba"
+        env_name = conda_env or Path(conda_prefix).name if conda_prefix else ""
+        activate_cmd = f"micromamba activate {env_name}" if env_name else "micromamba activate <env>"
+    elif conda_prefix:
+        env_kind = "conda"
+        env_name = conda_env or Path(conda_prefix).name
+        activate_cmd = f"conda activate {env_name}" if env_name else "conda activate <env>"
+    elif virtual_env:
+        env_kind = "venv"
+        env_name = Path(virtual_env).name
+        if sys.platform == "win32":
+            activate_cmd = f"{virtual_env}\\Scripts\\activate"
+        else:
+            activate_cmd = f"source {virtual_env}/bin/activate"
+
+    # Pick the shell rc to suggest (zsh takes precedence if present)
+    home = Path.home()
+    if sys.platform == "win32":
+        shell_rc = "your PowerShell profile"
+    elif (home / ".zshrc").exists():
+        shell_rc = "~/.zshrc"
+    else:
+        shell_rc = "~/.bashrc"
+
+    return {
+        "full_path": str(nvh_path),
+        "bin_dir": str(nvh_path.parent),
+        "env_kind": env_kind,
+        "env_name": env_name,
+        "shell_rc": shell_rc,
+        "activate_cmd": activate_cmd,
+    }
 
 
 def _validate_key(name: str, key: str, console: Console) -> bool | None:
