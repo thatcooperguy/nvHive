@@ -152,36 +152,136 @@ def _read_line(prompt_markup: str) -> str | None:
         return None
 
 
-def _try_restart_ollama_interactive(console: Console) -> bool:
-    """Ask the user if we should restart Ollama, and do so if they accept.
+def _startup_check_ollama_models(engine: Engine | None) -> None:
+    """One-time check at REPL launch: warn if any required Ollama model
+    is missing, and offer to pull.
 
-    Returns True if Ollama came back up, False otherwise. Reuses the hardened
-    _start_ollama from setup.py so the spawned daemon survives when this
-    process (or the user's SSH session) exits.
-
-    If Ollama is already reachable (the provider's error was actually about
-    something else — e.g. a missing model), returns False and tells the user
-    so — retrying the same query would just hit the same underlying error.
+    Cheap: skips entirely when Ollama isn't enabled in config (no HTTP
+    call). When enabled, makes one ``/api/tags`` request with a 2s timeout.
+    Silent on the happy path — only prints when something needs attention.
     """
-    from nvh.cli.setup import _find_ollama_binary, _ollama_running, _start_ollama
-
-    # Pre-check before asking: if Ollama is actually already up, the provider
-    # error was misdiagnosed as a connection problem. Don't offer a restart
-    # that wouldn't help — explain what's likely wrong instead.
-    running, models = _ollama_running()
-    if running:
-        console.print(
-            "\n  [yellow]Ollama is actually running[/yellow]"
-            f" ([dim]{len(models)} model(s) loaded[/dim]). "
-            "The error was likely misdiagnosed.\n"
-            "  [dim]Most common cause: the configured default model is not"
-            " pulled. Try:[/dim]\n"
-            "  [dim]  ollama list            # see what's installed[/dim]\n"
-            "  [dim]  ollama pull nemotron-small  # or whichever model"
-            " your config uses[/dim]"
+    if engine is None or getattr(engine, "config", None) is None:
+        return
+    try:
+        from nvh.utils.ollama import (
+            list_installed_models,
+            missing_models,
+            required_ollama_models,
         )
-        return False
+        required = required_ollama_models(engine.config)
+    except Exception:
+        return
+    if not required:
+        return  # No Ollama advisors enabled → nothing to check
 
+    installed = list_installed_models()
+    if not installed and required:
+        # Daemon is down or empty. Don't nag — the first query will surface
+        # the real issue via the existing "Ollama is not running" flow.
+        return
+    missing = missing_models(required, installed)
+    if not missing:
+        return
+
+    label = ", ".join(missing)
+    console.print(
+        f"[yellow]  {len(missing)} required Ollama model(s) missing:"
+        f"[/yellow] [bold]{label}[/bold]"
+    )
+    try:
+        answer = console.input(
+            "  Pull now? [Y/n] "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if answer in ("n", "no"):
+        console.print(
+            "  [dim]Skipped. Queries that route to Ollama will prompt"
+            " again.[/dim]"
+        )
+        return
+
+    from nvh.cli.setup import _find_ollama_binary, _pull_model
+    ollama_bin = _find_ollama_binary() or "ollama"
+    for m in missing:
+        _pull_model(console, m, ollama_bin)
+
+
+def _try_restart_ollama_interactive(
+    console: Console,
+    engine: Engine | None = None,
+) -> bool:
+    """Handle an "Ollama is not running" error from the REPL.
+
+    Decides between two real situations the user can be in:
+      1. Daemon is actually down → prompt to restart it via _start_ollama.
+      2. Daemon is up but a required model isn't pulled (most common when
+         ``connect`` substring false-matches a litellm error) → prompt to
+         pull the missing model(s) via _pull_model.
+
+    Returns True if something useful happened and the user should retry.
+    """
+    from nvh.cli.setup import (
+        _find_ollama_binary,
+        _ollama_running,
+        _pull_model,
+        _start_ollama,
+    )
+    from nvh.utils.ollama import missing_models, required_ollama_models
+
+    running, _ = _ollama_running()
+
+    # --- Case 2: daemon is up — the error was really about a missing model
+    if running:
+        required: list[str] = []
+        installed: list[str] = []
+        if engine is not None and getattr(engine, "config", None) is not None:
+            try:
+                required = required_ollama_models(engine.config)
+                from nvh.utils.ollama import list_installed_models
+                installed = list_installed_models()
+            except Exception:
+                pass
+
+        missing = missing_models(required, installed) if required else []
+        if not missing:
+            # Daemon is up, required models all present — so the real error
+            # was something else (timeout, auth, bad request). Tell the user.
+            console.print(
+                "\n  [yellow]Ollama is running and required models are"
+                " installed.[/yellow]\n"
+                "  [dim]The error above was likely transient"
+                " (timeout, bad request).[/dim]\n"
+                "  [dim]Try the query again, or run"
+                " [bold]nvh doctor[/bold] for details.[/dim]"
+            )
+            return False
+
+        # At least one required model is missing → offer to pull it.
+        label = ", ".join(missing)
+        console.print(
+            f"\n  [yellow]Ollama is running but {len(missing)}"
+            f" required model(s) missing:[/yellow] [bold]{label}[/bold]"
+        )
+        try:
+            answer = console.input(
+                f"  Pull {len(missing)} model(s) now? [Y/n] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if answer in ("n", "no"):
+            return False
+
+        ollama_bin = _find_ollama_binary() or "ollama"
+        pulled_any = False
+        for m in missing:
+            if _pull_model(console, m, ollama_bin):
+                pulled_any = True
+        if pulled_any:
+            console.print("[green]Done.[/green] [dim]Re-enter your query.[/dim]")
+        return pulled_any
+
+    # --- Case 1: daemon is down — offer to start it
     try:
         answer = console.input(
             "\n  [yellow]Restart Ollama now? [Y/n][/yellow] "
@@ -907,6 +1007,13 @@ async def run_repl(
     if system_prompt:
         preview = system_prompt[:60] + ("..." if len(system_prompt) > 60 else "")
         console.print(f"[dim]System prompt: {preview}[/dim]")
+
+    # --- Startup model-health check (Ollama only, cheap) ---
+    # Skip entirely if Ollama isn't enabled in config to avoid any latency
+    # for cloud-only users. When enabled but a required model is missing,
+    # surface it up front so the first query doesn't fail confusingly.
+    _startup_check_ollama_models(engine)
+
     console.print()
 
     # Main loop
@@ -1109,7 +1216,7 @@ async def run_repl(
             # this exact substring, so string match is safe here.
             if "Ollama is not running" in exc_text:
                 console.print(f"\n[red]Error: {exc}[/red]")
-                if _try_restart_ollama_interactive(console):
+                if _try_restart_ollama_interactive(console, engine=engine):
                     # Pop the user message so they can re-enter the query
                     # (retrying silently might surprise the user more than
                     # asking them to resubmit).
@@ -1117,10 +1224,6 @@ async def run_repl(
                         session.history.pop()
                     session.turn -= 1
                     session.system_prompt = _orig_system
-                    console.print(
-                        "[green]Ollama is back up.[/green] "
-                        "[dim]Re-enter your query to retry.[/dim]"
-                    )
                     continue
             else:
                 console.print(f"\n[red]Error: {exc}[/red]")

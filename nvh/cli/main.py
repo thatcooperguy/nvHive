@@ -8733,6 +8733,54 @@ def doctor(
             "Pull a model: `ollama pull llama3.1`",
         )
 
+    # 10b. Required Ollama models — does the config reference any models
+    # that aren't pulled? This catches the common "Ollama is up but the
+    # configured default model isn't installed" case. With --fix, offer
+    # to pull the missing ones.
+    if ollama_ok and config is not None:
+        try:
+            from nvh.utils.ollama import missing_models, required_ollama_models
+            required = required_ollama_models(config)
+        except Exception:
+            required = []
+        if required:
+            missing = missing_models(required, ollama_models)
+            if not missing:
+                _pass(
+                    "Ollama required models",
+                    f"all {len(required)} present: {', '.join(required)}",
+                )
+            else:
+                _warn(
+                    "Ollama required models",
+                    f"{len(missing)}/{len(required)} missing: {', '.join(missing)}",
+                    f"Pull missing: " + "; ".join(f"ollama pull {m}" for m in missing),
+                )
+                if fix:
+                    console.print(
+                        f"\n[yellow]{len(missing)} required model(s) missing"
+                        f" in Ollama:[/yellow] [bold]{', '.join(missing)}[/bold]"
+                    )
+                    try:
+                        answer = console.input(
+                            f"  Pull them now? [Y/n] "
+                        ).strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        answer = "n"
+                    if answer not in ("n", "no"):
+                        from nvh.cli.setup import _find_ollama_binary, _pull_model
+                        ollama_bin = _find_ollama_binary() or "ollama"
+                        pulled_any = False
+                        for m in missing:
+                            if _pull_model(console, m, ollama_bin):
+                                pulled_any = True
+                        if pulled_any:
+                            rows.append((
+                                "Ollama required models (fixed)",
+                                "[green]PASS[/green]",
+                                f"pulled {', '.join(missing)}",
+                            ))
+
     # 11. Deployment environment detection
     try:
         from nvh.utils.environment import detect_environment, get_environment_summary

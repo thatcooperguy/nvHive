@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.31.0] - 2026-04-16
+
+### Added
+- **Missing-model detection across REPL, doctor, and startup.** A new shared
+  helper (`nvh/utils/ollama.py`) resolves the set of Ollama models the
+  config expects (default + fallback across every enabled advisor) and
+  compares against `/api/tags` output with sensible tag-matching rules.
+- **REPL auto-pull on missing model.** When the REPL hits an Ollama error
+  and the daemon is actually up (i.e. the real cause is a missing model),
+  it now shows which models are missing and offers a single-prompt pull
+  via the existing progress-bar flow, instead of telling the user to run
+  `ollama pull` manually.
+- **Startup model-health check.** When the REPL launches with any Ollama
+  advisor enabled, does a single cached `/api/tags` probe and — if any
+  required model is missing — prints a one-line banner offering to pull
+  right then. Silent on the happy path; skipped entirely for cloud-only
+  configs.
+- **`nvh doctor` required-models row.** New diagnostic that flags
+  "configured but not pulled" models. With `--fix`, interactively pulls
+  them all.
+
+### Tests
+- New `tests/test_ollama_utils.py` — 18 tests covering tag matching,
+  missing-set computation, required-model resolution from config,
+  installed-model listing with various HTTP error paths.
+- 105/105 passing across affected modules.
+
 ## [0.30.1] - 2026-04-16
 
 ### Fixed
