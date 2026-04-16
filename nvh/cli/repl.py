@@ -174,11 +174,15 @@ def _startup_check_ollama_models(engine: Engine | None) -> None:
     if not required:
         return  # No Ollama advisors enabled → nothing to check
 
-    installed = list_installed_models()
-    if not installed and required:
-        # Daemon is down or empty. Don't nag — the first query will surface
-        # the real issue via the existing "Ollama is not running" flow.
+    # Distinguish "daemon down" (skip — first query will surface the real
+    # issue) from "daemon up but no models pulled" (prompt). list_installed
+    # alone can't tell these apart since both return [].
+    from nvh.cli.setup import _ollama_running
+    daemon_up, _ = _ollama_running()
+    if not daemon_up:
         return
+
+    installed = list_installed_models()
     missing = missing_models(required, installed)
     if not missing:
         return
@@ -1211,10 +1215,18 @@ async def run_repl(
             continue
         except Exception as exc:
             exc_text = str(exc)
-            # Detect Ollama-not-running and offer a one-key restart.
-            # ProviderUnavailableError from ollama_provider raises with
-            # this exact substring, so string match is safe here.
-            if "Ollama is not running" in exc_text:
+            # Detect Ollama-related errors and offer a one-key recovery.
+            # Two cases that both benefit from the same auto-recovery flow:
+            #   1. "Ollama is not running" — daemon is down, offer restart
+            #   2. "model 'X' not found"  — daemon is up but a required
+            #      model isn't pulled; offer to pull it
+            # _try_restart_ollama_interactive handles both situations.
+            is_ollama_err = (
+                "Ollama is not running" in exc_text
+                or "not found" in exc_text.lower()
+                and "ollama" in exc_text.lower()
+            )
+            if is_ollama_err:
                 console.print(f"\n[red]Error: {exc}[/red]")
                 if _try_restart_ollama_interactive(console, engine=engine):
                     # Pop the user message so they can re-enter the query

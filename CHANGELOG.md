@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.31.2] - 2026-04-16
+
+### Fixed
+- **`nvh setup` never wrote `~/.hive/config.yaml`.** The command walked
+  the EULA / email / provider / model flow and printed "Setup complete!"
+  but never actually created the config file that the REPL / doctor /
+  SDK all depend on. `nvh doctor` would then report "Config file exists:
+  FAIL" and tell the user to run `nvh config init`. Now calls
+  `_write_config()` with whatever providers were configured during the
+  run.
+- **`nvh setup` printed "Ollama not detected" when the daemon was up.**
+  Setup used `subprocess.run(["ollama", "pull", ...])` which raised
+  `FileNotFoundError` when the `ollama` CLI binary wasn't on PATH (very
+  common with portable installs where the daemon is running but the CLI
+  lives at `~/.nvh/ollama/ollama`). The error was caught by an outer
+  `except Exception` that emitted the misleading "Ollama not detected.
+  Install: curl ..." text and claimed every recommended model needed
+  pulling — including ones that were already installed. Now uses the
+  HTTP-based `setup._pull_model` which talks to the daemon directly and
+  handles per-model failures without aborting the loop.
+- **Startup missing-model check silently skipped when Ollama had no
+  models.** `_startup_check_ollama_models` returned early whenever
+  `list_installed_models()` came back empty — but that's the same signal
+  for "daemon down" AND "daemon up but nothing pulled". The second case
+  is exactly when we should prompt the user. Now probes the daemon
+  separately via `_ollama_running()` and only skips when it's actually
+  down.
+- **REPL auto-pull didn't trigger on "model not found" errors.** The
+  error handler only matched the exact string "Ollama is not running",
+  so `litellm.APIConnectionError: OllamaException - {"error": "model X
+  not found"}` fell through to the raw error display. Now matches both
+  cases and routes through the same auto-recovery flow, which already
+  handles the missing-model pull offer.
+
+### Added
+- **`nvh webui` auto-installs Node.js on Linux/macOS without root.** When
+  Node isn't found, setup prompts to install via `fnm` (Fast Node
+  Manager): single-binary installer, drops Node 22 LTS under
+  `~/.local/share/fnm`, and prepends the bin dir to PATH for this
+  process so the subsequent `npm ci` call finds it. Cleanly declines
+  on Windows (use winget) and when the user says no.
+
 ## [0.31.1] - 2026-04-16
 
 ### Fixed

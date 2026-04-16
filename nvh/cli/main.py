@@ -3643,83 +3643,81 @@ def setup(
                     f"{', '.join(r.model for r in recs)}",
                 )
 
-                # Check if Ollama is running
+                # Check if Ollama is running AND pull missing models.
+                # Use the HTTP API for pulls (via setup._pull_model) rather
+                # than shelling out to the `ollama` CLI — the daemon can be
+                # up without the CLI binary being on PATH (common with
+                # portable installs at ~/.nvh/ollama/ollama), and an
+                # uncaught FileNotFoundError would bail the whole block
+                # with a misleading "Ollama not detected" message.
+                _ollama_base = _os.environ.get(
+                    "OLLAMA_BASE_URL",
+                    "http://localhost:11434",
+                )
+                daemon_reachable = False
+                existing: list[str] = []
                 try:
                     import httpx as _hx
-                    _ollama_base = _os.environ.get(
-                        "OLLAMA_BASE_URL",
-                        "http://localhost:11434",
-                    )
-                    _r = _hx.get(
-                        f"{_ollama_base}/api/tags", timeout=3,
-                    )
+                    _r = _hx.get(f"{_ollama_base}/api/tags", timeout=3)
                     if _r.status_code == 200:
-                        existing = [
-                            m.get("name", "").split(":")[0]
-                            for m in _r.json().get("models", [])
-                        ]
-                        import subprocess as _sp
-                        # Pull all recommended models that
-                        # aren't already installed
-                        for rec in recs:
-                            if rec.model in existing:
-                                console.print(
-                                    f"  [green]✓[/green]"
-                                    f" {rec.model}"
-                                    f" already installed",
-                                )
-                            else:
-                                console.print(
-                                    f"  Pulling"
-                                    f" {rec.model}...",
-                                )
-                                result = _sp.run(
-                                    [
-                                        "ollama", "pull",
-                                        rec.model,
-                                    ],
-                                )
-                                if result.returncode == 0:
-                                    console.print(
-                                        f"  [green]✓"
-                                        f" {rec.model}"
-                                        f" ready[/green]",
-                                    )
-                                else:
-                                    console.print(
-                                        f"  [yellow]"
-                                        f"{rec.model} failed"
-                                        f"[/yellow]",
-                                    )
-                        if len(recs) > 1:
-                            console.print(
-                                "  [green]Local council"
-                                " ready — multiple models"
-                                " for consensus[/green]",
-                            )
-                    else:
-                        console.print(
-                            "  [dim]Ollama not running."
-                            " Start with:"
-                            " ollama serve[/dim]",
-                        )
-                        for rec in recs:
-                            console.print(
-                                f"  [dim]Then: ollama"
-                                f" pull {rec.model}[/dim]",
-                            )
+                        daemon_reachable = True
+                        # Keep both full name and base for comparison —
+                        # rec.model might be tag-less (`nemotron`) while
+                        # Ollama returns `nemotron:latest`.
+                        for m in _r.json().get("models", []):
+                            nm = m.get("name", "")
+                            existing.append(nm)
+                            existing.append(nm.split(":")[0])
                 except Exception:
+                    daemon_reachable = False
+
+                if daemon_reachable:
+                    from nvh.cli.setup import _find_ollama_binary, _pull_model
+                    ollama_bin = _find_ollama_binary() or "ollama"
+                    pulled_ok = 0
+                    for rec in recs:
+                        # Match either the full name or the base tag
+                        already = (
+                            rec.model in existing
+                            or rec.model.split(":")[0] in existing
+                        )
+                        if already:
+                            console.print(
+                                f"  [green]✓[/green] {rec.model}"
+                                f" already installed",
+                            )
+                            pulled_ok += 1
+                            continue
+
+                        # _pull_model does a registry check first, uses
+                        # HTTP streaming with progress bar, and swallows
+                        # per-model exceptions — so one failure doesn't
+                        # abort the loop or bail to the outer except.
+                        try:
+                            if _pull_model(console, rec.model, ollama_bin):
+                                pulled_ok += 1
+                        except Exception as _e:
+                            console.print(
+                                f"  [yellow]{rec.model} pull failed:"
+                                f" {_e}[/yellow]",
+                            )
+
+                    if pulled_ok >= 2:
+                        console.print(
+                            "  [green]Local council ready —"
+                            " multiple models for consensus[/green]",
+                        )
+                else:
                     console.print(
-                        "  [dim]Ollama not detected."
-                        " Install: curl -fsSL"
-                        " https://ollama.com/install.sh"
-                        " | sh[/dim]",
+                        "  [dim]Ollama daemon not reachable at"
+                        f" {_ollama_base} — start it with:"
+                        " ollama serve[/dim]",
                     )
                     for rec in recs:
                         console.print(
                             f"  [dim]Then: ollama"
                             f" pull {rec.model}[/dim]",
-                    )
+                        )
         else:
             console.print(
                 "  [dim]No NVIDIA GPU detected"
@@ -3728,6 +3726,39 @@ def setup(
     except Exception:
         console.print(
             "  [dim]GPU detection unavailable[/dim]",
+        )
+
+    # Write config — setup was previously logging "Setup complete!" without
+    # ever creating ~/.hive/config.yaml. The REPL, doctor, and SDK all
+    # depend on that file existing; silently skipping it meant the user
+    # had to manually run `nvh config init` afterwards to recover.
+    try:
+        from nvh.cli.setup import _ollama_running, _write_config
+
+        # Build the configured_providers dict from env vars (what setup
+        # collected via env/keyring into OS environment during this run).
+        env_map = {
+            "groq": "GROQ_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "google": "GOOGLE_API_KEY",
+        }
+        configured_keys: dict[str, str] = {}
+        for provider, env_var in env_map.items():
+            v = os.environ.get(env_var, "").strip()
+            if v:
+                configured_keys[provider] = v
+
+        ollama_up, _ = _ollama_running()
+        config_path = _write_config(configured_keys, ollama_enabled=ollama_up)
+        console.print(
+            f"\n[dim]Config saved to {config_path}[/dim]"
+        )
+    except Exception as _cfg_exc:
+        console.print(
+            f"\n[yellow]Note: could not write config automatically"
+            f" ({_cfg_exc}). Run [bold]nvh config init[/bold] to"
+            f" create one.[/yellow]"
         )
 
     # Summary
@@ -7092,6 +7123,126 @@ def _is_package_installed(module_name: str) -> bool:
     return importlib.util.find_spec(module_name) is not None
 
 
+def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]:
+    """Offer to auto-install Node.js into the user's home without root.
+
+    Uses ``fnm`` (Fast Node Manager) — a single-binary, no-root Node manager:
+    downloads into ``~/.local/share/fnm``, manages multiple Node versions,
+    adds them to PATH on demand. We install fnm, then use it to pull Node
+    22 (current LTS) and update this process's PATH so the subsequent npm
+    calls in ``nvh webui`` find it.
+
+    Returns ``(node_path, npm_path)`` on success, ``(None, None)`` otherwise.
+    Interactive: prompts the user before making any network call.
+
+    Windows is intentionally out of scope — users there should use winget
+    (which requires admin for some installs but is the native path).
+    """
+    import os as _os
+    import shutil as _shutil
+    import subprocess as _sp
+
+    if sys.platform == "win32":
+        return None, None
+
+    try:
+        answer = console.input(
+            "  Auto-install Node.js into your home via fnm (no root)? [Y/n] "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return None, None
+    if answer in ("n", "no"):
+        return None, None
+
+    # Step 1: install fnm if missing. The official installer writes to
+    # ~/.local/share/fnm and optionally edits shell rc; we bypass the rc
+    # edit (--skip-shell) since we'll just prepend to this process's PATH.
+    fnm = _shutil.which("fnm")
+    if fnm is None:
+        candidate = Path.home() / ".local" / "share" / "fnm" / "fnm"
+        if candidate.is_file():
+            fnm = str(candidate)
+    if fnm is None:
+        console.print("  Installing fnm...")
+        try:
+            res = _sp.run(
+                ["bash", "-c",
+                 "curl -fsSL https://fnm.vercel.app/install"
+                 " | bash -s -- --skip-shell"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if res.returncode != 0:
+                console.print(
+                    f"  [red]fnm install failed:[/red]"
+                    f" {res.stderr.strip().splitlines()[-1:]}"
+                )
+                return None, None
+        except Exception as e:
+            console.print(f"  [red]fnm install failed:[/red] {e}")
+            return None, None
+
+        candidate = Path.home() / ".local" / "share" / "fnm" / "fnm"
+        if not candidate.is_file():
+            console.print(
+                "  [red]fnm binary not found after install.[/red]"
+            )
+            return None, None
+        fnm = str(candidate)
+
+    # Step 2: install Node 22 (current LTS). fnm caches under ~/.local/share.
+    console.print("  Installing Node.js 22 (LTS) via fnm...")
+    try:
+        res = _sp.run(
+            [fnm, "install", "22"],
+            capture_output=True, text=True, timeout=300,
+        )
+        if res.returncode != 0:
+            console.print(
+                f"  [red]Node install failed:[/red]"
+                f" {res.stderr.strip().splitlines()[-1:]}"
+            )
+            return None, None
+    except Exception as e:
+        console.print(f"  [red]Node install failed:[/red] {e}")
+        return None, None
+
+    # Step 3: find the newly-installed node + npm and put them on PATH
+    # for THIS process so the existing webui flow finds them. fnm stores
+    # versions under ~/.local/share/fnm/node-versions/vX.Y.Z/installation/bin
+    versions_dir = Path.home() / ".local" / "share" / "fnm" / "node-versions"
+    if not versions_dir.is_dir():
+        console.print(
+            "  [red]fnm node-versions directory not found.[/red]"
+        )
+        return None, None
+    # Pick the highest v22 install (there should be exactly one after
+    # a fresh install, but be defensive).
+    node_bins = sorted(
+        versions_dir.glob("v22.*/installation/bin"),
+        reverse=True,
+    )
+    if not node_bins:
+        console.print("  [red]No Node 22 install found.[/red]")
+        return None, None
+    bin_dir = node_bins[0]
+    _os.environ["PATH"] = f"{bin_dir}{_os.pathsep}{_os.environ.get('PATH', '')}"
+
+    node = _shutil.which("node")
+    npm = _shutil.which("npm")
+    if not node or not npm:
+        console.print(
+            f"  [red]Node binaries missing from {bin_dir}[/red]"
+        )
+        return None, None
+
+    console.print(f"  [green]✓ Node.js ready:[/green] {node}")
+    console.print(
+        f"  [dim]For new shells, add to your rc file:"
+        f"  export PATH=\"{bin_dir}:$PATH\"[/dim]"
+    )
+    return node, npm
+
+
 # ---------------------------------------------------------------------------
 # hive version
 # ---------------------------------------------------------------------------
@@ -7632,16 +7783,32 @@ def webui(
                 npm = candidate
                 break
     if not node or not npm:
-        console.print("[red]Node.js not found.[/red]")
-        console.print("Install Node.js 18+:")
-        if sys.platform == "darwin":
-            console.print("  brew install node")
-        elif sys.platform == "win32":
-            console.print("  winget install OpenJS.NodeJS")
-        else:
-            console.print("  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -")
-            console.print("  sudo apt install -y nodejs")
-        raise typer.Exit(1)
+        console.print("[yellow]Node.js not found.[/yellow]")
+        # Offer to install automatically. On Linux/macOS without root we
+        # use fnm (Fast Node Manager): single-binary installer, drops Node
+        # under ~/.local/share/fnm and adds to PATH for this process.
+        # Windows stays with winget guidance (requires user action).
+        node, npm = _try_install_node_no_root(console)
+        if not node or not npm:
+            console.print("[red]Auto-install failed or declined.[/red]")
+            console.print("Install Node.js 18+:")
+            if sys.platform == "darwin":
+                console.print("  brew install node")
+            elif sys.platform == "win32":
+                console.print("  winget install OpenJS.NodeJS")
+            else:
+                console.print(
+                    "  # fnm (no root): "
+                    "curl -fsSL https://fnm.vercel.app/install | bash"
+                )
+                console.print("  # then: fnm install 22 && fnm use 22")
+                console.print(
+                    "  # system install (requires sudo):"
+                    " curl -fsSL"
+                    " https://deb.nodesource.com/setup_22.x | sudo -E bash -"
+                )
+                console.print("  sudo apt install -y nodejs")
+            raise typer.Exit(1)
 
     # Install dependencies if needed
     node_modules = os.path.join(web_dir, "node_modules")
