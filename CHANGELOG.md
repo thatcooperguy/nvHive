@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.30.1] - 2026-04-16
+
+### Fixed
+- **Ollama misdiagnosed "not running" errors** — `ollama_provider.py` was
+  raising `ProviderUnavailableError` with "Ollama is not running" for any
+  error containing the substring "connect" / "connection" / "refused".
+  That matched unrelated failures like `HTTPConnectionPool` timeouts and
+  model-not-found errors, sending users on a wild goose chase restarting a
+  daemon that was fine. Now actually probes `/api/tags` before declaring
+  the daemon down, so we only surface that error when it's real.
+- **REPL auto-restart no longer lies** — when pre-check found Ollama
+  already running, the REPL would print "Ollama is back up" and tell the
+  user to retry, but retry hit the exact same error. Now detects the
+  pre-check case and explains the likely real cause (missing model)
+  instead of offering a bogus restart.
+
 ## [0.30.0] - 2026-04-16
 
 ### Added

@@ -158,7 +158,30 @@ def _try_restart_ollama_interactive(console: Console) -> bool:
     Returns True if Ollama came back up, False otherwise. Reuses the hardened
     _start_ollama from setup.py so the spawned daemon survives when this
     process (or the user's SSH session) exits.
+
+    If Ollama is already reachable (the provider's error was actually about
+    something else — e.g. a missing model), returns False and tells the user
+    so — retrying the same query would just hit the same underlying error.
     """
+    from nvh.cli.setup import _find_ollama_binary, _ollama_running, _start_ollama
+
+    # Pre-check before asking: if Ollama is actually already up, the provider
+    # error was misdiagnosed as a connection problem. Don't offer a restart
+    # that wouldn't help — explain what's likely wrong instead.
+    running, models = _ollama_running()
+    if running:
+        console.print(
+            "\n  [yellow]Ollama is actually running[/yellow]"
+            f" ([dim]{len(models)} model(s) loaded[/dim]). "
+            "The error was likely misdiagnosed.\n"
+            "  [dim]Most common cause: the configured default model is not"
+            " pulled. Try:[/dim]\n"
+            "  [dim]  ollama list            # see what's installed[/dim]\n"
+            "  [dim]  ollama pull nemotron-small  # or whichever model"
+            " your config uses[/dim]"
+        )
+        return False
+
     try:
         answer = console.input(
             "\n  [yellow]Restart Ollama now? [Y/n][/yellow] "
@@ -167,13 +190,6 @@ def _try_restart_ollama_interactive(console: Console) -> bool:
         return False
     if answer in ("n", "no"):
         return False
-
-    from nvh.cli.setup import _find_ollama_binary, _ollama_running, _start_ollama
-
-    # Quick pre-check: maybe it came back up on its own
-    running, _ = _ollama_running()
-    if running:
-        return True
 
     ollama_bin = _find_ollama_binary()
     if ollama_bin is None:

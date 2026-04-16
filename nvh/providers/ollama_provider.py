@@ -23,6 +23,23 @@ from nvh.providers.base import (
 from nvh.providers.openai_provider import _build_messages, _map_error
 
 
+def _ollama_daemon_reachable(base_url: str) -> bool:
+    """Return True iff Ollama responds to /api/tags within 2s.
+
+    We use this as a ground-truth check BEFORE raising "Ollama is not
+    running" based on an error message substring. Many litellm errors
+    contain substrings like "connect", "connection", or "HTTPConnectionPool"
+    even when the daemon is up and the real issue is model-not-found,
+    timeout, or auth. Actually probing the daemon eliminates false
+    positives that confuse users.
+    """
+    try:
+        resp = httpx.get(f"{base_url.rstrip('/')}/api/tags", timeout=2)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
 class OllamaProvider:
     """Ollama local model adapter using LiteLLM."""
 
@@ -80,7 +97,16 @@ class OllamaProvider:
             )
         except Exception as e:
             err_str = str(e).lower()
-            if "connection" in err_str or "refused" in err_str or "connect" in err_str:
+            looks_like_conn = (
+                "connection" in err_str
+                or "refused" in err_str
+                or "connect" in err_str
+            )
+            # Only declare "not running" if the daemon actually isn't
+            # answering — otherwise the real cause is model-not-found,
+            # timeout, or some other transient issue and the user needs
+            # the underlying error, not a misleading "start Ollama" hint.
+            if looks_like_conn and not _ollama_daemon_reachable(self._base_url):
                 raise ProviderUnavailableError(
                     f"Ollama is not running at {self._base_url}.\n"
                     f"Start with:   ollama serve\n"
@@ -180,7 +206,12 @@ class OllamaProvider:
             )
         except Exception as e:
             err_str = str(e).lower()
-            if "connection" in err_str or "refused" in err_str or "connect" in err_str:
+            looks_like_conn = (
+                "connection" in err_str
+                or "refused" in err_str
+                or "connect" in err_str
+            )
+            if looks_like_conn and not _ollama_daemon_reachable(self._base_url):
                 raise ProviderUnavailableError(
                     f"Ollama is not running at {self._base_url}.\n"
                     f"Start with:   ollama serve\n"
