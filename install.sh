@@ -288,7 +288,7 @@ defaults:
 advisors:
   ollama:
     base_url: http://localhost:11434
-    default_model: ollama/nemotron-small
+    default_model: ollama/nemotron-mini
     type: ollama
     enabled: true
 
@@ -371,11 +371,11 @@ if [ -n "$GPU_NAME" ]; then
         sleep 3
     fi
 
-    # Pick model based on VRAM
+    # Pick model based on VRAM. Only real Ollama registry tags — earlier
+    # tiers referenced nemotron:120b / nemotron-small which return 404.
     if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        if [ "$VRAM_GB" -ge 80 ]; then MODEL="nemotron:120b"
-        elif [ "$VRAM_GB" -ge 24 ]; then MODEL="nemotron"
-        elif [ "$VRAM_GB" -ge 6 ]; then MODEL="nemotron-small"
+        if [ "$VRAM_GB" -ge 24 ]; then MODEL="nemotron"
+        elif [ "$VRAM_GB" -ge 8 ]; then MODEL="llama3.1:8b"
         else MODEL="nemotron-mini"; fi
 
         if ! "$OLLAMA_BIN" list 2>/dev/null | grep -q "$MODEL"; then

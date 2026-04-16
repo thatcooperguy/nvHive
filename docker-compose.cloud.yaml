@@ -124,7 +124,7 @@ services:
   #
   # Override OLLAMA_PULL_MODEL in your .env to choose a different model:
   #   OLLAMA_PULL_MODEL=nemotron          # 70B — needs 48 GB+ VRAM (A100, H100)
-  #   OLLAMA_PULL_MODEL=nemotron-small    # 4B  — runs on 8 GB+ VRAM (default)
+  #   OLLAMA_PULL_MODEL=llama3.1:8b    # 4B  — runs on 8 GB+ VRAM (default)
   #   OLLAMA_PULL_MODEL=llama3.3:70b      # Meta Llama 3.3 70B
   # ---------------------------------------------------------------------------
   ollama-init:
@@ -132,7 +132,7 @@ services:
       OLLAMA_HOST: "http://ollama:11434"
     command:
       - |
-        MODEL="${OLLAMA_PULL_MODEL:-nemotron-small}"
+        MODEL="${OLLAMA_PULL_MODEL:-llama3.1:8b}"
         echo "Hive cloud init: checking for model: $MODEL ..."
         if ollama list 2>/dev/null | grep -qF "$MODEL"; then
           echo "$MODEL already present — skipping pull."

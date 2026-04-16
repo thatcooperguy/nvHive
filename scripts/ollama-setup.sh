@@ -12,8 +12,8 @@
 #
 # VRAM tiers (auto mode):
 #   < 6 GB   — nemotron-mini only
-#   6–12 GB  — nemotron-mini + nemotron-small
-#   12–24 GB — nemotron-mini + nemotron-small + codellama
+#   6–12 GB  — nemotron-mini + llama3.1:8b
+#   12–24 GB — nemotron-mini + llama3.1:8b + codellama
 #   24 GB+   — everything including full nemotron (70B)
 # =============================================================================
 
@@ -148,7 +148,7 @@ add_model() {
 if [[ "$PULL_ALL" == "true" ]]; then
   info "Manual override: --all flag set — pulling every model."
   add_model "nemotron-mini"  "NVIDIA Nemotron Mini 4B — lightweight, fast on any GPU"                            "~2.0 GB"
-  add_model "nemotron-small" "NVIDIA Nemotron Small — RECOMMENDED default, great quality/speed balance"          "~5.0 GB"
+  add_model "llama3.1:8b" "NVIDIA Nemotron Small — RECOMMENDED default, great quality/speed balance"          "~5.0 GB"
   add_model "nemotron"       "NVIDIA Nemotron 70B — best local quality, 131K context (needs 48GB+ VRAM)"        "~40 GB"
   add_model "llama3.2:1b"   "Llama 3.2 1B — lightweight fallback, fast on CPU"                                  "~1.3 GB"
   add_model "llama3.1:8b"   "Llama 3.1 8B — balanced quality/speed alternative"                                 "~4.7 GB"
@@ -168,14 +168,14 @@ elif [[ "$VRAM_GB" -lt 12 ]]; then
   # 6–12 GB VRAM: mini + small
   info "Detected: ${GPU_NAME} (${VRAM_GB} GB VRAM) — pulling recommended models..."
   add_model "nemotron-mini"  "NVIDIA Nemotron Mini 4B — fast, low-memory option"                 "~2.0 GB"
-  add_model "nemotron-small" "NVIDIA Nemotron Small — RECOMMENDED for this GPU tier"             "~5.0 GB"
+  add_model "llama3.1:8b" "NVIDIA Nemotron Small — RECOMMENDED for this GPU tier"             "~5.0 GB"
   add_model "llama3.2:1b"   "Llama 3.2 1B — tiny fallback"                                      "~1.3 GB"
 
 elif [[ "$VRAM_GB" -lt 24 ]]; then
   # 12–24 GB VRAM: mini + small + codellama
   info "Detected: ${GPU_NAME} (${VRAM_GB} GB VRAM) — pulling recommended models..."
   add_model "nemotron-mini"  "NVIDIA Nemotron Mini 4B — fast, low-memory option"                 "~2.0 GB"
-  add_model "nemotron-small" "NVIDIA Nemotron Small — RECOMMENDED default"                       "~5.0 GB"
+  add_model "llama3.1:8b" "NVIDIA Nemotron Small — RECOMMENDED default"                       "~5.0 GB"
   add_model "codellama"      "Code generation, review, and explanation"                          "~3.8 GB"
   add_model "llama3.2:1b"   "Llama 3.2 1B — tiny fallback"                                      "~1.3 GB"
 
@@ -183,7 +183,7 @@ elif [[ "$VRAM_GB" -lt 80 ]]; then
   # 24-80 GB VRAM: full suite with 70B nemotron
   info "Detected: ${GPU_NAME} (${VRAM_GB} GB VRAM) — pulling full model suite..."
   add_model "nemotron-mini"  "NVIDIA Nemotron Mini 4B — fast option"                             "~2.0 GB"
-  add_model "nemotron-small" "NVIDIA Nemotron Small — balanced quality/speed"                    "~5.0 GB"
+  add_model "llama3.1:8b" "NVIDIA Nemotron Small — balanced quality/speed"                    "~5.0 GB"
   add_model "nemotron"       "NVIDIA Nemotron 70B — best local quality, 131K context"            "~40 GB"
   add_model "codellama"      "Code generation, review, and explanation"                          "~3.8 GB"
   add_model "llama3.1:8b"   "Llama 3.1 8B — alternative balanced model"                         "~4.7 GB"
@@ -192,9 +192,9 @@ else
   # 80 GB+ VRAM: flagship tier — Nemotron 120B fits (quantized ~70GB)
   info "Detected: ${GPU_NAME} (${VRAM_GB} GB VRAM) — flagship GPU detected! Pulling full suite + 120B..."
   add_model "nemotron-mini"  "NVIDIA Nemotron Mini 4B — fast option"                             "~2.0 GB"
-  add_model "nemotron-small" "NVIDIA Nemotron Small — balanced quality/speed"                    "~5.0 GB"
+  add_model "llama3.1:8b" "NVIDIA Nemotron Small — balanced quality/speed"                    "~5.0 GB"
   add_model "nemotron"       "NVIDIA Nemotron 70B — high quality, 131K context"                  "~40 GB"
-  add_model "nemotron:120b"  "NVIDIA Nemotron 120B — FLAGSHIP, maximum quality"                  "~70 GB"
+  add_model "nemotron"  "NVIDIA Nemotron 120B — FLAGSHIP, maximum quality"                  "~70 GB"
   add_model "codellama"      "Code generation, review, and explanation"                          "~3.8 GB"
   add_model "llama3.1:8b"   "Llama 3.1 8B — alternative balanced model"                         "~4.7 GB"
 fi
@@ -305,7 +305,7 @@ show_disk_usage "Total disk after setup"
 echo ""
 echo -e "${BOLD}Tips:${RESET}"
 echo "  Run a quick Nemotron test:"
-echo "    $OLLAMA_CMD run nemotron-small 'Hello! What can you do?'"
+echo "    $OLLAMA_CMD run llama3.1:8b 'Hello! What can you do?'"
 echo ""
 echo "  Pull everything manually (ignores GPU tier):"
 echo "    ./scripts/ollama-setup.sh --all"

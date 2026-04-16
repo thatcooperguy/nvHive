@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.31.1] - 2026-04-16
+
+### Fixed
+- **Ollama pulls failed with 404 on `nemotron-small` and `nemotron:120b`.**
+  Both tags were referenced throughout the codebase (recommender, config
+  writer, install scripts, Docker compose, cloud-session defaults, size
+  tables) but neither exists on Ollama's registry. Only `nemotron-mini`
+  (4B) and `nemotron` / `nemotron:70b` are real.
+
+  Every reference audited and replaced:
+  - Mid-VRAM text tier (6–24 GB): `nemotron-small` → `llama3.1:8b`
+  - CPU-offload hint: `nemotron-small` → `llama3.1:8b`
+  - High-VRAM flagship (80+ GB): `nemotron:120b` → `nemotron` (70B is
+    the largest Nemotron on Ollama)
+  - install.sh / install.ps1 / install-mac.sh: VRAM-tier model selection
+    now uses `nemotron-mini` / `llama3.1:8b` / `nemotron` only
+  - `nvh/config/settings.py`, `nvh/integrations/cloud_session.py`,
+    `nvh/api/server.py`, `nvh/providers/quota_info.py`,
+    `nvh/utils/gpu_emulation.py`, `docker-compose.yaml`,
+    `docker-compose.cloud.yaml`, and 3 setup scripts all updated.
+
+- **`_write_config` hardcoded `ollama/nemotron-small` as the Ollama
+  advisor default.** Even on a 48 GB machine where the user should be
+  running Nemotron 70B, the config pointed at a fake model. Now calls
+  `recommend_models()` per-machine and writes the matching default (plus
+  a real fallback_model), so the config reflects the detected hardware.
+
+### Added
+- **`_model_exists_on_registry()`** — cheap HEAD probe against
+  `registry.ollama.ai/v2/library/<name>/manifests/<tag>` that
+  `_pull_model` now consults before starting a pull. Confirmed 404s fail
+  fast with a clear error instead of propagating as a cryptic "model not
+  found" later. Network failures fall through (don't block the pull).
+
+### Tests
+- 160/160 passing across affected modules. New tests for registry probe
+  (200 / 404 / network-error / tag-splitting paths).
+
 ## [0.31.0] - 2026-04-16
 
 ### Added

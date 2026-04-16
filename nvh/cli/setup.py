@@ -404,6 +404,32 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
     return False
 
 
+def _model_exists_on_registry(model: str) -> bool | None:
+    """Cheap manifest HEAD against the Ollama registry.
+
+    Returns True/False if we got a clear answer, or None if the probe
+    failed (network issue, DNS, etc). Callers should treat None as
+    "can't confirm — try the pull anyway", not as failure.
+
+    We use this to catch invented/typo'd model names (e.g. the old
+    fictional ``nemotron-small`` tag) before kicking off a progress bar
+    against a pull that will eventually 404.
+    """
+    try:
+        import httpx
+        base, _, tag = model.partition(":")
+        tag = tag or "latest"
+        url = f"https://registry.ollama.ai/v2/library/{base}/manifests/{tag}"
+        resp = httpx.head(url, timeout=3, follow_redirects=True)
+        if resp.status_code == 200:
+            return True
+        if resp.status_code == 404:
+            return False
+        return None  # some other status — don't block the pull
+    except Exception:
+        return None
+
+
 def _pull_model(console: Console, model: str, ollama_bin: str) -> bool:
     """Pull an Ollama model with a Rich progress bar.
 
@@ -412,6 +438,20 @@ def _pull_model(console: Console, model: str, ollama_bin: str) -> bool:
     Falls back to a plain spinner if parsing fails.
     """
     import subprocess
+
+    # Short-circuit obviously-nonexistent tags so the user gets a clear
+    # error up front instead of a progress bar that fails and cascades
+    # into "Ollama is not running" on the next query. We only block on
+    # a confirmed 404 — network failures fall through to the real pull.
+    registry_state = _model_exists_on_registry(model)
+    if registry_state is False:
+        console.print(
+            f"  [red]Model [bold]{model}[/bold] does not exist on the"
+            " Ollama registry (404).[/red]\n"
+            f"  [dim]Check the name at https://ollama.com/library, or run"
+            " [bold]nvh doctor[/bold] to see what's configured.[/dim]"
+        )
+        return False
 
     from rich.progress import (
         BarColumn,
@@ -565,8 +605,10 @@ def _get_recommended_models(total_vram: float) -> list[str]:
     except Exception:
         pass
 
-    # Fallback: manual recommendations by VRAM
-    # Each tier fits text + vision model concurrently:
+    # Fallback: manual recommendations by VRAM, all names verified against
+    # Ollama's registry (no fictional tags like nemotron-small or
+    # nemotron:120b which 404'd on pull). Each tier fits text + vision
+    # model concurrently:
     #   llama3.2-vision (~7GB) — best spatial grounding for desktop agent
     #   minicpm-v (~5GB) — good vision, smaller footprint
     #   moondream (~2GB) — basic vision for very tight VRAM
@@ -577,7 +619,7 @@ def _get_recommended_models(total_vram: float) -> list[str]:
     if total_vram >= 48:
         return ["llama3.3:70b", "llama3.2-vision"]
     if total_vram >= 24:
-        return ["gemma2:27b", "llama3.2-vision"]
+        return ["gemma4:26b", "llama3.2-vision"]
     if total_vram >= 16:
         return ["qwen2.5-coder:7b", "minicpm-v"]
     if total_vram >= 12:
@@ -758,10 +800,35 @@ def _write_config(
         },
         "ollama": {
             "env": None,
-            "model": "ollama/nemotron-small",
+            # Populated per-machine below based on detected VRAM tier so the
+            # config points at a model that actually exists on the Ollama
+            # registry AND fits the user's hardware.
+            "model": None,
+            "fallback": None,
             "base_url": "http://localhost:11434",
         },
     }
+
+    # Pick the Ollama default/fallback for THIS machine — was hardcoded to
+    # the fictional `nemotron-small`, which 404'd the pull. Using the real
+    # recommender ensures the config always references real models.
+    try:
+        from nvh.utils.gpu import detect_gpus, recommend_models
+        recs = recommend_models(detect_gpus())
+        text_recs = [r.model for r in recs if not r.tier.startswith("vision")]
+        if text_recs:
+            advisor_defs["ollama"]["model"] = f"ollama/{text_recs[0]}"
+            if len(text_recs) > 1:
+                advisor_defs["ollama"]["fallback"] = f"ollama/{text_recs[1]}"
+    except Exception:
+        pass
+
+    # Sensible default if the recommender fails or returns nothing — use
+    # nemotron-mini since it's the smallest real Nemotron and exists on all
+    # Ollama installs where nemotron is pulled at all.
+    if not advisor_defs["ollama"]["model"]:
+        advisor_defs["ollama"]["model"] = "ollama/nemotron-mini"
+        advisor_defs["ollama"]["fallback"] = "ollama/nemotron-mini"
 
     for name, info in advisor_defs.items():
         if name == "ollama":

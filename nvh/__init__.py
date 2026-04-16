@@ -1,6 +1,6 @@
 """NVHive — Multi-LLM Orchestration Platform."""
 
-__version__ = "0.31.0"
+__version__ = "0.31.1"
 
 # SDK exports for Python usage
 from nvh.sdk import (

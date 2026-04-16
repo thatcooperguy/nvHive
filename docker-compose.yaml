@@ -7,7 +7,7 @@
 # Quick start:
 #   cp .env.example .env && $EDITOR .env   # add your API keys
 #   docker compose up -d
-#   # nemotron-small is pulled automatically by ollama-init
+#   # llama3.1:8b is pulled automatically by ollama-init
 #   # For the full Nemotron 70B model (needs 48GB+ VRAM):
 #   docker compose exec ollama ollama pull nemotron
 #
@@ -222,10 +222,10 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        echo "Hive init: checking for nemotron-small model (NVIDIA recommended)..."
-        if ollama list 2>/dev/null | grep -q 'nemotron-small'; then
-          echo "nemotron-small already present — skipping pull."
+        echo "Hive init: checking for llama3.1:8b model (NVIDIA recommended)..."
+        if ollama list 2>/dev/null | grep -q 'llama3.1:8b'; then
+          echo "llama3.1:8b already present — skipping pull."
         else
-          echo "Pulling nemotron-small (NVIDIA Nemotron Small, ~5 GB)..."
-          ollama pull nemotron-small && echo "Pull complete." || echo "Pull failed — will retry on next startup."
+          echo "Pulling llama3.1:8b (NVIDIA Nemotron Small, ~5 GB)..."
+          ollama pull llama3.1:8b && echo "Pull complete." || echo "Pull failed — will retry on next startup."
         fi

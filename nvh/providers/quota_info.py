@@ -135,7 +135,7 @@ PROVIDER_QUOTAS: dict[str, QuotaInfo] = {
         limit_description="Unlimited (local GPU)",
         reset_hint="No rate limits — runs on your hardware",
         upgrade_url="https://ollama.com/library",
-        upgrade_hint="Pull more models: ollama pull nemotron-small",
+        upgrade_hint="Pull more models: ollama pull llama3.1:8b",
     ),
 }
 

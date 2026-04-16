@@ -151,7 +151,10 @@ class TestGetRecommendedModels:
     def test_24gb_vram_gets_gemma(self):
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
             recs = _get_recommended_models(24.0)
-        assert "gemma2:27b" in recs
+        # Fallback recommender uses the real gemma4:26b (was gemma2:27b;
+        # both exist on Ollama but the newer Gemma 4 is what we recommend
+        # everywhere else in the codebase).
+        assert "gemma4:26b" in recs
 
     def test_96gb_gets_multiple_models(self):
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
@@ -399,6 +402,53 @@ class TestWriteConfig:
         assert "${OPENAI_API_KEY}" in text
         assert "${ANTHROPIC_API_KEY}" in text
         assert "${GOOGLE_API_KEY}" in text
+
+
+class TestModelExistsOnRegistry:
+    """Tests for _model_exists_on_registry — guards _pull_model from 404s."""
+
+    def test_returns_true_on_200(self):
+        from unittest.mock import MagicMock
+        from nvh.cli.setup import _model_exists_on_registry
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_httpx = MagicMock()
+        mock_httpx.head.return_value = mock_resp
+        with patch.dict("sys.modules", {"httpx": mock_httpx}):
+            assert _model_exists_on_registry("nemotron") is True
+
+    def test_returns_false_on_404(self):
+        from unittest.mock import MagicMock
+        from nvh.cli.setup import _model_exists_on_registry
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_httpx = MagicMock()
+        mock_httpx.head.return_value = mock_resp
+        with patch.dict("sys.modules", {"httpx": mock_httpx}):
+            assert _model_exists_on_registry("nemotron-small") is False
+
+    def test_returns_none_on_network_error(self):
+        from unittest.mock import MagicMock
+        from nvh.cli.setup import _model_exists_on_registry
+        mock_httpx = MagicMock()
+        mock_httpx.head.side_effect = Exception("DNS failure")
+        with patch.dict("sys.modules", {"httpx": mock_httpx}):
+            # None → don't block pull; maybe user has registry mirror
+            assert _model_exists_on_registry("anything") is None
+
+    def test_splits_tag_correctly(self):
+        """Model with explicit tag should probe the tag, not :latest."""
+        from unittest.mock import MagicMock
+        from nvh.cli.setup import _model_exists_on_registry
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_httpx = MagicMock()
+        mock_httpx.head.return_value = mock_resp
+        with patch.dict("sys.modules", {"httpx": mock_httpx}):
+            _model_exists_on_registry("nemotron:70b")
+        # Assert the URL included the explicit tag, not :latest
+        called_url = mock_httpx.head.call_args[0][0]
+        assert called_url.endswith("/library/nemotron/manifests/70b")
 
 
 class TestCheckNvhOnPath:

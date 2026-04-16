@@ -179,19 +179,20 @@ def get_cloud_recommended_config(session: CLOUDSession) -> dict[str, Any]:
     if not session.is_cloud_session:
         return config
 
-    # Model selection based on tier
+    # Model selection based on tier. Only real Ollama registry tags —
+    # earlier versions listed nemotron-small which 404s on pull.
     tier_models = {
         "priority": {
             "default_model": "ollama/nemotron-mini",
             "recommended_models": ["nemotron-mini"],
         },
         "performance": {
-            "default_model": "ollama/nemotron-small",
-            "recommended_models": ["nemotron-mini", "nemotron-small"],
+            "default_model": "ollama/llama3.1:8b",
+            "recommended_models": ["nemotron-mini", "llama3.1:8b"],
         },
         "ultimate": {
-            "default_model": "ollama/nemotron-small",
-            "recommended_models": ["nemotron-mini", "nemotron-small", "codellama"],
+            "default_model": "ollama/nemotron",
+            "recommended_models": ["nemotron-mini", "llama3.1:8b", "nemotron"],
         },
     }
 

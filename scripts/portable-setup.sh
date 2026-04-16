@@ -215,11 +215,11 @@ fi
 if [[ "$OLLAMA_RUNNING" == "true" ]]; then
     # Select model based on VRAM
     if [[ "$VRAM_GB" -ge 80 ]]; then
-        RECOMMENDED_MODEL="nemotron:120b"
+        RECOMMENDED_MODEL="nemotron"
     elif [[ "$VRAM_GB" -ge 24 ]]; then
         RECOMMENDED_MODEL="nemotron"
     elif [[ "$VRAM_GB" -ge 6 ]]; then
-        RECOMMENDED_MODEL="nemotron-small"
+        RECOMMENDED_MODEL="llama3.1:8b"
     else
         RECOMMENDED_MODEL="nemotron-mini"
     fi

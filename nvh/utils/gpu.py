@@ -329,15 +329,23 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
 
     recommendations: list[ModelRecommendation] = []
 
+    # NOTE on Nemotron sizes: Ollama's registry currently only ships
+    #   nemotron-mini (4B)  and  nemotron / nemotron:70b  (70B)
+    # There is no "nemotron-small" and no nemotron:120b in the registry.
+    # Earlier versions of this function referenced both — pull attempts
+    # returned 404 and the resulting "model not found" error from litellm
+    # was misdiagnosed as "Ollama is not running". For mid-tier VRAM where
+    # nemotron-mini would underutilize the hardware, fall back to
+    # llama3.1:8b which is a real, comparable Ollama model.
     if not gpus or total_vram_gb < 4:
         # CPU-only: system RAM is the constraint
         if sys_mem.available_ram_gb >= 8:
             recommendations.append(
                 ModelRecommendation(
-                    model="nemotron-small",
+                    model="llama3.1:8b",
                     reason=(
                         f"No GPU but {sys_mem.available_ram_gb:.0f} GB RAM available — "
-                        f"nemotron-small runs on CPU (slow but functional)"
+                        f"llama3.1:8b runs on CPU (slow but functional)"
                     ),
                     vram_required_gb=0.0,
                     tier="small",
@@ -382,8 +390,11 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
     elif total_vram_gb < 12:
         recommendations.append(
             ModelRecommendation(
-                model="nemotron-small",
-                reason=f"{total_vram_gb:.0f} GB VRAM — recommended sweet spot for quality/speed",
+                model="llama3.1:8b",
+                reason=(
+                    f"{total_vram_gb:.0f} GB VRAM — llama3.1:8b is the sweet spot"
+                    " (no mid-sized Nemotron exists in the Ollama registry)"
+                ),
                 vram_required_gb=5.0,
                 tier="small",
             )
@@ -391,7 +402,7 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
         recommendations.append(
             ModelRecommendation(
                 model="gemma4:e4b",
-                reason="Gemma 4 E4B — pair with Nemotron for local council",
+                reason="Gemma 4 E4B — pairs with llama3.1:8b for local council",
                 vram_required_gb=3.0,
                 tier="small",
             )
@@ -399,8 +410,11 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
     elif total_vram_gb < 24:
         recommendations.append(
             ModelRecommendation(
-                model="nemotron-small",
-                reason=f"{total_vram_gb:.0f} GB VRAM — great quality/speed balance",
+                model="llama3.1:8b",
+                reason=(
+                    f"{total_vram_gb:.0f} GB VRAM — llama3.1:8b gives good"
+                    " quality/speed balance at this tier"
+                ),
                 vram_required_gb=5.0,
                 tier="small",
             )
@@ -423,7 +437,7 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
                     model="gemma4:e4b",
                     reason=(
                         "Gemma 4 E4B — fits alongside"
-                        " Nemotron for local council"
+                        " llama3.1:8b for local council"
                     ),
                     vram_required_gb=3.0,
                     tier="small",
@@ -472,44 +486,32 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
                 tier="full",
             )
         )
-    elif total_vram_gb < 240:
-        # 80-240 GB VRAM — can run Nemotron 120B quantized (Q4_K_M ~67GB)
-        # Full FP16 (240GB) requires multi-GPU at this tier
-        recommendations.append(
-            ModelRecommendation(
-                model="nemotron:120b",
-                reason=(
-                    f"{total_vram_gb:.0f} GB VRAM available — Nemotron 120B runs in Q4_K_M "
-                    f"(~67 GB). Full FP16 (240 GB) requires more VRAM or multi-GPU"
-                ),
-                vram_required_gb=67.0,
-                tier="flagship",
-            )
-        )
+    else:
+        # 80GB+ VRAM. Note: Ollama's registry currently tops out at
+        # nemotron:70b — nemotron:120b / :340b were referenced by earlier
+        # versions of this function but return 404 on the registry. We
+        # recommend 70B as primary and pair it with the largest Gemma 4
+        # for a stronger local council at this tier.
         recommendations.append(
             ModelRecommendation(
                 model="nemotron",
-                reason="Nemotron 70B also available as a faster alternative",
+                reason=(
+                    f"{total_vram_gb:.0f} GB VRAM — Nemotron 70B "
+                    "(largest Nemotron available in the Ollama registry)"
+                ),
                 vram_required_gb=40.0,
                 tier="full",
             )
         )
-    else:
-        # 240GB+ VRAM (multi-GPU or GB200 class) — Nemotron 120B at full FP16
         recommendations.append(
             ModelRecommendation(
-                model="nemotron:120b",
-                reason=f"{total_vram_gb:.0f} GB VRAM available — Nemotron 120B at full FP16 precision",
-                vram_required_gb=240.0,
-                tier="flagship-fp16",
-            )
-        )
-        recommendations.append(
-            ModelRecommendation(
-                model="nemotron",
-                reason="Nemotron 70B at full FP16 for lower-latency tasks",
-                vram_required_gb=140.0,
-                tier="full",
+                model="gemma4:31b",
+                reason=(
+                    "Gemma 4 31B — pairs with Nemotron 70B for a strong"
+                    " local council at high-VRAM tiers"
+                ),
+                vram_required_gb=20.0,
+                tier="medium",
             )
         )
 
@@ -532,18 +534,18 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
                     tier="full-hybrid",
                 )
             )
-        # If we're on "full" tier but combined could fit 120B Q4 (~67GB)
-        elif top_tier in ("full",) and combined_gb >= 67 and total_vram_gb >= 48:
+        # Gemma 4 31B fits as a hybrid on mid-VRAM tiers (~20GB VRAM + CPU)
+        elif top_tier in ("full",) and combined_gb >= 35 and total_vram_gb >= 24:
             recommendations.append(
                 ModelRecommendation(
-                    model="nemotron:120b",
+                    model="gemma4:31b",
                     reason=(
                         f"Partial CPU offload: {total_vram_gb:.0f} GB VRAM + "
                         f"{cpu_offload_gb:.0f} GB RAM = {combined_gb:.0f} GB combined. "
-                        f"120B Q4 fits but noticeably slower than full GPU"
+                        f"Gemma 4 31B fits for diversified council"
                     ),
-                    vram_required_gb=67.0,
-                    tier="flagship-hybrid",
+                    vram_required_gb=20.0,
+                    tier="medium-hybrid",
                 )
             )
 

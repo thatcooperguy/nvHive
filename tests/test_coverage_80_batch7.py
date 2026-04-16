@@ -289,7 +289,10 @@ class TestGPU:
         gpu = self._make_gpu("RTX 4090", 24576)
         recs = recommend_models(gpus=[gpu])
         model_names = [r.model for r in recs]
-        assert "nemotron" in model_names or "nemotron-small" in model_names
+        # 24 GB lands in the "full" branch (nemotron 70B) at the boundary,
+        # or "small" for <24 — either llama3.1:8b (the real mid-tier) or
+        # nemotron should appear in the list.
+        assert any(m in model_names for m in ("nemotron", "llama3.1:8b"))
 
     @patch("nvh.utils.gpu.detect_system_memory")
     def test_recommend_models_multi_gpu(self, mock_mem):
@@ -332,7 +335,9 @@ class TestGPU:
         gpu = self._make_gpu("H100", 81920)
         recs = recommend_models(gpus=[gpu])
         model_names = [r.model for r in recs]
-        assert "nemotron:120b" in model_names
+        # Former "nemotron:120b" tier now recommends the real 70B Nemotron
+        # plus gemma4:31b for council at high-VRAM.
+        assert "nemotron" in model_names
 
     @patch("nvh.utils.gpu.detect_system_memory")
     def test_recommend_models_250gb_vram(self, mock_mem):
@@ -463,7 +468,9 @@ class TestCloudSession:
         session = CLOUDSession(is_cloud_session=True, tier="ultimate")
         cfg = get_cloud_recommended_config(session)
         assert cfg["ollama_num_parallel"] == 2
-        assert "nemotron-small" in cfg["recommended_models"]
+        # ultimate tier now recommends real Ollama models (was nemotron-small
+        # which 404s on the registry).
+        assert "llama3.1:8b" in cfg["recommended_models"]
 
     def test_format_cloud_status_not_cloud(self):
         from nvh.integrations.cloud_session import (

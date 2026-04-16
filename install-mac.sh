@@ -159,7 +159,7 @@ defaults:
 advisors:
   ollama:
     base_url: http://localhost:11434
-    default_model: ollama/nemotron-small
+    default_model: ollama/nemotron-mini
     type: ollama
     enabled: true
 
@@ -240,8 +240,8 @@ if [ "$APPLE_SILICON" = "true" ]; then
     # because Metal can address a larger portion of system RAM
     if curl -sf http://localhost:11434/api/tags &>/dev/null; then
         if [ "$MEM_GB" -ge 64 ]; then   MODEL="nemotron"       # 70B Q4 fits in 64GB
-        elif [ "$MEM_GB" -ge 32 ]; then MODEL="nemotron"       # 7B comfortably
-        elif [ "$MEM_GB" -ge 16 ]; then MODEL="nemotron-small" # 8B
+        elif [ "$MEM_GB" -ge 32 ]; then MODEL="nemotron"       # 70B Q4
+        elif [ "$MEM_GB" -ge 16 ]; then MODEL="llama3.1:8b"    # no real mid-Nemotron
         else                             MODEL="nemotron-mini"; fi
 
         if ! ollama list 2>/dev/null | grep -q "$MODEL"; then

@@ -173,7 +173,7 @@ defaults:
 advisors:
   ollama:
     base_url: http://localhost:11434
-    default_model: ollama/nemotron-small
+    default_model: ollama/nemotron-mini
     type: ollama
     enabled: true
 
@@ -256,10 +256,11 @@ if ($GPU_NAME) {
             Start-Sleep -Seconds 3
         }
 
-        # Pick model based on VRAM
-        $model = if     ($VRAM_GB -ge 80) { "nemotron:120b" }
-                 elseif ($VRAM_GB -ge 24) { "nemotron" }
-                 elseif ($VRAM_GB -ge 6 ) { "nemotron-small" }
+        # Pick model based on VRAM. Only real Ollama registry tags —
+        # earlier tiers referenced nemotron:120b / nemotron-small which
+        # return 404 on the registry.
+        $model = if     ($VRAM_GB -ge 24) { "nemotron" }
+                 elseif ($VRAM_GB -ge 8 ) { "llama3.1:8b" }
                  else                     { "nemotron-mini" }
 
         $ollamaRunning = try { (Invoke-WebRequest "http://localhost:11434/api/tags" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch { $false }

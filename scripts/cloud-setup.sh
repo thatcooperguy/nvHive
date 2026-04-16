@@ -200,11 +200,11 @@ detect_gpu() {
     RECOMMENDED_MODEL="llama3.3:70b-instruct-q4_K_M"
     info "Recommended model: llama3.3:70b (Q4, fits in 24 GB VRAM)"
   elif (( vram_int >= 16 )); then
-    RECOMMENDED_MODEL="nemotron-small"
-    info "Recommended model: nemotron-small (4B — comfortable in 16 GB VRAM)"
+    RECOMMENDED_MODEL="llama3.1:8b"
+    info "Recommended model: llama3.1:8b (4B — comfortable in 16 GB VRAM)"
   elif (( vram_int >= 8 )); then
-    RECOMMENDED_MODEL="nemotron-small"
-    info "Recommended model: nemotron-small (4B — fits in 8 GB VRAM)"
+    RECOMMENDED_MODEL="llama3.1:8b"
+    info "Recommended model: llama3.1:8b (4B — fits in 8 GB VRAM)"
   else
     RECOMMENDED_MODEL="llama3.2:3b"
     info "Recommended model: llama3.2:3b (small model for <8 GB VRAM)"

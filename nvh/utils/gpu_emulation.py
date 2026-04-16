@@ -146,7 +146,7 @@ _MEASURED_BASELINES: dict[tuple[str, str], float] = {
 # Model memory requirements (approximate, quantized)
 _MODEL_MEMORY_GB: dict[str, float] = {
     "nemotron-mini": 2.7,
-    "nemotron-small": 5.0,
+    "llama3.1:8b": 5.0,
     "gemma3": 3.3,
     "gemma4:e2b": 1.5,
     "gemma4:e4b": 9.6,

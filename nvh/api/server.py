@@ -802,10 +802,12 @@ async def system_recommendations() -> dict[str, Any]:
         recs = recommend_models(gpus)
         opts = get_ollama_optimizations(gpus)
 
-        # OOM check for the three main Nemotron model sizes
+        # OOM check for the three main model sizes users commonly pull.
+        # Note: there's no real "nemotron-small" on Ollama — llama3.1:8b
+        # is the comparable mid-tier option.
         oom_models = {
             "nemotron-mini": 2.0,
-            "nemotron-small": 5.0,
+            "llama3.1:8b": 5.0,
             "nemotron": 40.0,
         }
         oom_results = {name: check_oom_risk(vram, gpus) for name, vram in oom_models.items()}
@@ -2080,14 +2082,18 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
         pass
 
     # --- Build plan ---
-    # Rough size estimates in GB (used for ETA when exact size is unknown)
+    # Rough size estimates in GB (used for ETA when exact size is unknown).
+    # Only tags that actually exist on Ollama's registry — earlier entries
+    # included nemotron-small and nemotron:120b which return 404 on pull.
     size_estimates: dict[str, float] = {
         "nemotron-mini": 2.0,
-        "nemotron-small": 4.7,
+        "llama3.1:8b": 4.7,
         "nemotron": 40.0,
-        "nemotron:120b": 67.0,
         "codellama": 3.8,
         "llama3.2:3b": 2.0,
+        "llama3.2-vision": 7.0,
+        "gemma4:26b": 16.0,
+        "gemma4:31b": 20.0,
         "llama3.3:70b-instruct-q4_K_M": 40.0,
     }
     # Assume ~200 Mbps download (typical cloud / consumer broadband)
