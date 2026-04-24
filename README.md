@@ -35,21 +35,23 @@ macOS: `curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/in
 
 ### Option 2 — Single-file binary (no Python needed)
 
-Grab the latest binary from [GitHub Releases](https://github.com/thatcooperguy/nvHive/releases/latest):
+Fully standalone. No Python install, no pip, no venv. Click your OS:
 
-```bash
-# Linux x86_64
-curl -L -o nvh https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-linux-x86_64
-chmod +x nvh && ./nvh
+<p align="center">
+  <a href="https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-linux-x86_64">
+    <img src="https://img.shields.io/badge/Download%20for%20Linux-76B900?style=for-the-badge&logo=linux&logoColor=black" alt="Download for Linux (x86_64)">
+  </a>
+  &nbsp;
+  <a href="https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-macos-arm64">
+    <img src="https://img.shields.io/badge/Download%20for%20macOS-76B900?style=for-the-badge&logo=apple&logoColor=black" alt="Download for macOS (Apple Silicon)">
+  </a>
+  &nbsp;
+  <a href="https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-windows-x86_64.exe">
+    <img src="https://img.shields.io/badge/Download%20for%20Windows-76B900?style=for-the-badge&logo=windows&logoColor=black" alt="Download for Windows (x86_64)">
+  </a>
+</p>
 
-# macOS (Apple Silicon)
-curl -L -o nvh https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-macos-arm64
-chmod +x nvh && ./nvh
-
-# Windows — download nvh-windows-x86_64.exe from the Releases page
-```
-
-Fully standalone. No Python install, no pip, no venv.
+On Linux/macOS after download: `chmod +x nvh-* && ./nvh-*`. Full asset list (wheel, sdist, checksums) lives on the [Releases page](https://github.com/thatcooperguy/nvHive/releases/latest).
 
 ### Option 3 — pip from PyPI (for existing Python environments)
 
