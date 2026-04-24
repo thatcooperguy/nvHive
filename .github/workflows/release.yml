@@ -112,8 +112,7 @@ jobs:
           path: dist/${{ matrix.asset }}
 
   # ─────────────────────────────────────────────────────────────────────
-  # Aggregate all artifacts into a single GitHub Release. publish.yml
-  # listens for release:published and pushes the wheel/sdist to PyPI.
+  # Aggregate all artifacts into a single GitHub Release.
   # ─────────────────────────────────────────────────────────────────────
   release:
     needs: [build-python, build-binaries]
@@ -144,3 +143,25 @@ jobs:
             --title "nvHive ${{ steps.tag.outputs.tag }}" \
             --generate-notes \
             release-assets/*
+
+  # ─────────────────────────────────────────────────────────────────────
+  # PyPI publish — done in-workflow so the release chain isn't split.
+  #
+  # GitHub Actions suppresses `release:published` events when the
+  # Release is created by the default GITHUB_TOKEN (security: prevents
+  # workflow loops). That means publish.yml never fires for our
+  # automated releases, so we do it here directly via the same OIDC
+  # trusted-publishing flow publish.yml uses.
+  # ─────────────────────────────────────────────────────────────────────
+  publish-pypi:
+    needs: [release]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: python-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
