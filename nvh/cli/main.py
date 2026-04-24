@@ -9194,7 +9194,7 @@ def doctor(
                 _warn(
                     "Ollama required models",
                     f"{len(missing)}/{len(required)} missing: {', '.join(missing)}",
-                    f"Pull missing: " + "; ".join(f"ollama pull {m}" for m in missing),
+                    "Pull missing: " + "; ".join(f"ollama pull {m}" for m in missing),
                 )
                 if fix:
                     console.print(
@@ -9203,7 +9203,7 @@ def doctor(
                     )
                     try:
                         answer = console.input(
-                            f"  Pull them now? [Y/n] "
+                            "  Pull them now? [Y/n] "
                         ).strip().lower()
                     except (EOFError, KeyboardInterrupt):
                         answer = "n"

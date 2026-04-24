@@ -409,6 +409,7 @@ class TestModelExistsOnRegistry:
 
     def test_returns_true_on_200(self):
         from unittest.mock import MagicMock
+
         from nvh.cli.setup import _model_exists_on_registry
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -419,6 +420,7 @@ class TestModelExistsOnRegistry:
 
     def test_returns_false_on_404(self):
         from unittest.mock import MagicMock
+
         from nvh.cli.setup import _model_exists_on_registry
         mock_resp = MagicMock()
         mock_resp.status_code = 404
@@ -429,6 +431,7 @@ class TestModelExistsOnRegistry:
 
     def test_returns_none_on_network_error(self):
         from unittest.mock import MagicMock
+
         from nvh.cli.setup import _model_exists_on_registry
         mock_httpx = MagicMock()
         mock_httpx.head.side_effect = Exception("DNS failure")
@@ -439,6 +442,7 @@ class TestModelExistsOnRegistry:
     def test_splits_tag_correctly(self):
         """Model with explicit tag should probe the tag, not :latest."""
         from unittest.mock import MagicMock
+
         from nvh.cli.setup import _model_exists_on_registry
         mock_resp = MagicMock()
         mock_resp.status_code = 200
