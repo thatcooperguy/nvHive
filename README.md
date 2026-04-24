@@ -89,6 +89,14 @@ On first run, `nvh` launches a guided 3-step setup — GPU detection, provider k
   <img src="docs/screenshots/setup-flow.svg" alt="nvHive 3-Step Setup Flow" width="900">
 </p>
 
+### WebUI
+
+`nvh webui` launches a full-screen dashboard at `localhost:3000` — chat, council mode, advisor status, analytics, system stats, and setup flows. NVIDIA corporate theme, keyboard-first (Ctrl+K command palette, Ctrl+B collapse sidebar).
+
+<p align="center">
+  <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive WebUI walkthrough" width="900">
+</p>
+
 **GPU tier → model recommendations:**
 
 | VRAM | Text Model | Vision Model | Behavior |
