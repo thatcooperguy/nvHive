@@ -100,9 +100,9 @@ export default function QueryInput({
   };
 
   const MODES: { id: QueryMode; label: string; desc: string; color: string }[] = [
-    { id: 'simple', label: 'Simple', desc: 'Single provider', color: '#3b82f6' },
-    { id: 'council', label: 'Convene', desc: 'Multi-LLM orchestration', color: '#a855f7' },
-    { id: 'compare', label: 'Poll', desc: 'Side-by-side advisors', color: '#22c55e' },
+    { id: 'simple', label: 'Simple', desc: 'Single provider', color: '#2563eb' },
+    { id: 'council', label: 'Convene', desc: 'Multi-LLM orchestration', color: '#7c3aed' },
+    { id: 'compare', label: 'Poll', desc: 'Side-by-side advisors', color: '#16a34a' },
   ];
 
   return (
@@ -117,8 +117,8 @@ export default function QueryInput({
               onClick={() => setMode(m.id)}
               className={`flex-1 py-2.5 px-3 rounded-xl border text-sm font-medium transition-all duration-150 ${
                 mode === m.id
-                  ? 'border-opacity-50 text-white'
-                  : 'border-[#2a2a3e] text-[#475569] hover:text-[#94a3b8] hover:border-[#3a3a5e]'
+                  ? 'border-opacity-50 text-[#0a0a0a]'
+                  : 'border-[#e5e5e5] text-[#737373] hover:text-[#737373] hover:border-[#d4d4d4]'
               }`}
               style={mode === m.id ? {
                 backgroundColor: `${m.color}15`,
@@ -154,13 +154,13 @@ export default function QueryInput({
       {/* Provider / Model row */}
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs text-[#475569] mb-1.5 flex items-center justify-between">
+          <label className="block text-xs text-[#737373] mb-1.5 flex items-center justify-between">
             <span>Advisor</span>
             {sortedProviders.length > 0 && (
-              <span className="font-mono text-[10px] text-[#475569]">
-                <span className="text-[#22c55e]">●</span> {healthyCount} online
+              <span className="font-mono text-[10px] text-[#737373]">
+                <span className="text-[#16a34a]">●</span> {healthyCount} online
                 {healthyCount < sortedProviders.length && (
-                  <> / <span className="text-[#475569]">{sortedProviders.length - healthyCount} offline</span></>
+                  <> / <span className="text-[#737373]">{sortedProviders.length - healthyCount} offline</span></>
                 )}
               </span>
             )}
@@ -193,7 +193,7 @@ export default function QueryInput({
           </select>
         </div>
         <div>
-          <label className="block text-xs text-[#475569] mb-1.5">Model</label>
+          <label className="block text-xs text-[#737373] mb-1.5">Model</label>
           <select
             value={model}
             onChange={e => setModel(e.target.value)}
@@ -212,7 +212,7 @@ export default function QueryInput({
       <button
         type="button"
         onClick={() => setShowAdvanced(!showAdvanced)}
-        className="flex items-center gap-2 text-xs text-[#475569] hover:text-[#94a3b8] transition-colors"
+        className="flex items-center gap-2 text-xs text-[#737373] hover:text-[#737373] transition-colors"
       >
         <svg
           className={`w-3.5 h-3.5 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
@@ -224,12 +224,12 @@ export default function QueryInput({
       </button>
 
       {showAdvanced && (
-        <div className="space-y-4 bg-[#0d0d1a] border border-[#2a2a3e] rounded-xl p-4 animate-fade-in">
+        <div className="space-y-4 bg-[#eff6ff] border border-[#e5e5e5] rounded-xl p-4 animate-fade-in">
           {/* Temperature */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs text-[#94a3b8]">Temperature</label>
-              <span className="text-xs font-mono text-[#e2e8f0]">{temperature.toFixed(2)}</span>
+              <label className="text-xs text-[#737373]">Temperature</label>
+              <span className="text-xs font-mono text-[#0a0a0a]">{temperature.toFixed(2)}</span>
             </div>
             <input
               type="range"
@@ -238,20 +238,20 @@ export default function QueryInput({
               step="0.05"
               value={temperature}
               onChange={e => setTemperature(parseFloat(e.target.value))}
-              className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-[#1a1a2e]"
+              className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-[#fafafa]"
               style={{
-                background: `linear-gradient(to right, #3b82f6 ${(temperature / 2) * 100}%, #1a1a2e ${(temperature / 2) * 100}%)`
+                background: `linear-gradient(to right, #2563eb ${(temperature / 2) * 100}%, #fafafa ${(temperature / 2) * 100}%)`
               }}
             />
             <div className="flex justify-between mt-1">
-              <span className="text-xs text-[#475569]">Precise</span>
-              <span className="text-xs text-[#475569]">Creative</span>
+              <span className="text-xs text-[#737373]">Precise</span>
+              <span className="text-xs text-[#737373]">Creative</span>
             </div>
           </div>
 
           {/* Max tokens */}
           <div>
-            <label className="block text-xs text-[#94a3b8] mb-1.5">Max Tokens</label>
+            <label className="block text-xs text-[#737373] mb-1.5">Max Tokens</label>
             <input
               type="number"
               min="1"
@@ -264,7 +264,7 @@ export default function QueryInput({
 
           {/* System prompt */}
           <div>
-            <label className="block text-xs text-[#94a3b8] mb-1.5">System Prompt</label>
+            <label className="block text-xs text-[#737373] mb-1.5">System Prompt</label>
             <textarea
               value={systemPrompt}
               onChange={e => setSystemPrompt(e.target.value)}
@@ -276,12 +276,12 @@ export default function QueryInput({
 
           {/* Streaming toggle */}
           <div className="flex items-center justify-between">
-            <label className="text-xs text-[#94a3b8]">Streaming</label>
+            <label className="text-xs text-[#737373]">Streaming</label>
             <button
               type="button"
               onClick={() => setStream(!stream)}
               className={`relative w-10 h-5 rounded-full transition-colors ${
-                stream ? 'bg-[#3b82f6]' : 'bg-[#2a2a3e]'
+                stream ? 'bg-[#2563eb]' : 'bg-[#e5e5e5]'
               }`}
             >
               <span

@@ -379,12 +379,12 @@ export default function CouncilPage() {
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="nvidia-corner relative border border-[#333333] bg-[#111111] p-5 overflow-hidden">
+      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
         <div className="relative">
           <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Multi-LLM Orchestration</div>
-          <h1 className="text-2xl font-bold text-white">Convene Mode</h1>
-          <p className="text-xs font-mono text-[#555555] mt-1">
+          <h1 className="text-2xl font-bold text-[#0a0a0a]">Convene Mode</h1>
+          <p className="text-xs font-mono text-[#a3a3a3] mt-1">
             Orchestrate multiple AI advisors with real-time streaming and weighted synthesis
           </p>
         </div>
@@ -454,13 +454,13 @@ export default function CouncilPage() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#999999]">Auto Agents</div>
-                  <div className="text-[10px] font-mono text-[#555555]">AI-generated personas</div>
+                  <div className="text-xs font-mono text-[#525252]">Auto Agents</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]">AI-generated personas</div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setAutoAgents(!autoAgents)}
-                  className={`relative w-10 h-5 transition-colors ${autoAgents ? 'bg-[#76B900]' : 'bg-[#222222] border border-[#333333]'}`}
+                  className={`relative w-10 h-5 transition-colors ${autoAgents ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4]'}`}
                 >
                   <span className={`absolute top-0.5 w-4 h-4 bg-white shadow transition-transform ${autoAgents ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>
@@ -468,7 +468,7 @@ export default function CouncilPage() {
 
               {presets.length > 0 && (
                 <div>
-                  <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Cabinet</label>
+                  <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Cabinet</label>
                   <select
                     value={preset}
                     onChange={e => setPreset(e.target.value)}
@@ -480,7 +480,7 @@ export default function CouncilPage() {
                     ))}
                   </select>
                   {preset && presets.find(p => p.name === preset) && (
-                    <div className="mt-1.5 text-[10px] font-mono text-[#555555]">
+                    <div className="mt-1.5 text-[10px] font-mono text-[#a3a3a3]">
                       {presets.find(p => p.name === preset)?.description}
                     </div>
                   )}
@@ -489,7 +489,7 @@ export default function CouncilPage() {
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-[10px] font-mono text-[#666666] uppercase tracking-wider">Num Agents</label>
+                  <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Num Agents</label>
                   <span className="text-xs font-mono text-[#76B900]">{numAgents}</span>
                 </div>
                 <input type="range" min="2" max="8" step="1" value={numAgents}
@@ -523,7 +523,7 @@ export default function CouncilPage() {
               <div className="section-label">Convene Options</div>
 
               <div>
-                <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Strategy</label>
+                <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Strategy</label>
                 <select
                   value={strategy}
                   onChange={e => setStrategy(e.target.value)}
@@ -538,13 +538,13 @@ export default function CouncilPage() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#999999]">Synthesize</div>
-                  <div className="text-[10px] font-mono text-[#555555]">Combine responses</div>
+                  <div className="text-xs font-mono text-[#525252]">Synthesize</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]">Combine responses</div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setSynthesize(!synthesize)}
-                  className={`relative w-10 h-5 transition-colors ${synthesize ? 'bg-[#76B900]' : 'bg-[#222222] border border-[#333333]'}`}
+                  className={`relative w-10 h-5 transition-colors ${synthesize ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4]'}`}
                 >
                   <span className={`absolute top-0.5 w-4 h-4 bg-white shadow transition-transform ${synthesize ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>
@@ -552,7 +552,7 @@ export default function CouncilPage() {
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-[10px] font-mono text-[#666666] uppercase tracking-wider">Temperature</label>
+                  <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Temperature</label>
                   <span className="text-xs font-mono text-[#76B900]">{temperature.toFixed(2)}</span>
                 </div>
                 <input
@@ -563,7 +563,7 @@ export default function CouncilPage() {
               </div>
 
               <div>
-                <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Max Tokens</label>
+                <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Max Tokens</label>
                 <input
                   type="number" min="1" max="32000" value={maxTokens}
                   onChange={e => setMaxTokens(parseInt(e.target.value) || 1024)}
@@ -577,12 +577,12 @@ export default function CouncilPage() {
               <div className="card p-4 space-y-3">
                 <div className="section-label flex items-center justify-between">
                   <span>Advisor Weights</span>
-                  <span className="font-mono text-[9px] text-[#475569]">
-                    <span className="text-[#22c55e]">●</span>{' '}
+                  <span className="font-mono text-[9px] text-[#737373]">
+                    <span className="text-[#16a34a]">●</span>{' '}
                     {providerHealth.filter(p => p.healthy).length} online
                   </span>
                 </div>
-                <div className="text-[10px] font-mono text-[#444444] mb-2">Leave at 0 to use defaults</div>
+                <div className="text-[10px] font-mono text-[#a3a3a3] mb-2">Leave at 0 to use defaults</div>
                 {[...providerHealth]
                   .sort((a, b) => {
                     if (a.healthy !== b.healthy) return a.healthy ? -1 : 1;
@@ -597,16 +597,16 @@ export default function CouncilPage() {
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-[10px] font-mono uppercase flex items-center gap-1.5">
                         <span
-                          className={p.healthy ? 'text-[#22c55e]' : 'text-[#475569]'}
+                          className={p.healthy ? 'text-[#16a34a]' : 'text-[#737373]'}
                           title={p.healthy ? 'Connected' : 'Offline'}
                         >
                           {p.healthy ? '●' : '○'}
                         </span>
-                        <span className={p.healthy ? 'text-[#999999]' : 'text-[#555555]'}>
+                        <span className={p.healthy ? 'text-[#525252]' : 'text-[#a3a3a3]'}>
                           {p.name}
                         </span>
                         {p.healthy && p.latency_ms != null && (
-                          <span className="text-[9px] text-[#475569]">{p.latency_ms}ms</span>
+                          <span className="text-[9px] text-[#737373]">{p.latency_ms}ms</span>
                         )}
                       </span>
                       <span className="text-xs font-mono text-[#76B900]">
@@ -647,17 +647,17 @@ export default function CouncilPage() {
         {/* Results panel */}
         <div className="xl:col-span-3">
           {phase === 'error' ? (
-            <div className="card p-6 border-[#ef4444]/30">
+            <div className="card p-6 border-[#dc2626]/30">
               <div className="flex items-center gap-3 mb-4">
-                <div className="w-8 h-8 bg-[#ef4444]/10 border border-[#ef4444]/30 flex items-center justify-center flex-shrink-0">
-                  <svg className="w-4 h-4 text-[#ef4444]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <div className="w-8 h-8 bg-[#dc2626]/10 border border-[#dc2626]/30 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-4 h-4 text-[#dc2626]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round"
                       d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
                   </svg>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-mono font-bold text-[#ef4444] text-sm">HIVE ERROR</div>
-                  <div className="text-xs text-[#999999] font-mono mt-1 break-words">{error}</div>
+                  <div className="font-mono font-bold text-[#dc2626] text-sm">HIVE ERROR</div>
+                  <div className="text-xs text-[#525252] font-mono mt-1 break-words">{error}</div>
                 </div>
               </div>
               {/* Retry path — most council errors are transient (rate
@@ -710,7 +710,7 @@ export default function CouncilPage() {
                   style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
               </div>
               <div className="text-[#76B900] text-sm font-mono uppercase tracking-widest">Connecting…</div>
-              <div className="text-xs font-mono text-[#444444]">Opening WebSocket connection to hive…</div>
+              <div className="text-xs font-mono text-[#a3a3a3]">Opening WebSocket connection to hive…</div>
             </div>
 
           ) : (phase === 'streaming' || phase === 'synthesis' || phase === 'done') && memberOrder.length > 0 ? (
@@ -729,7 +729,7 @@ export default function CouncilPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">You asked</div>
-                      <div className="text-sm text-[#e2e8f0] whitespace-pre-wrap break-words leading-relaxed">
+                      <div className="text-sm text-[#0a0a0a] whitespace-pre-wrap break-words leading-relaxed">
                         {submittedPrompt}
                       </div>
                     </div>
@@ -747,12 +747,12 @@ export default function CouncilPage() {
                   </span>
                 )}
                 {phase === 'synthesis' && (
-                  <span className="text-[10px] font-mono text-[#3b82f6] animate-pulse uppercase tracking-wider ml-1">
+                  <span className="text-[10px] font-mono text-[#2563eb] animate-pulse uppercase tracking-wider ml-1">
                     Synthesizing
                   </span>
                 )}
                 {phase === 'done' && (
-                  <span className="text-[10px] font-mono text-[#22c55e] uppercase tracking-wider ml-1">
+                  <span className="text-[10px] font-mono text-[#16a34a] uppercase tracking-wider ml-1">
                     Complete
                   </span>
                 )}
@@ -789,8 +789,8 @@ export default function CouncilPage() {
                 </svg>
               </div>
               <div>
-                <div className="text-lg font-bold text-white mb-2 font-mono">THE HIVE AWAITS</div>
-                <div className="text-xs font-mono text-[#555555] max-w-sm">
+                <div className="text-lg font-bold text-[#0a0a0a] mb-2 font-mono">THE HIVE AWAITS</div>
+                <div className="text-xs font-mono text-[#a3a3a3] max-w-sm">
                   Configure settings and enter a prompt to convene the hive of AI advisors.
                   Each member streams in real-time — a synthesis is generated live.
                 </div>

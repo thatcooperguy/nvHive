@@ -14,13 +14,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en">
       <head>
         <script dangerouslySetInnerHTML={{
           __html: `window.__HIVE_API_URL__ = "${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}";`
         }} />
       </head>
-      <body className="bg-[#0a0a0a] text-white antialiased">
+      <body className="bg-white text-[#0a0a0a] antialiased">
         <LayoutShell>
           {children}
         </LayoutShell>

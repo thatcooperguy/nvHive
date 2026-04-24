@@ -86,8 +86,8 @@ function StatusDot({ status }: { status: "connected" | "available" | "missing" |
     connected: "bg-[#76B900] shadow-[0_0_6px_rgba(118,185,0,0.4)]",
     available: "bg-[#666]",
     missing: "bg-[#333]",
-    error: "bg-[#ef4444] shadow-[0_0_6px_rgba(239,68,68,0.4)]",
-    connecting: "bg-[#f59e0b] animate-pulse",
+    error: "bg-[#dc2626] shadow-[0_0_6px_rgba(239,68,68,0.4)]",
+    connecting: "bg-[#d97706] animate-pulse",
   };
   const labels = {
     connected: "Connected",
@@ -149,7 +149,7 @@ function PlatformRow({
       aria-label={`${platform.display_name}, status: ${status}`}
     >
       {/* Icon */}
-      <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-[#1a1a1a] text-lg">
+      <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-[#f5f5f5] text-lg">
         {meta.icon}
       </div>
 
@@ -172,7 +172,7 @@ function PlatformRow({
           {meta.subtitle}
         </p>
         {error && (
-          <p className="text-xs text-[#ef4444] mt-1 font-mono">{error}</p>
+          <p className="text-xs text-[#dc2626] mt-1 font-mono">{error}</p>
         )}
         {status === "connected" && platform.detection_method && (
           <p className="text-xs text-[--text-muted] mt-1 font-mono opacity-0 group-hover:opacity-100 transition-opacity">
@@ -191,7 +191,7 @@ function PlatformRow({
         {status === "connected" && (
           <button
             onClick={() => onDisconnect(platform.name)}
-            className="text-xs font-mono text-[--text-muted] hover:text-[#ef4444] transition-colors px-3 py-1.5 border border-transparent hover:border-[#ef4444]/20"
+            className="text-xs font-mono text-[--text-muted] hover:text-[#dc2626] transition-colors px-3 py-1.5 border border-transparent hover:border-[#dc2626]/20"
           >
             Disconnect
           </button>
@@ -205,14 +205,14 @@ function PlatformRow({
           </button>
         )}
         {status === "connecting" && (
-          <span className="text-xs font-mono text-[#f59e0b]">
+          <span className="text-xs font-mono text-[#d97706]">
             Connecting...
           </span>
         )}
         {status === "error" && (
           <button
             onClick={() => onConnect(platform.name)}
-            className="text-xs font-mono text-[#f59e0b] hover:bg-[#f59e0b]/10 transition-colors px-3 py-1.5 border border-[#f59e0b]/30"
+            className="text-xs font-mono text-[#d97706] hover:bg-[#d97706]/10 transition-colors px-3 py-1.5 border border-[#d97706]/30"
           >
             Retry
           </button>
@@ -363,7 +363,7 @@ export default function IntegrationsPage() {
                       ) : r.action === "skipped" ? (
                         <span className="text-[--text-muted]">&middot;</span>
                       ) : (
-                        <span className="text-[#ef4444]">&#10005;</span>
+                        <span className="text-[#dc2626]">&#10005;</span>
                       )}
                     </span>
                     <span className="text-[--text-primary]">
@@ -430,7 +430,7 @@ export default function IntegrationsPage() {
 
       {/* --- Error banner --- */}
       {scanError && (
-        <div className="mb-6 p-4 border border-[#ef4444]/20 bg-[#ef4444]/5 text-sm text-[#ef4444]">
+        <div className="mb-6 p-4 border border-[#dc2626]/20 bg-[#dc2626]/5 text-sm text-[#dc2626]">
           {scanError}
           <button
             onClick={scan}
@@ -447,7 +447,7 @@ export default function IntegrationsPage() {
           {[1, 2, 3, 4, 5].map((i) => (
             <div
               key={i}
-              className="h-[76px] bg-[#1a1a1a] animate-pulse border border-[--border]"
+              className="h-[76px] bg-[#f5f5f5] animate-pulse border border-[--border]"
             />
           ))}
         </div>

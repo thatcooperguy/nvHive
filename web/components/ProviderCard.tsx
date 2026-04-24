@@ -21,14 +21,14 @@ const PROVIDER_ICONS: Record<string, string> = {
 };
 
 const PROVIDER_COLORS: Record<string, string> = {
-  openai: '#22c55e',
-  anthropic: '#f59e0b',
-  google: '#3b82f6',
-  groq: '#a855f7',
-  ollama: '#06b6d4',
-  mistral: '#ef4444',
+  openai: '#16a34a',
+  anthropic: '#d97706',
+  google: '#2563eb',
+  groq: '#7c3aed',
+  ollama: '#0891b2',
+  mistral: '#dc2626',
   cohere: '#10b981',
-  together: '#f97316',
+  together: '#ea580c',
 };
 
 function getProviderColor(name: string): string {
@@ -36,7 +36,7 @@ function getProviderColor(name: string): string {
   for (const [k, v] of Object.entries(PROVIDER_COLORS)) {
     if (key.includes(k)) return v;
   }
-  return '#475569';
+  return '#737373';
 }
 
 function getProviderIcon(name: string): string {
@@ -71,7 +71,7 @@ export default function ProviderCard({ provider, onRefresh }: Props) {
 
   return (
     <div
-      className="card p-5 flex flex-col gap-4 hover:border-[#3a3a5e] transition-all duration-200"
+      className="card p-5 flex flex-col gap-4 hover:border-[#d4d4d4] transition-all duration-200"
       style={{ borderTopColor: accentColor, borderTopWidth: '2px' }}
     >
       {/* Header */}
@@ -84,10 +84,10 @@ export default function ProviderCard({ provider, onRefresh }: Props) {
             {icon}
           </div>
           <div>
-            <div className="font-semibold text-[#e2e8f0] capitalize">
+            <div className="font-semibold text-[#0a0a0a] capitalize">
               {provider.name}
             </div>
-            <div className="text-xs text-[#475569] mt-0.5">
+            <div className="text-xs text-[#737373] mt-0.5">
               {provider.models_available} model{provider.models_available !== 1 ? 's' : ''}
             </div>
           </div>
@@ -97,13 +97,13 @@ export default function ProviderCard({ provider, onRefresh }: Props) {
         <div
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
             displayHealth.healthy
-              ? 'bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/20'
-              : 'bg-[#ef4444]/10 text-[#ef4444] border border-[#ef4444]/20'
+              ? 'bg-[#16a34a]/10 text-[#16a34a] border border-[#16a34a]/20'
+              : 'bg-[#dc2626]/10 text-[#dc2626] border border-[#dc2626]/20'
           }`}
         >
           <span
             className={`w-1.5 h-1.5 rounded-full ${
-              displayHealth.healthy ? 'bg-[#22c55e]' : 'bg-[#ef4444]'
+              displayHealth.healthy ? 'bg-[#16a34a]' : 'bg-[#dc2626]'
             }`}
           />
           {displayHealth.healthy ? 'Healthy' : 'Down'}
@@ -112,9 +112,9 @@ export default function ProviderCard({ provider, onRefresh }: Props) {
 
       {/* Metrics */}
       <div className="grid grid-cols-2 gap-3">
-        <div className="bg-[#0a0a0a] rounded-lg p-3">
-          <div className="text-xs text-[#475569] mb-1">Latency</div>
-          <div className="font-mono text-sm font-semibold text-[#e2e8f0]">
+        <div className="bg-[#ffffff] rounded-lg p-3">
+          <div className="text-xs text-[#737373] mb-1">Latency</div>
+          <div className="font-mono text-sm font-semibold text-[#0a0a0a]">
             {displayHealth.latency_ms != null
               ? `${Math.round(displayHealth.latency_ms)}ms`
               : '—'}
@@ -126,27 +126,27 @@ export default function ProviderCard({ provider, onRefresh }: Props) {
                 style={{
                   width: `${Math.min(100, (displayHealth.latency_ms / 3000) * 100)}%`,
                   backgroundColor:
-                    displayHealth.latency_ms < 500 ? '#22c55e' :
-                    displayHealth.latency_ms < 1500 ? '#f59e0b' : '#ef4444',
+                    displayHealth.latency_ms < 500 ? '#16a34a' :
+                    displayHealth.latency_ms < 1500 ? '#d97706' : '#dc2626',
                 }}
               />
             </div>
           )}
         </div>
 
-        <div className="bg-[#0a0a0a] rounded-lg p-3">
-          <div className="text-xs text-[#475569] mb-1">Models</div>
-          <div className="font-mono text-sm font-semibold text-[#e2e8f0]">
+        <div className="bg-[#ffffff] rounded-lg p-3">
+          <div className="text-xs text-[#737373] mb-1">Models</div>
+          <div className="font-mono text-sm font-semibold text-[#0a0a0a]">
             {provider.models_available}
           </div>
-          <div className="text-xs text-[#475569] mt-1">available</div>
+          <div className="text-xs text-[#737373] mt-1">available</div>
         </div>
       </div>
 
       {/* Error message */}
       {displayHealth.error && (
-        <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 rounded-lg px-3 py-2">
-          <div className="text-xs text-[#ef4444] font-mono break-words">
+        <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 rounded-lg px-3 py-2">
+          <div className="text-xs text-[#dc2626] font-mono break-words">
             {displayHealth.error}
           </div>
         </div>

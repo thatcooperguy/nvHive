@@ -8,11 +8,11 @@ import type { AnalyticsData } from '@/lib/api';
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
-    <div className="nvidia-corner border border-[#333333] bg-[#111111] p-4 relative overflow-hidden">
+    <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-4 relative overflow-hidden">
       <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/60 to-transparent" />
-      <div className="text-[9px] font-mono text-[#555555] uppercase tracking-[0.15em] mb-1">{label}</div>
-      <div className="text-2xl font-bold text-white font-mono">{value}</div>
-      {sub && <div className="text-[10px] font-mono text-[#444444] mt-1">{sub}</div>}
+      <div className="text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.15em] mb-1">{label}</div>
+      <div className="text-2xl font-bold text-[#0a0a0a] font-mono">{value}</div>
+      {sub && <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">{sub}</div>}
     </div>
   );
 }
@@ -23,8 +23,8 @@ function CostBar({ provider, cost, maxCost }: { provider: string; cost: number; 
   const pct = maxCost > 0 ? (cost / maxCost) * 100 : 0;
   return (
     <div className="flex items-center gap-3 py-1.5">
-      <span className="text-xs font-mono text-[#888888] w-24 text-right truncate">{provider}</span>
-      <div className="flex-1 bg-[#1a1a1a] h-5 relative overflow-hidden">
+      <span className="text-xs font-mono text-[#525252] w-24 text-right truncate">{provider}</span>
+      <div className="flex-1 bg-[#f5f5f5] h-5 relative overflow-hidden">
         <div
           className="h-full bg-[#76B900]/70 transition-all duration-500"
           style={{ width: `${Math.max(pct, 1)}%` }}
@@ -72,20 +72,20 @@ export default function AnalyticsPage() {
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="nvidia-corner relative border border-[#333333] bg-[#111111] p-5 overflow-hidden">
+      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
         <div className="relative flex items-center justify-between">
           <div>
             <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Usage Insights</div>
-            <h1 className="text-2xl font-bold text-white">Analytics</h1>
-            <p className="text-xs font-mono text-[#555555] mt-1">
+            <h1 className="text-2xl font-bold text-[#0a0a0a]">Analytics</h1>
+            <p className="text-xs font-mono text-[#a3a3a3] mt-1">
               Query volume, cost breakdown, and provider performance
             </p>
           </div>
           <button
             onClick={loadData}
             disabled={loading}
-            className="px-3 py-1.5 text-xs font-mono border border-[#333333] text-[#888888] hover:text-[#76B900] hover:border-[#76B900]/40 transition-colors disabled:opacity-40"
+            className="px-3 py-1.5 text-xs font-mono border border-[#d4d4d4] text-[#525252] hover:text-[#76B900] hover:border-[#76B900]/40 transition-colors disabled:opacity-40"
           >
             {loading ? 'Loading...' : 'Refresh'}
           </button>
@@ -93,14 +93,14 @@ export default function AnalyticsPage() {
       </div>
 
       {error && (
-        <div className="border border-[#ef4444]/30 bg-[#ef4444]/5 p-4">
-          <span className="text-xs font-mono text-[#ef4444]">{error}</span>
+        <div className="border border-[#dc2626]/30 bg-[#dc2626]/5 p-4">
+          <span className="text-xs font-mono text-[#dc2626]">{error}</span>
         </div>
       )}
 
       {loading && !data && (
         <div className="flex items-center justify-center py-20">
-          <div className="text-xs font-mono text-[#444444] animate-pulse uppercase tracking-widest">Loading analytics...</div>
+          <div className="text-xs font-mono text-[#a3a3a3] animate-pulse uppercase tracking-widest">Loading analytics...</div>
         </div>
       )}
 
@@ -121,7 +121,7 @@ export default function AnalyticsPage() {
           {/* ── Cost breakdown + Queries per provider ─────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Cost by provider bar chart */}
-            <div className="nvidia-corner border border-[#333333] bg-[#111111] p-5 relative overflow-hidden">
+            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/40 to-transparent" />
               <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Cost by Provider (This Month)</div>
               {costEntries.length === 0 ? (
@@ -138,12 +138,12 @@ export default function AnalyticsPage() {
             </div>
 
             {/* Queries per provider table */}
-            <div className="nvidia-corner border border-[#333333] bg-[#111111] p-5 relative overflow-hidden">
+            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/40 to-transparent" />
               <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Queries by Provider (This Month)</div>
               <table className="w-full text-xs font-mono">
                 <thead>
-                  <tr className="text-[#555555] text-left border-b border-[#222222]">
+                  <tr className="text-[#a3a3a3] text-left border-b border-[#e5e5e5]">
                     <th className="pb-2 font-medium">Provider</th>
                     <th className="pb-2 font-medium text-right">Queries</th>
                     <th className="pb-2 font-medium text-right">Avg Latency</th>
@@ -159,15 +159,15 @@ export default function AnalyticsPage() {
                     Object.entries(data.queries_by_provider)
                       .sort(([, a], [, b]) => b - a)
                       .map(([provider, count]) => (
-                        <tr key={provider} className="border-b border-[#1a1a1a] hover:bg-[#1a1a1a] transition-colors">
-                          <td className="py-2 text-[#cccccc]">{provider}</td>
-                          <td className="py-2 text-right text-[#888888]">{count}</td>
-                          <td className="py-2 text-right text-[#888888]">
+                        <tr key={provider} className="border-b border-[#e5e5e5] hover:bg-[#f5f5f5] transition-colors">
+                          <td className="py-2 text-[#262626]">{provider}</td>
+                          <td className="py-2 text-right text-[#525252]">{count}</td>
+                          <td className="py-2 text-right text-[#525252]">
                             {data.latency_by_provider[provider]
                               ? `${data.latency_by_provider[provider].toFixed(0)}ms`
                               : '--'}
                           </td>
-                          <td className="py-2 text-right text-[#888888]">
+                          <td className="py-2 text-right text-[#525252]">
                             ${parseFloat(data.cost_by_provider[provider] || '0').toFixed(4)}
                           </td>
                         </tr>
@@ -181,12 +181,12 @@ export default function AnalyticsPage() {
           {/* ── Most used models + Savings ────────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Most used models */}
-            <div className="nvidia-corner border border-[#333333] bg-[#111111] p-5 relative overflow-hidden">
+            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/40 to-transparent" />
               <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Most Used Models</div>
               <table className="w-full text-xs font-mono">
                 <thead>
-                  <tr className="text-[#555555] text-left border-b border-[#222222]">
+                  <tr className="text-[#a3a3a3] text-left border-b border-[#e5e5e5]">
                     <th className="pb-2 font-medium">Model</th>
                     <th className="pb-2 font-medium">Provider</th>
                     <th className="pb-2 font-medium text-right">Queries</th>
@@ -199,10 +199,10 @@ export default function AnalyticsPage() {
                     </tr>
                   ) : (
                     data.most_used_models.map((m, i) => (
-                      <tr key={i} className="border-b border-[#1a1a1a] hover:bg-[#1a1a1a] transition-colors">
-                        <td className="py-2 text-[#cccccc] truncate max-w-[200px]">{m.model || '(default)'}</td>
-                        <td className="py-2 text-[#666666]">{m.provider}</td>
-                        <td className="py-2 text-right text-[#888888]">{m.count}</td>
+                      <tr key={i} className="border-b border-[#e5e5e5] hover:bg-[#f5f5f5] transition-colors">
+                        <td className="py-2 text-[#262626] truncate max-w-[200px]">{m.model || '(default)'}</td>
+                        <td className="py-2 text-[#737373]">{m.provider}</td>
+                        <td className="py-2 text-right text-[#525252]">{m.count}</td>
                       </tr>
                     ))
                   )}
@@ -211,44 +211,44 @@ export default function AnalyticsPage() {
             </div>
 
             {/* Savings from local models */}
-            <div className="nvidia-corner border border-[#333333] bg-[#111111] p-5 relative overflow-hidden">
+            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/40 to-transparent" />
               <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Savings from Local Models</div>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <div className="text-[9px] font-mono text-[#555555] uppercase tracking-[0.1em] mb-1">Total Saved</div>
+                    <div className="text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.1em] mb-1">Total Saved</div>
                     <div className="text-xl font-bold text-[#76B900] font-mono">
                       ${parseFloat(data.savings.total_savings).toFixed(4)}
                     </div>
                   </div>
                   <div>
-                    <div className="text-[9px] font-mono text-[#555555] uppercase tracking-[0.1em] mb-1">Savings Rate</div>
+                    <div className="text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.1em] mb-1">Savings Rate</div>
                     <div className="text-xl font-bold text-[#76B900] font-mono">
                       {data.savings.savings_pct.toFixed(1)}%
                     </div>
                   </div>
                 </div>
 
-                <div className="border-t border-[#222222] pt-3 space-y-2">
+                <div className="border-t border-[#e5e5e5] pt-3 space-y-2">
                   <div className="flex justify-between text-xs font-mono">
-                    <span className="text-[#555555]">Local queries</span>
-                    <span className="text-[#888888]">{data.savings.local_queries}</span>
+                    <span className="text-[#a3a3a3]">Local queries</span>
+                    <span className="text-[#525252]">{data.savings.local_queries}</span>
                   </div>
                   <div className="flex justify-between text-xs font-mono">
-                    <span className="text-[#555555]">Cloud queries</span>
-                    <span className="text-[#888888]">{data.savings.cloud_queries}</span>
+                    <span className="text-[#a3a3a3]">Cloud queries</span>
+                    <span className="text-[#525252]">{data.savings.cloud_queries}</span>
                   </div>
                   <div className="flex justify-between text-xs font-mono">
-                    <span className="text-[#555555]">Est. cloud cost (if no local)</span>
-                    <span className="text-[#888888]">${parseFloat(data.savings.estimated_cloud_cost).toFixed(4)}</span>
+                    <span className="text-[#a3a3a3]">Est. cloud cost (if no local)</span>
+                    <span className="text-[#525252]">${parseFloat(data.savings.estimated_cloud_cost).toFixed(4)}</span>
                   </div>
                 </div>
 
                 {/* Savings bar */}
                 <div>
-                  <div className="text-[9px] font-mono text-[#444444] mb-1">Local vs Cloud Usage</div>
-                  <div className="w-full h-4 bg-[#1a1a1a] flex overflow-hidden">
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mb-1">Local vs Cloud Usage</div>
+                  <div className="w-full h-4 bg-[#f5f5f5] flex overflow-hidden">
                     {totalQueries > 0 && (
                       <>
                         <div
@@ -257,7 +257,7 @@ export default function AnalyticsPage() {
                           title={`Local: ${data.savings.local_queries}`}
                         />
                         <div
-                          className="h-full bg-[#555555]/40 transition-all duration-500"
+                          className="h-full bg-[#a3a3a3]/40 transition-all duration-500"
                           style={{ width: `${(data.savings.cloud_queries / totalQueries) * 100}%` }}
                           title={`Cloud: ${data.savings.cloud_queries}`}
                         />

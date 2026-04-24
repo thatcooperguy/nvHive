@@ -5,41 +5,54 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 /* ============================================================
-   NVIDIA Design System — Council AI Command Center
-   Target: College students & gamers on NVIDIA GPU Linux PCs
+   NVIDIA Design System — Corporate White Theme
+   White page, black typography, NVIDIA green as accent.
+   Code blocks stay dark (NVIDIA docs pattern).
    ============================================================ */
 
 :root {
   /* NVIDIA brand palette */
   --nvidia-green: #76B900;
-  --nvidia-green-dim: rgba(118, 185, 0, 0.7);
-  --nvidia-green-glow: rgba(118, 185, 0, 0.2);
+  --nvidia-green-dim: #5a9100;
+  --nvidia-green-deep: #447000;
+  --nvidia-green-glow: rgba(118, 185, 0, 0.18);
   --nvidia-green-subtle: rgba(118, 185, 0, 0.08);
 
-  /* Dark backgrounds — layered depth */
-  --bg-primary: #070807;
-  --bg-secondary: #0f100f;
-  --bg-tertiary: #171817;
-  --bg-card: #111211;
-  --bg-card-hover: #171a15;
+  /* Light backgrounds — layered depth on white */
+  --bg-primary: #ffffff;
+  --bg-secondary: #fafafa;
+  --bg-tertiary: #f5f5f5;
+  --bg-card: #ffffff;
+  --bg-card-hover: #fafafa;
+  --bg-elevated: #ffffff;
+  --bg-subtle: #f5f5f5;
+
+  /* Dark code surface (used inside code blocks on white cards) */
+  --bg-code: #0d0d0d;
+  --bg-code-header: #141414;
+  --bg-code-border: #262626;
 
   /* Borders */
-  --border: #2a2d29;
-  --border-bright: #3a3f38;
-  --border-green: rgba(118, 185, 0, 0.35);
+  --border: #e5e5e5;
+  --border-subtle: #eeeeee;
+  --border-bright: #d4d4d4;
+  --border-strong: #a3a3a3;
+  --border-green: rgba(118, 185, 0, 0.45);
 
-  /* Text */
-  --text-primary: #ffffff;
-  --text-secondary: #999999;
-  --text-muted: #666666;
+  /* Text — dark on white */
+  --text-primary: #0a0a0a;
+  --text-secondary: #404040;
+  --text-muted: #737373;
+  --text-faint: #a3a3a3;
+  --text-inverse: #ffffff;
 
   /* Semantic colors */
   --accent-green: #76B900;
-  --accent-red: #ef4444;
-  --accent-amber: #f59e0b;
-  --accent-blue: #3b82f6;
-  --accent-purple: #a855f7;
-  --accent-cyan: #06b6d4;
+  --accent-red: #dc2626;
+  --accent-amber: #d97706;
+  --accent-blue: #2563eb;
+  --accent-purple: #7c3aed;
+  --accent-cyan: #0891b2;
 }
 
 * {
@@ -51,8 +64,7 @@
 html,
 body {
   height: 100%;
-  background:
-    linear-gradient(180deg, #0b0d0b 0%, #070807 42%, #050605 100%);
+  background: var(--bg-primary);
   color: var(--text-primary);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -60,20 +72,20 @@ body {
 }
 
 /* ============================================================
-   Custom Scrollbar — dark with NVIDIA green thumb
+   Custom Scrollbar — light track, NVIDIA green thumb on hover
    ============================================================ */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-secondary);
+  background: var(--bg-tertiary);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333333;
-  border-radius: 0px; /* angular, not rounded */
+  background: #cccccc;
+  border-radius: 0;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -84,8 +96,8 @@ body {
    Selection & Focus
    ============================================================ */
 ::selection {
-  background: var(--nvidia-green-glow);
-  color: var(--text-primary);
+  background: var(--nvidia-green);
+  color: #000000;
 }
 
 :focus-visible {
@@ -105,77 +117,74 @@ button {
    Tailwind component layer
    ============================================================ */
 @layer components {
-  /* Card — angular, dark, green hover border */
+  /* Card — white with subtle border, green hover */
   .card {
-    @apply bg-[#111211] border border-[#2a2d29] rounded-[4px];
-    clip-path: none;
+    @apply bg-white border border-[#e5e5e5] rounded-[4px];
     transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
   }
 
   .card:hover {
     border-color: var(--border-green);
     background-color: var(--bg-card-hover);
-    box-shadow: 0 12px 30px rgba(0,0,0,0.32);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
   }
 
   /* Flat card (no hover effect) */
   .card-flat {
-    @apply bg-[#1e1e1e] border border-[#333333] rounded-none;
+    @apply bg-white border border-[#e5e5e5] rounded-none;
   }
 
-  /* Input — dark with NVIDIA green focus */
+  /* Input — white with NVIDIA green focus */
   .input-base {
-    @apply bg-[#111111] border border-[#333333] rounded-none text-white placeholder-[#555555]
+    @apply bg-white border border-[#d4d4d4] rounded-none text-[#0a0a0a] placeholder-[#a3a3a3]
       focus:outline-none focus:border-[#76B900] focus:ring-1 focus:ring-[#76B900]/40
       transition-colors duration-150;
   }
 
-  /* Primary button — NVIDIA green with glow */
+  /* Primary button — NVIDIA green, black text */
   .btn-primary {
-    @apply bg-[#76B900] hover:bg-[#8fd000] text-black font-semibold rounded-none
+    @apply bg-[#76B900] hover:bg-[#5a9100] text-black font-semibold rounded-none
       transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed;
   }
 
   .btn-primary:not(:disabled):hover {
-    box-shadow: 0 0 16px var(--nvidia-green-glow), 0 0 4px rgba(118, 185, 0, 0.4);
+    box-shadow: 0 4px 12px var(--nvidia-green-glow);
   }
 
-  /* Secondary button — dark bordered */
+  /* Secondary button — white with border, green hover border */
   .btn-secondary {
-    @apply bg-[#1a1a1a] hover:bg-[#242424] border border-[#444444] hover:border-[#76B900]/50
-      text-[#999999] hover:text-white font-medium rounded-none transition-all duration-150
+    @apply bg-white hover:bg-[#fafafa] border border-[#d4d4d4] hover:border-[#76B900]
+      text-[#404040] hover:text-[#0a0a0a] font-medium rounded-none transition-all duration-150
       disabled:opacity-40 disabled:cursor-not-allowed;
   }
 
   /* Ghost button */
   .btn-ghost {
-    @apply hover:bg-[#1a1a1a] text-[#666666] hover:text-white
+    @apply hover:bg-[#f5f5f5] text-[#737373] hover:text-[#0a0a0a]
       font-medium rounded-none transition-all duration-150;
   }
 
   /* Status dots */
   .status-dot {
     @apply w-2 h-2 inline-block flex-shrink-0;
-    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); /* diamond shape */
+    clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
   }
 
   .status-dot-green {
     @apply status-dot bg-[#76B900];
-    box-shadow: 0 0 6px #76B900;
+    box-shadow: 0 0 6px var(--nvidia-green-glow);
   }
 
   .status-dot-red {
-    @apply status-dot bg-[#ef4444];
-    box-shadow: 0 0 6px #ef4444;
+    @apply status-dot bg-[#dc2626];
   }
 
   .status-dot-amber {
-    @apply status-dot bg-[#f59e0b];
-    box-shadow: 0 0 6px #f59e0b;
+    @apply status-dot bg-[#d97706];
   }
 
   .status-dot-gray {
-    @apply status-dot bg-[#444444];
+    @apply status-dot bg-[#a3a3a3];
   }
 
   /* Monospace / technical text */
@@ -185,7 +194,7 @@ button {
 
   /* Section label */
   .section-label {
-    @apply text-[10px] font-bold uppercase tracking-[0.15em] text-[#666666];
+    @apply text-[10px] font-bold uppercase tracking-[0.15em] text-[#737373];
   }
 
   /* Tag/badge */
@@ -196,7 +205,7 @@ button {
 
   /* Progress bar */
   .progress-bar {
-    @apply h-1 overflow-hidden bg-[#1a1a1a];
+    @apply h-1 overflow-hidden bg-[#e5e5e5];
   }
 
   .progress-fill {
@@ -205,42 +214,42 @@ button {
 }
 
 /* ============================================================
-   NVIDIA Grid Background — subtle tech pattern
+   NVIDIA Grid Background — subtle green grid on white
    ============================================================ */
 .grid-bg {
   background-image:
-    linear-gradient(rgba(118, 185, 0, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(118, 185, 0, 0.03) 1px, transparent 1px);
+    linear-gradient(rgba(118, 185, 0, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(118, 185, 0, 0.04) 1px, transparent 1px);
   background-size: 40px 40px;
 }
 
 /* ============================================================
-   Glow utilities
+   Glow utilities (subtle on white)
    ============================================================ */
 .glow-green {
-  box-shadow: 0 0 20px var(--nvidia-green-glow);
+  box-shadow: 0 4px 16px var(--nvidia-green-glow);
 }
 
 .glow-green-sm {
-  box-shadow: 0 0 8px var(--nvidia-green-glow);
+  box-shadow: 0 2px 8px var(--nvidia-green-glow);
 }
 
 .glow-red {
-  box-shadow: 0 0 20px rgba(239, 68, 68, 0.2);
+  box-shadow: 0 4px 16px rgba(220, 38, 38, 0.15);
 }
 
 /* ============================================================
-   Gradient text — NVIDIA green
+   Gradient text — NVIDIA green (deeper for white backgrounds)
    ============================================================ */
 .gradient-text {
-  background: linear-gradient(135deg, #76B900, #a8d000);
+  background: linear-gradient(135deg, #5a9100, #76B900);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 .gradient-text-mono {
-  background: linear-gradient(90deg, #76B900 0%, #b8e020 50%, #76B900 100%);
+  background: linear-gradient(90deg, #5a9100 0%, #76B900 50%, #5a9100 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -277,8 +286,8 @@ button {
    ============================================================ */
 .nav-active {
   border-left: 2px solid var(--nvidia-green);
-  background: rgba(118, 185, 0, 0.07);
-  color: #ffffff;
+  background: rgba(118, 185, 0, 0.08);
+  color: #0a0a0a;
 }
 
 /* ============================================================
@@ -301,7 +310,7 @@ button {
   left: 0;
   right: 0;
   height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(118,185,0,0.15), transparent);
+  background: linear-gradient(90deg, transparent, rgba(118, 185, 0, 0.2), transparent);
   animation: scanline 4s linear infinite;
   pointer-events: none;
 }
@@ -310,8 +319,8 @@ button {
    Pulse animation for GPU status
    ============================================================ */
 @keyframes nvidia-pulse {
-  0%, 100% { box-shadow: 0 0 4px rgba(118,185,0,0.4); }
-  50% { box-shadow: 0 0 12px rgba(118,185,0,0.8), 0 0 24px rgba(118,185,0,0.3); }
+  0%, 100% { box-shadow: 0 0 4px rgba(118, 185, 0, 0.35); }
+  50% { box-shadow: 0 0 12px rgba(118, 185, 0, 0.6), 0 0 20px rgba(118, 185, 0, 0.2); }
 }
 
 .nvidia-pulse {
@@ -322,7 +331,7 @@ button {
    Table row hover
    ============================================================ */
 tr:hover td {
-  background-color: rgba(118, 185, 0, 0.03);
+  background-color: rgba(118, 185, 0, 0.04);
 }
 
 /* ============================================================
@@ -332,7 +341,7 @@ input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   height: 3px;
-  background: #333333;
+  background: #e5e5e5;
   outline: none;
   border-radius: 0;
 }
@@ -358,10 +367,10 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* ============================================================
-   Select dropdown — themed
+   Select dropdown — themed for white background
    ============================================================ */
 select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23666666' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23737373' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.75rem center;
   background-size: 1rem;
@@ -369,11 +378,14 @@ select {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
+  background-color: #ffffff;
+  color: #0a0a0a;
+  border-color: #d4d4d4;
 }
 
 select option {
-  background-color: #1e1e1e;
-  color: #ffffff;
+  background-color: #ffffff;
+  color: #0a0a0a;
 }
 
 /* ============================================================
@@ -419,22 +431,25 @@ select option {
    Chat message bubbles
    ============================================================ */
 .chat-user-bubble {
-  background: rgba(118, 185, 0, 0.06);
-  border: 1px solid rgba(118, 185, 0, 0.2);
+  background: rgba(118, 185, 0, 0.08);
+  border: 1px solid rgba(118, 185, 0, 0.3);
+  color: #0a0a0a;
 }
 
 .chat-assistant-bubble {
-  border-left: 2px solid rgba(118, 185, 0, 0.3);
-  background: #141414;
+  border-left: 2px solid var(--nvidia-green);
+  background: #fafafa;
+  color: #0a0a0a;
 }
 
 .chat-error-bubble {
-  border: 1px solid rgba(239, 68, 68, 0.25);
-  background: rgba(239, 68, 68, 0.04);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  background: rgba(220, 38, 38, 0.04);
+  color: #7f1d1d;
 }
 
 /* ============================================================
-   Code blocks — dark with syntax color hints
+   Code blocks — DARK on white cards (NVIDIA docs pattern)
    ============================================================ */
 .code-block-wrapper {
   position: relative;
@@ -442,8 +457,8 @@ select option {
 }
 
 .code-block-wrapper pre {
-  background: #0d0d0d;
-  border: 1px solid #333333;
+  background: var(--bg-code);
+  border: 1px solid var(--bg-code-border);
   overflow-x: auto;
   padding: 1rem;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
@@ -452,16 +467,15 @@ select option {
   color: #e2e8f0;
 }
 
-/* Copy button overlay on code blocks */
 .code-block-wrapper .copy-btn {
   position: absolute;
   top: 0.5rem;
   right: 0.5rem;
   opacity: 0;
   transition: opacity 0.15s ease;
-  background: #1a1a1a;
+  background: #1f1f1f;
   border: 1px solid #333333;
-  color: #666666;
+  color: #a3a3a3;
   padding: 0.25rem 0.5rem;
   font-size: 0.625rem;
   font-family: 'JetBrains Mono', monospace;
@@ -510,7 +524,7 @@ select option {
   letter-spacing: 0.1em;
   transition: all 0.15s ease;
   cursor: pointer;
-  border: none;
+  border: 1px solid transparent;
   outline: none;
 }
 
@@ -522,12 +536,14 @@ select option {
 
 .mode-pill-inactive {
   background: transparent;
-  color: #555555;
+  color: #737373;
+  border-color: #e5e5e5;
 }
 
 .mode-pill-inactive:hover {
-  background: #1a1a1a;
-  color: #999999;
+  background: #f5f5f5;
+  color: #0a0a0a;
+  border-color: #d4d4d4;
 }
 
 /* ============================================================
@@ -565,16 +581,15 @@ select option {
    ============================================================ */
 .conv-item-active {
   border-left: 2px solid var(--nvidia-green);
-  background: rgba(118, 185, 0, 0.05);
+  background: rgba(118, 185, 0, 0.06);
 }
 
 .conv-item-active .conv-title {
-  color: #ffffff;
+  color: #0a0a0a;
 }
 
 /* ============================================================
    Full-height chat layout override
-   The chat page at / is full-screen, no padding
    ============================================================ */
 body:has(.chat-root) {
   overflow: hidden;
@@ -595,7 +610,7 @@ body:has(.chat-root) {
   bottom: 0;
   width: 2px;
   background: linear-gradient(to bottom, var(--nvidia-green), transparent);
-  opacity: 0.3;
+  opacity: 0.4;
 }
 
 /* ============================================================
@@ -606,10 +621,11 @@ body:has(.chat-root) {
   align-items: center;
   gap: 0.25rem;
   padding: 0.125rem 0.5rem;
-  background: #111111;
-  border: 1px solid #222222;
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
   font-size: 0.625rem;
   font-family: 'JetBrains Mono', monospace;
+  color: #404040;
 }
 
 /* ============================================================
@@ -620,14 +636,14 @@ body:has(.chat-root) {
   align-items: center;
   justify-content: center;
   padding: 2px 6px;
-  background: #1e1e1e;
-  border: 1px solid #3a3a3a;
+  background: #f5f5f5;
+  border: 1px solid #d4d4d4;
   border-bottom-width: 2px;
   border-radius: 3px;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 0.6875rem; /* 11px */
+  font-size: 0.6875rem;
   line-height: 1.4;
-  color: #999999;
+  color: #404040;
   white-space: nowrap;
   user-select: none;
 }
@@ -639,7 +655,7 @@ body:has(.chat-root) {
   position: fixed;
   inset: 0;
   z-index: 9000;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(10, 10, 10, 0.35);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -650,9 +666,9 @@ body:has(.chat-root) {
 .cmd-palette-container {
   width: 100%;
   max-width: 640px;
-  background: #111111;
-  border: 1px solid #333333;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(118, 185, 0, 0.08);
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(118, 185, 0, 0.08);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -670,13 +686,13 @@ body:has(.chat-root) {
   align-items: center;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  border-bottom: 1px solid #222222;
+  border-bottom: 1px solid #eeeeee;
 }
 
 .cmd-palette-search-icon {
   width: 16px;
   height: 16px;
-  color: #555555;
+  color: #a3a3a3;
   flex-shrink: 0;
 }
 
@@ -685,7 +701,7 @@ body:has(.chat-root) {
   background: transparent;
   border: none;
   outline: none;
-  color: #ffffff;
+  color: #0a0a0a;
   font-family: 'Inter', system-ui, sans-serif;
   font-size: 0.9375rem;
   line-height: 1.5;
@@ -693,7 +709,7 @@ body:has(.chat-root) {
 }
 
 .cmd-palette-input::placeholder {
-  color: #3a3a3a;
+  color: #a3a3a3;
 }
 
 .cmd-palette-input:focus {
@@ -712,7 +728,7 @@ body:has(.chat-root) {
   text-align: center;
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.75rem;
-  color: #444444;
+  color: #a3a3a3;
   letter-spacing: 0.05em;
 }
 
@@ -724,7 +740,7 @@ body:has(.chat-root) {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.15em;
-  color: #3a3a3a;
+  color: #a3a3a3;
 }
 
 /* Item row */
@@ -744,7 +760,7 @@ body:has(.chat-root) {
 
 .cmd-palette-item:hover,
 .cmd-palette-item-active {
-  background: rgba(118, 185, 0, 0.06);
+  background: rgba(118, 185, 0, 0.08);
 }
 
 .cmd-palette-item-active {
@@ -755,7 +771,7 @@ body:has(.chat-root) {
   flex-shrink: 0;
   width: 1.125rem;
   font-size: 0.75rem;
-  color: #555555;
+  color: #a3a3a3;
   text-align: center;
   font-family: 'JetBrains Mono', monospace;
 }
@@ -763,7 +779,7 @@ body:has(.chat-root) {
 .cmd-palette-item-label {
   flex: 1;
   font-size: 0.8125rem;
-  color: #cccccc;
+  color: #404040;
   font-family: 'Inter', system-ui, sans-serif;
   min-width: 0;
   overflow: hidden;
@@ -772,7 +788,7 @@ body:has(.chat-root) {
 }
 
 .cmd-palette-item-active .cmd-palette-item-label {
-  color: #ffffff;
+  color: #0a0a0a;
 }
 
 /* Footer */
@@ -781,11 +797,11 @@ body:has(.chat-root) {
   align-items: center;
   gap: 1rem;
   padding: 0.5rem 1rem;
-  border-top: 1px solid #1e1e1e;
-  background: #0d0d0d;
+  border-top: 1px solid #eeeeee;
+  background: #fafafa;
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.6rem;
-  color: #3a3a3a;
+  color: #737373;
   letter-spacing: 0.05em;
 }
 
@@ -796,7 +812,7 @@ body:has(.chat-root) {
   position: fixed;
   inset: 0;
   z-index: 9100;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(10, 10, 10, 0.35);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -807,13 +823,13 @@ body:has(.chat-root) {
 .shortcut-help-modal {
   width: 100%;
   max-width: 520px;
-  background: #111111;
-  border: 1px solid #333333;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(118, 185, 0, 0.06);
+  background: #ffffff;
+  border: 1px solid #e5e5e5;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
   display: flex;
   flex-direction: column;
   animation: palette-slide-in 0.15s ease-out;
-  outline: none; /* focusable div */
+  outline: none;
 }
 
 /* Header */
@@ -822,13 +838,13 @@ body:has(.chat-root) {
   align-items: center;
   justify-content: space-between;
   padding: 0.875rem 1.25rem;
-  border-bottom: 1px solid #222222;
+  border-bottom: 1px solid #eeeeee;
 }
 
 .shortcut-help-title {
   font-size: 0.875rem;
   font-weight: 600;
-  color: #ffffff;
+  color: #0a0a0a;
   letter-spacing: 0.02em;
 }
 
@@ -838,7 +854,7 @@ body:has(.chat-root) {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #555555;
+  color: #737373;
   background: transparent;
   border: none;
   cursor: pointer;
@@ -847,7 +863,7 @@ body:has(.chat-root) {
 }
 
 .shortcut-help-close:hover {
-  color: #ffffff;
+  color: #0a0a0a;
 }
 
 .shortcut-help-close:focus-visible {
@@ -863,15 +879,13 @@ body:has(.chat-root) {
   gap: 1.25rem;
 }
 
-.shortcut-help-group {}
-
 .shortcut-help-group-title {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.625rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.18em;
-  color: #76B900;
+  color: var(--nvidia-green-dim);
   margin-bottom: 0.5rem;
 }
 
@@ -887,7 +901,7 @@ body:has(.chat-root) {
   justify-content: space-between;
   gap: 1rem;
   padding: 0.3125rem 0;
-  border-bottom: 1px solid #1a1a1a;
+  border-bottom: 1px solid #f5f5f5;
 }
 
 .shortcut-help-row:last-child {
@@ -896,7 +910,7 @@ body:has(.chat-root) {
 
 .shortcut-help-row-desc {
   font-size: 0.8125rem;
-  color: #999999;
+  color: #404040;
   font-family: 'Inter', system-ui, sans-serif;
 }
 
@@ -912,8 +926,8 @@ body:has(.chat-root) {
   display: flex;
   justify-content: flex-end;
   padding: 0.75rem 1.25rem;
-  border-top: 1px solid #1e1e1e;
-  background: #0d0d0d;
+  border-top: 1px solid #eeeeee;
+  background: #fafafa;
 }
 
 .shortcut-help-got-it {
@@ -929,8 +943,8 @@ body:has(.chat-root) {
 }
 
 .shortcut-help-got-it:hover {
-  background: #8fd000;
-  box-shadow: 0 0 12px rgba(118, 185, 0, 0.35);
+  background: #5a9100;
+  box-shadow: 0 4px 12px var(--nvidia-green-glow);
 }
 
 .shortcut-help-got-it:focus-visible {
@@ -939,14 +953,14 @@ body:has(.chat-root) {
 }
 
 /* ============================================================
-   Syntax Highlighting — code blocks
+   Syntax Highlighting — code blocks (dark surface)
    ============================================================ */
 .code-keyword  { color: #569cd6; }
-.code-string   { color: #76B900; }   /* NVIDIA green for strings */
+.code-string   { color: #b5e853; }   /* brighter green on dark for contrast */
 .code-comment  { color: #6a9955; }
 .code-number   { color: #b5cea8; }
 .code-line-number {
-  color: #555555;
+  color: #525252;
   user-select: none;
   padding-right: 1em;
   text-align: right;
@@ -974,13 +988,13 @@ body:has(.chat-root) {
   padding: 0.5rem 1.25rem;
   pointer-events: none;
   animation: fade-in 0.15s ease-out;
+  box-shadow: 0 8px 24px var(--nvidia-green-glow);
 }
 
 /* ============================================================
    Mobile Responsive — sidebar drawer + layout changes
    ============================================================ */
 @media (max-width: 768px) {
-  /* Chat input toolbar — mode pills hidden on mobile, show dropdown */
   .mode-pills-container {
     display: none;
   }
@@ -991,25 +1005,21 @@ body:has(.chat-root) {
     display: none;
   }
 
-  /* Font sizes slightly larger for touch targets */
   .chat-textarea {
     font-size: 1rem;
     min-height: 48px;
   }
 
-  /* Input bar sticks to bottom */
   .chat-input-bar {
     position: sticky;
     bottom: 0;
     z-index: 10;
   }
 
-  /* Full-width chat area */
   .chat-main-area {
     width: 100%;
   }
 
-  /* Larger touch targets for buttons */
   button[title="Send (Ctrl+Enter)"],
   button[title="Stop generation"],
   button[title="Attach file (.py, .js, .ts, .txt, .md, .json, .yaml, .csv, .pdf, images)"] {
@@ -1017,18 +1027,15 @@ body:has(.chat-root) {
     height: 2.75rem;
   }
 
-  /* Hide right council panel on mobile — it overlaps */
   .council-right-panel {
     display: none;
   }
 
-  /* Message bubbles slightly larger font on mobile */
   .flex.px-4.py-2 p,
   .flex.px-4.py-2 code {
     font-size: 0.9375rem;
   }
 
-  /* Setup wizard padding reduced */
   .p-6.max-w-3xl {
     padding: 1rem;
   }

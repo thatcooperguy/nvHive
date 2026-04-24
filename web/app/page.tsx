@@ -80,15 +80,15 @@ function GPUPill() {
   if (!info) return null;
 
   const shortName = info.name.replace('NVIDIA GeForce ', '').replace('NVIDIA ', '');
-  const color = info.pct > 90 ? '#ef4444' : info.pct > 70 ? '#f59e0b' : '#76B900';
+  const color = info.pct > 90 ? '#dc2626' : info.pct > 70 ? '#d97706' : '#76B900';
 
   return (
-    <div className="flex items-center gap-1.5 px-2 py-0.5 bg-[#111111] border border-[#222222] text-[10px] font-mono">
+    <div className="flex items-center gap-1.5 px-2 py-0.5 bg-[#ffffff] border border-[#e5e5e5] text-[10px] font-mono">
       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round"
           d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18" />
       </svg>
-      <span className="text-[#555555]">{shortName}</span>
+      <span className="text-[#a3a3a3]">{shortName}</span>
       <span style={{ color }}>{info.pct}%</span>
     </div>
   );
@@ -108,7 +108,7 @@ function BudgetPill() {
   if (isNaN(n)) return null;
 
   return (
-    <div className="flex items-center gap-1 px-2 py-0.5 bg-[#111111] border border-[#222222] text-[10px] font-mono text-[#f59e0b]">
+    <div className="flex items-center gap-1 px-2 py-0.5 bg-[#ffffff] border border-[#e5e5e5] text-[10px] font-mono text-[#d97706]">
       <span>USD</span>
       <span>${n.toFixed(2)} today</span>
     </div>
@@ -126,7 +126,7 @@ interface LiveCouncilPanelProps {
 }
 
 function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthesisStatus, phase }: LiveCouncilPanelProps) {
-  const COLORS = ['#3b82f6', '#a855f7', '#22c55e', '#f59e0b', '#06b6d4', '#f97316'];
+  const COLORS = ['#2563eb', '#7c3aed', '#16a34a', '#d97706', '#0891b2', '#ea580c'];
 
   return (
     <div className="p-4 space-y-3">
@@ -137,10 +137,10 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
           <span className="text-[9px] font-mono text-[#76B900] animate-pulse ml-1">LIVE</span>
         )}
         {phase === 'synthesis' && (
-          <span className="text-[9px] font-mono text-[#3b82f6] animate-pulse ml-1">SYNTHESIZING</span>
+          <span className="text-[9px] font-mono text-[#2563eb] animate-pulse ml-1">SYNTHESIZING</span>
         )}
         {phase === 'done' && (
-          <span className="text-[9px] font-mono text-[#22c55e] ml-1">COMPLETE</span>
+          <span className="text-[9px] font-mono text-[#16a34a] ml-1">COMPLETE</span>
         )}
       </div>
 
@@ -157,7 +157,7 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
         return (
           <div
             key={label}
-            className="border p-3 bg-[#0d0d0d] transition-all"
+            className="border p-3 bg-white transition-all"
             style={{
               borderColor: state.status === 'streaming' ? color : `${color}30`,
             }}
@@ -166,8 +166,8 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
               <span
                 className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
                   state.status === 'streaming' ? 'bg-[#76B900] animate-pulse' :
-                  state.status === 'complete' ? 'bg-[#22c55e]' :
-                  state.status === 'failed' ? 'bg-[#ef4444]' :
+                  state.status === 'complete' ? 'bg-[#16a34a]' :
+                  state.status === 'failed' ? 'bg-[#dc2626]' :
                   'bg-[#333333]'
                 }`}
               />
@@ -175,20 +175,20 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
                 {state.provider.toUpperCase()}
               </span>
               {state.persona && (
-                <span className="text-[9px] font-mono text-[#555555]">{state.persona}</span>
+                <span className="text-[9px] font-mono text-[#a3a3a3]">{state.persona}</span>
               )}
               {state.status === 'complete' && (
-                <span className="ml-auto text-[9px] font-mono text-[#444444]">
+                <span className="ml-auto text-[9px] font-mono text-[#a3a3a3]">
                   {state.tokens > 0 ? `${state.tokens}t` : ''}
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-[#888888] font-mono whitespace-pre-wrap leading-relaxed max-h-28 overflow-y-auto">
+            <div className="text-[11px] text-[#525252] font-mono whitespace-pre-wrap leading-relaxed max-h-28 overflow-y-auto">
               {state.status === 'waiting' && (
                 <span className="text-[#333333] italic">Waiting...</span>
               )}
               {state.status === 'failed' && (
-                <span className="text-[#ef4444]">{state.error || 'Failed'}</span>
+                <span className="text-[#dc2626]">{state.error || 'Failed'}</span>
               )}
               {(state.status === 'streaming' || state.status === 'complete') && state.accumulated}
               {state.status === 'streaming' && (
@@ -203,19 +203,19 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
       })}
 
       {synthesisStatus !== 'hidden' && (
-        <div className="border border-[#3b82f6]/30 p-3 bg-[#0a0d1a]">
-          <div className="text-[9px] font-mono text-[#3b82f6] uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <span className="h-2 w-2 bg-[#3b82f6]" />
+        <div className="border border-[#2563eb]/30 p-3 bg-[#eff6ff]">
+          <div className="text-[9px] font-mono text-[#2563eb] uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <span className="h-2 w-2 bg-[#2563eb]" />
             <span>Synthesis</span>
             {synthesisStatus === 'streaming' && (
               <span className="animate-pulse">Generating...</span>
             )}
           </div>
-          <div className="text-[11px] text-[#cccccc] font-mono whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
+          <div className="text-[11px] text-[#262626] font-mono whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
             {synthesisContent}
             {synthesisStatus === 'streaming' && (
               <span
-                className="inline-block w-[2px] h-[1em] bg-[#3b82f6] align-middle ml-0.5"
+                className="inline-block w-[2px] h-[1em] bg-[#2563eb] align-middle ml-0.5"
                 style={{ animation: 'blink 1s step-end infinite' }}
               />
             )}
@@ -258,7 +258,7 @@ function EmptyState({
   return (
     <div className="flex flex-1 items-center justify-center px-5 py-8">
       <div className="w-full max-w-5xl">
-        <div className="mb-8 border border-[#262626] bg-[#0f0f0f] p-5 sm:p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+        <div className="mb-8 border border-[#262626] bg-white p-5 sm:p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="mb-2 flex items-center gap-2">
@@ -267,7 +267,7 @@ function EmptyState({
                   NVIDIA AI Workspace
                 </span>
               </div>
-              <h2 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+              <h2 className="text-3xl font-semibold tracking-tight text-[#0a0a0a] sm:text-4xl">
                 NVHive
               </h2>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-[#9ca3af]">
@@ -276,9 +276,9 @@ function EmptyState({
             </div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:min-w-[420px]">
               {readiness.map(item => (
-                <div key={item.label} className="border border-[#242424] bg-[#080808] px-3 py-2 text-left">
-                  <div className="text-[9px] font-mono uppercase tracking-[0.16em] text-[#5f6368]">{item.label}</div>
-                  <div className="mt-1 truncate text-sm font-semibold text-[#f5f5f5]">{item.value}</div>
+                <div key={item.label} className="border border-[#e5e5e5] bg-white px-3 py-2 text-left">
+                  <div className="text-[9px] font-mono uppercase tracking-[0.16em] text-[#737373]">{item.label}</div>
+                  <div className="mt-1 truncate text-sm font-semibold text-[#0a0a0a]">{item.value}</div>
                 </div>
               ))}
             </div>
@@ -290,15 +290,15 @@ function EmptyState({
             <button
               key={i}
               onClick={() => onPrompt(s)}
-              className="group min-h-[72px] border border-[#242424] bg-[#101010] px-4 py-3 text-left transition-all hover:border-[#76B900]/50 hover:bg-[#14180f]"
+              className="group min-h-[72px] border border-[#e5e5e5] bg-white px-4 py-3 text-left transition-all hover:border-[#76B900]/50 hover:bg-[#f3f9e5]"
             >
               <div className="mb-2 flex items-center justify-between">
-                <span className="text-[10px] font-mono uppercase tracking-[0.16em] text-[#5f6368]">
+                <span className="text-[10px] font-mono uppercase tracking-[0.16em] text-[#737373]">
                   Prompt {i + 1}
                 </span>
                 <span className="h-px w-8 bg-[#333333] transition-colors group-hover:bg-[#76B900]" />
               </div>
-              <div className="text-sm leading-snug text-[#c8c8c8] group-hover:text-white">
+              <div className="text-sm leading-snug text-[#c8c8c8] group-hover:text-[#0a0a0a]">
                 {s}
               </div>
             </button>
@@ -1070,7 +1070,7 @@ export default function ChatPage() {
   const hasCouncilActivity = memberOrder.length > 0 || councilPhase !== 'idle';
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#0a0a0a]">
+    <div className="flex h-screen overflow-hidden bg-[#ffffff]">
       {/* Mobile sidebar overlay */}
       {mobileSidebarOpen && (
         <div
@@ -1100,10 +1100,10 @@ export default function ChatPage() {
       {/* Main area */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         {/* Top bar */}
-        <div className="flex items-center px-3 h-11 border-b border-[#242424] bg-[#0b0b0b] flex-shrink-0 gap-2">
+        <div className="flex items-center px-3 h-11 border-b border-[#e5e5e5] bg-white flex-shrink-0 gap-2">
           {/* Hamburger — mobile only */}
           <button
-            className="md:hidden flex-shrink-0 w-8 h-8 flex items-center justify-center text-[#555555] hover:text-[#76B900] transition-colors"
+            className="md:hidden flex-shrink-0 w-8 h-8 flex items-center justify-center text-[#a3a3a3] hover:text-[#76B900] transition-colors"
             onClick={() => setMobileSidebarOpen(true)}
             title="Open sidebar"
           >
@@ -1118,12 +1118,12 @@ export default function ChatPage() {
             </span>
             <span className="hidden sm:inline text-[#333333]">/</span>
             {activeConvId && (
-              <span className="text-xs font-mono text-[#555555] truncate">
+              <span className="text-xs font-mono text-[#a3a3a3] truncate">
                 {allConversations.find(c => c.id === activeConvId)?.title ?? 'Chat'}
               </span>
             )}
             {!activeConvId && (
-              <span className="text-xs font-mono text-[#555555] truncate">
+              <span className="text-xs font-mono text-[#a3a3a3] truncate">
                 NVIDIA AI Workspace
               </span>
             )}
@@ -1135,7 +1135,7 @@ export default function ChatPage() {
             {messages.length > 0 && (
               <button
                 onClick={handleShare}
-                className="text-[10px] font-mono px-2 py-0.5 border border-[#333333] text-[#555555] hover:border-[#76B900]/30 hover:text-[#76B900] transition-colors flex items-center gap-1"
+                className="text-[10px] font-mono px-2 py-0.5 border border-[#d4d4d4] text-[#a3a3a3] hover:border-[#76B900]/30 hover:text-[#76B900] transition-colors flex items-center gap-1"
                 title="Export conversation as Markdown (copied to clipboard)"
               >
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1150,7 +1150,7 @@ export default function ChatPage() {
                 className={`text-[10px] font-mono px-2 py-0.5 border transition-colors ${
                   rightPanelOpen
                     ? 'border-[#76B900]/40 bg-[#76B900]/10 text-[#76B900]'
-                    : 'border-[#333333] text-[#555555] hover:border-[#76B900]/30 hover:text-[#76B900]'
+                    : 'border-[#d4d4d4] text-[#a3a3a3] hover:border-[#76B900]/30 hover:text-[#76B900]'
                 }`}
                 title="Toggle hive panel"
               >
@@ -1194,7 +1194,7 @@ export default function ChatPage() {
                   ))}
                   {/* Convene: also show expert panel inline when right panel closed */}
                   {mode === 'council' && !showRightPanel && hasCouncilActivity && (
-                    <div className="mx-4 mt-2 border border-[#76B900]/20 bg-[#0d0d0d]">
+                    <div className="mx-4 mt-2 border border-[#76B900]/20 bg-white">
                       <LiveCouncilPanel
                         memberOrder={memberOrder}
                         memberStates={memberStates}
@@ -1227,7 +1227,7 @@ export default function ChatPage() {
 
           {/* Right panel — council experts */}
           {showRightPanel && (
-            <div className="w-80 flex-shrink-0 border-l border-[#1a1a1a] bg-[#0d0d0d] overflow-y-auto animate-slide-in-right">
+            <div className="w-80 flex-shrink-0 border-l border-[#e5e5e5] bg-white overflow-y-auto animate-slide-in-right">
               {hasCouncilActivity ? (
                 <LiveCouncilPanel
                   memberOrder={memberOrder}
@@ -1238,8 +1238,8 @@ export default function ChatPage() {
                 />
               ) : (
                 <div className="p-6 flex flex-col items-center justify-center h-full text-center">
-                  <div className="mb-3 h-8 w-8 border border-[#333333] bg-[#111111]" />
-                  <div className="text-xs font-mono text-[#444444] uppercase tracking-wider mb-1">
+                  <div className="mb-3 h-8 w-8 border border-[#d4d4d4] bg-[#ffffff]" />
+                  <div className="text-xs font-mono text-[#a3a3a3] uppercase tracking-wider mb-1">
                     Convene Mode
                   </div>
                   <div className="text-[10px] font-mono text-[#333333] leading-relaxed">

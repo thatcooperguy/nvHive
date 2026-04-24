@@ -76,9 +76,9 @@ function costTierLabel(tier?: string): string {
 }
 
 function costTierColor(tier?: string): string {
-  if (!tier || tier === 'free') return '#76B900';
-  if (tier === 'low') return '#f59e0b';
-  return '#ef4444';
+  if (!tier || tier === 'free') return '#5a9100';
+  if (tier === 'low') return '#d97706';
+  return '#dc2626';
 }
 
 export default function ChatInput({
@@ -246,8 +246,8 @@ export default function ChatInput({
 
   return (
     <div
-      className={`border-t bg-[#0d0d0d] p-3 transition-colors ${
-        dragOver ? 'border-[#76B900] bg-[#76B900]/5' : 'border-[#333333]'
+      className={`border-t bg-white p-3 transition-colors ${
+        dragOver ? 'border-[#76B900] bg-[#f3f9e5]' : 'border-[#e5e5e5]'
       }`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -270,21 +270,21 @@ export default function ChatInput({
             className="w-1.5 h-1.5 bg-[#76B900]"
             style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }}
           />
-          <span className="text-[10px] font-mono text-[#76B900]/70">
+          <span className="text-[10px] font-mono text-[#5a9100]">
             Multiple AI advisors will deliberate and synthesize a response
           </span>
         </div>
       )}
       {mode === 'compare' && (
         <div className="flex items-center gap-2 mb-2 px-1">
-          <span className="text-[10px] font-mono text-[#999999]/70">All available advisors will respond for side-by-side comparison</span>
+          <span className="text-[10px] font-mono text-[#737373]">All available advisors will respond for side-by-side comparison</span>
         </div>
       )}
 
       {/* Drag-over hint */}
       {dragOver && (
         <div className="flex items-center gap-2 mb-2 px-1">
-          <span className="text-[10px] font-mono text-[#76B900]">
+          <span className="text-[10px] font-mono text-[#5a9100]">
             Drop files to attach
           </span>
         </div>
@@ -293,11 +293,11 @@ export default function ChatInput({
       {/* File error */}
       {fileError && (
         <div className="flex items-center gap-2 mb-2 px-1">
-          <span className="text-[10px] font-mono text-[#ef4444]">{fileError}</span>
+          <span className="text-[10px] font-mono text-[#dc2626]">{fileError}</span>
           <button
             type="button"
             onClick={() => setFileError(null)}
-            className="text-[#ef4444]/60 hover:text-[#ef4444] text-[10px] font-mono"
+            className="text-[#dc2626]/60 hover:text-[#dc2626] text-[10px] font-mono"
           >
             x
           </button>
@@ -310,28 +310,28 @@ export default function ChatInput({
           {attachedFiles.map(f => (
             <div
               key={f.name}
-              className="flex items-center gap-1.5 bg-[#111111] border border-[#76B900]/30 px-2 py-1 text-[10px] font-mono group"
+              className="flex items-center gap-1.5 bg-[#fafafa] border border-[#76B900]/40 px-2 py-1 text-[10px] font-mono group"
             >
               {f.isImage ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={f.content}
                   alt={f.name}
-                  className="w-5 h-5 object-cover flex-shrink-0 border border-[#333333]"
+                  className="w-5 h-5 object-cover flex-shrink-0 border border-[#e5e5e5]"
                 />
               ) : (
-                <span className="text-[#76B900] opacity-70">
+                <span className="text-[#5a9100]">
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round"
                       d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
                 </span>
               )}
-              <span className="text-[#cccccc] max-w-[120px] truncate">{f.name}</span>
+              <span className="text-[#404040] max-w-[120px] truncate">{f.name}</span>
               <button
                 type="button"
                 onClick={() => removeFile(f.name)}
-                className="text-[#444444] hover:text-[#ef4444] transition-colors ml-0.5 flex-shrink-0"
+                className="text-[#a3a3a3] hover:text-[#dc2626] transition-colors ml-0.5 flex-shrink-0"
                 title="Remove file"
               >
                 x
@@ -348,7 +348,7 @@ export default function ChatInput({
           type="button"
           onClick={handleAttachClick}
           disabled={disabled || streaming}
-          className="flex-shrink-0 w-9 h-9 flex items-center justify-center border border-[#333333] bg-[#111111] text-[#555555] hover:text-[#76B900] hover:border-[#76B900]/40 transition-colors disabled:opacity-40"
+          className="flex-shrink-0 w-9 h-9 flex items-center justify-center border border-[#d4d4d4] bg-white text-[#737373] hover:text-[#76B900] hover:border-[#76B900] transition-colors disabled:opacity-40"
           title="Attach file (.py, .js, .ts, .txt, .md, .json, .yaml, .csv, .pdf, images)"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -374,10 +374,10 @@ export default function ChatInput({
           }
           disabled={disabled || streaming}
           rows={1}
-          className={`flex-1 bg-[#111111] border text-white placeholder-[#444444] px-3 py-2.5 text-sm font-mono resize-none
-            focus:outline-none focus:border-[#76B900]/60 focus:ring-1 focus:ring-[#76B900]/20
+          className={`flex-1 bg-white border text-[#0a0a0a] placeholder-[#a3a3a3] px-3 py-2.5 text-sm font-mono resize-none
+            focus:outline-none focus:border-[#76B900] focus:ring-1 focus:ring-[#76B900]/30
             disabled:opacity-50 transition-colors min-h-[40px] leading-relaxed ${
-            dragOver ? 'border-[#76B900]/60' : 'border-[#333333]'
+            dragOver ? 'border-[#76B900]' : 'border-[#d4d4d4]'
           }`}
           style={{ maxHeight: '50vh' }}
         />
@@ -387,7 +387,7 @@ export default function ChatInput({
           <button
             type="button"
             onClick={onStop}
-            className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-[#ef4444]/10 border border-[#ef4444]/30 text-[#ef4444] hover:bg-[#ef4444]/20 transition-colors"
+            className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-[#fef2f2] border border-[#fca5a5] text-[#dc2626] hover:bg-[#fee2e2] transition-colors"
             title="Stop generation"
           >
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
@@ -399,9 +399,9 @@ export default function ChatInput({
             type="button"
             onClick={handleSubmit}
             disabled={disabled || (!value.trim() && attachedFiles.length === 0)}
-            className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-[#76B900] hover:bg-[#8fd000] text-black transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-[#76B900] hover:bg-[#5a9100] text-black transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             title="Send (Ctrl+Enter)"
-            style={{ boxShadow: (value.trim() || attachedFiles.length > 0) ? '0 0 10px rgba(118,185,0,0.3)' : undefined }}
+            style={{ boxShadow: (value.trim() || attachedFiles.length > 0) ? '0 4px 12px rgba(118,185,0,0.3)' : undefined }}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round"
@@ -414,7 +414,7 @@ export default function ChatInput({
       {/* Bottom toolbar */}
       <div className="flex items-center gap-2 mt-2 px-1">
         {/* Mode pills */}
-        <div className="flex items-center bg-[#111111] border border-[#333333] p-0.5 gap-0.5 mode-pills-container">
+        <div className="flex items-center bg-white border border-[#d4d4d4] p-0.5 gap-0.5 mode-pills-container">
           {MODES.map(m => (
             <button
               key={m.value}
@@ -424,7 +424,7 @@ export default function ChatInput({
               className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider transition-all flex items-center gap-1.5 disabled:opacity-50 ${
                 mode === m.value
                   ? 'bg-[#76B900] text-black font-bold'
-                  : 'text-[#555555] hover:text-[#999999] hover:bg-[#1a1a1a]'
+                  : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5]'
               }`}
             >
               <span className="text-[8px] font-bold">{m.value === 'single' ? 'S' : m.value === 'council' ? 'C' : 'P'}</span>
@@ -438,8 +438,8 @@ export default function ChatInput({
           value={mode}
           onChange={e => onModeChange(e.target.value as ChatMode)}
           disabled={disabled || streaming}
-          className="mode-dropdown hidden bg-[#111111] border border-[#333333] text-[#999999] text-[10px] font-mono px-2 py-1
-            focus:outline-none focus:border-[#76B900]/60 appearance-none disabled:opacity-50"
+          className="mode-dropdown hidden bg-white border border-[#d4d4d4] text-[#404040] text-[10px] font-mono px-2 py-1
+            focus:outline-none focus:border-[#76B900] appearance-none disabled:opacity-50"
         >
           {MODES.map(m => (
             <option key={m.value} value={m.value}>{m.label}</option>
@@ -453,8 +453,8 @@ export default function ChatInput({
               value={selectedModel}
               onChange={e => onModelChange(e.target.value)}
               disabled={disabled || streaming}
-              className="bg-[#111111] border border-[#333333] text-[#999999] text-[10px] font-mono pl-2 pr-6 py-1
-                focus:outline-none focus:border-[#76B900]/60 appearance-none disabled:opacity-50 hover:border-[#444444] transition-colors"
+              className="bg-white border border-[#d4d4d4] text-[#404040] text-[10px] font-mono pl-2 pr-6 py-1
+                focus:outline-none focus:border-[#76B900] appearance-none disabled:opacity-50 hover:border-[#a3a3a3] transition-colors"
             >
               {connectedModels.length > 0 && (
                 <optgroup label={offlineModels.length > 0 ? "Connected" : "Models"}>
@@ -486,7 +486,7 @@ export default function ChatInput({
           </div>
         )}
 
-        <span className="ml-auto text-[9px] font-mono text-[#2a2a2a] ctrl-enter-hint">
+        <span className="ml-auto text-[9px] font-mono text-[#a3a3a3] ctrl-enter-hint">
           Ctrl+Enter to send
         </span>
       </div>

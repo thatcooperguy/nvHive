@@ -18,15 +18,21 @@ python -m nvh._dev.bump_version 0.7.0  # or edit by hand
 
 # 3. Update CHANGELOG.md with the new section
 
-# 4. Commit, tag, push
-git commit -am "chore(release): bump version to 0.7.0"
+# 4. Commit, tag, push — tag push triggers the full release chain
+git commit -am "release: v0.7.0"
+git push
 git tag v0.7.0
-git push origin main --tags
-
-# 5. Create a GitHub Release from the tag. Publishing the release
-#    triggers .github/workflows/publish.yml which builds and uploads
-#    the wheel via OIDC trusted publishing — no tokens to paste.
+git push origin v0.7.0
 ```
+
+That tag push triggers `.github/workflows/release.yml` which:
+1. Builds sdist + wheel
+2. Builds PyInstaller single-file binaries for Linux x86_64, macOS arm64, Windows x86_64
+3. Creates a GitHub Release with all artifacts attached + auto-generated notes
+
+Creating the Release then fires `.github/workflows/publish.yml` which
+pushes the sdist/wheel to PyPI via OIDC trusted publishing. No manual
+Release creation, no manual twine, no tokens to paste.
 
 ## Prerequisites
 
@@ -66,24 +72,28 @@ Before tagging, verify:
 ## Creating the release
 
 ```bash
-# Tag format MUST be vX.Y.Z (lowercase 'v'). The publish workflow
-# triggers on tag creation and parses the version out of the tag name.
+# Tag format MUST be vX.Y.Z (lowercase 'v'). release.yml triggers on
+# tag creation; publish.yml chains from release:published.
 git tag v0.7.0
 git push origin v0.7.0
 ```
 
-Then go to https://github.com/thatcooperguy/nvHive/releases/new and
-create a release from the tag. Paste the relevant `CHANGELOG.md`
-section as the release notes. Clicking "Publish release" triggers
-`.github/workflows/publish.yml` which:
+That single tag push triggers the full chain in the Actions tab:
 
-1. Builds `dist/*.whl` and `dist/*.tar.gz`
-2. Runs `twine check dist/*`
-3. Uploads to PyPI via OIDC (no tokens)
+1. **release.yml** builds sdist, wheel, and PyInstaller binaries for
+   Linux/macOS/Windows, then creates a GitHub Release with
+   auto-generated notes and every artifact attached.
+2. **publish.yml** fires on `release:published`, runs
+   `twine check dist/*`, and uploads sdist + wheel to PyPI via OIDC
+   trusted publishing.
 
-Watch the workflow run in the Actions tab. Typical duration is 2–3
-minutes. On success, `pip install nvhive==0.7.0` becomes live on PyPI
-within seconds.
+Typical full duration is 6–10 minutes (binary builds dominate). On
+success, `pip install nvhive==0.7.0` is live on PyPI and the binary
+downloads are live on the Releases page.
+
+To re-run manually (e.g. you want to regenerate binaries for a
+pre-existing tag), use the `workflow_dispatch` input in the Actions tab
+and supply the tag name.
 
 ## Verifying the release
 

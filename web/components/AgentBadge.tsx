@@ -7,12 +7,12 @@ interface Props {
 }
 
 const BADGE_COLORS = [
-  { bg: 'bg-[#3b82f6]/10', text: 'text-[#3b82f6]', border: 'border-[#3b82f6]/20' },
-  { bg: 'bg-[#a855f7]/10', text: 'text-[#a855f7]', border: 'border-[#a855f7]/20' },
-  { bg: 'bg-[#22c55e]/10', text: 'text-[#22c55e]', border: 'border-[#22c55e]/20' },
-  { bg: 'bg-[#f59e0b]/10', text: 'text-[#f59e0b]', border: 'border-[#f59e0b]/20' },
-  { bg: 'bg-[#06b6d4]/10', text: 'text-[#06b6d4]', border: 'border-[#06b6d4]/20' },
-  { bg: 'bg-[#f97316]/10', text: 'text-[#f97316]', border: 'border-[#f97316]/20' },
+  { bg: 'bg-[#2563eb]/10', text: 'text-[#2563eb]', border: 'border-[#2563eb]/20' },
+  { bg: 'bg-[#7c3aed]/10', text: 'text-[#7c3aed]', border: 'border-[#7c3aed]/20' },
+  { bg: 'bg-[#16a34a]/10', text: 'text-[#16a34a]', border: 'border-[#16a34a]/20' },
+  { bg: 'bg-[#d97706]/10', text: 'text-[#d97706]', border: 'border-[#d97706]/20' },
+  { bg: 'bg-[#0891b2]/10', text: 'text-[#0891b2]', border: 'border-[#0891b2]/20' },
+  { bg: 'bg-[#ea580c]/10', text: 'text-[#ea580c]', border: 'border-[#ea580c]/20' },
 ];
 
 export default function AgentBadge({ agent, index = 0, compact = false }: Props) {
@@ -35,13 +35,13 @@ export default function AgentBadge({ agent, index = 0, compact = false }: Props)
       <div className="flex items-start justify-between mb-2">
         <div className={`font-semibold text-sm ${color.text}`}>{agent.role}</div>
         {agent.weight_boost !== 0 && (
-          <span className="text-xs font-mono text-[#475569]">
+          <span className="text-xs font-mono text-[#737373]">
             +{agent.weight_boost.toFixed(2)}w
           </span>
         )}
       </div>
-      <div className="text-xs text-[#94a3b8] mb-1">{agent.expertise}</div>
-      <div className="text-xs text-[#475569] italic">{agent.perspective}</div>
+      <div className="text-xs text-[#737373] mb-1">{agent.expertise}</div>
+      <div className="text-xs text-[#737373] italic">{agent.perspective}</div>
     </div>
   );
 }

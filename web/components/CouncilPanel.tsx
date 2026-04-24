@@ -11,12 +11,12 @@ import type {
 // ─── Colour palette ───────────────────────────────────────────────────────────
 
 const MEMBER_COLORS = [
-  { border: '#3b82f6', bg: '#3b82f615', text: '#3b82f6' },
-  { border: '#a855f7', bg: '#a855f715', text: '#a855f7' },
-  { border: '#22c55e', bg: '#22c55e15', text: '#22c55e' },
-  { border: '#f59e0b', bg: '#f59e0b15', text: '#f59e0b' },
-  { border: '#06b6d4', bg: '#06b6d415', text: '#06b6d4' },
-  { border: '#f97316', bg: '#f9731615', text: '#f97316' },
+  { border: '#2563eb', bg: '#2563eb15', text: '#2563eb' },
+  { border: '#7c3aed', bg: '#7c3aed15', text: '#7c3aed' },
+  { border: '#16a34a', bg: '#16a34a15', text: '#16a34a' },
+  { border: '#d97706', bg: '#d9770615', text: '#d97706' },
+  { border: '#0891b2', bg: '#0891b215', text: '#0891b2' },
+  { border: '#ea580c', bg: '#ea580c15', text: '#ea580c' },
 ];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ function formatMs(ms: number): string {
 function StatusDot({ status }: { status: MemberStreamStatus }) {
   if (status === 'waiting') {
     return (
-      <span className="inline-block w-2 h-2 rounded-full bg-[#444444] border border-[#555555]" title="Waiting" />
+      <span className="inline-block w-2 h-2 rounded-full bg-[#a3a3a3] border border-[#a3a3a3]" title="Waiting" />
     );
   }
   if (status === 'streaming') {
@@ -51,12 +51,12 @@ function StatusDot({ status }: { status: MemberStreamStatus }) {
   }
   if (status === 'complete') {
     return (
-      <span className="inline-block w-2 h-2 rounded-full bg-[#22c55e]" title="Complete" />
+      <span className="inline-block w-2 h-2 rounded-full bg-[#16a34a]" title="Complete" />
     );
   }
   // failed
   return (
-    <span className="inline-block w-2 h-2 rounded-full bg-[#ef4444]" title="Failed" />
+    <span className="inline-block w-2 h-2 rounded-full bg-[#dc2626]" title="Failed" />
   );
 }
 
@@ -113,7 +113,7 @@ function StreamingMemberPanel({
 
   const borderColor =
     state.status === 'failed'
-      ? '#ef444440'
+      ? '#dc262640'
       : state.status === 'complete'
       ? `${color.border}80`
       : state.status === 'streaming'
@@ -132,7 +132,7 @@ function StreamingMemberPanel({
             <StatusDot status={state.status} />
             <span
               className="text-sm font-semibold truncate"
-              style={{ color: state.status === 'failed' ? '#ef4444' : color.text }}
+              style={{ color: state.status === 'failed' ? '#dc2626' : color.text }}
             >
               {state.provider}
             </span>
@@ -149,7 +149,7 @@ function StreamingMemberPanel({
               </span>
             )}
           </div>
-          <div className="text-[10px] text-[#475569] mt-0.5 font-mono uppercase tracking-wider">
+          <div className="text-[10px] text-[#737373] mt-0.5 font-mono uppercase tracking-wider">
             {state.status === 'waiting' && 'Waiting…'}
             {state.status === 'streaming' && 'Generating…'}
             {state.status === 'complete' && 'Complete'}
@@ -165,12 +165,12 @@ function StreamingMemberPanel({
             </div>
           )}
           {state.status === 'complete' && (
-            <div className="text-[10px] font-mono text-[#555555] tabular-nums">
+            <div className="text-[10px] font-mono text-[#a3a3a3] tabular-nums">
               {formatMs(state.latency_ms)}
             </div>
           )}
           <div className="text-right">
-            <div className="text-[10px] text-[#475569]">weight</div>
+            <div className="text-[10px] text-[#737373]">weight</div>
             <div className="text-sm font-mono font-bold" style={{ color: color.text }}>
               {weight.toFixed(2)}
             </div>
@@ -179,12 +179,12 @@ function StreamingMemberPanel({
       </div>
 
       {/* Weight progress bar */}
-      <div className="h-px bg-[#1a1a1a] overflow-hidden">
+      <div className="h-px bg-[#f5f5f5] overflow-hidden">
         <div
           className="h-full transition-all duration-500"
           style={{
             width: `${Math.min(100, weight * 100)}%`,
-            backgroundColor: state.status === 'failed' ? '#ef4444' : color.border,
+            backgroundColor: state.status === 'failed' ? '#dc2626' : color.border,
           }}
         />
       </div>
@@ -192,22 +192,22 @@ function StreamingMemberPanel({
       {/* Content area */}
       <div
         ref={contentRef}
-        className="bg-[#0a0a0a] rounded-lg p-3 min-h-[80px] max-h-[220px] overflow-y-auto"
+        className="bg-[#ffffff] rounded-lg p-3 min-h-[80px] max-h-[220px] overflow-y-auto"
       >
         {state.status === 'waiting' && (
-          <div className="flex items-center gap-2 text-xs text-[#475569] font-mono italic">
+          <div className="flex items-center gap-2 text-xs text-[#737373] font-mono italic">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#333333] animate-pulse" />
             Waiting for response…
           </div>
         )}
         {state.status === 'failed' && (
-          <div className="text-xs text-[#ef4444] font-mono">
+          <div className="text-xs text-[#dc2626] font-mono">
             {state.error || 'Response failed'}
           </div>
         )}
         {(state.status === 'streaming' || state.status === 'complete') &&
           state.accumulated && (
-            <div className="text-sm text-[#e2e8f0] font-mono whitespace-pre-wrap leading-relaxed">
+            <div className="text-sm text-[#0a0a0a] font-mono whitespace-pre-wrap leading-relaxed">
               {state.accumulated}
               {state.status === 'streaming' && <StreamCursor />}
             </div>
@@ -229,9 +229,9 @@ function StreamingMemberPanel({
             { label: 'Cost', value: formatUSD(state.cost) },
             { label: 'Latency', value: formatMs(state.latency_ms) },
           ].map(({ label, value }) => (
-            <div key={label} className="bg-[#0a0a0a] border border-[#2a2a3e] rounded-md px-2 py-1">
-              <span className="text-xs text-[#475569]">{label}: </span>
-              <span className="text-xs font-mono text-[#94a3b8]">{value}</span>
+            <div key={label} className="bg-[#ffffff] border border-[#e5e5e5] rounded-md px-2 py-1">
+              <span className="text-xs text-[#737373]">{label}: </span>
+              <span className="text-xs font-mono text-[#737373]">{value}</span>
             </div>
           ))}
         </div>
@@ -262,12 +262,12 @@ function MemberPanel({
   return (
     <div
       className="rounded-xl border p-4 flex flex-col gap-3"
-      style={{ borderColor: failed ? '#ef444440' : `${color.border}40`, backgroundColor: '#0d0d1a' }}
+      style={{ borderColor: failed ? '#dc262640' : `${color.border}40`, backgroundColor: '#0d0d1a' }}
     >
       <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold" style={{ color: failed ? '#ef4444' : color.text }}>
+            <span className="text-sm font-semibold" style={{ color: failed ? '#dc2626' : color.text }}>
               {label}
             </span>
             {persona && (
@@ -280,12 +280,12 @@ function MemberPanel({
             )}
           </div>
           {response && (
-            <div className="text-xs text-[#475569] mt-0.5 font-mono">{response.model}</div>
+            <div className="text-xs text-[#737373] mt-0.5 font-mono">{response.model}</div>
           )}
         </div>
         <div className="flex items-center gap-2">
           <div className="text-right">
-            <div className="text-xs text-[#475569]">weight</div>
+            <div className="text-xs text-[#737373]">weight</div>
             <div className="text-sm font-mono font-bold" style={{ color: color.text }}>
               {weight.toFixed(2)}
             </div>
@@ -293,9 +293,9 @@ function MemberPanel({
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold border-2"
             style={{
-              borderColor: failed ? '#ef4444' : color.border,
-              color: failed ? '#ef4444' : color.text,
-              backgroundColor: failed ? '#ef444410' : color.bg,
+              borderColor: failed ? '#dc2626' : color.border,
+              color: failed ? '#dc2626' : color.text,
+              backgroundColor: failed ? '#dc262610' : color.bg,
             }}
           >
             {failed ? '✗' : '✓'}
@@ -306,19 +306,19 @@ function MemberPanel({
       <div className="progress-bar">
         <div
           className="progress-fill"
-          style={{ width: `${Math.min(100, weight * 100)}%`, backgroundColor: failed ? '#ef4444' : color.border }}
+          style={{ width: `${Math.min(100, weight * 100)}%`, backgroundColor: failed ? '#dc2626' : color.border }}
         />
       </div>
 
-      <div className="bg-[#0a0a0a] rounded-lg p-3 min-h-[80px] max-h-[200px] overflow-y-auto">
+      <div className="bg-[#ffffff] rounded-lg p-3 min-h-[80px] max-h-[200px] overflow-y-auto">
         {failed ? (
-          <div className="text-xs text-[#ef4444] font-mono italic">Response failed</div>
+          <div className="text-xs text-[#dc2626] font-mono italic">Response failed</div>
         ) : response ? (
-          <div className="text-sm text-[#e2e8f0] font-mono whitespace-pre-wrap leading-relaxed">
+          <div className="text-sm text-[#0a0a0a] font-mono whitespace-pre-wrap leading-relaxed">
             {response.content}
           </div>
         ) : (
-          <div className="text-xs text-[#475569] italic">No response</div>
+          <div className="text-xs text-[#737373] italic">No response</div>
         )}
       </div>
 
@@ -329,9 +329,9 @@ function MemberPanel({
             { label: 'Cost', value: formatUSD(response.cost_usd) },
             { label: 'Latency', value: `${Math.round(response.latency_ms)}ms` },
           ].map(({ label: l, value }) => (
-            <div key={l} className="bg-[#0a0a0a] border border-[#2a2a3e] rounded-md px-2 py-1">
-              <span className="text-xs text-[#475569]">{l}: </span>
-              <span className="text-xs font-mono text-[#94a3b8]">{value}</span>
+            <div key={l} className="bg-[#ffffff] border border-[#e5e5e5] rounded-md px-2 py-1">
+              <span className="text-xs text-[#737373]">{l}: </span>
+              <span className="text-xs font-mono text-[#737373]">{value}</span>
             </div>
           ))}
         </div>
@@ -386,7 +386,7 @@ function SynthesisPanel({ status, content, tokens, cost, result }: SynthesisPane
   return (
     <div ref={wrapperRef} className="scroll-mt-4">
       <div className="section-label mb-3 flex items-center gap-2">
-        <span className="text-[#3b82f6]">◈</span>
+        <span className="text-[#2563eb]">◈</span>
         <span>Synthesis</span>
         {status === 'streaming' && (
           <span className="text-[10px] font-mono text-[#76B900] animate-pulse uppercase tracking-wider">
@@ -394,29 +394,29 @@ function SynthesisPanel({ status, content, tokens, cost, result }: SynthesisPane
           </span>
         )}
       </div>
-      <div className="card p-5 border-2 border-[#3b82f6]/40 bg-[#3b82f6]/[0.02] shadow-[0_0_24px_rgba(59,130,246,0.08)] transition-all duration-300">
+      <div className="card p-5 border-2 border-[#2563eb]/40 bg-[#2563eb]/[0.02] shadow-[0_0_24px_rgba(59,130,246,0.08)] transition-all duration-300">
         <div className="flex items-center gap-2 mb-3">
-          <div className="w-7 h-7 rounded-lg bg-[#3b82f6]/10 flex items-center justify-center">
-            <svg className="w-4 h-4 text-[#3b82f6]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <div className="w-7 h-7 rounded-lg bg-[#2563eb]/10 flex items-center justify-center">
+            <svg className="w-4 h-4 text-[#2563eb]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round"
                 d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
             </svg>
           </div>
           <div>
-            <div className="text-sm font-semibold text-[#e2e8f0]">Synthesized Response</div>
+            <div className="text-sm font-semibold text-[#0a0a0a]">Synthesized Response</div>
             {displayModel && (
-              <div className="text-xs text-[#475569] font-mono">{displayModel}</div>
+              <div className="text-xs text-[#737373] font-mono">{displayModel}</div>
             )}
           </div>
         </div>
 
         <div
           ref={contentRef}
-          className="bg-[#0a0a0a] rounded-lg p-4 font-mono text-sm text-[#e2e8f0] whitespace-pre-wrap leading-relaxed max-h-[400px] overflow-y-auto"
+          className="bg-[#ffffff] rounded-lg p-4 font-mono text-sm text-[#0a0a0a] whitespace-pre-wrap leading-relaxed max-h-[400px] overflow-y-auto"
         >
           {displayContent || (
-            <span className="text-[#475569] italic flex items-center gap-1.5">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#3b82f6] animate-pulse" />
+            <span className="text-[#737373] italic flex items-center gap-1.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#2563eb] animate-pulse" />
               Synthesizing responses…
             </span>
           )}
@@ -432,9 +432,9 @@ function SynthesisPanel({ status, content, tokens, cost, result }: SynthesisPane
                 ? [{ label: 'Latency', value: formatMs(displayLatency) }]
                 : []),
             ].map(({ label, value }) => (
-              <div key={label} className="bg-[#0a0a0a] border border-[#2a2a3e] rounded-md px-2 py-1">
-                <span className="text-xs text-[#475569]">{label}: </span>
-                <span className="text-xs font-mono text-[#94a3b8]">{value}</span>
+              <div key={label} className="bg-[#ffffff] border border-[#e5e5e5] rounded-md px-2 py-1">
+                <span className="text-xs text-[#737373]">{label}: </span>
+                <span className="text-xs font-mono text-[#737373]">{value}</span>
               </div>
             ))}
           </div>
@@ -512,25 +512,25 @@ function LiveCouncilPanel({
       {/* Stats bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Strategy', value: strategy || 'weighted_consensus', color: '#3b82f6' },
+          { label: 'Strategy', value: strategy || 'weighted_consensus', color: '#2563eb' },
           {
             label: 'Total Cost',
             value: formatUSD(liveTotalCost),
-            color: '#f59e0b',
+            color: '#d97706',
           },
           {
             label: 'Total Latency',
             value: totalLatencyMs !== undefined ? formatMs(totalLatencyMs) : '—',
-            color: '#06b6d4',
+            color: '#0891b2',
           },
           {
             label: 'Quorum',
             value: quorumMet === undefined ? '—' : quorumMet ? 'Met' : 'Not Met',
-            color: quorumMet === undefined ? '#555555' : quorumMet ? '#22c55e' : '#ef4444',
+            color: quorumMet === undefined ? '#a3a3a3' : quorumMet ? '#16a34a' : '#dc2626',
           },
         ].map(({ label, value, color }) => (
           <div key={label} className="card p-3 text-center">
-            <div className="text-xs text-[#475569] mb-1">{label}</div>
+            <div className="text-xs text-[#737373] mb-1">{label}</div>
             <div className="text-sm font-mono font-bold" style={{ color }}>{value}</div>
           </div>
         ))}
@@ -568,17 +568,17 @@ function LiveCouncilPanel({
 
       {/* Failed members */}
       {failedKeys.length > 0 && (
-        <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 rounded-xl p-4">
+        <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
-            <svg className="w-4 h-4 text-[#ef4444]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4 text-[#dc2626]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
             </svg>
-            <span className="text-sm font-medium text-[#ef4444]">Failed Members</span>
+            <span className="text-sm font-medium text-[#dc2626]">Failed Members</span>
           </div>
           <div className="flex flex-wrap gap-2">
             {failedKeys.map(m => (
-              <span key={m} className="tag bg-[#ef4444]/10 text-[#ef4444] border border-[#ef4444]/20">
+              <span key={m} className="tag bg-[#dc2626]/10 text-[#dc2626] border border-[#dc2626]/20">
                 {m}
               </span>
             ))}
@@ -596,17 +596,17 @@ function StaticCouncilPanel({ result }: { result: CouncilResult }) {
     <div className="space-y-6">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Strategy', value: result.strategy, color: '#3b82f6' },
-          { label: 'Total Cost', value: formatUSD(result.total_cost_usd), color: '#f59e0b' },
-          { label: 'Total Latency', value: `${Math.round(result.total_latency_ms)}ms`, color: '#06b6d4' },
+          { label: 'Strategy', value: result.strategy, color: '#2563eb' },
+          { label: 'Total Cost', value: formatUSD(result.total_cost_usd), color: '#d97706' },
+          { label: 'Total Latency', value: `${Math.round(result.total_latency_ms)}ms`, color: '#0891b2' },
           {
             label: 'Quorum',
             value: result.quorum_met ? 'Met' : 'Not Met',
-            color: result.quorum_met ? '#22c55e' : '#ef4444',
+            color: result.quorum_met ? '#16a34a' : '#dc2626',
           },
         ].map(({ label, value, color }) => (
           <div key={label} className="card p-3 text-center">
-            <div className="text-xs text-[#475569] mb-1">{label}</div>
+            <div className="text-xs text-[#737373] mb-1">{label}</div>
             <div className="text-sm font-mono font-bold" style={{ color }}>{value}</div>
           </div>
         ))}
@@ -645,17 +645,17 @@ function StaticCouncilPanel({ result }: { result: CouncilResult }) {
       )}
 
       {result.failed_members.length > 0 && (
-        <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 rounded-xl p-4">
+        <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
-            <svg className="w-4 h-4 text-[#ef4444]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4 text-[#dc2626]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
             </svg>
-            <span className="text-sm font-medium text-[#ef4444]">Failed Members</span>
+            <span className="text-sm font-medium text-[#dc2626]">Failed Members</span>
           </div>
           <div className="flex flex-wrap gap-2">
             {result.failed_members.map(m => (
-              <span key={m} className="tag bg-[#ef4444]/10 text-[#ef4444] border border-[#ef4444]/20">
+              <span key={m} className="tag bg-[#dc2626]/10 text-[#dc2626] border border-[#dc2626]/20">
                 {m}
               </span>
             ))}

@@ -41,34 +41,34 @@ export default function ResponsePanel({
       {/* Content area */}
       <div
         ref={scrollRef}
-        className="relative min-h-[200px] max-h-[500px] overflow-y-auto bg-[#0a0a0a] border border-[#2a2a3e] rounded-xl p-4"
+        className="relative min-h-[200px] max-h-[500px] overflow-y-auto bg-[#ffffff] border border-[#e5e5e5] rounded-xl p-4"
       >
         {error ? (
           <div className="flex items-start gap-3">
-            <div className="w-8 h-8 rounded-full bg-[#ef4444]/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <svg className="w-4 h-4 text-[#ef4444]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <div className="w-8 h-8 rounded-full bg-[#dc2626]/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <svg className="w-4 h-4 text-[#dc2626]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
               </svg>
             </div>
             <div>
-              <div className="text-sm font-medium text-[#ef4444] mb-1">Error</div>
-              <div className="text-sm text-[#94a3b8] font-mono">{error}</div>
+              <div className="text-sm font-medium text-[#dc2626] mb-1">Error</div>
+              <div className="text-sm text-[#737373] font-mono">{error}</div>
             </div>
           </div>
         ) : content ? (
-          <div className={`prose-sm font-mono text-sm text-[#e2e8f0] whitespace-pre-wrap leading-relaxed ${
+          <div className={`prose-sm font-mono text-sm text-[#0a0a0a] whitespace-pre-wrap leading-relaxed ${
             streaming ? 'streaming-cursor' : ''
           }`}>
             {content}
           </div>
         ) : streaming ? (
-          <div className="flex items-center gap-2 text-[#475569]">
+          <div className="flex items-center gap-2 text-[#737373]">
             <div className="flex gap-1">
               {[0, 1, 2].map(i => (
                 <div
                   key={i}
-                  className="w-2 h-2 bg-[#3b82f6] rounded-full animate-bounce"
+                  className="w-2 h-2 bg-[#2563eb] rounded-full animate-bounce"
                   style={{ animationDelay: `${i * 0.15}s` }}
                 />
               ))}
@@ -76,7 +76,7 @@ export default function ResponsePanel({
             <span className="text-sm">Generating...</span>
           </div>
         ) : (
-          <div className="text-[#475569] text-sm italic">{placeholder}</div>
+          <div className="text-[#737373] text-sm italic">{placeholder}</div>
         )}
       </div>
 
@@ -86,30 +86,30 @@ export default function ResponsePanel({
           <MetaChip
             label="Provider"
             value={response.provider}
-            color="#3b82f6"
+            color="#2563eb"
           />
           <MetaChip
             label="Model"
             value={response.model}
-            color="#a855f7"
+            color="#7c3aed"
           />
           <MetaChip
             label="Tokens"
             value={`${response.usage?.total_tokens ?? '—'}`}
-            color="#22c55e"
+            color="#16a34a"
           />
           <MetaChip
             label="Cost"
             value={formatUSD(response.cost_usd)}
-            color="#f59e0b"
+            color="#d97706"
           />
           <MetaChip
             label="Latency"
             value={`${Math.round(response.latency_ms)}ms`}
-            color="#06b6d4"
+            color="#0891b2"
           />
           {response.cache_hit && (
-            <span className="tag bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/20">
+            <span className="tag bg-[#16a34a]/10 text-[#16a34a] border border-[#16a34a]/20">
               <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
                 <path d="M4 4a2 2 0 00-2 2v1h16V6a2 2 0 00-2-2H4z" />
                 <path fillRule="evenodd" d="M18 9H2v5a2 2 0 002 2h12a2 2 0 002-2V9zM4 13a1 1 0 011-1h1a1 1 0 110 2H5a1 1 0 01-1-1zm5-1a1 1 0 100 2h1a1 1 0 100-2H9z" clipRule="evenodd" />
@@ -118,7 +118,7 @@ export default function ResponsePanel({
             </span>
           )}
           {response.fallback_from && (
-            <span className="tag bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/20">
+            <span className="tag bg-[#d97706]/10 text-[#d97706] border border-[#d97706]/20">
               Fallback from {response.fallback_from}
             </span>
           )}
@@ -130,8 +130,8 @@ export default function ResponsePanel({
 
 function MetaChip({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div className="flex items-center gap-1.5 bg-[#0a0a0a] border border-[#2a2a3e] rounded-lg px-2.5 py-1">
-      <span className="text-xs text-[#475569]">{label}:</span>
+    <div className="flex items-center gap-1.5 bg-[#ffffff] border border-[#e5e5e5] rounded-lg px-2.5 py-1">
+      <span className="text-xs text-[#737373]">{label}:</span>
       <span className="text-xs font-mono font-medium" style={{ color }}>{value}</span>
     </div>
   );

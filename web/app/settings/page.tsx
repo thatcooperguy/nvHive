@@ -56,7 +56,7 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
     <button
       type="button"
       onClick={() => onChange(!value)}
-      className={`relative w-11 h-6 transition-colors ${value ? 'bg-[#76B900]' : 'bg-[#222222] border border-[#333333]'}`}
+      className={`relative w-11 h-6 transition-colors ${value ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4]'}`}
     >
       <span className={`absolute top-1 w-4 h-4 bg-white shadow transition-transform ${value ? 'translate-x-6' : 'translate-x-1'}`} />
     </button>
@@ -66,7 +66,7 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="card p-5 space-y-4 nvidia-corner relative">
-      <h2 className="font-mono font-bold text-white text-xs uppercase tracking-widest border-b border-[#222222] pb-3 flex items-center gap-2">
+      <h2 className="font-mono font-bold text-[#0a0a0a] text-xs uppercase tracking-widest border-b border-[#e5e5e5] pb-3 flex items-center gap-2">
         <span className="w-1 h-4 bg-[#76B900] inline-block" />
         {title}
       </h2>
@@ -87,8 +87,8 @@ function SettingRow({
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-mono text-[#999999]">{label}</div>
-        {description && <div className="text-[10px] font-mono text-[#555555] mt-0.5">{description}</div>}
+        <div className="text-sm font-mono text-[#525252]">{label}</div>
+        {description && <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">{description}</div>}
       </div>
       <div className="flex-shrink-0">{children}</div>
     </div>
@@ -143,13 +143,13 @@ export default function SettingsPage() {
   return (
     <div className="p-6 space-y-6 max-w-3xl mx-auto">
       {/* Header */}
-      <div className="nvidia-corner relative border border-[#333333] bg-[#111111] p-5 overflow-hidden">
+      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
         <div className="relative flex items-center justify-between">
           <div>
             <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Configuration</div>
-            <h1 className="text-2xl font-bold text-white">Settings</h1>
-            <p className="text-xs font-mono text-[#555555] mt-1">Configure Hive platform preferences</p>
+            <h1 className="text-2xl font-bold text-[#0a0a0a]">Settings</h1>
+            <p className="text-xs font-mono text-[#a3a3a3] mt-1">Configure Hive platform preferences</p>
           </div>
           <div className="flex gap-2">
             <button onClick={handleReset} className="btn-ghost px-4 py-2 text-xs font-mono uppercase tracking-wider">
@@ -179,7 +179,7 @@ export default function SettingsPage() {
       {/* General */}
       <SectionCard title="General">
         <div>
-          <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">API Server URL</label>
+          <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">API Server URL</label>
           <input
             type="text"
             value={settings.apiUrl}
@@ -187,14 +187,14 @@ export default function SettingsPage() {
             className="input-base w-full px-3 py-2.5 text-sm font-mono"
             placeholder="http://localhost:8000"
           />
-          <div className="text-[10px] font-mono text-[#444444] mt-1">
+          <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">
             The Hive API server address. Changes require a page reload.
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Default Advisor</label>
+            <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Default Advisor</label>
             <input
               type="text"
               value={settings.defaultProvider}
@@ -204,7 +204,7 @@ export default function SettingsPage() {
             />
           </div>
           <div>
-            <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Default Model</label>
+            <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Default Model</label>
             <input
               type="text"
               value={settings.defaultModel}
@@ -217,7 +217,7 @@ export default function SettingsPage() {
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-[10px] font-mono text-[#666666] uppercase tracking-wider">Default Temperature</label>
+            <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Default Temperature</label>
             <span className="text-xs font-mono text-[#76B900]">{settings.defaultTemperature.toFixed(2)}</span>
           </div>
           <input
@@ -229,7 +229,7 @@ export default function SettingsPage() {
         </div>
 
         <div>
-          <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Default Max Tokens</label>
+          <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Default Max Tokens</label>
           <input
             type="number" min="1" max="32000"
             value={settings.defaultMaxTokens}
@@ -243,8 +243,8 @@ export default function SettingsPage() {
         </SettingRow>
 
         <div>
-          <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Output Format</label>
-          <div className="flex gap-0 border border-[#333333]">
+          <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Output Format</label>
+          <div className="flex gap-0 border border-[#d4d4d4]">
             {(['plain', 'markdown'] as const).map(fmt => (
               <button
                 key={fmt}
@@ -253,7 +253,7 @@ export default function SettingsPage() {
                 className={`flex-1 py-2 text-xs font-mono uppercase tracking-wider transition-all ${
                   settings.outputFormat === fmt
                     ? 'bg-[#76B900] text-black font-bold'
-                    : 'text-[#555555] hover:text-[#999999] hover:bg-[#1a1a1a]'
+                    : 'text-[#a3a3a3] hover:text-[#525252] hover:bg-[#f5f5f5]'
                 }`}
               >
                 {fmt}
@@ -267,10 +267,10 @@ export default function SettingsPage() {
       <SectionCard title="NVIDIA Local AI">
         <div className="bg-[#76B900]/5 border border-[#76B900]/20 p-3">
           <div className="text-[10px] font-mono text-[#76B900] mb-2 uppercase tracking-wider">Recommended Configuration</div>
-          <div className="text-[10px] font-mono text-[#666666] space-y-1">
-            <div>Default Provider: <span className="text-white">ollama</span></div>
+          <div className="text-[10px] font-mono text-[#737373] space-y-1">
+            <div>Default Provider: <span className="text-[#0a0a0a]">ollama</span></div>
             <div>Default Model: <span className="text-[#76B900]">ollama/nemotron-mini</span></div>
-            <div>Ollama URL: <span className="text-white">http://localhost:11434</span></div>
+            <div>Ollama URL: <span className="text-[#0a0a0a]">http://localhost:11434</span></div>
           </div>
           <button
             type="button"
@@ -283,7 +283,7 @@ export default function SettingsPage() {
             Apply NVIDIA Defaults
           </button>
         </div>
-        <div className="text-[10px] font-mono text-[#444444]">
+        <div className="text-[10px] font-mono text-[#a3a3a3]">
           NVIDIA Nemotron runs locally on your GPU via Ollama. Zero cost, full privacy.
           Run: <span className="text-[#76B900]">ollama pull nemotron-mini</span>
         </div>
@@ -292,7 +292,7 @@ export default function SettingsPage() {
       {/* Budget */}
       <SectionCard title="Budget Limits">
         {budgetStatus && (
-          <div className="bg-[#0a0a0a] border border-[#222222] p-3 mb-2">
+          <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 mb-2">
             <div className="section-label mb-2">Current Usage</div>
             <div className="grid grid-cols-2 gap-3">
               {[
@@ -302,8 +302,8 @@ export default function SettingsPage() {
                 { label: 'Monthly Queries', value: `${budgetStatus.monthly_queries}` },
               ].map(({ label, value }) => (
                 <div key={label}>
-                  <div className="text-[10px] font-mono text-[#444444] uppercase">{label}</div>
-                  <div className="text-sm font-mono text-white">{value}</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">{label}</div>
+                  <div className="text-sm font-mono text-[#0a0a0a]">{value}</div>
                 </div>
               ))}
             </div>
@@ -312,9 +312,9 @@ export default function SettingsPage() {
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Daily Limit (USD)</label>
+            <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Daily Limit (USD)</label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#555555] text-sm font-mono">$</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a3a3a3] text-sm font-mono">$</span>
               <input
                 type="number" min="0" step="0.01"
                 value={settings.dailyBudgetLimit}
@@ -324,9 +324,9 @@ export default function SettingsPage() {
             </div>
           </div>
           <div>
-            <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Monthly Limit (USD)</label>
+            <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Monthly Limit (USD)</label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#555555] text-sm font-mono">$</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a3a3a3] text-sm font-mono">$</span>
               <input
                 type="number" min="0" step="0.01"
                 value={settings.monthlyBudgetLimit}
@@ -336,7 +336,7 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-        <div className="text-[10px] font-mono text-[#444444]">
+        <div className="text-[10px] font-mono text-[#a3a3a3]">
           Stored locally. For server-side enforcement, configure limits in the Hive config file.
           Using Nemotron locally = $0.00 always.
         </div>
@@ -345,7 +345,7 @@ export default function SettingsPage() {
       {/* Hive defaults */}
       <SectionCard title="Hive Settings">
         <div>
-          <label className="block text-[10px] font-mono text-[#666666] mb-1.5 uppercase tracking-wider">Default Strategy</label>
+          <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Default Strategy</label>
           <select
             value={settings.defaultCouncilStrategy}
             onChange={e => update('defaultCouncilStrategy', e.target.value)}
@@ -359,7 +359,7 @@ export default function SettingsPage() {
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-[10px] font-mono text-[#666666] uppercase tracking-wider">Default Num Agents</label>
+            <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Default Num Agents</label>
             <span className="text-xs font-mono text-[#76B900]">{settings.defaultNumAgents}</span>
           </div>
           <input
@@ -369,14 +369,14 @@ export default function SettingsPage() {
             className="w-full"
           />
           <div className="flex justify-between mt-1">
-            <span className="text-[10px] font-mono text-[#444444]">2</span>
-            <span className="text-[10px] font-mono text-[#444444]">8</span>
+            <span className="text-[10px] font-mono text-[#a3a3a3]">2</span>
+            <span className="text-[10px] font-mono text-[#a3a3a3]">8</span>
           </div>
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-[10px] font-mono text-[#666666] uppercase tracking-wider">Quorum Threshold</label>
+            <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Quorum Threshold</label>
             <span className="text-xs font-mono text-[#76B900]">{(settings.quorumThreshold * 100).toFixed(0)}%</span>
           </div>
           <input
@@ -398,13 +398,13 @@ export default function SettingsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-2">
             {[
               { label: 'Hits', value: `${cacheStats.hits}`, color: '#76B900' },
-              { label: 'Misses', value: `${cacheStats.misses}`, color: '#ef4444' },
-              { label: 'Size', value: `${cacheStats.size}/${cacheStats.max_size}`, color: '#999999' },
+              { label: 'Misses', value: `${cacheStats.misses}`, color: '#dc2626' },
+              { label: 'Size', value: `${cacheStats.size}/${cacheStats.max_size}`, color: '#525252' },
               { label: 'Hit Rate', value: `${(cacheStats.hit_rate * 100).toFixed(0)}%`, color: '#76B900' },
             ].map(({ label, value, color }) => (
-              <div key={label} className="bg-[#0a0a0a] border border-[#222222] p-3 text-center">
+              <div key={label} className="bg-[#ffffff] border border-[#e5e5e5] p-3 text-center">
                 <div className="font-mono font-bold text-sm" style={{ color }}>{value}</div>
-                <div className="text-[10px] font-mono text-[#444444] mt-0.5 uppercase">{label}</div>
+                <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 uppercase">{label}</div>
               </div>
             ))}
           </div>
@@ -441,8 +441,8 @@ export default function SettingsPage() {
       {/* Data reset */}
       <SectionCard title="Data">
         <div>
-          <div className="text-sm font-mono text-[#999999] mb-1">Reset All Settings</div>
-          <div className="text-[10px] font-mono text-[#444444] mb-3">
+          <div className="text-sm font-mono text-[#525252] mb-1">Reset All Settings</div>
+          <div className="text-[10px] font-mono text-[#a3a3a3] mb-3">
             Clear all locally stored settings and return to defaults.
             This does not affect the API server configuration.
           </div>
@@ -455,7 +455,7 @@ export default function SettingsPage() {
                 setSaved(false);
               }
             }}
-            className="px-4 py-2 border border-[#ef4444]/30 text-[#ef4444] text-xs font-mono uppercase tracking-wider hover:bg-[#ef4444]/10 transition-all"
+            className="px-4 py-2 border border-[#dc2626]/30 text-[#dc2626] text-xs font-mono uppercase tracking-wider hover:bg-[#dc2626]/10 transition-all"
           >
             Reset to Defaults & Clear History
           </button>
@@ -463,9 +463,9 @@ export default function SettingsPage() {
       </SectionCard>
 
       {/* Version info */}
-      <div className="text-center py-4 border-t border-[#1a1a1a]">
-        <div className="text-[10px] font-mono text-[#333333]">COUNCIL AI COMMAND CENTER · v0.2.0</div>
-        <div className="text-[10px] font-mono text-[#2a2a2a] mt-1">NVIDIA Nemotron · Next.js 14 · Tailwind CSS</div>
+      <div className="text-center py-4 border-t border-[#e5e5e5]">
+        <div className="text-[10px] font-mono text-[#404040]">NVHIVE · v0.32.0</div>
+        <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">NVIDIA Nemotron · Next.js 14 · Tailwind CSS</div>
       </div>
     </div>
   );

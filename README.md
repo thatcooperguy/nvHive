@@ -2,7 +2,7 @@
 
 **One command. Every AI model you have. Automatically assembled into the best team for each task.**
 
-![version](https://img.shields.io/badge/version-0.30.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
+![version](https://img.shields.io/badge/version-0.32.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 ```bash
 nvh "What is a binary search tree?"              # → answers (single best advisor)
@@ -18,24 +18,58 @@ nvh "setup comfyui"                              # → agent installs, configure
 
 ---
 
-## Get Started
+## Install
 
-```bash
-pip install nvhive
-nvh                    # first-run setup auto-detects GPU, installs local AI, configures providers
-nvh workstation        # Linux GPU desktop: create launcher + student setup checklist
-nvh studio --install starter -y  # rootless LLMs + agents + ComfyUI nodes + game-dev tools
-nvh "your question"    # just ask - nvhive figures out the rest
-```
+Three ways to get nvHive — pick the one that matches your setup. No Docker, no container runtime, no root required.
 
-For a fresh NVIDIA Linux cloud desktop / GeForce NOW-style GPU session:
+### Option 1 — One-line installer (recommended for GPU VMs)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
-nvh workstation --all -y
 ```
 
-That path creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds AI Studio packs for LLMs, agents, ComfyUI nodes, and Linux game projects.
+Works on any Linux box with no root. Installs to `~/nvh/`, auto-detects conda/mamba/venv, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config. Re-running heals the venv if the host Python moved (common on fresh cloud VMs).
+
+Windows: `iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex`
+macOS: `curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash`
+
+### Option 2 — Single-file binary (no Python needed)
+
+Grab the latest binary from [GitHub Releases](https://github.com/thatcooperguy/nvHive/releases/latest):
+
+```bash
+# Linux x86_64
+curl -L -o nvh https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-linux-x86_64
+chmod +x nvh && ./nvh
+
+# macOS (Apple Silicon)
+curl -L -o nvh https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-macos-arm64
+chmod +x nvh && ./nvh
+
+# Windows — download nvh-windows-x86_64.exe from the Releases page
+```
+
+Fully standalone. No Python install, no pip, no venv.
+
+### Option 3 — pip from PyPI (for existing Python environments)
+
+```bash
+pip install nvhive              # core
+pip install "nvhive[vision]"    # + desktop agent (screenshot, click, type)
+pip install "nvhive[browser]"   # + headless browser (playwright)
+pip install "nvhive[all]"       # everything
+```
+
+### First run
+
+```bash
+nvh                              # guided setup — GPU detect, provider keys, local model pulls
+nvh workstation --all -y         # Linux GPU desktop: launcher + WebUI + ComfyUI + studio packs
+nvh studio --install starter -y  # rootless LLMs + agents + ComfyUI nodes + game-dev tools
+nvh "your question"              # just ask — nvHive figures out the rest
+```
+
+`nvh workstation --all -y` creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds AI Studio packs for LLMs, agents, ComfyUI nodes, and Linux game projects.
 
 Use packs directly when you want a specific no-root lab:
 
@@ -45,13 +79,6 @@ nvh studio --install llms -y
 nvh studio --install agents -y
 nvh studio --install comfy -y
 nvh studio --install game -y
-```
-
-```bash
-# Optional extras
-pip install "nvhive[vision]"      # desktop agent: screenshot, click, type, scroll
-pip install "nvhive[browser]"     # headless browser automation (playwright)
-pip install "nvhive[all]"         # everything
 ```
 
 On first run, `nvh` launches a guided 3-step setup — GPU detection, provider keys, local model pulls. Works immediately with local models (no signup needed). Every step is skippable. Run `nvh setup` anytime to reconfigure.

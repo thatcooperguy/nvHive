@@ -24,15 +24,15 @@ function StatusBar({ value, label, spend, limit }: {
   limit: string;
 }) {
   const color =
-    value >= 90 ? '#ef4444' :
-    value >= 70 ? '#f59e0b' :
-    '#22c55e';
+    value >= 90 ? '#dc2626' :
+    value >= 70 ? '#d97706' :
+    '#16a34a';
 
   return (
     <div>
       <div className="flex items-center justify-between mb-1.5">
-        <span className="text-xs text-[#94a3b8]">{label}</span>
-        <span className="text-xs font-mono text-[#e2e8f0]">
+        <span className="text-xs text-[#737373]">{label}</span>
+        <span className="text-xs font-mono text-[#0a0a0a]">
           {formatUSD(spend)} / {formatUSD(limit)}
         </span>
       </div>
@@ -79,25 +79,25 @@ export default function BudgetWidget({ className = '' }: Props) {
     <div className={`card p-5 ${className}`}>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
-          <svg className="w-4 h-4 text-[#f59e0b]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <svg className="w-4 h-4 text-[#d97706]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round"
               d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <span className="font-semibold text-sm text-[#e2e8f0]">Budget</span>
+          <span className="font-semibold text-sm text-[#0a0a0a]">Budget</span>
         </div>
         {loading && (
-          <div className="w-3 h-3 border-2 border-[#3b82f6]/30 border-t-[#3b82f6] rounded-full animate-spin" />
+          <div className="w-3 h-3 border-2 border-[#2563eb]/30 border-t-[#2563eb] rounded-full animate-spin" />
         )}
       </div>
 
       {error ? (
-        <div className="text-xs text-[#ef4444] font-mono">{error}</div>
+        <div className="text-xs text-[#dc2626] font-mono">{error}</div>
       ) : loading ? (
         <div className="space-y-4">
           {[1, 2].map(i => (
             <div key={i} className="space-y-1.5">
-              <div className="h-3 bg-[#1a1a2e] rounded animate-pulse" />
-              <div className="h-1.5 bg-[#1a1a2e] rounded animate-pulse" />
+              <div className="h-3 bg-[#fafafa] rounded animate-pulse" />
+              <div className="h-1.5 bg-[#fafafa] rounded animate-pulse" />
             </div>
           ))}
         </div>
@@ -117,17 +117,17 @@ export default function BudgetWidget({ className = '' }: Props) {
           />
 
           <div className="grid grid-cols-2 gap-2 pt-1">
-            <div className="bg-[#0a0a0a] rounded-lg p-2.5 text-center">
-              <div className="font-mono text-sm font-bold text-[#e2e8f0]">
+            <div className="bg-[#ffffff] rounded-lg p-2.5 text-center">
+              <div className="font-mono text-sm font-bold text-[#0a0a0a]">
                 {budget.daily_queries}
               </div>
-              <div className="text-xs text-[#475569] mt-0.5">Today</div>
+              <div className="text-xs text-[#737373] mt-0.5">Today</div>
             </div>
-            <div className="bg-[#0a0a0a] rounded-lg p-2.5 text-center">
-              <div className="font-mono text-sm font-bold text-[#e2e8f0]">
+            <div className="bg-[#ffffff] rounded-lg p-2.5 text-center">
+              <div className="font-mono text-sm font-bold text-[#0a0a0a]">
                 {budget.monthly_queries}
               </div>
-              <div className="text-xs text-[#475569] mt-0.5">This month</div>
+              <div className="text-xs text-[#737373] mt-0.5">This month</div>
             </div>
           </div>
 
@@ -137,8 +137,8 @@ export default function BudgetWidget({ className = '' }: Props) {
               <div className="space-y-1">
                 {Object.entries(budget.by_provider).map(([provider, cost]) => (
                   <div key={provider} className="flex items-center justify-between">
-                    <span className="text-xs text-[#94a3b8] capitalize">{provider}</span>
-                    <span className="text-xs font-mono text-[#e2e8f0]">{formatUSD(cost)}</span>
+                    <span className="text-xs text-[#737373] capitalize">{provider}</span>
+                    <span className="text-xs font-mono text-[#0a0a0a]">{formatUSD(cost)}</span>
                   </div>
                 ))}
               </div>

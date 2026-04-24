@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.32.0] - 2026-04-23
+
+### Added
+- **AI Studio Packs.** Rootless, no-sudo install surface for LLMs, agents,
+  ComfyUI nodes, and Linux game-dev tooling. All packs land under
+  `~/.nvh/` and `~/.local/bin` — never touch apt/dnf/systemctl. Catalog
+  lives in `nvh/integrations/studio_packs.py`; install via
+  `nvh studio --install <id> -y`. Tagged packs: `rootless-ollama`,
+  `llm-starter`, `agents`, `comfy`, `game`.
+- **ComfyUI integration.** `nvh/integrations/comfyui.py` sets up ComfyUI
+  under `~/.nvh/comfyui` with starter workflow examples and a user
+  launcher. No system package install required.
+- **Workstation integration.** `nvh workstation --all -y` orchestrates
+  the full local desktop: launcher, WebUI, Ollama, ComfyUI, and all
+  studio packs in one command.
+- **GitHub Releases workflow.** `.github/workflows/release.yml` triggers
+  on `v*.*.*` tag push — builds sdist, wheel, and single-file
+  PyInstaller binaries for Linux x86_64, macOS arm64, and Windows x86_64.
+  The existing `publish.yml` chains from `release:published` to push the
+  sdist/wheel to PyPI via trusted publishing.
+- **Three clear install paths in README.** One-line curl installer
+  (recommended for GPU VMs), single-file binary from Releases (no Python
+  needed), and pip from PyPI (existing Python envs).
+
+### Changed
+- **WebUI theme: NVIDIA corporate white.** Flipped the whole app from a
+  pure-black dark theme to white + black typography + NVIDIA green
+  accent. Code blocks intentionally remain dark (NVIDIA docs pattern).
+  Touched `web/app/globals.css`, `web/tailwind.config.js`, and every
+  component. Reason: higher legibility for college/classroom use, and
+  closer alignment to NVIDIA's public brand.
+
 ## [0.31.2] - 2026-04-16
 
 ### Fixed

@@ -36,12 +36,12 @@ function parseInline(text: string): React.ReactNode[] {
       parts.push(text.slice(last, match.index));
     }
     if (match[2] !== undefined) {
-      parts.push(<strong key={match.index} className="font-semibold text-white">{match[2]}</strong>);
+      parts.push(<strong key={match.index} className="font-semibold text-[#0a0a0a]">{match[2]}</strong>);
     } else if (match[3] !== undefined) {
-      parts.push(<em key={match.index} className="italic text-[#cccccc]">{match[3]}</em>);
+      parts.push(<em key={match.index} className="italic text-[#404040]">{match[3]}</em>);
     } else if (match[4] !== undefined) {
       parts.push(
-        <code key={match.index} className="bg-[#1a1a1a] border border-[#333333] px-1 py-0.5 text-[#76B900] font-mono text-[0.85em]">
+        <code key={match.index} className="bg-[#f5f5f5] border border-[#e5e5e5] px-1 py-0.5 text-[#5a9100] font-mono text-[0.85em]">
           {match[4]}
         </code>
       );
@@ -156,8 +156,8 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   return (
     <div className="relative my-3 group">
       {/* Header bar */}
-      <div className="flex items-center justify-between bg-[#111111] border border-[#333333] border-b-0 px-3 py-1.5">
-        <span className="text-[10px] font-mono text-[#555555] uppercase tracking-wider">
+      <div className="flex items-center justify-between bg-[#141414] border border-[#262626] border-b-0 px-3 py-1.5">
+        <span className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider">
           {lang || 'code'}
         </span>
         <div className="flex items-center gap-2">
@@ -165,7 +165,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
           <button
             onClick={() => setShowLineNumbers(v => !v)}
             className={`text-[10px] font-mono transition-colors flex items-center gap-1 ${
-              showLineNumbers ? 'text-[#76B900]' : 'text-[#444444] hover:text-[#999999]'
+              showLineNumbers ? 'text-[#76B900]' : 'text-[#737373] hover:text-[#e2e8f0]'
             }`}
             title="Toggle line numbers"
           >
@@ -177,7 +177,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
           {/* Copy button */}
           <button
             onClick={handleCopy}
-            className="text-[10px] font-mono text-[#444444] hover:text-[#76B900] transition-colors flex items-center gap-1"
+            className="text-[10px] font-mono text-[#737373] hover:text-[#76B900] transition-colors flex items-center gap-1"
             title="Copy code"
           >
             {copied ? (
@@ -199,7 +199,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         </div>
       </div>
       {/* Code content */}
-      <pre className="bg-[#0d0d0d] border border-[#333333] overflow-x-auto p-4 text-sm font-mono leading-relaxed">
+      <pre className="bg-[#0d0d0d] border border-[#262626] overflow-x-auto p-4 text-sm font-mono leading-relaxed">
         {lines.map((line, idx) => (
           <div key={idx} className="flex">
             {showLineNumbers && (
@@ -227,7 +227,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
       elements.push(
         <ul key={`ul-${i}`} className="list-none space-y-1 my-2 pl-2">
           {listItems.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2 text-sm text-[#cccccc]">
+            <li key={idx} className="flex items-start gap-2 text-sm text-[#404040]">
               <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 bg-[#76B900]" />
               <span>{item}</span>
             </li>
@@ -240,7 +240,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
       elements.push(
         <ol key={`ol-${i}`} className="space-y-1 my-2 pl-2">
           {orderedItems.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2 text-sm text-[#cccccc]">
+            <li key={idx} className="flex items-start gap-2 text-sm text-[#404040]">
               <span className="text-[#76B900] font-mono text-xs mt-0.5 flex-shrink-0 w-4">{idx + 1}.</span>
               <span>{item}</span>
             </li>
@@ -273,7 +273,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
     if (line.startsWith('### ')) {
       flushList();
       elements.push(
-        <h3 key={i} className="text-base font-bold text-white mt-4 mb-1">
+        <h3 key={i} className="text-base font-bold text-[#0a0a0a] mt-4 mb-1">
           {parseInline(line.slice(4))}
         </h3>
       );
@@ -283,7 +283,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
     if (line.startsWith('## ')) {
       flushList();
       elements.push(
-        <h2 key={i} className="text-lg font-bold text-white mt-4 mb-2">
+        <h2 key={i} className="text-lg font-bold text-[#0a0a0a] mt-4 mb-2">
           {parseInline(line.slice(3))}
         </h2>
       );
@@ -293,7 +293,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
     if (line.startsWith('# ')) {
       flushList();
       elements.push(
-        <h1 key={i} className="text-xl font-bold text-white mt-4 mb-2">
+        <h1 key={i} className="text-xl font-bold text-[#0a0a0a] mt-4 mb-2">
           {parseInline(line.slice(2))}
         </h1>
       );
@@ -321,7 +321,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
     // Horizontal rule
     if (line.match(/^[-*]{3,}$/)) {
       flushList();
-      elements.push(<hr key={i} className="border-[#333333] my-3" />);
+      elements.push(<hr key={i} className="border-[#e5e5e5] my-3" />);
       i++;
       continue;
     }
@@ -338,7 +338,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
 
     // Normal paragraph line
     elements.push(
-      <p key={i} className="text-sm text-[#cccccc] leading-relaxed">
+      <p key={i} className="text-sm text-[#262626] leading-relaxed">
         {parseInline(line)}
       </p>
     );
@@ -405,12 +405,12 @@ interface ExpertPanelProps {
 }
 
 export function CouncilExpertPanel({ data }: ExpertPanelProps) {
-  const COLORS = ['#3b82f6', '#a855f7', '#22c55e', '#f59e0b', '#06b6d4', '#f97316'];
+  const COLORS = ['#2563eb', '#7c3aed', '#16a34a', '#d97706', '#0891b2', '#ea580c'];
   const order = data.member_order ?? Object.keys(data.member_responses);
 
   return (
     <div className="space-y-3 p-4">
-      <div className="text-[10px] font-mono text-[#555555] uppercase tracking-wider mb-2">Convene Members</div>
+      <div className="text-[10px] font-mono text-[#737373] uppercase tracking-wider mb-2">Convene Members</div>
       {order.map((key, i) => {
         const member = data.member_responses[key];
         if (!member) return null;
@@ -418,22 +418,22 @@ export function CouncilExpertPanel({ data }: ExpertPanelProps) {
         return (
           <div
             key={key}
-            className="border p-3 bg-[#0d0d0d]"
-            style={{ borderColor: `${color}30` }}
+            className="border p-3 bg-white"
+            style={{ borderColor: `${color}40` }}
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-mono font-bold" style={{ color }}>
                 {member.provider.toUpperCase()}
               </span>
-              <span className="text-[10px] font-mono text-[#444444]">{member.model}</span>
+              <span className="text-[10px] font-mono text-[#a3a3a3]">{member.model}</span>
             </div>
-            <div className="text-xs text-[#999999] font-mono whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto">
+            <div className="text-xs text-[#404040] font-mono whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto">
               {member.content}
             </div>
-            <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#444444]">
+            <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#a3a3a3]">
               <span>{member.tokens} tokens</span>
               {member.cost && parseFloat(member.cost) > 0 && (
-                <span className="text-[#f59e0b]">${parseFloat(member.cost).toFixed(4)}</span>
+                <span className="text-[#d97706]">${parseFloat(member.cost).toFixed(4)}</span>
               )}
               {member.latency_ms && <span>{member.latency_ms}ms</span>}
             </div>
@@ -441,7 +441,7 @@ export function CouncilExpertPanel({ data }: ExpertPanelProps) {
         );
       })}
       {data.total_cost && parseFloat(data.total_cost) > 0 && (
-        <div className="text-[10px] font-mono text-[#f59e0b] pt-2 border-t border-[#222222]">
+        <div className="text-[10px] font-mono text-[#d97706] pt-2 border-t border-[#e5e5e5]">
           Total: ${parseFloat(data.total_cost).toFixed(4)}
         </div>
       )}
@@ -463,11 +463,11 @@ export default function ChatMessage({ message }: ChatMessageProps) {
     return (
       <div className="flex justify-end px-4 py-2 group">
         <div className="max-w-[75%]">
-          <div className="bg-[#1a2a0a] border border-[#76B900]/30 px-4 py-3 text-sm text-[#e2e8f0] font-mono whitespace-pre-wrap leading-relaxed">
+          <div className="bg-[#f3f9e5] border border-[#76B900]/40 px-4 py-3 text-sm text-[#0a0a0a] font-mono whitespace-pre-wrap leading-relaxed">
             {message.content}
           </div>
           <div className="flex justify-end mt-1">
-            <span className="text-[10px] font-mono text-[#333333] group-hover:text-[#555555] transition-colors">
+            <span className="text-[10px] font-mono text-[#a3a3a3] group-hover:text-[#737373] transition-colors">
               {timeStr(message.timestamp)}
             </span>
           </div>
@@ -479,14 +479,14 @@ export default function ChatMessage({ message }: ChatMessageProps) {
   if (isError) {
     return (
       <div className="flex px-4 py-2">
-        <div className="max-w-[85%] border border-[#ef4444]/30 bg-[#ef4444]/5 px-4 py-3">
+        <div className="max-w-[85%] border border-[#fca5a5] bg-[#fef2f2] px-4 py-3">
           <div className="flex items-center gap-2 mb-1">
-            <svg className="w-3.5 h-3.5 text-[#ef4444]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-3.5 h-3.5 text-[#dc2626]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
             </svg>
-            <span className="text-[10px] font-mono text-[#ef4444] uppercase tracking-wider">Error</span>
+            <span className="text-[10px] font-mono text-[#dc2626] uppercase tracking-wider">Error</span>
           </div>
-          <div className="text-sm text-[#ef4444]/80 font-mono">{message.content}</div>
+          <div className="text-sm text-[#b91c1c] font-mono">{message.content}</div>
         </div>
       </div>
     );
@@ -508,29 +508,29 @@ export default function ChatMessage({ message }: ChatMessageProps) {
             style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }}
           />
           {isCouncil ? (
-            <span className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider">Convene</span>
+            <span className="text-[10px] font-mono text-[#5a9100] uppercase tracking-wider">Convene</span>
           ) : isCompare ? (
-            <span className="text-[10px] font-mono text-[#999999] uppercase tracking-wider">Compare</span>
+            <span className="text-[10px] font-mono text-[#525252] uppercase tracking-wider">Compare</span>
           ) : message.provider ? (
-            <span className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider">
+            <span className="text-[10px] font-mono text-[#5a9100] uppercase tracking-wider">
               {message.provider}
             </span>
           ) : null}
           {message.model && !isCouncil && !isCompare && (
-            <span className="text-[10px] font-mono text-[#444444]">{message.model}</span>
+            <span className="text-[10px] font-mono text-[#a3a3a3]">{message.model}</span>
           )}
           {isCouncil && message.council_data && (
-            <span className="text-[10px] font-mono text-[#555555]">
+            <span className="text-[10px] font-mono text-[#737373]">
               Synthesized from {Object.keys(message.council_data.member_responses).length} experts
             </span>
           )}
-          <span className="ml-auto text-[10px] font-mono text-[#333333] group-hover:text-[#555555] transition-colors">
+          <span className="ml-auto text-[10px] font-mono text-[#a3a3a3] group-hover:text-[#737373] transition-colors">
             {timeStr(message.timestamp)}
           </span>
         </div>
 
         {/* Message body */}
-        <div className="bg-[#141414] border-l-2 border-[#76B900]/40 pl-4 pr-3 py-3">
+        <div className="bg-[#fafafa] border-l-2 border-[#76B900] pl-4 pr-3 py-3">
           {isCompare && message.compare_data ? (
             <CompareContent data={message.compare_data} />
           ) : (
@@ -542,15 +542,15 @@ export default function ChatMessage({ message }: ChatMessageProps) {
         {!message.streaming && !isCompare && (
           <div className="flex items-center gap-3 mt-1.5 flex-wrap">
             {message.tokens && message.tokens > 0 && (
-              <span className="text-[10px] font-mono text-[#444444]">{message.tokens} tokens</span>
+              <span className="text-[10px] font-mono text-[#a3a3a3]">{message.tokens} tokens</span>
             )}
             {costStr && (
-              <span className={`text-[10px] font-mono ${costStr === 'FREE' ? 'text-[#76B900]' : 'text-[#f59e0b]'}`}>
+              <span className={`text-[10px] font-mono ${costStr === 'FREE' ? 'text-[#5a9100]' : 'text-[#d97706]'}`}>
                 {costStr}
               </span>
             )}
             {message.latency_ms && message.latency_ms > 0 && (
-              <span className="text-[10px] font-mono text-[#333333]">{message.latency_ms}ms</span>
+              <span className="text-[10px] font-mono text-[#a3a3a3]">{message.latency_ms}ms</span>
             )}
           </div>
         )}
@@ -562,7 +562,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
 // ─── Compare Content ──────────────────────────────────────────────────────────
 
 function CompareContent({ data }: { data: NonNullable<ChatMessageType['compare_data']> }) {
-  const COLORS = ['#76B900', '#f59e0b', '#3b82f6', '#ef4444', '#a855f7', '#06b6d4'];
+  const COLORS = ['#5a9100', '#d97706', '#2563eb', '#dc2626', '#7c3aed', '#0891b2'];
   const entries = Object.entries(data);
 
   return (
@@ -571,24 +571,24 @@ function CompareContent({ data }: { data: NonNullable<ChatMessageType['compare_d
         {entries.map(([provider, resp], i) => (
           <div
             key={provider}
-            className="border p-3 bg-[#0a0a0a]"
-            style={{ borderColor: `${COLORS[i % COLORS.length]}30` }}
+            className="border p-3 bg-white"
+            style={{ borderColor: `${COLORS[i % COLORS.length]}40` }}
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-mono font-bold" style={{ color: COLORS[i % COLORS.length] }}>
                 {provider.toUpperCase()}
               </span>
-              <span className="text-[10px] font-mono text-[#444444]">{resp.model}</span>
+              <span className="text-[10px] font-mono text-[#a3a3a3]">{resp.model}</span>
             </div>
-            <div className="text-xs text-[#cccccc] font-mono whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
+            <div className="text-xs text-[#262626] font-mono whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
               {resp.content}
             </div>
-            <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#444444]">
+            <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#a3a3a3]">
               {resp.tokens && <span>{resp.tokens} tokens</span>}
               {resp.cost_usd && parseFloat(resp.cost_usd) > 0 ? (
-                <span className="text-[#f59e0b]">${parseFloat(resp.cost_usd).toFixed(4)}</span>
+                <span className="text-[#d97706]">${parseFloat(resp.cost_usd).toFixed(4)}</span>
               ) : (
-                <span className="text-[#76B900]">FREE</span>
+                <span className="text-[#5a9100]">FREE</span>
               )}
               {resp.latency_ms && <span>{Math.round(resp.latency_ms)}ms</span>}
             </div>

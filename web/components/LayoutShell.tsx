@@ -37,22 +37,22 @@ function InnerShell({ children }: { children: React.ReactNode }) {
     <>
       <GlobalModals />
       {/* Top status bar */}
-      <div className="fixed top-0 left-0 right-0 z-50 h-8 bg-[#111111] border-b border-[#333333] flex items-center px-4 gap-6 text-[10px] font-mono text-[#666666]">
+      <div className="fixed top-0 left-0 right-0 z-50 h-8 bg-white border-b border-[#e5e5e5] flex items-center px-4 gap-6 text-[10px] font-mono text-[#737373]">
         <span className="text-[#76B900] font-bold tracking-widest uppercase">NVHIVE</span>
-        <span className="text-[#444444]">|</span>
+        <span className="text-[#d4d4d4]">|</span>
         <span>NVIDIA AI Workspace</span>
-        <span className="text-[#444444]">|</span>
-        <span className="text-[#76B900]">Nemotron Ready</span>
+        <span className="text-[#d4d4d4]">|</span>
+        <span className="text-[#5a9100]">Nemotron Ready</span>
         <div className="ml-auto flex items-center gap-4">
           {/* Command palette trigger */}
           <button
-            className="text-[#333333] hover:text-[#76B900] font-mono text-[10px] transition-colors"
+            className="text-[#737373] hover:text-[#76B900] font-mono text-[10px] transition-colors"
             title="Open command palette (Ctrl+K)"
             onClick={openCommandPalette}
           >
             Ctrl+K
           </button>
-          <span className="text-[#444444]">v0.3.0</span>
+          <span className="text-[#a3a3a3]">v0.32.0</span>
         </div>
       </div>
       {/* Offset for top bar */}

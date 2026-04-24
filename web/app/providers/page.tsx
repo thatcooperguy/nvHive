@@ -8,8 +8,8 @@ import type { ModelInfo, GPUInfo, RecommendationsResult } from '@/lib/types';
 
 const MODEL_STATUS_COLORS: Record<string, string> = {
   available: '#76B900',
-  deprecated: '#f59e0b',
-  unavailable: '#ef4444',
+  deprecated: '#d97706',
+  unavailable: '#dc2626',
 };
 
 export default function ProvidersPage() {
@@ -77,13 +77,13 @@ export default function ProvidersPage() {
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="nvidia-corner relative border border-[#333333] bg-[#111111] p-5 overflow-hidden">
+      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
         <div className="relative flex items-center justify-between">
           <div>
             <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">AI Advisors</div>
-            <h1 className="text-2xl font-bold text-white">Advisors</h1>
-            <p className="text-xs font-mono text-[#555555] mt-1">
+            <h1 className="text-2xl font-bold text-[#0a0a0a]">Advisors</h1>
+            <p className="text-xs font-mono text-[#a3a3a3] mt-1">
               {providers.length > 0
                 ? `${healthyCount} of ${providers.length} advisors healthy`
                 : 'Manage and monitor AI advisor connections'}
@@ -108,17 +108,17 @@ export default function ProvidersPage() {
         <div className="grid grid-cols-3 gap-4">
           <div className="card p-4 text-center">
             <div className="text-2xl font-bold font-mono text-[#76B900]">{healthyCount}</div>
-            <div className="text-[10px] font-mono text-[#555555] mt-1 uppercase tracking-wider">Healthy</div>
+            <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 uppercase tracking-wider">Healthy</div>
           </div>
           <div className="card p-4 text-center">
-            <div className="text-2xl font-bold font-mono text-[#ef4444]">{providers.length - healthyCount}</div>
-            <div className="text-[10px] font-mono text-[#555555] mt-1 uppercase tracking-wider">Down</div>
+            <div className="text-2xl font-bold font-mono text-[#dc2626]">{providers.length - healthyCount}</div>
+            <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 uppercase tracking-wider">Down</div>
           </div>
           <div className="card p-4 text-center">
             <div className="text-2xl font-bold font-mono text-[#76B900]">
               {providers.reduce((s, p) => s + p.models_available, 0)}
             </div>
-            <div className="text-[10px] font-mono text-[#555555] mt-1 uppercase tracking-wider">Total Models</div>
+            <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 uppercase tracking-wider">Total Models</div>
           </div>
         </div>
       )}
@@ -131,18 +131,18 @@ export default function ProvidersPage() {
             <div className="w-12 h-12 bg-[#76B900]/10 border border-[#76B900]/30 flex items-center justify-center flex-shrink-0 font-mono font-bold text-[#76B900] text-lg">N</div>
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-sm font-bold text-white">NVIDIA Nemotron</span>
+                <span className="text-sm font-bold text-[#0a0a0a]">NVIDIA Nemotron</span>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 bg-[#76B900] text-black font-bold">RECOMMENDED</span>
               </div>
               <div className="text-[10px] font-mono text-[#76B900]">
                 Local · Free · NVIDIA GPU Optimized · 131K context
               </div>
-              <div className="text-[10px] font-mono text-[#555555] mt-0.5">
+              <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">
                 Run NVIDIA&apos;s Nemotron models locally on your GPU via Ollama — zero cost, full privacy
               </div>
             </div>
             <div className="text-right hidden sm:block">
-              <div className="text-[10px] font-mono text-[#555555]">via Ollama</div>
+              <div className="text-[10px] font-mono text-[#a3a3a3]">via Ollama</div>
               <div className="text-[10px] font-mono text-[#76B900]">$0.00 / 1M tokens</div>
             </div>
           </div>
@@ -150,7 +150,7 @@ export default function ProvidersPage() {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-0 border border-[#333333] w-fit">
+      <div className="flex gap-0 border border-[#d4d4d4] w-fit">
         {(['providers', 'models', 'local-ai'] as const).map(tab => (
           <button
             key={tab}
@@ -158,17 +158,17 @@ export default function ProvidersPage() {
             className={`px-6 py-2 text-xs font-mono uppercase tracking-wider transition-all ${
               activeTab === tab
                 ? 'bg-[#76B900] text-black font-bold'
-                : 'text-[#555555] hover:text-[#999999] hover:bg-[#1a1a1a]'
+                : 'text-[#a3a3a3] hover:text-[#525252] hover:bg-[#f5f5f5]'
             }`}
           >
             {tab === 'local-ai' ? 'Local AI' : tab === 'providers' ? 'Advisors' : tab}
             {tab === 'providers' && providers.length > 0 && (
-              <span className={`ml-2 text-[10px] px-1 ${activeTab === tab ? 'text-black' : 'text-[#444444]'}`}>
+              <span className={`ml-2 text-[10px] px-1 ${activeTab === tab ? 'text-black' : 'text-[#a3a3a3]'}`}>
                 {providers.length}
               </span>
             )}
             {tab === 'models' && models.length > 0 && (
-              <span className={`ml-2 text-[10px] px-1 ${activeTab === tab ? 'text-black' : 'text-[#444444]'}`}>
+              <span className={`ml-2 text-[10px] px-1 ${activeTab === tab ? 'text-black' : 'text-[#a3a3a3]'}`}>
                 {models.length}
               </span>
             )}
@@ -180,9 +180,9 @@ export default function ProvidersPage() {
       {activeTab === 'providers' && (
         <div>
           {error ? (
-            <div className="card p-6 text-center border-[#ef4444]/30">
-              <div className="text-[#ef4444] font-mono text-sm mb-2">{error}</div>
-              <div className="text-[10px] font-mono text-[#444444] mb-4">
+            <div className="card p-6 text-center border-[#dc2626]/30">
+              <div className="text-[#dc2626] font-mono text-sm mb-2">{error}</div>
+              <div className="text-[10px] font-mono text-[#a3a3a3] mb-4">
                 Make sure the Hive API server is running at localhost:8000
               </div>
               <button onClick={loadProviders} className="btn-secondary px-4 py-2 text-xs font-mono">
@@ -194,35 +194,35 @@ export default function ProvidersPage() {
               {[1, 2, 3, 4, 5, 6].map(i => (
                 <div key={i} className="card p-5 h-52 animate-pulse">
                   <div className="flex items-center gap-3 mb-4">
-                    <div className="w-10 h-10 bg-[#222222]" />
+                    <div className="w-10 h-10 bg-[#e5e5e5]" />
                     <div className="flex-1">
-                      <div className="h-3 bg-[#1a1a1a] mb-2 w-1/2" />
-                      <div className="h-2 bg-[#1a1a1a] w-1/4" />
+                      <div className="h-3 bg-[#f5f5f5] mb-2 w-1/2" />
+                      <div className="h-2 bg-[#f5f5f5] w-1/4" />
                     </div>
                   </div>
-                  <div className="h-12 bg-[#1a1a1a] mb-3" />
-                  <div className="h-8 bg-[#1a1a1a]" />
+                  <div className="h-12 bg-[#f5f5f5] mb-3" />
+                  <div className="h-8 bg-[#f5f5f5]" />
                 </div>
               ))}
             </div>
           ) : providers.length === 0 ? (
             <div className="card p-10 text-center">
               <div className="text-4xl mb-4 text-[#333333]">▣</div>
-              <div className="text-base font-mono font-bold text-[#666666] mb-2 uppercase">No Advisors Configured</div>
-              <div className="text-xs font-mono text-[#444444] max-w-md mx-auto mb-6">
+              <div className="text-base font-mono font-bold text-[#737373] mb-2 uppercase">No Advisors Configured</div>
+              <div className="text-xs font-mono text-[#a3a3a3] max-w-md mx-auto mb-6">
                 The Hive API needs to be running with at least one advisor configured.
                 Add API keys to your config file or environment variables.
               </div>
-              <div className="bg-[#0a0a0a] border border-[#222222] p-4 text-left max-w-sm mx-auto">
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 text-left max-w-sm mx-auto">
                 <div className="section-label mb-2">Quick Start</div>
-                <div className="font-mono text-xs text-[#666666] space-y-1">
-                  <div className="text-[#444444]"># Set environment variables</div>
+                <div className="font-mono text-xs text-[#737373] space-y-1">
+                  <div className="text-[#a3a3a3]"># Set environment variables</div>
                   <div className="text-[#76B900]">OPENAI_API_KEY=sk-...</div>
                   <div className="text-[#76B900]">ANTHROPIC_API_KEY=sk-ant-...</div>
-                  <div className="mt-2 text-[#444444]"># Or use local Nemotron (free!)</div>
+                  <div className="mt-2 text-[#a3a3a3]"># Or use local Nemotron (free!)</div>
                   <div className="text-[#76B900]">ollama pull nemotron-mini</div>
-                  <div className="mt-2 text-[#444444]"># Then start the server</div>
-                  <div className="text-white">council serve</div>
+                  <div className="mt-2 text-[#a3a3a3]"># Then start the server</div>
+                  <div className="text-[#0a0a0a]">council serve</div>
                 </div>
               </div>
             </div>
@@ -243,9 +243,9 @@ export default function ProvidersPage() {
             <div className="space-y-4">
               {[1, 2].map(i => (
                 <div key={i} className="card p-5 h-32 animate-pulse">
-                  <div className="h-3 bg-[#1a1a1a] w-1/3 mb-3" />
-                  <div className="h-2 bg-[#1a1a1a] mb-2" />
-                  <div className="h-2 bg-[#1a1a1a] w-3/4" />
+                  <div className="h-3 bg-[#f5f5f5] w-1/3 mb-3" />
+                  <div className="h-2 bg-[#f5f5f5] mb-2" />
+                  <div className="h-2 bg-[#f5f5f5] w-3/4" />
                 </div>
               ))}
             </div>
@@ -255,14 +255,14 @@ export default function ProvidersPage() {
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <div className="section-label">GPU Hardware</div>
-                  <div className="flex-1 h-px bg-[#222222]" />
+                  <div className="flex-1 h-px bg-[#e5e5e5]" />
                 </div>
 
                 {gpuInfo && gpuInfo.gpus.length > 0 ? (
                   <div className="space-y-3">
                     {gpuInfo.gpus.map((g, i) => {
                       const usedPct = g.vram_mb > 0 ? Math.round((g.memory_used_mb / g.vram_mb) * 100) : 0;
-                      const barColor = usedPct > 90 ? '#ef4444' : usedPct > 70 ? '#f59e0b' : '#76B900';
+                      const barColor = usedPct > 90 ? '#dc2626' : usedPct > 70 ? '#d97706' : '#76B900';
                       return (
                         <div key={i} className="border border-[#76B900]/30 bg-[#76B900]/5 p-4">
                           <div className="flex items-start gap-4">
@@ -274,12 +274,12 @@ export default function ProvidersPage() {
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-1">
-                                <span className="text-sm font-bold text-white font-mono">{g.name}</span>
+                                <span className="text-sm font-bold text-[#0a0a0a] font-mono">{g.name}</span>
                                 {gpuInfo.gpus.length > 1 && (
-                                  <span className="text-[10px] font-mono text-[#555555]">GPU {g.index}</span>
+                                  <span className="text-[10px] font-mono text-[#a3a3a3]">GPU {g.index}</span>
                                 )}
                               </div>
-                              <div className="text-[10px] font-mono text-[#555555] mb-2 space-x-3">
+                              <div className="text-[10px] font-mono text-[#a3a3a3] mb-2 space-x-3">
                                 <span>CUDA {g.cuda_version}</span>
                                 <span>·</span>
                                 <span>driver {g.driver_version}</span>
@@ -288,15 +288,15 @@ export default function ProvidersPage() {
                               </div>
                               <div className="space-y-1">
                                 <div className="flex justify-between text-[10px] font-mono">
-                                  <span className="text-[#555555]">VRAM</span>
-                                  <span className="text-[#999999]">
+                                  <span className="text-[#a3a3a3]">VRAM</span>
+                                  <span className="text-[#525252]">
                                     {(g.memory_used_mb / 1024).toFixed(1)} / {g.vram_gb} GB ({usedPct}% used)
                                   </span>
                                 </div>
                                 <div className="progress-bar">
                                   <div className="progress-fill" style={{ width: `${usedPct}%`, backgroundColor: barColor }} />
                                 </div>
-                                <div className="text-[10px] font-mono text-[#444444]">
+                                <div className="text-[10px] font-mono text-[#a3a3a3]">
                                   {(g.memory_free_mb / 1024).toFixed(1)} GB free
                                 </div>
                               </div>
@@ -308,18 +308,18 @@ export default function ProvidersPage() {
 
                     {/* System RAM summary */}
                     {gpuInfo.system_ram && (
-                      <div className="bg-[#111111] border border-[#222222] p-3 grid grid-cols-3 gap-3 text-center">
+                      <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 grid grid-cols-3 gap-3 text-center">
                         <div>
-                          <div className="text-sm font-bold font-mono text-white">{gpuInfo.system_ram.total_gb} GB</div>
-                          <div className="text-[10px] font-mono text-[#555555] mt-0.5">Total RAM</div>
+                          <div className="text-sm font-bold font-mono text-[#0a0a0a]">{gpuInfo.system_ram.total_gb} GB</div>
+                          <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">Total RAM</div>
                         </div>
                         <div>
                           <div className="text-sm font-bold font-mono text-[#76B900]">{gpuInfo.system_ram.available_gb} GB</div>
-                          <div className="text-[10px] font-mono text-[#555555] mt-0.5">Available</div>
+                          <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">Available</div>
                         </div>
                         <div>
-                          <div className="text-sm font-bold font-mono text-[#f59e0b]">{gpuInfo.system_ram.effective_for_llm_gb} GB</div>
-                          <div className="text-[10px] font-mono text-[#555555] mt-0.5">LLM Offload</div>
+                          <div className="text-sm font-bold font-mono text-[#d97706]">{gpuInfo.system_ram.effective_for_llm_gb} GB</div>
+                          <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">LLM Offload</div>
                         </div>
                       </div>
                     )}
@@ -327,8 +327,8 @@ export default function ProvidersPage() {
                 ) : (
                   <div className="card p-6 text-center">
                     <div className="text-2xl mb-2 text-[#333333]">▣</div>
-                    <div className="text-xs font-mono text-[#555555] uppercase mb-1">No NVIDIA GPU Detected</div>
-                    <div className="text-[10px] font-mono text-[#444444]">
+                    <div className="text-xs font-mono text-[#a3a3a3] uppercase mb-1">No NVIDIA GPU Detected</div>
+                    <div className="text-[10px] font-mono text-[#a3a3a3]">
                       CPU mode — local models will run on CPU (slower). Cloud providers work normally.
                     </div>
                   </div>
@@ -339,21 +339,21 @@ export default function ProvidersPage() {
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <div className="section-label">Ollama Status</div>
-                  <div className="flex-1 h-px bg-[#222222]" />
+                  <div className="flex-1 h-px bg-[#e5e5e5]" />
                 </div>
                 {(() => {
                   const ollamaProvider = providers.find(p => p.name === 'ollama');
                   const online = ollamaProvider?.healthy ?? false;
                   return (
-                    <div className={`p-4 border ${online ? 'border-[#76B900]/30 bg-[#76B900]/5' : 'border-[#333333] bg-[#111111]'}`}>
+                    <div className={`p-4 border ${online ? 'border-[#76B900]/30 bg-[#76B900]/5' : 'border-[#d4d4d4] bg-[#ffffff]'}`}>
                       <div className="flex items-center gap-3">
-                        <span className={`w-2 h-2 flex-shrink-0 ${online ? 'bg-[#76B900] nvidia-pulse' : 'bg-[#555555]'}`}
+                        <span className={`w-2 h-2 flex-shrink-0 ${online ? 'bg-[#76B900] nvidia-pulse' : 'bg-[#a3a3a3]'}`}
                           style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
                         <div className="flex-1">
-                          <div className={`text-sm font-mono font-bold ${online ? 'text-[#76B900]' : 'text-[#555555]'}`}>
+                          <div className={`text-sm font-mono font-bold ${online ? 'text-[#76B900]' : 'text-[#a3a3a3]'}`}>
                             Ollama {online ? 'RUNNING' : 'NOT DETECTED'}
                           </div>
-                          <div className="text-[10px] font-mono text-[#555555]">
+                          <div className="text-[10px] font-mono text-[#a3a3a3]">
                             {online
                               ? `${ollamaProvider?.models_available ?? 0} model(s) installed · localhost:11434`
                               : 'Install and start Ollama: curl -fsSL https://ollama.com/install.sh | sh && ollama serve'}
@@ -361,8 +361,8 @@ export default function ProvidersPage() {
                         </div>
                         {online && ollamaProvider?.latency_ms != null && (
                           <div className="text-right">
-                            <div className="text-sm font-mono font-bold text-white">{ollamaProvider.latency_ms}ms</div>
-                            <div className="text-[10px] font-mono text-[#555555]">latency</div>
+                            <div className="text-sm font-mono font-bold text-[#0a0a0a]">{ollamaProvider.latency_ms}ms</div>
+                            <div className="text-[10px] font-mono text-[#a3a3a3]">latency</div>
                           </div>
                         )}
                       </div>
@@ -375,7 +375,7 @@ export default function ProvidersPage() {
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <div className="section-label">Models — Installed vs Recommended</div>
-                  <div className="flex-1 h-px bg-[#222222]" />
+                  <div className="flex-1 h-px bg-[#e5e5e5]" />
                 </div>
 
                 {gpuRecs && gpuRecs.recommendations.length > 0 ? (
@@ -385,17 +385,17 @@ export default function ProvidersPage() {
                       const oom = gpuRecs.oom_check[rec.model];
                       return (
                         <div key={i} className={`p-3 border ${
-                          isInstalled ? 'border-[#76B900]/30 bg-[#76B900]/5' : 'border-[#222222] bg-[#111111]'
+                          isInstalled ? 'border-[#76B900]/30 bg-[#76B900]/5' : 'border-[#e5e5e5] bg-[#ffffff]'
                         }`}>
                           <div className="flex items-start gap-3">
                             <span className={`w-1.5 h-1.5 mt-1.5 flex-shrink-0 ${
-                              isInstalled ? 'bg-[#76B900]' : 'bg-[#444444]'
+                              isInstalled ? 'bg-[#76B900]' : 'bg-[#a3a3a3]'
                             }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-xs font-mono font-bold text-white">{rec.model}</span>
+                                <span className="text-xs font-mono font-bold text-[#0a0a0a]">{rec.model}</span>
                                 <span className={`text-[10px] font-mono px-1.5 py-0.5 uppercase ${
-                                  i === 0 ? 'bg-[#76B900]/10 text-[#76B900]' : 'bg-[#222222] text-[#555555]'
+                                  i === 0 ? 'bg-[#76B900]/10 text-[#76B900]' : 'bg-[#e5e5e5] text-[#a3a3a3]'
                                 }`}>{rec.tier}</span>
                                 {isInstalled && (
                                   <span className="text-[10px] font-mono px-1.5 py-0.5 bg-[#76B900] text-black font-bold">INSTALLED</span>
@@ -403,24 +403,24 @@ export default function ProvidersPage() {
                                 {oom && (
                                   <span className={`text-[10px] font-mono px-1.5 py-0.5 uppercase ${
                                     oom.fits_gpu ? 'bg-[#76B900]/10 text-[#76B900]' :
-                                    oom.fits_hybrid ? 'bg-[#f59e0b]/10 text-[#f59e0b]' :
-                                    'bg-[#ef4444]/10 text-[#ef4444]'
+                                    oom.fits_hybrid ? 'bg-[#d97706]/10 text-[#d97706]' :
+                                    'bg-[#dc2626]/10 text-[#dc2626]'
                                   }`}>
                                     {oom.fits_gpu ? 'GPU FIT' : oom.fits_hybrid ? 'HYBRID' : 'OOM RISK'}
                                   </span>
                                 )}
                               </div>
-                              <div className="text-[10px] font-mono text-[#555555] mt-0.5">{rec.reason}</div>
+                              <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">{rec.reason}</div>
                               {!isInstalled && (
-                                <div className="mt-1.5 inline-flex bg-[#0a0a0a] border border-[#222222] px-2 py-1">
-                                  <code className="text-[10px] font-mono text-[#555555]">ollama pull {rec.model}</code>
+                                <div className="mt-1.5 inline-flex bg-[#ffffff] border border-[#e5e5e5] px-2 py-1">
+                                  <code className="text-[10px] font-mono text-[#a3a3a3]">ollama pull {rec.model}</code>
                                 </div>
                               )}
                             </div>
                             {rec.vram_required_gb > 0 && (
                               <div className="text-right flex-shrink-0">
-                                <div className="text-xs font-mono font-bold text-[#999999]">{rec.vram_required_gb} GB</div>
-                                <div className="text-[10px] font-mono text-[#444444]">VRAM</div>
+                                <div className="text-xs font-mono font-bold text-[#525252]">{rec.vram_required_gb} GB</div>
+                                <div className="text-[10px] font-mono text-[#a3a3a3]">VRAM</div>
                               </div>
                             )}
                           </div>
@@ -430,7 +430,7 @@ export default function ProvidersPage() {
                   </div>
                 ) : (
                   <div className="card p-6 text-center">
-                    <div className="text-xs font-mono text-[#555555]">No recommendations available</div>
+                    <div className="text-xs font-mono text-[#a3a3a3]">No recommendations available</div>
                   </div>
                 )}
               </div>
@@ -440,8 +440,8 @@ export default function ProvidersPage() {
                 <div>
                   <div className="flex items-center gap-2 mb-3">
                     <div className="section-label">Ollama Optimizations</div>
-                    <div className="flex-1 h-px bg-[#222222]" />
-                    <span className="text-[10px] font-mono text-[#555555]">{gpuRecs.optimizations.architecture}</span>
+                    <div className="flex-1 h-px bg-[#e5e5e5]" />
+                    <span className="text-[10px] font-mono text-[#a3a3a3]">{gpuRecs.optimizations.architecture}</span>
                   </div>
                   <div className="card p-4 space-y-3">
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -451,15 +451,15 @@ export default function ProvidersPage() {
                         { label: 'Context', value: `${(gpuRecs.optimizations.recommended_ctx / 1024).toFixed(0)}K`, ok: true },
                         { label: 'Quantization', value: gpuRecs.optimizations.recommended_quant, ok: true },
                       ].map(item => (
-                        <div key={item.label} className="bg-[#111111] border border-[#1a1a1a] p-3 text-center">
-                          <div className={`text-sm font-bold font-mono ${item.ok ? 'text-[#76B900]' : 'text-[#555555]'}`}>{item.value}</div>
-                          <div className="text-[10px] font-mono text-[#555555] mt-0.5 uppercase">{item.label}</div>
+                        <div key={item.label} className="bg-[#ffffff] border border-[#e5e5e5] p-3 text-center">
+                          <div className={`text-sm font-bold font-mono ${item.ok ? 'text-[#76B900]' : 'text-[#a3a3a3]'}`}>{item.value}</div>
+                          <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 uppercase">{item.label}</div>
                         </div>
                       ))}
                     </div>
                     <div className="space-y-1">
                       {gpuRecs.optimizations.notes.map((note, i) => (
-                        <div key={i} className="text-[10px] font-mono text-[#444444]">· {note}</div>
+                        <div key={i} className="text-[10px] font-mono text-[#a3a3a3]">· {note}</div>
                       ))}
                     </div>
                   </div>
@@ -476,7 +476,7 @@ export default function ProvidersPage() {
           {/* Filters */}
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
-              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#444444]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#a3a3a3]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
               </svg>
               <input
@@ -525,9 +525,9 @@ export default function ProvidersPage() {
               {[1, 2, 3, 4, 5].map(i => (
                 <div key={i} className="card p-4 h-14 animate-pulse">
                   <div className="flex gap-3">
-                    <div className="h-3 bg-[#1a1a1a] w-1/4" />
-                    <div className="h-3 bg-[#1a1a1a] w-1/6" />
-                    <div className="ml-auto h-3 bg-[#1a1a1a] w-1/6" />
+                    <div className="h-3 bg-[#f5f5f5] w-1/4" />
+                    <div className="h-3 bg-[#f5f5f5] w-1/6" />
+                    <div className="ml-auto h-3 bg-[#f5f5f5] w-1/6" />
                   </div>
                 </div>
               ))}
@@ -535,7 +535,7 @@ export default function ProvidersPage() {
           ) : (cloudModels.length === 0 && localModels.length === 0) ? (
             <div className="card p-8 text-center">
               <div className="text-2xl mb-3 text-[#333333]">◎</div>
-              <div className="text-xs font-mono text-[#555555] uppercase">
+              <div className="text-xs font-mono text-[#a3a3a3] uppercase">
                 {modelSearch ? 'No models match your search' : 'No models available'}
               </div>
             </div>
@@ -546,22 +546,22 @@ export default function ProvidersPage() {
                   {localModels.length > 0 && !selectedProvider && (
                     <div className="flex items-center gap-2 mt-4">
                       <div className="section-label">Cloud Models</div>
-                      <div className="flex-1 h-px bg-[#222222]" />
-                      <span className="text-[10px] font-mono text-[#444444]">{cloudModels.length} available</span>
+                      <div className="flex-1 h-px bg-[#e5e5e5]" />
+                      <span className="text-[10px] font-mono text-[#a3a3a3]">{cloudModels.length} available</span>
                     </div>
                   )}
                   <div className="card overflow-hidden">
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
                         <thead>
-                          <tr className="border-b border-[#222222] bg-[#111111]">
-                            <th className="text-left py-2 px-4 font-mono text-[#555555] text-[10px] uppercase tracking-wider">Model</th>
-                            <th className="text-left py-2 px-4 font-mono text-[#555555] text-[10px] uppercase tracking-wider">Provider</th>
-                            <th className="text-right py-2 px-4 font-mono text-[#555555] text-[10px] uppercase tracking-wider hidden md:table-cell">Context</th>
-                            <th className="text-right py-2 px-4 font-mono text-[#555555] text-[10px] uppercase tracking-wider hidden lg:table-cell">Input</th>
-                            <th className="text-right py-2 px-4 font-mono text-[#555555] text-[10px] uppercase tracking-wider hidden lg:table-cell">Output</th>
-                            <th className="py-2 px-4 font-mono text-[#555555] text-[10px] uppercase tracking-wider hidden xl:table-cell">Capabilities</th>
-                            <th className="text-center py-2 px-4 font-mono text-[#555555] text-[10px] uppercase tracking-wider">Status</th>
+                          <tr className="border-b border-[#e5e5e5] bg-[#ffffff]">
+                            <th className="text-left py-2 px-4 font-mono text-[#a3a3a3] text-[10px] uppercase tracking-wider">Model</th>
+                            <th className="text-left py-2 px-4 font-mono text-[#a3a3a3] text-[10px] uppercase tracking-wider">Provider</th>
+                            <th className="text-right py-2 px-4 font-mono text-[#a3a3a3] text-[10px] uppercase tracking-wider hidden md:table-cell">Context</th>
+                            <th className="text-right py-2 px-4 font-mono text-[#a3a3a3] text-[10px] uppercase tracking-wider hidden lg:table-cell">Input</th>
+                            <th className="text-right py-2 px-4 font-mono text-[#a3a3a3] text-[10px] uppercase tracking-wider hidden lg:table-cell">Output</th>
+                            <th className="py-2 px-4 font-mono text-[#a3a3a3] text-[10px] uppercase tracking-wider hidden xl:table-cell">Capabilities</th>
+                            <th className="text-center py-2 px-4 font-mono text-[#a3a3a3] text-[10px] uppercase tracking-wider">Status</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -571,8 +571,8 @@ export default function ProvidersPage() {
                         </tbody>
                       </table>
                     </div>
-                    <div className="px-4 py-2 border-t border-[#1a1a1a]">
-                      <span className="text-[10px] font-mono text-[#444444]">{cloudModels.length} models</span>
+                    <div className="px-4 py-2 border-t border-[#e5e5e5]">
+                      <span className="text-[10px] font-mono text-[#a3a3a3]">{cloudModels.length} models</span>
                     </div>
                   </div>
                 </>
@@ -591,14 +591,14 @@ function ModelRow({ m, highlight = false, tableMode = false }: { m: ModelInfo; h
 
   if (!tableMode) {
     return (
-      <tr className={`border-b border-[#1a1a1a] hover:bg-[#76B900]/5 transition-colors ${highlight ? 'bg-[#76B900]/3' : ''}`}>
+      <tr className={`border-b border-[#e5e5e5] hover:bg-[#76B900]/5 transition-colors ${highlight ? 'bg-[#76B900]/3' : ''}`}>
         <td className="py-3 px-4">
           <div className="flex items-center gap-2">
             {isNemotron && <span className="text-[10px] font-mono px-1 py-0.5 bg-[#76B900] text-black font-bold">N</span>}
             <div>
-              <div className="font-mono text-xs text-white">{m.model_id}</div>
+              <div className="font-mono text-xs text-[#0a0a0a]">{m.model_id}</div>
               {m.display_name && m.display_name !== m.model_id && (
-                <div className="text-[10px] font-mono text-[#555555] mt-0.5">{m.display_name}</div>
+                <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">{m.display_name}</div>
               )}
             </div>
           </div>
@@ -619,32 +619,32 @@ function ModelRow({ m, highlight = false, tableMode = false }: { m: ModelInfo; h
   }
 
   return (
-    <tr className="border-b border-[#1a1a1a] hover:bg-[#1a1a1a] transition-colors">
+    <tr className="border-b border-[#e5e5e5] hover:bg-[#f5f5f5] transition-colors">
       <td className="py-3 px-4">
-        <div className="font-mono text-xs text-white">{m.model_id}</div>
+        <div className="font-mono text-xs text-[#0a0a0a]">{m.model_id}</div>
         {m.display_name && m.display_name !== m.model_id && (
-          <div className="text-[10px] font-mono text-[#444444] mt-0.5">{m.display_name}</div>
+          <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">{m.display_name}</div>
         )}
       </td>
       <td className="py-3 px-4">
-        <span className="text-[10px] font-mono px-2 py-1 bg-[#222222] text-[#666666] uppercase">
+        <span className="text-[10px] font-mono px-2 py-1 bg-[#e5e5e5] text-[#737373] uppercase">
           {m.provider}
         </span>
       </td>
       <td className="py-3 px-4 text-right hidden md:table-cell">
-        <span className="font-mono text-[10px] text-[#666666]">
+        <span className="font-mono text-[10px] text-[#737373]">
           {m.context_window > 0 ? `${(m.context_window / 1000).toFixed(0)}K` : '—'}
         </span>
       </td>
       <td className="py-3 px-4 text-right hidden lg:table-cell">
-        <span className="font-mono text-[10px] text-[#f59e0b]">
+        <span className="font-mono text-[10px] text-[#d97706]">
           {m.input_cost_per_1m_tokens ? `$${parseFloat(String(m.input_cost_per_1m_tokens)).toFixed(2)}` : (
             isFree ? <span className="text-[#76B900]">FREE</span> : '—'
           )}
         </span>
       </td>
       <td className="py-3 px-4 text-right hidden lg:table-cell">
-        <span className="font-mono text-[10px] text-[#f59e0b]">
+        <span className="font-mono text-[10px] text-[#d97706]">
           {m.output_cost_per_1m_tokens ? `$${parseFloat(String(m.output_cost_per_1m_tokens)).toFixed(2)}` : (
             isFree ? <span className="text-[#76B900]">FREE</span> : '—'
           )}
@@ -662,8 +662,8 @@ function ModelRow({ m, highlight = false, tableMode = false }: { m: ModelInfo; h
         <span
           className="text-[10px] font-mono px-2 py-0.5"
           style={{
-            color: MODEL_STATUS_COLORS[m.status] ?? '#555555',
-            backgroundColor: `${MODEL_STATUS_COLORS[m.status] ?? '#555555'}15`,
+            color: MODEL_STATUS_COLORS[m.status] ?? '#a3a3a3',
+            backgroundColor: `${MODEL_STATUS_COLORS[m.status] ?? '#a3a3a3'}15`,
           }}
         >
           {m.status?.toUpperCase()}
@@ -675,7 +675,7 @@ function ModelRow({ m, highlight = false, tableMode = false }: { m: ModelInfo; h
 
 function CapBadge({ label }: { label: string }) {
   return (
-    <span className="text-[10px] font-mono px-1.5 py-0.5 bg-[#1a1a1a] text-[#555555] border border-[#222222]">
+    <span className="text-[10px] font-mono px-1.5 py-0.5 bg-[#f5f5f5] text-[#a3a3a3] border border-[#e5e5e5]">
       {label.toUpperCase()}
     </span>
   );
