@@ -3,8 +3,8 @@ import './globals.css';
 import LayoutShell from '@/components/LayoutShell';
 
 export const metadata: Metadata = {
-  title: 'Hive — AI Command Center',
-  description: 'NVIDIA-powered multi-LLM orchestration platform. Run Nemotron and other AI models locally on your GPU.',
+  title: 'NVHive - NVIDIA AI Workspace',
+  description: 'NVIDIA-styled multi-LLM orchestration platform for local GPU and cloud advisor workflows.',
   keywords: ['AI', 'NVIDIA', 'Nemotron', 'LLM', 'GPU', 'local AI', 'Ollama'],
 };
 

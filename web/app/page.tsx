@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import Sidebar from '@/components/Sidebar';
-import ChatMessage, { CouncilExpertPanel, exportConversationMarkdown } from '@/components/ChatMessage';
+import ChatMessage, { exportConversationMarkdown } from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
 import { useUIShell } from '@/components/UIShellProvider';
 import {
@@ -13,6 +13,7 @@ import {
   getGPUInfo,
   getBudgetStatus,
   getConversations,
+  getConversation,
   streamCouncil,
 } from '@/lib/api';
 import { useProviderHealth } from '@/lib/useProviderHealth';
@@ -108,7 +109,7 @@ function BudgetPill() {
 
   return (
     <div className="flex items-center gap-1 px-2 py-0.5 bg-[#111111] border border-[#222222] text-[10px] font-mono text-[#f59e0b]">
-      <span>💰</span>
+      <span>USD</span>
       <span>${n.toFixed(2)} today</span>
     </div>
   );
@@ -130,7 +131,7 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
   return (
     <div className="p-4 space-y-3">
       <div className="flex items-center gap-2 mb-3">
-        <span className="text-[#76B900] text-xs">◈</span>
+        <span className="h-2 w-2 bg-[#76B900]" />
         <span className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider">Hive</span>
         {(phase === 'streaming' || phase === 'connecting') && (
           <span className="text-[9px] font-mono text-[#76B900] animate-pulse ml-1">LIVE</span>
@@ -204,7 +205,7 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
       {synthesisStatus !== 'hidden' && (
         <div className="border border-[#3b82f6]/30 p-3 bg-[#0a0d1a]">
           <div className="text-[9px] font-mono text-[#3b82f6] uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <span>◈</span>
+            <span className="h-2 w-2 bg-[#3b82f6]" />
             <span>Synthesis</span>
             {synthesisStatus === 'streaming' && (
               <span className="animate-pulse">Generating...</span>
@@ -227,46 +228,82 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
 
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
-function EmptyState({ onPrompt }: { onPrompt: (p: string) => void }) {
+function EmptyState({
+  onPrompt,
+  models,
+  providerHealth,
+  selectedModel,
+}: {
+  onPrompt: (p: string) => void;
+  models: Array<{ model_id: string; provider: string; display_name: string; is_local?: boolean; cost_tier?: 'free' | 'low' | 'high' }>;
+  providerHealth: Array<{ name: string; healthy: boolean; latency_ms: number | null; models_available: number; error: string | null }>;
+  selectedModel: string;
+}) {
   const suggestions = [
-    'Debug my segfault in C — here\'s the backtrace...',
-    'Explain how transformers work in simple terms',
-    'Write a Python script to batch rename files',
-    'Compare weighted voting vs majority vote for ensemble models',
+    'Analyze my CUDA error log and recommend a fix',
+    'Design a local Nemotron workflow for this project',
+    'Compare these model responses for correctness',
+    'Turn this repo issue into a testable patch plan',
+  ];
+  const healthyProviders = providerHealth.filter(p => p.healthy);
+  const localModelCount = models.filter(m => m.is_local || m.provider === 'ollama').length;
+  const selected = models.find(m => m.model_id === selectedModel);
+  const defaultModel = selected?.display_name || selectedModel || 'Select model';
+  const readiness = [
+    { label: 'Advisors Online', value: providerHealth.length > 0 ? `${healthyProviders.length}/${providerHealth.length}` : 'checking' },
+    { label: 'Local Models', value: `${localModelCount}` },
+    { label: 'Default Model', value: defaultModel },
   ];
 
   return (
-    <div className="flex flex-col items-center justify-center flex-1 px-6 py-12 text-center">
-      {/* Logo hex */}
-      <div className="relative mb-6">
-        <div
-          className="w-16 h-16 bg-[#76B900]/5 border border-[#76B900]/20 flex items-center justify-center"
-          style={{ clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)' }}
-        >
-          <svg className="w-8 h-8 text-[#76B900]/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-            <path strokeLinecap="round" strokeLinejoin="round"
-              d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-          </svg>
-        </div>
-      </div>
-
-      <h2 className="text-lg font-bold text-white mb-1 tracking-tight">Hive AI</h2>
-      <p className="text-sm text-[#555555] font-mono mb-8 max-w-sm">
-        Your NVIDIA-powered multi-model AI. Ask anything — single model, hive of advisors, or side-by-side comparison.
-      </p>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 w-full max-w-lg">
-        {suggestions.map((s, i) => (
-          <button
-            key={i}
-            onClick={() => onPrompt(s)}
-            className="text-left px-4 py-3 border border-[#222222] bg-[#111111] hover:border-[#76B900]/30 hover:bg-[#141414] transition-all group"
-          >
-            <div className="text-xs text-[#666666] group-hover:text-[#999999] leading-snug font-mono">
-              {s}
+    <div className="flex flex-1 items-center justify-center px-5 py-8">
+      <div className="w-full max-w-5xl">
+        <div className="mb-8 border border-[#262626] bg-[#0f0f0f] p-5 sm:p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <div className="mb-2 flex items-center gap-2">
+                <span className="h-2 w-2 bg-[#76B900]" />
+                <span className="text-[10px] font-mono font-bold uppercase tracking-[0.24em] text-[#76B900]">
+                  NVIDIA AI Workspace
+                </span>
+              </div>
+              <h2 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                NVHive
+              </h2>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-[#9ca3af]">
+                A focused command surface for local GPU inference, cloud advisors, and council synthesis.
+              </p>
             </div>
-          </button>
-        ))}
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:min-w-[420px]">
+              {readiness.map(item => (
+                <div key={item.label} className="border border-[#242424] bg-[#080808] px-3 py-2 text-left">
+                  <div className="text-[9px] font-mono uppercase tracking-[0.16em] text-[#5f6368]">{item.label}</div>
+                  <div className="mt-1 truncate text-sm font-semibold text-[#f5f5f5]">{item.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {suggestions.map((s, i) => (
+            <button
+              key={i}
+              onClick={() => onPrompt(s)}
+              className="group min-h-[72px] border border-[#242424] bg-[#101010] px-4 py-3 text-left transition-all hover:border-[#76B900]/50 hover:bg-[#14180f]"
+            >
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-[10px] font-mono uppercase tracking-[0.16em] text-[#5f6368]">
+                  Prompt {i + 1}
+                </span>
+                <span className="h-px w-8 bg-[#333333] transition-colors group-hover:bg-[#76B900]" />
+              </div>
+              <div className="text-sm leading-snug text-[#c8c8c8] group-hover:text-white">
+                {s}
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -312,6 +349,8 @@ export default function ChatPage() {
   const [synthesisStatus, setSynthesisStatus] = useState<'hidden' | 'streaming' | 'complete'>('hidden');
   const wsRef = useRef<WebSocket | null>(null);
   const completedCostRef = useRef(0);
+  const memberStatesRef = useRef<Record<string, MemberStreamState>>({});
+  const memberModelByLabelRef = useRef<Record<string, string>>({});
   // Ref mirror of the live synthesis content. The WebSocket callbacks
   // are created once at submit time, so reading `synthesisContent`
   // state inside `onComplete` gives the stale closure value (empty
@@ -397,6 +436,16 @@ export default function ChatPage() {
     });
   }, []);
 
+  const updateMemberStates = useCallback((
+    updater: Record<string, MemberStreamState> | ((prev: Record<string, MemberStreamState>) => Record<string, MemberStreamState>)
+  ) => {
+    setMemberStates(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      memberStatesRef.current = next;
+      return next;
+    });
+  }, []);
+
   const addMessage = useCallback((msg: ChatMessageType) => {
     setMessages(prev => [...prev, msg]);
     if (activeConvId) {
@@ -448,12 +497,14 @@ export default function ChatPage() {
     setRightPanelOpen(false);
     setCouncilPhase('idle');
     setMemberOrder([]);
+    memberStatesRef.current = {};
+    memberModelByLabelRef.current = {};
     setMemberStates({});
     setSynthesisContent('');
     setSynthesisStatus('hidden');
   }, [updateStoredState]);
 
-  const handleSelectConversation = useCallback((id: string) => {
+  const handleSelectConversation = useCallback(async (id: string) => {
     if (!id) {
       // Clear active, go to home
       setActiveConvId(null);
@@ -467,11 +518,42 @@ export default function ChatPage() {
     setMessages(msgs);
     setCouncilPhase('idle');
     setMemberOrder([]);
+    memberStatesRef.current = {};
+    memberModelByLabelRef.current = {};
     setMemberStates({});
     setSynthesisContent('');
     setSynthesisStatus('hidden');
     setRightPanelOpen(false);
-  }, [storedState.messages]);
+
+    if (msgs.length === 0) {
+      const remote = await getConversation(id);
+      if (remote?.messages?.length) {
+        const mapped: ChatMessageType[] = remote.messages
+          .filter(m => m.role !== 'system')
+          .map(m => ({
+            id: m.id,
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.content,
+            provider: m.provider,
+            model: m.model,
+            mode: m.mode,
+            cost_usd: m.cost_usd,
+            tokens: m.tokens,
+            latency_ms: m.latency_ms,
+            council_data: m.council_data,
+            timestamp: m.timestamp,
+          }));
+        setMessages(mapped);
+        updateStoredState(prev => ({
+          ...prev,
+          messages: {
+            ...prev.messages,
+            [id]: mapped,
+          },
+        }));
+      }
+    }
+  }, [storedState.messages, updateStoredState]);
 
   const handleRenameConversation = useCallback((id: string, title: string) => {
     updateStoredState(prev => ({
@@ -501,6 +583,8 @@ export default function ChatPage() {
   const resetCouncilState = useCallback(() => {
     setCouncilPhase('idle');
     setMemberOrder([]);
+    memberStatesRef.current = {};
+    memberModelByLabelRef.current = {};
     setMemberStates({});
     setSynthesisContent('');
     setSynthesisStatus('hidden');
@@ -527,8 +611,8 @@ export default function ChatPage() {
     return () => clearTimeout(timer);
   }, [streaming, handleStop]);
 
-  const handleSubmit = useCallback(async () => {
-    const prompt = inputValue.trim();
+  const handleSubmit = useCallback(async (promptOverride?: string) => {
+    const prompt = (promptOverride ?? inputValue).trim();
     if (!prompt || streaming) return;
 
     // Pre-flight health gate: in 'single' mode, if the user has a
@@ -679,6 +763,8 @@ export default function ChatPage() {
       setRightPanelOpen(true);
       // Reset council state inline
       setMemberOrder([]);
+      memberStatesRef.current = {};
+      memberModelByLabelRef.current = {};
       setMemberStates({});
       setSynthesisContent('');
       setSynthesisStatus('hidden');
@@ -704,8 +790,10 @@ export default function ChatPage() {
               m.persona ? `${m.provider}:${m.persona}` : m.provider
             );
             const states: Record<string, MemberStreamState> = {};
+            const modelMap: Record<string, string> = {};
             data.members.forEach(m => {
               const label = m.persona ? `${m.provider}:${m.persona}` : m.provider;
+              modelMap[label] = m.model;
               states[label] = {
                 label,
                 provider: m.provider,
@@ -719,11 +807,12 @@ export default function ChatPage() {
               };
             });
             setMemberOrder(order);
-            setMemberStates(states);
+            memberModelByLabelRef.current = modelMap;
+            updateMemberStates(states);
             setCouncilPhase('streaming');
           },
           onMemberStart: (member) => {
-            setMemberStates(prev => ({
+            updateMemberStates(prev => ({
               ...prev,
               [member]: {
                 ...(prev[member] ?? {
@@ -737,20 +826,20 @@ export default function ChatPage() {
             }));
           },
           onMemberChunk: (member, _delta, accumulated) => {
-            setMemberStates(prev => ({
+            updateMemberStates(prev => ({
               ...prev,
               [member]: { ...(prev[member] ?? { label: member, provider: member.split(':')[0], persona: '', tokens: 0, cost: '0', latency_ms: 0, elapsedMs: 0 }), accumulated, status: 'streaming' },
             }));
           },
           onMemberComplete: (member, content, tokens, cost, latency) => {
-            setMemberStates(prev => ({
+            updateMemberStates(prev => ({
               ...prev,
               [member]: { ...(prev[member] ?? { label: member, provider: member.split(':')[0], persona: '', accumulated: '', elapsedMs: 0 }), status: 'complete', accumulated: content, tokens, cost, latency_ms: latency },
             }));
             completedCostRef.current += parseFloat(cost) || 0;
           },
           onMemberFailed: (member, err) => {
-            setMemberStates(prev => ({
+            updateMemberStates(prev => ({
               ...prev,
               [member]: { ...(prev[member] ?? { label: member, provider: member.split(':')[0], persona: '', accumulated: '', tokens: 0, cost: '0', latency_ms: 0, elapsedMs: 0 }), status: 'failed', error: err },
             }));
@@ -787,7 +876,19 @@ export default function ChatPage() {
             // Read from the ref so we get the live synthesis, not the
             // closure value captured when handleSubmit was built.
             const finalContent = synthesisContentRef.current;
-            const memberStatesSnapshot = {} as Record<string, { content: string; provider: string; model: string; tokens: number; cost: string; latency_ms?: number }>;
+            const memberStatesSnapshot = Object.fromEntries(
+              Object.entries(memberStatesRef.current).map(([label, state]) => [
+                label,
+                {
+                  content: state.accumulated,
+                  provider: state.provider,
+                  model: memberModelByLabelRef.current[label] ?? state.provider,
+                  tokens: state.tokens,
+                  cost: state.cost,
+                  latency_ms: state.latency_ms,
+                },
+              ])
+            ) as Record<string, { content: string; provider: string; model: string; tokens: number; cost: string; latency_ms?: number }>;
             const finalMsg: ChatMessageType = {
               id: assistantMsgId,
               role: 'assistant',
@@ -805,6 +906,16 @@ export default function ChatPage() {
             setMessages(prev =>
               prev.map(m => m.id === assistantMsgId ? finalMsg : m)
             );
+            updateStoredState(prev => ({
+              ...prev,
+              messages: {
+                ...prev.messages,
+                [convId!]: [
+                  ...(prev.messages[convId!] ?? []).filter(m => m.id !== assistantMsgId),
+                  finalMsg,
+                ],
+              },
+            }));
           },
           onError: (err) => {
             setCouncilPhase('error');
@@ -862,6 +973,16 @@ export default function ChatPage() {
         setMessages(prev =>
           prev.map(m => m.id === assistantMsgId ? finalMsg : m)
         );
+        updateStoredState(prev => ({
+          ...prev,
+          messages: {
+            ...prev.messages,
+            [convId!]: [
+              ...(prev.messages[convId!] ?? []).filter(m => m.id !== assistantMsgId),
+              finalMsg,
+            ],
+          },
+        }));
       } catch (err) {
         const errMsg: ChatMessageType = {
           id: assistantMsgId,
@@ -965,6 +1086,7 @@ export default function ChatPage() {
         ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
       `}>
         <Sidebar
+          topOffset={false}
           conversations={allConversations}
           activeConversationId={activeConvId}
           onNewChat={() => { handleNewChat(); setMobileSidebarOpen(false); }}
@@ -978,7 +1100,7 @@ export default function ChatPage() {
       {/* Main area */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         {/* Top bar */}
-        <div className="flex items-center px-3 h-10 border-b border-[#1a1a1a] bg-[#0d0d0d] flex-shrink-0 gap-2">
+        <div className="flex items-center px-3 h-11 border-b border-[#242424] bg-[#0b0b0b] flex-shrink-0 gap-2">
           {/* Hamburger — mobile only */}
           <button
             className="md:hidden flex-shrink-0 w-8 h-8 flex items-center justify-center text-[#555555] hover:text-[#76B900] transition-colors"
@@ -991,9 +1113,18 @@ export default function ChatPage() {
           </button>
 
           <div className="flex items-center gap-2 flex-1 min-w-0">
+            <span className="hidden sm:inline text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-[#76B900]">
+              NVHIVE
+            </span>
+            <span className="hidden sm:inline text-[#333333]">/</span>
             {activeConvId && (
               <span className="text-xs font-mono text-[#555555] truncate">
                 {allConversations.find(c => c.id === activeConvId)?.title ?? 'Chat'}
+              </span>
+            )}
+            {!activeConvId && (
+              <span className="text-xs font-mono text-[#555555] truncate">
+                NVIDIA AI Workspace
               </span>
             )}
           </div>
@@ -1023,7 +1154,7 @@ export default function ChatPage() {
                 }`}
                 title="Toggle hive panel"
               >
-                ◈ Panel
+                Panel
               </button>
             )}
           </div>
@@ -1044,6 +1175,9 @@ export default function ChatPage() {
             <div className="flex-1 overflow-y-auto py-4">
               {messages.length === 0 ? (
                 <EmptyState
+                  models={models}
+                  providerHealth={providerHealth}
+                  selectedModel={selectedModel}
                   onPrompt={p => {
                     setInputValue(p);
                     // Small delay to let state update, then focus
@@ -1104,7 +1238,7 @@ export default function ChatPage() {
                 />
               ) : (
                 <div className="p-6 flex flex-col items-center justify-center h-full text-center">
-                  <div className="text-3xl text-[#333333] mb-3">◈</div>
+                  <div className="mb-3 h-8 w-8 border border-[#333333] bg-[#111111]" />
                   <div className="text-xs font-mono text-[#444444] uppercase tracking-wider mb-1">
                     Convene Mode
                   </div>

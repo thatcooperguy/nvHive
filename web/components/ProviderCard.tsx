@@ -10,14 +10,14 @@ interface Props {
 }
 
 const PROVIDER_ICONS: Record<string, string> = {
-  openai: '⬡',
-  anthropic: '◈',
-  google: '◉',
-  groq: '▲',
-  ollama: '◎',
-  mistral: '❖',
-  cohere: '⬟',
-  together: '⊕',
+  openai: 'OA',
+  anthropic: 'AN',
+  google: 'GO',
+  groq: 'GQ',
+  ollama: 'OL',
+  mistral: 'MI',
+  cohere: 'CO',
+  together: 'TG',
 };
 
 const PROVIDER_COLORS: Record<string, string> = {
@@ -44,7 +44,7 @@ function getProviderIcon(name: string): string {
   for (const [k, v] of Object.entries(PROVIDER_ICONS)) {
     if (key.includes(k)) return v;
   }
-  return '◆';
+  return name.slice(0, 2).toUpperCase();
 }
 
 export default function ProviderCard({ provider, onRefresh }: Props) {

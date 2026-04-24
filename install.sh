@@ -403,7 +403,11 @@ if [ "$USE_ACTIVE_ENV" = "true" ]; then
     echo ""
 fi
 echo -e "  ${G}nvh${N}            Start chatting (works immediately)"
+echo -e "  ${G}nvh workstation${N} Create desktop launcher + student GPU lab checklist"
+echo -e "  ${G}nvh workstation --all -y${N} Full local AI + ComfyUI + WebUI setup"
+echo -e "  ${G}nvh studio --install starter -y${N} Rootless LLMs + agents + game-dev packs"
 echo -e "  ${G}nvh setup${N}      Add more free AI providers"
+echo -e "  ${G}nvh webui${N}      Launch the browser dashboard"
 echo -e "  ${G}nvh bench${N}      Benchmark your GPU"
 echo -e "  ${G}nvh status${N}     System overview"
 echo -e "  ${G}nvh update${N}     Pull latest version"

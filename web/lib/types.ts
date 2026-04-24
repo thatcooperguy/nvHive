@@ -379,6 +379,117 @@ export interface SystemInfo {
 
 // ─── UI State helpers ────────────────────────────────────────────────────────
 
+export interface ComfyUIExample {
+  id: string;
+  title: string;
+  category: string;
+  install_profile: string;
+  recommended_vram_gb: number;
+  why_trending: string;
+  workflow_hint: string;
+  source_url: string;
+  models: string[];
+  custom_nodes: string[];
+  notes: string[];
+}
+
+export interface ComfyUIStatus {
+  installed: boolean;
+  running: boolean;
+  url: string;
+  install_root: string;
+  app_dir: string;
+  venv_python: string;
+  examples_dir: string;
+  examples_installed: boolean;
+  manager_available: boolean;
+  log_path: string;
+  pid: number | null;
+  examples: ComfyUIExample[];
+  already_running?: boolean;
+  started?: boolean;
+}
+
+export interface ComfyUIExamplesResult {
+  examples: ComfyUIExample[];
+  count: number;
+  sources: string[];
+}
+
+export type ComfyUITorchProfile = 'nvidia-cu130' | 'nvidia-cu121' | 'cpu' | 'skip';
+
+export interface ComfyUIInstallRequest {
+  torch_profile?: ComfyUITorchProfile;
+  force_update?: boolean;
+}
+
+export interface ComfyUIInstallEvent {
+  event: 'plan' | 'step' | 'log' | 'complete' | 'error' | string;
+  status: 'running' | 'complete' | 'failed' | string;
+  message: string;
+  command?: string[];
+  install_root?: string;
+  torch_profile?: string;
+  examples_dir?: string;
+  status_snapshot?: ComfyUIStatus;
+}
+
+export interface StudioPackStatus {
+  id: string;
+  installed: boolean;
+  root: string;
+  marker: string;
+  details: Record<string, unknown>;
+  installed_at: string | null;
+}
+
+export interface StudioComfyNode {
+  name: string;
+  repo_url: string;
+}
+
+export interface StudioPack {
+  id: string;
+  title: string;
+  category: 'runtime' | 'llm' | 'agents' | 'comfyui' | 'game' | string;
+  tagline: string;
+  description: string;
+  recommended_vram_gb: number;
+  estimated_disk_gb: number;
+  install_kind: string;
+  no_root: boolean;
+  models: string[];
+  python_packages: string[];
+  comfy_nodes: StudioComfyNode[];
+  launchers: string[];
+  source_urls: string[];
+  notes: string[];
+  status: StudioPackStatus;
+}
+
+export interface StudioPacksResult {
+  packs: StudioPack[];
+  bundles: Record<string, string[]>;
+  root: string;
+  count: number;
+}
+
+export interface StudioPackInstallRequest {
+  pack_ids: string[];
+  force_update?: boolean;
+}
+
+export interface StudioPackInstallEvent {
+  event: 'plan' | 'pack' | 'step' | 'log' | 'complete' | 'error' | string;
+  status: 'running' | 'complete' | 'failed' | string;
+  message: string;
+  pack_id?: string;
+  pack_ids?: string[];
+  command?: string[];
+  estimated_disk_gb?: number;
+  status_snapshot?: StudioPacksResult;
+}
+
 export type QueryMode = 'simple' | 'council' | 'compare';
 export type ConnectionStatus = 'connected' | 'disconnected' | 'checking';
 

@@ -1,45 +1,107 @@
-# For Linux Desktop
+# Linux GPU Desktop Student Workstation
 
-nvHive is designed for deployment on Linux Desktop instances.
+nvHive is designed to make a fresh NVIDIA Linux cloud desktop feel like a ready-to-use AI lab for students.
 
-## Features
+Target user journey:
 
-- Auto-detects cloud sessions and adapts to the available GPU tier
-- All tools operate at user level -- no root, no sudo
-- Session-aware: handles ephemeral environments with mounted home directories
-- Auto-healing: reconnects to Ollama if the instance restarts
-- GPU VRAM management: models unload after inactivity so games can reclaim VRAM
+1. Launch the Linux desktop instance.
+2. Run one install command or `pip install nvhive`.
+3. Click the NVHive AI Studio desktop icon, or run `nvh workstation --launch`.
+4. Use local chat models, cloud/free advisors, ComfyUI examples, agent packs, and game-dev helpers from one WebUI.
 
-## What Happens Automatically
+## Quick Start
 
-When you install nvHive, everything configures itself:
-
-```
-Install runs:
-  1. Detects your GPU (NVIDIA via pynvml, Apple Silicon via sysctl)
-  2. Reads available VRAM / unified memory
-  3. Downloads the right NVIDIA Nemotron model for your hardware:
-
-     GPU Memory        Model Auto-Downloaded         Size    Speed
-     ─────────────────────────────────────────────────────────────
-     < 4 GB or CPU     nemotron-mini (4B)            ~2 GB   ~30 tok/s
-     4–6 GB            nemotron-mini (GPU accel.)     ~2 GB   ~50 tok/s
-     6–12 GB           nemotron-small (recommended)   ~5 GB   ~75 tok/s
-     12–24 GB          nemotron-small + codellama     ~9 GB   ~110 tok/s
-     24–48 GB          nemotron 70B (quantized)       ~40 GB  ~40 tok/s
-     48–80 GB          nemotron 70B (full quality)    ~40 GB  ~120 tok/s
-     80+ GB            nemotron 120B (flagship)       ~70 GB  ~180 tok/s
-
-  4. Installs Ollama (local model server) — no root needed
-  5. Creates config with Ollama + LLM7 (anonymous, free) enabled
-  6. Pulls model in background — you can start chatting immediately
-  7. Adds 'nvh' to your PATH
-
-First time: ~60 seconds. Reconnect (new VM): ~3 seconds.
+```bash
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
+nvh workstation --all -y
 ```
 
-**You never pick a model.** The platform reads your hardware and downloads the best one. On Apple Silicon, it uses Metal via Ollama with unified memory. On NVIDIA, it uses CUDA. On CPU-only systems, it uses free cloud providers.
+For a pip install path:
 
----
+```bash
+python3 -m pip install --user "nvhive[all]"
+nvh workstation --all -y
+```
+
+For a lighter setup that avoids large downloads:
+
+```bash
+nvh workstation
+nvh webui
+```
+
+## What `nvh workstation` Does
+
+- Detects NVIDIA GPU availability with `nvidia-smi`
+- Estimates VRAM and recommends local chat models
+- Creates `~/.local/bin/nvhive-ai-studio`
+- Creates a Linux desktop launcher named `NVHive AI Studio`
+- Shows a student-friendly setup checklist
+- With `--all`, ensures local AI, installs ComfyUI, installs the rootless starter pack, and launches WebUI
+- Uses user-space paths only: `~/.nvh`, `~/.local/bin`, and project folders under the student's home directory
+
+## Rootless AI Studio Packs
+
+`nvh studio` installs optional packs without root access. It never calls `sudo`, `apt`, `dnf`, `pacman`, `systemctl`, or Docker.
+
+| Bundle | Command | Installs |
+| --- | --- | --- |
+| Starter lab | `nvh studio --install starter -y` | Rootless Ollama, top local LLMs, agent lab, ComfyUI power nodes, game-dev lab |
+| LLMs | `nvh studio --install llms -y` | Gemma 3, Qwen 3, Llama 3.1, Qwen coder, DeepSeek reasoning, embeddings |
+| Agents | `nvh studio --install agents -y` | LangGraph, CrewAI, AutoGen, JupyterLab, search/tool packages |
+| ComfyUI | `nvh studio --install comfy -y` | ComfyUI Manager, Impact Pack, ControlNet Aux, Video Helper Suite, GGUF, rgthree |
+| Games | `nvh studio --install game -y` | Pygame/Panda3D lab, asset helpers, Linux/Wine mod workspace |
+
+Run `nvh studio --list` to see exact pack status and disk estimates.
+
+## Model Defaults
+
+| GPU VRAM | Local Chat Models | ComfyUI Profiles |
+| --- | --- | --- |
+| CPU only | Cloud/free providers | starter |
+| 4-8 GB | `nemotron-mini` | starter |
+| 8-12 GB | `llama3.1:8b`, `nemotron-mini` | starter, video |
+| 12-24 GB | `llama3.1:8b`, `nemotron-mini` | starter, edit, control, video |
+| 24+ GB | `nemotron`, `llama3.1:8b`, `nemotron-mini` | starter, edit, control, video, video-pro |
+
+The ComfyUI installer uses an isolated environment under `~/.nvh/comfyui`, installs current NVIDIA PyTorch support, enables ComfyUI Manager when available, and writes nvHive starter examples.
+
+## ComfyUI Starter Examples
+
+The setup wizard highlights current official ComfyUI template categories:
+
+- Z-Image-Turbo text-to-image
+- Wan 2.2 5B video generation
+- Wan 2.2 14B image-to-video
+- LTX-2.3 image-to-video
+- FLUX.1 ControlNet Canny/Depth
+- Qwen image editing
+
+Large model downloads remain explicit because many image/video models require license acceptance, significant disk space, or upstream account terms.
+
+## Student-Safe Defaults
+
+- No root required for nvHive itself
+- AI Studio packs are rootless and install to user-owned directories
+- Local data path: `~/nvh`, `~/.hive`, `~/.nvh`
+- API binds to localhost by default
+- WebUI starts a local API automatically unless `--no-api` is used
+- ComfyUI auto-start binds to `127.0.0.1:8188`
+- Cloud API keys are optional and stored locally
+
+## Useful Commands
+
+```bash
+nvh workstation              # detect and prepare the student AI lab
+nvh workstation --launch     # open WebUI from the same flow
+nvh workstation --with-comfyui
+nvh workstation --with-studio-packs
+nvh workstation --all -y
+nvh studio --list            # show rootless LLM/agent/ComfyUI/game packs
+nvh studio --install starter -y
+nvh doctor --fix             # repair local models/config where possible
+nvh webui                    # launch browser dashboard
+nvh safe "summarize this"    # local-only prompt path
+```
 
 Back to [README](../README.md)

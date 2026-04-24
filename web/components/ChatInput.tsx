@@ -22,7 +22,7 @@ interface AttachedFile {
 interface ChatInputProps {
   value: string;
   onChange: (val: string) => void;
-  onSubmit: () => void;
+  onSubmit: (promptOverride?: string) => void;
   onStop?: () => void;
   mode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
@@ -38,9 +38,9 @@ interface ChatInputProps {
 }
 
 const MODES: { value: ChatMode; label: string; icon: string }[] = [
-  { value: 'single', label: 'Single', icon: '▶' },
-  { value: 'council', label: 'Convene', icon: '◈' },
-  { value: 'compare', label: 'Poll', icon: '▣' },
+  { value: 'single', label: 'Single', icon: 'S' },
+  { value: 'council', label: 'Convene', icon: 'C' },
+  { value: 'compare', label: 'Poll', icon: 'P' },
 ];
 
 const ACCEPTED_EXTENSIONS = [
@@ -173,18 +173,13 @@ export default function ChatInput({
 
   // Override onSubmit to inject file content first
   const handleSubmit = useCallback(() => {
+    const combined = buildPrompt().trim();
+    if (!combined) return;
     if (attachedFiles.length > 0) {
-      const combined = buildPrompt();
-      onChange(combined);
-      // Small tick so state propagates, then submit via the passed handler
       setAttachedFiles([]);
-      setTimeout(() => {
-        onSubmit();
-      }, 0);
-    } else {
-      onSubmit();
     }
-  }, [attachedFiles, buildPrompt, onChange, onSubmit]);
+    onSubmit(combined);
+  }, [attachedFiles.length, buildPrompt, onSubmit]);
 
   // Intercept onChange so we can call the real submit with injected content
   // We wrap the external onSubmit with our file-injecting version
@@ -193,10 +188,10 @@ export default function ChatInput({
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        if (!streaming && value.trim()) handleSubmit();
+        if (!streaming && (value.trim() || attachedFiles.length > 0)) handleSubmit();
       }
     },
-    [handleSubmit, streaming, value]
+    [attachedFiles.length, handleSubmit, streaming, value]
   );
 
   // Drag and drop
@@ -282,9 +277,7 @@ export default function ChatInput({
       )}
       {mode === 'compare' && (
         <div className="flex items-center gap-2 mb-2 px-1">
-          <span className="text-[10px] font-mono text-[#999999]/70">
-            ▣ All available advisors will respond for side-by-side comparison
-          </span>
+          <span className="text-[10px] font-mono text-[#999999]/70">All available advisors will respond for side-by-side comparison</span>
         </div>
       )}
 
@@ -306,7 +299,7 @@ export default function ChatInput({
             onClick={() => setFileError(null)}
             className="text-[#ef4444]/60 hover:text-[#ef4444] text-[10px] font-mono"
           >
-            ✕
+            x
           </button>
         </div>
       )}
@@ -341,7 +334,7 @@ export default function ChatInput({
                 className="text-[#444444] hover:text-[#ef4444] transition-colors ml-0.5 flex-shrink-0"
                 title="Remove file"
               >
-                ✕
+                x
               </button>
             </div>
           ))}
@@ -434,7 +427,7 @@ export default function ChatInput({
                   : 'text-[#555555] hover:text-[#999999] hover:bg-[#1a1a1a]'
               }`}
             >
-              <span className="text-[8px]">{m.icon}</span>
+              <span className="text-[8px] font-bold">{m.value === 'single' ? 'S' : m.value === 'council' ? 'C' : 'P'}</span>
               <span className="mode-label">{m.label}</span>
             </button>
           ))}
@@ -449,7 +442,7 @@ export default function ChatInput({
             focus:outline-none focus:border-[#76B900]/60 appearance-none disabled:opacity-50"
         >
           {MODES.map(m => (
-            <option key={m.value} value={m.value}>{m.icon} {m.label}</option>
+            <option key={m.value} value={m.value}>{m.label}</option>
           ))}
         </select>
 
@@ -464,7 +457,7 @@ export default function ChatInput({
                 focus:outline-none focus:border-[#76B900]/60 appearance-none disabled:opacity-50 hover:border-[#444444] transition-colors"
             >
               {connectedModels.length > 0 && (
-                <optgroup label={offlineModels.length > 0 ? "● Connected" : "Models"}>
+                <optgroup label={offlineModels.length > 0 ? "Connected" : "Models"}>
                   {connectedModels.map(m => (
                     <option key={m.model_id} value={m.model_id}>
                       {m.display_name} {m.is_local ? '(local)' : '(cloud)'}
@@ -473,10 +466,10 @@ export default function ChatInput({
                 </optgroup>
               )}
               {offlineModels.length > 0 && (
-                <optgroup label="○ Offline">
+                <optgroup label="Offline">
                   {offlineModels.map(m => (
                     <option key={m.model_id} value={m.model_id}>
-                      {m.display_name} · offline
+                      {m.display_name} - offline
                     </option>
                   ))}
                 </optgroup>

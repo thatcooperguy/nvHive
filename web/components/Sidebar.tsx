@@ -117,9 +117,9 @@ function groupConversations(convs: ConversationSummary[]) {
 }
 
 function modeIcon(mode: ConversationSummary['mode']): string {
-  if (mode === 'council') return '◈';
-  if (mode === 'compare') return '▣';
-  return '▶';
+  if (mode === 'council') return 'C';
+  if (mode === 'compare') return 'P';
+  return 'S';
 }
 
 function modeColor(mode: ConversationSummary['mode']): string {
@@ -192,7 +192,7 @@ function ConvItem({ conv, active, onClick, onContextMenu, collapsed }: ConvItemP
         </div>
       </div>
       {conv.pinned && (
-        <span className="text-[8px] text-[#76B900] flex-shrink-0 mt-0.5">📌</span>
+        <span className="text-[8px] text-[#76B900] flex-shrink-0 mt-0.5">PIN</span>
       )}
     </button>
   );
@@ -208,6 +208,7 @@ interface SidebarProps {
   onRenameConversation?: (id: string, newTitle: string) => void;
   onDeleteConversation?: (id: string) => void;
   onPinConversation?: (id: string) => void;
+  topOffset?: boolean;
 }
 
 const BOTTOM_NAV = [
@@ -227,6 +228,7 @@ export default function Sidebar({
   onRenameConversation,
   onDeleteConversation,
   onPinConversation,
+  topOffset = true,
 }: SidebarProps) {
   const pathname = usePathname();
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -351,17 +353,17 @@ export default function Sidebar({
   return (
     <>
       <aside
-        className={`flex flex-col bg-[#0d0d0d] border-r border-[#222222] h-[calc(100vh-2rem)] sticky top-8 transition-all duration-300 ${
-          collapsed ? 'w-14' : 'w-64'
-        }`}
+        className={`flex flex-col bg-[#0d0d0d] border-r border-[#222222] transition-all duration-300 ${
+          topOffset ? 'h-[calc(100vh-2rem)] sticky top-8' : 'h-screen'
+        } ${collapsed ? 'w-14' : 'w-64'}`}
       >
         {/* Logo header */}
         <div className={`flex items-center gap-3 px-3 py-3 border-b border-[#222222] ${collapsed ? 'justify-center' : ''}`}>
           <HiveLogo />
           {!collapsed && (
             <div className="flex-1 min-w-0">
-              <div className="font-bold text-white text-sm leading-none tracking-wide">HIVE</div>
-              <div className="text-[9px] text-[#76B900] font-mono uppercase tracking-[0.2em] mt-0.5">AI Command Center</div>
+              <div className="font-bold text-white text-sm leading-none tracking-wide">NVHIVE</div>
+              <div className="text-[9px] text-[#76B900] font-mono uppercase tracking-[0.2em] mt-0.5">NVIDIA AI Workspace</div>
             </div>
           )}
         </div>
@@ -505,7 +507,7 @@ export default function Sidebar({
           {[
             {
               label: 'Rename',
-              icon: '✏',
+              icon: 'rename',
               action: () => {
                 const conv = conversations.find(c => c.id === contextMenu.conversationId);
                 setRenameValue(conv?.title ?? '');
@@ -515,7 +517,7 @@ export default function Sidebar({
             },
             {
               label: conversations.find(c => c.id === contextMenu.conversationId)?.pinned ? 'Unpin' : 'Pin',
-              icon: '📌',
+              icon: 'pin',
               action: () => {
                 onPinConversation?.(contextMenu.conversationId);
                 setContextMenu(null);
@@ -523,7 +525,7 @@ export default function Sidebar({
             },
             {
               label: 'Export',
-              icon: '↗',
+              icon: 'export',
               action: () => {
                 // Export as JSON — placeholder
                 setContextMenu(null);
@@ -532,7 +534,7 @@ export default function Sidebar({
             { separator: true },
             {
               label: 'Delete',
-              icon: '✕',
+              icon: 'delete',
               danger: true,
               action: () => {
                 onDeleteConversation?.(contextMenu.conversationId);

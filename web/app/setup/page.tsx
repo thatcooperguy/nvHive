@@ -2,19 +2,43 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { checkHealth, query, getGPUInfo, getRecommendations, getFreeProviders, saveProviderKey } from '@/lib/api';
+import {
+  checkHealth,
+  query,
+  getGPUInfo,
+  getRecommendations,
+  getFreeProviders,
+  saveProviderKey,
+  getComfyUIStatus,
+  getComfyUIExamples,
+  installComfyUIStream,
+  startComfyUI,
+  getStudioPacks,
+  installStudioPacksStream,
+} from '@/lib/api';
 import { useProviderHealth } from '@/lib/useProviderHealth';
-import type { GPUInfo, RecommendationsResult, FreeProvider } from '@/lib/types';
+import type {
+  GPUInfo,
+  RecommendationsResult,
+  FreeProvider,
+  ComfyUIExample,
+  ComfyUIInstallEvent,
+  ComfyUIStatus,
+  StudioPack,
+  StudioPackInstallEvent,
+} from '@/lib/types';
 
-type Step = 'welcome' | 'gpu' | 'local-ai' | 'cloud' | 'test' | 'done';
+type Step = 'welcome' | 'gpu' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
 
 const STEPS: { id: Step; label: string; num: number }[] = [
   { id: 'welcome', label: 'Welcome', num: 1 },
   { id: 'gpu', label: 'GPU', num: 2 },
   { id: 'local-ai', label: 'Local AI', num: 3 },
-  { id: 'cloud', label: 'Cloud', num: 4 },
-  { id: 'test', label: 'Test', num: 5 },
-  { id: 'done', label: 'Done', num: 6 },
+  { id: 'studio', label: 'Packs', num: 4 },
+  { id: 'comfyui', label: 'ComfyUI', num: 5 },
+  { id: 'cloud', label: 'Cloud', num: 6 },
+  { id: 'test', label: 'Test', num: 7 },
+  { id: 'done', label: 'Done', num: 8 },
 ];
 
 const CLOUD_PROVIDERS = [
@@ -166,6 +190,21 @@ export default function SetupPage() {
   const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
   const [gpuRecs, setGpuRecs] = useState<RecommendationsResult | null>(null);
   const [gpuLoading, setGpuLoading] = useState(false);
+  const [comfyStatus, setComfyStatus] = useState<ComfyUIStatus | null>(null);
+  const [comfyExamples, setComfyExamples] = useState<ComfyUIExample[]>([]);
+  const [comfyLoading, setComfyLoading] = useState(false);
+  const [comfyInstalling, setComfyInstalling] = useState(false);
+  const [comfyStarting, setComfyStarting] = useState(false);
+  const [comfyEvents, setComfyEvents] = useState<ComfyUIInstallEvent[]>([]);
+  const [comfyError, setComfyError] = useState<string | null>(null);
+  const [studioPacks, setStudioPacks] = useState<StudioPack[]>([]);
+  const [studioBundles, setStudioBundles] = useState<Record<string, string[]>>({});
+  const [studioRoot, setStudioRoot] = useState<string>('');
+  const [selectedStudioPacks, setSelectedStudioPacks] = useState<Set<string>>(new Set());
+  const [studioLoading, setStudioLoading] = useState(false);
+  const [studioInstalling, setStudioInstalling] = useState(false);
+  const [studioEvents, setStudioEvents] = useState<StudioPackInstallEvent[]>([]);
+  const [studioError, setStudioError] = useState<string | null>(null);
 
   // Live-polled provider health — drives Ollama status and the
   // configured-providers list so the setup screen reflects newly
@@ -207,6 +246,32 @@ export default function SetupPage() {
         // GPU not available — leave null
       })
       .finally(() => setGpuLoading(false));
+
+    // Fetch ComfyUI status and curated example manifest for the visual workflow step.
+    setComfyLoading(true);
+    getComfyUIStatus()
+      .then(data => {
+        setComfyStatus(data);
+        setComfyExamples(data.examples ?? []);
+      })
+      .catch(() => {
+        getComfyUIExamples()
+          .then(data => setComfyExamples(data.examples))
+          .catch(() => {});
+      })
+      .finally(() => setComfyLoading(false));
+
+    // Fetch rootless AI Studio packs for LLMs, agents, ComfyUI nodes, and game-dev tools.
+    setStudioLoading(true);
+    getStudioPacks()
+      .then(data => {
+        setStudioPacks(data.packs);
+        setStudioBundles(data.bundles);
+        setStudioRoot(data.root);
+        setSelectedStudioPacks(new Set(data.bundles.starter ?? data.packs.map(pack => pack.id)));
+      })
+      .catch(() => {})
+      .finally(() => setStudioLoading(false));
   }, []);
 
   const handleTest = async () => {
@@ -245,7 +310,138 @@ export default function SetupPage() {
     }
   };
 
+  const refreshComfyUI = async () => {
+    setComfyLoading(true);
+    try {
+      const status = await getComfyUIStatus();
+      setComfyStatus(status);
+      setComfyExamples(status.examples ?? []);
+    } catch {
+      try {
+        const examples = await getComfyUIExamples();
+        setComfyExamples(examples.examples);
+      } catch {
+        // keep whatever we already have
+      }
+    } finally {
+      setComfyLoading(false);
+    }
+  };
+
+  const refreshStudioPacks = async () => {
+    setStudioLoading(true);
+    try {
+      const data = await getStudioPacks();
+      setStudioPacks(data.packs);
+      setStudioBundles(data.bundles);
+      setStudioRoot(data.root);
+      setSelectedStudioPacks(prev => {
+        if (prev.size > 0) return prev;
+        return new Set(data.bundles.starter ?? data.packs.map(pack => pack.id));
+      });
+    } catch {
+      // keep current pack state
+    } finally {
+      setStudioLoading(false);
+    }
+  };
+
+  const toggleStudioPack = (packId: string) => {
+    setSelectedStudioPacks(prev => {
+      const next = new Set(prev);
+      if (next.has(packId)) next.delete(packId);
+      else next.add(packId);
+      return next;
+    });
+  };
+
+  const selectStudioBundle = (bundleId: string) => {
+    const packIds = studioBundles[bundleId] ?? [];
+    setSelectedStudioPacks(new Set(packIds));
+  };
+
+  const handleInstallStudioPacks = (packIds?: string[]) => {
+    if (studioInstalling) return;
+    const selected = packIds?.length ? packIds : Array.from(selectedStudioPacks);
+    if (selected.length === 0) {
+      setStudioError('Select at least one AI Studio pack.');
+      return;
+    }
+
+    setStudioInstalling(true);
+    setStudioError(null);
+    setStudioEvents([]);
+
+    installStudioPacksStream(
+      { pack_ids: selected, force_update: false },
+      {
+        onEvent: event => {
+          setStudioEvents(prev => [...prev.slice(-10), event]);
+          if (event.status_snapshot) {
+            setStudioPacks(event.status_snapshot.packs);
+            setStudioBundles(event.status_snapshot.bundles);
+            setStudioRoot(event.status_snapshot.root);
+          }
+        },
+        onComplete: event => {
+          setStudioEvents(prev => [...prev.slice(-10), event]);
+          setStudioInstalling(false);
+          refreshStudioPacks();
+        },
+        onError: error => {
+          setStudioError(error);
+          setStudioInstalling(false);
+        },
+      }
+    );
+  };
+
+  const handleInstallComfyUI = () => {
+    if (comfyInstalling) return;
+    setComfyInstalling(true);
+    setComfyError(null);
+    setComfyEvents([]);
+
+    installComfyUIStream(
+      { torch_profile: 'nvidia-cu130', force_update: false },
+      {
+        onEvent: event => {
+          setComfyEvents(prev => [...prev.slice(-8), event]);
+          if (event.status_snapshot) {
+            setComfyStatus(event.status_snapshot);
+          }
+        },
+        onComplete: event => {
+          setComfyEvents(prev => [...prev.slice(-8), event]);
+          setComfyInstalling(false);
+          refreshComfyUI();
+        },
+        onError: error => {
+          setComfyError(error);
+          setComfyInstalling(false);
+        },
+      }
+    );
+  };
+
+  const handleStartComfyUI = async () => {
+    setComfyStarting(true);
+    setComfyError(null);
+    try {
+      const status = await startComfyUI();
+      setComfyStatus(status);
+    } catch (err) {
+      setComfyError(err instanceof Error ? err.message : 'Failed to start ComfyUI');
+    } finally {
+      setComfyStarting(false);
+    }
+  };
+
   const currentStepIdx = STEPS.findIndex(s => s.id === step);
+  const visibleComfyExamples = comfyStatus?.examples?.length ? comfyStatus.examples : comfyExamples;
+  const selectedStudioPackIds = Array.from(selectedStudioPacks);
+  const starterStudioPackIds = studioBundles.starter ?? [];
+  const studioCategories = Array.from(new Set(studioPacks.map(pack => pack.category)));
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -613,11 +809,321 @@ export default function SetupPage() {
           </div>
         )}
 
+        {/* AI STUDIO PACKS */}
+        {step === 'studio' && (
+          <div className="space-y-6">
+            <div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 4</div>
+              <h2 className="text-lg font-bold text-white font-mono">AI Studio Packs</h2>
+              <p className="text-xs font-mono text-[#555555] mt-1">
+                One-click rootless packs for LLMs, local agents, ComfyUI sub software, and Linux game projects.
+              </p>
+            </div>
+
+            <div className="border border-[#76B900]/30 bg-[#76B900]/5 p-4">
+              <div className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between">
+                <div>
+                  <div className="text-sm font-mono font-bold text-white">Student Lab Starter</div>
+                  <div className="text-[10px] font-mono text-[#76B900] mt-0.5">
+                    No sudo. Installs under {studioRoot || '~/.nvh/studio'} and ~/.local/bin
+                  </div>
+                  <div className="text-[10px] font-mono text-[#777777] mt-2">
+                    {starterStudioPackIds.length} packs - {studioPacks.filter(pack => pack.status.installed).length}/{studioPacks.length} installed
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => selectStudioBundle('starter')}
+                    className="btn-secondary px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                  >
+                    Select Starter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => selectStudioBundle('all')}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                  >
+                    Select All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleInstallStudioPacks(selectedStudioPackIds)}
+                    disabled={studioInstalling || selectedStudioPackIds.length === 0}
+                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {studioInstalling ? 'Installing...' : `Install ${selectedStudioPackIds.length || ''}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {studioError && (
+              <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 p-3">
+                <div className="text-[10px] font-mono text-[#ef4444] uppercase tracking-wider mb-1">Pack Error</div>
+                <div className="text-xs font-mono text-[#ef4444]">{studioError}</div>
+              </div>
+            )}
+
+            {(studioInstalling || studioEvents.length > 0) && (
+              <div className="bg-[#0a0a0a] border border-[#222222] p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="section-label">Pack Stream</div>
+                  <div className="text-[10px] font-mono text-[#555555]">rootless mode</div>
+                </div>
+                <div className="max-h-44 overflow-y-auto space-y-1">
+                  {studioEvents.map((event, index) => (
+                    <div key={`${event.event}-${index}`} className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
+                      <span className={event.event === 'error' ? 'text-[#ef4444]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#555555]'}>
+                        {event.event.toUpperCase()}
+                      </span>
+                      <span className="text-[#999999] break-words">{event.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {studioLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 animate-pulse">
+                {[1, 2, 3, 4].map(i => (
+                  <div key={i} className="h-32 bg-[#111111] border border-[#222222]" />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {studioCategories.map(category => (
+                  <div key={category} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="section-label">{category}</div>
+                      <span className="text-[10px] font-mono text-[#555555]">
+                        {studioPacks.filter(pack => pack.category === category).length} pack(s)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {studioPacks.filter(pack => pack.category === category).map(pack => {
+                        const selected = selectedStudioPacks.has(pack.id);
+                        return (
+                          <label
+                            key={pack.id}
+                            className={`block border p-4 cursor-pointer transition-colors ${
+                              selected
+                                ? 'border-[#76B900]/50 bg-[#76B900]/5'
+                                : 'border-[#222222] bg-[#111111] hover:border-[#333333]'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => toggleStudioPack(pack.id)}
+                                className="mt-1 accent-[#76B900]"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="text-xs font-mono font-bold text-white">{pack.title}</div>
+                                    <div className="text-[10px] font-mono text-[#76B900] mt-0.5">{pack.tagline}</div>
+                                  </div>
+                                  <span className={`text-[9px] font-mono px-1.5 py-0.5 border ${
+                                    pack.status.installed
+                                      ? 'border-[#76B900]/40 text-[#76B900]'
+                                      : 'border-[#333333] text-[#777777]'
+                                  }`}>
+                                    {pack.status.installed ? 'INSTALLED' : 'READY'}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] font-mono text-[#777777] leading-relaxed mt-2">
+                                  {pack.description}
+                                </div>
+                                <div className="flex flex-wrap gap-1 mt-3">
+                                  <span className="text-[9px] font-mono text-[#555555] bg-[#1a1a1a] border border-[#2a2a2a] px-1.5 py-0.5">
+                                    {pack.recommended_vram_gb ? `${pack.recommended_vram_gb}GB VRAM` : 'any GPU'}
+                                  </span>
+                                  <span className="text-[9px] font-mono text-[#555555] bg-[#1a1a1a] border border-[#2a2a2a] px-1.5 py-0.5">
+                                    ~{pack.estimated_disk_gb}GB
+                                  </span>
+                                  {pack.models.slice(0, 2).map(model => (
+                                    <span key={model} className="text-[9px] font-mono text-[#555555] bg-[#1a1a1a] border border-[#2a2a2a] px-1.5 py-0.5">
+                                      {model}
+                                    </span>
+                                  ))}
+                                  {pack.comfy_nodes.length > 0 && (
+                                    <span className="text-[9px] font-mono text-[#555555] bg-[#1a1a1a] border border-[#2a2a2a] px-1.5 py-0.5">
+                                      {pack.comfy_nodes.length} nodes
+                                    </span>
+                                  )}
+                                  {pack.python_packages.length > 0 && (
+                                    <span className="text-[9px] font-mono text-[#555555] bg-[#1a1a1a] border border-[#2a2a2a] px-1.5 py-0.5">
+                                      {pack.python_packages.length} packages
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* COMFYUI */}
+        {step === 'comfyui' && (
+          <div className="space-y-6">
+            <div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 5</div>
+              <h2 className="text-lg font-bold text-white font-mono">ComfyUI Visual Workflows</h2>
+              <p className="text-xs font-mono text-[#555555] mt-1">
+                Auto-install a local ComfyUI workspace with NVIDIA-ready PyTorch, Manager support, and nvHive example packs.
+              </p>
+            </div>
+
+            <div className={`p-4 border ${comfyStatus?.running ? 'border-[#76B900]/40 bg-[#76B900]/5' : comfyStatus?.installed ? 'border-[#333333] bg-[#111111]' : 'border-[#222222] bg-[#0f0f0f]'}`}>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-4 justify-between">
+                <div className="flex items-start gap-3">
+                  <span className={`w-2 h-2 mt-1.5 flex-shrink-0 ${
+                    comfyStatus?.running ? 'bg-[#76B900] nvidia-pulse' :
+                    comfyStatus?.installed ? 'bg-[#f59e0b]' :
+                    comfyLoading ? 'bg-[#444444] animate-pulse' :
+                    'bg-[#ef4444]'
+                  }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                  <div>
+                    <div className={`text-sm font-mono font-bold ${comfyStatus?.running ? 'text-[#76B900]' : 'text-white'}`}>
+                      ComfyUI {comfyLoading ? 'CHECKING...' : comfyStatus?.running ? 'RUNNING' : comfyStatus?.installed ? 'INSTALLED' : 'NOT INSTALLED'}
+                    </div>
+                    <div className="text-[10px] font-mono text-[#555555] mt-0.5 break-all">
+                      {comfyStatus?.installed ? comfyStatus.app_dir : 'Install target: ~/.nvh/comfyui/ComfyUI'}
+                    </div>
+                    {comfyStatus?.examples_installed && (
+                      <div className="text-[10px] font-mono text-[#76B900] mt-1 break-all">
+                        nvHive examples installed at {comfyStatus.examples_dir}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleInstallComfyUI}
+                    disabled={comfyInstalling}
+                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {comfyInstalling ? 'Installing...' : comfyStatus?.installed ? 'Refresh Install' : 'Install ComfyUI'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleStartComfyUI}
+                    disabled={comfyStarting || !comfyStatus?.installed}
+                    className="btn-secondary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {comfyStarting ? 'Starting...' : comfyStatus?.running ? 'Restart Check' : 'Start'}
+                  </button>
+                  <a
+                    href={comfyStatus?.url ?? 'http://127.0.0.1:8188'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                  >
+                    Open
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            {comfyError && (
+              <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 p-3">
+                <div className="text-[10px] font-mono text-[#ef4444] uppercase tracking-wider mb-1">ComfyUI Error</div>
+                <div className="text-xs font-mono text-[#ef4444]">{comfyError}</div>
+              </div>
+            )}
+
+            {(comfyInstalling || comfyEvents.length > 0) && (
+              <div className="bg-[#0a0a0a] border border-[#222222] p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="section-label">Install Stream</div>
+                  <div className="text-[10px] font-mono text-[#555555]">
+                    PyTorch profile: NVIDIA CUDA 13.0
+                  </div>
+                </div>
+                <div className="max-h-44 overflow-y-auto space-y-1">
+                  {comfyEvents.map((event, index) => (
+                    <div key={`${event.event}-${index}`} className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
+                      <span className={event.event === 'error' ? 'text-[#ef4444]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#555555]'}>
+                        {event.event.toUpperCase()}
+                      </span>
+                      <span className="text-[#999999] break-words">{event.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="section-label">Trending Starter Workflows</div>
+                <div className="text-[10px] font-mono text-[#555555]">Official ComfyUI templates and docs</div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {visibleComfyExamples.slice(0, 6).map(example => (
+                  <div key={example.id} className="border border-[#222222] bg-[#111111] p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-mono font-bold text-white">{example.title}</div>
+                        <div className="text-[10px] font-mono text-[#76B900] uppercase mt-0.5">
+                          {example.category} / {example.install_profile}
+                        </div>
+                      </div>
+                      <div className="text-[10px] font-mono text-[#999999] border border-[#333333] px-1.5 py-0.5">
+                        {example.recommended_vram_gb}GB
+                      </div>
+                    </div>
+
+                    <div className="text-[10px] font-mono text-[#777777] leading-relaxed">
+                      {example.why_trending}
+                    </div>
+
+                    <div className="bg-[#0a0a0a] border border-[#222222] p-2">
+                      <div className="text-[9px] font-mono text-[#444444] uppercase mb-1">Load path</div>
+                      <div className="text-[10px] font-mono text-[#999999]">{example.workflow_hint}</div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1">
+                      {example.models.slice(0, 3).map(model => (
+                        <span key={model} className="text-[9px] font-mono text-[#555555] bg-[#1a1a1a] border border-[#2a2a2a] px-1.5 py-0.5">
+                          {model}
+                        </span>
+                      ))}
+                      {example.models.length > 3 && (
+                        <span className="text-[9px] font-mono text-[#555555] bg-[#1a1a1a] border border-[#2a2a2a] px-1.5 py-0.5">
+                          +{example.models.length - 3} more
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-[#76B900]/5 border border-[#76B900]/20 p-3">
+              <div className="text-[10px] font-mono text-[#76B900] leading-relaxed">
+                The installer writes an nvHive example manifest into ComfyUI so the WebUI can keep showing the same starter deck after install. Model downloads still stay explicit because several image/video models require upstream terms or large storage.
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* CLOUD PROVIDERS */}
         {step === 'cloud' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 4</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 6</div>
               <h2 className="text-lg font-bold text-white font-mono">Cloud Providers</h2>
               <p className="text-xs font-mono text-[#555555] mt-1">
                 Optional — add API keys for cloud providers. Local Nemotron works without any keys.
@@ -746,7 +1252,7 @@ export default function SetupPage() {
         {step === 'test' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 5</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 7</div>
               <h2 className="text-lg font-bold text-white font-mono">Quick Test</h2>
               <p className="text-xs font-mono text-[#555555] mt-1">Verify everything is working correctly</p>
             </div>
@@ -862,6 +1368,8 @@ export default function SetupPage() {
                 {[
                   { label: 'Local AI', value: ollamaStatus === 'online' ? 'Ollama Running' : 'Not configured', ok: ollamaStatus === 'online' },
                   { label: 'NVIDIA Nemotron', value: 'Recommended model', ok: true },
+                  { label: 'AI Studio Packs', value: `${studioPacks.filter(pack => pack.status.installed).length}/${studioPacks.length || 0} installed`, ok: studioPacks.some(pack => pack.status.installed) },
+                  { label: 'ComfyUI', value: comfyStatus?.running ? 'Running' : comfyStatus?.installed ? 'Installed' : 'Optional', ok: Boolean(comfyStatus?.installed || comfyStatus?.running) },
                   { label: 'Hive API', value: apiStatus === 'connected' ? 'Online' : 'Offline', ok: apiStatus === 'connected' },
                   { label: 'Active Advisors', value: configuredProviders.length > 0 ? configuredProviders.join(', ') : 'None yet', ok: configuredProviders.length > 0 },
                 ].map(item => (
@@ -878,10 +1386,12 @@ export default function SetupPage() {
             {/* Quick start commands */}
             <div className="bg-[#0a0a0a] border border-[#222222] p-4 space-y-2">
               <div className="text-[10px] font-mono text-[#555555] uppercase tracking-wider mb-2">Quick Commands</div>
-              <div className="text-[10px] font-mono text-[#555555]"># Pull Nemotron (if not done yet)</div>
-              <div className="text-[10px] font-mono text-[#76B900]">ollama pull nemotron-mini</div>
-              <div className="text-[10px] font-mono text-[#555555] mt-2"># Or use the full stack</div>
-              <div className="text-[10px] font-mono text-[#76B900]">docker compose up -d</div>
+              <div className="text-[10px] font-mono text-[#555555]"># Rootless all-in-one student lab</div>
+              <div className="text-[10px] font-mono text-[#76B900]">nvh workstation --all -y</div>
+              <div className="text-[10px] font-mono text-[#555555] mt-2"># Packs only</div>
+              <div className="text-[10px] font-mono text-[#76B900]">nvh studio --install starter -y</div>
+              <div className="text-[10px] font-mono text-[#555555] mt-2"># Launch dashboard</div>
+              <div className="text-[10px] font-mono text-[#76B900]">nvh webui</div>
             </div>
 
             <div className="flex gap-3">
