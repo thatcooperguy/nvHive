@@ -23,7 +23,28 @@ nvh "setup comfyui"                              # → agent installs, configure
 ```bash
 pip install nvhive
 nvh                    # first-run setup auto-detects GPU, installs local AI, configures providers
-nvh "your question"    # just ask — nvhive figures out the rest
+nvh workstation        # Linux GPU desktop: create launcher + student setup checklist
+nvh studio --install starter -y  # rootless LLMs + agents + ComfyUI nodes + game-dev tools
+nvh "your question"    # just ask - nvhive figures out the rest
+```
+
+For a fresh NVIDIA Linux cloud desktop / GeForce NOW-style GPU session:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
+nvh workstation --all -y
+```
+
+That path creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds AI Studio packs for LLMs, agents, ComfyUI nodes, and Linux game projects.
+
+Use packs directly when you want a specific no-root lab:
+
+```bash
+nvh studio --list
+nvh studio --install llms -y
+nvh studio --install agents -y
+nvh studio --install comfy -y
+nvh studio --install game -y
 ```
 
 ```bash
@@ -50,7 +71,7 @@ On first run, `nvh` launches a guided 3-step setup — GPU detection, provider k
 | 48 GB | `llama3.3:70b` | `llama3.2-vision` | Full power local |
 | 96+ GB | Multiple 70B models | `llama3.2-vision` | Full local council, $0 |
 
-Setup auto-detects your VRAM and recommends models that fit concurrently. No root/sudo needed — Ollama installs to `~/.nvh/`. [Full GPU guide](docs/GPU_DETECTION.md)
+Setup auto-detects your VRAM and recommends models that fit concurrently. No root/sudo needed for nvHive packs: tools install under `~/.nvh/` and `~/.local/bin`. [Full GPU guide](docs/GPU_DETECTION.md)
 
 ---
 

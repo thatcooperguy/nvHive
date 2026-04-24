@@ -228,7 +228,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
         <ul key={`ul-${i}`} className="list-none space-y-1 my-2 pl-2">
           {listItems.map((item, idx) => (
             <li key={idx} className="flex items-start gap-2 text-sm text-[#cccccc]">
-              <span className="text-[#76B900] mt-1 flex-shrink-0">▸</span>
+              <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 bg-[#76B900]" />
               <span>{item}</span>
             </li>
           ))}
@@ -394,7 +394,7 @@ export function exportConversationMarkdown(
     }
   }
 
-  lines.push('*Exported from NVHive — nvhive.dev*');
+  lines.push('*Exported from NVHive - nvhive.dev*');
   return lines.join('\n');
 }
 
@@ -410,9 +410,7 @@ export function CouncilExpertPanel({ data }: ExpertPanelProps) {
 
   return (
     <div className="space-y-3 p-4">
-      <div className="text-[10px] font-mono text-[#555555] uppercase tracking-wider mb-2">
-        ◈ Convene Members
-      </div>
+      <div className="text-[10px] font-mono text-[#555555] uppercase tracking-wider mb-2">Convene Members</div>
       {order.map((key, i) => {
         const member = data.member_responses[key];
         if (!member) return null;

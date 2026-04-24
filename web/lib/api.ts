@@ -29,6 +29,13 @@ import type {
   GPUInfo,
   RecommendationsResult,
   SystemInfo,
+  ComfyUIExamplesResult,
+  ComfyUIInstallEvent,
+  ComfyUIInstallRequest,
+  ComfyUIStatus,
+  StudioPackInstallEvent,
+  StudioPackInstallRequest,
+  StudioPacksResult,
 } from './types';
 
 function getApiBase(): string {
@@ -106,6 +113,199 @@ export async function getSystemInfo(): Promise<SystemInfo> {
 }
 
 // ─── Analytics ──────────────────────────────────────────────────────────────
+
+// ComfyUI visual workflow setup
+
+export async function getComfyUIStatus(): Promise<ComfyUIStatus> {
+  return apiGet<ComfyUIStatus>('/v1/comfyui/status');
+}
+
+export async function getComfyUIExamples(): Promise<ComfyUIExamplesResult> {
+  return apiGet<ComfyUIExamplesResult>('/v1/comfyui/examples');
+}
+
+export async function startComfyUI(
+  host = '127.0.0.1',
+  port = 8188
+): Promise<ComfyUIStatus> {
+  return apiPost<ComfyUIStatus>('/v1/comfyui/start', { host, port });
+}
+
+export function installComfyUIStream(
+  request: ComfyUIInstallRequest,
+  callbacks: {
+    onEvent?: (event: ComfyUIInstallEvent) => void;
+    onComplete?: (event: ComfyUIInstallEvent) => void;
+    onError?: (error: string) => void;
+  }
+): () => void {
+  let aborted = false;
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetch(`${BASE_URL}/v1/comfyui/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          detail = body?.detail ?? detail;
+        } catch {
+          // ignore
+        }
+        callbacks.onError?.(detail);
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        callbacks.onError?.('No response body');
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let eventType = '';
+
+      while (!aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            try {
+              const parsed = JSON.parse(line.slice(6).trim()) as ComfyUIInstallEvent;
+              callbacks.onEvent?.(parsed);
+              if (eventType === 'complete' || parsed.event === 'complete') {
+                callbacks.onComplete?.(parsed);
+                return;
+              }
+              if (eventType === 'error' || parsed.event === 'error') {
+                callbacks.onError?.(parsed.message || 'ComfyUI install failed');
+                return;
+              }
+            } catch {
+              // ignore malformed JSON
+            }
+            eventType = '';
+          }
+        }
+      }
+    } catch (err) {
+      if (!aborted) {
+        callbacks.onError?.(err instanceof Error ? err.message : 'ComfyUI install failed');
+      }
+    }
+  })();
+
+  return () => {
+    aborted = true;
+    controller.abort();
+  };
+}
+
+// Rootless AI Studio pack setup
+
+export async function getStudioPacks(): Promise<StudioPacksResult> {
+  return apiGet<StudioPacksResult>('/v1/studio/packs');
+}
+
+export function installStudioPacksStream(
+  request: StudioPackInstallRequest,
+  callbacks: {
+    onEvent?: (event: StudioPackInstallEvent) => void;
+    onComplete?: (event: StudioPackInstallEvent) => void;
+    onError?: (error: string) => void;
+  }
+): () => void {
+  let aborted = false;
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetch(`${BASE_URL}/v1/studio/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          detail = body?.detail ?? detail;
+        } catch {
+          // ignore
+        }
+        callbacks.onError?.(detail);
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        callbacks.onError?.('No response body');
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let eventType = '';
+
+      while (!aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            try {
+              const parsed = JSON.parse(line.slice(6).trim()) as StudioPackInstallEvent;
+              callbacks.onEvent?.(parsed);
+              if (eventType === 'complete' || parsed.event === 'complete') {
+                callbacks.onComplete?.(parsed);
+                return;
+              }
+              if (eventType === 'error' || parsed.event === 'error') {
+                callbacks.onError?.(parsed.message || 'AI Studio pack install failed');
+                return;
+              }
+            } catch {
+              // ignore malformed JSON
+            }
+            eventType = '';
+          }
+        }
+      }
+    } catch (err) {
+      if (!aborted) {
+        callbacks.onError?.(err instanceof Error ? err.message : 'AI Studio pack install failed');
+      }
+    }
+  })();
+
+  return () => {
+    aborted = true;
+    controller.abort();
+  };
+}
 
 export interface AnalyticsData {
   queries_today: number;

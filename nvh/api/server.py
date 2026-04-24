@@ -2160,6 +2160,168 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
 
 
 # ---------------------------------------------------------------------------
+# Part 1b: ComfyUI management endpoints
+# ---------------------------------------------------------------------------
+
+class ComfyUIInstallRequest(BaseModel):
+    torch_profile: str = Field(
+        default="nvidia-cu130",
+        description="PyTorch install profile: nvidia-cu130, nvidia-cu121, cpu, or skip",
+    )
+    force_update: bool = False
+
+    @field_validator("torch_profile")
+    @classmethod
+    def validate_torch_profile(cls, value: str) -> str:
+        allowed = {"nvidia-cu130", "nvidia-cu121", "cpu", "skip"}
+        if value not in allowed:
+            raise ValueError(f"torch_profile must be one of: {', '.join(sorted(allowed))}")
+        return value
+
+
+class ComfyUIStartRequest(BaseModel):
+    host: str = "127.0.0.1"
+    port: int = Field(default=8188, ge=1024, le=65535)
+
+    @field_validator("host")
+    @classmethod
+    def validate_host(cls, value: str) -> str:
+        if value not in {"127.0.0.1", "localhost"}:
+            raise ValueError("ComfyUI auto-start is restricted to localhost.")
+        return value
+
+
+@app.get("/v1/comfyui/examples", summary="List curated ComfyUI workflow examples")
+async def comfyui_examples(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Return nvHive's curated ComfyUI starter workflow manifest."""
+    from nvh.integrations.comfyui import examples_as_dicts
+
+    examples = examples_as_dicts()
+    sources = sorted({item["source_url"] for item in examples})
+    return _response_envelope({
+        "examples": examples,
+        "count": len(examples),
+        "sources": sources,
+    })
+
+
+@app.get("/v1/comfyui/status", summary="Detect local ComfyUI install and runtime status")
+async def comfyui_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Return local ComfyUI install, process, and example-pack status."""
+    from nvh.integrations.comfyui import detect_comfyui
+
+    return _response_envelope(detect_comfyui())
+
+
+async def _comfyui_install_stream(
+    request: ComfyUIInstallRequest,
+) -> AsyncGenerator:
+    """Stream SSE events for ComfyUI installation."""
+    from nvh.integrations.comfyui import install_comfyui
+
+    async for event in install_comfyui(
+        torch_profile=request.torch_profile,
+        force_update=request.force_update,
+    ):
+        event_name = event.get("event", "progress")
+        yield f"event: {event_name}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+@app.post("/v1/comfyui/install", summary="Install ComfyUI with nvHive examples")
+async def comfyui_install(
+    request: ComfyUIInstallRequest,
+    _auth: None = Depends(require_auth),
+) -> StreamingResponse:
+    """Install or update ComfyUI and stream progress logs to the WebUI."""
+    return StreamingResponse(
+        _comfyui_install_stream(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/v1/comfyui/start", summary="Start local ComfyUI")
+async def comfyui_start(
+    request: ComfyUIStartRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Start ComfyUI bound to localhost and return launch metadata."""
+    from nvh.integrations.comfyui import start_comfyui
+
+    try:
+        result = start_comfyui(host=request.host, port=request.port)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except Exception as exc:
+        logger.warning("ComfyUI start failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+    return _response_envelope(result)
+
+
+# ---------------------------------------------------------------------------
+# Part 1c: Rootless AI Studio pack endpoints
+# ---------------------------------------------------------------------------
+
+class StudioPackInstallRequest(BaseModel):
+    pack_ids: list[str] = Field(
+        default_factory=lambda: ["starter"],
+        description="Studio pack ids or bundle names: starter, all, llms, agents, comfy, game",
+    )
+    force_update: bool = False
+
+    @field_validator("pack_ids")
+    @classmethod
+    def validate_pack_ids(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("Select at least one studio pack.")
+        return value
+
+
+@app.get("/v1/studio/packs", summary="List rootless AI Studio packs")
+async def studio_packs(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Return the no-root AI Studio pack catalog with local status."""
+    from nvh.integrations.studio_packs import catalog_with_status
+
+    return _response_envelope(catalog_with_status())
+
+
+async def _studio_pack_install_stream(
+    request: StudioPackInstallRequest,
+) -> AsyncGenerator:
+    """Stream SSE events for rootless AI Studio pack installation."""
+    from nvh.integrations.studio_packs import install_studio_packs
+
+    async for event in install_studio_packs(
+        request.pack_ids,
+        force_update=request.force_update,
+    ):
+        event_name = event.get("event", "progress")
+        yield f"event: {event_name}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+@app.post("/v1/studio/install", summary="Install rootless AI Studio packs")
+async def studio_pack_install(
+    request: StudioPackInstallRequest,
+    _auth: None = Depends(require_auth),
+) -> StreamingResponse:
+    """Install LLM, agent, ComfyUI, and game-dev packs without root access."""
+    return StreamingResponse(
+        _studio_pack_install_stream(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Part 2: Sandbox execution endpoints
 # ---------------------------------------------------------------------------
 

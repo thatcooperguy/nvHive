@@ -17,15 +17,15 @@
   --nvidia-green-subtle: rgba(118, 185, 0, 0.08);
 
   /* Dark backgrounds — layered depth */
-  --bg-primary: #0a0a0a;
-  --bg-secondary: #111111;
-  --bg-tertiary: #1a1a1a;
-  --bg-card: #1e1e1e;
-  --bg-card-hover: #242424;
+  --bg-primary: #070807;
+  --bg-secondary: #0f100f;
+  --bg-tertiary: #171817;
+  --bg-card: #111211;
+  --bg-card-hover: #171a15;
 
   /* Borders */
-  --border: #333333;
-  --border-bright: #444444;
+  --border: #2a2d29;
+  --border-bright: #3a3f38;
   --border-green: rgba(118, 185, 0, 0.35);
 
   /* Text */
@@ -51,7 +51,8 @@
 html,
 body {
   height: 100%;
-  background-color: var(--bg-primary);
+  background:
+    linear-gradient(180deg, #0b0d0b 0%, #070807 42%, #050605 100%);
   color: var(--text-primary);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -106,14 +107,15 @@ button {
 @layer components {
   /* Card — angular, dark, green hover border */
   .card {
-    @apply bg-[#1e1e1e] border border-[#333333] rounded-none;
+    @apply bg-[#111211] border border-[#2a2d29] rounded-[4px];
     clip-path: none;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
   }
 
   .card:hover {
     border-color: var(--border-green);
-    box-shadow: 0 0 0 1px var(--nvidia-green-glow), 0 4px 20px rgba(0,0,0,0.4);
+    background-color: var(--bg-card-hover);
+    box-shadow: 0 12px 30px rgba(0,0,0,0.32);
   }
 
   /* Flat card (no hover effect) */
@@ -253,10 +255,13 @@ button {
 }
 
 .streaming-cursor::after {
-  content: '▋';
-  color: var(--nvidia-green);
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--nvidia-green);
   animation: blink 1s step-end infinite;
-  margin-left: 1px;
+  margin-left: 2px;
 }
 
 /* ============================================================

@@ -38,11 +38,11 @@ function InnerShell({ children }: { children: React.ReactNode }) {
       <GlobalModals />
       {/* Top status bar */}
       <div className="fixed top-0 left-0 right-0 z-50 h-8 bg-[#111111] border-b border-[#333333] flex items-center px-4 gap-6 text-[10px] font-mono text-[#666666]">
-        <span className="text-[#76B900] font-bold tracking-widest uppercase">COUNCIL</span>
+        <span className="text-[#76B900] font-bold tracking-widest uppercase">NVHIVE</span>
         <span className="text-[#444444]">|</span>
-        <span>AI Command Center</span>
+        <span>NVIDIA AI Workspace</span>
         <span className="text-[#444444]">|</span>
-        <span className="text-[#76B900]">NVIDIA Nemotron Ready</span>
+        <span className="text-[#76B900]">Nemotron Ready</span>
         <div className="ml-auto flex items-center gap-4">
           {/* Command palette trigger */}
           <button

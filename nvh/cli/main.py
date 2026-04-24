@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 import webbrowser
 from decimal import Decimal
 from pathlib import Path
@@ -7564,6 +7565,278 @@ def update(
 # ---------------------------------------------------------------------------
 
 @app.command(rich_help_panel="Infrastructure")
+def studio(
+    list_packs: bool = typer.Option(False, "--list", help="List available rootless AI Studio packs"),
+    install: str | None = typer.Option(
+        None,
+        "--install",
+        "-i",
+        help="Install a pack id or bundle: starter, all, llms, agents, comfy, game",
+    ),
+    force_update: bool = typer.Option(False, "--force-update", help="Update existing packs where possible"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompts"),
+):
+    """Install rootless AI Studio packs for LLMs, agents, ComfyUI, and games."""
+    from nvh.integrations.studio_packs import (
+        catalog_with_status,
+        expand_pack_ids,
+        install_studio_packs,
+    )
+
+    catalog = catalog_with_status()
+    packs = catalog["packs"]
+
+    if list_packs or not install:
+        console.print("\n[bold green]NVHive AI Studio Packs[/bold green]")
+        console.print(f"  [dim]Rootless install home: {catalog['root']}[/dim]\n")
+
+        table = Table(show_header=True, header_style="bold green")
+        table.add_column("Pack")
+        table.add_column("Category")
+        table.add_column("VRAM")
+        table.add_column("Disk")
+        table.add_column("Status")
+        table.add_column("Purpose")
+        for pack in packs:
+            status_label = "installed" if pack["status"]["installed"] else "ready"
+            table.add_row(
+                pack["id"],
+                pack["category"],
+                f"{pack['recommended_vram_gb']} GB" if pack["recommended_vram_gb"] else "any",
+                f"~{pack['estimated_disk_gb']} GB",
+                status_label,
+                pack["tagline"],
+            )
+        console.print(table)
+        console.print("\n[bold]Bundles[/bold]")
+        for name, pack_ids in catalog["bundles"].items():
+            console.print(f"  - [green]{name}[/green]: {', '.join(pack_ids)}")
+        console.print("\nTry: [bold]nvh studio --install starter -y[/bold]")
+        if not install:
+            return
+
+    try:
+        pack_ids = expand_pack_ids([install])
+    except KeyError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    console.print("\n[bold green]AI Studio Pack Install[/bold green]")
+    console.print(f"  Packs: [bold]{', '.join(pack_ids)}[/bold]")
+    console.print("  Scope: user-space only (~/.nvh and ~/.local/bin)")
+    if not yes and not typer.confirm("Install selected packs now?", default=True):
+        console.print("Cancelled.")
+        return
+
+    async def _install() -> None:
+        last_log = 0.0
+        async for event in install_studio_packs(pack_ids, force_update=force_update):
+            kind = event.get("event", "")
+            message = event.get("message", "")
+            now = time.monotonic()
+            if kind in {"plan", "pack", "step", "complete", "error"}:
+                color = "green" if kind == "complete" else "red" if kind == "error" else "cyan"
+                prefix = f"{kind.upper():>8}"
+                console.print(f"  [{color}]{prefix}[/] {message}")
+            elif kind == "log" and now - last_log > 1.5:
+                console.print(f"  [dim]{message[:140]}[/dim]")
+                last_log = now
+
+    _run(_install())
+
+
+@app.command(rich_help_panel="Infrastructure")
+def workstation(
+    all_in_one: bool = typer.Option(
+        False,
+        "--all",
+        help="Set up local AI, ComfyUI, desktop launcher, then launch WebUI",
+    ),
+    launch: bool = typer.Option(False, "--launch", help="Launch the WebUI after setup"),
+    desktop: bool = typer.Option(True, "--desktop/--no-desktop", help="Create a Linux desktop icon"),
+    with_local_ai: bool = typer.Option(
+        False,
+        "--with-local-ai",
+        help="Ensure Ollama is running and pull recommended chat models",
+    ),
+    with_comfyui: bool = typer.Option(
+        False,
+        "--with-comfyui",
+        help="Install or update ComfyUI and nvHive starter examples",
+    ),
+    with_studio_packs: bool = typer.Option(
+        False,
+        "--with-studio-packs",
+        help="Install rootless LLM, agent, ComfyUI-node, and game-dev packs",
+    ),
+    port: int = typer.Option(3000, "--port", help="WebUI port"),
+    api_port: int = typer.Option(8000, "--api-port", help="API server port"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompts"),
+):
+    """Prepare an all-in-one AI workstation for students and cloud GPU desktops.
+
+    Examples:
+        nvh workstation                 # detect GPU, create launcher, print next steps
+        nvh workstation --launch        # open the WebUI flow
+        nvh workstation --all -y        # local AI + ComfyUI + launcher + WebUI
+    """
+    import time as _time
+
+    if all_in_one:
+        with_local_ai = True
+        with_comfyui = True
+        with_studio_packs = True
+        launch = True
+        desktop = True
+
+    from nvh.integrations.workstation import (
+        detect_workstation_profile,
+        workstation_next_steps,
+        write_desktop_launcher,
+        write_launch_script,
+    )
+
+    profile = detect_workstation_profile()
+    console.print("\n[bold green]NVHive Student Workstation[/bold green]")
+    console.print("  [dim]Target: Linux GPU desktop or forwarded cloud session[/dim]\n")
+    gpu_label = (
+        f"{profile.gpu_name or 'NVIDIA GPU'} ({profile.vram_gb} GB VRAM)"
+        if profile.has_gpu
+        else "not detected"
+    )
+    console.print(f"  GPU:        [bold]{gpu_label}[/bold]")
+    console.print(f"  Desktop:    {'yes' if profile.has_gui else 'not detected'}")
+    console.print(f"  Python:     {profile.python or 'not found'}")
+    console.print(f"  Ollama:     {profile.ollama or 'not found'}")
+    if profile.recommended_chat_models:
+        console.print(f"  Chat models: {', '.join(profile.recommended_chat_models)}")
+    console.print(f"  ComfyUI:    {', '.join(profile.recommended_comfy_profiles)} profiles\n")
+
+    for note in profile.notes:
+        console.print(f"  [yellow]![/yellow] {note}")
+    if profile.notes:
+        console.print()
+
+    if desktop:
+        try:
+            desktop_file = write_desktop_launcher(
+                port=port,
+                api_port=api_port,
+                install_comfyui=with_comfyui,
+            )
+            launch_script = write_launch_script(
+                port=port,
+                api_port=api_port,
+                install_comfyui=with_comfyui,
+            )
+            console.print(f"  [green]ok[/green] Desktop launcher: {desktop_file}")
+            console.print(f"  [green]ok[/green] Terminal launcher: {launch_script}")
+        except Exception as exc:
+            console.print(f"  [yellow]![/yellow] Could not create desktop launcher: {exc}")
+
+    if with_local_ai:
+        console.print("\n[bold]Local AI setup[/bold]")
+        try:
+            from nvh.cli.setup import _ensure_ollama, _find_ollama_binary, _pull_model
+
+            running, installed_models = _ensure_ollama(console)
+            installed_bases = {
+                m.split(":")[0]
+                for m in installed_models
+                if m
+            } | set(installed_models)
+            if running:
+                console.print("  [green]ok[/green] Ollama is running")
+                missing = [
+                    model
+                    for model in profile.recommended_chat_models
+                    if model not in installed_bases
+                    and model.split(":")[0] not in installed_bases
+                ]
+                if missing:
+                    console.print(f"  Recommended model pull: [bold]{', '.join(missing)}[/bold]")
+                    should_pull = yes or typer.confirm("  Pull now?", default=True)
+                    if should_pull:
+                        ollama_bin = _find_ollama_binary() or "ollama"
+                        for model in missing:
+                            _pull_model(console, model, ollama_bin)
+                else:
+                    console.print("  [green]ok[/green] Recommended local models are present")
+            else:
+                console.print("  [yellow]![/yellow] Ollama is not running yet")
+        except Exception as exc:
+            console.print(f"  [yellow]![/yellow] Local AI setup skipped: {exc}")
+
+    if with_comfyui:
+        console.print("\n[bold]ComfyUI setup[/bold]")
+
+        async def _install_comfy() -> None:
+            from nvh.integrations.comfyui import install_comfyui
+
+            last_log = 0.0
+            async for event in install_comfyui(torch_profile="nvidia-cu130"):
+                kind = event.get("event", "")
+                message = event.get("message", "")
+                now = _time.monotonic()
+                if kind in {"plan", "step", "complete", "error"}:
+                    color = "green" if kind == "complete" else "red" if kind == "error" else "cyan"
+                    console.print(f"  [{color}]{kind}[/] {message}")
+                elif kind == "log" and now - last_log > 1.5:
+                    console.print(f"  [dim]{message[:140]}[/dim]")
+                    last_log = now
+
+        if yes or typer.confirm(
+            "  Install/update ComfyUI now? This can download several GB.",
+            default=False,
+        ):
+            _run(_install_comfy())
+        else:
+            console.print("  [dim]Skipped. You can install later from WebUI > Setup > ComfyUI.[/dim]")
+
+    if with_studio_packs:
+        console.print("\n[bold]AI Studio packs[/bold]")
+
+        async def _install_packs() -> None:
+            from nvh.integrations.studio_packs import install_studio_packs
+
+            last_log = 0.0
+            async for event in install_studio_packs(["starter"], force_update=False):
+                kind = event.get("event", "")
+                message = event.get("message", "")
+                now = _time.monotonic()
+                if kind in {"plan", "pack", "step", "complete", "error"}:
+                    color = "green" if kind == "complete" else "red" if kind == "error" else "cyan"
+                    console.print(f"  [{color}]{kind}[/] {message}")
+                elif kind == "log" and now - last_log > 1.5:
+                    console.print(f"  [dim]{message[:140]}[/dim]")
+                    last_log = now
+
+        if yes or typer.confirm(
+            "  Install the rootless starter pack now? This can download models and Python packages.",
+            default=False,
+        ):
+            _run(_install_packs())
+        else:
+            console.print("  [dim]Skipped. You can install later with: nvh studio --install starter[/dim]")
+
+    console.print("\n[bold]Next steps[/bold]")
+    for step in workstation_next_steps(port=port):
+        console.print(f"  - {step}")
+
+    if launch:
+        console.print("\n[bold]Launching WebUI...[/bold]")
+        webui(
+            install_only=False,
+            port=port,
+            uninstall=False,
+            clean=False,
+            yes=True,
+            no_api=False,
+            api_port=api_port,
+        )
+
+
+@app.command(rich_help_panel="Infrastructure")
 def webui(
     install_only: bool = typer.Option(False, "--install", help="Install without launching"),
     port: int = typer.Option(3000, "--port", help="Port for the web UI"),
@@ -11848,7 +12121,7 @@ def main():
         "service", "test",
         "advisor", "agent", "config", "conversation", "budget", "model",
         "template", "workflow", "knowledge", "schedule", "webhook", "auth",
-        "git", "webui", "keys", "tour",
+        "git", "webui", "workstation", "studio", "keys", "tour",
     })
 
     if first in known_commands:
