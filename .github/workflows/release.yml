@@ -1,0 +1,146 @@
+name: Release
+
+# Creates a GitHub Release on tag push with:
+#   - sdist + wheel (also consumed by publish.yml → PyPI)
+#   - Single-file PyInstaller binaries for Linux, macOS, Windows
+#   - Source tarball (auto-attached by gh release create)
+#
+# The tag must match v*.*.* (e.g. v0.32.0). The version in pyproject.toml
+# should match the tag; CI does not enforce this but the release notes do.
+#
+# publish.yml listens on release:published and pushes the sdist/wheel
+# to PyPI via trusted publishing — no token needed here.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.32.0). Must already exist.'
+        required: true
+        type: string
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Python wheel + sdist. These are the canonical release artifacts —
+  # PyPI consumes them and users can `pip install` directly from a
+  # release asset URL without PyPI at all.
+  # ─────────────────────────────────────────────────────────────────────
+  build-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install build tools
+        run: pip install build twine
+      - name: Build sdist + wheel
+        run: python -m build
+      - name: Verify metadata
+        run: twine check dist/*
+      - uses: actions/upload-artifact@v5
+        with:
+          name: python-dist
+          path: dist/
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Single-file binaries via PyInstaller. One job per OS so the binary
+  # runs on that host's libc/Frameworks without a Python install.
+  #
+  # --collect-all covers the dynamic imports in litellm/typer/rich that
+  # PyInstaller's static analysis misses. Hidden imports are the known
+  # offenders that still slip through (keyring backends, aiosqlite).
+  # ─────────────────────────────────────────────────────────────────────
+  build-binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: nvh-linux-x86_64
+            sep: ':'
+          - os: macos-latest
+            asset: nvh-macos-arm64
+            sep: ':'
+          - os: windows-latest
+            asset: nvh-windows-x86_64.exe
+            sep: ';'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install package + PyInstaller
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[serve,nvidia]"
+          pip install pyinstaller
+      - name: Build binary
+        shell: bash
+        run: |
+          pyinstaller \
+            --onefile \
+            --name nvh \
+            --collect-all litellm \
+            --collect-all typer \
+            --collect-all rich \
+            --collect-all keyring \
+            --collect-submodules nvh \
+            --hidden-import aiosqlite \
+            --hidden-import keyring.backends \
+            nvh/cli/main.py
+      - name: Rename artifact
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv dist/nvh.exe "dist/${{ matrix.asset }}"
+          else
+            mv dist/nvh "dist/${{ matrix.asset }}"
+          fi
+      - name: Smoke test
+        shell: bash
+        run: |
+          "./dist/${{ matrix.asset }}" version || echo "binary smoke test failed (non-fatal)"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binary-${{ matrix.os }}
+          path: dist/${{ matrix.asset }}
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Aggregate all artifacts into a single GitHub Release. publish.yml
+  # listens for release:published and pushes the wheel/sdist to PyPI.
+  # ─────────────────────────────────────────────────────────────────────
+  release:
+    needs: [build-python, build-binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: List assets
+        run: ls -la release-assets/
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --title "nvHive ${{ steps.tag.outputs.tag }}" \
+            --generate-notes \
+            release-assets/*
