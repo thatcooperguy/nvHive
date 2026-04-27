@@ -38,7 +38,7 @@ CORE_PROVIDERS = [
 # ---------------------------------------------------------------------------
 
 def load_env_keys() -> None:
-    """Load API keys from keyring and ~/.hive/.env into os.environ.
+    """Load API keys from keyring and HIVE_CONFIG_HOME/.env into os.environ.
 
     Checks keyring first (primary storage), then falls back to .env file
     (headless fallback). Keys are set in os.environ so that config YAML
@@ -107,7 +107,7 @@ def _store_key(name: str, env_var: str, key: str) -> bool:
     except Exception:
         pass
 
-    # Fallback: write to ~/.hive/.env (works on headless servers with no keyring)
+    # Fallback: write to HIVE_CONFIG_HOME/.env (works on headless servers with no keyring)
     try:
         env_file = DEFAULT_CONFIG_DIR / ".env"
         DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -179,6 +179,7 @@ def _ollama_running() -> tuple[bool, list[str]]:
 def _find_ollama_binary() -> str | None:
     """Return path to an existing Ollama binary, or None."""
     import shutil
+    from nvh.integrations.storage import storage_layout
 
     # Check PATH first (system install)
     which = shutil.which("ollama")
@@ -186,8 +187,14 @@ def _find_ollama_binary() -> str | None:
         return which
 
     # Check nvhive-local install locations (new layout: bin/ollama, legacy: ollama)
-    nvh_home = Path.home() / ".nvh"
-    for candidate in [nvh_home / "bin" / "ollama", nvh_home / "ollama"]:
+    layout = storage_layout()
+    legacy_home = Path.home() / ".nvh"
+    for candidate in [
+        layout.bin_dir / "ollama",
+        layout.home / "ollama",
+        legacy_home / "bin" / "ollama",
+        legacy_home / "ollama",
+    ]:
         if candidate.exists() and os.access(str(candidate), os.X_OK):
             return str(candidate)
 
@@ -195,7 +202,7 @@ def _find_ollama_binary() -> str | None:
 
 
 def _install_ollama(console: Console) -> str | None:
-    """Download and install Ollama to ~/.nvh/. Returns binary path or None.
+    """Download and install Ollama to NVH_HOME. Returns binary path or None.
 
     Ollama ships as a .tar.zst archive containing bin/ollama plus CUDA libs.
     We stream-download with a Rich progress bar, then decompress and extract
@@ -203,6 +210,7 @@ def _install_ollama(console: Console) -> str | None:
     """
     import platform
     import subprocess
+    from nvh.integrations.storage import storage_layout
 
     if platform.system() != "Linux":
         console.print(
@@ -214,12 +222,15 @@ def _install_ollama(console: Console) -> str | None:
     # Detect architecture
     arch = "arm64" if platform.machine() in ("aarch64", "arm64") else "amd64"
 
-    nvh_home = Path.home() / ".nvh"
+    layout = storage_layout()
+    nvh_home = layout.home
     nvh_home.mkdir(parents=True, exist_ok=True)
-    ollama_bin = nvh_home / "bin" / "ollama"
+    layout.bin_dir.mkdir(parents=True, exist_ok=True)
+    layout.cache_dir.mkdir(parents=True, exist_ok=True)
+    ollama_bin = layout.bin_dir / "ollama"
 
     url = f"https://ollama.com/download/ollama-linux-{arch}.tar.zst"
-    archive_path = nvh_home / f"ollama-linux-{arch}.tar.zst"
+    archive_path = layout.cache_dir / f"ollama-linux-{arch}.tar.zst"
 
     # --- Download with Rich progress bar ---
     console.print("  Downloading Ollama (this is ~2 GB — includes CUDA libraries)...")
@@ -340,18 +351,21 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
     """Start 'ollama serve' in the background. Returns True if it comes up."""
     import subprocess
     import time
+    from nvh.integrations.storage import storage_layout
 
-    nvh_home = Path.home() / ".nvh"
-    models_dir = nvh_home / "models"
+    layout = storage_layout()
+    models_dir = layout.ollama_models_dir
     models_dir.mkdir(parents=True, exist_ok=True)
-    log_path = nvh_home / "ollama.log"
+    log_path = layout.logs_dir / "ollama.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
+    env.update(layout.env())
     env["OLLAMA_MODELS"] = str(models_dir)
     env["OLLAMA_HOST"] = "127.0.0.1:11434"  # bind to localhost only
 
     # Add CUDA libs from local install (tar.zst extracts lib/ollama/)
-    lib_dir = nvh_home / "lib" / "ollama"
+    lib_dir = layout.home / "lib" / "ollama"
     if lib_dir.is_dir():
         existing_ld = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = f"{lib_dir}:{existing_ld}" if existing_ld else str(lib_dir)
@@ -512,9 +526,13 @@ def _pull_model(console: Console, model: str, ollama_bin: str) -> bool:
     # Fallback: plain subprocess call
     console.print(f"  Pulling {model} (this may take a while)...")
     try:
+        from nvh.integrations.storage import storage_layout
+        env = os.environ.copy()
+        env.update(storage_layout().env())
         result = subprocess.run(
             [ollama_bin, "pull", model],
             capture_output=False,
+            env=env,
             timeout=1800,
         )
         if result.returncode == 0:
@@ -871,7 +889,7 @@ def guided_setup(console: Console | None = None) -> None:
     if console is None:
         console = Console()
 
-    # Load any keys previously saved to ~/.hive/.env (headless fallback)
+    # Load any keys previously saved to HIVE_CONFIG_HOME/.env (headless fallback)
     load_env_keys()
 
     console.print()

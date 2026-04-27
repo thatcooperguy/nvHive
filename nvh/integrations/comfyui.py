@@ -1,7 +1,7 @@
 """ComfyUI install, status, and example-pack helpers.
 
 The web setup wizard uses this module to install a local ComfyUI workspace
-under ``~/.nvh/comfyui`` without polluting the user's system Python.
+under ``NVH_HOME/comfyui`` without polluting the user's system Python.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+from nvh.integrations.storage import storage_layout
 
 COMFYUI_REPO_URL = "https://github.com/comfyanonymous/ComfyUI.git"
 DEFAULT_HOST = "127.0.0.1"
@@ -163,7 +165,7 @@ def comfyui_root() -> Path:
     configured = os.environ.get("COMFYUI_HOME")
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".nvh" / "comfyui"
+    return storage_layout().comfyui_dir
 
 
 def comfyui_app_dir(root: Path | None = None) -> Path:
@@ -461,6 +463,7 @@ async def install_comfyui(
         return
 
     env = os.environ.copy()
+    env.update(storage_layout().env())
     env["PYTHONUTF8"] = "1"
 
     yield {
@@ -601,8 +604,8 @@ def start_comfyui(
     ]
 
     env = os.environ.copy()
+    env.update(storage_layout().env())
     env["PYTHONUTF8"] = "1"
-    env.setdefault("HF_HOME", str(root / "hf-cache"))
 
     kwargs: dict[str, Any] = {
         "cwd": str(app_dir),

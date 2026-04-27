@@ -854,6 +854,54 @@ async def system_recommendations() -> dict[str, Any]:
         })
 
 
+class StorageConfigureRequest(BaseModel):
+    home_dir: str | None = Field(
+        default=None,
+        description="Persistent NVH_HOME on a mounted user-writable volume",
+    )
+    min_free_gb: float = Field(default=20.0, ge=0)
+    activate: bool = True
+
+    @field_validator("home_dir")
+    @classmethod
+    def clean_home_dir(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+@app.get("/v1/system/storage", summary="Inspect rootless persistent storage")
+async def system_storage(
+    home_dir: str | None = None,
+    min_free_gb: float = 20.0,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the active rootless storage layout and preflight warnings."""
+    from nvh.integrations.storage import storage_status
+
+    return _response_envelope(
+        storage_status(home_dir=home_dir, min_free_gb=min_free_gb).as_dict()
+    )
+
+
+@app.post("/v1/system/storage", summary="Configure rootless persistent storage")
+async def configure_system_storage(
+    request: StorageConfigureRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Create and activate the rootless NVH_HOME directory layout."""
+    from nvh.integrations.storage import ensure_storage
+
+    return _response_envelope(
+        ensure_storage(
+            request.home_dir,
+            min_free_gb=request.min_free_gb,
+            activate=request.activate,
+        ).as_dict()
+    )
+
+
 # -- /v1/system/info ----------------------------------------------------------
 
 @app.get("/v1/system/info", summary="Combined system status — GPU + providers + budget in one call")

@@ -29,6 +29,8 @@ import type {
   GPUInfo,
   RecommendationsResult,
   SystemInfo,
+  StorageConfigureRequest,
+  StorageStatus,
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
@@ -114,6 +116,15 @@ export async function getRecommendations(): Promise<RecommendationsResult> {
 
 export async function getSystemInfo(): Promise<SystemInfo> {
   return apiGet<SystemInfo>('/v1/system/info');
+}
+
+export async function getStorageStatus(homeDir?: string): Promise<StorageStatus> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<StorageStatus>(`/v1/system/storage${qs}`);
+}
+
+export async function configureStorage(request: StorageConfigureRequest): Promise<StorageStatus> {
+  return apiPost<StorageStatus>('/v1/system/storage', request);
 }
 
 // ─── Analytics ──────────────────────────────────────────────────────────────

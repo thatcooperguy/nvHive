@@ -1,7 +1,7 @@
 """Rootless AI Studio pack catalog and installers.
 
-Packs are intentionally user-space only: files go under ``~/.nvh`` and
-launchers go under ``~/.local/bin``. The installer never calls sudo, apt,
+Packs are intentionally user-space only: files, launchers, models, and caches
+go under ``NVH_HOME``. The installer never calls sudo, apt,
 dnf, pacman, systemctl, or Docker.
 """
 
@@ -22,6 +22,8 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+from nvh.integrations.storage import storage_layout
 
 OLLAMA_PORT = 11434
 
@@ -176,8 +178,8 @@ STUDIO_PACKS: list[StudioPack] = [
         category="runtime",
         tagline="Local model server without sudo",
         description=(
-            "Installs the Ollama Linux bundle into ~/.local, writes a user launcher, "
-            "and stores models under ~/.nvh/models/ollama."
+            "Installs the Ollama Linux bundle into NVH_HOME, writes a user launcher, "
+            "and stores models under NVH_HOME/models/ollama."
         ),
         recommended_vram_gb=0,
         estimated_disk_gb=1.0,
@@ -189,7 +191,7 @@ STUDIO_PACKS: list[StudioPack] = [
         launchers=["nvhive-ollama-serve"],
         source_urls=["https://docs.ollama.com/linux"],
         notes=[
-            "~/.local/bin must be on PATH for the plain ollama command.",
+            "NVH_HOME/bin must be on PATH for the plain ollama command.",
             "If a system Ollama already exists, nvHive uses it instead of replacing it.",
         ],
     ),
@@ -400,11 +402,11 @@ def studio_root() -> Path:
     configured = os.environ.get("NVH_STUDIO_HOME")
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".nvh" / "studio"
+    return storage_layout().studio_dir
 
 
 def _local_bin() -> Path:
-    path = Path.home() / ".local" / "bin"
+    path = storage_layout().bin_dir
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -417,7 +419,7 @@ def _comfyui_root() -> Path:
     configured = os.environ.get("COMFYUI_HOME")
     if configured:
         return Path(configured).expanduser()
-    return Path.home() / ".nvh" / "comfyui"
+    return storage_layout().comfyui_dir
 
 
 def _comfyui_app_dir() -> Path:
@@ -538,21 +540,24 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _ollama_binary() -> str:
+    local = storage_layout().bin_dir / "ollama"
+    if local.exists():
+        return str(local)
     found = shutil.which("ollama")
     if found:
         return found
-    local = Path.home() / ".local" / "bin" / "ollama"
-    return str(local) if local.exists() else ""
+    return ""
 
 
 def _ollama_env() -> dict[str, str]:
+    layout = storage_layout()
     env = os.environ.copy()
-    env.setdefault("OLLAMA_MODELS", str(Path.home() / ".nvh" / "models" / "ollama"))
-    local_lib = Path.home() / ".local" / "lib" / "ollama"
+    env.update(layout.env())
+    local_lib = layout.home / "lib" / "ollama"
     existing = env.get("LD_LIBRARY_PATH", "")
     if local_lib.exists() and str(local_lib) not in existing.split(":"):
         env["LD_LIBRARY_PATH"] = f"{local_lib}:{existing}" if existing else str(local_lib)
-    env["PATH"] = f"{Path.home() / '.local' / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    env["PATH"] = f"{layout.bin_dir}{os.pathsep}{env.get('PATH', '')}"
     return env
 
 
@@ -759,7 +764,8 @@ async def _install_rootless_ollama(pack: StudioPack, force_update: bool) -> Asyn
 
     arch = _platform_arch()
     url = f"https://ollama.com/download/ollama-linux-{arch}.tgz"
-    target = Path.home() / ".local"
+    layout = storage_layout()
+    target = layout.home
     target.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix="ollama-", dir=str(studio_root())))
     archive = stage / f"ollama-linux-{arch}.tgz"
@@ -771,7 +777,7 @@ async def _install_rootless_ollama(pack: StudioPack, force_update: bool) -> Asyn
         yield event
     async for event in _run_command(
         [tar, "-xzf", str(archive), "-C", str(target)],
-        label="Extract Ollama into ~/.local",
+        label=f"Extract Ollama into {target}",
     ):
         yield event
 
@@ -786,12 +792,15 @@ async def _install_rootless_ollama(pack: StudioPack, force_update: bool) -> Asyn
 
 def _write_ollama_launcher() -> Path:
     script = _local_bin() / "nvhive-ollama-serve"
-    content = """#!/usr/bin/env bash
+    layout = storage_layout()
+    content = f"""#!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="$HOME/.local/bin:$PATH"
-export LD_LIBRARY_PATH="$HOME/.local/lib/ollama:${LD_LIBRARY_PATH:-}"
-export OLLAMA_MODELS="${OLLAMA_MODELS:-$HOME/.nvh/models/ollama}"
+export NVH_HOME="${{NVH_HOME:-{layout.home}}}"
+export NVH_BIN="${{NVH_BIN:-{layout.bin_dir}}}"
+export PATH="$NVH_BIN:$PATH"
+export LD_LIBRARY_PATH="{layout.home}/lib/ollama:${{LD_LIBRARY_PATH:-}}"
+export OLLAMA_MODELS="${{OLLAMA_MODELS:-{layout.ollama_models_dir}}}"
 mkdir -p "$OLLAMA_MODELS"
 exec ollama serve
 """
@@ -941,23 +950,29 @@ async def _install_python_venv(pack: StudioPack, force_update: bool) -> AsyncIte
     root = _pack_root(pack.id)
     venv_python = _venv_python(pack.id)
     root.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env.update(storage_layout().env())
+    env["PYTHONUTF8"] = "1"
 
     if force_update and venv_python.exists():
         yield {"event": "step", "status": "running", "message": "Updating existing Python environment"}
     elif not venv_python.exists():
         async for event in _run_command(
             [sys.executable, "-m", "venv", str(root / "venv")],
+            env=env,
             label=f"Create {pack.title} virtual environment",
         ):
             yield event
 
     async for event in _run_command(
         [str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"],
+        env=env,
         label="Upgrade Python packaging tools",
     ):
         yield event
     async for event in _run_command(
         [str(venv_python), "-m", "pip", "install", *pack.python_packages],
+        env=env,
         label=f"Install {pack.title} packages",
     ):
         yield event
@@ -974,6 +989,9 @@ async def _install_comfy_nodes(pack: StudioPack, force_update: bool) -> AsyncIte
     app_dir = _comfyui_app_dir()
     venv_python = _comfyui_venv_python()
     custom_nodes = app_dir / "custom_nodes"
+    env = os.environ.copy()
+    env.update(storage_layout().env())
+    env["PYTHONUTF8"] = "1"
 
     if not app_dir.exists() or not venv_python.exists():
         yield {
@@ -1014,6 +1032,7 @@ async def _install_comfy_nodes(pack: StudioPack, force_update: bool) -> AsyncIte
             async for event in _run_command(
                 [str(venv_python), "-m", "pip", "install", "-r", str(requirements)],
                 cwd=target,
+                env=env,
                 label=f"Install {node.name} requirements",
             ):
                 yield event

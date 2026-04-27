@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from nvh.integrations.storage import StorageStatus, ensure_storage, storage_status
+
 
 @dataclass(frozen=True)
 class WorkstationProfile:
@@ -25,6 +27,10 @@ class WorkstationProfile:
     ollama: str
     recommended_chat_models: list[str]
     recommended_comfy_profiles: list[str]
+    storage_home: str
+    storage_ok: bool
+    storage_free_gb: float | None
+    storage_env_file: str
     notes: list[str]
 
 
@@ -82,9 +88,10 @@ def _recommend_comfy_profiles(vram_gb: int) -> list[str]:
     return ["starter"]
 
 
-def detect_workstation_profile() -> WorkstationProfile:
+def detect_workstation_profile(home_dir: str | Path | None = None) -> WorkstationProfile:
     """Detect a student-friendly Linux GPU workstation profile."""
     has_gpu, gpu_name, vram_gb = _detect_gpu()
+    storage = storage_status(home_dir=home_dir)
     has_gui = bool(
         os.environ.get("DISPLAY")
         or os.environ.get("WAYLAND_DISPLAY")
@@ -102,6 +109,7 @@ def detect_workstation_profile() -> WorkstationProfile:
 
     if not shutil.which("nvidia-smi"):
         notes.append("nvidia-smi is missing; install or expose NVIDIA drivers for GPU detection.")
+    notes.extend(storage.warnings)
 
     return WorkstationProfile(
         platform=os.uname().sysname if hasattr(os, "uname") else os.name,
@@ -114,18 +122,21 @@ def detect_workstation_profile() -> WorkstationProfile:
         ollama=_first_existing_command("ollama"),
         recommended_chat_models=_recommend_chat_models(vram_gb),
         recommended_comfy_profiles=_recommend_comfy_profiles(vram_gb),
+        storage_home=str(storage.layout.home),
+        storage_ok=storage.ok,
+        storage_free_gb=storage.free_gb,
+        storage_env_file=str(storage.env_file),
         notes=notes,
     )
 
 
-def profile_as_dict() -> dict[str, Any]:
-    return asdict(detect_workstation_profile())
+def profile_as_dict(home_dir: str | Path | None = None) -> dict[str, Any]:
+    return asdict(detect_workstation_profile(home_dir=home_dir))
 
 
-def ensure_local_bin() -> Path:
-    path = Path.home() / ".local" / "bin"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def ensure_local_bin(home_dir: str | Path | None = None) -> Path:
+    storage = ensure_storage(home_dir)
+    return storage.layout.bin_dir
 
 
 def write_launch_script(
@@ -133,21 +144,26 @@ def write_launch_script(
     port: int = 3000,
     api_port: int = 8000,
     install_comfyui: bool = False,
+    storage: StorageStatus | None = None,
 ) -> Path:
     """Create a stable launcher script used by terminal and desktop icons."""
-    bin_dir = ensure_local_bin()
+    storage = storage or ensure_storage()
+    bin_dir = storage.layout.bin_dir
     script = bin_dir / "nvhive-ai-studio"
     comfy_flag = " --with-comfyui" if install_comfyui else ""
+    exports = "\n".join(storage.layout.export_lines())
     content = f"""#!/usr/bin/env bash
 set -euo pipefail
 
+{exports}
+
 if ! command -v nvh >/dev/null 2>&1; then
-  echo "nvh is not on PATH. Open a new terminal or run: source ~/.bashrc"
+  echo "nvh is not on PATH. Run: source {storage.env_file}"
   exit 1
 fi
 
 export NVH_STUDENT_WORKSTATION=1
-exec nvh workstation --launch --port {port} --api-port {api_port}{comfy_flag}
+exec nvh workstation --home-dir "{storage.layout.home}" --launch --port {port} --api-port {api_port}{comfy_flag}
 """
     script.write_text(content, encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -159,12 +175,15 @@ def write_desktop_launcher(
     port: int = 3000,
     api_port: int = 8000,
     install_comfyui: bool = False,
+    storage: StorageStatus | None = None,
 ) -> Path:
     """Create a Linux desktop launcher for the nvHive AI Studio."""
+    storage = storage or ensure_storage()
     script = write_launch_script(
         port=port,
         api_port=api_port,
         install_comfyui=install_comfyui,
+        storage=storage,
     )
     desktop_dir = Path.home() / ".local" / "share" / "applications"
     desktop_dir.mkdir(parents=True, exist_ok=True)
@@ -189,8 +208,10 @@ StartupNotify=true
     return desktop_file
 
 
-def workstation_next_steps(port: int = 3000) -> list[str]:
+def workstation_next_steps(port: int = 3000, storage: StorageStatus | None = None) -> list[str]:
+    storage = storage or storage_status()
     return [
+        f"Persist this session: source {storage.env_file}",
         f"Open WebUI: nvh webui --port {port}",
         "Install the rootless student pack: nvh studio --install starter -y",
         "Install ComfyUI from Setup > ComfyUI, or run: nvh workstation --with-comfyui",

@@ -199,7 +199,7 @@ class CouncilConfig(BaseModel):
 # Config Loading
 # ---------------------------------------------------------------------------
 
-DEFAULT_CONFIG_DIR = Path.home() / ".hive"
+DEFAULT_CONFIG_DIR = Path(os.environ.get("HIVE_CONFIG_HOME", Path.home() / ".hive")).expanduser()
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.yaml"
 PROJECT_CONFIG_NAMES = [".hive.yaml", ".hive/config.yaml"]
 
