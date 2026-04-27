@@ -1,15 +1,15 @@
 name: Release
 
 # Creates a GitHub Release on tag push with:
-#   - sdist + wheel (also consumed by publish.yml → PyPI)
+#   - sdist + wheel (also consumed by publish.yml for PyPI)
 #   - Single-file PyInstaller binaries for Linux, macOS, Windows
 #   - Source tarball (auto-attached by gh release create)
 #
 # The tag must match v*.*.* (e.g. v0.32.0). The version in pyproject.toml
 # should match the tag; CI does not enforce this but the release notes do.
 #
-# publish.yml listens on release:published and pushes the sdist/wheel
-# to PyPI via trusted publishing — no token needed here.
+# PyPI publishing is handled by .github/workflows/publish.yml, whose
+# workflow file is registered with PyPI trusted publishing.
 
 on:
   push:
@@ -23,11 +23,9 @@ on:
         type: string
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────
-  # Python wheel + sdist. These are the canonical release artifacts —
+  # Python wheel + sdist. These are the canonical release artifacts -
   # PyPI consumes them and users can `pip install` directly from a
   # release asset URL without PyPI at all.
-  # ─────────────────────────────────────────────────────────────────────
   build-python:
     runs-on: ubuntu-latest
     steps:
@@ -46,14 +44,12 @@ jobs:
           name: python-dist
           path: dist/
 
-  # ─────────────────────────────────────────────────────────────────────
   # Single-file binaries via PyInstaller. One job per OS so the binary
   # runs on that host's libc/Frameworks without a Python install.
   #
   # --collect-all covers the dynamic imports in litellm/typer/rich that
   # PyInstaller's static analysis misses. Hidden imports are the known
   # offenders that still slip through (keyring backends, aiosqlite).
-  # ─────────────────────────────────────────────────────────────────────
   build-binaries:
     strategy:
       fail-fast: false
@@ -111,9 +107,7 @@ jobs:
           name: binary-${{ matrix.os }}
           path: dist/${{ matrix.asset }}
 
-  # ─────────────────────────────────────────────────────────────────────
   # Aggregate all artifacts into a single GitHub Release.
-  # ─────────────────────────────────────────────────────────────────────
   release:
     needs: [build-python, build-binaries]
     runs-on: ubuntu-latest
@@ -143,25 +137,3 @@ jobs:
             --title "nvHive ${{ steps.tag.outputs.tag }}" \
             --generate-notes \
             release-assets/*
-
-  # ─────────────────────────────────────────────────────────────────────
-  # PyPI publish — done in-workflow so the release chain isn't split.
-  #
-  # GitHub Actions suppresses `release:published` events when the
-  # Release is created by the default GITHUB_TOKEN (security: prevents
-  # workflow loops). That means publish.yml never fires for our
-  # automated releases, so we do it here directly via the same OIDC
-  # trusted-publishing flow publish.yml uses.
-  # ─────────────────────────────────────────────────────────────────────
-  publish-pypi:
-    needs: [release]
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          name: python-dist
-          path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
