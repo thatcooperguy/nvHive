@@ -179,6 +179,7 @@ def _ollama_running() -> tuple[bool, list[str]]:
 def _find_ollama_binary() -> str | None:
     """Return path to an existing Ollama binary, or None."""
     import shutil
+
     from nvh.integrations.storage import storage_layout
 
     # Check PATH first (system install)
@@ -210,6 +211,7 @@ def _install_ollama(console: Console) -> str | None:
     """
     import platform
     import subprocess
+
     from nvh.integrations.storage import storage_layout
 
     if platform.system() != "Linux":
@@ -351,6 +353,7 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
     """Start 'ollama serve' in the background. Returns True if it comes up."""
     import subprocess
     import time
+
     from nvh.integrations.storage import storage_layout
 
     layout = storage_layout()
