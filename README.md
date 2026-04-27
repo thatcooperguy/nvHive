@@ -282,6 +282,7 @@ Results vary by hardware and workload — run `nvh bench` to measure on your set
 | Guide | Description |
 |-------|-------------|
 | [Getting Started](docs/GETTING_STARTED.md) | First-time setup |
+| [Student GPU Cloud / Linux Desktop](docs/LINUX_DESKTOP.md) | No-root NVIDIA Linux workstation and ComfyUI guide |
 | [Commands](docs/COMMANDS.md) | Full CLI reference (50+ commands) |
 | [Providers](docs/PROVIDERS.md) | 23 providers, rate limits, free tiers |
 | [Council System](docs/COUNCIL.md) | Multi-LLM consensus with confidence scoring |

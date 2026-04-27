@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.33.2] - 2026-04-27
+
+### Fixed
+- Unsafe agent tools now require explicit approval instead of being
+  accidentally covered by the safe-tool auto-approval flag.
+- Smart routing now returns the best-scored model for the selected
+  provider instead of falling back to the provider default.
+- Student setup copy now points to the rootless Ollama studio pack,
+  `nvh serve`, and the Linux desktop guide.
+- AI Studio starter packs now skip ComfyUI custom nodes when ComfyUI is
+  not installed yet, instead of failing the rest of the starter install.
+- Install failure messaging now matches the supported Python 3.11+
+  requirement.
+
 ## [0.33.1] - 2026-04-27
 
 ### Added

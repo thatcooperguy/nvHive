@@ -222,7 +222,7 @@ export default function ProvidersPage() {
                   <div className="mt-2 text-[#a3a3a3]"># Or use local Nemotron (free!)</div>
                   <div className="text-[#76B900]">ollama pull nemotron-mini</div>
                   <div className="mt-2 text-[#a3a3a3]"># Then start the server</div>
-                  <div className="text-[#0a0a0a]">council serve</div>
+                  <div className="text-[#0a0a0a]">nvh serve</div>
                 </div>
               </div>
             </div>
@@ -355,8 +355,8 @@ export default function ProvidersPage() {
                           </div>
                           <div className="text-[10px] font-mono text-[#a3a3a3]">
                             {online
-                              ? `${ollamaProvider?.models_available ?? 0} model(s) installed · localhost:11434`
-                              : 'Install and start Ollama: curl -fsSL https://ollama.com/install.sh | sh && ollama serve'}
+                              ? `${ollamaProvider?.models_available ?? 0} model(s) installed at localhost:11434`
+                              : 'Install local AI without sudo: nvh studio --install rootless-ollama -y && nvhive-ollama-serve'}
                           </div>
                         </div>
                         {online && ollamaProvider?.latency_ms != null && (

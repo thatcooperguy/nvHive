@@ -21,6 +21,7 @@ access to file operations, code execution, and web browsing.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -317,18 +318,41 @@ async def run_agent_loop(
                 ))
                 continue
 
-            # Check if we need approval for unsafe tools
-            if not tool.safe and not auto_approve_safe:
-                if confirm_unsafe:
-                    approved = confirm_unsafe(tool_name, tool_args)
-                    if not approved:
-                        tool_results.append(ToolResult(
-                            tool_name=tool_name,
-                            success=False,
-                            output="",
-                            error="User denied tool execution",
-                        ))
-                        continue
+            # Unsafe tools always require an explicit approval callback.
+            # `auto_approve_safe` only controls read/search-style tools.
+            if not tool.safe:
+                if not confirm_unsafe:
+                    tool_results.append(ToolResult(
+                        tool_name=tool_name,
+                        success=False,
+                        output="",
+                        error=f"Tool requires approval: {tool_name}",
+                    ))
+                    continue
+
+                approved = confirm_unsafe(tool_name, tool_args)
+                if inspect.isawaitable(approved):
+                    approved = await approved
+                if not approved:
+                    tool_results.append(ToolResult(
+                        tool_name=tool_name,
+                        success=False,
+                        output="",
+                        error="User denied tool execution",
+                    ))
+                    continue
+            elif not auto_approve_safe and confirm_unsafe:
+                approved = confirm_unsafe(tool_name, tool_args)
+                if inspect.isawaitable(approved):
+                    approved = await approved
+                if not approved:
+                    tool_results.append(ToolResult(
+                        tool_name=tool_name,
+                        success=False,
+                        output="",
+                        error="User denied tool execution",
+                    ))
+                    continue
 
             # Execute the tool
             result = await tools.execute(tool_name, tool_args)

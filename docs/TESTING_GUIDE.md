@@ -749,7 +749,7 @@ cat /tmp/hive-test-convo.json | python -m json.tool
 Start the server for all tests in this section:
 
 ```bash
-council serve --host 127.0.0.1 --port 8000
+nvh serve --host 127.0.0.1 --port 8000
 ```
 
 **Expected on start:** `Hive API Server starting on http://127.0.0.1:8000` and `API docs: http://127.0.0.1:8000/docs`.
@@ -1250,7 +1250,7 @@ OPENAI_API_KEY="sk-testkey12345678" council doctor 2>&1 | grep "sk-testkey"
 ### 9.3 API Authentication — Server Mode
 
 **Steps:**
-1. Start the server with an API key set: `HIVE_API_KEY=mysecrettoken council serve`
+1. Start the server with an API key set: `HIVE_API_KEY=mysecrettoken nvh serve`
 2. Test unauthenticated request:
 
 ```bash
@@ -1282,7 +1282,7 @@ curl -s -X POST http://127.0.0.1:8000/v1/query \
 **Test:** Start the server without `HIVE_API_KEY`::
 
 ```bash
-council serve &
+nvh serve &
 curl -s -X POST http://127.0.0.1:8000/v1/query \
   -H "Content-Type: application/json" \
   -d '{"prompt": "hello", "provider": "mock"}'
@@ -1648,7 +1648,7 @@ council convene "How do we improve our CI/CD pipeline?" --auto-agents --provider
 **Test:**
 
 ```bash
-council serve &
+nvh serve &
 sleep 2
 
 # Query

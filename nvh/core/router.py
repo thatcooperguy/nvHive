@@ -507,6 +507,7 @@ class RoutingEngine:
             )
 
         provider_scores: dict[str, dict[str, float]] = {}
+        provider_models: dict[str, str] = {}
         skipped_reasons: dict[str, str] = {}
 
         # Import advisor profiles once outside the loop
@@ -654,6 +655,7 @@ class RoutingEngine:
                     "health": health,
                     "model": 0,  # reserved for future model-level scoring
                 }
+                provider_models[pname] = best_model.model_id
             except Exception as e:
                 _log.warning("Scoring failed for provider %s: %s", pname, e)
                 skipped_reasons[pname] = f"scoring error: {e}"
@@ -688,7 +690,10 @@ class RoutingEngine:
             selected_model = model_override
         else:
             pconfig = self.config.providers.get(best_provider)
-            selected_model = pconfig.default_model if pconfig else ""
+            selected_model = (
+                provider_models.get(best_provider)
+                or (pconfig.default_model if pconfig else "")
+            )
 
         return RoutingDecision(
             provider=best_provider,

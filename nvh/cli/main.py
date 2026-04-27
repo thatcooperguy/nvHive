@@ -9812,8 +9812,8 @@ def do_task(
     """Hands-free mode — give NVHive a task and it completes it autonomously.
 
     The agent can read/write files, search the web, run code, and more.
-    Safe tools (read, search) run automatically. Unsafe tools (write, execute)
-    ask for confirmation unless --auto is set.
+    Safe tools (read, search) run automatically by default. Unsafe tools
+    (write, execute) always ask for confirmation.
 
     Examples:
 
@@ -9949,7 +9949,7 @@ def do_task(
             max_iterations=max_steps,
             auto_approve_safe=auto,
             on_step=on_step,
-            confirm_unsafe=None if auto else confirm_unsafe,
+            confirm_unsafe=confirm_unsafe,
         )
 
         elapsed = _time.monotonic() - start

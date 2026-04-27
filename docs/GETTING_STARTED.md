@@ -202,8 +202,9 @@ Use it whenever the content is sensitive. Requires Ollama installed locally:
 
 ```bash
 nvh ollama          # Check Ollama status and available models
-curl -fsSL https://ollama.com/install.sh | sh   # Install if not present
-ollama pull llama3.1:8b                          # Pull a model
+nvh studio --install rootless-ollama -y          # Install without sudo
+nvhive-ollama-serve                              # Start local model server
+nvh studio --install-models recommended -y       # Pull recommended models
 ```
 
 ---
@@ -415,11 +416,12 @@ docker compose exec ollama ollama pull codellama
 ### Without Docker
 
 ```bash
-# Install Ollama
-curl -fsSL https://ollama.com/install.sh | sh
+# Install Ollama without sudo/root
+nvh studio --install rootless-ollama -y
+nvhive-ollama-serve
 
-# Pull a model
-ollama pull llama3.1:8b
+# Pull recommended fitting models
+nvh studio --install-models recommended -y
 
 # NVHive auto-detects Ollama at localhost:11434
 nvh ollama          # Check status

@@ -155,6 +155,52 @@ async def test_loop_executes_tool_then_finishes():
 
 
 @pytest.mark.asyncio
+async def test_loop_blocks_unsafe_tool_without_approval_callback():
+    """Unsafe tools must not execute unless an approval callback is available."""
+    engine = _make_mock_engine([
+        '```tool_call\n{"tool": "write_file", "args": {"path": "x.py", "content": "x"}}\n```',
+        "I could not write the file.",
+    ])
+    registry = _make_mock_registry()
+
+    result = await run_agent_loop("Write a file", engine, tools=registry)
+
+    assert result.completed is True
+    assert result.total_tool_calls == 0
+    registry.execute.assert_not_called()
+    error = result.steps[0].tool_results[0].error
+    assert error is not None
+    assert "requires approval" in error
+
+
+@pytest.mark.asyncio
+async def test_loop_runs_unsafe_tool_when_approved():
+    """Unsafe tools execute only after the approval callback allows them."""
+    engine = _make_mock_engine([
+        '```tool_call\n{"tool": "write_file", "args": {"path": "x.py", "content": "x"}}\n```',
+        "Done.",
+    ])
+    registry = _make_mock_registry()
+    approvals: list[str] = []
+
+    def approve(tool_name: str, _tool_args: dict) -> bool:
+        approvals.append(tool_name)
+        return True
+
+    result = await run_agent_loop(
+        "Write a file",
+        engine,
+        tools=registry,
+        confirm_unsafe=approve,
+    )
+
+    assert result.completed is True
+    assert result.total_tool_calls == 1
+    assert approvals == ["write_file"]
+    registry.execute.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_loop_unknown_tool_produces_error_result():
     """If agent requests a tool that doesn't exist, error result is recorded."""
     engine = _make_mock_engine([

@@ -140,6 +140,20 @@ class TestRoutingEngine:
         decision = engine.route("Write code", model_override="gpt-4o-mini")
         assert decision.model == "gpt-4o-mini"
 
+    def test_best_scored_model_is_selected(self) -> None:
+        weak = _model(model_id="weak-chat", cap=0.2)
+        strong = _model(model_id="strong-code", cap=0.95)
+        engine = _make_engine(
+            enabled=["openai"],
+            models=[weak, strong],
+            providers={"openai": ProviderConfig(default_model="weak-chat")},
+        )
+
+        decision = engine.route("Write a Python API endpoint")
+
+        assert decision.provider == "openai"
+        assert decision.model == "strong-code"
+
     def test_fallback_when_unhealthy(self) -> None:
         engine = _make_engine(enabled=["openai"], models=[], health=0.0)
         decision = engine.route("hello")

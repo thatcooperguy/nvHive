@@ -2686,13 +2686,13 @@ async def conversation_query(
 
 
 # ---------------------------------------------------------------------------
-# Entry point — `council serve`
+# Entry point - `nvh serve`
 # ---------------------------------------------------------------------------
 
 def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) -> None:
     """Start the Council API server with uvicorn.
 
-    Called by the CLI via `council serve --host HOST --port PORT`.
+    Called by the CLI via `nvh serve --host HOST --port PORT`.
     """
     import uvicorn
 

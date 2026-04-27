@@ -977,9 +977,13 @@ async def _install_comfy_nodes(pack: StudioPack, force_update: bool) -> AsyncIte
 
     if not app_dir.exists() or not venv_python.exists():
         yield {
-            "event": "error",
-            "status": "failed",
-            "message": "ComfyUI is not installed yet. Run nvh workstation --with-comfyui first.",
+            "event": "skip",
+            "status": "skipped",
+            "message": (
+                "ComfyUI is not installed yet, so custom nodes were skipped. "
+                "Install ComfyUI from the setup wizard or run "
+                "nvh workstation --with-comfyui -y, then rerun nvh studio --install comfy -y."
+            ),
         }
         return
     if shutil.which("git") is None:
@@ -1197,6 +1201,6 @@ async def install_studio_packs(
     yield {
         "event": "complete",
         "status": "complete",
-        "message": "AI Studio packs installed",
+        "message": "AI Studio pack setup finished",
         "status_snapshot": catalog_with_status(),
     }

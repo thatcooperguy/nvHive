@@ -1143,12 +1143,14 @@ export default function SetupPage() {
             {/* Install instructions */}
             {ollamaStatus !== 'online' && (
               <div className="space-y-3">
-                <div className="section-label">Install Ollama</div>
+                <div className="section-label">Install Local AI</div>
                 <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 font-mono text-sm space-y-2">
-                  <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider"># Install Ollama (Linux)</div>
-                  <div className="text-[#76B900]">curl -fsSL https://ollama.com/install.sh | sh</div>
-                  <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3"># Start Ollama service</div>
-                  <div className="text-[#76B900]">ollama serve</div>
+                  <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider"># Rootless Ollama runtime, no sudo</div>
+                  <div className="text-[#76B900]">nvh studio --install rootless-ollama -y</div>
+                  <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3"># Start the local model server</div>
+                  <div className="text-[#76B900]">nvhive-ollama-serve</div>
+                  <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3"># Pull recommended fitting models</div>
+                  <div className="text-[#76B900]">nvh studio --install-models recommended -y</div>
                 </div>
               </div>
             )}
@@ -1690,11 +1692,11 @@ export default function SetupPage() {
                   <div className={`text-sm font-mono font-bold ${apiStatus === 'connected' ? 'text-[#76B900]' : 'text-[#dc2626]'}`}>
                     Hive API {apiStatus === 'connected' ? 'ONLINE' : 'OFFLINE'}
                   </div>
-                  {apiStatus === 'disconnected' && (
-                    <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">
-                      Start the server: <span className="text-[#76B900]">council serve</span>
-                    </div>
-                  )}
+                    {apiStatus === 'disconnected' && (
+                      <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">
+                        Start the server: <span className="text-[#76B900]">nvh serve</span>
+                      </div>
+                    )}
                 </div>
               </div>
             </div>

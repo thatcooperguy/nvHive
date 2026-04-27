@@ -249,12 +249,12 @@ fi
 echo -e "${B}Installing NVHive (~60s)...${N}"
 if [ "$USE_ACTIVE_ENV" = "true" ]; then
     "$PYTHON" -m pip install -q -e "$NVH_REPO" 2>/dev/null || {
-        echo -e "${R}Install failed. Check Python version (need 3.12+).${N}"
+        echo -e "${R}Install failed. Check Python version (need 3.11+).${N}"
         exit 1
     }
 else
     pip install -q -e "$NVH_REPO" 2>/dev/null || {
-        echo -e "${R}Install failed. Check Python version (need 3.12+).${N}"
+        echo -e "${R}Install failed. Check Python version (need 3.11+).${N}"
         exit 1
     }
 fi

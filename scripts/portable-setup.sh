@@ -258,7 +258,7 @@ elif [[ -f "$HOME/.council/.env" ]]; then
 fi
 
 # Start the API server in background
-council serve --host 0.0.0.0 --port "$HIVE_PORT" &>/dev/null &
+nvh serve --host 0.0.0.0 --port "$HIVE_PORT" &>/dev/null &
 API_PID=$!
 echo "$API_PID" > "$HIVE_DATA/api.pid"
 
@@ -294,7 +294,7 @@ if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
 fi
 
 # Start API
-council serve --host 0.0.0.0 --port ${HIVE_PORT:-8000} &>/dev/null &
+nvh serve --host 0.0.0.0 --port ${HIVE_PORT:-8000} &>/dev/null &
 echo "Hive started. API: http://localhost:${HIVE_PORT:-8000}"
 STARTEOF
 chmod +x "$HIVE_HOME/start.sh"

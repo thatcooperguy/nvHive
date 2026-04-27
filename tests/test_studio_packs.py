@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from nvh.integrations import studio_packs
 
 
@@ -48,4 +50,17 @@ def test_catalog_status_uses_configured_studio_home(tmp_path, monkeypatch) -> No
     assert catalog["root"] == str(tmp_path)
     assert catalog["count"] >= 5
     assert all(pack["status"]["root"].startswith(str(tmp_path)) for pack in catalog["packs"])
+
+
+@pytest.mark.asyncio
+async def test_comfy_nodes_skip_without_comfyui(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_STUDIO_HOME", str(tmp_path / "studio"))
+    monkeypatch.setenv("COMFYUI_HOME", str(tmp_path / "missing-comfyui"))
+
+    events = [event async for event in studio_packs.install_studio_packs(["comfy"])]
+
+    assert any(event["event"] == "skip" for event in events)
+    assert events[-1]["event"] == "complete"
+    marker = tmp_path / "studio" / "packs" / "comfyui-power-nodes" / "installed.json"
+    assert not marker.exists()
 
