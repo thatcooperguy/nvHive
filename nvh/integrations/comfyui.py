@@ -182,6 +182,86 @@ def examples_as_dicts() -> list[dict[str, Any]]:
     return [asdict(example) for example in TRENDING_COMFYUI_EXAMPLES]
 
 
+def comfyui_model_plan(example_ids: list[str] | None = None) -> dict[str, Any]:
+    """Return a model download plan for selected ComfyUI workflow examples."""
+    selected_ids = set(example_ids or [])
+    examples = [
+        example for example in TRENDING_COMFYUI_EXAMPLES
+        if not selected_ids or example.id in selected_ids
+    ]
+    models: dict[str, dict[str, Any]] = {}
+    custom_nodes: dict[str, dict[str, Any]] = {}
+    for example in examples:
+        for model in example.models:
+            models.setdefault(model, {
+                "name": model,
+                "workflow_ids": [],
+                "workflow_titles": [],
+                "source_urls": set(),
+                "requires_manual_download": True,
+            })
+            models[model]["workflow_ids"].append(example.id)
+            models[model]["workflow_titles"].append(example.title)
+            models[model]["source_urls"].add(example.source_url)
+        for node in example.custom_nodes:
+            custom_nodes.setdefault(node, {
+                "name": node,
+                "workflow_ids": [],
+                "workflow_titles": [],
+            })
+            custom_nodes[node]["workflow_ids"].append(example.id)
+            custom_nodes[node]["workflow_titles"].append(example.title)
+
+    return {
+        "examples": [asdict(example) for example in examples],
+        "models": [
+            {**model, "source_urls": sorted(model["source_urls"])}
+            for model in models.values()
+        ],
+        "custom_nodes": list(custom_nodes.values()),
+        "model_count": len(models),
+        "custom_node_count": len(custom_nodes),
+        "requires_manual_download": True,
+        "message": (
+            "ComfyUI model weights can be very large and may require upstream license "
+            "acceptance. nvHive saves the plan and source links; download only models "
+            "whose terms you accept."
+        ),
+    }
+
+
+def write_model_plan(example_ids: list[str] | None = None, root: Path | None = None) -> Path:
+    """Write a selected ComfyUI model plan beside the nvHive example pack."""
+    target_root = root or comfyui_root()
+    examples_dir = write_example_pack(target_root)
+    plan = comfyui_model_plan(example_ids)
+    plan_path = examples_dir / "model-download-plan.json"
+    plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+
+    lines = [
+        "# nvHive ComfyUI Model Download Plan",
+        "",
+        plan["message"],
+        "",
+        "Selected workflows:",
+    ]
+    for example in plan["examples"]:
+        lines.append(f"- {example['title']} ({example['recommended_vram_gb']} GB VRAM)")
+    lines.extend(["", "Models:"])
+    for model in plan["models"]:
+        sources = ", ".join(model["source_urls"])
+        lines.append(f"- {model['name']} - sources: {sources}")
+    if plan["custom_nodes"]:
+        lines.extend(["", "Custom nodes:"])
+        for node in plan["custom_nodes"]:
+            lines.append(f"- {node['name']}")
+    (examples_dir / "MODEL_DOWNLOAD_PLAN.md").write_text(
+        "\n".join(lines).strip() + "\n",
+        encoding="utf-8",
+    )
+    return plan_path
+
+
 def _status_url(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> str:
     return f"http://{host}:{port}"
 

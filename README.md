@@ -2,7 +2,7 @@
 
 **One command. Every AI model you have. Automatically assembled into the best team for each task.**
 
-![version](https://img.shields.io/badge/version-0.32.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
+![version](https://img.shields.io/badge/version-0.33.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 ```bash
 nvh "What is a binary search tree?"              # → answers (single best advisor)
@@ -67,6 +67,7 @@ pip install "nvhive[all]"       # everything
 ```bash
 nvh                              # guided setup — GPU detect, provider keys, local model pulls
 nvh workstation --all -y         # Linux GPU desktop: launcher + WebUI + ComfyUI + studio packs
+nvh webui                        # Setup > Models lets you choose exact local downloads
 nvh studio --install starter -y  # rootless LLMs + agents + ComfyUI nodes + game-dev tools
 nvh "your question"              # just ask — nvHive figures out the rest
 ```
@@ -77,11 +78,18 @@ Use packs directly when you want a specific no-root lab:
 
 ```bash
 nvh studio --list
+nvh studio --models
+nvh studio --install-models recommended -y
 nvh studio --install llms -y
 nvh studio --install agents -y
 nvh studio --install comfy -y
 nvh studio --install game -y
 ```
+
+The WebUI setup wizard includes a model picker with GPU-fit badges, disk
+estimates, installed status, and a download queue. The ComfyUI step lets
+students select workflow examples and save a model download plan with source
+links, because many image/video weights are large or require upstream terms.
 
 On first run, `nvh` launches a guided 3-step setup — GPU detection, provider keys, local model pulls. Works immediately with local models (no signup needed). Every step is skippable. Run `nvh setup` anytime to reconfigure.
 

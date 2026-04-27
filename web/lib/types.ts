@@ -434,6 +434,29 @@ export interface ComfyUIInstallEvent {
   status_snapshot?: ComfyUIStatus;
 }
 
+export interface ComfyUIModelPlanModel {
+  name: string;
+  workflow_ids: string[];
+  workflow_titles: string[];
+  source_urls: string[];
+  requires_manual_download: boolean;
+}
+
+export interface ComfyUIModelPlanResult {
+  examples: ComfyUIExample[];
+  models: ComfyUIModelPlanModel[];
+  custom_nodes: Array<{
+    name: string;
+    workflow_ids: string[];
+    workflow_titles: string[];
+  }>;
+  model_count: number;
+  custom_node_count: number;
+  requires_manual_download: boolean;
+  message: string;
+  plan_path: string;
+}
+
 export interface StudioPackStatus {
   id: string;
   installed: boolean;
@@ -488,6 +511,51 @@ export interface StudioPackInstallEvent {
   command?: string[];
   estimated_disk_gb?: number;
   status_snapshot?: StudioPacksResult;
+}
+
+export interface StudioModel {
+  id: string;
+  title: string;
+  provider: string;
+  install_target: string;
+  category: string;
+  recommended_vram_gb: number;
+  estimated_disk_gb: number;
+  priority: number;
+  capabilities: string[];
+  why_recommended: string;
+  source_url: string;
+  license_note: string;
+  recommended: boolean;
+  fits_vram: boolean;
+  installed: boolean;
+  install_command: string;
+}
+
+export interface StudioModelsResult {
+  models: StudioModel[];
+  recommended_ids: string[];
+  installed_targets: string[];
+  detected_vram_gb: number;
+  ollama_available: boolean;
+  ollama_running: boolean;
+  count: number;
+}
+
+export interface StudioModelInstallRequest {
+  model_ids: string[];
+  force_update?: boolean;
+}
+
+export interface StudioModelInstallEvent {
+  event: 'plan' | 'model' | 'step' | 'log' | 'complete' | 'error' | string;
+  status: 'running' | 'complete' | 'failed' | string;
+  message: string;
+  model_id?: string;
+  model_ids?: string[];
+  command?: string[];
+  estimated_disk_gb?: number;
+  status_snapshot?: StudioModelsResult;
 }
 
 export type QueryMode = 'simple' | 'council' | 'compare';

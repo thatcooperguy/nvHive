@@ -54,6 +54,29 @@ nvh webui
 
 Run `nvh studio --list` to see exact pack status and disk estimates.
 
+## Model Picker
+
+The WebUI setup wizard includes a dedicated Models step. It shows:
+
+- detected GPU VRAM
+- recommended local models
+- exact Ollama model names
+- disk estimates
+- installed status
+- GPU-fit warnings
+- a download queue for selected models
+
+The default recommendation set covers chat, coding, reasoning, vision, and
+embeddings. Students can accept the defaults or choose models one at a time.
+
+CLI equivalents:
+
+```bash
+nvh studio --models
+nvh studio --install-models recommended -y
+nvh studio --install-models gemma3-4b,qwen25-coder-7b -y
+```
+
 ## Model Defaults
 
 | GPU VRAM | Local Chat Models | ComfyUI Profiles |
@@ -79,6 +102,11 @@ The setup wizard highlights current official ComfyUI template categories:
 
 Large model downloads remain explicit because many image/video models require license acceptance, significant disk space, or upstream account terms.
 
+The ComfyUI step includes a workflow model-plan selector. It saves
+`MODEL_DOWNLOAD_PLAN.md` and `model-download-plan.json` beside the nvHive
+ComfyUI examples so students can see exactly which image/video weights each
+workflow needs before accepting upstream terms.
+
 ## Student-Safe Defaults
 
 - No root required for nvHive itself
@@ -98,6 +126,8 @@ nvh workstation --with-comfyui
 nvh workstation --with-studio-packs
 nvh workstation --all -y
 nvh studio --list            # show rootless LLM/agent/ComfyUI/game packs
+nvh studio --models          # show recommended local model downloads
+nvh studio --install-models recommended -y
 nvh studio --install starter -y
 nvh doctor --fix             # repair local models/config where possible
 nvh webui                    # launch browser dashboard

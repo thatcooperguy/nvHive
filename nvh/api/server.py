@@ -2191,6 +2191,10 @@ class ComfyUIStartRequest(BaseModel):
         return value
 
 
+class ComfyUIModelPlanRequest(BaseModel):
+    example_ids: list[str] = Field(default_factory=list)
+
+
 @app.get("/v1/comfyui/examples", summary="List curated ComfyUI workflow examples")
 async def comfyui_examples(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return nvHive's curated ComfyUI starter workflow manifest."""
@@ -2203,6 +2207,20 @@ async def comfyui_examples(_auth: None = Depends(require_auth)) -> dict[str, Any
         "count": len(examples),
         "sources": sources,
     })
+
+
+@app.post("/v1/comfyui/model-plan", summary="Write a ComfyUI model download plan")
+async def comfyui_model_plan(
+    request: ComfyUIModelPlanRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Persist selected ComfyUI workflow model requirements and source links."""
+    from nvh.integrations.comfyui import comfyui_model_plan, write_model_plan
+
+    plan_path = write_model_plan(request.example_ids or None)
+    plan = comfyui_model_plan(request.example_ids or None)
+    plan["plan_path"] = str(plan_path)
+    return _response_envelope(plan)
 
 
 @app.get("/v1/comfyui/status", summary="Detect local ComfyUI install and runtime status")
@@ -2283,12 +2301,35 @@ class StudioPackInstallRequest(BaseModel):
         return value
 
 
+class StudioModelInstallRequest(BaseModel):
+    model_ids: list[str] = Field(
+        default_factory=list,
+        description="Studio model ids or Ollama names selected in the setup wizard",
+    )
+    force_update: bool = False
+
+    @field_validator("model_ids")
+    @classmethod
+    def validate_model_ids(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("Select at least one model.")
+        return value
+
+
 @app.get("/v1/studio/packs", summary="List rootless AI Studio packs")
 async def studio_packs(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return the no-root AI Studio pack catalog with local status."""
     from nvh.integrations.studio_packs import catalog_with_status
 
     return _response_envelope(catalog_with_status())
+
+
+@app.get("/v1/studio/models", summary="List recommended local models")
+async def studio_models(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Return model-by-model recommendations and Ollama install status."""
+    from nvh.integrations.studio_packs import model_catalog_with_status
+
+    return _response_envelope(model_catalog_with_status())
 
 
 async def _studio_pack_install_stream(
@@ -2305,6 +2346,20 @@ async def _studio_pack_install_stream(
         yield f"event: {event_name}\ndata: {json.dumps(event)}\n\n".encode()
 
 
+async def _studio_model_install_stream(
+    request: StudioModelInstallRequest,
+) -> AsyncGenerator:
+    """Stream SSE events for selected model installation."""
+    from nvh.integrations.studio_packs import install_studio_models
+
+    async for event in install_studio_models(
+        request.model_ids,
+        force_update=request.force_update,
+    ):
+        event_name = event.get("event", "progress")
+        yield f"event: {event_name}\ndata: {json.dumps(event)}\n\n".encode()
+
+
 @app.post("/v1/studio/install", summary="Install rootless AI Studio packs")
 async def studio_pack_install(
     request: StudioPackInstallRequest,
@@ -2313,6 +2368,22 @@ async def studio_pack_install(
     """Install LLM, agent, ComfyUI, and game-dev packs without root access."""
     return StreamingResponse(
         _studio_pack_install_stream(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.post("/v1/studio/models/install", summary="Install selected local models")
+async def studio_model_install(
+    request: StudioModelInstallRequest,
+    _auth: None = Depends(require_auth),
+) -> StreamingResponse:
+    """Pull selected Ollama models using the rootless local runtime when needed."""
+    return StreamingResponse(
+        _studio_model_install_stream(request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

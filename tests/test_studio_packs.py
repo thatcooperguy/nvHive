@@ -26,6 +26,20 @@ def test_pack_bundles_expand_without_duplicates() -> None:
     assert len(starter) == len(set(starter))
 
 
+def test_model_catalog_marks_vram_recommendations(monkeypatch) -> None:
+    monkeypatch.setattr(studio_packs, "_detect_vram_gb", lambda: 8)
+    monkeypatch.setattr(studio_packs, "_ollama_models", lambda: {"gemma3:4b"})
+    monkeypatch.setattr(studio_packs, "_ollama_binary", lambda: "ollama")
+    monkeypatch.setattr(studio_packs, "_ollama_reachable", lambda: True)
+
+    catalog = studio_packs.model_catalog_with_status()
+    by_id = {model["id"]: model for model in catalog["models"]}
+
+    assert by_id["gemma3-4b"]["installed"] is True
+    assert by_id["qwen3-8b"]["recommended"] is True
+    assert by_id["deepseek-r1-8b"]["fits_vram"] is False
+
+
 def test_catalog_status_uses_configured_studio_home(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_STUDIO_HOME", str(tmp_path))
 

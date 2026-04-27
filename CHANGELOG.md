@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.33.0] - 2026-04-27
+
+### Added
+- **Model Picker wizard step.** Setup now shows exact local Ollama models
+  with detected-VRAM recommendations, GPU-fit badges, disk estimates,
+  installed status, and a streamed download queue.
+- **Studio model endpoints.** Added `GET /v1/studio/models` and
+  `POST /v1/studio/models/install` for model-by-model selection rather
+  than only pack-level installs.
+- **ComfyUI model-plan selector.** The ComfyUI setup step lets students
+  choose workflow examples and save `MODEL_DOWNLOAD_PLAN.md` plus
+  `model-download-plan.json` with required model names and source links.
+
+### Changed
+- Bumped package version to `0.33.0` for the model-picker/PyPI release.
+- Expanded Linux desktop docs around rootless model selection and ComfyUI
+  workflow model planning.
+
 ## [0.32.0] - 2026-04-23
 
 ### Added

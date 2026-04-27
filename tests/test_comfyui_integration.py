@@ -35,6 +35,18 @@ def test_write_example_pack_creates_readable_manifest(tmp_path, monkeypatch) -> 
     assert "Wan 2.2 5B Video Generation" in readme_path.read_text(encoding="utf-8")
 
 
+def test_write_model_plan_creates_selected_manifest(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("COMFYUI_HOME", str(tmp_path))
+    app_dir = tmp_path / "ComfyUI"
+    app_dir.mkdir()
+
+    plan_path = comfyui.write_model_plan(["wan22-5b-video-generation"])
+
+    assert plan_path.exists()
+    assert "wan2.2_ti2v_5B_fp16.safetensors" in plan_path.read_text(encoding="utf-8")
+    assert (tmp_path / "ComfyUI" / "nvhive_examples" / "MODEL_DOWNLOAD_PLAN.md").exists()
+
+
 def test_detect_comfyui_reports_absent_install(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("COMFYUI_HOME", str(tmp_path))
     monkeypatch.setattr(

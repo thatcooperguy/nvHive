@@ -51,6 +51,124 @@ class StudioPack:
     notes: list[str]
 
 
+@dataclass(frozen=True)
+class StudioModel:
+    id: str
+    title: str
+    provider: str
+    install_target: str
+    category: str
+    recommended_vram_gb: int
+    estimated_disk_gb: float
+    priority: int
+    capabilities: list[str]
+    why_recommended: str
+    source_url: str
+    license_note: str
+
+
+STUDIO_MODELS: list[StudioModel] = [
+    StudioModel(
+        id="gemma3-4b",
+        title="Gemma 3 4B",
+        provider="ollama",
+        install_target="gemma3:4b",
+        category="chat",
+        recommended_vram_gb=6,
+        estimated_disk_gb=3.3,
+        priority=10,
+        capabilities=["chat", "vision-capable family", "fast"],
+        why_recommended="Best first local model for small student GPUs.",
+        source_url="https://ollama.com/library/gemma3",
+        license_note="Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="qwen3-8b",
+        title="Qwen 3 8B",
+        provider="ollama",
+        install_target="qwen3:8b",
+        category="chat",
+        recommended_vram_gb=8,
+        estimated_disk_gb=5.2,
+        priority=20,
+        capabilities=["chat", "reasoning", "multilingual"],
+        why_recommended="Strong general-purpose reasoning model for 8 GB+ GPUs.",
+        source_url="https://ollama.com/library/qwen3",
+        license_note="Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="llama31-8b",
+        title="Llama 3.1 8B",
+        provider="ollama",
+        install_target="llama3.1:8b",
+        category="chat",
+        recommended_vram_gb=8,
+        estimated_disk_gb=4.9,
+        priority=30,
+        capabilities=["chat", "long context", "general"],
+        why_recommended="Reliable baseline model for comparing answers in class.",
+        source_url="https://ollama.com/library/llama3.1",
+        license_note="Meta Llama license and Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="qwen25-coder-7b",
+        title="Qwen 2.5 Coder 7B",
+        provider="ollama",
+        install_target="qwen2.5-coder:7b",
+        category="code",
+        recommended_vram_gb=8,
+        estimated_disk_gb=4.7,
+        priority=40,
+        capabilities=["code", "debugging", "homework helper"],
+        why_recommended="Good local coding tutor without sending code to a cloud API.",
+        source_url="https://ollama.com/library/qwen2.5-coder",
+        license_note="Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="deepseek-r1-8b",
+        title="DeepSeek R1 8B",
+        provider="ollama",
+        install_target="deepseek-r1:8b",
+        category="reasoning",
+        recommended_vram_gb=10,
+        estimated_disk_gb=5.2,
+        priority=50,
+        capabilities=["reasoning", "math", "step-by-step"],
+        why_recommended="Useful when students want slower, more deliberate reasoning.",
+        source_url="https://ollama.com/library/deepseek-r1",
+        license_note="Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="nomic-embed-text",
+        title="Nomic Embed Text",
+        provider="ollama",
+        install_target="nomic-embed-text",
+        category="embedding",
+        recommended_vram_gb=0,
+        estimated_disk_gb=0.3,
+        priority=60,
+        capabilities=["embeddings", "search", "RAG"],
+        why_recommended="Small embedding model for local search and document experiments.",
+        source_url="https://ollama.com/library/nomic-embed-text",
+        license_note="Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="llava-7b",
+        title="LLaVA 7B",
+        provider="ollama",
+        install_target="llava:7b",
+        category="vision",
+        recommended_vram_gb=8,
+        estimated_disk_gb=4.5,
+        priority=70,
+        capabilities=["vision", "image Q&A", "desktop screenshots"],
+        why_recommended="Adds local image understanding for screenshots and classroom media.",
+        source_url="https://ollama.com/library/llava",
+        license_note="Ollama library terms apply.",
+    ),
+]
+
+
 STUDIO_PACKS: list[StudioPack] = [
     StudioPack(
         id="rootless-ollama",
@@ -364,6 +482,54 @@ def bundles_as_dict() -> dict[str, list[str]]:
     return {key: list(value) for key, value in PACK_BUNDLES.items()}
 
 
+def _detect_vram_gb() -> int:
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return 0
+    try:
+        result = subprocess.run(
+            [
+                nvidia_smi,
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return 0
+        values = [
+            int(line.strip())
+            for line in result.stdout.splitlines()
+            if line.strip().isdigit()
+        ]
+        if not values:
+            return 0
+        return max(values) // 1024
+    except Exception:
+        return 0
+
+
+def _fits_vram(model: StudioModel, vram_gb: int) -> bool:
+    return model.recommended_vram_gb == 0 or (
+        vram_gb > 0 and model.recommended_vram_gb <= vram_gb
+    )
+
+
+def _recommended_model_ids(vram_gb: int) -> set[str]:
+    recommended: set[str] = {"nomic-embed-text"}
+    if vram_gb >= 6:
+        recommended.add("gemma3-4b")
+    if vram_gb >= 8:
+        recommended.update({"qwen3-8b", "llama31-8b", "qwen25-coder-7b", "llava-7b"})
+    if vram_gb >= 10:
+        recommended.add("deepseek-r1-8b")
+    if vram_gb == 0:
+        recommended.add("gemma3-4b")
+    return recommended
+
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -414,6 +580,42 @@ def _ollama_models() -> set[str]:
             installed.add(name)
             installed.add(name.split(":")[0])
     return installed
+
+
+def model_catalog_with_status() -> dict[str, Any]:
+    vram_gb = _detect_vram_gb()
+    installed = _ollama_models()
+    recommended = _recommended_model_ids(vram_gb)
+    models: list[dict[str, Any]] = []
+
+    for model in sorted(STUDIO_MODELS, key=lambda item: item.priority):
+        installed_model = (
+            model.install_target in installed
+            or model.install_target.split(":")[0] in installed
+        )
+        data = asdict(model)
+        data["recommended"] = model.id in recommended
+        data["fits_vram"] = _fits_vram(model, vram_gb)
+        data["installed"] = installed_model
+        data["install_command"] = f"ollama pull {model.install_target}"
+        models.append(data)
+
+    return {
+        "models": models,
+        "recommended_ids": [model["id"] for model in models if model["recommended"]],
+        "installed_targets": sorted(installed),
+        "detected_vram_gb": vram_gb,
+        "ollama_available": bool(_ollama_binary()),
+        "ollama_running": _ollama_reachable(),
+        "count": len(models),
+    }
+
+
+def _find_model(model_id: str) -> StudioModel:
+    for model in STUDIO_MODELS:
+        if model.id == model_id or model.install_target == model_id:
+            return model
+    raise KeyError(f"Unknown studio model: {model_id}")
 
 
 def _ollama_reachable() -> bool:
@@ -852,6 +1054,83 @@ async def _install_scaffold(pack: StudioPack, force_update: bool) -> AsyncIterat
     _write_mod_helper(pack)
     _write_marker(pack, {"workspace": str(_pack_root(pack.id)), "force_update": force_update})
     yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
+
+
+async def install_studio_models(
+    model_ids: list[str] | tuple[str, ...],
+    *,
+    force_update: bool = False,
+) -> AsyncIterator[dict[str, Any]]:
+    """Install selected Ollama models from the model picker."""
+    try:
+        models = [_find_model(model_id) for model_id in model_ids]
+    except KeyError as exc:
+        yield {"event": "error", "status": "failed", "message": str(exc)}
+        return
+
+    if not models:
+        yield {"event": "error", "status": "failed", "message": "No models selected."}
+        return
+
+    yield {
+        "event": "plan",
+        "status": "running",
+        "message": f"Installing {len(models)} selected local model(s)",
+        "model_ids": [model.id for model in models],
+        "estimated_disk_gb": round(sum(model.estimated_disk_gb for model in models), 1),
+        "status_snapshot": model_catalog_with_status(),
+    }
+
+    if not _ollama_binary():
+        rootless = _find_pack("rootless-ollama")
+        async for event in _install_rootless_ollama(rootless, force_update=False):
+            yield {**event, "model_ids": [model.id for model in models]}
+
+    if not _ollama_binary():
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": "Ollama is unavailable; install the Rootless Ollama pack first.",
+            "status_snapshot": model_catalog_with_status(),
+        }
+        return
+
+    _start_ollama_background()
+    if not await _wait_for_ollama():
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": "Ollama did not start. Try nvhive-ollama-serve in a terminal, then retry.",
+            "status_snapshot": model_catalog_with_status(),
+        }
+        return
+
+    installed = _ollama_models()
+    for model in models:
+        if not force_update and (
+            model.install_target in installed
+            or model.install_target.split(":")[0] in installed
+        ):
+            yield {
+                "event": "model",
+                "status": "complete",
+                "message": f"{model.install_target} already installed",
+                "model_id": model.id,
+            }
+            continue
+        async for event in _run_command(
+            [_ollama_binary(), "pull", model.install_target],
+            label=f"Pull {model.title}",
+            env=_ollama_env(),
+        ):
+            yield {**event, "model_id": model.id}
+
+    yield {
+        "event": "complete",
+        "status": "complete",
+        "message": "Selected local models installed",
+        "status_snapshot": model_catalog_with_status(),
+    }
 
 
 async def install_studio_packs(

@@ -32,10 +32,14 @@ import type {
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
+  ComfyUIModelPlanResult,
   ComfyUIStatus,
   StudioPackInstallEvent,
   StudioPackInstallRequest,
   StudioPacksResult,
+  StudioModelInstallEvent,
+  StudioModelInstallRequest,
+  StudioModelsResult,
 } from './types';
 
 function getApiBase(): string {
@@ -129,6 +133,10 @@ export async function startComfyUI(
   port = 8188
 ): Promise<ComfyUIStatus> {
   return apiPost<ComfyUIStatus>('/v1/comfyui/start', { host, port });
+}
+
+export async function saveComfyUIModelPlan(example_ids: string[]): Promise<ComfyUIModelPlanResult> {
+  return apiPost<ComfyUIModelPlanResult>('/v1/comfyui/model-plan', { example_ids });
 }
 
 export function installComfyUIStream(
@@ -297,6 +305,95 @@ export function installStudioPacksStream(
     } catch (err) {
       if (!aborted) {
         callbacks.onError?.(err instanceof Error ? err.message : 'AI Studio pack install failed');
+      }
+    }
+  })();
+
+  return () => {
+    aborted = true;
+    controller.abort();
+  };
+}
+
+export async function getStudioModels(): Promise<StudioModelsResult> {
+  return apiGet<StudioModelsResult>('/v1/studio/models');
+}
+
+export function installStudioModelsStream(
+  request: StudioModelInstallRequest,
+  callbacks: {
+    onEvent?: (event: StudioModelInstallEvent) => void;
+    onComplete?: (event: StudioModelInstallEvent) => void;
+    onError?: (error: string) => void;
+  }
+): () => void {
+  let aborted = false;
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetch(`${BASE_URL}/v1/studio/models/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          detail = body?.detail ?? detail;
+        } catch {
+          // ignore
+        }
+        callbacks.onError?.(detail);
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        callbacks.onError?.('No response body');
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let eventType = '';
+
+      while (!aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            try {
+              const parsed = JSON.parse(line.slice(6).trim()) as StudioModelInstallEvent;
+              callbacks.onEvent?.(parsed);
+              if (eventType === 'complete' || parsed.event === 'complete') {
+                callbacks.onComplete?.(parsed);
+                return;
+              }
+              if (eventType === 'error' || parsed.event === 'error') {
+                callbacks.onError?.(parsed.message || 'Model install failed');
+                return;
+              }
+            } catch {
+              // ignore malformed JSON
+            }
+            eventType = '';
+          }
+        }
+      }
+    } catch (err) {
+      if (!aborted) {
+        callbacks.onError?.(err instanceof Error ? err.message : 'Model install failed');
       }
     }
   })();

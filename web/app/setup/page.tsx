@@ -13,8 +13,11 @@ import {
   getComfyUIExamples,
   installComfyUIStream,
   startComfyUI,
+  saveComfyUIModelPlan,
   getStudioPacks,
   installStudioPacksStream,
+  getStudioModels,
+  installStudioModelsStream,
 } from '@/lib/api';
 import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
@@ -26,19 +29,22 @@ import type {
   ComfyUIStatus,
   StudioPack,
   StudioPackInstallEvent,
+  StudioModel,
+  StudioModelInstallEvent,
 } from '@/lib/types';
 
-type Step = 'welcome' | 'gpu' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
+type Step = 'welcome' | 'gpu' | 'models' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
 
 const STEPS: { id: Step; label: string; num: number }[] = [
   { id: 'welcome', label: 'Welcome', num: 1 },
   { id: 'gpu', label: 'GPU', num: 2 },
-  { id: 'local-ai', label: 'Local AI', num: 3 },
-  { id: 'studio', label: 'Packs', num: 4 },
-  { id: 'comfyui', label: 'ComfyUI', num: 5 },
-  { id: 'cloud', label: 'Cloud', num: 6 },
-  { id: 'test', label: 'Test', num: 7 },
-  { id: 'done', label: 'Done', num: 8 },
+  { id: 'models', label: 'Models', num: 3 },
+  { id: 'local-ai', label: 'Local AI', num: 4 },
+  { id: 'studio', label: 'Packs', num: 5 },
+  { id: 'comfyui', label: 'ComfyUI', num: 6 },
+  { id: 'cloud', label: 'Cloud', num: 7 },
+  { id: 'test', label: 'Test', num: 8 },
+  { id: 'done', label: 'Done', num: 9 },
 ];
 
 const CLOUD_PROVIDERS = [
@@ -50,7 +56,7 @@ const CLOUD_PROVIDERS = [
   { id: 'mistral', name: 'Mistral', description: 'Mistral Large, Small', envKey: 'MISTRAL_API_KEY', placeholder: 'your-key...', signupUrl: 'https://console.mistral.ai/api-keys' },
 ];
 
-// ─── Provider Card (used in Cloud step) ──────────────────────────────────────
+// Provider Card (used in Cloud step)
 
 interface ProviderCardProps {
   p: FreeProvider;
@@ -197,6 +203,9 @@ export default function SetupPage() {
   const [comfyStarting, setComfyStarting] = useState(false);
   const [comfyEvents, setComfyEvents] = useState<ComfyUIInstallEvent[]>([]);
   const [comfyError, setComfyError] = useState<string | null>(null);
+  const [selectedComfyExamples, setSelectedComfyExamples] = useState<Set<string>>(new Set());
+  const [comfyPlanSaving, setComfyPlanSaving] = useState(false);
+  const [comfyPlanMessage, setComfyPlanMessage] = useState<string | null>(null);
   const [studioPacks, setStudioPacks] = useState<StudioPack[]>([]);
   const [studioBundles, setStudioBundles] = useState<Record<string, string[]>>({});
   const [studioRoot, setStudioRoot] = useState<string>('');
@@ -205,8 +214,15 @@ export default function SetupPage() {
   const [studioInstalling, setStudioInstalling] = useState(false);
   const [studioEvents, setStudioEvents] = useState<StudioPackInstallEvent[]>([]);
   const [studioError, setStudioError] = useState<string | null>(null);
+  const [studioModels, setStudioModels] = useState<StudioModel[]>([]);
+  const [detectedModelVram, setDetectedModelVram] = useState(0);
+  const [selectedStudioModels, setSelectedStudioModels] = useState<Set<string>>(new Set());
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsInstalling, setModelsInstalling] = useState(false);
+  const [modelEvents, setModelEvents] = useState<StudioModelInstallEvent[]>([]);
+  const [modelError, setModelError] = useState<string | null>(null);
 
-  // Live-polled provider health — drives Ollama status and the
+  // Live-polled provider health drives Ollama status and the
   // configured-providers list so the setup screen reflects newly
   // added keys within 30s without requiring a manual refresh.
   const { providers: polledProviders } = useProviderHealth();
@@ -243,7 +259,7 @@ export default function SetupPage() {
         setGpuRecs(recs);
       })
       .catch(() => {
-        // GPU not available — leave null
+        // GPU not available; leave null
       })
       .finally(() => setGpuLoading(false));
 
@@ -253,10 +269,14 @@ export default function SetupPage() {
       .then(data => {
         setComfyStatus(data);
         setComfyExamples(data.examples ?? []);
+        setSelectedComfyExamples(new Set((data.examples ?? []).filter(example => example.recommended_vram_gb <= 12).map(example => example.id)));
       })
       .catch(() => {
         getComfyUIExamples()
-          .then(data => setComfyExamples(data.examples))
+          .then(data => {
+            setComfyExamples(data.examples);
+            setSelectedComfyExamples(new Set(data.examples.filter(example => example.recommended_vram_gb <= 12).map(example => example.id)));
+          })
           .catch(() => {});
       })
       .finally(() => setComfyLoading(false));
@@ -272,6 +292,17 @@ export default function SetupPage() {
       })
       .catch(() => {})
       .finally(() => setStudioLoading(false));
+
+    // Fetch model-by-model recommendations for the local model picker.
+    setModelsLoading(true);
+    getStudioModels()
+      .then(data => {
+        setStudioModels(data.models);
+        setDetectedModelVram(data.detected_vram_gb);
+        setSelectedStudioModels(new Set(data.recommended_ids));
+      })
+      .catch(() => {})
+      .finally(() => setModelsLoading(false));
   }, []);
 
   const handleTest = async () => {
@@ -360,6 +391,79 @@ export default function SetupPage() {
     setSelectedStudioPacks(new Set(packIds));
   };
 
+  const refreshStudioModels = async () => {
+    setModelsLoading(true);
+    try {
+      const data = await getStudioModels();
+      setStudioModels(data.models);
+      setDetectedModelVram(data.detected_vram_gb);
+      setSelectedStudioModels(prev => {
+        if (prev.size > 0) return prev;
+        return new Set(data.recommended_ids);
+      });
+    } catch {
+      // keep current model state
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
+  const toggleStudioModel = (modelId: string) => {
+    setSelectedStudioModels(prev => {
+      const next = new Set(prev);
+      if (next.has(modelId)) next.delete(modelId);
+      else next.add(modelId);
+      return next;
+    });
+  };
+
+  const selectRecommendedModels = () => {
+    setSelectedStudioModels(new Set(studioModels.filter(model => model.recommended).map(model => model.id)));
+  };
+
+  const selectInstalledMissingModels = () => {
+    setSelectedStudioModels(new Set(
+      studioModels
+        .filter(model => model.recommended && !model.installed)
+        .map(model => model.id)
+    ));
+  };
+
+  const handleInstallStudioModels = () => {
+    if (modelsInstalling) return;
+    const selected = Array.from(selectedStudioModels);
+    if (selected.length === 0) {
+      setModelError('Select at least one local model.');
+      return;
+    }
+
+    setModelsInstalling(true);
+    setModelError(null);
+    setModelEvents([]);
+
+    installStudioModelsStream(
+      { model_ids: selected, force_update: false },
+      {
+        onEvent: event => {
+          setModelEvents(prev => [...prev.slice(-10), event]);
+          if (event.status_snapshot) {
+            setStudioModels(event.status_snapshot.models);
+            setDetectedModelVram(event.status_snapshot.detected_vram_gb);
+          }
+        },
+        onComplete: event => {
+          setModelEvents(prev => [...prev.slice(-10), event]);
+          setModelsInstalling(false);
+          refreshStudioModels();
+        },
+        onError: error => {
+          setModelError(error);
+          setModelsInstalling(false);
+        },
+      }
+    );
+  };
+
   const handleInstallStudioPacks = (packIds?: string[]) => {
     if (studioInstalling) return;
     const selected = packIds?.length ? packIds : Array.from(selectedStudioPacks);
@@ -437,11 +541,44 @@ export default function SetupPage() {
     }
   };
 
+  const toggleComfyExample = (exampleId: string) => {
+    setSelectedComfyExamples(prev => {
+      const next = new Set(prev);
+      if (next.has(exampleId)) next.delete(exampleId);
+      else next.add(exampleId);
+      return next;
+    });
+  };
+
+  const handleSaveComfyPlan = async () => {
+    setComfyPlanSaving(true);
+    setComfyError(null);
+    setComfyPlanMessage(null);
+    try {
+      const plan = await saveComfyUIModelPlan(Array.from(selectedComfyExamples));
+      setComfyPlanMessage(`Saved ${plan.model_count} model requirement(s) to ${plan.plan_path}`);
+    } catch (err) {
+      setComfyError(err instanceof Error ? err.message : 'Failed to save ComfyUI model plan');
+    } finally {
+      setComfyPlanSaving(false);
+    }
+  };
+
   const currentStepIdx = STEPS.findIndex(s => s.id === step);
   const visibleComfyExamples = comfyStatus?.examples?.length ? comfyStatus.examples : comfyExamples;
+  const selectedComfyModelCount = new Set(
+    visibleComfyExamples
+      .filter(example => selectedComfyExamples.has(example.id))
+      .flatMap(example => example.models)
+  ).size;
   const selectedStudioPackIds = Array.from(selectedStudioPacks);
   const starterStudioPackIds = studioBundles.starter ?? [];
   const studioCategories = Array.from(new Set(studioPacks.map(pack => pack.category)));
+  const selectedModelIds = Array.from(selectedStudioModels);
+  const modelCategories = Array.from(new Set(studioModels.map(model => model.category)));
+  const selectedModelDiskGb = studioModels
+    .filter(model => selectedStudioModels.has(model.id))
+    .reduce((total, model) => total + model.estimated_disk_gb, 0);
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -476,7 +613,7 @@ export default function SetupPage() {
                   ? 'border-[#76B900]/40 text-[#76B900]'
                   : 'border-[#d4d4d4] text-[#333333]'
               }`}>
-                {i < currentStepIdx ? '✓' : s.num}
+                {i < currentStepIdx ? 'OK' : s.num}
               </span>
               <span className="hidden sm:inline">{s.label}</span>
             </button>
@@ -501,19 +638,19 @@ export default function SetupPage() {
               </div>
               <div>
                 <h2 className="text-xl font-bold text-[#0a0a0a] font-mono">Welcome to Hive</h2>
-                <p className="text-xs font-mono text-[#a3a3a3] mt-2">AI Command Center — NVIDIA Powered</p>
+                <p className="text-xs font-mono text-[#a3a3a3] mt-2">AI Command Center - NVIDIA Powered</p>
               </div>
               <div className="text-sm font-mono text-[#525252] max-w-lg mx-auto leading-relaxed">
-                Hive lets you run multiple AI advisors in parallel — locally on your NVIDIA GPU with zero cost,
+                Hive lets you run multiple AI advisors in parallel - locally on your NVIDIA GPU with zero cost,
                 or via cloud APIs. This wizard will get you set up in minutes.
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {[
-                { icon: '▣', title: 'Local AI', desc: 'Run NVIDIA Nemotron on your GPU. Free forever.' },
-                { icon: '◈', title: 'Multi-LLM', desc: 'Query multiple models at once. Compare results.' },
-                { icon: '⚡', title: 'Zero Cost', desc: 'Local models cost $0. Use cloud only when needed.' },
+                { icon: 'GPU', title: 'Local AI', desc: 'Run NVIDIA Nemotron on your GPU. Free forever.' },
+                { icon: 'LLM', title: 'Multi-LLM', desc: 'Query multiple models at once. Compare results.' },
+                { icon: '$0', title: 'Zero Cost', desc: 'Local models cost $0. Use cloud only when needed.' },
               ].map(f => (
                 <div key={f.title} className="bg-[#ffffff] border border-[#e5e5e5] p-4 text-center">
                   <div className="text-2xl text-[#76B900] mb-2">{f.icon}</div>
@@ -527,7 +664,7 @@ export default function SetupPage() {
               <span className={`w-1.5 h-1.5 flex-shrink-0 ${apiStatus === 'connected' ? 'bg-[#76B900]' : apiStatus === 'disconnected' ? 'bg-[#dc2626]' : 'bg-[#a3a3a3] animate-pulse'}`}
                 style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
               <span className={apiStatus === 'connected' ? 'text-[#76B900]' : apiStatus === 'disconnected' ? 'text-[#dc2626]' : 'text-[#a3a3a3]'}>
-                {apiStatus === 'connected' ? 'Hive API is running' : apiStatus === 'disconnected' ? 'Hive API is offline — start it with: council serve' : 'Checking API...'}
+                {apiStatus === 'connected' ? 'Hive API is running' : apiStatus === 'disconnected' ? 'Hive API is offline - start it with: nvh serve' : 'Checking API...'}
               </span>
             </div>
           </div>
@@ -569,10 +706,10 @@ export default function SetupPage() {
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-bold text-[#0a0a0a] font-mono">{g.name}</div>
-                          <div className="text-[10px] font-mono text-[#76B900] mt-0.5">DETECTED · GPU {g.index}</div>
+                          <div className="text-[10px] font-mono text-[#76B900] mt-0.5">DETECTED / GPU {g.index}</div>
                           <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 space-x-2">
                             <span>CUDA {g.cuda_version}</span>
-                            <span>·</span>
+                            <span>/</span>
                             <span>driver {g.driver_version}</span>
                           </div>
                           <div className="mt-2 space-y-1">
@@ -586,7 +723,7 @@ export default function SetupPage() {
                               <div className="progress-fill" style={{ width: `${usedPct}%`, backgroundColor: barColor }} />
                             </div>
                             <div className="text-[10px] font-mono text-[#a3a3a3]">
-                              {(g.memory_free_mb / 1024).toFixed(1)} GB free · Utilization {g.utilization_pct}%
+                              {(g.memory_free_mb / 1024).toFixed(1)} GB free / Utilization {g.utilization_pct}%
                             </div>
                           </div>
                         </div>
@@ -599,7 +736,7 @@ export default function SetupPage() {
                 <div className="bg-[#ffffff] border border-[#e5e5e5] p-3">
                   <div className="text-[10px] font-mono text-[#a3a3a3] mb-1 uppercase tracking-wider">System RAM</div>
                   <div className="text-xs font-mono text-[#525252]">
-                    {gpuInfo.system_ram.total_gb} GB total · {gpuInfo.system_ram.available_gb} GB available ·{' '}
+                    {gpuInfo.system_ram.total_gb} GB total / {gpuInfo.system_ram.available_gb} GB available /{' '}
                     {gpuInfo.system_ram.effective_for_llm_gb} GB usable for CPU offload
                   </div>
                 </div>
@@ -681,7 +818,7 @@ export default function SetupPage() {
             {gpuRecs?.optimizations && gpuInfo && gpuInfo.gpus.length > 0 && (
               <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2">
                 <div className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider mb-2">
-                  Ollama Optimizations — {gpuRecs.optimizations.architecture}
+                  Ollama Optimizations - {gpuRecs.optimizations.architecture}
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
                   <div className="flex justify-between">
@@ -704,7 +841,7 @@ export default function SetupPage() {
                   </div>
                 </div>
                 {gpuRecs.optimizations.notes.map((note, i) => (
-                  <div key={i} className="text-[10px] font-mono text-[#a3a3a3]">· {note}</div>
+                  <div key={i} className="text-[10px] font-mono text-[#a3a3a3]">- {note}</div>
                 ))}
               </div>
             )}
@@ -713,8 +850,168 @@ export default function SetupPage() {
             {!gpuLoading && (!gpuInfo || gpuInfo.gpus.length === 0) && (
               <div className="bg-[#ffffff] border border-[#e5e5e5] p-3">
                 <div className="text-[10px] font-mono text-[#a3a3a3]">
-                  No NVIDIA GPU? Hive still works — Ollama runs on CPU (slower), or use cloud advisors (OpenAI, Anthropic, etc.)
+                  No NVIDIA GPU? Hive still works - Ollama runs on CPU (slower), or use cloud advisors (OpenAI, Anthropic, etc.)
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* MODEL PICKER */}
+        {step === 'models' && (
+          <div className="space-y-6">
+            <div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 3</div>
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Model Picker</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1">
+                Choose exact local models to download. Recommendations are based on detected VRAM and student-friendly defaults.
+              </p>
+            </div>
+
+            <div className="border border-[#76B900]/30 bg-[#76B900]/5 p-4">
+              <div className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between">
+                <div>
+                  <div className="text-sm font-mono font-bold text-[#0a0a0a]">Recommended Local Model Queue</div>
+                  <div className="text-[10px] font-mono text-[#76B900] mt-0.5">
+                    Detected VRAM: {detectedModelVram ? `${detectedModelVram} GB` : 'unknown'} / selected download: ~{selectedModelDiskGb.toFixed(1)} GB
+                  </div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-2">
+                    {studioModels.filter(model => model.installed).length}/{studioModels.length} installed
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={selectRecommendedModels}
+                    className="btn-secondary px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                  >
+                    Recommended
+                  </button>
+                  <button
+                    type="button"
+                    onClick={selectInstalledMissingModels}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                  >
+                    Missing Only
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleInstallStudioModels}
+                    disabled={modelsInstalling || selectedModelIds.length === 0}
+                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {modelsInstalling ? 'Downloading...' : `Download ${selectedModelIds.length || ''}`}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {modelError && (
+              <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-3">
+                <div className="text-[10px] font-mono text-[#dc2626] uppercase tracking-wider mb-1">Model Error</div>
+                <div className="text-xs font-mono text-[#dc2626]">{modelError}</div>
+              </div>
+            )}
+
+            {(modelsInstalling || modelEvents.length > 0) && (
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="section-label">Install Queue</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]">Ollama rootless runtime</div>
+                </div>
+                <div className="max-h-44 overflow-y-auto space-y-1">
+                  {modelEvents.map((event, index) => (
+                    <div key={`${event.event}-${index}`} className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
+                      <span className={event.event === 'error' ? 'text-[#dc2626]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#737373]'}>
+                        {event.event.toUpperCase()}
+                      </span>
+                      <span className="text-[#525252] break-words">{event.message}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {modelsLoading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 animate-pulse">
+                {[1, 2, 3, 4].map(i => (
+                  <div key={i} className="h-32 bg-[#ffffff] border border-[#e5e5e5]" />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {modelCategories.map(category => (
+                  <div key={category} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="section-label">{category}</div>
+                      <span className="text-[10px] font-mono text-[#a3a3a3]">
+                        {studioModels.filter(model => model.category === category).length} model(s)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {studioModels.filter(model => model.category === category).map(model => {
+                        const selected = selectedStudioModels.has(model.id);
+                        return (
+                          <label
+                            key={model.id}
+                            className={`block border p-4 cursor-pointer transition-colors ${
+                              selected
+                                ? 'border-[#76B900]/50 bg-[#76B900]/5'
+                                : 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4]'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => toggleStudioModel(model.id)}
+                                className="mt-1 accent-[#76B900]"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">{model.title}</div>
+                                    <div className="text-[10px] font-mono text-[#76B900] mt-0.5">{model.install_target}</div>
+                                  </div>
+                                  <span className={`text-[9px] font-mono px-1.5 py-0.5 border ${
+                                    model.installed
+                                      ? 'border-[#76B900]/40 text-[#76B900]'
+                                      : model.fits_vram
+                                      ? 'border-[#d4d4d4] text-[#525252]'
+                                      : 'border-[#f59e0b]/40 text-[#b45309]'
+                                  }`}>
+                                    {model.installed ? 'INSTALLED' : model.fits_vram ? 'FITS' : 'CHECK VRAM'}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] font-mono text-[#737373] leading-relaxed mt-2">
+                                  {model.why_recommended}
+                                </div>
+                                <div className="flex flex-wrap gap-1 mt-3">
+                                  {model.recommended && (
+                                    <span className="text-[9px] font-mono text-[#76B900] bg-[#76B900]/10 border border-[#76B900]/20 px-1.5 py-0.5">
+                                      recommended
+                                    </span>
+                                  )}
+                                  <span className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                    {model.recommended_vram_gb ? `${model.recommended_vram_gb}GB VRAM` : 'CPU OK'}
+                                  </span>
+                                  <span className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                    ~{model.estimated_disk_gb}GB
+                                  </span>
+                                  {model.capabilities.slice(0, 3).map(capability => (
+                                    <span key={capability} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                      {capability}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -724,9 +1021,9 @@ export default function SetupPage() {
         {step === 'local-ai' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 3</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 4</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Local AI Setup</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">Install NVIDIA Nemotron via Ollama — runs on your GPU, free forever</p>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1">Install NVIDIA Nemotron via Ollama - runs on your GPU, free forever</p>
             </div>
 
             {/* Ollama status */}
@@ -776,7 +1073,7 @@ export default function SetupPage() {
                   <div className="w-8 h-8 bg-[#76B900]/20 border border-[#76B900]/40 flex items-center justify-center flex-shrink-0 font-bold text-[#76B900] text-sm font-mono">N</div>
                   <div>
                     <div className="text-sm font-mono font-bold text-[#0a0a0a]">NVIDIA Nemotron Mini (2B)</div>
-                    <div className="text-[10px] font-mono text-[#76B900]">~2 GB · Fast · 4K context · Instruction tuned</div>
+                    <div className="text-[10px] font-mono text-[#76B900]">~2 GB / Fast / 4K context / Instruction tuned</div>
                     <div className="mt-1 bg-[#ffffff] border border-[#e5e5e5] px-2 py-1">
                       <code className="text-[10px] font-mono text-[#76B900]">ollama pull nemotron-mini</code>
                     </div>
@@ -789,7 +1086,7 @@ export default function SetupPage() {
                   <div className="w-8 h-8 bg-[#e5e5e5] border border-[#d4d4d4] flex items-center justify-center flex-shrink-0 font-bold text-[#525252] text-sm font-mono">N</div>
                   <div>
                     <div className="text-sm font-mono font-bold text-[#0a0a0a]">NVIDIA Nemotron (8B)</div>
-                    <div className="text-[10px] font-mono text-[#a3a3a3]">~8 GB · Best quality · 131K context · Tool calling</div>
+                    <div className="text-[10px] font-mono text-[#a3a3a3]">~8 GB / Best quality / 131K context / Tool calling</div>
                     <div className="mt-1 bg-[#ffffff] border border-[#e5e5e5] px-2 py-1">
                       <code className="text-[10px] font-mono text-[#525252]">ollama pull nemotron</code>
                     </div>
@@ -813,7 +1110,7 @@ export default function SetupPage() {
         {step === 'studio' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 4</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 5</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">AI Studio Packs</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
                 One-click rootless packs for LLMs, local agents, ComfyUI sub software, and Linux game projects.
@@ -976,7 +1273,7 @@ export default function SetupPage() {
         {step === 'comfyui' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 5</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 6</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">ComfyUI Visual Workflows</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
                 Auto-install a local ComfyUI workspace with NVIDIA-ready PyTorch, Manager support, and nvHive example packs.
@@ -1065,49 +1362,83 @@ export default function SetupPage() {
             )}
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="section-label">Trending Starter Workflows</div>
-                <div className="text-[10px] font-mono text-[#a3a3a3]">Official ComfyUI templates and docs</div>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="section-label">Workflow Model Plan</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">
+                    {selectedComfyExamples.size} workflow(s), {selectedComfyModelCount} model requirement(s)
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveComfyPlan}
+                  disabled={comfyPlanSaving || selectedComfyExamples.size === 0}
+                  className="btn-secondary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                >
+                  {comfyPlanSaving ? 'Saving...' : 'Save Model Plan'}
+                </button>
               </div>
 
+              {comfyPlanMessage && (
+                <div className="bg-[#76B900]/5 border border-[#76B900]/20 p-3">
+                  <div className="text-[10px] font-mono text-[#76B900]">{comfyPlanMessage}</div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {visibleComfyExamples.slice(0, 6).map(example => (
-                  <div key={example.id} className="border border-[#e5e5e5] bg-[#ffffff] p-4 space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-xs font-mono font-bold text-[#0a0a0a]">{example.title}</div>
-                        <div className="text-[10px] font-mono text-[#76B900] uppercase mt-0.5">
-                          {example.category} / {example.install_profile}
+                {visibleComfyExamples.slice(0, 6).map(example => {
+                  const selected = selectedComfyExamples.has(example.id);
+                  return (
+                    <label
+                      key={example.id}
+                      className={`block border p-4 space-y-3 cursor-pointer transition-colors ${
+                        selected ? 'border-[#76B900]/50 bg-[#76B900]/5' : 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4]'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleComfyExample(example.id)}
+                            className="mt-1 accent-[#76B900]"
+                          />
+                          <div>
+                            <div className="text-xs font-mono font-bold text-[#0a0a0a]">{example.title}</div>
+                            <div className="text-[10px] font-mono text-[#76B900] uppercase mt-0.5">
+                              {example.category} / {example.install_profile}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-[10px] font-mono text-[#525252] border border-[#d4d4d4] px-1.5 py-0.5">
+                          {example.recommended_vram_gb}GB
                         </div>
                       </div>
-                      <div className="text-[10px] font-mono text-[#525252] border border-[#d4d4d4] px-1.5 py-0.5">
-                        {example.recommended_vram_gb}GB
+
+                      <div className="text-[10px] font-mono text-[#737373] leading-relaxed">
+                        {example.why_trending}
                       </div>
-                    </div>
 
-                    <div className="text-[10px] font-mono text-[#737373] leading-relaxed">
-                      {example.why_trending}
-                    </div>
+                      <div className="bg-[#ffffff] border border-[#e5e5e5] p-2">
+                        <div className="text-[9px] font-mono text-[#a3a3a3] uppercase mb-1">Load path</div>
+                        <div className="text-[10px] font-mono text-[#525252]">{example.workflow_hint}</div>
+                      </div>
 
-                    <div className="bg-[#ffffff] border border-[#e5e5e5] p-2">
-                      <div className="text-[9px] font-mono text-[#a3a3a3] uppercase mb-1">Load path</div>
-                      <div className="text-[10px] font-mono text-[#525252]">{example.workflow_hint}</div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-1">
-                      {example.models.slice(0, 3).map(model => (
-                        <span key={model} className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
-                          {model}
-                        </span>
-                      ))}
-                      {example.models.length > 3 && (
-                        <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
-                          +{example.models.length - 3} more
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                      <div className="flex flex-wrap gap-1">
+                        {example.models.slice(0, 3).map(model => (
+                          <span key={model} className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                            {model}
+                          </span>
+                        ))}
+                        {example.models.length > 3 && (
+                          <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                            +{example.models.length - 3} more
+                          </span>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })}
               </div>
             </div>
 
@@ -1123,10 +1454,10 @@ export default function SetupPage() {
         {step === 'cloud' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 6</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 7</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Cloud Providers</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
-                Optional — add API keys for cloud providers. Local Nemotron works without any keys.
+                Optional - add API keys for cloud providers. Local Nemotron works without any keys.
               </p>
             </div>
 
@@ -1252,7 +1583,7 @@ export default function SetupPage() {
         {step === 'test' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 7</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 8</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Quick Test</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">Verify everything is working correctly</p>
             </div>
@@ -1367,7 +1698,7 @@ export default function SetupPage() {
               <div className="space-y-2">
                 {[
                   { label: 'Local AI', value: ollamaStatus === 'online' ? 'Ollama Running' : 'Not configured', ok: ollamaStatus === 'online' },
-                  { label: 'NVIDIA Nemotron', value: 'Recommended model', ok: true },
+                  { label: 'Local Models', value: `${studioModels.filter(model => model.installed).length}/${studioModels.length || 0} installed`, ok: studioModels.some(model => model.installed) },
                   { label: 'AI Studio Packs', value: `${studioPacks.filter(pack => pack.status.installed).length}/${studioPacks.length || 0} installed`, ok: studioPacks.some(pack => pack.status.installed) },
                   { label: 'ComfyUI', value: comfyStatus?.running ? 'Running' : comfyStatus?.installed ? 'Installed' : 'Optional', ok: Boolean(comfyStatus?.installed || comfyStatus?.running) },
                   { label: 'Hive API', value: apiStatus === 'connected' ? 'Online' : 'Offline', ok: apiStatus === 'connected' },
@@ -1415,7 +1746,7 @@ export default function SetupPage() {
             disabled={step === 'welcome'}
             className="btn-ghost px-4 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-30"
           >
-            ← Back
+            &lt; Back
           </button>
 
           <span className="text-[10px] font-mono text-[#333333]">
@@ -1430,11 +1761,11 @@ export default function SetupPage() {
               }}
               className="btn-primary px-6 py-2 text-xs font-mono uppercase tracking-wider"
             >
-              Next →
+              Next &gt;
             </button>
           ) : (
             <Link href="/" className="btn-primary px-6 py-2 text-xs font-mono uppercase tracking-wider">
-              Done →
+              Done &gt;
             </Link>
           )}
         </div>

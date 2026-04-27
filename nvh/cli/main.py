@@ -7567,11 +7567,17 @@ def update(
 @app.command(rich_help_panel="Infrastructure")
 def studio(
     list_packs: bool = typer.Option(False, "--list", help="List available rootless AI Studio packs"),
+    list_models: bool = typer.Option(False, "--models", help="List recommended local model downloads"),
     install: str | None = typer.Option(
         None,
         "--install",
         "-i",
         help="Install a pack id or bundle: starter, all, llms, agents, comfy, game",
+    ),
+    install_models: str | None = typer.Option(
+        None,
+        "--install-models",
+        help="Install comma-separated model ids, or 'recommended'",
     ),
     force_update: bool = typer.Option(False, "--force-update", help="Update existing packs where possible"),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompts"),
@@ -7580,11 +7586,73 @@ def studio(
     from nvh.integrations.studio_packs import (
         catalog_with_status,
         expand_pack_ids,
+        install_studio_models,
         install_studio_packs,
+        model_catalog_with_status,
     )
 
     catalog = catalog_with_status()
     packs = catalog["packs"]
+
+    if list_models or install_models:
+        model_catalog = model_catalog_with_status()
+        console.print("\n[bold green]NVHive Local Models[/bold green]")
+        console.print(f"  [dim]Detected VRAM: {model_catalog['detected_vram_gb'] or 'unknown'} GB[/dim]\n")
+        table = Table(show_header=True, header_style="bold green")
+        table.add_column("Model")
+        table.add_column("Category")
+        table.add_column("VRAM")
+        table.add_column("Disk")
+        table.add_column("Status")
+        table.add_column("Why")
+        for model in model_catalog["models"]:
+            badges = []
+            if model["recommended"]:
+                badges.append("recommended")
+            if model["installed"]:
+                badges.append("installed")
+            elif model["fits_vram"]:
+                badges.append("fits")
+            else:
+                badges.append("check vram")
+            table.add_row(
+                model["id"],
+                model["category"],
+                f"{model['recommended_vram_gb']} GB" if model["recommended_vram_gb"] else "any",
+                f"~{model['estimated_disk_gb']} GB",
+                ", ".join(badges),
+                model["why_recommended"],
+            )
+        console.print(table)
+        console.print("\nTry: [bold]nvh studio --install-models recommended -y[/bold]")
+
+        if install_models:
+            model_ids = (
+                model_catalog["recommended_ids"]
+                if install_models == "recommended"
+                else [item.strip() for item in install_models.split(",") if item.strip()]
+            )
+            console.print(f"\n[bold green]Local Model Install[/bold green]\n  Models: [bold]{', '.join(model_ids)}[/bold]")
+            if not yes and not typer.confirm("Download selected models now?", default=True):
+                console.print("Cancelled.")
+                return
+
+            async def _install_selected_models() -> None:
+                last_log = 0.0
+                async for event in install_studio_models(model_ids, force_update=force_update):
+                    kind = event.get("event", "")
+                    message = event.get("message", "")
+                    now = time.monotonic()
+                    if kind in {"plan", "model", "step", "complete", "error"}:
+                        color = "green" if kind == "complete" else "red" if kind == "error" else "cyan"
+                        prefix = f"{kind.upper():>8}"
+                        console.print(f"  [{color}]{prefix}[/] {message}")
+                    elif kind == "log" and now - last_log > 1.5:
+                        console.print(f"  [dim]{message[:140]}[/dim]")
+                        last_log = now
+
+            _run(_install_selected_models())
+        return
 
     if list_packs or not install:
         console.print("\n[bold green]NVHive AI Studio Packs[/bold green]")
