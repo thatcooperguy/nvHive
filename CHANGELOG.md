@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.33.1] - 2026-04-27
+
+### Added
+- **Setup quick profiles.** The first-run wizard now offers Student
+  Starter, Creator/ComfyUI, Game Dev, and Full Workstation presets that
+  preselect sensible local models, studio packs, and ComfyUI examples.
+
+### Fixed
+- Release workflow now hands PyPI publishing to the trusted
+  `.github/workflows/publish.yml` workflow instead of running an inline
+  publisher job that is not registered with PyPI.
+
 ## [0.33.0] - 2026-04-27
 
 ### Added

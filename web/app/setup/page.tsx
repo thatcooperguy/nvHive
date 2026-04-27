@@ -34,6 +34,7 @@ import type {
 } from '@/lib/types';
 
 type Step = 'welcome' | 'gpu' | 'models' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
+type WizardProfile = 'student' | 'creator' | 'game' | 'full';
 
 const STEPS: { id: Step; label: string; num: number }[] = [
   { id: 'welcome', label: 'Welcome', num: 1 },
@@ -391,6 +392,49 @@ export default function SetupPage() {
     setSelectedStudioPacks(new Set(packIds));
   };
 
+  const applyWizardProfile = (profile: WizardProfile) => {
+    const recommendedModels = studioModels
+      .filter(model => model.recommended)
+      .map(model => model.id);
+    const allModelIds = studioModels
+      .filter(model => model.recommended || model.fits_vram)
+      .map(model => model.id);
+    const vramLimit = detectedModelVram || 12;
+    const starterPackIds = studioBundles.starter ?? studioPacks.map(pack => pack.id);
+    const starterExamples = visibleComfyExamples
+      .filter(example => example.recommended_vram_gb <= vramLimit)
+      .map(example => example.id);
+
+    if (profile === 'student') {
+      setSelectedStudioModels(new Set(recommendedModels));
+      setSelectedStudioPacks(new Set(starterPackIds));
+      setSelectedComfyExamples(new Set(starterExamples));
+      setStep('models');
+      return;
+    }
+
+    if (profile === 'creator') {
+      setSelectedStudioModels(new Set(recommendedModels));
+      setSelectedStudioPacks(new Set(studioBundles.comfy ?? ['comfyui-power-nodes']));
+      setSelectedComfyExamples(new Set(starterExamples));
+      setStep('comfyui');
+      return;
+    }
+
+    if (profile === 'game') {
+      setSelectedStudioModels(new Set(recommendedModels));
+      setSelectedStudioPacks(new Set(studioBundles.game ?? ['game-dev-lab', 'game-mod-helper']));
+      setSelectedComfyExamples(new Set(starterExamples));
+      setStep('studio');
+      return;
+    }
+
+    setSelectedStudioModels(new Set(allModelIds.length ? allModelIds : recommendedModels));
+    setSelectedStudioPacks(new Set(studioBundles.all ?? studioPacks.map(pack => pack.id)));
+    setSelectedComfyExamples(new Set(starterExamples));
+    setStep('models');
+  };
+
   const refreshStudioModels = async () => {
     setModelsLoading(true);
     try {
@@ -658,6 +702,55 @@ export default function SetupPage() {
                   <div className="text-[10px] font-mono text-[#a3a3a3]">{f.desc}</div>
                 </div>
               ))}
+            </div>
+
+            <div className="space-y-3">
+              <div className="section-label">Quick Profiles</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {[
+                  {
+                    id: 'student' as WizardProfile,
+                    title: 'Student Starter',
+                    desc: 'Recommended local models, agent lab, ComfyUI nodes, and beginner workflow examples.',
+                    next: 'Models',
+                  },
+                  {
+                    id: 'creator' as WizardProfile,
+                    title: 'Creator / ComfyUI',
+                    desc: 'ComfyUI power nodes plus image, edit, ControlNet, and video workflow planning.',
+                    next: 'ComfyUI',
+                  },
+                  {
+                    id: 'game' as WizardProfile,
+                    title: 'Game Dev',
+                    desc: 'Linux game-dev pack, mod helper workspace, and local AI helpers.',
+                    next: 'Packs',
+                  },
+                  {
+                    id: 'full' as WizardProfile,
+                    title: 'Full Workstation',
+                    desc: 'Everything that fits the detected GPU, with all rootless studio packs selected.',
+                    next: 'Models',
+                  },
+                ].map(profile => (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    onClick={() => applyWizardProfile(profile.id)}
+                    className="text-left border border-[#e5e5e5] bg-[#ffffff] p-4 hover:border-[#76B900]/50 hover:bg-[#76B900]/5 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-mono font-bold text-[#0a0a0a] uppercase">{profile.title}</div>
+                        <div className="text-[10px] font-mono text-[#737373] leading-relaxed mt-2">{profile.desc}</div>
+                      </div>
+                      <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/30 px-1.5 py-0.5 flex-shrink-0">
+                        {profile.next}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="flex items-center gap-2 text-[10px] font-mono">
