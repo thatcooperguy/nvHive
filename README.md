@@ -102,6 +102,9 @@ The WebUI setup wizard includes a model picker with GPU-fit badges, disk
 estimates, installed status, and persistent install jobs saved under
 `$NVH_HOME/jobs`. ComfyUI, AI Studio packs, and local model downloads keep
 showing progress after a browser refresh and can be canceled from the wizard.
+For pip installs, the downloaded WebUI, npm cache, and no-root Node fallback
+also live under `$NVH_HOME`, so reconnecting to a cloud desktop does not mean
+starting the frontend toolchain from scratch.
 The ComfyUI step lets students select workflow examples and save a model
 download plan with source links, because many image/video weights are large or
 require upstream terms.
