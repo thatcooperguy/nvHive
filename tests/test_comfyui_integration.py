@@ -41,10 +41,14 @@ def test_write_model_plan_creates_selected_manifest(tmp_path, monkeypatch) -> No
     app_dir.mkdir()
 
     plan_path = comfyui.write_model_plan(["wan22-5b-video-generation"])
+    helper_path = tmp_path / "ComfyUI" / "nvhive_examples" / "download-comfy-models.sh"
 
     assert plan_path.exists()
-    assert "wan2.2_ti2v_5B_fp16.safetensors" in plan_path.read_text(encoding="utf-8")
-    assert (tmp_path / "ComfyUI" / "nvhive_examples" / "MODEL_DOWNLOAD_PLAN.md").exists()
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert plan["download_helper"] == "download-comfy-models.sh"
+    assert plan["models"][0]["target_folder"] in {"diffusion_models", "vae"}
+    assert helper_path.exists()
+    assert "wan2.2_ti2v_5B_fp16.safetensors" in helper_path.read_text(encoding="utf-8")
 
 
 def test_detect_comfyui_reports_absent_install(tmp_path, monkeypatch) -> None:
