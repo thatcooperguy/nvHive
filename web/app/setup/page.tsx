@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import {
   checkHealth,
@@ -101,87 +102,32 @@ const CLOUD_PROVIDERS = [
   { id: 'mistral', name: 'Mistral', description: 'Mistral Large, Small', envKey: 'MISTRAL_API_KEY', placeholder: 'your-key...', signupUrl: 'https://console.mistral.ai/api-keys' },
 ];
 
-type SoftwareGlyphKind = 'claw' | 'nodes' | 'blender' | 'godot' | 'cube' | 'unreal' | 'github' | 'nvidia' | 'llm';
+type BrandLogoId = 'openclaw' | 'nvidia' | 'comfyui' | 'blender' | 'godot' | 'github' | 'unity' | 'unreal' | 'ollama';
 
-function SoftwareGlyph({ kind }: { kind: SoftwareGlyphKind }) {
-  if (kind === 'claw') {
-    return (
-      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-        <path d="M9 24 16 5M16 25l4-18M23 24l-1-15" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-        <path d="M7 25c5 3 13 3 18 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  if (kind === 'nodes') {
-    return (
-      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-        <path d="M10 10h12v12H10zM10 16H5M27 16h-5M16 10V5M16 27v-5" stroke="currentColor" strokeWidth="2" />
-        <circle cx="5" cy="16" r="2.5" fill="currentColor" />
-        <circle cx="27" cy="16" r="2.5" fill="currentColor" />
-        <circle cx="16" cy="5" r="2.5" fill="currentColor" />
-        <circle cx="16" cy="27" r="2.5" fill="currentColor" />
-      </svg>
-    );
-  }
-  if (kind === 'blender') {
-    return (
-      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-        <path d="M6 12h13c5 0 8 3 8 7s-4 7-10 7c-5 0-9-3-9-7 0-2 1-4 3-5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-        <path d="M7 7l8 5M11 4l8 8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-        <circle cx="18" cy="19" r="3" fill="currentColor" />
-      </svg>
-    );
-  }
-  if (kind === 'godot') {
-    return (
-      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-        <path d="m6 13 4-5 3 3 3-5 3 5 3-3 4 5-2 12H8L6 13Z" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" />
-        <circle cx="12" cy="18" r="1.8" fill="currentColor" />
-        <circle cx="20" cy="18" r="1.8" fill="currentColor" />
-        <path d="M12 23h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  if (kind === 'cube') {
-    return (
-      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-        <path d="m16 4 10 6v12l-10 6-10-6V10l10-6Z" stroke="currentColor" strokeWidth="2.4" strokeLinejoin="round" />
-        <path d="M6 10l10 6 10-6M16 16v12" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
-      </svg>
-    );
-  }
-  if (kind === 'unreal') {
-    return (
-      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-        <path d="M16 4c6 0 11 5 11 11 0 8-6 12-11 13C11 27 5 23 5 15 5 9 10 4 16 4Z" stroke="currentColor" strokeWidth="2.2" />
-        <path d="M11 10v8c0 3 2 5 5 5s5-2 5-5v-8M9 10h6M17 10h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  if (kind === 'github') {
-    return (
-      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-        <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="2.2" />
-        <circle cx="23" cy="24" r="3" stroke="currentColor" strokeWidth="2.2" />
-        <circle cx="9" cy="24" r="3" stroke="currentColor" strokeWidth="2.2" />
-        <path d="M9 11v10M12 8h5c3 0 6 3 6 7v6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-      </svg>
-    );
-  }
-  if (kind === 'nvidia') {
-    return (
-      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-        <path d="M5 17c5-7 15-7 22 0-7 7-17 7-22 0Z" stroke="currentColor" strokeWidth="2.2" />
-        <circle cx="16" cy="17" r="4" stroke="currentColor" strokeWidth="2.2" />
-        <path d="M16 13c4 0 7 2 9 4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
-      </svg>
-    );
-  }
+const BRAND_LOGOS: Record<BrandLogoId, { src: string; alt: string }> = {
+  openclaw: { src: '/brand-icons/openclaw.svg', alt: 'OpenClaw logo' },
+  nvidia: { src: '/brand-icons/nvidia.svg', alt: 'NVIDIA logo' },
+  comfyui: { src: '/brand-icons/comfyui.svg', alt: 'ComfyUI logo' },
+  blender: { src: '/brand-icons/blender.svg', alt: 'Blender logo' },
+  godot: { src: '/brand-icons/godot.svg', alt: 'Godot Engine logo' },
+  github: { src: '/brand-icons/github.svg', alt: 'GitHub logo' },
+  unity: { src: '/brand-icons/unity.svg', alt: 'Unity logo' },
+  unreal: { src: '/brand-icons/unrealengine.svg', alt: 'Unreal Engine logo' },
+  ollama: { src: '/brand-icons/ollama.svg', alt: 'Ollama logo' },
+};
+
+function BrandLogo({ id, className = 'w-7 h-7' }: { id: BrandLogoId; className?: string }) {
+  const logo = BRAND_LOGOS[id];
   return (
-    <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <path d="M8 24V8h16v16H8Z" stroke="currentColor" strokeWidth="2.4" />
-      <path d="M12 20 16 9l4 11M13 17h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
+    <Image
+      src={logo.src}
+      alt={logo.alt}
+      width={32}
+      height={32}
+      className={`${className} object-contain`}
+      draggable={false}
+      unoptimized
+    />
   );
 }
 
@@ -1418,15 +1364,15 @@ export default function SetupPage() {
   const githubPack = studioPacks.find(pack => pack.id === 'github-login-helper') ?? null;
   const gameEnginePacks = studioPacks.filter(pack => ['godot-engine', 'unity-hub-helper', 'unreal-engine-helper'].includes(pack.id));
   const modelPickPreview = visibleHardwareModels.slice(0, 3);
-  const softwareHighlights = [
-    { id: 'openclaw', label: 'OpenClaw', kind: 'claw' as SoftwareGlyphKind, sub: studioPacks.find(pack => pack.id === 'openclaw-agent')?.status.installed ? 'Ready' : 'Agent', tone: 'bg-[#111827] text-[#76B900] border-[#111827]' },
-    { id: 'nemoclaw', label: 'NemoClaw', kind: 'nvidia' as SoftwareGlyphKind, sub: studioPacks.find(pack => pack.id === 'nemoclaw-sandbox')?.status.installed ? 'Ready' : 'Guarded', tone: 'bg-[#76B900] text-black border-[#76B900]' },
-    { id: 'comfyui', label: 'ComfyUI', kind: 'nodes' as SoftwareGlyphKind, sub: comfyStatus?.installed ? 'Ready' : 'Images', tone: 'bg-[#2563eb] text-white border-[#2563eb]' },
-    { id: 'blender', label: 'Blender', kind: 'blender' as SoftwareGlyphKind, sub: studioPacks.find(pack => pack.id === 'blender-creative')?.status.installed ? 'Ready' : '3D', tone: 'bg-[#f97316] text-white border-[#f97316]' },
-    { id: 'godot', label: 'Godot', kind: 'godot' as SoftwareGlyphKind, sub: studioPacks.find(pack => pack.id === 'godot-engine')?.status.installed ? 'Ready' : 'Games', tone: 'bg-[#478cbf] text-white border-[#478cbf]' },
-    { id: 'github', label: 'GitHub', kind: 'github' as SoftwareGlyphKind, sub: githubPack?.status.installed ? 'Ready' : 'Repos', tone: 'bg-[#0a0a0a] text-white border-[#0a0a0a]' },
-    { id: 'unity', label: 'Unity', kind: 'cube' as SoftwareGlyphKind, sub: 'Helper', tone: 'bg-[#525252] text-white border-[#525252]' },
-    { id: 'unreal', label: 'Unreal', kind: 'unreal' as SoftwareGlyphKind, sub: 'Helper', tone: 'bg-[#7c3aed] text-white border-[#7c3aed]' },
+  const softwareHighlights: Array<{ id: string; label: string; logo: BrandLogoId; sub: string; tone: string }> = [
+    { id: 'openclaw', label: 'OpenClaw', logo: 'openclaw', sub: studioPacks.find(pack => pack.id === 'openclaw-agent')?.status.installed ? 'Ready' : 'Agent', tone: 'bg-white border-[#e5e5e5]' },
+    { id: 'nemoclaw', label: 'NemoClaw', logo: 'nvidia', sub: studioPacks.find(pack => pack.id === 'nemoclaw-sandbox')?.status.installed ? 'Ready' : 'Guarded', tone: 'bg-white border-[#76B900]/40' },
+    { id: 'comfyui', label: 'ComfyUI', logo: 'comfyui', sub: comfyStatus?.installed ? 'Ready' : 'Images', tone: 'bg-white border-[#e5e5e5]' },
+    { id: 'blender', label: 'Blender', logo: 'blender', sub: studioPacks.find(pack => pack.id === 'blender-creative')?.status.installed ? 'Ready' : '3D', tone: 'bg-white border-[#e5e5e5]' },
+    { id: 'godot', label: 'Godot', logo: 'godot', sub: studioPacks.find(pack => pack.id === 'godot-engine')?.status.installed ? 'Ready' : 'Games', tone: 'bg-white border-[#e5e5e5]' },
+    { id: 'github', label: 'GitHub', logo: 'github', sub: githubPack?.status.installed ? 'Ready' : 'Repos', tone: 'bg-white border-[#e5e5e5]' },
+    { id: 'unity', label: 'Unity', logo: 'unity', sub: 'Helper', tone: 'bg-white border-[#e5e5e5]' },
+    { id: 'unreal', label: 'Unreal', logo: 'unreal', sub: 'Helper', tone: 'bg-white border-[#e5e5e5]' },
   ];
   const repoAndGameHighlights = softwareHighlights.filter(item => ['github', 'godot', 'unity', 'unreal'].includes(item.id));
   const missionProfiles: Array<{
@@ -2340,7 +2286,7 @@ export default function SetupPage() {
                     {softwareHighlights.slice(0, 6).map(item => (
                       <div key={item.id} className="flex items-center gap-2 border border-[#d8e8c3] bg-white/70 p-2 min-w-0">
                         <span className={`w-10 h-10 flex items-center justify-center border flex-shrink-0 ${item.tone}`}>
-                          <SoftwareGlyph kind={item.kind} />
+                          <BrandLogo id={item.logo} />
                         </span>
                         <span className="min-w-0">
                           <span className="block text-[11px] font-bold text-[#0a0a0a] truncate">{item.label}</span>
@@ -2397,8 +2343,8 @@ export default function SetupPage() {
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
               <div className={`border bg-white p-4 ${storageReady ? 'border-[#76B900]/30' : 'border-[#d97706]/30'}`}>
                 <div className="flex items-start gap-3">
-                  <span className={`w-12 h-12 flex items-center justify-center border flex-shrink-0 ${storageReady ? 'bg-[#76B900] text-black border-[#76B900]' : 'bg-[#fff7ed] text-[#d97706] border-[#d97706]/30'}`}>
-                    <SoftwareGlyph kind="nvidia" />
+                  <span className={`w-12 h-12 flex items-center justify-center border flex-shrink-0 ${storageReady ? 'bg-white border-[#76B900]/50' : 'bg-white border-[#d97706]/30'}`}>
+                    <BrandLogo id="nvidia" className="w-8 h-8" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="section-label">Storage Autopilot</div>
@@ -2461,8 +2407,8 @@ export default function SetupPage() {
 
               <div className="border border-[#e5e5e5] bg-white p-4">
                 <div className="flex items-start gap-3">
-                  <span className="w-12 h-12 flex items-center justify-center border bg-[#0a0a0a] text-[#76B900] border-[#0a0a0a] flex-shrink-0">
-                    <SoftwareGlyph kind="llm" />
+                  <span className="w-12 h-12 flex items-center justify-center border bg-white border-[#e5e5e5] flex-shrink-0">
+                    <BrandLogo id="ollama" className="w-8 h-8" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="section-label">LLM Picks</div>
@@ -2511,7 +2457,7 @@ export default function SetupPage() {
                     <div key={item.id} className="border border-[#e5e5e5] bg-[#fafafa] p-2 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className={`w-9 h-9 flex items-center justify-center border flex-shrink-0 ${item.tone}`}>
-                          <SoftwareGlyph kind={item.kind} />
+                          <BrandLogo id={item.logo} className="w-6 h-6" />
                         </span>
                         <span className="min-w-0">
                           <span className="block text-[10px] font-bold text-[#0a0a0a] truncate">{item.label}</span>
