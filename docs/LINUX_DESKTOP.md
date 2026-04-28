@@ -128,6 +128,7 @@ workflow needs before accepting upstream terms.
 - AI Studio packs are rootless and install to user-owned directories
 - Local data path: `$NVH_HOME` on the mounted persistent file volume
 - API binds to localhost by default
+- WebUI source, npm cache, auto-installed Node, and the local API process inherit `NVH_HOME`
 - WebUI starts a local API automatically unless `--no-api` is used
 - ComfyUI auto-start binds to `127.0.0.1:8188`
 - Cloud API keys are optional and stored locally

@@ -7127,8 +7127,8 @@ def _is_package_installed(module_name: str) -> bool:
 def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]:
     """Offer to auto-install Node.js into the user's home without root.
 
-    Uses ``fnm`` (Fast Node Manager) — a single-binary, no-root Node manager:
-    downloads into ``~/.local/share/fnm``, manages multiple Node versions,
+    Uses ``fnm`` (Fast Node Manager) - a single-binary, no-root Node manager:
+    downloads into ``NVH_HOME/runtimes/fnm``, manages multiple Node versions,
     adds them to PATH on demand. We install fnm, then use it to pull Node
     22 (current LTS) and update this process's PATH so the subsequent npm
     calls in ``nvh webui`` find it.
@@ -7143,12 +7143,21 @@ def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]
     import shutil as _shutil
     import subprocess as _sp
 
+    from nvh.integrations.storage import storage_layout
+
     if sys.platform == "win32":
         return None, None
 
+    layout = storage_layout()
+    fnm_root = layout.runtime_dir / "fnm"
+    fnm_root.mkdir(parents=True, exist_ok=True)
+    env = _os.environ.copy()
+    env.update(layout.env())
+    env["FNM_DIR"] = str(fnm_root)
+
     try:
         answer = console.input(
-            "  Auto-install Node.js into your home via fnm (no root)? [Y/n] "
+            f"  Auto-install Node.js into {fnm_root} via fnm (no root)? [Y/n] "
         ).strip().lower()
     except (EOFError, KeyboardInterrupt):
         return None, None
@@ -7156,11 +7165,11 @@ def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]
         return None, None
 
     # Step 1: install fnm if missing. The official installer writes to
-    # ~/.local/share/fnm and optionally edits shell rc; we bypass the rc
+    # FNM_DIR and optionally edits shell rc; we bypass the rc
     # edit (--skip-shell) since we'll just prepend to this process's PATH.
     fnm = _shutil.which("fnm")
     if fnm is None:
-        candidate = Path.home() / ".local" / "share" / "fnm" / "fnm"
+        candidate = fnm_root / "fnm"
         if candidate.is_file():
             fnm = str(candidate)
     if fnm is None:
@@ -7170,7 +7179,7 @@ def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]
                 ["bash", "-c",
                  "curl -fsSL https://fnm.vercel.app/install"
                  " | bash -s -- --skip-shell"],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, timeout=120, env=env,
             )
             if res.returncode != 0:
                 console.print(
@@ -7182,7 +7191,7 @@ def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]
             console.print(f"  [red]fnm install failed:[/red] {e}")
             return None, None
 
-        candidate = Path.home() / ".local" / "share" / "fnm" / "fnm"
+        candidate = fnm_root / "fnm"
         if not candidate.is_file():
             console.print(
                 "  [red]fnm binary not found after install.[/red]"
@@ -7190,12 +7199,12 @@ def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]
             return None, None
         fnm = str(candidate)
 
-    # Step 2: install Node 22 (current LTS). fnm caches under ~/.local/share.
+    # Step 2: install Node 22 (current LTS). fnm caches under NVH_HOME/runtimes.
     console.print("  Installing Node.js 22 (LTS) via fnm...")
     try:
         res = _sp.run(
             [fnm, "install", "22"],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, text=True, timeout=300, env=env,
         )
         if res.returncode != 0:
             console.print(
@@ -7209,8 +7218,8 @@ def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]
 
     # Step 3: find the newly-installed node + npm and put them on PATH
     # for THIS process so the existing webui flow finds them. fnm stores
-    # versions under ~/.local/share/fnm/node-versions/vX.Y.Z/installation/bin
-    versions_dir = Path.home() / ".local" / "share" / "fnm" / "node-versions"
+    # versions under NVH_HOME/runtimes/fnm/node-versions/vX.Y.Z/installation/bin
+    versions_dir = fnm_root / "node-versions"
     if not versions_dir.is_dir():
         console.print(
             "  [red]fnm node-versions directory not found.[/red]"
@@ -7959,7 +7968,7 @@ def webui(
     port: int = typer.Option(3000, "--port", help="Port for the web UI"),
     uninstall: bool = typer.Option(
         False, "--uninstall",
-        help="Remove the downloaded Web UI (~/.nvhive/web) and exit",
+        help="Remove the downloaded Web UI (NVH_WEB_HOME) and exit",
     ),
     clean: bool = typer.Option(
         False, "--clean",
@@ -7996,10 +8005,19 @@ def webui(
     import shutil
     import subprocess
 
-    cache_web_dir_early = os.path.expanduser("~/.nvhive/web")
+    from nvh.integrations.storage import storage_layout
+
+    layout = storage_layout()
+    cache_web_dir_early = str(layout.webui_dir)
+    webui_env = os.environ.copy()
+    webui_env.update(layout.env())
+    webui_env["npm_config_cache"] = str(layout.cache_dir / "npm")
+    webui_env["NEXT_TELEMETRY_DISABLED"] = "1"
+    layout.webui_dir.parent.mkdir(parents=True, exist_ok=True)
+    (layout.cache_dir / "npm").mkdir(parents=True, exist_ok=True)
 
     # --- Safe uninstall / clean paths ---------------------------------
-    # These intentionally only ever touch ~/.nvhive/web (the cache dir
+    # These intentionally only ever touch NVH_WEB_HOME (the cache dir
     # the download path uses). They refuse to touch a source-tree web/
     # directory, a symlink, or anything that is itself a git repo — in
     # those cases the user installed from source and we must not nuke
@@ -8095,9 +8113,9 @@ def webui(
     # ------------------------------------------------------------------
 
     # Find the web directory. When nvHive is installed via pip, the web/
-    # folder is not shipped in the wheel, so also check a user cache dir
-    # and offer to download it on first run.
-    cache_web_dir = os.path.expanduser("~/.nvhive/web")
+    # folder is not shipped in the wheel, so also check the persistent
+    # NVH_WEB_HOME directory and offer to download it on first run.
+    cache_web_dir = str(layout.webui_dir)
     web_dir = None
     candidates = [
         os.path.join(
@@ -8106,6 +8124,7 @@ def webui(
             )),
             "web",
         ),
+        str(layout.home / "repo" / "web"),
         os.path.expanduser("~/nvh/repo/web"),
         cache_web_dir,
         os.path.join(os.getcwd(), "web"),
@@ -8140,6 +8159,7 @@ def webui(
             ],
             capture_output=True,
             text=True,
+            env=webui_env,
         )
         if result.returncode != 0:
             console.print("[red]Failed to download Web UI.[/red]")
@@ -8209,10 +8229,11 @@ def webui(
             cwd=web_dir,
             capture_output=True,
             text=True,
+            env=webui_env,
         )
         if result.returncode != 0:
             # Try npm install as fallback
-            result = subprocess.run([npm, "install"], cwd=web_dir)
+            result = subprocess.run([npm, "install"], cwd=web_dir, env=webui_env)
         if result.returncode != 0:
             console.print("[red]npm install failed.[/red]")
             raise typer.Exit(1)
@@ -8320,6 +8341,7 @@ def webui(
                 api_cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                env=webui_env,
             )
         except Exception as e:
             console.print(
@@ -8367,6 +8389,7 @@ def webui(
         subprocess.run(
             [npm, "run", "dev", "--", "-p", str(chosen_port)],
             cwd=web_dir,
+            env=webui_env,
         )
     except KeyboardInterrupt:
         console.print("\n[dim]Web UI stopped.[/dim]")
