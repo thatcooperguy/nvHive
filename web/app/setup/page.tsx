@@ -752,33 +752,41 @@ export default function SetupPage() {
     setSelectedStudioPacks(new Set(selectableStudioPackIds(studioPacks, packIds)));
   };
 
-  const expandStudioPackGroups = (groups: string[]) => (
+  const expandStudioPackGroups = (
+    groups: string[],
+    packs: StudioPack[] = studioPacks,
+    bundles: Record<string, string[]> = studioBundles,
+  ) => (
     selectableStudioPackIds(
-      studioPacks,
-      groups.flatMap(group => studioBundles[group] ?? [group])
+      packs,
+      groups.flatMap(group => bundles[group] ?? [group])
     )
   );
 
-  const wizardProfilePackIds = (profile: WizardProfile) => {
+  const wizardProfilePackIds = (
+    profile: WizardProfile,
+    packs: StudioPack[] = studioPacks,
+    bundles: Record<string, string[]> = studioBundles,
+  ) => {
     if (profile === 'student') {
-      return expandStudioPackGroups(['rootless-ollama', 'agent-lab']);
+      return expandStudioPackGroups(['rootless-ollama', 'agent-lab'], packs, bundles);
     }
     if (profile === 'llm') {
-      return expandStudioPackGroups(['rootless-ollama']);
+      return expandStudioPackGroups(['rootless-ollama'], packs, bundles);
     }
     if (profile === 'creator') {
-      return expandStudioPackGroups(['rootless-ollama', 'creative', 'comfy', 'github-login-helper']);
+      return expandStudioPackGroups(['rootless-ollama', 'creative', 'comfy', 'github-login-helper'], packs, bundles);
     }
     if (profile === 'agent') {
-      return expandStudioPackGroups(['rootless-ollama', 'agents', 'claw']);
+      return expandStudioPackGroups(['rootless-ollama', 'agents', 'claw'], packs, bundles);
     }
     if (profile === 'game') {
-      return expandStudioPackGroups(['rootless-ollama', 'game', 'creative', 'comfy']);
+      return expandStudioPackGroups(['rootless-ollama', 'game', 'creative', 'comfy'], packs, bundles);
     }
     if (profile === 'music') {
-      return expandStudioPackGroups(['rootless-ollama', 'music']);
+      return expandStudioPackGroups(['rootless-ollama', 'music'], packs, bundles);
     }
-    return expandStudioPackGroups(['all'])
+    return expandStudioPackGroups(['all'], packs, bundles)
       .filter(packId => packId !== 'llm-starter' && packId !== 'llm-coder-reasoner');
   };
 
@@ -792,16 +800,16 @@ export default function SetupPage() {
     profile === 'creator' || profile === 'game' || profile === 'full'
   );
 
-  const wizardProfileModelIds = (profile: WizardProfile) => {
-    const recommendedModels = studioModels
+  const wizardProfileModelIds = (profile: WizardProfile, models: StudioModel[] = studioModels) => {
+    const recommendedModels = models
       .filter(model => model.recommended)
       .map(model => model.id);
-    const allModelIds = studioModels
+    const allModelIds = models
       .filter(model => model.recommended || model.fits_vram)
       .map(model => model.id);
 
     if (profile === 'agent') {
-      const agentModels = studioModels
+      const agentModels = models
         .filter(model => ['code', 'embedding'].includes(model.category))
         .filter(model => model.recommended || model.fits_vram)
         .map(model => model.id);
@@ -815,9 +823,12 @@ export default function SetupPage() {
     return recommendedModels;
   };
 
-  const wizardProfileExampleIds = () => {
-    const vramLimit = detectedModelVram || 12;
-    const starterExamples = visibleComfyExamples
+  const wizardProfileExampleIds = (
+    examples: ComfyUIExample[] = visibleComfyExamples,
+    vramGb: number = detectedModelVram,
+  ) => {
+    const vramLimit = vramGb || 12;
+    const starterExamples = examples
       .filter(example => example.recommended_vram_gb <= vramLimit)
       .map(example => example.id);
     return starterExamples;
@@ -845,6 +856,54 @@ export default function SetupPage() {
     } finally {
       setModelsLoading(false);
     }
+  };
+
+  const ensureWizardCatalogReady = async () => {
+    let packs = studioPacks;
+    let bundles = studioBundles;
+    let models = studioModels;
+    let examples = visibleComfyExamples;
+    let vramGb = detectedModelVram;
+
+    const [packData, modelData, comfyData] = await Promise.all([
+      packs.length > 0 ? Promise.resolve(null) : getStudioPacks().catch(() => null),
+      models.length > 0 ? Promise.resolve(null) : getStudioModels().catch(() => null),
+      examples.length > 0 ? Promise.resolve(null) : getComfyUIStatus().catch(() => null),
+    ]);
+
+    if (packData) {
+      packs = packData.packs;
+      bundles = packData.bundles;
+      setStudioPacks(packData.packs);
+      setStudioBundles(packData.bundles);
+      setStudioRoot(packData.root);
+      setSelectedStudioPacks(prev => {
+        if (prev.size > 0) return prev;
+        const starterIds = packData.bundles.starter ?? packData.packs.map(pack => pack.id);
+        return new Set(selectableStudioPackIds(packData.packs, starterIds));
+      });
+    }
+
+    if (modelData) {
+      models = modelData.models;
+      vramGb = modelData.detected_vram_gb;
+      setStudioModels(modelData.models);
+      setDetectedModelVram(modelData.detected_vram_gb);
+      setSelectedStudioModels(prev => {
+        if (prev.size > 0) return prev;
+        return new Set(modelData.recommended_ids);
+      });
+    }
+
+    if (comfyData) {
+      setComfyStatus(comfyData);
+      if (comfyData.examples?.length) {
+        examples = comfyData.examples;
+        setComfyExamples(comfyData.examples);
+      }
+    }
+
+    return { packs, bundles, models, examples, vramGb };
   };
 
   const handleUseRecommendedStorage = async (): Promise<StorageStatus | null> => {
@@ -1209,35 +1268,38 @@ export default function SetupPage() {
   });
 
   const handleBuildWizardProfile = async (profile: WizardProfile) => {
-    if (activeWizardBuild || studioInstalling || modelsInstalling || comfyInstalling) return;
-
-    const modelIds = wizardProfileModelIds(profile);
-    const packIds = wizardProfilePackIds(profile);
-    const exampleIds = wizardProfileExampleIds();
-    const comfyNodePackIds = packIds.filter(packId => packId === 'comfyui-power-nodes');
-    const firstPackIds = wizardProfileNeedsComfy(profile)
-      ? packIds.filter(packId => packId !== 'comfyui-power-nodes')
-      : packIds;
-
-    setSelectedStudioModels(new Set(modelIds));
-    setSelectedStudioPacks(new Set(packIds));
-    setSelectedComfyExamples(new Set(exampleIds));
-
-    if (!storageReady) {
-      setWizardBuildMessage('nvWizard is finding the persistent block storage first, then it will build the mission there.');
-      const detectedStorage = await handleUseRecommendedStorage();
-      if (!detectedStorage?.ok || detectedStorage.configured_by === 'default') {
-        setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. Advanced Details has the manual override if the host is unusual.');
-        setAdvancedSetupOpen(true);
-        return;
-      }
-    }
+    if (activeWizardBuild || studioInstalling || modelsInstalling || comfyInstalling || apiDisconnected) return;
 
     setActiveWizardBuild(profile);
-    setWizardBuildMessage('nvWizard picked the beginner-safe defaults and is building the mission in dependency order.');
-    setStep(wizardProfileNeedsComfy(profile) ? 'comfyui' : 'studio');
+    setWizardBuildMessage('nvWizard is checking the mission catalog, hardware, and persistent storage.');
 
     try {
+      const catalog = await ensureWizardCatalogReady();
+      const modelIds = wizardProfileModelIds(profile, catalog.models);
+      const packIds = wizardProfilePackIds(profile, catalog.packs, catalog.bundles);
+      const exampleIds = wizardProfileExampleIds(catalog.examples, catalog.vramGb);
+      const comfyNodePackIds = packIds.filter(packId => packId === 'comfyui-power-nodes');
+      const firstPackIds = wizardProfileNeedsComfy(profile)
+        ? packIds.filter(packId => packId !== 'comfyui-power-nodes')
+        : packIds;
+
+      setSelectedStudioModels(new Set(modelIds));
+      setSelectedStudioPacks(new Set(packIds));
+      setSelectedComfyExamples(new Set(exampleIds));
+
+      if (!storageReady) {
+        setWizardBuildMessage('nvWizard is finding the persistent block storage first, then it will build the mission there.');
+        const detectedStorage = await handleUseRecommendedStorage();
+        if (!detectedStorage?.ok || detectedStorage.configured_by === 'default') {
+          setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. Advanced Details has the manual override if the host is unusual.');
+          setAdvancedSetupOpen(true);
+          return;
+        }
+      }
+
+      setWizardBuildMessage('nvWizard picked the beginner-safe defaults and is building the mission in dependency order.');
+      setStep(wizardProfileNeedsComfy(profile) ? 'comfyui' : 'studio');
+
       if (firstPackIds.length > 0) {
         setWizardBuildMessage('Installing rootless runtimes and mission tools on the persistent drive.');
         await buildStudioPacks(firstPackIds);
@@ -1247,7 +1309,7 @@ export default function SetupPage() {
         setWizardBuildMessage('Installing ComfyUI with the NVIDIA-ready PyTorch profile.');
         await buildComfyUI();
         if (comfyNodePackIds.length > 0) {
-          setWizardBuildMessage('Adding ComfyUI power nodes after the base app is ready.');
+          setWizardBuildMessage('Installing ComfyUI power nodes after the base app is ready.');
           await buildStudioPacks(comfyNodePackIds);
         }
         if (exampleIds.length > 0) {
@@ -1494,10 +1556,10 @@ export default function SetupPage() {
   const beginnerProfileIds = new Set<WizardProfile>(['student', 'creator', 'game', 'music']);
   const beginnerProfiles = missionProfiles.filter(profile => beginnerProfileIds.has(profile.id));
   const beginnerProfileCopy: Partial<Record<WizardProfile, string>> = {
-    student: 'Chat, code, ComfyUI',
-    creator: 'Images, 3D, video',
-    game: 'Games, engines, assets',
-    music: 'Songs, stems, vocals',
+    student: 'Local AI for classwork, coding, research, and first ComfyUI experiments.',
+    creator: 'ComfyUI, Blender, and creative helpers for images, 3D, and video workflows.',
+    game: 'Game engine helpers, Blender assets, GitHub repos, and mod workspace tools.',
+    music: 'AI music generation, stem separation, transcription, and audio editor helpers.',
   };
   const selectedProfile = missionProfiles.find(profile => profile.id === selectedWizardProfile) ?? missionProfiles[0];
   const selectedProfilePackIds = wizardProfilePackIds(selectedProfile.id);
@@ -2567,7 +2629,7 @@ export default function SetupPage() {
 
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
-                <div className="section-label">Add Options</div>
+                <div className="section-label">Install Options</div>
               </div>
               {advancedSetupOpen && (
               <div className="hidden sm:block border border-[#76B900]/30 bg-[#f7fdf0] p-4">
@@ -2623,7 +2685,7 @@ export default function SetupPage() {
                     <button
                       type="button"
                       onClick={() => void handleBuildWizardProfile(selectedProfile.id)}
-                      disabled={!profilesReady || anyInstallRunning || apiDisconnected}
+                      disabled={anyInstallRunning || apiDisconnected}
                       className="btn-primary px-4 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
                     >
                       {apiDisconnected
@@ -2694,14 +2756,25 @@ export default function SetupPage() {
                             <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border flex-shrink-0 ${
                               profileInstalled
                                 ? 'border-[#76B900]/40 text-[#76B900] bg-[#76B900]/10'
-                                : 'border-[#d4d4d4] text-[#737373]'
+                                : profile.primary
+                                  ? 'border-[#76B900]/40 text-[#76B900] bg-[#76B900]/10'
+                                  : 'border-[#d4d4d4] text-[#737373]'
                             }`}>
-                              {profileInstalled ? 'Installed' : 'Add'}
+                              {profileInstalled ? 'Installed' : profile.primary ? 'Recommended' : profile.label}
                             </span>
                           </div>
                           <div className="mt-3">
                             <h3 className="text-base font-bold text-[#0a0a0a] leading-tight">{profile.title}</h3>
-                            <div className="text-xs text-[#737373] mt-1">{beginnerProfileCopy[profile.id] ?? profile.label}</div>
+                            <div className="text-xs text-[#525252] mt-2 leading-relaxed min-h-[3rem]">
+                              {beginnerProfileCopy[profile.id] ?? profile.description}
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-1">
+                              {profile.includes.slice(0, 3).map(item => (
+                                <span key={item} className="text-[9px] font-mono text-[#737373] bg-[#fafafa] border border-[#e5e5e5] px-1.5 py-0.5">
+                                  {item}
+                                </span>
+                              ))}
+                            </div>
                           </div>
                           <button
                             type="button"
@@ -2713,10 +2786,10 @@ export default function SetupPage() {
                               }
                               void handleBuildWizardProfile(profile.id);
                             }}
-                            disabled={!profileInstalled && (!profilesReady || anyInstallRunning || apiDisconnected)}
+                            disabled={!profileInstalled && (anyInstallRunning || apiDisconnected)}
                             className={`${profileInstalled ? 'btn-ghost' : 'btn-primary'} w-full mt-4 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40`}
                           >
-                            {profileInstalled ? 'Open' : apiDisconnected ? 'API Offline' : building ? 'Adding' : 'Add'}
+                            {profileInstalled ? 'Open' : apiDisconnected ? 'API Offline' : building ? 'Installing' : 'Install'}
                           </button>
                         </div>
                       );
@@ -2771,7 +2844,7 @@ export default function SetupPage() {
                           <button
                             type="button"
                             onClick={() => void handleBuildWizardProfile(profile.id)}
-                            disabled={!profilesReady || anyInstallRunning || apiDisconnected}
+                            disabled={anyInstallRunning || apiDisconnected}
                             className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                           >
                             {apiDisconnected ? 'API Offline' : building ? 'Installing' : 'Install Mission'}

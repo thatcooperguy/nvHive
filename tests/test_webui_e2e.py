@@ -196,13 +196,13 @@ class TestWebUINavigation:
 
 class TestWebUISetup:
     def test_setup_installer_home_loads(self, page):
-        """Setup home should show compact system check and add options."""
+        """Setup home should show compact system check and install options."""
         page.goto(f"{BASE}/setup")
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(2000)
 
         assert page.locator("text=System Check").count() > 0
-        assert page.locator("text=Add Options").count() > 0
+        assert page.locator("text=Install Options").count() > 0
 
     def test_setup_advanced_details_reveals_controls(self, page):
         """Advanced Details should reveal the deeper setup controls."""
