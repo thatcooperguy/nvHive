@@ -92,13 +92,25 @@ def model_fit_report(home_dir: str | None = None) -> dict[str, Any]:
             model for model in ranked
             if model.get("fits_vram") and not model.get("installed")
         ][:3]
+    queue_disk_gb = round(
+        sum(float(model.get("estimated_disk_gb", 0) or 0) for model in recommended_queue),
+        1,
+    )
+    storage_fits_queue = free_gb is None or queue_disk_gb <= float(free_gb)
+    if storage_fits_queue:
+        summary = f"{len(recommended_queue)} model(s) queued for the detected {vram_gb or 'unknown'} GB VRAM profile."
+    else:
+        summary = (
+            f"{len(recommended_queue)} model(s) fit the GPU profile, but the queue needs "
+            f"about {queue_disk_gb} GB and storage reports {free_gb} GB free."
+        )
 
     return {
-        "summary": (
-            f"{len(recommended_queue)} model(s) queued for the detected {vram_gb or 'unknown'} GB VRAM profile."
-        ),
+        "summary": summary,
         "detected_vram_gb": vram_gb,
         "free_gb": free_gb,
+        "recommended_queue_disk_gb": queue_disk_gb,
+        "storage_fits_queue": storage_fits_queue,
         "recommended_ids": [model["id"] for model in recommended_queue],
         "best_by_use_case": best_by_use_case,
         "models": ranked,

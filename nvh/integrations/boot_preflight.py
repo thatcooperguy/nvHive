@@ -34,15 +34,25 @@ _FACT_LABELS = {
     "python_strategy": "Python runtime",
     "gpu_name": "GPU",
     "gpu_memory_total_mb": "GPU memory",
+    "gpu_memory_free_mb": "GPU free framebuffer",
+    "gpu_compute_capability": "GPU compute capability",
+    "gpu_architecture": "GPU architecture",
+    "gpu_detection_status": "GPU detection",
     "driver_version": "NVIDIA driver",
     "cuda_version": "CUDA driver API",
     "git_available": "Git",
     "curl_available": "curl",
     "tar_available": "tar",
     "node_available": "Node.js",
+    "node_version": "Node.js version",
     "npm_available": "npm",
+    "npm_version": "npm version",
     "display_available": "Desktop display",
     "storage_home": "NVH_HOME",
+    "storage_configured_by": "Storage source",
+    "storage_total_gb": "Storage capacity",
+    "storage_write_probe_ok": "Storage write probe",
+    "torch_profile": "PyTorch CUDA profile",
 }
 
 _CRITICAL_FACTS = {
@@ -54,10 +64,19 @@ _CRITICAL_FACTS = {
     "python_strategy",
     "driver_version",
     "cuda_version",
+    "gpu_memory_total_mb",
+    "gpu_compute_capability",
+    "gpu_detection_status",
     "git_available",
     "curl_available",
     "tar_available",
     "storage_home",
+    "storage_configured_by",
+    "storage_total_gb",
+    "storage_write_probe_ok",
+    "node_version",
+    "npm_version",
+    "torch_profile",
 }
 
 
@@ -90,10 +109,20 @@ def _available(value: str | None) -> bool:
     return bool(value and str(value).strip())
 
 
+def _gb_value(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return str(round(float(value), 1))
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def host_fingerprint(report: dict[str, Any]) -> dict[str, Any]:
     """Extract stable boot facts from a compatibility report."""
     host = report.get("host", {})
     commands = host.get("commands", {})
+    command_versions = host.get("command_versions", {})
     gpu = host.get("gpu", {})
     python = host.get("python", {})
     libc = host.get("libc", {})
@@ -109,15 +138,25 @@ def host_fingerprint(report: dict[str, Any]) -> dict[str, Any]:
         "python_strategy": python.get("strategy", ""),
         "gpu_name": gpu.get("name", ""),
         "gpu_memory_total_mb": str(gpu.get("memory_total_mb", "")),
+        "gpu_memory_free_mb": str(gpu.get("memory_free_mb", "")),
+        "gpu_compute_capability": str(gpu.get("compute_capability", "")),
+        "gpu_architecture": str(gpu.get("architecture", "")),
+        "gpu_detection_status": str(gpu.get("detection_status", "")),
         "driver_version": gpu.get("driver_version", ""),
         "cuda_version": gpu.get("cuda_version", ""),
         "git_available": _available(commands.get("git")),
         "curl_available": _available(commands.get("curl")),
         "tar_available": _available(commands.get("tar")),
         "node_available": _available(commands.get("node")),
+        "node_version": command_versions.get("node", ""),
         "npm_available": _available(commands.get("npm")),
+        "npm_version": command_versions.get("npm", ""),
         "display_available": _available(display.get("DISPLAY")) or _available(display.get("WAYLAND_DISPLAY")),
         "storage_home": storage_layout_data.get("home", ""),
+        "storage_configured_by": storage.get("configured_by", ""),
+        "storage_total_gb": _gb_value(storage.get("total_gb")),
+        "storage_write_probe_ok": str(storage.get("write_probe_ok", "")),
+        "torch_profile": str(report.get("recommended_torch_profile", "")),
     }
 
 
@@ -233,6 +272,8 @@ def run_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
         "model_fit": {
             "summary": model_fit.get("summary"),
             "detected_vram_gb": model_fit.get("detected_vram_gb"),
+            "recommended_queue_disk_gb": model_fit.get("recommended_queue_disk_gb"),
+            "storage_fits_queue": model_fit.get("storage_fits_queue"),
             "recommended_ids": model_fit.get("recommended_ids", []),
         },
         "compatibility": compatibility,

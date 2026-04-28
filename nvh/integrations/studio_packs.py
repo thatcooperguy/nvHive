@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from nvh.integrations.storage import storage_layout
+from nvh.utils.gpu import detect_gpus
 
 OLLAMA_PORT = 11434
 BLENDER_VERSION = "4.5.4"
@@ -1089,6 +1090,13 @@ def bundles_as_dict() -> dict[str, list[str]]:
 
 
 def _detect_vram_gb() -> int:
+    try:
+        gpus = detect_gpus()
+    except Exception:
+        gpus = []
+    if gpus:
+        return int(sum(gpu.vram_mb for gpu in gpus) // 1024)
+
     nvidia_smi = shutil.which("nvidia-smi")
     if not nvidia_smi:
         return 0
@@ -1363,6 +1371,7 @@ async def _run_command(
     label: str,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
+    timeout: float | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     yield {"event": "step", "status": "running", "message": label, "command": cmd}
     process = await asyncio.create_subprocess_exec(
@@ -1387,7 +1396,13 @@ async def _run_command(
                 process.kill()
                 await process.wait()
         raise
-    return_code = await process.wait()
+    try:
+        return_code = await asyncio.wait_for(process.wait(), timeout=timeout)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        yield {"event": "error", "status": "failed", "message": f"{label} timed out"}
+        raise RuntimeError(f"{label} timed out")
     if return_code != 0:
         yield {
             "event": "error",
@@ -2011,7 +2026,7 @@ options in the UI.
 
 
 async def _install_ace_step_music(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
-    if os.name == "nt":
+    if platform.system().lower() != "linux":
         yield {"event": "error", "status": "failed", "message": "ACE-Step music pack targets Linux cloud desktops."}
         return
     git = shutil.which("git")
@@ -2422,13 +2437,12 @@ async def _install_music_daw_helper(pack: StudioPack, force_update: bool) -> Asy
     downloads = root / "appimages"
     downloads.mkdir(parents=True, exist_ok=True)
     downloaded: list[dict[str, Any]] = []
+    download_errors: list[str] = []
 
     try:
         import httpx
     except Exception as exc:
-        yield {"event": "warning", "status": "warning", "message": f"Could not import httpx for AppImage downloads: {exc}"}
-        _write_marker(pack, {"workspace": str(root), "appimages": downloaded, "force_update": force_update})
-        yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
+        yield {"event": "error", "status": "failed", "message": f"Could not import httpx for AppImage downloads: {exc}"}
         return
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=600) as client:
@@ -2451,9 +2465,15 @@ async def _install_music_daw_helper(pack: StudioPack, force_update: bool) -> Asy
                 verb = "Using cached" if metadata.get("cached") else "Downloaded"
                 yield {"event": "step", "status": "complete", "message": f"{verb} {app_name} AppImage", "path": str(target)}
             except Exception as exc:
-                yield {"event": "warning", "status": "warning", "message": f"{app_name} AppImage could not be auto-downloaded: {exc}"}
+                message = f"{app_name} AppImage could not be auto-downloaded: {exc}"
+                download_errors.append(message)
+                yield {"event": "warning", "status": "warning", "message": message}
 
-    _write_marker(pack, {"workspace": str(root), "appimages": downloaded, "force_update": force_update})
+    if not downloaded:
+        yield {"event": "error", "status": "failed", "message": "No Audacity or LMMS AppImages were downloaded; retry later or use manual AppImage overrides."}
+        return
+
+    _write_marker(pack, {"workspace": str(root), "appimages": downloaded, "download_errors": download_errors, "force_update": force_update})
     yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
 
 

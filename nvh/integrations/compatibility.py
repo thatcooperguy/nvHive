@@ -6,6 +6,7 @@ problems that require a different base image, GPU session, driver, or OS.
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
@@ -25,6 +26,7 @@ from nvh.integrations.studio_packs import (
     catalog_with_status,
     model_catalog_with_status,
 )
+from nvh.utils.gpu import detect_gpu_status, gpu_architecture_info
 
 
 @dataclass(frozen=True)
@@ -136,31 +138,32 @@ def _read_os_release() -> dict[str, str]:
 
 
 def _nvidia_smi_query() -> dict[str, str]:
-    if not _which("nvidia-smi"):
-        return {}
-    try:
-        result = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name,memory.total,driver_version",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-    except Exception:
-        return {}
-    if result.returncode != 0 or not result.stdout.strip():
-        return {}
-    first = [part.strip() for part in result.stdout.splitlines()[0].split(",")]
-    if len(first) < 3:
-        return {}
+    status = detect_gpu_status()
+    gpus = status.get("gpus", [])
+    if not gpus:
+        return {
+            "detection_status": str(status.get("status") or "not-detected"),
+            "detection_source": str(status.get("source") or "none"),
+            "detection_issues": json.dumps(status.get("issues", [])),
+            "device_files_present": str(bool(status.get("device_files_present", False))).lower(),
+        }
+    gpu = gpus[0]
+    arch = gpu_architecture_info(gpu)
     return {
-        "name": first[0],
-        "memory_total_mb": first[1],
-        "driver_version": first[2],
-        "cuda_version": _nvidia_cuda_version(),
+        "name": gpu.name,
+        "memory_total_mb": str(gpu.vram_mb),
+        "memory_free_mb": str(gpu.memory_free_mb),
+        "memory_used_mb": str(gpu.memory_used_mb),
+        "driver_version": gpu.driver_version,
+        "cuda_version": gpu.cuda_version,
+        "compute_capability": ".".join(str(part) for part in arch["compute_capability"]),
+        "compute_capability_source": str(arch["compute_capability_source"]),
+        "architecture": str(arch["architecture"]),
+        "architecture_heuristic": str(bool(arch["heuristic"])).lower(),
+        "detection_status": str(status.get("status") or "ready"),
+        "detection_source": str(status.get("source") or ""),
+        "detection_issues": json.dumps(status.get("issues", [])),
+        "device_files_present": str(bool(status.get("device_files_present", False))).lower(),
     }
 
 
@@ -243,6 +246,7 @@ def _host_facts() -> dict[str, Any]:
 def _fact_list(host: dict[str, Any]) -> list[HostFact]:
     commands = host["commands"]
     gpu = host["gpu"]
+    gpu_ready = bool(gpu.get("name"))
     display_ready = bool(host["display"].get("DISPLAY") or host["display"].get("WAYLAND_DISPLAY"))
     return [
         HostFact("os", "Base OS", f"{host['distro']} / {host['kernel']}", "detected"),
@@ -254,7 +258,7 @@ def _fact_list(host: dict[str, Any]) -> list[HostFact]:
         HostFact("curl", "curl", commands.get("curl") or "missing", "ok" if commands.get("curl") else "blocked", "required"),
         HostFact("node", "Node.js", host["command_versions"].get("node") or "rootless install available", "ok" if _node_runtime_status().get("ready") else "fixable", "recommended"),
         HostFact("docker", "Docker runtime", host["command_versions"].get("docker") or "missing", "ok" if _docker_status().get("ready") else "degraded", "optional", "Required only for NemoClaw/OpenShell sandboxes."),
-        HostFact("nvidia-smi", "NVIDIA driver", gpu.get("driver_version", "not detected"), "ok" if gpu else "degraded", "recommended"),
+        HostFact("nvidia-smi", "NVIDIA driver", gpu.get("driver_version") or gpu.get("detection_status", "not detected"), "ok" if gpu_ready else "degraded", "recommended"),
         HostFact("cuda", "CUDA driver API", gpu.get("cuda_version", "unknown"), "ok" if gpu.get("cuda_version") else "degraded", "recommended"),
         HostFact("display", "Linux desktop display", "available" if display_ready else "not detected", "ok" if display_ready else "degraded", "optional"),
         HostFact("storage", "Persistent NVH_HOME", host["storage"]["layout"]["home"], "ok" if host["storage"]["ok"] and host["storage"]["configured_by"] != "default" else "fixable", "required"),
@@ -343,6 +347,7 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     if home_dir:
         host["storage"] = storage_status(home_dir=home_dir, min_free_gb=20).as_dict()
     gpu = host["gpu"]
+    gpu_ready = bool(gpu.get("name"))
     commands = host["commands"]
     py = host["python"]
     storage = host["storage"]
@@ -401,7 +406,7 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             "model",
             [
                 _req("ollama", "Ollama runtime", bool(model_status.get("ollama_available")), "Required for local LLM downloads.", fix_action_id="rootless-ollama", rootless_fix_available=True),
-                _req("gpu", "NVIDIA GPU", bool(gpu), "GPU acceleration is strongly recommended; CPU fallback is slower."),
+                _req("gpu", "NVIDIA GPU", gpu_ready, "GPU acceleration is strongly recommended; CPU fallback is slower."),
                 _req("models", "Recommended models", not missing_recommended_models, f"{len(missing_recommended_models)} recommended model(s) missing.", fix_action_id="starter-models", rootless_fix_available=True),
             ],
             recommended_action_id="starter-models",

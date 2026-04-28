@@ -2,7 +2,7 @@
 
 **One command. Every AI model you have. Automatically assembled into the best team for each task.**
 
-![version](https://img.shields.io/badge/version-0.34.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
+![version](https://img.shields.io/badge/version-0.34.1-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 ```bash
 nvh "What is a binary search tree?"              # → answers (single best advisor)
@@ -109,7 +109,7 @@ source "$NVH_HOME/nvh-env.sh"
 nvh workstation --home-dir "$NVH_HOME" --all -y
 ```
 
-`nvh workstation --all -y` creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds AI Studio packs for LLMs, agents, Claw agent options, ComfyUI nodes, Linux game projects, creative tools, and AI music production.
+`nvh workstation --all -y` creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds the beginner AI Starter packs. Creative, game, Claw, and music missions stay one click away in the WebUI or can be installed directly with `nvh studio --install creative|game|claw|music -y`.
 
 Use packs directly when you want a specific no-root lab:
 
@@ -126,6 +126,21 @@ nvh studio --install creative -y                # Blender LTS + game/asset works
 nvh studio --install music -y                   # ACE-Step, Demucs, WhisperX, Audacity/LMMS AppImages
 nvh studio --install python-runtime-fallback -y  # optional rescue pack, not the default path
 ```
+
+### Pick Your Mission
+
+The WebUI setup now starts with simple mission cards instead of a long
+checklist. A first-time student can choose one path and let nvWizard handle
+the storage, GPU, CUDA/Python/Node checks, rootless installers, model choices,
+and background jobs:
+
+| Mission | One-click path |
+| --- | --- |
+| AI Starter | Local chat/coding models, Ollama, GitHub helper, ComfyUI starter nodes, and the local agent helper |
+| Graphics Creator Studio | ComfyUI, Blender, image/video workflow examples, and model download plans |
+| Game Dev Lab | Godot helper, Unity/Unreal download guidance, Blender assets, GitHub, and Linux game tooling |
+| Music Producer Studio | ACE-Step AI music generation, Demucs stems, WhisperX transcription, Audacity, LMMS, and audio notebooks |
+| Agent Builder | OpenClaw rootless agent workspace plus guarded NemoClaw when Docker/OpenShell is already usable without sudo |
 
 The WebUI setup wizard includes a model picker with GPU-fit badges, disk
 estimates, installed status, and persistent install jobs saved under
@@ -144,7 +159,21 @@ The ComfyUI step lets students select workflow examples and save a model
 download plan with source links, folder targets, and a helper checklist script,
 because many image/video weights are large or require upstream terms.
 
-On first run, `nvh` launches a guided 3-step setup — GPU detection, provider keys, local model pulls. Works immediately with local models (no signup needed). Every step is skippable. Run `nvh setup` anytime to reconfigure.
+On every API/WebUI boot, nvWizard records a VM image fingerprint under
+`$NVH_HOME/config/boot-preflight.json`. It checks the base OS, kernel,
+architecture, NVIDIA driver/CUDA, detected GPU architecture, framebuffer,
+Python, Node/npm, persistent storage capacity, and a real storage write probe.
+If the cloud image changes between sessions, the wizard flags what changed and
+recommends rootless repair actions before launching large installs.
+
+<p align="center">
+  <img src="docs/screenshots/rootless-runtime.svg" alt="Rootless NVIDIA cloud desktop layout" width="900">
+</p>
+
+On first run, `nvh` launches a guided setup helper for GPU detection,
+provider keys, local model pulls, and rootless app installs. Works immediately
+with local models when available. Every advanced step is skippable. Run
+`nvh setup` anytime to reconfigure.
 
 <p align="center">
   <img src="docs/screenshots/setup-flow.svg" alt="nvHive 3-Step Setup Flow" width="900">
@@ -152,7 +181,7 @@ On first run, `nvh` launches a guided 3-step setup — GPU detection, provider k
 
 ### WebUI
 
-`nvh webui` launches a full-screen dashboard at `localhost:3000` — chat, council mode, advisor status, analytics, system stats, and setup flows. NVIDIA corporate theme, keyboard-first (Ctrl+K command palette, Ctrl+B collapse sidebar).
+`nvh webui` launches an optimized full-screen dashboard at `localhost:3000` - chat, council mode, advisor status, analytics, system stats, and setup flows. First run installs dependencies and builds the WebUI under persistent `NVH_HOME`; later launches use the production server for fast loading. If the WebUI is not bundled, nvHive downloads the matching release tag with `git` or a GitHub archive fallback when `git` is missing, then falls back to `main` only if needed. Use `nvh webui --dev` only when editing the frontend. NVIDIA corporate theme, keyboard-first (Ctrl+K command palette, Ctrl+B collapse sidebar).
 
 <p align="center">
   <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive WebUI walkthrough" width="900">

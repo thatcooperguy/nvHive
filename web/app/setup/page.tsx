@@ -487,10 +487,24 @@ export default function SetupPage() {
 
 
   useEffect(() => {
-    // Check API health
-    checkHealth()
-      .then(() => setApiStatus('connected'))
-      .catch(() => setApiStatus('disconnected'));
+    let cancelled = false;
+    let healthRetryTimer: ReturnType<typeof setTimeout> | null = null;
+    let storageRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const pollApiHealth = async (retry = false) => {
+      if (cancelled) return;
+      if (!retry) setApiStatus('checking');
+      try {
+        await checkHealth();
+        if (!cancelled) setApiStatus('connected');
+      } catch {
+        if (!cancelled) {
+          setApiStatus('disconnected');
+          healthRetryTimer = setTimeout(() => void pollApiHealth(true), 5000);
+        }
+      }
+    };
+    void pollApiHealth();
 
     // Ollama status + configured-providers list are now fed by the
     // polled useProviderHealth hook below, so nothing to do here at
@@ -505,15 +519,19 @@ export default function SetupPage() {
 
     // Fetch persistent storage preflight before any large local downloads.
     const loadStorage = async () => {
+      if (cancelled) return;
       try {
         const status = await getStorageStatus();
+        if (cancelled) return;
         setStorageStatus(status);
         setStorageHomeInput(status.layout.home);
+        setStorageError(null);
         void refreshSetupHelper(status.layout.home);
 
         if (!status.ok || status.configured_by === 'default') {
           try {
             const report = await getMountAutopilot(20);
+            if (cancelled) return;
             setMountAutopilot(report);
             if (report.recommended) {
               setStorageHomeInput(report.recommended.recommended_home);
@@ -522,6 +540,7 @@ export default function SetupPage() {
               setMountActivating(true);
               try {
                 const activated = await activateMountAutopilot(report.recommended?.recommended_home, 20);
+                if (cancelled) return;
                 setStorageStatus(activated.storage);
                 setStorageHomeInput(activated.storage.layout.home);
                 setMountAutopilot(activated.mount_autopilot);
@@ -535,11 +554,16 @@ export default function SetupPage() {
               }
             }
           } catch {
-            setStorageError('Mount autopilot could not inspect persistent volumes yet. You can still paste NVH_HOME.');
+            if (!cancelled) {
+              setStorageError('Mount autopilot could not inspect persistent volumes yet. You can still paste NVH_HOME.');
+            }
           }
         }
       } catch {
-        setStorageError('Storage preflight is unavailable. Start the API with nvh serve.');
+        if (!cancelled) {
+          setStorageError('Storage preflight is unavailable. Start the API with nvh serve.');
+          storageRetryTimer = setTimeout(() => void loadStorage(), 5000);
+        }
       }
     };
     void loadStorage();
@@ -597,6 +621,12 @@ export default function SetupPage() {
       })
       .catch(() => {})
       .finally(() => setModelsLoading(false));
+
+    return () => {
+      cancelled = true;
+      if (healthRetryTimer) clearTimeout(healthRetryTimer);
+      if (storageRetryTimer) clearTimeout(storageRetryTimer);
+    };
   }, [refreshSetupHelper, refreshSetupInventory]);
 
   const handleTest = async () => {
@@ -1249,12 +1279,15 @@ export default function SetupPage() {
   };
 
   const currentStepIdx = STEPS.findIndex(s => s.id === step);
+  const apiDisconnected = apiStatus === 'disconnected';
   const storageReady = Boolean(storageStatus?.ok && storageStatus.configured_by !== 'default');
   const storageFreeGb = storageStatus?.free_gb ?? null;
   const mountRecommendation = mountAutopilot?.recommended ?? missionControl?.mount_autopilot.recommended ?? bootPreflight?.mount_autopilot?.recommended ?? null;
-  const storageAutopilotBusy = !storageReady && (mountActivating || storageSaving || apiStatus === 'checking' || storageStatus === null);
+  const storageAutopilotBusy = !storageReady && !apiDisconnected && (mountActivating || storageSaving || apiStatus === 'checking' || storageStatus === null);
   const storageBeginnerLabel = storageReady
     ? 'ready'
+    : apiDisconnected
+      ? 'api offline'
     : storageAutopilotBusy
       ? 'finding'
       : mountRecommendation
@@ -1262,6 +1295,8 @@ export default function SetupPage() {
         : 'checking';
   const storagePrimaryLabel = storageReady
     ? 'Build AI Starter'
+    : apiDisconnected
+      ? 'API Offline'
     : storageAutopilotBusy
       ? 'Finding Storage'
       : 'Auto-Find Storage';
@@ -1357,6 +1392,8 @@ export default function SetupPage() {
   );
   const hardwareName = gpuInfo?.gpus?.[0]?.name ?? 'GPU scan pending';
   const hardwareVramLabel = detectedModelVram ? `${detectedModelVram} GB VRAM` : 'VRAM scan pending';
+  const gpuDetectionStatus = gpuInfo?.detection?.status ?? 'checking';
+  const gpuDetectionIssue = gpuInfo?.detection?.issues?.[0]?.message ?? '';
   const visibleHardwareModelIds = visibleHardwareModels.map(model => model.id);
   const githubPack = studioPacks.find(pack => pack.id === 'github-login-helper') ?? null;
   const gameEnginePacks = studioPacks.filter(pack => ['godot-engine', 'unity-hub-helper', 'unreal-engine-helper'].includes(pack.id));
@@ -1456,6 +1493,12 @@ export default function SetupPage() {
 
   const beginnerProfileIds = new Set<WizardProfile>(['student', 'creator', 'game', 'music']);
   const beginnerProfiles = missionProfiles.filter(profile => beginnerProfileIds.has(profile.id));
+  const beginnerProfileCopy: Partial<Record<WizardProfile, string>> = {
+    student: 'Chat, code, ComfyUI',
+    creator: 'Images, 3D, video',
+    game: 'Games, engines, assets',
+    music: 'Songs, stems, vocals',
+  };
   const selectedProfile = missionProfiles.find(profile => profile.id === selectedWizardProfile) ?? missionProfiles[0];
   const selectedProfilePackIds = wizardProfilePackIds(selectedProfile.id);
   const selectedProfileModelIds = wizardProfileModelIds(selectedProfile.id);
@@ -1496,8 +1539,12 @@ export default function SetupPage() {
     },
     {
       label: 'Health',
-      value: setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'}` : 'clear',
-      state: setupConcernCount ? 'fix' : 'ready',
+      value: apiStatus === 'checking'
+        ? 'checking'
+        : apiDisconnected
+          ? 'API offline'
+          : setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'}` : 'clear',
+      state: apiStatus === 'checking' ? 'checking' : apiDisconnected ? 'fix' : setupConcernCount ? 'fix' : 'ready',
     },
   ];
 
@@ -1572,6 +1619,7 @@ export default function SetupPage() {
   };
 
   const helperActionLabel = (actionId: string) => {
+    if (apiDisconnected) return 'API Offline';
     if (actionId.startsWith('repair-receipt:')) return !storageReady ? 'Auto Storage' : 'Repair';
     if (actionId === 'storage') return storageAutopilotBusy ? 'Finding' : 'Auto Storage';
     if (!storageReady) return storageAutopilotBusy ? 'Finding' : 'Auto Storage';
@@ -1586,6 +1634,7 @@ export default function SetupPage() {
   };
 
   const helperActionDisabled = (actionId: string) => {
+    if (apiDisconnected) return true;
     if (actionId.startsWith('repair-receipt:')) return !storageReady || studioInstalling || modelsInstalling || comfyInstalling;
     if (actionId === 'storage') return storageAutopilotBusy;
     if (actionId === 'starter-models') return modelsInstalling || !storageReady;
@@ -1617,52 +1666,21 @@ export default function SetupPage() {
   };
 
   return (
-    <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-4">
       {/* Header */}
-      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
-        <div className="relative">
-          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">nvWizard Setup</div>
-          <h1 className="text-2xl font-bold text-[#0a0a0a]">Build Your NVIDIA AI Lab</h1>
-          <p className="text-sm text-[#525252] mt-1">Pick a use case. nvWizard checks the mount, GPU, CUDA, Python, Node, and disk before touching anything.</p>
-        </div>
-      </div>
-
-      {/* Beginner-facing phase indicator */}
-      <div className="border border-[#e5e5e5] bg-[#ffffff] px-3 py-2 space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {[
-            { label: 'Save Files', mark: '01', active: step === 'storage' || !storageReady, done: storageReady },
-            { label: 'Pick Mission', mark: '02', active: storageReady && step === 'welcome', done: storageReady && currentStepIdx > 0 },
-            { label: 'Install & Try', mark: '03', active: storageReady && !['welcome', 'storage'].includes(step), done: step === 'done' },
-          ].map(phase => (
-            <div
-              key={phase.label}
-              className={`flex items-center gap-2 border px-3 py-2 min-w-[128px] ${
-                phase.active
-                  ? 'border-[#76B900]/40 bg-[#76B900]/5'
-                  : phase.done
-                    ? 'border-[#76B900]/20 bg-[#ffffff]'
-                    : 'border-[#e5e5e5] bg-[#fafafa]'
-                  }`}
-            >
-              <span className={`w-7 h-7 flex items-center justify-center border text-[10px] font-mono ${
-                phase.active
-                  ? 'border-[#76B900] bg-[#76B900] text-black'
-                  : phase.done
-                    ? 'border-[#76B900]/40 text-[#76B900]'
-                    : 'border-[#d4d4d4] text-[#737373]'
-              }`}>
-                {phase.done ? 'OK' : phase.mark}
-              </span>
-              <div className={`text-xs font-bold ${phase.active ? 'text-[#0a0a0a]' : phase.done ? 'text-[#76B900]' : 'text-[#737373]'}`}>
-                {phase.label}
-              </div>
-            </div>
-          ))}
+      <div className="border-b border-[#e5e5e5] pb-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase">nvWizard Setup</div>
+          <button
+            type="button"
+            onClick={() => setAdvancedSetupOpen(prev => !prev)}
+            className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider sm:flex-shrink-0"
+          >
+            {advancedSetupOpen ? 'Hide Details' : 'Advanced Details'}
+          </button>
         </div>
         {advancedSetupOpen && (
-          <div className="flex items-center gap-0 overflow-x-auto pt-1">
+          <div className="mt-3 flex items-center gap-0 overflow-x-auto pt-1">
             {STEPS.map((s, i) => (
               <div key={s.id} className="flex items-center flex-shrink-0">
                 <button
@@ -1728,10 +1746,12 @@ export default function SetupPage() {
                   }
                   applyWizardProfile('student');
                 }}
-                disabled={storageAutopilotBusy || Boolean(storageReady && topHelperAction && helperActionDisabled(topHelperAction.id))}
+                disabled={apiDisconnected || Boolean(storageReady && topHelperAction && helperActionDisabled(topHelperAction.id))}
                 className="btn-primary px-4 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
               >
-                {!storageReady ? storagePrimaryLabel : topHelperAction ? helperActionLabel(topHelperAction.id) : 'Start AI Starter'}
+                {apiDisconnected
+                  ? 'API Offline'
+                  : topHelperAction ? helperActionLabel(topHelperAction.id) : 'Start AI Starter'}
               </button>
               <button
                 type="button"
@@ -2341,53 +2361,20 @@ export default function SetupPage() {
 
         {/* WELCOME */}
         {step === 'welcome' && (
-          <div className="space-y-6">
-            <div className="border border-[#76B900]/30 bg-[#f7fdf0] p-4 sm:p-5">
-              <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-4">
-                <div>
-                  <div className="section-label">Beginner Mode</div>
-                  <h2 className="text-3xl font-bold text-[#0a0a0a] mt-2">Pick Your Mission</h2>
-                  <p className="text-sm text-[#525252] mt-2 leading-relaxed max-w-xl">
-                    Pick one path. nvWizard finds persistent storage, checks the GPU, picks compatible models, and installs everything rootlessly.
-                  </p>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => storageReady ? void handleBuildWizardProfile('student') : void handleUseRecommendedStorage()}
-                      disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
-                      className="btn-primary px-5 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
-                    >
-                      {activeWizardBuild === 'student' ? 'Building AI Starter' : storageReady ? 'Start AI Starter' : storagePrimaryLabel}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAdvancedSetupOpen(prev => !prev)}
-                      className="btn-ghost px-5 py-3 text-xs font-mono uppercase tracking-wider"
-                    >
-                      {advancedSetupOpen ? 'Hide Advanced' : 'Customize'}
-                    </button>
-                  </div>
-                </div>
-                <div className="border border-[#76B900]/20 bg-white p-3 min-w-0 overflow-hidden">
-                  <div className="section-label">Autopilot</div>
-                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">No root. No OS surgery.</div>
-                  <div className="text-[10px] font-mono text-[#737373] mt-2 leading-relaxed">
-                    Storage first, then hardware-fit apps and models. Wizard mood: suspicious of read-only drives, friendly to GPUs.
-                  </div>
-                  {wizardBuildMessage && (
-                    <div className="mt-3 border border-[#76B900]/20 bg-[#76B900]/5 p-2 text-[10px] font-mono text-[#0a0a0a] leading-relaxed">
-                      {wizardBuildMessage}
-                    </div>
-                  )}
-                </div>
+          <div className="space-y-4">
+            {wizardBuildMessage && (
+              <div className="border border-[#76B900]/25 bg-[#f7fdf0] px-3 py-2 text-xs text-[#315f00]">
+                {wizardBuildMessage}
               </div>
-            </div>
+            )}
 
             <div className="border border-[#e5e5e5] bg-white p-3">
               <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                 <div>
                   <div className="section-label">System Check</div>
-                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">nvWizard checks the host before installing</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">
+                    {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready for rootless installs'}
+                  </div>
                 </div>
                 {topHelperAction && (
                   <button
@@ -2438,10 +2425,10 @@ export default function SetupPage() {
                 <button
                   type="button"
                   onClick={() => void handleUseRecommendedStorage()}
-                  disabled={storageReady || storageAutopilotBusy}
+                  disabled={storageReady || storageAutopilotBusy || apiDisconnected}
                   className="btn-primary w-full mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                 >
-                  {storageReady ? 'Storage Ready' : storageAutopilotBusy ? 'Finding' : 'Run Auto-Detect'}
+                  {storageReady ? 'Storage Ready' : apiDisconnected ? 'API Offline' : storageAutopilotBusy ? 'Finding' : 'Run Auto-Detect'}
                 </button>
                 {advancedSetupOpen && (
                   <div className="mt-3 space-y-2">
@@ -2514,7 +2501,7 @@ export default function SetupPage() {
                     }
                     if (visibleHardwareModelIds.length > 0) handleInstallStudioModels(visibleHardwareModelIds);
                   }}
-                  disabled={storageAutopilotBusy || anyInstallRunning || modelsInstalling || (storageReady && visibleHardwareModelIds.length === 0)}
+                  disabled={apiDisconnected || storageAutopilotBusy || anyInstallRunning || modelsInstalling || (storageReady && visibleHardwareModelIds.length === 0)}
                   className="btn-primary w-full mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                 >
                   {!storageReady ? storagePrimaryLabel : modelsInstalling ? 'Downloading' : 'Download Picks'}
@@ -2554,7 +2541,7 @@ export default function SetupPage() {
                       }
                       handleInstallStudioPacks(['github-login-helper']);
                     }}
-                    disabled={storageAutopilotBusy || anyInstallRunning || studioInstalling || !githubPack}
+                    disabled={apiDisconnected || storageAutopilotBusy || anyInstallRunning || studioInstalling || !githubPack}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
                     {!storageReady ? storagePrimaryLabel : githubPack?.status.installed ? 'Refresh GitHub' : 'Connect GitHub'}
@@ -2568,7 +2555,7 @@ export default function SetupPage() {
                       }
                       handleInstallStudioPacks(['game']);
                     }}
-                    disabled={storageAutopilotBusy || anyInstallRunning || studioInstalling || gameEnginePacks.length === 0}
+                    disabled={apiDisconnected || storageAutopilotBusy || anyInstallRunning || studioInstalling || gameEnginePacks.length === 0}
                     className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
                     {!storageReady ? 'Auto-Find Storage' : 'Game Engines'}
@@ -2579,21 +2566,10 @@ export default function SetupPage() {
             )}
 
             <div className="space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-                <div>
-                  <div className="section-label">Core Missions</div>
-                  <div className="text-sm text-[#525252] mt-1">Pick the outcome. nvWizard handles the install order and keeps manual commands as overrides.</div>
-                </div>
-                {!advancedSetupOpen && (
-                  <button
-                    type="button"
-                    onClick={() => setAdvancedSetupOpen(true)}
-                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
-                  >
-                    Show Power Options
-                  </button>
-                )}
+              <div className="flex items-center justify-between gap-2">
+                <div className="section-label">Add Options</div>
               </div>
+              {advancedSetupOpen && (
               <div className="hidden sm:block border border-[#76B900]/30 bg-[#f7fdf0] p-4">
                 <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
                   <div className="min-w-0 flex-1">
@@ -2647,21 +2623,31 @@ export default function SetupPage() {
                     <button
                       type="button"
                       onClick={() => void handleBuildWizardProfile(selectedProfile.id)}
-                      disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
+                      disabled={!profilesReady || anyInstallRunning || apiDisconnected}
                       className="btn-primary px-4 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
                     >
-                      {!storageReady ? storagePrimaryLabel : activeWizardBuild === selectedProfile.id ? 'Installing' : 'Install Mission'}
+                      {apiDisconnected
+                        ? 'API Offline'
+                        : activeWizardBuild === selectedProfile.id ? 'Installing' : 'Install Mission'}
                     </button>
                     <button
                       type="button"
                       onClick={() => {
                         if (!storageReady) {
-                          void handleUseRecommendedStorage();
+                          void handleUseRecommendedStorage().then(status => {
+                            if (status?.ok && status.configured_by !== 'default') {
+                              setAdvancedSetupOpen(true);
+                              applyWizardProfile(selectedProfile.id);
+                            } else {
+                              setAdvancedSetupOpen(true);
+                            }
+                          });
                           return;
                         }
+                        setAdvancedSetupOpen(true);
                         applyWizardProfile(selectedProfile.id);
                       }}
-                      disabled={!profilesReady || Boolean(activeWizardBuild) || storageAutopilotBusy}
+                      disabled={!profilesReady || Boolean(activeWizardBuild) || storageAutopilotBusy || apiDisconnected}
                       className="btn-ghost px-4 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
                     >
                       Customize
@@ -2669,6 +2655,7 @@ export default function SetupPage() {
                   </div>
                 </div>
               </div>
+              )}
               <div className={`grid grid-cols-1 gap-3 ${advancedSetupOpen ? 'lg:grid-cols-2' : 'lg:grid-cols-2 xl:grid-cols-4'}`}>
                 {(advancedSetupOpen ? missionProfiles : beginnerProfiles)
                   .map(profile => {
@@ -2676,6 +2663,64 @@ export default function SetupPage() {
                     const modelIds = wizardProfileModelIds(profile.id);
                     const estimatedGb = diskForPackIds(packIds) + diskForModelIds(modelIds);
                     const building = activeWizardBuild === profile.id;
+                    const profilePackItems = studioPacks.filter(pack => packIds.includes(pack.id));
+                    const profileModelItems = studioModels.filter(model => modelIds.includes(model.id));
+                    const needsComfy = wizardProfileNeedsComfy(profile.id);
+                    const requiredUnits = profilePackItems.length + profileModelItems.length + (needsComfy ? 1 : 0);
+                    const installedUnits = profilePackItems.filter(pack => pack.status.installed).length
+                      + profileModelItems.filter(model => model.installed).length
+                      + (needsComfy && comfyStatus?.installed ? 1 : 0);
+                    const profileInstalled = requiredUnits > 0 && installedUnits >= requiredUnits;
+                    if (!advancedSetupOpen) {
+                      return (
+                        <div
+                          key={profile.id}
+                          className={`border p-4 transition-colors ${
+                            profileInstalled
+                              ? 'border-[#d4d4d4] bg-[#fafafa]'
+                              : profile.primary
+                              ? 'border-[#76B900]/60 bg-white'
+                              : 'border-[#e5e5e5] bg-white'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <span className="w-14 h-14 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                              <div className="grid grid-cols-2 gap-0.5">
+                                {profile.logos.slice(0, 4).map(logo => (
+                                  <BrandLogo key={logo} id={logo} className="w-5 h-5" />
+                                ))}
+                              </div>
+                            </span>
+                            <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border flex-shrink-0 ${
+                              profileInstalled
+                                ? 'border-[#76B900]/40 text-[#76B900] bg-[#76B900]/10'
+                                : 'border-[#d4d4d4] text-[#737373]'
+                            }`}>
+                              {profileInstalled ? 'Installed' : 'Add'}
+                            </span>
+                          </div>
+                          <div className="mt-3">
+                            <h3 className="text-base font-bold text-[#0a0a0a] leading-tight">{profile.title}</h3>
+                            <div className="text-xs text-[#737373] mt-1">{beginnerProfileCopy[profile.id] ?? profile.label}</div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (profileInstalled) {
+                                setAdvancedSetupOpen(true);
+                                applyWizardProfile(profile.id);
+                                return;
+                              }
+                              void handleBuildWizardProfile(profile.id);
+                            }}
+                            disabled={!profileInstalled && (!profilesReady || anyInstallRunning || apiDisconnected)}
+                            className={`${profileInstalled ? 'btn-ghost' : 'btn-primary'} w-full mt-4 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40`}
+                          >
+                            {profileInstalled ? 'Open' : apiDisconnected ? 'API Offline' : building ? 'Adding' : 'Add'}
+                          </button>
+                        </div>
+                      );
+                    }
                     return (
                       <div
                         key={profile.id}
@@ -2726,25 +2771,29 @@ export default function SetupPage() {
                           <button
                             type="button"
                             onClick={() => void handleBuildWizardProfile(profile.id)}
-                            disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
+                            disabled={!profilesReady || anyInstallRunning || apiDisconnected}
                             className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                           >
-                            {!storageReady ? storagePrimaryLabel : building ? 'Installing' : 'Install Mission'}
+                            {apiDisconnected ? 'API Offline' : building ? 'Installing' : 'Install Mission'}
                           </button>
                           <button
                             type="button"
                             onClick={() => {
                               if (!storageReady) {
                                 void handleUseRecommendedStorage().then(status => {
-                                  if (!status?.ok || status.configured_by === 'default') {
+                                  if (status?.ok && status.configured_by !== 'default') {
+                                    setAdvancedSetupOpen(true);
+                                    applyWizardProfile(profile.id);
+                                  } else {
                                     setAdvancedSetupOpen(true);
                                   }
                                 });
                                 return;
                               }
+                              setAdvancedSetupOpen(true);
                               applyWizardProfile(profile.id);
                             }}
-                            disabled={!profilesReady || Boolean(activeWizardBuild) || storageAutopilotBusy}
+                            disabled={!profilesReady || Boolean(activeWizardBuild) || storageAutopilotBusy || apiDisconnected}
                             className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                           >
                             Customize
@@ -2756,6 +2805,7 @@ export default function SetupPage() {
               </div>
             </div>
 
+            {advancedSetupOpen && (
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-[10px] font-mono border-t border-[#e5e5e5] pt-4">
               <div className="flex items-center gap-2">
                 <span className={`w-1.5 h-1.5 flex-shrink-0 ${apiStatus === 'connected' ? 'bg-[#76B900]' : apiStatus === 'disconnected' ? 'bg-[#d97706]' : 'bg-[#a3a3a3] animate-pulse'}`}
@@ -2772,6 +2822,7 @@ export default function SetupPage() {
                 {advancedSetupOpen ? 'Hide Details' : 'Advanced Details'}
               </button>
             </div>
+            )}
           </div>
         )}
 
@@ -2936,6 +2987,12 @@ export default function SetupPage() {
                             <span>CUDA {g.cuda_version}</span>
                             <span>/</span>
                             <span>driver {g.driver_version}</span>
+                            {g.architecture && (
+                              <>
+                                <span>/</span>
+                                <span>{g.architecture}{g.architecture_heuristic ? ' (estimated)' : ''}</span>
+                              </>
+                            )}
                           </div>
                           <div className="mt-2 space-y-1">
                             <div className="flex justify-between text-[10px] font-mono">
@@ -2976,10 +3033,12 @@ export default function SetupPage() {
                     </svg>
                   </div>
                   <div>
-                    <div className="text-sm font-bold text-[#0a0a0a] font-mono">No NVIDIA GPU Detected</div>
-                    <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">CPU MODE</div>
+                    <div className="text-sm font-bold text-[#0a0a0a] font-mono">
+                      {gpuDetectionStatus === 'blocked' ? 'GPU Present, Access Blocked' : 'No NVIDIA GPU Detected'}
+                    </div>
+                    <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">{gpuDetectionStatus.toUpperCase()}</div>
                     <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">
-                      Local models will run on CPU. Consider a cloud provider for better speed.
+                      {gpuDetectionIssue || 'Local models will run on CPU. Consider a cloud provider for better speed.'}
                     </div>
                   </div>
                 </div>
@@ -3614,7 +3673,7 @@ export default function SetupPage() {
             <div className="space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
-                  <div className="section-label">Workflow Model Plan</div>
+                  <div className="section-label">Workflow Download Checklist</div>
                   <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">
                     {selectedComfyExamples.size} workflow(s), {selectedComfyModelCount} model requirement(s)
                   </div>
@@ -3625,7 +3684,7 @@ export default function SetupPage() {
                   disabled={comfyPlanSaving || selectedComfyExamples.size === 0}
                   className="btn-secondary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                 >
-                  {comfyPlanSaving ? 'Saving...' : 'Save Model Plan'}
+                  {comfyPlanSaving ? 'Saving...' : 'Save Download Checklist'}
                 </button>
               </div>
 
@@ -4101,7 +4160,7 @@ export default function SetupPage() {
                 const idx = STEPS.findIndex(s => s.id === step);
                 if (idx < STEPS.length - 1) setStep(STEPS[idx + 1].id);
               }}
-              disabled={step === 'storage' && storageAutopilotBusy}
+              disabled={step === 'storage' && (storageAutopilotBusy || apiDisconnected)}
               className="btn-primary px-6 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
             >
               {step === 'storage' && !storageReady ? storagePrimaryLabel : 'Next >'}

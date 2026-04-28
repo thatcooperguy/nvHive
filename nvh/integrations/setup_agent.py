@@ -314,15 +314,20 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             reason="Adds Blender LTS and asset workspaces for creative students.",
         ))
 
-    music_pack = by_pack.get("ace-step-music", {})
-    if not music_pack.get("status", {}).get("installed"):
+    music_pack_ids = ("ace-step-music", "music-producer-lab", "music-daw-helper")
+    music_missing = [
+        pack_id
+        for pack_id in music_pack_ids
+        if not by_pack.get(pack_id, {}).get("status", {}).get("installed")
+    ]
+    if music_missing:
         actions.append(SetupAction(
             id="music-tools",
             title="Install music producer tools",
             priority=72,
             status="optional",
             command="nvh studio --install music -y",
-            reason="Adds ACE-Step music generation, audio AI tools, and a rootless DAW workspace.",
+            reason=f"Adds ACE-Step music generation, audio AI tools, and a rootless DAW workspace. Missing: {', '.join(music_missing)}.",
         ))
 
     receipts = _safe_receipt_summary()

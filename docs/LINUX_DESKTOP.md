@@ -19,6 +19,10 @@ curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linu
 
 That script chooses a likely persistent mount for `NVH_HOME`, installs nvHive
 without root, creates the desktop launcher, and starts the WebUI setup wizard.
+For the target cloud desktop shape, `NVH_HOME` should land on the writable
+block-backed home/data volume that survives reconnects, ideally 200GB or
+larger for local LLMs and ComfyUI assets. Avoid read-only CIFS/SMB mounts and
+the ephemeral OS disk.
 To force the no-Python binary path:
 
 ```bash
@@ -57,8 +61,10 @@ commands.
 
 ## What `nvh workstation` Does
 
-- Detects NVIDIA GPU availability with `nvidia-smi`
-- Estimates VRAM and recommends local chat models
+- Detects NVIDIA GPU availability with NVML/`nvidia-smi` and reports when a
+  rootless session can see NVIDIA device files but cannot query them
+- Estimates framebuffer/VRAM, architecture, and storage capacity before
+  recommending local chat models
 - Creates `$NVH_HOME/bin/nvhive-ai-studio`
 - Creates a Linux desktop launcher named `NVHive AI Studio`
 - Shows a student-friendly setup checklist

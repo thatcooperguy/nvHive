@@ -50,7 +50,11 @@ def _validate_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
 
 def _generated_fallback_catalog() -> dict[str, Any]:
     from nvh.integrations.comfyui import examples_as_dicts
-    from nvh.integrations.studio_packs import BLENDER_VERSION, catalog_as_dicts, model_catalog_as_dicts
+    from nvh.integrations.studio_packs import (
+        BLENDER_VERSION,
+        catalog_as_dicts,
+        model_catalog_as_dicts,
+    )
 
     packs = catalog_as_dicts()
     for pack in packs:

@@ -8,6 +8,12 @@ build/
 .eggs/
 *.so
 .pytest_cache/
+pytest_tmp*/
+.tmp-pytest*/
+.pytest-*/
+.codex-pytest-tmp/
+.codex-test-tmp*/
+pytest-of-*/
 .mypy_cache/
 .ruff_cache/
 *.db
@@ -32,3 +38,4 @@ docs/DEVTO_ARTICLE.md
 docs/DEVTO_FINAL.md
 benchmark_results.md
 .coverage
+/setup-*.png

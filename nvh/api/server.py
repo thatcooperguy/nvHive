@@ -45,10 +45,12 @@ from nvh.providers.base import (
 )
 from nvh.utils.gpu import (
     check_oom_risk,
+    detect_gpu_status,
     detect_gpus,
     detect_system_memory,
     get_gpu_summary,
     get_ollama_optimizations,
+    gpu_architecture_info,
     recommend_models,
 )
 
@@ -363,10 +365,15 @@ ALLOWED_ORIGINS = (
     if _cors_env
     else _DEFAULT_CORS_ORIGINS
 )
+LOCAL_WEBUI_ORIGIN_REGEX = os.environ.get(
+    "HIVE_CORS_ORIGIN_REGEX",
+    r"^http://(localhost|127\.0\.0\.1|nvhive|\[::1\])(:\d+)?$",
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=LOCAL_WEBUI_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -776,30 +783,45 @@ async def prometheus_metrics_v1() -> Response:
 def _serialize_gpu_data() -> dict[str, Any]:
     """Detect GPUs and return serialisable dict. Never raises — returns empty on error."""
     try:
-        gpus = detect_gpus()
+        gpu_status = detect_gpu_status()
+        gpus = gpu_status["gpus"]
         sys_mem = detect_system_memory()
         summary = get_gpu_summary()
         total_vram_gb = round(sum(g.vram_mb for g in gpus) / 1024, 1) if gpus else 0.0
 
-        gpu_list = [
-            {
-                "name": g.name,
-                "vram_mb": g.vram_mb,
-                "vram_gb": g.vram_gb,
-                "memory_used_mb": g.memory_used_mb,
-                "memory_free_mb": g.memory_free_mb,
-                "utilization_pct": g.utilization_pct,
-                "driver_version": g.driver_version,
-                "cuda_version": g.cuda_version,
-                "index": g.index,
-            }
-            for g in gpus
-        ]
+        gpu_list = []
+        for g in gpus:
+            arch = gpu_architecture_info(g)
+            gpu_list.append(
+                {
+                    "name": g.name,
+                    "vram_mb": g.vram_mb,
+                    "vram_gb": g.vram_gb,
+                    "memory_used_mb": g.memory_used_mb,
+                    "memory_free_mb": g.memory_free_mb,
+                    "memory_reserved_mb": max(g.vram_mb - g.memory_used_mb - g.memory_free_mb, 0),
+                    "utilization_pct": g.utilization_pct,
+                    "driver_version": g.driver_version,
+                    "cuda_version": g.cuda_version,
+                    "index": g.index,
+                    "compute_capability": list(arch["compute_capability"]),
+                    "compute_capability_source": arch["compute_capability_source"],
+                    "architecture": arch["architecture"],
+                    "architecture_heuristic": arch["heuristic"],
+                }
+            )
 
         return {
             "gpus": gpu_list,
             "summary": summary,
             "total_vram_gb": total_vram_gb,
+            "detection": {
+                "status": gpu_status.get("status"),
+                "source": gpu_status.get("source"),
+                "issues": gpu_status.get("issues", []),
+                "device_files_present": gpu_status.get("device_files_present", False),
+                "nvidia_smi": gpu_status.get("nvidia_smi", ""),
+            },
             "system_ram": {
                 "total_gb": sys_mem.total_ram_gb,
                 "available_gb": sys_mem.available_ram_gb,
@@ -812,6 +834,13 @@ def _serialize_gpu_data() -> dict[str, Any]:
             "gpus": [],
             "summary": "GPU detection unavailable",
             "total_vram_gb": 0.0,
+            "detection": {
+                "status": "error",
+                "source": "exception",
+                "issues": [{"source": "api", "code": "exception", "message": str(exc), "severity": "warning", "detail": ""}],
+                "device_files_present": False,
+                "nvidia_smi": "",
+            },
             "system_ram": {"total_gb": 0.0, "available_gb": 0.0, "effective_for_llm_gb": 0.0},
         }
 

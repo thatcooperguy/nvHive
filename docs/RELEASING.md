@@ -80,7 +80,9 @@ Before tagging, verify:
 git tag v0.7.0
 git push origin v0.7.0
 
-# Publish the same tag to PyPI through trusted publishing.
+# publish.yml normally starts automatically when release.yml publishes
+# the GitHub Release. Only run this manually if the automatic publish
+# did not start or you are recovering a failed publish.
 gh workflow run publish.yml --ref v0.7.0 -f target=pypi
 ```
 
@@ -89,10 +91,11 @@ The tag push triggers the release chain in the Actions tab:
 1. **release.yml** builds sdist, wheel, and PyInstaller binaries for
    Linux/macOS/Windows, then creates a GitHub Release with
    auto-generated notes and every artifact attached.
-2. **publish.yml** is dispatched against the same tag, runs
-   `twine check dist/*`, and uploads sdist + wheel to PyPI via OIDC
+2. **publish.yml** normally starts from the `release: published` event,
+   runs `twine check dist/*`, and uploads sdist + wheel to PyPI via OIDC
    trusted publishing. This workflow file name is the one registered in
-   PyPI's trusted-publisher settings.
+   PyPI's trusted-publisher settings. Manual dispatch is a recovery path,
+   not a required second publish step.
 
 Typical full duration is 6-10 minutes for the GitHub Release (binary
 builds dominate) plus about a minute for PyPI publishing. On success,

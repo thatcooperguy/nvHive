@@ -316,10 +316,15 @@ export interface GPUDevice {
   vram_gb: number;
   memory_used_mb: number;
   memory_free_mb: number;
+  memory_reserved_mb?: number;
   utilization_pct: number;
   driver_version: string;
   cuda_version: string;
   index: number;
+  compute_capability?: [number, number];
+  compute_capability_source?: string;
+  architecture?: string;
+  architecture_heuristic?: boolean;
 }
 
 export interface SystemRAM {
@@ -332,6 +337,13 @@ export interface GPUInfo {
   gpus: GPUDevice[];
   summary: string;
   total_vram_gb: number;
+  detection?: {
+    status: string;
+    source: string;
+    issues: Array<{ source: string; code: string; message: string; severity: string; detail: string }>;
+    device_files_present: boolean;
+    nvidia_smi: string;
+  };
   system_ram: SystemRAM;
 }
 
@@ -398,6 +410,8 @@ export interface StorageStatus {
   configured_by: string;
   exists: boolean;
   writable: boolean;
+  write_probe_ok: boolean;
+  write_probe_error: string;
   free_gb: number | null;
   total_gb: number | null;
   min_free_gb: number;

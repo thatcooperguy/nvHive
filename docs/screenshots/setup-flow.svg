@@ -1,87 +1,76 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 320" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 520" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
   <defs>
-    <linearGradient id="sf-bg" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#111"/><stop offset="100%" style="stop-color:#0a0a0a"/>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#101214"/>
+      <stop offset="100%" stop-color="#050607"/>
     </linearGradient>
-    <linearGradient id="sf-nv" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#76B900"/><stop offset="100%" style="stop-color:#5a8f00"/>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#76B900"/>
+      <stop offset="100%" stop-color="#4f7f00"/>
     </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000" flood-opacity="0.32"/>
+    </filter>
+    <style>
+      .small { fill: #9ca3af; font-size: 13px; }
+      .label { fill: #f8fafc; font-size: 18px; font-weight: 700; }
+      .title { fill: #76B900; font-size: 28px; font-weight: 800; letter-spacing: 1px; }
+      .card { fill: #171a1d; stroke: #2d3338; stroke-width: 1.2; }
+      .pill { fill: #101214; stroke: #76B900; stroke-width: 1; }
+      .muted { fill: #69707a; font-size: 12px; }
+      .mission { fill: #f8fafc; font-size: 15px; font-weight: 700; }
+      .arrow { stroke: #76B900; stroke-width: 3; stroke-linecap: round; }
+    </style>
   </defs>
 
-  <rect width="1100" height="320" rx="12" fill="url(#sf-bg)"/>
+  <rect width="1120" height="520" rx="18" fill="url(#bg)"/>
+  <text x="560" y="42" text-anchor="middle" class="title">nvHive Mission Wizard</text>
+  <text x="560" y="67" text-anchor="middle" class="small">Pick one goal. nvWizard finds persistent storage, checks the GPU stack, recommends models, and installs rootlessly.</text>
 
-  <!-- Title -->
-  <text x="550" y="30" text-anchor="middle" fill="#76B900" font-size="22" font-weight="bold" letter-spacing="3">FIRST-RUN SETUP</text>
-  <line x1="380" y1="40" x2="720" y2="40" stroke="#76B900" stroke-width="1" opacity="0.4"/>
-  <text x="550" y="58" text-anchor="middle" fill="#555" font-size="12">3 steps  |  No root  |  Fully automatic  |  Every step skippable</text>
+  <rect x="36" y="106" width="292" height="300" rx="14" class="card" filter="url(#shadow)"/>
+  <rect x="36" y="106" width="292" height="6" rx="3" fill="url(#green)"/>
+  <text x="64" y="148" class="label">1. Autopilot Boot</text>
+  <text x="64" y="178" class="small">No admin password. No OS changes.</text>
+  <text x="64" y="205" class="small">- Detects persistent block storage</text>
+  <text x="64" y="229" class="small">- Probes write/fsync/delete safety</text>
+  <text x="64" y="253" class="small">- Reads GPU, VRAM, CUDA, driver</text>
+  <text x="64" y="277" class="small">- Tracks OS/kernel/runtime drift</text>
+  <rect x="64" y="316" width="236" height="42" rx="8" class="pill"/>
+  <text x="182" y="342" text-anchor="middle" fill="#76B900" font-size="14" font-weight="800">Fix My Setup is automatic</text>
 
-  <!-- Step 1 -->
-  <rect x="30" y="78" width="310" height="185" rx="10" fill="#161616" stroke="#2a2a2a" stroke-width="1"/>
-  <rect x="30" y="78" width="310" height="3" fill="#76B900"/>
-  <rect x="48" y="98" width="32" height="32" rx="16" fill="url(#sf-nv)"/>
-  <text x="64" y="121" text-anchor="middle" fill="white" font-size="17" font-weight="bold">1</text>
-  <text x="92" y="118" fill="white" font-size="17" font-weight="bold">Hardware + Local AI</text>
+  <line x1="342" y1="256" x2="404" y2="256" class="arrow"/>
+  <polygon points="404,248 422,256 404,264" fill="#76B900"/>
 
-  <circle cx="58" cy="148" r="3" fill="#76B900"/>
-  <text x="70" y="152" fill="#bbb" font-size="13">Detect GPU, VRAM, CUDA</text>
-  <circle cx="58" cy="172" r="3" fill="#76B900"/>
-  <text x="70" y="176" fill="#bbb" font-size="13">Install Ollama to ~/.nvh/</text>
-  <circle cx="58" cy="196" r="3" fill="#76B900"/>
-  <text x="70" y="200" fill="#bbb" font-size="13">Pull text + vision models</text>
-  <circle cx="58" cy="220" r="3" fill="#76B900"/>
-  <text x="70" y="224" fill="#bbb" font-size="13">Rich progress bars</text>
+  <rect x="432" y="94" width="258" height="324" rx="14" class="card" filter="url(#shadow)"/>
+  <rect x="432" y="94" width="258" height="6" rx="3" fill="url(#green)"/>
+  <text x="460" y="134" class="label">2. Pick Your Mission</text>
+  <text x="460" y="164" class="small">The first screen is a choice,</text>
+  <text x="460" y="184" class="small">not a checklist.</text>
 
-  <rect x="48" y="238" width="275" height="18" rx="4" fill="#111" stroke="#76B900" stroke-width="1"/>
-  <text x="185" y="251" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">DESKTOP AGENT: READY</text>
+  <rect x="460" y="214" width="202" height="34" rx="8" fill="#20252a" stroke="#3a4249"/>
+  <text x="482" y="236" class="mission">AI Starter</text>
+  <rect x="460" y="258" width="202" height="34" rx="8" fill="#20252a" stroke="#3a4249"/>
+  <text x="482" y="280" class="mission">Creator Studio</text>
+  <rect x="460" y="302" width="202" height="34" rx="8" fill="#20252a" stroke="#3a4249"/>
+  <text x="482" y="324" class="mission">Game Lab</text>
+  <rect x="460" y="346" width="202" height="34" rx="8" fill="#20252a" stroke="#3a4249"/>
+  <text x="482" y="368" class="mission">Music Studio</text>
+  <text x="460" y="398" class="muted">Advanced details stay one click away.</text>
 
-  <!-- Arrow 1 -> 2 -->
-  <line x1="348" y1="170" x2="388" y2="170" stroke="#76B900" stroke-width="2"/>
-  <polygon points="388,164 400,170 388,176" fill="#76B900"/>
+  <line x1="704" y1="256" x2="766" y2="256" class="arrow"/>
+  <polygon points="766,248 784,256 766,264" fill="#76B900"/>
 
-  <!-- Step 2 -->
-  <rect x="408" y="78" width="260" height="185" rx="10" fill="#161616" stroke="#2a2a2a" stroke-width="1"/>
-  <rect x="408" y="78" width="260" height="3" fill="#76B900"/>
-  <rect x="426" y="98" width="32" height="32" rx="16" fill="url(#sf-nv)"/>
-  <text x="442" y="121" text-anchor="middle" fill="white" font-size="17" font-weight="bold">2</text>
-  <text x="470" y="118" fill="white" font-size="17" font-weight="bold">Provider Status</text>
+  <rect x="794" y="106" width="292" height="300" rx="14" class="card" filter="url(#shadow)"/>
+  <rect x="794" y="106" width="292" height="6" rx="3" fill="url(#green)"/>
+  <text x="822" y="148" class="label">3. Rootless Install</text>
+  <text x="822" y="178" class="small">nvHive downloads only what fits.</text>
+  <text x="822" y="205" class="small">- LLMs and vision models</text>
+  <text x="822" y="229" class="small">- ComfyUI workflows and nodes</text>
+  <text x="822" y="253" class="small">- Blender, Godot, audio helpers</text>
+  <text x="822" y="277" class="small">- OpenClaw and guarded NemoClaw</text>
+  <rect x="822" y="316" width="236" height="42" rx="8" class="pill"/>
+  <text x="940" y="342" text-anchor="middle" fill="#76B900" font-size="14" font-weight="800">Everything lives in NVH_HOME</text>
 
-  <text x="428" y="152" fill="#888" font-size="13">Groq</text>
-  <text x="540" y="152" fill="#555" font-size="13">not configured</text>
-  <text x="428" y="176" fill="#888" font-size="13">OpenAI</text>
-  <text x="540" y="176" fill="#555" font-size="13">not configured</text>
-  <text x="428" y="200" fill="#888" font-size="13">Anthropic</text>
-  <text x="540" y="200" fill="#555" font-size="13">not configured</text>
-  <text x="428" y="224" fill="#888" font-size="13">Google</text>
-  <text x="540" y="224" fill="#555" font-size="13">not configured</text>
-
-  <rect x="428" y="238" width="220" height="18" rx="4" fill="#111" stroke="#76B900" stroke-width="1"/>
-  <text x="538" y="251" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">OLLAMA  RUNNING  2 MODELS</text>
-
-  <!-- Arrow 2 -> 3 -->
-  <line x1="676" y1="170" x2="716" y2="170" stroke="#76B900" stroke-width="2"/>
-  <polygon points="716,164 728,170 716,176" fill="#76B900"/>
-
-  <!-- Step 3 -->
-  <rect x="736" y="78" width="334" height="185" rx="10" fill="#161616" stroke="#2a2a2a" stroke-width="1"/>
-  <rect x="736" y="78" width="334" height="3" fill="#76B900"/>
-  <rect x="754" y="98" width="32" height="32" rx="16" fill="url(#sf-nv)"/>
-  <text x="770" y="121" text-anchor="middle" fill="white" font-size="17" font-weight="bold">3</text>
-  <text x="798" y="118" fill="white" font-size="17" font-weight="bold">API Keys</text>
-  <text x="897" y="118" fill="#666" font-size="13">(agent-assisted)</text>
-
-  <circle cx="754" cy="148" r="3" fill="#76B900"/>
-  <text x="766" y="152" fill="#bbb" font-size="13">Opens signup page in browser</text>
-  <circle cx="754" cy="172" r="3" fill="#76B900"/>
-  <text x="766" y="176" fill="#bbb" font-size="13">Screenshots page to verify</text>
-  <circle cx="754" cy="196" r="3" fill="#76B900"/>
-  <text x="766" y="200" fill="#bbb" font-size="13">Watches clipboard for key</text>
-  <circle cx="754" cy="220" r="3" fill="#76B900"/>
-  <text x="766" y="224" fill="#bbb" font-size="13">Falls back to manual paste</text>
-
-  <rect x="754" y="238" width="298" height="18" rx="4" fill="#111" stroke="#76B900" stroke-width="1"/>
-  <text x="903" y="251" text-anchor="middle" fill="#76B900" font-size="10" font-weight="bold">DETECTED KEY: gsk_xR...CmLa  SAVED</text>
-
-  <!-- Bottom completion bar -->
-  <rect x="30" y="280" width="1040" height="28" rx="8" fill="url(#sf-nv)"/>
-  <text x="550" y="299" text-anchor="middle" fill="white" font-size="12" font-weight="bold" letter-spacing="1">SETUP COMPLETE   |   4 PROVIDERS   |   48 GB VRAM   |   DESKTOP AGENT READY</text>
+  <rect x="140" y="444" width="840" height="42" rx="10" fill="#101214" stroke="#2d3338"/>
+  <text x="560" y="470" text-anchor="middle" class="small">Designed for NVIDIA Linux cloud desktops where the OS may reset but the mounted user volume survives.</text>
 </svg>

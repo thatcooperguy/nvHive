@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 560" font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#101214"/>
+      <stop offset="100%" stop-color="#050607"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#76B900"/>
+      <stop offset="100%" stop-color="#4f7f00"/>
+    </linearGradient>
+    <style>
+      .title { fill: #76B900; font-size: 28px; font-weight: 800; }
+      .subtitle { fill: #a6adb6; font-size: 14px; }
+      .box { fill: #171a1d; stroke: #2d3338; stroke-width: 1.2; }
+      .good { fill: #0f1b0f; stroke: #76B900; stroke-width: 1.4; }
+      .warn { fill: #241c0e; stroke: #d99a20; stroke-width: 1.2; }
+      .label { fill: #f8fafc; font-size: 17px; font-weight: 700; }
+      .small { fill: #a6adb6; font-size: 13px; }
+      .muted { fill: #69707a; font-size: 12px; }
+      .arrow { stroke: #76B900; stroke-width: 3; stroke-linecap: round; }
+    </style>
+  </defs>
+
+  <rect width="1120" height="560" rx="18" fill="url(#bg)"/>
+  <text x="560" y="44" text-anchor="middle" class="title">Rootless NVIDIA Cloud Desktop Layout</text>
+  <text x="560" y="70" text-anchor="middle" class="subtitle">nvHive assumes the base VM can change. The user's mounted block storage is the source of truth.</text>
+
+  <rect x="56" y="118" width="284" height="300" rx="14" class="warn"/>
+  <text x="84" y="158" class="label">Base VM Image</text>
+  <text x="84" y="190" class="small">Read-only or disposable</text>
+  <text x="84" y="222" class="small">- Kernel</text>
+  <text x="84" y="246" class="small">- NVIDIA driver</text>
+  <text x="84" y="270" class="small">- CUDA runtime visibility</text>
+  <text x="84" y="294" class="small">- System Python and Node</text>
+  <text x="84" y="336" fill="#d99a20" font-size="13" font-weight="700">Can drift between sessions</text>
+
+  <line x1="358" y1="268" x2="442" y2="268" class="arrow"/>
+  <polygon points="442,260 460,268 442,276" fill="#76B900"/>
+
+  <rect x="476" y="98" width="332" height="340" rx="14" class="good"/>
+  <text x="508" y="138" class="label">Persistent Block Storage</text>
+  <text x="508" y="168" class="small">Auto-selected as NVH_HOME</text>
+  <rect x="508" y="198" width="120" height="42" rx="8" fill="#101214" stroke="#3a4249"/>
+  <text x="568" y="224" text-anchor="middle" class="small">apps</text>
+  <rect x="648" y="198" width="120" height="42" rx="8" fill="#101214" stroke="#3a4249"/>
+  <text x="708" y="224" text-anchor="middle" class="small">models</text>
+  <rect x="508" y="258" width="120" height="42" rx="8" fill="#101214" stroke="#3a4249"/>
+  <text x="568" y="284" text-anchor="middle" class="small">runtimes</text>
+  <rect x="648" y="258" width="120" height="42" rx="8" fill="#101214" stroke="#3a4249"/>
+  <text x="708" y="284" text-anchor="middle" class="small">jobs</text>
+  <rect x="508" y="318" width="120" height="42" rx="8" fill="#101214" stroke="#3a4249"/>
+  <text x="568" y="344" text-anchor="middle" class="small">cache</text>
+  <rect x="648" y="318" width="120" height="42" rx="8" fill="#101214" stroke="#3a4249"/>
+  <text x="708" y="344" text-anchor="middle" class="small">config</text>
+  <text x="642" y="398" text-anchor="middle" fill="#76B900" font-size="13" font-weight="800">write/fsync/delete probe required</text>
+
+  <line x1="826" y1="268" x2="910" y2="268" class="arrow"/>
+  <polygon points="910,260 928,268 910,276" fill="#76B900"/>
+
+  <rect x="944" y="118" width="120" height="300" rx="14" class="box"/>
+  <text x="1004" y="158" text-anchor="middle" class="label">Tools</text>
+  <text x="1004" y="194" text-anchor="middle" class="small">ComfyUI</text>
+  <text x="1004" y="224" text-anchor="middle" class="small">Ollama</text>
+  <text x="1004" y="254" text-anchor="middle" class="small">Blender</text>
+  <text x="1004" y="284" text-anchor="middle" class="small">Godot</text>
+  <text x="1004" y="314" text-anchor="middle" class="small">Music AI</text>
+  <text x="1004" y="344" text-anchor="middle" class="small">Agents</text>
+
+  <rect x="148" y="466" width="824" height="44" rx="10" fill="#101214" stroke="#2d3338"/>
+  <text x="560" y="493" text-anchor="middle" class="muted">Boot preflight compares the new VM fingerprint to the previous one and recommends rootless repairs before large downloads run.</text>
+</svg>

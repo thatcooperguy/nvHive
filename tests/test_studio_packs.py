@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
+import sys
+
 import pytest
 
 from nvh.integrations import studio_packs
@@ -103,6 +106,37 @@ def test_appimage_selector_prefers_linux_x64_assets() -> None:
     )
 
     assert asset["browser_download_url"].endswith("audacity-22.AppImage")
+
+
+def test_run_command_supports_long_install_timeout() -> None:
+    signature = inspect.signature(studio_packs._run_command)
+
+    assert "timeout" in signature.parameters
+
+
+@pytest.mark.asyncio
+async def test_ace_step_music_blocks_non_linux(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_STUDIO_HOME", str(tmp_path / "studio"))
+    monkeypatch.setattr(studio_packs.platform, "system", lambda: "Darwin")
+
+    pack = studio_packs._find_pack("ace-step-music")
+    events = [event async for event in studio_packs._install_ace_step_music(pack, force_update=False)]
+
+    assert events[0]["event"] == "error"
+    assert not (tmp_path / "studio" / "packs" / "ace-step-music" / "installed.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_music_daw_helper_does_not_mark_installed_without_downloads(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_STUDIO_HOME", str(tmp_path / "studio"))
+    monkeypatch.setattr(studio_packs.platform, "system", lambda: "Linux")
+    monkeypatch.setitem(sys.modules, "httpx", None)
+
+    pack = studio_packs._find_pack("music-daw-helper")
+    events = [event async for event in studio_packs._install_music_daw_helper(pack, force_update=False)]
+
+    assert any(event["event"] == "error" for event in events)
+    assert not (tmp_path / "studio" / "packs" / "music-daw-helper" / "installed.json").exists()
 
 
 def test_catalog_status_uses_configured_studio_home(tmp_path, monkeypatch) -> None:

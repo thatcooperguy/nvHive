@@ -5,7 +5,14 @@ from __future__ import annotations
 from nvh.integrations import boot_preflight
 
 
-def _compatibility_report(*, kernel: str = "6.8.0", cuda: str = "12.4", agent_ready: bool = False) -> dict:
+def _compatibility_report(
+    *,
+    kernel: str = "6.8.0",
+    cuda: str = "12.4",
+    agent_ready: bool = False,
+    node_version: str = "v22.16.0",
+    storage_total_gb: float = 500.0,
+) -> dict:
     return {
         "summary": "ready",
         "ready": True,
@@ -24,6 +31,9 @@ def _compatibility_report(*, kernel: str = "6.8.0", cuda: str = "12.4", agent_re
                 "memory_total_mb": "24576",
                 "driver_version": "570.00",
                 "cuda_version": cuda,
+                "compute_capability": "8.9",
+                "architecture": "Ada Lovelace",
+                "detection_status": "ready",
             },
             "commands": {
                 "git": "/usr/bin/git",
@@ -32,8 +42,14 @@ def _compatibility_report(*, kernel: str = "6.8.0", cuda: str = "12.4", agent_re
                 "node": "/usr/bin/node",
                 "npm": "/usr/bin/npm",
             },
+            "command_versions": {"node": node_version, "npm": "10.8.0"},
             "display": {"DISPLAY": ":0", "WAYLAND_DISPLAY": ""},
-            "storage": {"layout": {"home": "/mnt/nvh"}},
+            "storage": {
+                "configured_by": "argument",
+                "total_gb": storage_total_gb,
+                "write_probe_ok": True,
+                "layout": {"home": "/mnt/nvh"},
+            },
         },
         "apps": [
             {
@@ -89,3 +105,26 @@ def test_boot_preflight_detects_image_drift(tmp_path, monkeypatch) -> None:
     assert changed["changed"] is True
     assert {"kernel", "cuda_version"}.issubset(change_ids)
     assert changed["agent_helper"]["mode"] == "local-agent-ready"
+
+
+def test_boot_preflight_detects_runtime_and_storage_drift(tmp_path, monkeypatch) -> None:
+    reports = [
+        _compatibility_report(node_version="v22.16.0", storage_total_gb=500.0, agent_ready=True),
+        _compatibility_report(node_version="v20.11.0", storage_total_gb=200.0, agent_ready=True),
+    ]
+    monkeypatch.setattr(
+        boot_preflight,
+        "compatibility_report",
+        lambda home_dir=None: reports.pop(0),
+    )
+    monkeypatch.setattr(boot_preflight, "mount_autopilot_report", lambda: {"recommended": None})
+    monkeypatch.setattr(boot_preflight, "auto_repair_plan", lambda home_dir=None: {"actions": []})
+    monkeypatch.setattr(boot_preflight, "run_safe_repairs", lambda home_dir=None: {"completed": [], "plan": {"actions": []}})
+    monkeypatch.setattr(boot_preflight, "smoke_test_report", lambda home_dir=None: {"summary": "ok"})
+    monkeypatch.setattr(boot_preflight, "model_fit_report", lambda home_dir=None: {"summary": "ok", "recommended_ids": [], "detected_vram_gb": 0})
+
+    boot_preflight.run_boot_preflight(home_dir=tmp_path / "nvh")
+    changed = boot_preflight.run_boot_preflight(home_dir=tmp_path / "nvh")
+
+    change_ids = {change["id"] for change in changed["changes"]}
+    assert {"node_version", "storage_total_gb"}.issubset(change_ids)
