@@ -21,10 +21,11 @@ function InnerShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const isChatPage = pathname === '/';
+  const isSetupPage = pathname?.startsWith('/setup');
   const { openCommandPalette } = useUIShell();
 
-  if (isChatPage) {
-    // Chat page is fully self-contained — it renders its own sidebar.
+  if (isChatPage || isSetupPage) {
+    // Chat and setup are self-contained surfaces.
     return (
       <>
         <GlobalModals />

@@ -644,6 +644,13 @@ export interface MountCandidate {
   writable: boolean;
   free_gb: number | null;
   total_gb: number | null;
+  fs_type: string | null;
+  device: string | null;
+  mount_point: string | null;
+  read_only: boolean;
+  network_mount: boolean;
+  os_mount: boolean;
+  large_block_mount: boolean;
   score: number;
   warnings: string[];
   evidence: string[];

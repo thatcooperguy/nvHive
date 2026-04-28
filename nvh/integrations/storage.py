@@ -265,7 +265,7 @@ def storage_status(
 
     if configured_by == "default":
         warnings.append(
-            "NVH_HOME is not set. On ephemeral cloud desktops, point it at the mounted persistent volume."
+            "NVH_HOME is not set. On ephemeral cloud desktops, use the persistent block-backed home/data volume; ~/.nvh is only safe when $HOME itself is that volume."
         )
     if _looks_ephemeral(home):
         warnings.append("Selected storage path looks ephemeral; use a mounted persistent directory instead.")
