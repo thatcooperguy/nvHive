@@ -16,10 +16,16 @@ def test_ensure_storage_creates_canonical_layout(tmp_path, monkeypatch) -> None:
     assert status.layout.bin_dir.is_dir()
     assert status.layout.models_dir.is_dir()
     assert status.layout.ollama_models_dir.is_dir()
+    assert status.layout.runtime_dir.is_dir()
+    assert status.layout.apps_dir.is_dir()
+    assert status.layout.webui_dir.is_dir()
     assert status.layout.comfyui_dir.is_dir()
     assert status.layout.config_dir.is_dir()
     assert status.env_file.exists()
     assert "NVH_HOME" in status.layout.env()
+    assert "NVH_RUNTIME_HOME" in status.layout.env()
+    assert "NVH_APPS_HOME" in status.layout.env()
+    assert "NVH_WEB_HOME" in status.layout.env()
     assert "PIP_CACHE_DIR" in status.layout.env()
     assert "HIVE_CONFIG_HOME" in status.layout.env()
 
@@ -43,4 +49,3 @@ def test_storage_layout_respects_component_envs(tmp_path, monkeypatch) -> None:
     assert layout.home == tmp_path / "home"
     assert layout.comfyui_dir == tmp_path / "custom-comfy"
     assert layout.ollama_models_dir == tmp_path / "custom-models"
-

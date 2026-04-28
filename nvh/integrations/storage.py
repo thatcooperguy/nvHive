@@ -29,6 +29,9 @@ class StorageLayout:
     cache_dir: Path
     logs_dir: Path
     tmp_dir: Path
+    runtime_dir: Path
+    apps_dir: Path
+    webui_dir: Path
     studio_dir: Path
     comfyui_dir: Path
     config_dir: Path
@@ -41,6 +44,9 @@ class StorageLayout:
             "NVH_MODELS": str(self.models_dir),
             "NVH_CACHE": str(self.cache_dir),
             "NVH_LOGS": str(self.logs_dir),
+            "NVH_RUNTIME_HOME": str(self.runtime_dir),
+            "NVH_APPS_HOME": str(self.apps_dir),
+            "NVH_WEB_HOME": str(self.webui_dir),
             "NVH_STUDIO_HOME": str(self.studio_dir),
             "COMFYUI_HOME": str(self.comfyui_dir),
             "OLLAMA_MODELS": str(self.ollama_models_dir),
@@ -114,6 +120,17 @@ def storage_layout(home_dir: str | Path | None = None) -> StorageLayout:
     logs_dir = _expand_path(
         os.environ.get("NVH_LOGS", home / "logs") if use_component_env else home / "logs"
     )
+    runtime_dir = _expand_path(
+        os.environ.get("NVH_RUNTIME_HOME", home / "runtimes")
+        if use_component_env
+        else home / "runtimes"
+    )
+    apps_dir = _expand_path(
+        os.environ.get("NVH_APPS_HOME", home / "apps") if use_component_env else home / "apps"
+    )
+    webui_dir = _expand_path(
+        os.environ.get("NVH_WEB_HOME", home / "webui") if use_component_env else home / "webui"
+    )
     studio_dir = _expand_path(
         os.environ.get("NVH_STUDIO_HOME", home / "studio") if use_component_env else home / "studio"
     )
@@ -136,6 +153,9 @@ def storage_layout(home_dir: str | Path | None = None) -> StorageLayout:
         cache_dir=cache_dir,
         logs_dir=logs_dir,
         tmp_dir=cache_dir / "tmp",
+        runtime_dir=runtime_dir,
+        apps_dir=apps_dir,
+        webui_dir=webui_dir,
         studio_dir=studio_dir,
         comfyui_dir=comfyui_dir,
         config_dir=config_dir,
@@ -207,6 +227,9 @@ def ensure_storage(
         layout.cache_dir,
         layout.logs_dir,
         layout.tmp_dir,
+        layout.runtime_dir,
+        layout.apps_dir,
+        layout.webui_dir,
         layout.studio_dir,
         layout.comfyui_dir,
         layout.config_dir,

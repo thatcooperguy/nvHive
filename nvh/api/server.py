@@ -902,6 +902,14 @@ async def configure_system_storage(
     )
 
 
+@app.get("/v1/system/runtime", summary="Inspect rootless runtime fallback status")
+async def system_runtime(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Return whether nvHive can use Python venv/pip or needs micromamba fallback."""
+    from nvh.integrations.runtime import runtime_status
+
+    return _response_envelope(runtime_status().as_dict())
+
+
 # -- /v1/system/info ----------------------------------------------------------
 
 @app.get("/v1/system/info", summary="Combined system status — GPU + providers + budget in one call")

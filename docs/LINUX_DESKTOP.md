@@ -41,7 +41,7 @@ nvh webui
 - Creates a Linux desktop launcher named `NVHive AI Studio`
 - Shows a student-friendly setup checklist
 - With `--all`, ensures local AI, installs ComfyUI, installs the rootless starter pack, and launches WebUI
-- Uses user-space paths only under `NVH_HOME` for durable models, ComfyUI, packs, cache, logs, and config
+- Uses user-space paths only under `NVH_HOME` for durable models, ComfyUI, packs, runtime fallback tools, apps, WebUI assets, cache, logs, and config
 
 ## Rootless AI Studio Packs
 
@@ -50,12 +50,18 @@ nvh webui
 | Bundle | Command | Installs |
 | --- | --- | --- |
 | Starter lab | `nvh studio --install starter -y` | Rootless Ollama, top local LLMs, agent lab, ComfyUI power nodes, game-dev lab |
+| Runtime fallback | `nvh studio --install python-runtime-fallback -y` | Optional micromamba binary under `$NVH_HOME` for cloud images where Python `venv` is broken |
 | LLMs | `nvh studio --install llms -y` | Gemma 3, Qwen 3, Llama 3.1, Qwen coder, DeepSeek reasoning, embeddings |
 | Agents | `nvh studio --install agents -y` | LangGraph, CrewAI, AutoGen, JupyterLab, search/tool packages |
 | ComfyUI | `nvh studio --install comfy -y` | ComfyUI Manager, Impact Pack, ControlNet Aux, Video Helper Suite, GGUF, rgthree |
 | Games | `nvh studio --install game -y` | Pygame/Panda3D lab, asset helpers, Linux/Wine mod workspace |
 
 Run `nvh studio --list` to see exact pack status and disk estimates.
+
+nvHive does not require conda, miniforge, or micromamba on the happy path. The
+default installer uses Python `venv` and `pip`; the runtime fallback pack is a
+student-friendly rescue option for locked-down images that are missing working
+virtualenv support.
 
 ## Model Picker
 
