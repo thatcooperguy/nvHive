@@ -35,6 +35,8 @@ import type {
   SystemInfo,
   StorageConfigureRequest,
   StorageStatus,
+  RuntimeStatus,
+  SetupHelperReport,
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
@@ -129,6 +131,15 @@ export async function getStorageStatus(homeDir?: string): Promise<StorageStatus>
 
 export async function configureStorage(request: StorageConfigureRequest): Promise<StorageStatus> {
   return apiPost<StorageStatus>('/v1/system/storage', request);
+}
+
+export async function getRuntimeStatus(): Promise<RuntimeStatus> {
+  return apiGet<RuntimeStatus>('/v1/system/runtime');
+}
+
+export async function getSetupHelper(homeDir?: string): Promise<SetupHelperReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<SetupHelperReport>(`/v1/setup/helper${qs}`);
 }
 
 // ─── Analytics ──────────────────────────────────────────────────────────────
