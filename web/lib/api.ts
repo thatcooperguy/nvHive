@@ -43,6 +43,8 @@ import type {
   CompatibilityReport,
   BootPreflightReport,
   MissionControlReport,
+  ProductionReadinessReport,
+  DiagnosticsReport,
   AutoRepairResult,
   MountAutopilotReport,
   ComfyUIExamplesResult,
@@ -87,13 +89,28 @@ async function apiFetch<T>(
 
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
+    const requestId = res.headers.get('x-request-id') ?? undefined;
+    const errorId = res.headers.get('x-error-id') ?? undefined;
     try {
       const body = await res.json();
-      detail = body?.detail ?? detail;
+      const bodyDetail = body?.error?.message ?? body?.detail ?? detail;
+      detail = typeof bodyDetail === 'string' ? bodyDetail : JSON.stringify(bodyDetail);
     } catch {
       // ignore
     }
-    throw new Error(detail);
+    const suffix = [
+      requestId ? `request ${requestId}` : null,
+      errorId ? `error ${errorId}` : null,
+    ].filter(Boolean).join(', ');
+    const error = new Error(suffix ? `${detail} (${suffix})` : detail) as Error & {
+      statusCode?: number;
+      requestId?: string;
+      errorId?: string;
+    };
+    error.statusCode = res.status;
+    error.requestId = requestId;
+    error.errorId = errorId;
+    throw error;
   }
 
   return res.json() as Promise<T>;
@@ -199,6 +216,30 @@ export async function getSetupBootPreflight(homeDir?: string, recheck = false): 
 export async function getSetupMissionControl(homeDir?: string): Promise<MissionControlReport> {
   const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
   return apiGet<MissionControlReport>(`/v1/setup/mission-control${qs}`);
+}
+
+export async function getSetupProductionReadiness(
+  homeDir?: string,
+  targetVmValidated?: boolean
+): Promise<ProductionReadinessReport> {
+  const params = new URLSearchParams();
+  if (homeDir) params.set('home_dir', homeDir);
+  if (typeof targetVmValidated === 'boolean') {
+    params.set('target_vm_validated', targetVmValidated ? 'true' : 'false');
+  }
+  const qs = params.toString();
+  return apiGet<ProductionReadinessReport>(`/v1/setup/production-readiness${qs ? `?${qs}` : ''}`);
+}
+
+export async function getSetupDiagnostics(
+  homeDir?: string,
+  includeLogs = true
+): Promise<DiagnosticsReport> {
+  const params = new URLSearchParams();
+  if (homeDir) params.set('home_dir', homeDir);
+  params.set('include_logs', includeLogs ? 'true' : 'false');
+  const qs = params.toString();
+  return apiGet<DiagnosticsReport>(`/v1/setup/diagnostics${qs ? `?${qs}` : ''}`);
 }
 
 export async function repairSetupWorkspace(homeDir?: string): Promise<AutoRepairResult> {

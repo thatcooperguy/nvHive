@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from collections import defaultdict
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -33,7 +34,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
@@ -378,6 +379,66 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """Attach a request id, log latency, and return safe unexpected errors."""
+    from nvh.utils.logging import reset_request_id, set_request_id
+
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    token = set_request_id(request_id)
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        level = logging.WARNING if response.status_code >= 500 else logging.INFO
+        logger.log(
+            level,
+            "HTTP request complete",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+                "client": request.client.host if request.client else "",
+            },
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
+    except Exception:
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        error_id = uuid.uuid4().hex[:12]
+        logger.exception(
+            "Unhandled API request error",
+            extra={
+                "request_id": request_id,
+                "error_id": error_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": 500,
+                "duration_ms": duration_ms,
+                "client": request.client.host if request.client else "",
+            },
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            headers={"X-Request-ID": request_id, "X-Error-ID": error_id},
+            content={
+                "status": "error",
+                "error": {
+                    "type": "internal_server_error",
+                    "message": "Internal server error",
+                    "request_id": request_id,
+                    "error_id": error_id,
+                },
+                "detail": "Internal server error",
+                "request_id": request_id,
+            },
+        )
+    finally:
+        reset_request_id(token)
 
 
 # ---------------------------------------------------------------------------
@@ -1078,6 +1139,50 @@ async def setup_model_fit(
     from nvh.integrations.model_fit import model_fit_report
 
     return _response_envelope(model_fit_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/production-readiness", summary="Return conservative production readiness gates")
+async def setup_production_readiness(
+    home_dir: str | None = None,
+    target_vm_validated: bool | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Aggregate rootless, storage, model, smoke, and target-VM release gates."""
+    from nvh.integrations.production_readiness import production_readiness_report
+
+    return _response_envelope(
+        production_readiness_report(
+            home_dir=home_dir,
+            target_vm_validated=target_vm_validated,
+        )
+    )
+
+
+@app.get("/v1/setup/diagnostics", summary="Return a redacted setup diagnostics report")
+async def setup_diagnostics(
+    request: Request,
+    home_dir: str | None = None,
+    include_logs: bool = True,
+    log_lines: int = 80,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Package rootless setup state, recent jobs, and redacted log warnings."""
+    from nvh.integrations.diagnostics import diagnostics_report
+
+    report = diagnostics_report(
+        home_dir=home_dir,
+        request_id=request.headers.get("x-request-id"),
+        include_logs=include_logs,
+        log_lines=log_lines,
+    )
+    logger.info(
+        "Setup diagnostics report generated",
+        extra={
+            "request_id": report.get("request_id") or "",
+            "path": request.url.path,
+        },
+    )
+    return _response_envelope(report)
 
 
 @app.post("/v1/setup/assistant", summary="Ask the local setup helper")

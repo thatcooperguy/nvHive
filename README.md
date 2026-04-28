@@ -155,6 +155,11 @@ includes a local setup helper that ranks the next storage, runtime, model,
 ComfyUI, OpenClaw/NemoClaw, creative-tool, and music-tool actions before any local LLM is
 installed. NemoClaw is shown as a guarded sandbox option only when Docker works
 without sudo; OpenClaw remains the simple rootless agent path.
+Advanced Details includes Release Readiness gates for storage, boot drift,
+smoke tests, model fit, receipts, and target VM acceptance; see
+[Production Readiness](docs/PRODUCTION_READINESS.md).
+It also has a redacted Copy Error Report action with request IDs and log
+locations, so students can send useful diagnostics without exposing API keys.
 The ComfyUI step lets students select workflow examples and save a model
 download plan with source links, folder targets, and a helper checklist script,
 because many image/video weights are large or require upstream terms.
@@ -376,6 +381,7 @@ Results vary by hardware and workload — run `nvh bench` to measure on your set
 | [Web UI](docs/WEBUI.md) | Web dashboard |
 | [Deploy Without Root](docs/DEPLOY_NO_ROOT.md) | No-root install on servers |
 | [Windows Troubleshooting](docs/TROUBLESHOOTING_WINDOWS.md) | Encoding, segfaults, port issues |
+| [Production Readiness](docs/PRODUCTION_READINESS.md) | Release gates and target NVIDIA Linux VM acceptance checklist |
 | [Releasing](docs/RELEASING.md) | Release runbook |
 
 ---

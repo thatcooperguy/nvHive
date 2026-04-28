@@ -725,11 +725,60 @@ export interface ModelFitReport {
   summary: string;
   detected_vram_gb: number;
   free_gb: number | null;
+  recommended_queue_disk_gb?: number;
+  storage_fits_queue?: boolean;
   recommended_ids: string[];
   best_by_use_case: Record<string, Record<string, unknown>>;
   models: Array<Record<string, unknown>>;
   ollama_available: boolean;
   ollama_running: boolean;
+}
+
+export interface ProductionReadinessGate {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'blocked' | string;
+  summary: string;
+  detail: string;
+  recommendation: string;
+  source: 'local' | 'target-vm' | string;
+}
+
+export interface ProductionReadinessReport {
+  checked_at: string;
+  status: 'production-ready' | 'pilot-ready' | 'blocked' | string;
+  summary: string;
+  pilot_ready: boolean;
+  production_ready: boolean;
+  target_vm_validated: boolean;
+  counts: {
+    passed: number;
+    warnings: number;
+    blocked: number;
+    total: number;
+  };
+  gates: ProductionReadinessGate[];
+  next_actions: string[];
+  target_vm_checklist: string[];
+  inputs: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface DiagnosticsReport {
+  report_id: string;
+  checked_at: string;
+  request_id?: string | null;
+  summary: string;
+  environment: Record<string, unknown>;
+  paths: Record<string, string>;
+  checks: Record<string, unknown>;
+  logs: {
+    included: boolean;
+    files: string[];
+    recent: Array<{
+      path: string;
+      lines: string[];
+    }>;
+  };
 }
 
 export interface MissionStage {

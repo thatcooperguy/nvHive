@@ -123,6 +123,20 @@ def _path_exists(path: Path) -> bool:
         return False
 
 
+def _path_is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except Exception:
+        return False
+
+
+def _candidate_key(path: Path) -> str:
+    try:
+        return str(path.resolve() if _path_exists(path) else path)
+    except Exception:
+        return str(path)
+
+
 def _decode_mount_path(value: str) -> str:
     return (
         value.replace("\\040", " ")
@@ -224,9 +238,9 @@ def _is_large_block_mount(info: MountInfo | None, total_gb: float | None) -> boo
 
 def _nearest_existing(path: Path) -> Path | None:
     current = path
-    while not current.exists() and current.parent != current:
+    while not _path_exists(current) and current.parent != current:
         current = current.parent
-    return current if current.exists() else None
+    return current if _path_exists(current) else None
 
 
 def _disk_usage(path: Path) -> tuple[float | None, float | None]:
@@ -259,7 +273,7 @@ def _looks_ephemeral(path: Path) -> bool:
 def _evidence(path: Path) -> list[str]:
     evidence: list[str] = []
     for marker in ("nvh-env.sh", "receipts", "models", "comfyui", "studio", "apps"):
-        if (path / marker).exists():
+        if _path_exists(path / marker):
             evidence.append(marker)
     return evidence
 
@@ -411,13 +425,13 @@ def _candidate_paths(extra_roots: list[str | Path] | None = None) -> list[tuple[
     for source, root in [*_common_roots(), *[("candidate", _expand(path)) for path in extra_roots or []]]:
         root = root.expanduser()
         options = [root]
-        if root.exists() and root.is_dir():
+        if _path_exists(root) and _path_is_dir(root):
             try:
-                options.extend(path for path in root.iterdir() if path.is_dir())
+                options.extend(path for path in root.iterdir() if _path_is_dir(path))
             except Exception:
                 pass
         for option in options:
-            key = str(option.resolve() if option.exists() else option)
+            key = _candidate_key(option)
             if key in seen:
                 continue
             seen.add(key)

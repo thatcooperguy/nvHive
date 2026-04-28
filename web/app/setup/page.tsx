@@ -18,6 +18,8 @@ import {
   getSetupCatalog,
   getSetupBootPreflight,
   getSetupMissionControl,
+  getSetupProductionReadiness,
+  getSetupDiagnostics,
   getSetupHelper,
   getSetupReceipts,
   repairSetupWorkspace,
@@ -47,6 +49,8 @@ import type {
   InstallJob,
   InstallReceipt,
   MissionControlReport,
+  ProductionReadinessReport,
+  DiagnosticsReport,
   SetupAssistantReply,
   SetupCatalogResult,
   SetupHelperReport,
@@ -302,6 +306,11 @@ export default function SetupPage() {
   const [setupCompatibility, setSetupCompatibility] = useState<CompatibilityReport | null>(null);
   const [bootPreflight, setBootPreflight] = useState<BootPreflightReport | null>(null);
   const [missionControl, setMissionControl] = useState<MissionControlReport | null>(null);
+  const [productionReadiness, setProductionReadiness] = useState<ProductionReadinessReport | null>(null);
+  const [diagnosticsReport, setDiagnosticsReport] = useState<DiagnosticsReport | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsMessage, setDiagnosticsMessage] = useState<string | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [workspaceRepairing, setWorkspaceRepairing] = useState(false);
   const [setupInventoryError, setSetupInventoryError] = useState<string | null>(null);
   const [activeWizardBuild, setActiveWizardBuild] = useState<WizardProfile | null>(null);
@@ -392,22 +401,50 @@ export default function SetupPage() {
   const refreshSetupInventory = useCallback(async (refreshCatalog = false, homeDir?: string) => {
     try {
       const activeHome = homeDir ?? storageStatus?.layout.home;
-      const [receipts, catalog, boot, mission] = await Promise.all([
+      const [receipts, catalog, boot, mission, readiness] = await Promise.all([
         getSetupReceipts({ limit: 8 }),
         getSetupCatalog(refreshCatalog),
         getSetupBootPreflight(activeHome),
         getSetupMissionControl(activeHome),
+        getSetupProductionReadiness(activeHome),
       ]);
       setSetupReceipts(receipts);
       setSetupCatalog(catalog);
       setBootPreflight(boot);
       setSetupCompatibility(boot.compatibility);
       setMissionControl(mission);
+      setProductionReadiness(readiness);
       setSetupInventoryError(null);
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Could not load setup inventory');
     }
   }, [storageStatus?.layout.home]);
+
+  const handleDiagnosticsReport = async () => {
+    if (diagnosticsLoading) return;
+    setDiagnosticsLoading(true);
+    setDiagnosticsError(null);
+    setDiagnosticsMessage(null);
+    try {
+      const report = await getSetupDiagnostics(storageStatus?.layout.home, true);
+      setDiagnosticsReport(report);
+      const reportText = JSON.stringify(report, null, 2);
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(reportText);
+          setDiagnosticsMessage(`Copied redacted report ${report.report_id}`);
+        } catch {
+          setDiagnosticsMessage(`Report ${report.report_id} is ready below`);
+        }
+      } else {
+        setDiagnosticsMessage(`Report ${report.report_id} is ready below`);
+      }
+    } catch (err) {
+      setDiagnosticsError(err instanceof Error ? err.message : 'Could not build diagnostics report');
+    } finally {
+      setDiagnosticsLoading(false);
+    }
+  };
 
   useEffect(() => {
     void refreshInstallJobs();
@@ -1407,6 +1444,18 @@ export default function SetupPage() {
       : [];
   const smokeTests = missionControl?.smoke_tests ?? bootPreflight?.smoke_tests ?? null;
   const modelFit = missionControl?.model_fit ?? bootPreflight?.model_fit ?? null;
+  const visibleReadinessGates = productionReadiness?.gates
+    .filter(gate => gate.status !== 'pass')
+    .slice(0, 4) ?? [];
+  const diagnosticsLogLineCount = diagnosticsReport?.logs.recent.reduce(
+    (total, item) => total + item.lines.length,
+    0
+  ) ?? 0;
+  const readinessTone = productionReadiness?.status === 'production-ready'
+    ? 'text-[#76B900]'
+    : productionReadiness?.status === 'blocked'
+      ? 'text-[#dc2626]'
+      : 'text-[#d97706]';
   const detectedTorchProfile = setupCompatibility?.recommended_torch_profile
     ?? setupHelper?.compatibility?.recommended_torch_profile
     ?? 'nvidia-cu121';
@@ -1966,11 +2015,79 @@ export default function SetupPage() {
               >
                 Refresh Catalog
               </button>
+              <button
+                type="button"
+                onClick={() => void handleDiagnosticsReport()}
+                disabled={diagnosticsLoading}
+                className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+              >
+                {diagnosticsLoading ? 'Building Report' : 'Copy Error Report'}
+              </button>
             </div>
           </div>
           {setupInventoryError && (
             <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
               {setupInventoryError}
+            </div>
+          )}
+          {(diagnosticsMessage || diagnosticsError || diagnosticsReport) && (
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                <div>
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a]">Error Report</div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-0.5">
+                    Redacted diagnostics for support; API keys and bearer tokens are masked.
+                  </div>
+                </div>
+                {diagnosticsReport && (
+                  <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#76B900]/40 text-[#76B900]">
+                    {diagnosticsLogLineCount} log line{diagnosticsLogLineCount === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+              {diagnosticsMessage && (
+                <div className="text-[10px] font-mono text-[#76B900]">{diagnosticsMessage}</div>
+              )}
+              {diagnosticsError && (
+                <div className="text-[10px] font-mono text-[#dc2626]">{diagnosticsError}</div>
+              )}
+              {diagnosticsReport && (
+                <details>
+                  <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                    Report summary
+                  </summary>
+                  <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="border border-[#e5e5e5] bg-white p-2">
+                      <div className="text-[9px] font-mono text-[#737373] uppercase">Report</div>
+                      <div className="text-[10px] font-mono text-[#0a0a0a] break-all">{diagnosticsReport.report_id}</div>
+                    </div>
+                    <div className="border border-[#e5e5e5] bg-white p-2">
+                      <div className="text-[9px] font-mono text-[#737373] uppercase">Logs</div>
+                      <div className="text-[10px] font-mono text-[#0a0a0a]">{diagnosticsReport.logs.files.length} file(s)</div>
+                    </div>
+                    <div className="border border-[#e5e5e5] bg-white p-2">
+                      <div className="text-[9px] font-mono text-[#737373] uppercase">Home</div>
+                      <div className="text-[10px] font-mono text-[#0a0a0a] break-all">{diagnosticsReport.paths.home}</div>
+                    </div>
+                  </div>
+                  {diagnosticsReport.logs.recent.length > 0 && (
+                    <div className="mt-2 space-y-2">
+                      {diagnosticsReport.logs.recent.slice(0, 2).map(item => (
+                        <div key={item.path} className="border border-[#e5e5e5] bg-white p-2">
+                          <div className="text-[9px] font-mono text-[#737373] break-all">{item.path}</div>
+                          <div className="mt-1 space-y-1">
+                            {item.lines.slice(-4).map((line, index) => (
+                              <div key={`${item.path}-${index}`} className="text-[9px] font-mono text-[#525252] break-words">
+                                {line}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </details>
+              )}
             </div>
           )}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -2113,6 +2230,67 @@ export default function SetupPage() {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+          {productionReadiness && (
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                <div>
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a]">Release Readiness</div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-0.5">
+                    {productionReadiness.summary}
+                  </div>
+                </div>
+                <div className="flex gap-1 flex-wrap">
+                  <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border border-current ${readinessTone}`}>
+                    {productionReadiness.status}
+                  </span>
+                  <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d4d4d4] text-[#737373]">
+                    {productionReadiness.counts.blocked} blocked
+                  </span>
+                  <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d97706]/40 text-[#d97706]">
+                    {productionReadiness.counts.warnings} review
+                  </span>
+                </div>
+              </div>
+              {visibleReadinessGates.length > 0 ? (
+                <div className="space-y-2">
+                  {visibleReadinessGates.map(gate => (
+                    <div key={gate.id} className="border border-[#e5e5e5] bg-white p-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-1.5 h-1.5 flex-shrink-0 ${gate.status === 'blocked' ? 'bg-[#dc2626]' : 'bg-[#d97706]'}`} />
+                        <div className="text-[10px] font-mono font-bold text-[#0a0a0a]">{gate.title}</div>
+                        <span className="text-[9px] font-mono uppercase text-[#737373]">{gate.status}</span>
+                      </div>
+                      <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
+                        {gate.summary}
+                      </div>
+                      {gate.recommendation && (
+                        <div className="text-[9px] font-mono text-[#737373] mt-1 leading-relaxed">
+                          {gate.recommendation}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[10px] font-mono text-[#76B900] border border-[#76B900]/20 bg-white p-2">
+                  All release gates are passing.
+                </div>
+              )}
+              <details>
+                <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                  Target VM checklist
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {productionReadiness.target_vm_checklist.map(item => (
+                    <div key={item} className="text-[9px] font-mono text-[#525252] flex items-start gap-2">
+                      <span className="mt-1 w-1.5 h-1.5 bg-[#76B900] flex-shrink-0" />
+                      <span>{item}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
             </div>
           )}
           {(setupCompatibility || setupHelper?.compatibility) && (

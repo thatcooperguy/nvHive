@@ -32,6 +32,17 @@ def _stub_paths(monkeypatch, *paths: Path) -> None:
     monkeypatch.setattr(autopilot, "_evidence", lambda path: [])
 
 
+def test_evidence_ignores_permission_denied(monkeypatch) -> None:
+    def exists(path: Path) -> bool:
+        if "lost+found" in str(path):
+            raise PermissionError("blocked mount marker")
+        return False
+
+    monkeypatch.setattr(autopilot.Path, "exists", exists)
+
+    assert autopilot._evidence(Path("/mnt/lost+found")) == []
+
+
 def test_mount_autopilot_prefers_large_block_backed_home(monkeypatch) -> None:
     home = Path("/home/student")
     share = Path("/mnt/readonly-share")

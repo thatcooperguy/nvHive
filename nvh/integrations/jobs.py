@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ from nvh.integrations.storage import storage_layout
 TERMINAL_STATUSES = {"complete", "failed", "canceled", "interrupted"}
 RUNNING_STATUSES = {"queued", "running"}
 _TASKS: dict[str, asyncio.Task[None]] = {}
+logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
@@ -81,6 +83,10 @@ def create_job(
         "events_path": str(_events_path(job_id)),
     }
     _events_path(job_id).write_text("", encoding="utf-8")
+    logger.info(
+        "Setup job queued",
+        extra={"job_id": job_id, "kind": kind},
+    )
     return _write_job(job)
 
 
@@ -189,12 +195,25 @@ def append_event(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         job["status"] = "complete"
         job["progress"] = 100
         job["completed_at"] = now
+        logger.info(
+            "Setup job complete",
+            extra={"job_id": job_id, "kind": job.get("kind", "")},
+        )
     elif payload.get("event") == "error" or payload.get("status") == "failed":
         job["status"] = "failed"
         job["completed_at"] = now
+        logger.error(
+            "Setup job failed: %s",
+            event["message"] or "unknown error",
+            extra={"job_id": job_id, "kind": job.get("kind", "")},
+        )
     elif payload.get("event") == "canceled" or payload.get("status") == "canceled":
         job["status"] = "canceled"
         job["completed_at"] = now
+        logger.info(
+            "Setup job canceled",
+            extra={"job_id": job_id, "kind": job.get("kind", "")},
+        )
     else:
         job["status"] = "running"
     _write_job(job)
@@ -214,6 +233,10 @@ def reconcile_job(job: dict[str, Any]) -> dict[str, Any]:
     )
     job["updated_at"] = _now()
     job["completed_at"] = job["updated_at"]
+    logger.warning(
+        "Setup job marked interrupted after server restart",
+        extra={"job_id": job.get("id", ""), "kind": job.get("kind", "")},
+    )
     return _write_job(job)
 
 
@@ -268,6 +291,10 @@ async def _consume_job_events(
         )
         raise
     except Exception as exc:
+        logger.exception(
+            "Setup job crashed",
+            extra={"job_id": job_id},
+        )
         append_event(
             job_id,
             {
