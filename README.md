@@ -108,7 +108,7 @@ source "$NVH_HOME/nvh-env.sh"
 nvh workstation --home-dir "$NVH_HOME" --all -y
 ```
 
-`nvh workstation --all -y` creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds AI Studio packs for LLMs, agents, ComfyUI nodes, and Linux game projects.
+`nvh workstation --all -y` creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds AI Studio packs for LLMs, agents, Claw agent options, ComfyUI nodes, and Linux game projects.
 
 Use packs directly when you want a specific no-root lab:
 
@@ -118,6 +118,7 @@ nvh studio --models
 nvh studio --install-models recommended -y
 nvh studio --install llms -y
 nvh studio --install agents -y
+nvh studio --install claw -y                  # OpenClaw + NemoClaw when Docker/OpenShell is usable
 nvh studio --install comfy -y
 nvh studio --install game -y
 nvh studio --install creative -y                # Blender LTS + game/asset workspace
@@ -134,7 +135,9 @@ starting the frontend toolchain from scratch.
 The wizard now opens in Beginner Mode: one recommended action, Fix My Setup,
 and Advanced Details only when the student wants the full diagnostics. It also
 includes a local setup helper that ranks the next storage, runtime, model,
-ComfyUI, and creative-tool actions before any local LLM is installed.
+ComfyUI, OpenClaw/NemoClaw, and creative-tool actions before any local LLM is
+installed. NemoClaw is shown as a guarded sandbox option only when Docker works
+without sudo; OpenClaw remains the simple rootless agent path.
 The ComfyUI step lets students select workflow examples and save a model
 download plan with source links, folder targets, and a helper checklist script,
 because many image/video weights are large or require upstream terms.

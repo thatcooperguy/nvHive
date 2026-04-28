@@ -271,6 +271,38 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             reason="ComfyUI exists, but the nvHive examples manifest is missing.",
         ))
 
+    openclaw_pack = by_pack.get("openclaw-agent", {})
+    nemoclaw_pack = by_pack.get("nemoclaw-sandbox", {})
+    openclaw_status = openclaw_pack.get("status", {})
+    nemoclaw_status = nemoclaw_pack.get("status", {})
+    nemoclaw_details = nemoclaw_status.get("details", {})
+    if not openclaw_status.get("installed"):
+        issues.append(SetupIssue(
+            id="claw-agents",
+            title="OpenClaw agent option is not installed",
+            severity="optional",
+            reason="OpenClaw gives students a self-hosted agent platform that can use local or cloud models.",
+            fix_action_id="claw-agents",
+            affected_item="openclaw-agent",
+        ))
+        actions.append(SetupAction(
+            id="claw-agents",
+            title="Install Claw agent options",
+            priority=65,
+            status="optional",
+            command="nvh studio --install claw -y",
+            reason="Adds OpenClaw, and adds NemoClaw too when Docker/OpenShell is usable without sudo.",
+        ))
+    elif nemoclaw_details.get("installable") and not nemoclaw_status.get("installed"):
+        actions.append(SetupAction(
+            id="claw-agents",
+            title="Add NemoClaw sandbox option",
+            priority=66,
+            status="optional",
+            command="nvh studio --install claw -y",
+            reason="Docker is reachable, so nvHive can add the NVIDIA NemoClaw/OpenShell path.",
+        ))
+
     creative_pack = by_pack.get("blender-creative", {})
     if not creative_pack.get("status", {}).get("installed"):
         actions.append(SetupAction(
@@ -471,6 +503,16 @@ def setup_assistant_reply(
         answer = (
             "Start with the rootless Ollama runtime, then download the recommended models "
             "that fit the detected GPU. The wizard can run both steps and keeps files under NVH_HOME/models."
+        )
+    elif any(word in q for word in ["claw", "openclaw", "nemo", "nemoclaw", "desktop agent", "sandbox agent"]):
+        focus = "claw-agents"
+        commands = _commands_for_actions(actions, "claw-agents") or [
+            "nvh studio --install claw -y",
+        ]
+        answer = (
+            "OpenClaw is the simple rootless agent install. NemoClaw is the guarded NVIDIA/OpenShell "
+            "path and only lights up when Docker works without sudo. In the wizard, use the Claw Agents "
+            "pack; manual commands are just the advanced override."
         )
     elif any(word in q for word in ["blender", "creative", "game", "asset"]):
         focus = "creative"

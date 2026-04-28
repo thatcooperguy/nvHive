@@ -14,6 +14,8 @@ def test_catalog_is_rootless_and_grouped() -> None:
     assert "rootless-ollama" in ids
     assert "llm-starter" in ids
     assert "agent-lab" in ids
+    assert "openclaw-agent" in ids
+    assert "nemoclaw-sandbox" in ids
     assert "comfyui-power-nodes" in ids
     assert "game-dev-lab" in ids
     assert "blender-creative" in ids
@@ -30,6 +32,13 @@ def test_pack_bundles_expand_without_duplicates() -> None:
 
     creative = studio_packs.expand_pack_ids(["creative"])
     assert creative == ["blender-creative", "game-dev-lab", "game-mod-helper"]
+
+    claw = studio_packs.expand_pack_ids(["claw"])
+    assert claw == ["openclaw-agent", "nemoclaw-sandbox"]
+
+    agents = studio_packs.expand_pack_ids(["agents"])
+    assert "agent-lab" in agents
+    assert "openclaw-agent" in agents
 
 
 def test_model_catalog_marks_vram_recommendations(monkeypatch) -> None:
@@ -66,6 +75,37 @@ def test_blender_pack_status_uses_persistent_apps_home(tmp_path, monkeypatch) ->
     assert status["installed"] is False
     assert status["details"]["app_dir"].startswith(str(tmp_path / "nvh" / "apps" / "blender"))
     assert status["details"]["version"] == studio_packs.BLENDER_VERSION
+
+
+def test_claw_status_marks_nemoclaw_blocked_without_docker(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    monkeypatch.setattr(studio_packs, "_node_runtime_status", lambda env=None: {
+        "node": "/tmp/node",
+        "npm": "/tmp/npm",
+        "node_version": "v22.16.0",
+        "npm_version": "10.9.0",
+        "node_ok": True,
+        "npm_ok": True,
+        "ready": True,
+        "can_auto_install": True,
+        "minimum_node": "22.16.0",
+        "minimum_npm": "10.0.0",
+    })
+    monkeypatch.setattr(studio_packs, "_docker_status", lambda: {
+        "binary": "",
+        "ready": False,
+        "detail": "Docker was not found on PATH.",
+        "rootless_hint": "Ask the provider to enable rootless Docker.",
+    })
+    monkeypatch.setattr(studio_packs, "_nemoclaw_binary_from_env", lambda env=None: "")
+
+    openclaw = studio_packs.pack_status(studio_packs._find_pack("openclaw-agent"))
+    nemoclaw = studio_packs.pack_status(studio_packs._find_pack("nemoclaw-sandbox"))
+
+    assert openclaw["details"]["installable"] is True
+    assert nemoclaw["installed"] is False
+    assert nemoclaw["details"]["installable"] is False
+    assert "Docker" in nemoclaw["details"]["blocked_reason"]
 
 
 @pytest.mark.asyncio

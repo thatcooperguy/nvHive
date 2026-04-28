@@ -7582,7 +7582,7 @@ def studio(
         None,
         "--install",
         "-i",
-        help="Install a pack id or bundle: starter, all, llms, agents, comfy, game",
+        help="Install a pack id or bundle: starter, all, llms, agents, claw, comfy, game, creative",
     ),
     install_models: str | None = typer.Option(
         None,

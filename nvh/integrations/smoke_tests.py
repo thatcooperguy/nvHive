@@ -40,6 +40,13 @@ def _pack_installed(pack_id: str, packs: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _pack_details(pack_id: str, packs: list[dict[str, Any]]) -> dict[str, Any]:
+    for pack in packs:
+        if pack.get("id") == pack_id:
+            return pack.get("status", {}).get("details", {})
+    return {}
+
+
 def smoke_test_report(home_dir: str | None = None) -> dict[str, Any]:
     """Return non-destructive app health checks."""
     storage = storage_status(home_dir=home_dir)
@@ -76,6 +83,18 @@ def smoke_test_report(home_dir: str | None = None) -> dict[str, Any]:
             status="pass" if _pack_installed("agent-lab", packs) else "warn",
             summary="Local agent helper pack is installed" if _pack_installed("agent-lab", packs) else "Local Agent Lab is not installed",
             action_id="agent-lab",
+        ),
+        SmokeTest(
+            id="claw-agents",
+            title="Claw agent options",
+            status="pass" if _pack_installed("openclaw-agent", packs) else "warn",
+            summary=(
+                "OpenClaw is installed"
+                if _pack_installed("openclaw-agent", packs)
+                else "OpenClaw can be installed; NemoClaw requires Docker/OpenShell access"
+            ),
+            detail=str(_pack_details("nemoclaw-sandbox", packs).get("blocked_reason", "")),
+            action_id="claw-agents",
         ),
         SmokeTest(
             id="comfyui",

@@ -2,7 +2,8 @@
 
 Packs are intentionally user-space only: files, launchers, models, and caches
 go under ``NVH_HOME``. The installer never calls sudo, apt,
-dnf, pacman, systemctl, or Docker.
+dnf, pacman, or systemctl. Container-backed packs only run when a provider
+already exposes Docker without sudo.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import asyncio
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import stat
@@ -33,6 +35,14 @@ BLENDER_LINUX_X64_URL = (
     "https://download.blender.org/release/Blender4.5/"
     f"blender-{BLENDER_VERSION}-linux-x64.tar.xz"
 )
+NODE_MAJOR_VERSION = "22"
+NODE_MIN_VERSION = (22, 16, 0)
+NPM_MIN_VERSION = (10, 0, 0)
+OPENCLAW_PACKAGE = "openclaw@latest"
+OPENCLAW_DOC_URL = "https://openclawdoc.com/docs/getting-started/installation/"
+NEMOCLAW_INSTALL_URL = "https://www.nvidia.com/nemoclaw.sh"
+NEMOCLAW_DOC_URL = "https://docs.nvidia.com/nemoclaw/latest/get-started/quickstart.html"
+NEMOCLAW_PACKAGE = "nemoclaw@latest"
 
 
 @dataclass(frozen=True)
@@ -315,6 +325,53 @@ STUDIO_PACKS: list[StudioPack] = [
         ],
     ),
     StudioPack(
+        id="openclaw-agent",
+        title="OpenClaw Agent Workspace",
+        category="claw",
+        tagline="Self-hosted agent platform with local model support",
+        description=(
+            "Installs OpenClaw into a persistent user-space Node workspace, adds a "
+            "launcher, and keeps agent state under NVH_HOME/studio instead of the base OS."
+        ),
+        recommended_vram_gb=0,
+        estimated_disk_gb=2.0,
+        install_kind="openclaw_agent",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-openclaw"],
+        source_urls=[OPENCLAW_DOC_URL, "https://openclaw.ai/install.sh"],
+        notes=[
+            "Requires Node.js 22.16+ and npm 10+; nvHive can install a rootless Node runtime on Linux.",
+            "Use with local Ollama models or a configured cloud provider.",
+        ],
+    ),
+    StudioPack(
+        id="nemoclaw-sandbox",
+        title="NVIDIA NemoClaw Sandbox",
+        category="claw",
+        tagline="OpenClaw inside NVIDIA OpenShell guardrails",
+        description=(
+            "Adds NVIDIA NemoClaw as the guarded OpenClaw path when the host exposes "
+            "a Docker runtime that works without sudo. The wizard blocks this pack on "
+            "locked-down sessions that cannot run containers."
+        ),
+        recommended_vram_gb=0,
+        estimated_disk_gb=40.0,
+        install_kind="nemoclaw_sandbox",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-nemoclaw"],
+        source_urls=[NEMOCLAW_DOC_URL, NEMOCLAW_INSTALL_URL],
+        notes=[
+            "NemoClaw is alpha software and requires a usable Docker/OpenShell path.",
+            "Recommended only when the cloud image grants rootless Docker or docker group access.",
+        ],
+    ),
+    StudioPack(
         id="comfyui-power-nodes",
         title="ComfyUI Power Nodes",
         category="comfyui",
@@ -441,7 +498,8 @@ STUDIO_PACKS: list[StudioPack] = [
 PACK_BUNDLES: dict[str, list[str]] = {
     "starter": ["rootless-ollama", "llm-starter", "agent-lab", "comfyui-power-nodes", "game-dev-lab"],
     "llms": ["rootless-ollama", "llm-starter", "llm-coder-reasoner"],
-    "agents": ["agent-lab"],
+    "agents": ["agent-lab", "openclaw-agent"],
+    "claw": ["openclaw-agent", "nemoclaw-sandbox"],
     "comfy": ["comfyui-power-nodes"],
     "game": ["game-dev-lab", "game-mod-helper"],
     "creative": ["blender-creative", "game-dev-lab", "game-mod-helper"],
@@ -450,6 +508,8 @@ PACK_BUNDLES: dict[str, list[str]] = {
         "llm-starter",
         "llm-coder-reasoner",
         "agent-lab",
+        "openclaw-agent",
+        "nemoclaw-sandbox",
         "comfyui-power-nodes",
         "game-dev-lab",
         "game-mod-helper",
@@ -514,6 +574,224 @@ def _blender_app_dir() -> Path:
 
 def _blender_binary() -> Path:
     return _blender_app_dir() / "blender"
+
+
+def _node_runtime_root() -> Path:
+    return storage_layout().runtime_dir / "node"
+
+
+def _fnm_root() -> Path:
+    return storage_layout().runtime_dir / "fnm"
+
+
+def _openclaw_workspace() -> Path:
+    return _pack_root("openclaw-agent") / "workspace"
+
+
+def _openclaw_prefix() -> Path:
+    return _pack_root("openclaw-agent") / "node"
+
+
+def _openclaw_binary() -> Path:
+    suffix = ".cmd" if os.name == "nt" else ""
+    return _openclaw_prefix() / "bin" / f"openclaw{suffix}"
+
+
+def _nemoclaw_workspace() -> Path:
+    return _pack_root("nemoclaw-sandbox") / "workspace"
+
+
+def _nemoclaw_prefix() -> Path:
+    return _pack_root("nemoclaw-sandbox") / "node"
+
+
+def _nemoclaw_binary_from_env(env: dict[str, str] | None = None) -> str:
+    suffix = ".cmd" if os.name == "nt" else ""
+    candidates = [
+        _nemoclaw_prefix() / "bin" / f"nemoclaw{suffix}",
+        _local_bin() / "nemoclaw",
+        _pack_root("nemoclaw-sandbox") / "home" / ".local" / "bin" / "nemoclaw",
+        _pack_root("nemoclaw-sandbox") / "home" / ".npm-global" / "bin" / "nemoclaw",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    found = shutil.which("nemoclaw", path=env.get("PATH") if env else None)
+    return found or ""
+
+
+def _parse_semver(value: str | None) -> tuple[int, int, int] | None:
+    if not value:
+        return None
+    match = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", value)
+    if not match:
+        return None
+    return tuple(int(part or 0) for part in match.groups())  # type: ignore[return-value]
+
+
+def _semver_at_least(value: tuple[int, int, int] | None, minimum: tuple[int, int, int]) -> bool:
+    return bool(value and value >= minimum)
+
+
+def _run_capture(cmd: list[str], *, env: dict[str, str] | None = None, timeout: float = 8.0) -> str:
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    except Exception:
+        return ""
+    return ((result.stdout or result.stderr) or "").strip().splitlines()[0] if (result.stdout or result.stderr) else ""
+
+
+def _find_rootless_node_bin() -> Path | None:
+    root = _fnm_root() / "node-versions"
+    if not root.exists():
+        return None
+    installs = sorted(root.glob(f"v{NODE_MAJOR_VERSION}.*/installation/bin"), reverse=True)
+    for install in installs:
+        if (install / "node").exists() and (install / "npm").exists():
+            return install
+    return None
+
+
+def _node_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(storage_layout().env())
+    rootless_bin = _find_rootless_node_bin()
+    path_parts = [
+        str(_local_bin()),
+        str(_openclaw_prefix() / "bin"),
+        str(_nemoclaw_prefix() / "bin"),
+        str(_pack_root("nemoclaw-sandbox") / "home" / ".local" / "bin"),
+        str(_pack_root("nemoclaw-sandbox") / "home" / ".npm-global" / "bin"),
+    ]
+    if rootless_bin:
+        path_parts.insert(0, str(rootless_bin))
+    env["PATH"] = os.pathsep.join(path_parts + [env.get("PATH", "")])
+    env["NPM_CONFIG_PREFIX"] = str(_openclaw_prefix())
+    env["OPENCLAW_HOME"] = str(_openclaw_workspace())
+    env["NEMOCLAW_WORKSPACE"] = str(_nemoclaw_workspace())
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _node_runtime_status(env: dict[str, str] | None = None) -> dict[str, Any]:
+    env = env or _node_env()
+    node = shutil.which("node", path=env.get("PATH"))
+    npm = shutil.which("npm", path=env.get("PATH"))
+    node_text = _run_capture([node, "--version"], env=env) if node else ""
+    npm_text = _run_capture([npm, "--version"], env=env) if npm else ""
+    node_version = _parse_semver(node_text)
+    npm_version = _parse_semver(npm_text)
+    node_ok = _semver_at_least(node_version, NODE_MIN_VERSION)
+    npm_ok = _semver_at_least(npm_version, NPM_MIN_VERSION)
+    can_auto_install = (
+        platform.system() == "Linux"
+        and bool(shutil.which("bash"))
+        and bool(shutil.which("curl"))
+    )
+    return {
+        "node": node or "",
+        "npm": npm or "",
+        "node_version": node_text,
+        "npm_version": npm_text,
+        "node_ok": node_ok,
+        "npm_ok": npm_ok,
+        "ready": node_ok and npm_ok,
+        "can_auto_install": can_auto_install,
+        "minimum_node": ".".join(str(part) for part in NODE_MIN_VERSION),
+        "minimum_npm": ".".join(str(part) for part in NPM_MIN_VERSION),
+    }
+
+
+def _docker_status() -> dict[str, Any]:
+    docker = shutil.which("docker")
+    if not docker:
+        return {
+            "binary": "",
+            "ready": False,
+            "detail": "Docker was not found on PATH.",
+            "rootless_hint": "NemoClaw needs Docker or a provider-enabled rootless container runtime.",
+        }
+    try:
+        result = subprocess.run(
+            [docker, "info"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        return {
+            "binary": docker,
+            "ready": False,
+            "detail": f"Docker could not be checked: {exc}",
+            "rootless_hint": "Ask the provider to enable rootless Docker or docker group access.",
+        }
+    if result.returncode == 0:
+        return {
+            "binary": docker,
+            "ready": True,
+            "detail": "Docker daemon is reachable without sudo.",
+            "rootless_hint": "",
+        }
+    detail = (result.stderr or result.stdout or "Docker daemon is not reachable.").strip().splitlines()[0]
+    return {
+        "binary": docker,
+        "ready": False,
+        "detail": detail,
+        "rootless_hint": "NemoClaw is blocked until Docker works without sudo in this session.",
+    }
+
+
+def _prepare_node_runtime() -> tuple[dict[str, str], dict[str, Any]]:
+    env = _node_env()
+    status = _node_runtime_status(env)
+    if status["ready"]:
+        return env, status
+    if not status["can_auto_install"]:
+        raise RuntimeError(
+            "OpenClaw needs Node.js 22.16+ and npm 10+. This host cannot auto-install "
+            "the rootless Node runtime because Linux, bash, and curl are not all available."
+        )
+
+    fnm_dir = _fnm_root()
+    fnm_dir.mkdir(parents=True, exist_ok=True)
+    install_env = os.environ.copy()
+    install_env.update(storage_layout().env())
+    install_env["FNM_DIR"] = str(fnm_dir)
+    install_env["NODE_VERSION"] = NODE_MAJOR_VERSION
+    subprocess.run(
+        ["bash", "-lc", "curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell"],
+        check=True,
+        timeout=180,
+        env=install_env,
+    )
+
+    fnm = fnm_dir / "fnm"
+    if not fnm.exists():
+        fnm = fnm_dir / "fnm.exe"
+    if not fnm.exists():
+        raise RuntimeError("Rootless Node install finished, but fnm was not found.")
+    subprocess.run(
+        [str(fnm), "install", NODE_MAJOR_VERSION],
+        check=True,
+        timeout=300,
+        env=install_env,
+    )
+
+    env = _node_env()
+    status = _node_runtime_status(env)
+    if not status["ready"]:
+        raise RuntimeError(
+            f"Node runtime is still not ready. Node={status['node_version'] or 'missing'} "
+            f"npm={status['npm_version'] or 'missing'}."
+        )
+    return env, status
 
 
 def _find_pack(pack_id: str) -> StudioPack:
@@ -733,6 +1011,38 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
     elif pack.install_kind == "python_venv":
         installed = _venv_python(pack.id).exists() and marker is not None
         details["venv"] = str(_venv_python(pack.id).parent.parent)
+    elif pack.install_kind == "openclaw_agent":
+        node = _node_runtime_status()
+        binary = _openclaw_binary()
+        installed = binary.exists() or marker is not None
+        installable = bool(node["ready"] or node["can_auto_install"])
+        details.update(node)
+        details["binary"] = str(binary)
+        details["workspace"] = str(_openclaw_workspace())
+        details["installable"] = installable
+        if not installable:
+            details["blocked_reason"] = "OpenClaw needs Node.js 22.16+ and npm 10+, or a Linux host where nvHive can install Node rootlessly."
+    elif pack.install_kind == "nemoclaw_sandbox":
+        node = _node_runtime_status()
+        docker = _docker_status()
+        binary = _nemoclaw_binary_from_env(_node_env())
+        installed = bool(binary) or marker is not None
+        installable = bool(docker["ready"] and (node["ready"] or node["can_auto_install"]))
+        details.update({
+            "node": node,
+            "docker": docker,
+            "binary": binary,
+            "workspace": str(_nemoclaw_workspace()),
+            "installable": installable,
+            "alpha": True,
+            "estimated_min_disk_gb": 20,
+            "estimated_recommended_disk_gb": 40,
+            "recommended_ram_gb": 16,
+        })
+        if not docker["ready"]:
+            details["blocked_reason"] = "NemoClaw needs Docker/OpenShell access that works without sudo; use OpenClaw or ask the provider to enable rootless Docker."
+        elif not installable:
+            details["blocked_reason"] = "NemoClaw needs Node.js 22.16+ and npm 10+."
     elif pack.install_kind == "comfy_nodes":
         custom_nodes = _comfyui_app_dir() / "custom_nodes"
         missing_nodes = [node.name for node in pack.comfy_nodes if not (custom_nodes / node.name).exists()]
@@ -1106,6 +1416,235 @@ async def _install_python_venv(pack: StudioPack, force_update: bool) -> AsyncIte
     if pack.id == "game-dev-lab":
         _write_game_lab(pack)
     _write_marker(pack, {"packages": pack.python_packages, "venv": str(root / "venv")})
+
+
+def _write_openclaw_launcher() -> Path:
+    root = _pack_root("openclaw-agent")
+    workspace = _openclaw_workspace()
+    launcher = _local_bin() / "nvhive-openclaw"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+export NVH_HOME="${{NVH_HOME:-{storage_layout().home}}}"
+export OPENCLAW_HOME="${{OPENCLAW_HOME:-{workspace}}}"
+export NPM_CONFIG_PREFIX="${{NPM_CONFIG_PREFIX:-{_openclaw_prefix()}}}"
+export PATH="{_openclaw_prefix()}/bin:{_local_bin()}:$PATH"
+mkdir -p "$OPENCLAW_HOME" "{root}/logs"
+cd "$OPENCLAW_HOME"
+if [ "$#" -eq 0 ]; then
+  exec openclaw onboard --install-daemon
+fi
+exec openclaw "$@"
+"""
+    _write_script(launcher, content)
+    return launcher
+
+
+def _write_openclaw_readme() -> None:
+    root = _pack_root("openclaw-agent")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        f"""# OpenClaw Agent Workspace
+
+OpenClaw is installed in this rootless nvHive pack:
+
+`{root}`
+
+Launch the guided OpenClaw onboarding:
+
+```bash
+nvhive-openclaw
+```
+
+Advanced overrides:
+
+```bash
+nvhive-openclaw --help
+nvhive-openclaw tui
+```
+
+The wizard keeps OpenClaw state in `{_openclaw_workspace()}` and can route to
+local Ollama models or configured cloud model providers.
+""",
+        encoding="utf-8",
+    )
+
+
+async def _install_openclaw_agent(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if os.name == "nt":
+        yield {"event": "error", "status": "failed", "message": "OpenClaw rootless pack currently targets Linux/WSL sessions."}
+        return
+
+    root = _pack_root(pack.id)
+    root.mkdir(parents=True, exist_ok=True)
+    _openclaw_workspace().mkdir(parents=True, exist_ok=True)
+
+    if _openclaw_binary().exists() and not force_update:
+        launcher = _write_openclaw_launcher()
+        _write_openclaw_readme()
+        _write_marker(pack, {"binary": str(_openclaw_binary()), "launcher": str(launcher), "workspace": str(_openclaw_workspace())})
+        yield {"event": "step", "status": "complete", "message": "OpenClaw already installed"}
+        return
+
+    yield {"event": "step", "status": "running", "message": "Checking Node.js 22.16+ and npm 10+ for OpenClaw"}
+    try:
+        env, node_status = await asyncio.to_thread(_prepare_node_runtime)
+    except Exception as exc:
+        yield {"event": "error", "status": "failed", "message": str(exc)}
+        return
+    npm = shutil.which("npm", path=env.get("PATH"))
+    if not npm:
+        yield {"event": "error", "status": "failed", "message": "npm is unavailable after Node runtime setup."}
+        return
+
+    _openclaw_prefix().mkdir(parents=True, exist_ok=True)
+    async for event in _run_command(
+        [npm, "install", "--prefix", str(_openclaw_prefix()), OPENCLAW_PACKAGE],
+        label="Install OpenClaw package",
+        env=env,
+    ):
+        yield event
+
+    launcher = _write_openclaw_launcher()
+    _write_openclaw_readme()
+    _write_marker(pack, {
+        "binary": str(_openclaw_binary()),
+        "launcher": str(launcher),
+        "workspace": str(_openclaw_workspace()),
+        "node": node_status,
+    })
+    yield {
+        "event": "complete",
+        "status": "complete",
+        "message": "OpenClaw installed. Launch nvhive-openclaw to onboard the agent.",
+        "launcher": str(launcher),
+    }
+
+
+def _write_nemoclaw_launcher() -> Path:
+    root = _pack_root("nemoclaw-sandbox")
+    workspace = _nemoclaw_workspace()
+    launcher = _local_bin() / "nvhive-nemoclaw"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+export NVH_HOME="${{NVH_HOME:-{storage_layout().home}}}"
+export NEMOCLAW_WORKSPACE="${{NEMOCLAW_WORKSPACE:-{workspace}}}"
+export NPM_CONFIG_PREFIX="${{NPM_CONFIG_PREFIX:-{_nemoclaw_prefix()}}}"
+export PATH="{_nemoclaw_prefix()}/bin:{_local_bin()}:$PATH"
+mkdir -p "$NEMOCLAW_WORKSPACE" "{root}/logs"
+cd "$NEMOCLAW_WORKSPACE"
+if [ "$#" -eq 0 ]; then
+  exec nemoclaw onboard
+fi
+exec nemoclaw "$@"
+"""
+    _write_script(launcher, content)
+    return launcher
+
+
+def _write_nemoclaw_readme(docker: dict[str, Any]) -> None:
+    root = _pack_root("nemoclaw-sandbox")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        f"""# NVIDIA NemoClaw Sandbox
+
+NemoClaw is the guarded OpenClaw path. It uses NVIDIA OpenShell and requires a
+Docker runtime that works without sudo in this Linux session.
+
+Docker check:
+
+`{docker.get("detail", "not checked")}`
+
+Launch onboarding:
+
+```bash
+nvhive-nemoclaw
+```
+
+Advanced overrides:
+
+```bash
+nvhive-nemoclaw --help
+nvhive-nemoclaw <sandbox-name> status
+```
+
+Keep the sandbox workspace on the persistent mount:
+
+`{_nemoclaw_workspace()}`
+""",
+        encoding="utf-8",
+    )
+
+
+async def _install_nemoclaw_sandbox(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if os.name == "nt":
+        yield {"event": "error", "status": "failed", "message": "NemoClaw requires a Linux, macOS, or WSL2 container runtime; nvHive only enables this pack on Linux sessions."}
+        return
+    if platform.system() != "Linux":
+        yield {"event": "error", "status": "failed", "message": "This nvHive pack targets Linux cloud desktops."}
+        return
+
+    docker = _docker_status()
+    if not docker["ready"]:
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": f"NemoClaw is blocked: {docker['detail']} {docker['rootless_hint']}",
+            "details": docker,
+        }
+        return
+
+    root = _pack_root(pack.id)
+    root.mkdir(parents=True, exist_ok=True)
+    _nemoclaw_workspace().mkdir(parents=True, exist_ok=True)
+
+    current_env = _node_env({"NPM_CONFIG_PREFIX": str(_nemoclaw_prefix())})
+    existing_binary = _nemoclaw_binary_from_env(current_env)
+    if existing_binary and not force_update:
+        launcher = _write_nemoclaw_launcher()
+        _write_nemoclaw_readme(docker)
+        _write_marker(pack, {"binary": existing_binary, "launcher": str(launcher), "workspace": str(_nemoclaw_workspace()), "docker": docker})
+        yield {"event": "step", "status": "complete", "message": "NemoClaw CLI already installed"}
+        return
+
+    yield {"event": "step", "status": "running", "message": "Checking Node.js 22.16+ and npm 10+ for NemoClaw"}
+    try:
+        env, node_status = await asyncio.to_thread(_prepare_node_runtime)
+    except Exception as exc:
+        yield {"event": "error", "status": "failed", "message": str(exc)}
+        return
+    env = _node_env({"NPM_CONFIG_PREFIX": str(_nemoclaw_prefix())})
+    npm = shutil.which("npm", path=env.get("PATH"))
+    if not npm:
+        yield {"event": "error", "status": "failed", "message": "npm is unavailable after Node runtime setup."}
+        return
+
+    _nemoclaw_prefix().mkdir(parents=True, exist_ok=True)
+    async for event in _run_command(
+        [npm, "install", "--prefix", str(_nemoclaw_prefix()), NEMOCLAW_PACKAGE],
+        label="Install NemoClaw CLI",
+        env=env,
+    ):
+        yield event
+
+    binary = _nemoclaw_binary_from_env(env)
+    launcher = _write_nemoclaw_launcher()
+    _write_nemoclaw_readme(docker)
+    _write_marker(pack, {
+        "binary": binary,
+        "launcher": str(launcher),
+        "workspace": str(_nemoclaw_workspace()),
+        "node": node_status,
+        "docker": docker,
+        "onboard_next": "nvhive-nemoclaw",
+    })
+    yield {
+        "event": "complete",
+        "status": "complete",
+        "message": "NemoClaw CLI installed. Launch nvhive-nemoclaw to create the OpenShell sandbox.",
+        "launcher": str(launcher),
+    }
 
 
 async def _install_comfy_nodes(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
@@ -1491,6 +2030,12 @@ async def install_studio_packs(
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "python_venv":
                 async for event in _install_python_venv(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "openclaw_agent":
+                async for event in _install_openclaw_agent(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "nemoclaw_sandbox":
+                async for event in _install_nemoclaw_sandbox(pack, force_update):
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "comfy_nodes":
                 async for event in _install_comfy_nodes(pack, force_update):

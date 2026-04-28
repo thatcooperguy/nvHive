@@ -18,7 +18,13 @@ from typing import Any
 
 from nvh.integrations.runtime import runtime_status
 from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import BLENDER_VERSION, catalog_with_status, model_catalog_with_status
+from nvh.integrations.studio_packs import (
+    BLENDER_VERSION,
+    _docker_status,
+    _node_runtime_status,
+    catalog_with_status,
+    model_catalog_with_status,
+)
 
 
 @dataclass(frozen=True)
@@ -212,12 +218,14 @@ def _host_facts() -> dict[str, Any]:
             "tar": _which("tar"),
             "node": _which("node"),
             "npm": _which("npm"),
+            "docker": _which("docker"),
             "nvidia-smi": _which("nvidia-smi"),
         },
         "command_versions": {
             "git": _command_version("git", "--version"),
             "node": _command_version("node", "--version"),
             "npm": _command_version("npm", "--version"),
+            "docker": _command_version("docker", "--version"),
         },
         "gpu": nvidia,
         "display": {
@@ -244,6 +252,8 @@ def _fact_list(host: dict[str, Any]) -> list[HostFact]:
         HostFact("venv", "Python venv", "available" if host["python"]["venv_available"] else "missing", "ok" if host["python"]["venv_available"] else "fixable", "recommended"),
         HostFact("git", "Git", commands.get("git") or "missing", "ok" if commands.get("git") else "blocked", "required"),
         HostFact("curl", "curl", commands.get("curl") or "missing", "ok" if commands.get("curl") else "blocked", "required"),
+        HostFact("node", "Node.js", host["command_versions"].get("node") or "rootless install available", "ok" if _node_runtime_status().get("ready") else "fixable", "recommended"),
+        HostFact("docker", "Docker runtime", host["command_versions"].get("docker") or "missing", "ok" if _docker_status().get("ready") else "degraded", "optional", "Required only for NemoClaw/OpenShell sandboxes."),
         HostFact("nvidia-smi", "NVIDIA driver", gpu.get("driver_version", "not detected"), "ok" if gpu else "degraded", "recommended"),
         HostFact("cuda", "CUDA driver API", gpu.get("cuda_version", "unknown"), "ok" if gpu.get("cuda_version") else "degraded", "recommended"),
         HostFact("display", "Linux desktop display", "available" if display_ready else "not detected", "ok" if display_ready else "degraded", "optional"),
@@ -343,6 +353,8 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     model_status = model_catalog_with_status()
     pack_status = catalog_with_status()
     pack_by_id = {pack.get("id"): pack for pack in pack_status.get("packs", [])}
+    node_status = _node_runtime_status()
+    docker_status = _docker_status()
     recommended_models = model_status.get("recommended_ids", [])
     missing_recommended_models = [
         model["id"] for model in model_status.get("models", [])
@@ -433,6 +445,23 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
                 _req("storage", "Persistent workspace", bool(storage["ok"]), "Agent packages install under NVH_HOME/studio.", fix_action_id="storage", rootless_fix_available=True),
             ],
             recommended_action_id="agent-lab",
+        ),
+        _overall(
+            "claw-agents",
+            "OpenClaw and NVIDIA NemoClaw",
+            "agent",
+            [
+                _req("linux", "Linux desktop session", is_linux, "OpenClaw/NemoClaw packs are optimized for Linux cloud desktops.", blocked=not is_linux),
+                _req("node", "Node.js 22.16+ and npm 10+", bool(node_status.get("ready")), f"Node={node_status.get('node_version') or 'missing'}, npm={node_status.get('npm_version') or 'missing'}.", fix_action_id="claw-agents", rootless_fix_available=bool(node_status.get("can_auto_install"))),
+                _req("openclaw", "OpenClaw pack", _pack_installed("openclaw-agent"), "Simple self-hosted agent platform install.", fix_action_id="claw-agents", rootless_fix_available=True),
+                _req("docker", "Docker for NemoClaw", bool(docker_status.get("ready")), docker_status.get("detail", "Docker must work without sudo.")),
+                _req("storage", "Persistent workspace", bool(storage["ok"]), "Claw workspaces install under NVH_HOME/studio.", fix_action_id="storage", rootless_fix_available=True),
+            ],
+            recommended_action_id="claw-agents",
+            notes=[
+                "OpenClaw is the default rootless agent path.",
+                "NemoClaw remains optional until Docker/OpenShell is available without sudo.",
+            ],
         ),
         _overall(
             "game-dev-lab",

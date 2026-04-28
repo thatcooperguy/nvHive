@@ -202,6 +202,22 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
 
 const isActiveInstallJob = (job: InstallJob) => job.status === 'queued' || job.status === 'running';
 
+const studioPackDetails = (pack: StudioPack): Record<string, unknown> => pack.status?.details ?? {};
+
+const studioPackInstallable = (pack: StudioPack) => studioPackDetails(pack).installable !== false;
+
+const studioPackBlockedReason = (pack: StudioPack) => {
+  const reason = studioPackDetails(pack).blocked_reason;
+  return typeof reason === 'string' ? reason : '';
+};
+
+const selectableStudioPackIds = (packs: StudioPack[], packIds: string[]) => (
+  packIds.filter(packId => {
+    const pack = packs.find(item => item.id === packId);
+    return !pack || studioPackInstallable(pack);
+  })
+);
+
 export default function SetupPage() {
   const [step, setStep] = useState<Step>('welcome');
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
@@ -471,7 +487,8 @@ export default function SetupPage() {
         setStudioPacks(data.packs);
         setStudioBundles(data.bundles);
         setStudioRoot(data.root);
-        setSelectedStudioPacks(new Set(data.bundles.starter ?? data.packs.map(pack => pack.id)));
+        const starterIds = data.bundles.starter ?? data.packs.map(pack => pack.id);
+        setSelectedStudioPacks(new Set(selectableStudioPackIds(data.packs, starterIds)));
       })
       .catch(() => {})
       .finally(() => setStudioLoading(false));
@@ -582,7 +599,8 @@ export default function SetupPage() {
       setStudioRoot(data.root);
       setSelectedStudioPacks(prev => {
         if (prev.size > 0) return prev;
-        return new Set(data.bundles.starter ?? data.packs.map(pack => pack.id));
+        const starterIds = data.bundles.starter ?? data.packs.map(pack => pack.id);
+        return new Set(selectableStudioPackIds(data.packs, starterIds));
       });
     } catch {
       // keep current pack state
@@ -592,6 +610,11 @@ export default function SetupPage() {
   };
 
   const toggleStudioPack = (packId: string) => {
+    const pack = studioPacks.find(item => item.id === packId);
+    if (pack && !studioPackInstallable(pack)) {
+      setStudioError(studioPackBlockedReason(pack) || `${pack.title} is blocked on this host.`);
+      return;
+    }
     setSelectedStudioPacks(prev => {
       const next = new Set(prev);
       if (next.has(packId)) next.delete(packId);
@@ -602,7 +625,7 @@ export default function SetupPage() {
 
   const selectStudioBundle = (bundleId: string) => {
     const packIds = studioBundles[bundleId] ?? [];
-    setSelectedStudioPacks(new Set(packIds));
+    setSelectedStudioPacks(new Set(selectableStudioPackIds(studioPacks, packIds)));
   };
 
   const applyWizardProfile = (profile: WizardProfile) => {
@@ -615,13 +638,15 @@ export default function SetupPage() {
     const vramLimit = detectedModelVram || 12;
     const starterPackIds = studioBundles.starter ?? studioPacks.map(pack => pack.id);
     const creativePackIds = studioBundles.creative ?? ['blender-creative', 'game-dev-lab', 'game-mod-helper'];
+    const installableStarterPackIds = selectableStudioPackIds(studioPacks, starterPackIds);
+    const installableCreativePackIds = selectableStudioPackIds(studioPacks, creativePackIds);
     const starterExamples = visibleComfyExamples
       .filter(example => example.recommended_vram_gb <= vramLimit)
       .map(example => example.id);
 
     if (profile === 'student') {
       setSelectedStudioModels(new Set(recommendedModels));
-      setSelectedStudioPacks(new Set(starterPackIds));
+      setSelectedStudioPacks(new Set(installableStarterPackIds));
       setSelectedComfyExamples(new Set(starterExamples));
       setStep('models');
       return;
@@ -629,7 +654,7 @@ export default function SetupPage() {
 
     if (profile === 'creator') {
       setSelectedStudioModels(new Set(recommendedModels));
-      setSelectedStudioPacks(new Set([...(studioBundles.comfy ?? ['comfyui-power-nodes']), ...creativePackIds]));
+      setSelectedStudioPacks(new Set(selectableStudioPackIds(studioPacks, [...(studioBundles.comfy ?? ['comfyui-power-nodes']), ...creativePackIds])));
       setSelectedComfyExamples(new Set(starterExamples));
       setStep('comfyui');
       return;
@@ -637,14 +662,14 @@ export default function SetupPage() {
 
     if (profile === 'game') {
       setSelectedStudioModels(new Set(recommendedModels));
-      setSelectedStudioPacks(new Set(creativePackIds));
+      setSelectedStudioPacks(new Set(installableCreativePackIds));
       setSelectedComfyExamples(new Set(starterExamples));
       setStep('studio');
       return;
     }
 
     setSelectedStudioModels(new Set(allModelIds.length ? allModelIds : recommendedModels));
-    setSelectedStudioPacks(new Set(studioBundles.all ?? studioPacks.map(pack => pack.id)));
+    setSelectedStudioPacks(new Set(selectableStudioPackIds(studioPacks, studioBundles.all ?? studioPacks.map(pack => pack.id))));
     setSelectedComfyExamples(new Set(starterExamples));
     setStep('models');
   };
@@ -888,8 +913,10 @@ export default function SetupPage() {
       .filter(example => selectedComfyExamples.has(example.id))
       .flatMap(example => example.models)
   ).size;
-  const selectedStudioPackIds = Array.from(selectedStudioPacks);
+  const selectedStudioPackIds = selectableStudioPackIds(studioPacks, Array.from(selectedStudioPacks));
   const starterStudioPackIds = studioBundles.starter ?? [];
+  const clawStudioPackIds = studioBundles.claw ?? [];
+  const blockedStudioPackCount = studioPacks.filter(pack => !studioPackInstallable(pack)).length;
   const studioCategories = Array.from(new Set(studioPacks.map(pack => pack.category)));
   const selectedStudioPackDiskGb = studioPacks
     .filter(pack => selectedStudioPacks.has(pack.id))
@@ -977,6 +1004,15 @@ export default function SetupPage() {
     }
     if (actionId === 'creative-tools') {
       handleInstallStudioPacks(['creative']);
+      return;
+    }
+    if (actionId === 'claw-agents') {
+      const installableClawIds = selectableStudioPackIds(studioPacks, studioBundles.claw ?? ['openclaw-agent', 'nemoclaw-sandbox']);
+      if (installableClawIds.length > 0) handleInstallStudioPacks(installableClawIds);
+      else {
+        setStudioError('No Claw agent option is installable on this host yet. Check Node.js and Docker/OpenShell readiness in Advanced Details.');
+        setStep('studio');
+      }
       return;
     }
     if (actionId === 'repair-workspace') {
@@ -2437,7 +2473,7 @@ export default function SetupPage() {
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 6</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">AI Studio Packs</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
-                One-click rootless packs for LLMs, local agents, ComfyUI sub software, Blender, runtime fallback, and Linux game projects.
+                One-click rootless packs for LLMs, OpenClaw/NemoClaw agents, ComfyUI sub software, Blender, runtime fallback, and Linux game projects.
               </p>
             </div>
 
@@ -2449,7 +2485,7 @@ export default function SetupPage() {
                     No sudo. Installs under {studioRoot || storageStatus?.layout.studio_dir || 'NVH_HOME/studio'} and {storageStatus?.layout.bin_dir || 'NVH_HOME/bin'}
                   </div>
                   <div className="text-[10px] font-mono text-[#737373] mt-2">
-                    {starterStudioPackIds.length} packs - {studioPacks.filter(pack => pack.status.installed).length}/{studioPacks.length} installed - selected ~{selectedStudioPackDiskGb.toFixed(1)} GB - free {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
+                    {starterStudioPackIds.length} starter packs - {clawStudioPackIds.length} Claw options - {studioPacks.filter(pack => pack.status.installed).length}/{studioPacks.length} installed - {blockedStudioPackCount} blocked by host - selected ~{selectedStudioPackDiskGb.toFixed(1)} GB - free {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -2459,6 +2495,13 @@ export default function SetupPage() {
                     className="btn-secondary px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
                   >
                     Select Starter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => selectStudioBundle('claw')}
+                    className="btn-secondary px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                  >
+                    Select Claw Agents
                   </button>
                   <button
                     type="button"
@@ -2523,20 +2566,26 @@ export default function SetupPage() {
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {studioPacks.filter(pack => pack.category === category).map(pack => {
-                        const selected = selectedStudioPacks.has(pack.id);
+                        const installable = studioPackInstallable(pack);
+                        const selected = selectedStudioPacks.has(pack.id) && installable;
+                        const blockedReason = studioPackBlockedReason(pack);
+                        const badgeText = pack.status.installed ? 'INSTALLED' : installable ? 'READY' : 'BLOCKED';
                         return (
                           <label
                             key={pack.id}
-                            className={`block border p-4 cursor-pointer transition-colors ${
+                            className={`block border p-4 transition-colors ${
                               selected
                                 ? 'border-[#76B900]/50 bg-[#76B900]/5'
-                                : 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4]'
+                                : installable
+                                  ? 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4] cursor-pointer'
+                                  : 'border-[#e5e5e5] bg-[#fafafa] opacity-75 cursor-not-allowed'
                             }`}
                           >
                             <div className="flex items-start gap-3">
                               <input
                                 type="checkbox"
                                 checked={selected}
+                                disabled={!installable}
                                 onChange={() => toggleStudioPack(pack.id)}
                                 className="mt-1 accent-[#76B900]"
                               />
@@ -2549,14 +2598,21 @@ export default function SetupPage() {
                                   <span className={`text-[9px] font-mono px-1.5 py-0.5 border ${
                                     pack.status.installed
                                       ? 'border-[#76B900]/40 text-[#76B900]'
-                                      : 'border-[#d4d4d4] text-[#737373]'
+                                      : installable
+                                        ? 'border-[#d4d4d4] text-[#737373]'
+                                        : 'border-[#dc2626]/30 text-[#dc2626]'
                                   }`}>
-                                    {pack.status.installed ? 'INSTALLED' : 'READY'}
+                                    {badgeText}
                                   </span>
                                 </div>
                                 <div className="text-[10px] font-mono text-[#737373] leading-relaxed mt-2">
                                   {pack.description}
                                 </div>
+                                {blockedReason && (
+                                  <div className="text-[10px] font-mono text-[#dc2626] leading-relaxed mt-2 border border-[#dc2626]/20 bg-[#dc2626]/5 p-2">
+                                    {blockedReason}
+                                  </div>
+                                )}
                                 <div className="flex flex-wrap gap-1 mt-3">
                                   <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
                                     {pack.recommended_vram_gb ? `${pack.recommended_vram_gb}GB VRAM` : 'any GPU'}
