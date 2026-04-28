@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
   checkHealth,
@@ -11,8 +11,10 @@ import {
   saveProviderKey,
   getStorageStatus,
   configureStorage,
+  cancelInstallJob,
   getComfyUIStatus,
   getComfyUIExamples,
+  getInstallJobs,
   installComfyUIStream,
   startComfyUI,
   saveComfyUIModelPlan,
@@ -29,6 +31,7 @@ import type {
   ComfyUIExample,
   ComfyUIInstallEvent,
   ComfyUIStatus,
+  InstallJob,
   StorageStatus,
   StudioPack,
   StudioPackInstallEvent,
@@ -181,6 +184,8 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
   );
 }
 
+const isActiveInstallJob = (job: InstallJob) => job.status === 'queued' || job.status === 'running';
+
 export default function SetupPage() {
   const [step, setStep] = useState<Step>('welcome');
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
@@ -230,6 +235,9 @@ export default function SetupPage() {
   const [modelsInstalling, setModelsInstalling] = useState(false);
   const [modelEvents, setModelEvents] = useState<StudioModelInstallEvent[]>([]);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [installJobs, setInstallJobs] = useState<InstallJob[]>([]);
+  const [jobsError, setJobsError] = useState<string | null>(null);
+  const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
 
   // Live-polled provider health drives Ollama status and the
   // configured-providers list so the setup screen reflects newly
@@ -241,6 +249,53 @@ export default function SetupPage() {
     setOllamaStatus(ollamaProvider?.healthy ? 'online' : 'offline');
     setConfiguredProviders(polledProviders.filter(p => p.healthy).map(p => p.name));
   }, [polledProviders]);
+
+  const mergeInstallJob = useCallback((job: InstallJob) => {
+    setInstallJobs(prev => {
+      const next = [job, ...prev.filter(item => item.id !== job.id)];
+      return next
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .slice(0, 8);
+    });
+  }, []);
+
+  const refreshInstallJobs = useCallback(async () => {
+    try {
+      const data = await getInstallJobs({ limit: 8 });
+      setInstallJobs(data.jobs);
+      setJobsError(null);
+    } catch (err) {
+      setJobsError(err instanceof Error ? err.message : 'Could not load install jobs');
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshInstallJobs();
+    const timer = window.setInterval(() => {
+      void refreshInstallJobs();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [refreshInstallJobs]);
+
+  useEffect(() => {
+    setComfyInstalling(installJobs.some(job => job.kind === 'comfyui-install' && isActiveInstallJob(job)));
+    setStudioInstalling(installJobs.some(job => job.kind === 'studio-pack-install' && isActiveInstallJob(job)));
+    setModelsInstalling(installJobs.some(job => job.kind === 'studio-model-install' && isActiveInstallJob(job)));
+  }, [installJobs]);
+
+  const handleCancelInstallJob = async (jobId: string) => {
+    setCancelingJobId(jobId);
+    setJobsError(null);
+    try {
+      const job = await cancelInstallJob(jobId);
+      mergeInstallJob(job);
+      void refreshInstallJobs();
+    } catch (err) {
+      setJobsError(err instanceof Error ? err.message : 'Could not cancel install job');
+    } finally {
+      setCancelingJobId(null);
+    }
+  };
 
 
   useEffect(() => {
@@ -540,6 +595,12 @@ export default function SetupPage() {
     installStudioModelsStream(
       { model_ids: selected, force_update: false },
       {
+        onJob: job => {
+          mergeInstallJob(job);
+        },
+        onStatus: job => {
+          mergeInstallJob(job);
+        },
         onEvent: event => {
           setModelEvents(prev => [...prev.slice(-10), event]);
           if (event.status_snapshot) {
@@ -551,10 +612,12 @@ export default function SetupPage() {
           setModelEvents(prev => [...prev.slice(-10), event]);
           setModelsInstalling(false);
           refreshStudioModels();
+          void refreshInstallJobs();
         },
         onError: error => {
           setModelError(error);
           setModelsInstalling(false);
+          void refreshInstallJobs();
         },
       }
     );
@@ -580,6 +643,12 @@ export default function SetupPage() {
     installStudioPacksStream(
       { pack_ids: selected, force_update: false },
       {
+        onJob: job => {
+          mergeInstallJob(job);
+        },
+        onStatus: job => {
+          mergeInstallJob(job);
+        },
         onEvent: event => {
           setStudioEvents(prev => [...prev.slice(-10), event]);
           if (event.status_snapshot) {
@@ -592,10 +661,12 @@ export default function SetupPage() {
           setStudioEvents(prev => [...prev.slice(-10), event]);
           setStudioInstalling(false);
           refreshStudioPacks();
+          void refreshInstallJobs();
         },
         onError: error => {
           setStudioError(error);
           setStudioInstalling(false);
+          void refreshInstallJobs();
         },
       }
     );
@@ -615,6 +686,12 @@ export default function SetupPage() {
     installComfyUIStream(
       { torch_profile: 'nvidia-cu130', force_update: false },
       {
+        onJob: job => {
+          mergeInstallJob(job);
+        },
+        onStatus: job => {
+          mergeInstallJob(job);
+        },
         onEvent: event => {
           setComfyEvents(prev => [...prev.slice(-8), event]);
           if (event.status_snapshot) {
@@ -625,10 +702,12 @@ export default function SetupPage() {
           setComfyEvents(prev => [...prev.slice(-8), event]);
           setComfyInstalling(false);
           refreshComfyUI();
+          void refreshInstallJobs();
         },
         onError: error => {
           setComfyError(error);
           setComfyInstalling(false);
+          void refreshInstallJobs();
         },
       }
     );
@@ -691,6 +770,8 @@ export default function SetupPage() {
   const selectedModelDiskGb = studioModels
     .filter(model => selectedStudioModels.has(model.id))
     .reduce((total, model) => total + model.estimated_disk_gb, 0);
+  const activeInstallJobs = installJobs.filter(isActiveInstallJob);
+  const visibleInstallJobs = installJobs.slice(0, 5);
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -735,6 +816,84 @@ export default function SetupPage() {
           </div>
         ))}
       </div>
+
+      {(visibleInstallJobs.length > 0 || jobsError) && (
+        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <div className="section-label">Install Jobs</div>
+              <div className="text-[10px] font-mono text-[#737373] mt-1">
+                {activeInstallJobs.length > 0
+                  ? `${activeInstallJobs.length} active job${activeInstallJobs.length === 1 ? '' : 's'} running from persistent NVH_HOME`
+                  : 'Recent setup jobs are saved under NVH_HOME/jobs'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void refreshInstallJobs()}
+              className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+            >
+              Refresh
+            </button>
+          </div>
+          {jobsError && (
+            <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
+              {jobsError}
+            </div>
+          )}
+          <div className="space-y-2">
+            {visibleInstallJobs.map(job => {
+              const active = isActiveInstallJob(job);
+              const failed = job.status === 'failed' || job.status === 'interrupted';
+              const complete = job.status === 'complete';
+              const bar = Math.max(0, Math.min(100, job.progress || 0));
+              return (
+                <div key={job.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                  <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-1.5 h-1.5 flex-shrink-0 ${
+                          complete ? 'bg-[#76B900]' : failed ? 'bg-[#dc2626]' : 'bg-[#d97706]'
+                        }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                        <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">
+                          {job.title}
+                        </div>
+                        <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                          {job.status}
+                        </span>
+                      </div>
+                      <div className="text-[10px] font-mono text-[#525252] mt-1 break-words">
+                        {job.message || job.kind}
+                      </div>
+                      <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all">
+                        {job.id} / {job.storage_home}
+                      </div>
+                    </div>
+                    {active && (
+                      <button
+                        type="button"
+                        onClick={() => void handleCancelInstallJob(job.id)}
+                        disabled={cancelingJobId === job.id}
+                        className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                      >
+                        {cancelingJobId === job.id ? 'Canceling' : 'Cancel'}
+                      </button>
+                    )}
+                  </div>
+                  <div className="mt-3 h-1.5 bg-[#e5e5e5] overflow-hidden">
+                    <div
+                      className={`h-full transition-all ${
+                        complete ? 'bg-[#76B900]' : failed ? 'bg-[#dc2626]' : 'bg-[#d97706]'
+                      }`}
+                      style={{ width: `${bar}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Step content */}
       <div className="card p-6 nvidia-corner relative animate-fade-in">

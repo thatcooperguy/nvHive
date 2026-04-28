@@ -2279,6 +2279,72 @@ async def comfyui_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     return _response_envelope(detect_comfyui())
 
 
+def _job_or_404(job_id: str) -> dict[str, Any]:
+    from nvh.integrations.jobs import load_job
+
+    try:
+        return load_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@app.get("/v1/jobs", summary="List persistent setup jobs")
+async def setup_jobs(
+    kind: str | None = None,
+    status_filter: str | None = None,
+    limit: int = 20,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return recent rootless install jobs persisted under NVH_HOME."""
+    from nvh.integrations.jobs import list_jobs
+
+    safe_limit = max(1, min(limit, 100))
+    jobs = list_jobs(kind=kind, status=status_filter, limit=safe_limit)
+    return _response_envelope({"jobs": jobs, "count": len(jobs)})
+
+
+@app.get("/v1/jobs/{job_id}", summary="Get a persistent setup job")
+async def setup_job(
+    job_id: str,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return one persisted setup job by id."""
+    return _response_envelope(_job_or_404(job_id))
+
+
+@app.get("/v1/jobs/{job_id}/events", summary="Read persistent setup job events")
+async def setup_job_events(
+    job_id: str,
+    after: int = 0,
+    limit: int = 200,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return JSONL-backed setup job events after a sequence number."""
+    from nvh.integrations.jobs import read_events
+
+    _job_or_404(job_id)
+    try:
+        events = read_events(job_id, after=max(0, after), limit=max(1, min(limit, 500)))
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _response_envelope({"events": events, "count": len(events)})
+
+
+@app.post("/v1/jobs/{job_id}/cancel", summary="Cancel a running setup job")
+async def setup_job_cancel(
+    job_id: str,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Request cancellation for an active setup job."""
+    from nvh.integrations.jobs import cancel_job
+
+    try:
+        job = cancel_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _response_envelope(job)
+
+
 async def _comfyui_install_stream(
     request: ComfyUIInstallRequest,
 ) -> AsyncGenerator:
@@ -2424,6 +2490,27 @@ async def studio_pack_install(
     )
 
 
+@app.post("/v1/comfyui/install/job", summary="Start a background ComfyUI install job")
+async def comfyui_install_job(
+    request: ComfyUIInstallRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Install or update ComfyUI in the background with persistent progress."""
+    from nvh.integrations.comfyui import install_comfyui
+    from nvh.integrations.jobs import start_job
+
+    job = start_job(
+        kind="comfyui-install",
+        title="Install ComfyUI",
+        request=request.model_dump(),
+        source_factory=lambda: install_comfyui(
+            torch_profile=request.torch_profile,
+            force_update=request.force_update,
+        ),
+    )
+    return _response_envelope(job)
+
+
 @app.post("/v1/studio/models/install", summary="Install selected local models")
 async def studio_model_install(
     request: StudioModelInstallRequest,
@@ -2438,6 +2525,48 @@ async def studio_model_install(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/v1/studio/install/job", summary="Start a background AI Studio pack install job")
+async def studio_pack_install_job(
+    request: StudioPackInstallRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Install AI Studio packs in the background with persistent progress."""
+    from nvh.integrations.jobs import start_job
+    from nvh.integrations.studio_packs import install_studio_packs
+
+    job = start_job(
+        kind="studio-pack-install",
+        title="Install AI Studio packs",
+        request=request.model_dump(),
+        source_factory=lambda: install_studio_packs(
+            request.pack_ids,
+            force_update=request.force_update,
+        ),
+    )
+    return _response_envelope(job)
+
+
+@app.post("/v1/studio/models/install/job", summary="Start a background local model install job")
+async def studio_model_install_job(
+    request: StudioModelInstallRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Pull selected local models in the background with persistent progress."""
+    from nvh.integrations.jobs import start_job
+    from nvh.integrations.studio_packs import install_studio_models
+
+    job = start_job(
+        kind="studio-model-install",
+        title="Download local models",
+        request=request.model_dump(),
+        source_factory=lambda: install_studio_models(
+            request.model_ids,
+            force_update=request.force_update,
+        ),
+    )
+    return _response_envelope(job)
 
 
 # ---------------------------------------------------------------------------
