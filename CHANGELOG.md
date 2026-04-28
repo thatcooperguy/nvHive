@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.34.0] - 2026-04-28
+
+### Added
+- Rootless persistent workstation storage under `NVH_HOME`, including
+  dedicated app, runtime, WebUI, model, cache, config, and log directories
+  for ephemeral Linux cloud desktop sessions.
+- Persistent background install jobs with progress, cancellation, and
+  WebUI visibility for long-running model and app setup tasks.
+- Optional rootless Python runtime fallback pack for systems where the
+  bundled Python/venv path is not enough.
+- Blender creative studio pack that installs Blender under
+  `NVH_HOME/apps/blender` and creates a `nvhive-blender` launcher.
+- Setup helper endpoint and wizard panel that rank next actions for
+  students configuring storage, LLMs, ComfyUI, creative tools, and agents.
+- ComfyUI model download assists, including target folders and a generated
+  helper script for selected workflow examples.
+
+### Changed
+- `nvh webui` now keeps WebUI source, Node fallback tooling, and npm cache
+  under persistent `NVH_HOME` paths instead of legacy home-directory paths.
+- The setup wizard now exposes persistent storage locations, runtime status,
+  local helper guidance, Blender/creative profile options, and clearer
+  ComfyUI download-plan messaging.
+
 ## [0.33.2] - 2026-04-27
 
 ### Fixed
