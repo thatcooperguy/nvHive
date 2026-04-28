@@ -97,9 +97,12 @@ nvh studio --install game -y
 ```
 
 The WebUI setup wizard includes a model picker with GPU-fit badges, disk
-estimates, installed status, and a download queue. The ComfyUI step lets
-students select workflow examples and save a model download plan with source
-links, because many image/video weights are large or require upstream terms.
+estimates, installed status, and persistent install jobs saved under
+`$NVH_HOME/jobs`. ComfyUI, AI Studio packs, and local model downloads keep
+showing progress after a browser refresh and can be canceled from the wizard.
+The ComfyUI step lets students select workflow examples and save a model
+download plan with source links, because many image/video weights are large or
+require upstream terms.
 
 On first run, `nvh` launches a guided 3-step setup — GPU detection, provider keys, local model pulls. Works immediately with local models (no signup needed). Every step is skippable. Run `nvh setup` anytime to reconfigure.
 

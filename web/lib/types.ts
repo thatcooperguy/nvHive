@@ -412,6 +412,53 @@ export interface StorageConfigureRequest {
 
 // ─── UI State helpers ────────────────────────────────────────────────────────
 
+export type InstallJobStatus =
+  | 'queued'
+  | 'running'
+  | 'complete'
+  | 'failed'
+  | 'canceled'
+  | 'interrupted'
+  | string;
+
+export interface InstallJob {
+  id: string;
+  kind: 'comfyui-install' | 'studio-pack-install' | 'studio-model-install' | string;
+  title: string;
+  status: InstallJobStatus;
+  message: string;
+  progress: number;
+  request: Record<string, unknown>;
+  storage_home: string;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  event_count: number;
+  cancel_requested: boolean;
+  events_path: string;
+}
+
+export interface InstallJobEvent {
+  job_id: string;
+  sequence: number;
+  timestamp: string;
+  event: string;
+  status: string;
+  message: string;
+  payload: Record<string, unknown>;
+}
+
+export interface InstallJobsResult {
+  jobs: InstallJob[];
+  count: number;
+}
+
+export interface InstallJobEventsResult {
+  events: InstallJobEvent[];
+  count: number;
+}
+
 export interface ComfyUIExample {
   id: string;
   title: string;

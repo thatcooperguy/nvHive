@@ -72,6 +72,11 @@ The WebUI setup wizard includes a dedicated Models step. It shows:
 The default recommendation set covers chat, coding, reasoning, vision, and
 embeddings. Students can accept the defaults or choose models one at a time.
 
+ComfyUI, AI Studio pack, and local model installs run as persistent background
+jobs. Job metadata and logs are written to `$NVH_HOME/jobs`, so a student can
+refresh the browser, reconnect to a cloud desktop, or cancel a long download
+without losing the setup state.
+
 CLI equivalents:
 
 ```bash

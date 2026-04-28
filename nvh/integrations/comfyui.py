@@ -394,11 +394,21 @@ async def _run_command(
         stderr=asyncio.subprocess.STDOUT,
     )
 
-    assert process.stdout is not None
-    async for raw_line in process.stdout:
-        line = raw_line.decode("utf-8", errors="replace").rstrip()
-        if line:
-            yield {"event": "log", "status": "running", "message": line}
+    try:
+        assert process.stdout is not None
+        async for raw_line in process.stdout:
+            line = raw_line.decode("utf-8", errors="replace").rstrip()
+            if line:
+                yield {"event": "log", "status": "running", "message": line}
+    except asyncio.CancelledError:
+        if process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
+        raise
 
     return_code = await process.wait()
     if return_code != 0:

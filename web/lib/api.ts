@@ -27,6 +27,10 @@ import type {
   WsSynthesisComplete,
   WsCouncilComplete,
   GPUInfo,
+  InstallJob,
+  InstallJobEvent,
+  InstallJobEventsResult,
+  InstallJobsResult,
   RecommendationsResult,
   SystemInfo,
   StorageConfigureRequest,
@@ -131,6 +135,158 @@ export async function configureStorage(request: StorageConfigureRequest): Promis
 
 // ComfyUI visual workflow setup
 
+const TERMINAL_JOB_STATUSES = new Set(['complete', 'failed', 'canceled', 'interrupted']);
+
+export async function getInstallJobs(options: {
+  kind?: string;
+  status?: string;
+  limit?: number;
+} = {}): Promise<InstallJobsResult> {
+  const params = new URLSearchParams();
+  if (options.kind) params.set('kind', options.kind);
+  if (options.status) params.set('status_filter', options.status);
+  if (options.limit) params.set('limit', String(options.limit));
+  const qs = params.toString();
+  return apiGet<InstallJobsResult>(`/v1/jobs${qs ? `?${qs}` : ''}`);
+}
+
+export async function getInstallJob(jobId: string): Promise<InstallJob> {
+  return apiGet<InstallJob>(`/v1/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export async function getInstallJobEvents(
+  jobId: string,
+  after = 0,
+  limit = 200
+): Promise<InstallJobEventsResult> {
+  return apiGet<InstallJobEventsResult>(
+    `/v1/jobs/${encodeURIComponent(jobId)}/events?after=${after}&limit=${limit}`
+  );
+}
+
+export async function cancelInstallJob(jobId: string): Promise<InstallJob> {
+  return apiPost<InstallJob>(`/v1/jobs/${encodeURIComponent(jobId)}/cancel`, {});
+}
+
+export async function startComfyUIInstallJob(request: ComfyUIInstallRequest): Promise<InstallJob> {
+  return apiPost<InstallJob>('/v1/comfyui/install/job', request);
+}
+
+export async function startStudioPackInstallJob(request: StudioPackInstallRequest): Promise<InstallJob> {
+  return apiPost<InstallJob>('/v1/studio/install/job', request);
+}
+
+export async function startStudioModelInstallJob(request: StudioModelInstallRequest): Promise<InstallJob> {
+  return apiPost<InstallJob>('/v1/studio/models/install/job', request);
+}
+
+function payloadFromJobEvent<TEvent extends { event: string; status: string; message: string }>(
+  event: InstallJobEvent
+): TEvent {
+  return {
+    event: event.event,
+    status: event.status,
+    message: event.message,
+    ...event.payload,
+  } as TEvent;
+}
+
+export function watchInstallJob<TEvent extends { event: string; status: string; message: string }>(
+  jobId: string,
+  callbacks: {
+    onEvent?: (event: TEvent, jobEvent: InstallJobEvent) => void;
+    onStatus?: (job: InstallJob) => void;
+    onComplete?: (event: TEvent, job: InstallJob) => void;
+    onError?: (error: string, job?: InstallJob) => void;
+  }
+): () => void {
+  let stopped = false;
+  let after = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const poll = async () => {
+    if (stopped) return;
+    try {
+      const [job, batch] = await Promise.all([
+        getInstallJob(jobId),
+        getInstallJobEvents(jobId, after),
+      ]);
+      callbacks.onStatus?.(job);
+
+      let lastPayload: TEvent | null = null;
+      for (const event of batch.events) {
+        after = Math.max(after, event.sequence);
+        const payload = payloadFromJobEvent<TEvent>(event);
+        lastPayload = payload;
+        callbacks.onEvent?.(payload, event);
+      }
+
+      if (TERMINAL_JOB_STATUSES.has(job.status)) {
+        if (job.status === 'complete') {
+          callbacks.onComplete?.(
+            lastPayload ?? ({ event: 'complete', status: 'complete', message: job.message } as TEvent),
+            job
+          );
+        } else {
+          callbacks.onError?.(job.message || `Install job ${job.status}`, job);
+        }
+        return;
+      }
+
+      timer = setTimeout(poll, 1200);
+    } catch (err) {
+      if (!stopped) {
+        callbacks.onError?.(err instanceof Error ? err.message : 'Install job polling failed');
+      }
+    }
+  };
+
+  void poll();
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
+}
+
+function runBackgroundInstall<TEvent extends { event: string; status: string; message: string }>(
+  start: () => Promise<InstallJob>,
+  callbacks: {
+    onJob?: (job: InstallJob) => void;
+    onStatus?: (job: InstallJob) => void;
+    onEvent?: (event: TEvent) => void;
+    onComplete?: (event: TEvent) => void;
+    onError?: (error: string) => void;
+  }
+): () => void {
+  let stopped = false;
+  let stopWatch: (() => void) | null = null;
+
+  (async () => {
+    try {
+      const job = await start();
+      if (stopped) return;
+      callbacks.onJob?.(job);
+      callbacks.onStatus?.(job);
+      stopWatch = watchInstallJob<TEvent>(job.id, {
+        onEvent: event => callbacks.onEvent?.(event),
+        onStatus: nextJob => callbacks.onStatus?.(nextJob),
+        onComplete: event => callbacks.onComplete?.(event),
+        onError: error => callbacks.onError?.(error),
+      });
+    } catch (err) {
+      if (!stopped) {
+        callbacks.onError?.(err instanceof Error ? err.message : 'Install job failed to start');
+      }
+    }
+  })();
+
+  return () => {
+    stopped = true;
+    stopWatch?.();
+  };
+}
+
 export async function getComfyUIStatus(): Promise<ComfyUIStatus> {
   return apiGet<ComfyUIStatus>('/v1/comfyui/status');
 }
@@ -153,86 +309,17 @@ export async function saveComfyUIModelPlan(example_ids: string[]): Promise<Comfy
 export function installComfyUIStream(
   request: ComfyUIInstallRequest,
   callbacks: {
+    onJob?: (job: InstallJob) => void;
+    onStatus?: (job: InstallJob) => void;
     onEvent?: (event: ComfyUIInstallEvent) => void;
     onComplete?: (event: ComfyUIInstallEvent) => void;
     onError?: (error: string) => void;
   }
 ): () => void {
-  let aborted = false;
-  const controller = new AbortController();
-
-  (async () => {
-    try {
-      const res = await fetch(`${BASE_URL}/v1/comfyui/install`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try {
-          const body = await res.json();
-          detail = body?.detail ?? detail;
-        } catch {
-          // ignore
-        }
-        callbacks.onError?.(detail);
-        return;
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) {
-        callbacks.onError?.('No response body');
-        return;
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let eventType = '';
-
-      while (!aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            eventType = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            try {
-              const parsed = JSON.parse(line.slice(6).trim()) as ComfyUIInstallEvent;
-              callbacks.onEvent?.(parsed);
-              if (eventType === 'complete' || parsed.event === 'complete') {
-                callbacks.onComplete?.(parsed);
-                return;
-              }
-              if (eventType === 'error' || parsed.event === 'error') {
-                callbacks.onError?.(parsed.message || 'ComfyUI install failed');
-                return;
-              }
-            } catch {
-              // ignore malformed JSON
-            }
-            eventType = '';
-          }
-        }
-      }
-    } catch (err) {
-      if (!aborted) {
-        callbacks.onError?.(err instanceof Error ? err.message : 'ComfyUI install failed');
-      }
-    }
-  })();
-
-  return () => {
-    aborted = true;
-    controller.abort();
-  };
+  return runBackgroundInstall<ComfyUIInstallEvent>(
+    () => startComfyUIInstallJob(request),
+    callbacks
+  );
 }
 
 // Rootless AI Studio pack setup
@@ -244,86 +331,17 @@ export async function getStudioPacks(): Promise<StudioPacksResult> {
 export function installStudioPacksStream(
   request: StudioPackInstallRequest,
   callbacks: {
+    onJob?: (job: InstallJob) => void;
+    onStatus?: (job: InstallJob) => void;
     onEvent?: (event: StudioPackInstallEvent) => void;
     onComplete?: (event: StudioPackInstallEvent) => void;
     onError?: (error: string) => void;
   }
 ): () => void {
-  let aborted = false;
-  const controller = new AbortController();
-
-  (async () => {
-    try {
-      const res = await fetch(`${BASE_URL}/v1/studio/install`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try {
-          const body = await res.json();
-          detail = body?.detail ?? detail;
-        } catch {
-          // ignore
-        }
-        callbacks.onError?.(detail);
-        return;
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) {
-        callbacks.onError?.('No response body');
-        return;
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let eventType = '';
-
-      while (!aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            eventType = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            try {
-              const parsed = JSON.parse(line.slice(6).trim()) as StudioPackInstallEvent;
-              callbacks.onEvent?.(parsed);
-              if (eventType === 'complete' || parsed.event === 'complete') {
-                callbacks.onComplete?.(parsed);
-                return;
-              }
-              if (eventType === 'error' || parsed.event === 'error') {
-                callbacks.onError?.(parsed.message || 'AI Studio pack install failed');
-                return;
-              }
-            } catch {
-              // ignore malformed JSON
-            }
-            eventType = '';
-          }
-        }
-      }
-    } catch (err) {
-      if (!aborted) {
-        callbacks.onError?.(err instanceof Error ? err.message : 'AI Studio pack install failed');
-      }
-    }
-  })();
-
-  return () => {
-    aborted = true;
-    controller.abort();
-  };
+  return runBackgroundInstall<StudioPackInstallEvent>(
+    () => startStudioPackInstallJob(request),
+    callbacks
+  );
 }
 
 export async function getStudioModels(): Promise<StudioModelsResult> {
@@ -333,86 +351,17 @@ export async function getStudioModels(): Promise<StudioModelsResult> {
 export function installStudioModelsStream(
   request: StudioModelInstallRequest,
   callbacks: {
+    onJob?: (job: InstallJob) => void;
+    onStatus?: (job: InstallJob) => void;
     onEvent?: (event: StudioModelInstallEvent) => void;
     onComplete?: (event: StudioModelInstallEvent) => void;
     onError?: (error: string) => void;
   }
 ): () => void {
-  let aborted = false;
-  const controller = new AbortController();
-
-  (async () => {
-    try {
-      const res = await fetch(`${BASE_URL}/v1/studio/models/install`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try {
-          const body = await res.json();
-          detail = body?.detail ?? detail;
-        } catch {
-          // ignore
-        }
-        callbacks.onError?.(detail);
-        return;
-      }
-
-      const reader = res.body?.getReader();
-      if (!reader) {
-        callbacks.onError?.('No response body');
-        return;
-      }
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let eventType = '';
-
-      while (!aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            eventType = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            try {
-              const parsed = JSON.parse(line.slice(6).trim()) as StudioModelInstallEvent;
-              callbacks.onEvent?.(parsed);
-              if (eventType === 'complete' || parsed.event === 'complete') {
-                callbacks.onComplete?.(parsed);
-                return;
-              }
-              if (eventType === 'error' || parsed.event === 'error') {
-                callbacks.onError?.(parsed.message || 'Model install failed');
-                return;
-              }
-            } catch {
-              // ignore malformed JSON
-            }
-            eventType = '';
-          }
-        }
-      }
-    } catch (err) {
-      if (!aborted) {
-        callbacks.onError?.(err instanceof Error ? err.message : 'Model install failed');
-      }
-    }
-  })();
-
-  return () => {
-    aborted = true;
-    controller.abort();
-  };
+  return runBackgroundInstall<StudioModelInstallEvent>(
+    () => startStudioModelInstallJob(request),
+    callbacks
+  );
 }
 
 export interface AnalyticsData {
