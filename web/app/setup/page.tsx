@@ -62,22 +62,13 @@ import type {
 type Step = 'welcome' | 'storage' | 'gpu' | 'models' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
 type WizardProfile = 'student' | 'llm' | 'creator' | 'agent' | 'game' | 'full';
 
-const PROFILE_MARKS: Record<WizardProfile, string> = {
-  student: 'AI',
-  llm: 'LLM',
-  creator: '3D',
-  agent: 'BOT',
-  game: 'GM',
-  full: 'ALL',
-};
+type SetupCheckState = 'ready' | 'warn' | 'fix' | 'checking';
 
-const PROFILE_TONES: Record<WizardProfile, string> = {
-  student: 'bg-[#76B900] text-black border-[#76B900]',
-  llm: 'bg-[#0a0a0a] text-white border-[#0a0a0a]',
-  creator: 'bg-[#2563eb] text-white border-[#2563eb]',
-  agent: 'bg-[#7c3aed] text-white border-[#7c3aed]',
-  game: 'bg-[#dc2626] text-white border-[#dc2626]',
-  full: 'bg-[#525252] text-white border-[#525252]',
+const CHECK_TONES: Record<SetupCheckState, { dot: string; text: string; border: string; bg: string; label: string }> = {
+  ready: { dot: 'bg-[#76B900]', text: 'text-[#76B900]', border: 'border-[#76B900]/30', bg: 'bg-[#76B900]/5', label: 'Ready' },
+  warn: { dot: 'bg-[#d97706]', text: 'text-[#d97706]', border: 'border-[#d97706]/30', bg: 'bg-[#fff7ed]', label: 'Review' },
+  fix: { dot: 'bg-[#d97706]', text: 'text-[#d97706]', border: 'border-[#d97706]/30', bg: 'bg-[#fff7ed]', label: 'Fix queued' },
+  checking: { dot: 'bg-[#a3a3a3]', text: 'text-[#737373]', border: 'border-[#e5e5e5]', bg: 'bg-[#fafafa]', label: 'Checking' },
 };
 
 const STEPS: { id: Step; label: string; num: number }[] = [
@@ -354,6 +345,7 @@ export default function SetupPage() {
   const [jobsError, setJobsError] = useState<string | null>(null);
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
+  const [selectedWizardProfile, setSelectedWizardProfile] = useState<WizardProfile>('student');
 
   // Live-polled provider health drives Ollama status and the
   // configured-providers list so the setup screen reflects newly
@@ -1382,6 +1374,7 @@ export default function SetupPage() {
     label: string;
     outcome: string;
     includes: string[];
+    logos: BrandLogoId[];
     primary?: boolean;
     advanced?: boolean;
   }> = [
@@ -1392,6 +1385,7 @@ export default function SetupPage() {
       label: 'Recommended',
       outcome: 'Homework, research, chat, embeddings, and a local agent lab.',
       includes: ['Rootless Ollama', 'Starter models', 'Agent lab', 'GitHub connect'],
+      logos: ['ollama', 'github', 'openclaw'],
       primary: true,
     },
     {
@@ -1401,6 +1395,8 @@ export default function SetupPage() {
       label: 'LLMs',
       outcome: 'Compare local models, write code, summarize notes, and stay offline-friendly.',
       includes: ['Ollama runtime', 'VRAM-fit models', 'Coder model', 'Embeddings'],
+      logos: ['ollama', 'nvidia'],
+      advanced: true,
     },
     {
       id: 'creator',
@@ -1409,6 +1405,7 @@ export default function SetupPage() {
       label: 'Creative',
       outcome: 'Generate images, prep video workflows, and open Blender from the persistent drive.',
       includes: ['ComfyUI', 'Power nodes', 'Blender LTS', 'Workflow plan'],
+      logos: ['comfyui', 'blender', 'nvidia'],
     },
     {
       id: 'agent',
@@ -1417,6 +1414,8 @@ export default function SetupPage() {
       label: 'Agents',
       outcome: 'Install the local agent lab, OpenClaw, and NemoClaw only when the host can support it.',
       includes: ['Agent lab', 'OpenClaw', 'Conditional NemoClaw', 'Coder model'],
+      logos: ['openclaw', 'nvidia', 'ollama'],
+      advanced: true,
     },
     {
       id: 'game',
@@ -1425,6 +1424,7 @@ export default function SetupPage() {
       label: 'Game',
       outcome: 'Prototype games, build assets, connect repos, and keep engines on persistent storage.',
       includes: ['Godot', 'Unity helper', 'Unreal helper', 'GitHub connect'],
+      logos: ['godot', 'unity', 'unreal', 'github'],
     },
     {
       id: 'full',
@@ -1433,7 +1433,55 @@ export default function SetupPage() {
       label: 'Advanced',
       outcome: 'Install every supported rootless tool that passes the host checks.',
       includes: ['LLMs', 'Agents', 'ComfyUI', 'Blender', 'Game tools', 'GitHub'],
+      logos: ['nvidia', 'ollama', 'comfyui', 'blender', 'godot', 'github'],
       advanced: true,
+    },
+  ];
+
+  const beginnerProfileIds = new Set<WizardProfile>(['student', 'creator', 'game']);
+  const beginnerProfiles = missionProfiles.filter(profile => beginnerProfileIds.has(profile.id));
+  const selectedProfile = missionProfiles.find(profile => profile.id === selectedWizardProfile) ?? missionProfiles[0];
+  const selectedProfilePackIds = wizardProfilePackIds(selectedProfile.id);
+  const selectedProfileModelIds = wizardProfileModelIds(selectedProfile.id);
+  const selectedProfileDiskGb = diskForPackIds(selectedProfilePackIds) + diskForModelIds(selectedProfileModelIds);
+  const selectedProfilePacks = studioPacks.filter(pack => selectedProfilePackIds.includes(pack.id));
+  const selectedProfileModels = studioModels.filter(model => selectedProfileModelIds.includes(model.id));
+  const pythonFact = setupCompatibility?.facts.find(fact => fact.id.toLowerCase().includes('python') || fact.label.toLowerCase().includes('python'));
+  const nodeFact = setupCompatibility?.facts.find(fact => fact.id.toLowerCase().includes('node') || fact.label.toLowerCase().includes('node'));
+  const systemCheckItems: Array<{ label: string; value: string; state: SetupCheckState }> = [
+    {
+      label: 'Storage',
+      value: storageReady ? (storageFreeGb === null ? 'persistent ready' : `${storageFreeGb} GB free`) : storageBeginnerLabel,
+      state: storageReady ? 'ready' : storageAutopilotBusy ? 'checking' : 'fix',
+    },
+    {
+      label: 'GPU / CUDA',
+      value: gpuLoading
+        ? 'scanning'
+        : gpuInfo?.gpus?.length
+          ? `${gpuInfo.gpus[0].name} / CUDA ${gpuInfo.gpus[0].cuda_version}`
+          : 'CPU fallback',
+      state: gpuLoading ? 'checking' : gpuInfo?.gpus?.length ? 'ready' : 'warn',
+    },
+    {
+      label: 'Python env',
+      value: pythonFact?.value ?? recommendedTorchProfile,
+      state: setupCompatibility ? compatibilityBlockedCount > 0 ? 'fix' : compatibilityIssueCount > 0 ? 'warn' : 'ready' : 'checking',
+    },
+    {
+      label: 'Node',
+      value: nodeFact?.value ?? (setupCompatibility ? 'checked' : 'pending'),
+      state: nodeFact?.status === 'blocked' ? 'fix' : nodeFact?.status === 'warning' || nodeFact?.status === 'fixable' ? 'warn' : setupCompatibility ? 'ready' : 'checking',
+    },
+    {
+      label: 'GitHub',
+      value: githubPack?.status.installed ? 'helper ready' : 'optional login',
+      state: githubPack?.status.installed ? 'ready' : 'warn',
+    },
+    {
+      label: 'Health',
+      value: setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'}` : 'clear',
+      state: setupConcernCount ? 'fix' : 'ready',
     },
   ];
 
@@ -2278,23 +2326,10 @@ export default function SetupPage() {
               <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-4">
                 <div>
                   <div className="section-label">Beginner Mode</div>
-                  <h2 className="text-3xl font-bold text-[#0a0a0a] mt-2">Pick Your AI Lab</h2>
+                  <h2 className="text-3xl font-bold text-[#0a0a0a] mt-2">Choose Your Lab</h2>
                   <p className="text-sm text-[#525252] mt-2 leading-relaxed max-w-xl">
-                    Choose a lab. nvWizard finds storage, checks the GPU, picks compatible models, then installs rootless tools.
+                    Pick one path. nvWizard finds persistent storage, checks the GPU, picks compatible models, and installs everything rootlessly.
                   </p>
-                  <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {softwareHighlights.slice(0, 6).map(item => (
-                      <div key={item.id} className="flex items-center gap-2 border border-[#d8e8c3] bg-white/70 p-2 min-w-0">
-                        <span className={`w-10 h-10 flex items-center justify-center border flex-shrink-0 ${item.tone}`}>
-                          <BrandLogo id={item.logo} />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block text-[11px] font-bold text-[#0a0a0a] truncate">{item.label}</span>
-                          <span className="block text-[9px] font-mono text-[#737373] uppercase truncate">{item.sub}</span>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -2302,37 +2337,25 @@ export default function SetupPage() {
                       disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
                       className="btn-primary px-5 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
                     >
-                      {activeWizardBuild === 'student' ? 'Building Student Lab' : storagePrimaryLabel}
+                      {activeWizardBuild === 'student' ? 'Building Student Lab' : storageReady ? 'Start Student Lab' : storagePrimaryLabel}
                     </button>
                     <button
                       type="button"
                       onClick={() => setAdvancedSetupOpen(prev => !prev)}
                       className="btn-ghost px-5 py-3 text-xs font-mono uppercase tracking-wider"
                     >
-                      {advancedSetupOpen ? 'Hide Advanced' : 'Troubleshoot'}
+                      {advancedSetupOpen ? 'Hide Advanced' : 'Customize'}
                     </button>
                   </div>
                 </div>
-                <div className="border border-[#76B900]/20 bg-white p-3 space-y-3 min-w-0 overflow-hidden">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-bold text-[#0a0a0a]">nvWizard Status</div>
-                    <span className="text-[9px] font-mono text-[#76B900] uppercase">Auto</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { label: 'Storage', value: storageBeginnerLabel, good: storageReady },
-                    { label: 'API', value: apiStatus === 'connected' ? 'online' : apiStatus === 'disconnected' ? 'waking up' : 'checking', good: apiStatus === 'connected' },
-                    { label: 'Checks', value: setupConcernCount ? `${setupConcernCount} review` : 'clear', good: setupConcernCount === 0 },
-                    { label: 'Jobs', value: activeInstallJobs.length ? `${activeInstallJobs.length} running` : 'idle', good: activeInstallJobs.length === 0 },
-                  ].map(item => (
-                    <div key={item.label} className="border border-[#e5e5e5] bg-[#fafafa] p-2 min-w-0">
-                      <span className="block text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
-                      <span className={`block text-[10px] font-mono mt-1 truncate ${item.good ? 'text-[#76B900]' : 'text-[#d97706]'}`}>{item.value}</span>
-                    </div>
-                  ))}
+                <div className="border border-[#76B900]/20 bg-white p-3 min-w-0 overflow-hidden">
+                  <div className="section-label">Autopilot</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">No root. No OS surgery.</div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-2 leading-relaxed">
+                    Storage first, then hardware-fit apps and models. Wizard mood: suspicious of read-only drives, friendly to GPUs.
                   </div>
                   {wizardBuildMessage && (
-                    <div className="border border-[#76B900]/20 bg-[#76B900]/5 p-2 text-[10px] font-mono text-[#0a0a0a] leading-relaxed">
+                    <div className="mt-3 border border-[#76B900]/20 bg-[#76B900]/5 p-2 text-[10px] font-mono text-[#0a0a0a] leading-relaxed">
                       {wizardBuildMessage}
                     </div>
                   )}
@@ -2340,6 +2363,40 @@ export default function SetupPage() {
               </div>
             </div>
 
+            <div className="border border-[#e5e5e5] bg-white p-3">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                <div>
+                  <div className="section-label">System Check</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">nvWizard checks the host before installing</div>
+                </div>
+                {topHelperAction && (
+                  <button
+                    type="button"
+                    onClick={() => runHelperAction(topHelperAction.id)}
+                    disabled={helperActionDisabled(topHelperAction.id)}
+                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {helperActionLabel(topHelperAction.id)}
+                  </button>
+                )}
+              </div>
+              <div className="mt-3 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                {systemCheckItems.map(item => {
+                  const tone = CHECK_TONES[item.state];
+                  return (
+                    <div key={item.label} className={`border ${tone.border} ${tone.bg} p-2 min-w-0`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[9px] font-mono text-[#737373] uppercase truncate">{item.label}</span>
+                        <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                      </div>
+                      <div className={`text-[10px] font-mono mt-1 truncate ${tone.text}`}>{item.value}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {advancedSetupOpen && (
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
               <div className={`border bg-white p-4 ${storageReady ? 'border-[#76B900]/30' : 'border-[#d97706]/30'}`}>
                 <div className="flex items-start gap-3">
@@ -2499,12 +2556,13 @@ export default function SetupPage() {
                 </div>
               </div>
             </div>
+            )}
 
             <div className="space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
                 <div>
-                  <div className="section-label">One-Click Labs</div>
-                  <div className="text-sm text-[#525252] mt-1">Pick the outcome. nvWizard handles the install order.</div>
+                  <div className="section-label">Three Simple Labs</div>
+                  <div className="text-sm text-[#525252] mt-1">Pick the outcome. nvWizard handles the install order and keeps manual commands as overrides.</div>
                 </div>
                 {!advancedSetupOpen && (
                   <button
@@ -2512,13 +2570,87 @@ export default function SetupPage() {
                     onClick={() => setAdvancedSetupOpen(true)}
                     className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
                   >
-                    Show Full Workstation
+                    Show Advanced Labs
                   </button>
                 )}
               </div>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                {missionProfiles
-                  .filter(profile => !profile.advanced || advancedSetupOpen)
+              <div className="hidden sm:block border border-[#76B900]/30 bg-[#f7fdf0] p-4">
+                <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-3">
+                      <span className="w-12 h-12 flex items-center justify-center border border-[#76B900]/30 bg-white flex-shrink-0">
+                        <div className="grid grid-cols-2 gap-0.5">
+                          {selectedProfile.logos.slice(0, 4).map(logo => (
+                            <BrandLogo key={logo} id={logo} className="w-5 h-5" />
+                          ))}
+                        </div>
+                      </span>
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider">Install Summary</div>
+                        <div className="text-base font-bold text-[#0a0a0a] truncate">{selectedProfile.title}</div>
+                        <div className="text-xs text-[#525252] mt-1">{selectedProfile.outcome}</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
+                      <div className="border border-[#d8e8c3] bg-white/80 p-2 min-w-0">
+                        <div className="text-[9px] font-mono text-[#737373] uppercase">Storage</div>
+                        <div className={`text-[10px] font-mono mt-1 truncate ${storageReady ? 'text-[#76B900]' : 'text-[#d97706]'}`}>
+                          {storageReady ? storageStatus?.layout.home ?? 'persistent ready' : 'auto-detect first'}
+                        </div>
+                      </div>
+                      <div className="border border-[#d8e8c3] bg-white/80 p-2 min-w-0">
+                        <div className="text-[9px] font-mono text-[#737373] uppercase">GPU</div>
+                        <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 truncate">{hardwareName}</div>
+                      </div>
+                      <div className="border border-[#d8e8c3] bg-white/80 p-2 min-w-0">
+                        <div className="text-[9px] font-mono text-[#737373] uppercase">Disk</div>
+                        <div className="text-[10px] font-mono text-[#0a0a0a] mt-1">
+                          {hasCatalogSizing ? `~${Math.max(0, selectedProfileDiskGb).toFixed(1)} GB` : 'after check'}
+                        </div>
+                      </div>
+                      <div className="border border-[#d8e8c3] bg-white/80 p-2 min-w-0">
+                        <div className="text-[9px] font-mono text-[#737373] uppercase">Selected</div>
+                        <div className="text-[10px] font-mono text-[#0a0a0a] mt-1">
+                          {selectedProfilePacks.length} apps / {selectedProfileModels.length} models
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-1">
+                      {[...selectedProfilePacks.slice(0, 4).map(pack => pack.title), ...selectedProfileModels.slice(0, 3).map(model => model.title)].map(item => (
+                        <span key={item} className="text-[9px] font-mono text-[#525252] bg-white border border-[#d8e8c3] px-1.5 py-0.5">
+                          {item}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2 xl:w-44">
+                    <button
+                      type="button"
+                      onClick={() => void handleBuildWizardProfile(selectedProfile.id)}
+                      disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
+                      className="btn-primary px-4 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {!storageReady ? storagePrimaryLabel : activeWizardBuild === selectedProfile.id ? 'Installing' : 'Install Lab'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!storageReady) {
+                          void handleUseRecommendedStorage();
+                          return;
+                        }
+                        applyWizardProfile(selectedProfile.id);
+                      }}
+                      disabled={!profilesReady || Boolean(activeWizardBuild) || storageAutopilotBusy}
+                      className="btn-ghost px-4 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      Customize
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className={`grid grid-cols-1 gap-3 ${advancedSetupOpen ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
+                {(advancedSetupOpen ? missionProfiles : beginnerProfiles)
                   .map(profile => {
                     const packIds = wizardProfilePackIds(profile.id);
                     const modelIds = wizardProfileModelIds(profile.id);
@@ -2527,15 +2659,24 @@ export default function SetupPage() {
                     return (
                       <div
                         key={profile.id}
+                        onMouseEnter={() => setSelectedWizardProfile(profile.id)}
+                        onFocus={() => setSelectedWizardProfile(profile.id)}
+                        onClick={() => setSelectedWizardProfile(profile.id)}
                         className={`border bg-white p-4 transition-colors ${
-                          profile.primary
+                          selectedWizardProfile === profile.id
+                            ? 'border-[#76B900] shadow-[0_0_0_1px_rgba(118,185,0,0.16)]'
+                            : profile.primary
                             ? 'border-[#76B900]/50 shadow-[0_0_0_1px_rgba(118,185,0,0.08)]'
                             : 'border-[#e5e5e5]'
                         }`}
                       >
                         <div className="flex items-start gap-3">
-                          <span className={`w-12 h-12 flex items-center justify-center border text-sm font-mono font-bold flex-shrink-0 ${PROFILE_TONES[profile.id]}`}>
-                            {PROFILE_MARKS[profile.id]}
+                          <span className="w-12 h-12 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                            <div className="grid grid-cols-2 gap-0.5">
+                              {profile.logos.slice(0, 4).map(logo => (
+                                <BrandLogo key={logo} id={logo} className="w-5 h-5" />
+                              ))}
+                            </div>
                           </span>
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2568,7 +2709,7 @@ export default function SetupPage() {
                             disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
                             className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                           >
-                            {!storageReady ? storagePrimaryLabel : building ? 'Building' : 'Build This Lab'}
+                            {!storageReady ? storagePrimaryLabel : building ? 'Installing' : 'Install This Lab'}
                           </button>
                           <button
                             type="button"
@@ -3804,23 +3945,101 @@ export default function SetupPage() {
               </div>
             </div>
 
-            {/* Quick start commands */}
-            <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2">
-              <div className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider mb-2">Quick Commands</div>
-              {storageStatus && (
-                <>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]"># Persist this shell session</div>
-                  <div className="text-[10px] font-mono text-[#76B900] break-all">source {storageStatus.env_file}</div>
-                </>
-              )}
-              <div className="text-[10px] font-mono text-[#a3a3a3]"># Rootless all-in-one student lab</div>
-              <div className="text-[10px] font-mono text-[#76B900] break-all">
-                {`nvh workstation --home-dir "${storageStatus?.layout.home ?? '$NVH_HOME'}" --all -y`}
+            <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-3">
+              <div>
+                <div className="section-label">Launcher Dashboard</div>
+                <div className="text-sm font-bold text-[#0a0a0a] mt-1">Open the lab from buttons, not terminal memory</div>
               </div>
-              <div className="text-[10px] font-mono text-[#a3a3a3] mt-2"># Packs only</div>
-              <div className="text-[10px] font-mono text-[#76B900]">nvh studio --install starter -y</div>
-              <div className="text-[10px] font-mono text-[#a3a3a3] mt-2"># Launch dashboard</div>
-              <div className="text-[10px] font-mono text-[#76B900]">nvh webui</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                  <div className="flex items-center gap-3">
+                    <span className="w-10 h-10 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                      <BrandLogo id="ollama" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-[#0a0a0a]">Local Chat</div>
+                      <div className="text-[9px] font-mono text-[#737373] uppercase">{ollamaStatus === 'online' ? 'Ollama online' : 'Uses best available advisor'}</div>
+                    </div>
+                  </div>
+                  <Link href="/query" className="btn-primary block text-center mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+                    Open Chat
+                  </Link>
+                </div>
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                  <div className="flex items-center gap-3">
+                    <span className="w-10 h-10 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                      <BrandLogo id="comfyui" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-[#0a0a0a]">ComfyUI</div>
+                      <div className="text-[9px] font-mono text-[#737373] uppercase">{comfyStatus?.running ? 'running' : comfyStatus?.installed ? 'installed' : 'not installed'}</div>
+                    </div>
+                  </div>
+                  {comfyStatus?.running ? (
+                    <a href={comfyStatus.url} target="_blank" rel="noreferrer" className="btn-primary block text-center mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+                      Open ComfyUI
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={comfyStatus?.installed ? handleStartComfyUI : handleInstallComfyUI}
+                      disabled={comfyStarting || comfyInstalling || !storageReady}
+                      className="btn-primary w-full mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {comfyStatus?.installed ? comfyStarting ? 'Starting' : 'Start ComfyUI' : comfyInstalling ? 'Installing' : 'Install ComfyUI'}
+                    </button>
+                  )}
+                </div>
+                {[
+                  { id: 'blender-creative', title: 'Blender', logo: 'blender' as BrandLogoId, action: 'Install Blender' },
+                  { id: 'godot-engine', title: 'Godot', logo: 'godot' as BrandLogoId, action: 'Install Godot' },
+                  { id: 'github-login-helper', title: 'GitHub Workspace', logo: 'github' as BrandLogoId, action: 'Connect GitHub' },
+                  { id: 'unreal-engine-helper', title: 'Unreal Helper', logo: 'unreal' as BrandLogoId, action: 'Install Helper' },
+                ].map(item => {
+                  const pack = studioPacks.find(candidate => candidate.id === item.id);
+                  const installed = Boolean(pack?.status.installed);
+                  return (
+                    <div key={item.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                      <div className="flex items-center gap-3">
+                        <span className="w-10 h-10 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                          <BrandLogo id={item.logo} />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-[#0a0a0a]">{item.title}</div>
+                          <div className="text-[9px] font-mono text-[#737373] uppercase">{installed ? 'launcher ready' : 'optional'}</div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => installed ? setStep('studio') : handleInstallStudioPacks([item.id])}
+                        disabled={!storageReady || studioInstalling || !pack}
+                        className="btn-primary w-full mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                      >
+                        {installed ? 'Open Setup' : item.action}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              <details className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">
+                  Manual command overrides
+                </summary>
+                <div className="mt-3 space-y-2">
+                  {storageStatus && (
+                    <>
+                      <div className="text-[10px] font-mono text-[#a3a3a3]"># Persist this shell session</div>
+                      <div className="text-[10px] font-mono text-[#76B900] break-all">source {storageStatus.env_file}</div>
+                    </>
+                  )}
+                  <div className="text-[10px] font-mono text-[#a3a3a3]"># Rootless all-in-one student lab</div>
+                  <div className="text-[10px] font-mono text-[#76B900] break-all">
+                    {`nvh workstation --home-dir "${storageStatus?.layout.home ?? '$NVH_HOME'}" --all -y`}
+                  </div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]"># Launch dashboard</div>
+                  <div className="text-[10px] font-mono text-[#76B900]">nvh webui</div>
+                </div>
+              </details>
             </div>
 
             <div className="flex gap-3">
