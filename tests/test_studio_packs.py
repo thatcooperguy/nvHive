@@ -57,6 +57,7 @@ def test_catalog_status_uses_configured_studio_home(tmp_path, monkeypatch) -> No
 
 
 def test_blender_pack_status_uses_persistent_apps_home(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("NVH_APPS_HOME", raising=False)
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
 
     pack = studio_packs._find_pack("blender-creative")
