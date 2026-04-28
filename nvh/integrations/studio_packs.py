@@ -45,6 +45,19 @@ OPENCLAW_DOC_URL = "https://openclawdoc.com/docs/getting-started/installation/"
 NEMOCLAW_INSTALL_URL = "https://www.nvidia.com/nemoclaw.sh"
 NEMOCLAW_DOC_URL = "https://docs.nvidia.com/nemoclaw/latest/get-started/quickstart.html"
 NEMOCLAW_PACKAGE = "nemoclaw@latest"
+NVIDIA_OMNI_BLOG_URL = (
+    "https://blogs.nvidia.com/blog/nemotron-3-nano-omni-multimodal-ai-agents/"
+    "?nvid=nv-int-csfg-551280"
+)
+NVIDIA_OMNI_TECH_BLOG_URL = (
+    "https://developer.nvidia.com/blog/"
+    "nvidia-nemotron-3-nano-omni-powers-multimodal-agent-reasoning-in-a-single-efficient-open-model"
+)
+NVIDIA_OMNI_HF_URL = (
+    "https://huggingface.co/nvidia/"
+    "Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16"
+)
+NVIDIA_BUILD_URL = "https://build.nvidia.com/"
 GODOT_RELEASE_API = "https://api.github.com/repos/godotengine/godot/releases/latest"
 GODOT_DOC_URL = "https://docs.godotengine.org/en/stable/"
 ACE_STEP_REPO_URL = "https://github.com/ACE-Step/ACE-Step-1.5.git"
@@ -330,6 +343,41 @@ STUDIO_PACKS: list[StudioPack] = [
         notes=[
             "Browser automation packages may need extra browser binaries later, but no sudo is used here.",
             "This pack gives the local AI agent layer a ready Python home.",
+        ],
+    ),
+    StudioPack(
+        id="nvidia-omni-agent",
+        title="NVIDIA Omni Agent",
+        category="agents",
+        tagline="Optional multimodal Nemotron 3 Nano Omni upgrade for AI Starter",
+        description=(
+            "Adds an NVIDIA Omni Agent workspace that routes first to NVIDIA NIM/build.nvidia.com "
+            "and only recommends local Nemotron 3 Nano Omni weights when GPU VRAM and persistent "
+            "storage are large enough."
+        ),
+        recommended_vram_gb=24,
+        estimated_disk_gb=0.2,
+        install_kind="scaffold",
+        no_root=True,
+        models=[
+            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-FP8",
+            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
+        ],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-omni-agent"],
+        source_urls=[
+            NVIDIA_OMNI_BLOG_URL,
+            NVIDIA_OMNI_TECH_BLOG_URL,
+            NVIDIA_OMNI_HF_URL,
+            NVIDIA_BUILD_URL,
+        ],
+        notes=[
+            "AI Starter installs this as a lightweight guide and launcher, not a default model download.",
+            "Use NVIDIA NIM/build.nvidia.com first on smaller student VMs.",
+            "Local BF16 weights are roughly 61.5 GB; FP8 is roughly 32.8 GB; NVFP4 is roughly 20.9 GB.",
+            "nvWizard should require persistent storage headroom before recommending local weights.",
         ],
     ),
     StudioPack(
@@ -693,10 +741,19 @@ STUDIO_PACKS: list[StudioPack] = [
 
 
 PACK_BUNDLES: dict[str, list[str]] = {
-    "starter": ["rootless-ollama", "llm-starter", "agent-lab", "comfyui-power-nodes", "game-dev-lab", "github-login-helper"],
+    "starter": [
+        "rootless-ollama",
+        "llm-starter",
+        "agent-lab",
+        "nvidia-omni-agent",
+        "comfyui-power-nodes",
+        "game-dev-lab",
+        "github-login-helper",
+    ],
     "llms": ["rootless-ollama", "llm-starter", "llm-coder-reasoner"],
-    "agents": ["agent-lab", "openclaw-agent", "github-login-helper"],
+    "agents": ["agent-lab", "nvidia-omni-agent", "openclaw-agent", "github-login-helper"],
     "claw": ["openclaw-agent", "nemoclaw-sandbox"],
+    "omni": ["nvidia-omni-agent"],
     "comfy": ["comfyui-power-nodes"],
     "connectors": ["github-login-helper"],
     "music": ["ace-step-music", "music-producer-lab", "music-daw-helper", "github-login-helper"],
@@ -707,6 +764,7 @@ PACK_BUNDLES: dict[str, list[str]] = {
         "llm-starter",
         "llm-coder-reasoner",
         "agent-lab",
+        "nvidia-omni-agent",
         "openclaw-agent",
         "nemoclaw-sandbox",
         "comfyui-power-nodes",
@@ -1322,6 +1380,30 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
     elif pack.install_kind == "scaffold":
         installed = marker is not None
         details["workspace"] = str(_pack_root(pack.id))
+        if pack.id == "nvidia-omni-agent":
+            vram_gb = _detect_vram_gb()
+            layout = storage_layout()
+            min_local_gb = 70.0
+            free_gb = None
+            try:
+                usage = shutil.disk_usage(layout.home)
+                free_gb = round(usage.free / (1024**3), 1)
+            except Exception:
+                pass
+            local_ok = bool(
+                vram_gb >= pack.recommended_vram_gb
+                and free_gb is not None
+                and free_gb >= min_local_gb
+            )
+            details.update({
+                "nim_recommended": True,
+                "local_recommended": local_ok,
+                "detected_vram_gb": vram_gb,
+                "free_gb": free_gb,
+                "min_local_free_gb": min_local_gb,
+                "model_sizes_gb": {"BF16": 61.5, "FP8": 32.8, "NVFP4": 20.9},
+                "recommended_path": "local" if local_ok else "nvidia-nim",
+            })
         if pack.id == "music-daw-helper":
             appimages = sorted((_pack_root(pack.id) / "appimages").glob("*.AppImage"))
             details["appimages"] = [str(path) for path in appimages]
@@ -2372,6 +2454,74 @@ exec "$target"
     _write_script(launcher, content)
 
 
+def _write_omni_agent_helper(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    root.mkdir(parents=True, exist_ok=True)
+    readme = f"""# {pack.title}
+
+{pack.description}
+
+## Default Path
+
+Use NVIDIA NIM / build.nvidia.com first. This keeps AI Starter fast, rootless,
+and usable on smaller student VMs while still exposing the new multimodal
+Nemotron 3 Nano Omni workflow.
+
+## Local Path
+
+Only try a local download when nvWizard reports enough persistent storage and
+GPU headroom. The current published footprints are approximately:
+
+- BF16: 61.5 GB
+- FP8: 32.8 GB
+- NVFP4: 20.9 GB
+
+The local path should be treated as an advanced option for large NVIDIA GPUs or
+cloud instances with ample block storage.
+
+## Use Cases
+
+- Document intelligence and OCR
+- Screenshot / GUI reasoning
+- Audio-video reasoning
+- Multimodal agent perception before OpenClaw or NemoClaw actions
+
+## Sources
+
+- {NVIDIA_OMNI_BLOG_URL}
+- {NVIDIA_OMNI_TECH_BLOG_URL}
+- {NVIDIA_OMNI_HF_URL}
+- {NVIDIA_BUILD_URL}
+"""
+    (root / "README.md").write_text(readme, encoding="utf-8")
+    plan = {
+        "name": "nvidia-omni-agent",
+        "default_path": "nvidia-nim",
+        "local_guardrails": {
+            "min_free_gb": 70,
+            "recommended_vram_gb": pack.recommended_vram_gb,
+            "model_sizes_gb": {"BF16": 61.5, "FP8": 32.8, "NVFP4": 20.9},
+        },
+        "models": pack.models,
+        "sources": pack.source_urls,
+    }
+    (root / "omni-agent-plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+    launcher = _local_bin() / "nvhive-omni-agent"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="{root}"
+echo "NVHive NVIDIA Omni Agent"
+echo "Workspace: $ROOT"
+echo
+echo "Default: use NVIDIA NIM / build.nvidia.com for Nemotron 3 Nano Omni."
+echo "Local weights are advanced and gated by nvWizard storage + GPU checks."
+echo
+echo "Open: $ROOT/README.md"
+"""
+    _write_script(launcher, content)
+
+
 def _write_scaffold_pack(pack: StudioPack) -> None:
     if pack.id == "game-mod-helper":
         _write_mod_helper(pack)
@@ -2381,6 +2531,8 @@ def _write_scaffold_pack(pack: StudioPack) -> None:
         _write_game_engine_helper(pack)
     elif pack.id == "music-daw-helper":
         _write_music_daw_helper(pack)
+    elif pack.id == "nvidia-omni-agent":
+        _write_omni_agent_helper(pack)
     else:
         root = _pack_root(pack.id)
         root.mkdir(parents=True, exist_ok=True)

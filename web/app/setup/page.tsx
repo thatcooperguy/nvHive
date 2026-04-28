@@ -769,7 +769,7 @@ export default function SetupPage() {
     bundles: Record<string, string[]> = studioBundles,
   ) => {
     if (profile === 'student') {
-      return expandStudioPackGroups(['rootless-ollama', 'agent-lab'], packs, bundles);
+      return expandStudioPackGroups(['rootless-ollama', 'agent-lab', 'nvidia-omni-agent'], packs, bundles);
     }
     if (profile === 'llm') {
       return expandStudioPackGroups(['rootless-ollama'], packs, bundles);
@@ -1487,10 +1487,10 @@ export default function SetupPage() {
     {
       id: 'student',
       title: catalogText('student', 'title', 'AI Starter'),
-      description: catalogText('student', 'description', 'Chat, research, homework, coding help, and starter local models.'),
+      description: catalogText('student', 'description', 'Chat, research, homework, coding help, starter local models, and optional NVIDIA Omni Agent guidance.'),
       label: 'Recommended',
       outcome: 'A practical local AI desk for classes, projects, notes, and first model experiments.',
-      includes: ['Rootless Ollama', 'Starter models', 'Agent lab', 'GitHub connect'],
+      includes: ['Rootless Ollama', 'Starter models', 'Omni option', 'Agent lab'],
       logos: ['ollama', 'github', 'openclaw', 'nvidia'],
       primary: true,
     },
@@ -1556,7 +1556,7 @@ export default function SetupPage() {
   const beginnerProfileIds = new Set<WizardProfile>(['student', 'creator', 'game', 'music']);
   const beginnerProfiles = missionProfiles.filter(profile => beginnerProfileIds.has(profile.id));
   const beginnerProfileCopy: Partial<Record<WizardProfile, string>> = {
-    student: 'Local AI for classwork, coding, research, and first ComfyUI experiments.',
+    student: 'Local AI for classwork, coding, research, plus optional NVIDIA Omni Agent guidance.',
     creator: 'ComfyUI, Blender, and creative helpers for images, 3D, and video workflows.',
     game: 'Game engine helpers, Blender assets, GitHub repos, and mod workspace tools.',
     music: 'AI music generation, stem separation, transcription, and audio editor helpers.',

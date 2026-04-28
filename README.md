@@ -136,7 +136,7 @@ and background jobs:
 
 | Mission | One-click path |
 | --- | --- |
-| AI Starter | Local chat/coding models, Ollama, GitHub helper, ComfyUI starter nodes, and the local agent helper |
+| AI Starter | Local chat/coding models, Ollama, GitHub helper, the local agent helper, and a lightweight NVIDIA Omni Agent upgrade path for Nemotron 3 Nano Omni via NIM or guarded local weights |
 | Graphics Creator Studio | ComfyUI, Blender, image/video workflow examples, and model download plans |
 | Game Dev Lab | Godot helper, Unity/Unreal download guidance, Blender assets, GitHub, and Linux game tooling |
 | Music Producer Studio | ACE-Step AI music generation, Demucs stems, WhisperX transcription, Audacity, LMMS, and audio notebooks |

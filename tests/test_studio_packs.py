@@ -17,6 +17,7 @@ def test_catalog_is_rootless_and_grouped() -> None:
     assert "rootless-ollama" in ids
     assert "llm-starter" in ids
     assert "agent-lab" in ids
+    assert "nvidia-omni-agent" in ids
     assert "openclaw-agent" in ids
     assert "nemoclaw-sandbox" in ids
     assert "comfyui-power-nodes" in ids
@@ -38,6 +39,7 @@ def test_pack_bundles_expand_without_duplicates() -> None:
     assert starter[0] == "rootless-ollama"
     assert "llm-starter" in starter
     assert "agent-lab" in starter
+    assert "nvidia-omni-agent" in starter
     assert len(starter) == len(set(starter))
     assert "github-login-helper" in starter
 
@@ -55,6 +57,7 @@ def test_pack_bundles_expand_without_duplicates() -> None:
 
     agents = studio_packs.expand_pack_ids(["agents"])
     assert "agent-lab" in agents
+    assert "nvidia-omni-agent" in agents
     assert "openclaw-agent" in agents
 
     music = studio_packs.expand_pack_ids(["music"])
