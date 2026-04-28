@@ -40,6 +40,7 @@ import type {
   SetupCatalogResult,
   SetupHelperReport,
   SetupReceiptsResult,
+  CompatibilityReport,
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
@@ -161,6 +162,11 @@ export async function askSetupAssistant(
 
 export async function getSetupCatalog(refresh = false): Promise<SetupCatalogResult> {
   return apiGet<SetupCatalogResult>(`/v1/setup/catalog${refresh ? '?refresh=true' : ''}`);
+}
+
+export async function getSetupCompatibility(homeDir?: string): Promise<CompatibilityReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<CompatibilityReport>(`/v1/setup/compatibility${qs}`);
 }
 
 export async function getSetupReceipts(options: {

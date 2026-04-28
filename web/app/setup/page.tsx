@@ -13,6 +13,7 @@ import {
   getStorageStatus,
   configureStorage,
   getSetupCatalog,
+  getSetupCompatibility,
   getSetupHelper,
   getSetupReceipts,
   cancelInstallJob,
@@ -35,6 +36,7 @@ import type {
   ComfyUIExample,
   ComfyUIInstallEvent,
   ComfyUIStatus,
+  CompatibilityReport,
   InstallJob,
   InstallReceipt,
   SetupAssistantReply,
@@ -215,6 +217,7 @@ export default function SetupPage() {
   const [setupHelperError, setSetupHelperError] = useState<string | null>(null);
   const [setupReceipts, setSetupReceipts] = useState<SetupReceiptsResult | null>(null);
   const [setupCatalog, setSetupCatalog] = useState<SetupCatalogResult | null>(null);
+  const [setupCompatibility, setSetupCompatibility] = useState<CompatibilityReport | null>(null);
   const [setupInventoryError, setSetupInventoryError] = useState<string | null>(null);
   const [assistantQuestion, setAssistantQuestion] = useState('');
   const [assistantReply, setAssistantReply] = useState<SetupAssistantReply | null>(null);
@@ -297,19 +300,21 @@ export default function SetupPage() {
     }
   }, []);
 
-  const refreshSetupInventory = useCallback(async (refreshCatalog = false) => {
+  const refreshSetupInventory = useCallback(async (refreshCatalog = false, homeDir?: string) => {
     try {
-      const [receipts, catalog] = await Promise.all([
+      const [receipts, catalog, compatibility] = await Promise.all([
         getSetupReceipts({ limit: 8 }),
         getSetupCatalog(refreshCatalog),
+        getSetupCompatibility(homeDir ?? storageStatus?.layout.home),
       ]);
       setSetupReceipts(receipts);
       setSetupCatalog(catalog);
+      setSetupCompatibility(compatibility);
       setSetupInventoryError(null);
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Could not load setup inventory');
     }
-  }, []);
+  }, [storageStatus?.layout.home]);
 
   useEffect(() => {
     void refreshInstallJobs();
@@ -496,7 +501,7 @@ export default function SetupPage() {
         refreshStudioPacks(),
         refreshComfyUI(),
         refreshSetupHelper(status.layout.home),
-        refreshSetupInventory(false),
+        refreshSetupInventory(false, status.layout.home),
       ]);
     } catch (err) {
       setStorageError(err instanceof Error ? err.message : 'Could not configure persistent storage');
@@ -857,6 +862,12 @@ export default function SetupPage() {
   const unhealthyReceiptCount = setupReceipts?.summary.unhealthy ?? setupHelper?.receipts?.unhealthy ?? 0;
   const receiptCount = setupReceipts?.count ?? setupHelper?.receipts?.count ?? 0;
   const catalogSource = setupCatalog?.source ?? setupHelper?.catalog?.source ?? 'bundled';
+  const visibleCompatibilityApps = setupCompatibility?.apps
+    .filter(app => app.status !== 'ready')
+    .slice(0, 5) ?? [];
+  const compatibilityIssueCount = setupCompatibility?.issue_count ?? setupHelper?.compatibility?.issue_count ?? 0;
+  const compatibilityBlockedCount = setupCompatibility?.blocked_count ?? setupHelper?.compatibility?.blocked_count ?? 0;
+  const compatibilityFixableCount = setupCompatibility?.rootless_fixable_count ?? setupHelper?.compatibility?.rootless_fixable_count ?? 0;
 
   const runHelperAction = (actionId: string) => {
     if (actionId.startsWith('repair-receipt:')) {
@@ -893,6 +904,10 @@ export default function SetupPage() {
     }
     if (actionId === 'creative-tools') {
       handleInstallStudioPacks(['creative']);
+      return;
+    }
+    if (studioPacks.some(pack => pack.id === actionId)) {
+      handleInstallStudioPacks([actionId]);
       return;
     }
     setStep('studio');
@@ -1107,12 +1122,86 @@ export default function SetupPage() {
               </div>
             </div>
             <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-              <div className="text-[9px] font-mono text-[#737373] uppercase">Models</div>
+              <div className="text-[9px] font-mono text-[#737373] uppercase">Compat</div>
               <div className="text-lg font-mono font-bold text-[#0a0a0a]">
-                {setupCatalog?.catalog.models.length ?? setupHelper?.catalog?.model_count ?? 0}
+                {compatibilityIssueCount}
               </div>
             </div>
           </div>
+          {(setupCompatibility || setupHelper?.compatibility) && (
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div>
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a]">Compatibility Preflight</div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-0.5">
+                    {setupCompatibility?.summary ?? setupHelper?.compatibility?.summary ?? 'Host/app compatibility checks'}
+                  </div>
+                </div>
+                <div className="flex gap-1 flex-wrap">
+                  <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
+                    compatibilityBlockedCount ? 'border-[#dc2626]/40 text-[#dc2626]' : 'border-[#76B900]/40 text-[#76B900]'
+                  }`}>
+                    {compatibilityBlockedCount} blocked
+                  </span>
+                  <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d97706]/40 text-[#d97706]">
+                    {compatibilityFixableCount} fixable
+                  </span>
+                  <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d4d4d4] text-[#737373]">
+                    {setupCompatibility?.recommended_torch_profile ?? setupHelper?.compatibility?.recommended_torch_profile ?? 'torch auto'}
+                  </span>
+                </div>
+              </div>
+              {visibleCompatibilityApps.length > 0 && (
+                <div className="space-y-2">
+                  {visibleCompatibilityApps.map(app => (
+                    <div key={app.id} className="border border-[#e5e5e5] bg-[#ffffff] p-3">
+                      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-1.5 h-1.5 flex-shrink-0 ${
+                              app.status === 'blocked' ? 'bg-[#dc2626]' : app.status === 'fixable' ? 'bg-[#d97706]' : 'bg-[#76B900]'
+                            }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                            <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">{app.title}</div>
+                            <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                              {app.status}
+                            </span>
+                          </div>
+                          <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
+                            {app.summary}
+                          </div>
+                          <details className="mt-2">
+                            <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                              Requirements
+                            </summary>
+                            <div className="mt-2 space-y-1">
+                              {app.requirements.map(req => (
+                                <div key={req.id} className="text-[9px] font-mono text-[#525252] flex items-start gap-2">
+                                  <span className={`mt-1 w-1.5 h-1.5 flex-shrink-0 ${
+                                    req.status === 'ok' ? 'bg-[#76B900]' : req.status === 'blocked' ? 'bg-[#dc2626]' : 'bg-[#d97706]'
+                                  }`} />
+                                  <span>{req.label}: {req.detail}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        </div>
+                        {app.recommended_action_id && (
+                          <button
+                            type="button"
+                            onClick={() => runHelperAction(app.recommended_action_id as string)}
+                            disabled={helperActionDisabled(app.recommended_action_id)}
+                            className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                          >
+                            {helperActionLabel(app.recommended_action_id)}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {visibleReceipts.length > 0 && (
             <div className="space-y-2">
               {visibleReceipts.map(receipt => (

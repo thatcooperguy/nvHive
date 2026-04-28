@@ -80,6 +80,15 @@ def _safe_catalog_data() -> dict[str, Any]:
         return {}
 
 
+def _safe_compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
+    try:
+        from nvh.integrations.compatibility import compatibility_report
+
+        return compatibility_report(home_dir=home_dir)
+    except Exception as exc:
+        return {"summary": "Compatibility unavailable", "issue_count": 0, "apps": [], "error": str(exc)}
+
+
 def _recent_failed_job() -> dict[str, Any] | None:
     try:
         jobs = list_jobs(limit=10)
@@ -321,6 +330,21 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             affected_item=failed_job.get("kind"),
         ))
 
+    compatibility = _safe_compatibility_report(home_dir=home_dir)
+    for app in compatibility.get("apps", []):
+        if app.get("status") == "ready":
+            continue
+        action_id = app.get("recommended_action_id")
+        severity = "required" if app.get("status") == "blocked" else app.get("severity", "recommended")
+        issues.append(SetupIssue(
+            id=f"compat:{app['id']}",
+            title=f"{app.get('title', app['id'])} compatibility needs attention",
+            severity=severity,
+            reason=app.get("summary", "Compatibility check needs attention."),
+            fix_action_id=action_id,
+            affected_item=app["id"],
+        ))
+
     actions.sort(key=lambda action: action.priority)
     issues.sort(key=lambda issue: {"required": 0, "recommended": 1, "optional": 2}.get(issue.severity, 3))
     ready = not any(action.status == "required" for action in actions)
@@ -340,6 +364,13 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
         "issue_count": len(issues),
         "receipts": receipts,
         "catalog": _safe_catalog_status(),
+        "compatibility": {
+            "summary": compatibility.get("summary"),
+            "issue_count": compatibility.get("issue_count", 0),
+            "blocked_count": compatibility.get("blocked_count", 0),
+            "rootless_fixable_count": compatibility.get("rootless_fixable_count", 0),
+            "recommended_torch_profile": compatibility.get("recommended_torch_profile"),
+        },
         "assistant": {
             "mode": "offline-deterministic",
             "can_read_jobs": True,

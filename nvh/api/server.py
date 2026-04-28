@@ -953,6 +953,17 @@ async def setup_catalog(
     return _response_envelope(load_setup_catalog(refresh=refresh))
 
 
+@app.get("/v1/setup/compatibility", summary="Inspect host/app compatibility")
+async def setup_compatibility(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return host facts and per-app compatibility checks for nvWizard."""
+    from nvh.integrations.compatibility import compatibility_report
+
+    return _response_envelope(compatibility_report(home_dir=home_dir))
+
+
 @app.get("/v1/setup/receipts", summary="List rootless install receipts")
 async def setup_receipts(
     kind: str | None = None,

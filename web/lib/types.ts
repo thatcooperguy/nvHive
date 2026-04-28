@@ -458,6 +458,13 @@ export interface SetupHelperReport {
   issue_count?: number;
   receipts?: SetupReceiptsSummary;
   catalog?: SetupCatalogStatus;
+  compatibility?: {
+    summary?: string;
+    issue_count: number;
+    blocked_count: number;
+    rootless_fixable_count: number;
+    recommended_torch_profile?: string;
+  };
   assistant?: {
     mode: string;
     can_read_jobs: boolean;
@@ -533,6 +540,49 @@ export interface SetupCatalogResult {
     models: Array<Record<string, unknown>>;
     comfyui_examples: Array<Record<string, unknown>>;
   };
+}
+
+export interface CompatibilityRequirement {
+  id: string;
+  label: string;
+  status: 'ok' | 'fixable' | 'warning' | 'blocked' | string;
+  detail: string;
+  fix_action_id: string | null;
+  rootless_fix_available: boolean;
+}
+
+export interface AppCompatibility {
+  id: string;
+  title: string;
+  category: string;
+  status: 'ready' | 'fixable' | 'degraded' | 'blocked' | string;
+  severity: 'info' | 'optional' | 'recommended' | 'required' | string;
+  summary: string;
+  recommended_action_id: string | null;
+  rootless_fix_available: boolean;
+  requirements: CompatibilityRequirement[];
+  notes: string[];
+}
+
+export interface HostFact {
+  id: string;
+  label: string;
+  value: string;
+  status: string;
+  severity: string;
+  detail: string;
+}
+
+export interface CompatibilityReport {
+  summary: string;
+  ready: boolean;
+  issue_count: number;
+  blocked_count: number;
+  rootless_fixable_count: number;
+  recommended_torch_profile: string;
+  host: Record<string, unknown>;
+  facts: HostFact[];
+  apps: AppCompatibility[];
 }
 
 export interface SetupAssistantReply {
