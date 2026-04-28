@@ -16,6 +16,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from collections.abc import AsyncIterator
