@@ -67,6 +67,7 @@ _ROLE_TO_TASK_TYPES: dict[str, list[str]] = {
     "Open Source Maintainer": ["code_review", "analysis", "creative"],
     "Blockchain/Web3 Engineer": ["code_generation", "security", "reasoning"],
     "Game Developer": ["code_generation", "optimization", "creative"],
+    "Underdog Student Advocate": ["analysis", "debugging", "testing", "devops"],
 }
 
 # ---------------------------------------------------------------------------
