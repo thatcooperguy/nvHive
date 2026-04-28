@@ -55,6 +55,7 @@ nvh webui
 | Agents | `nvh studio --install agents -y` | LangGraph, CrewAI, AutoGen, JupyterLab, search/tool packages |
 | ComfyUI | `nvh studio --install comfy -y` | ComfyUI Manager, Impact Pack, ControlNet Aux, Video Helper Suite, GGUF, rgthree |
 | Games | `nvh studio --install game -y` | Pygame/Panda3D lab, asset helpers, Linux/Wine mod workspace |
+| Creative | `nvh studio --install creative -y` | Blender 4.5 LTS portable install, launcher, game/asset workspace |
 
 Run `nvh studio --list` to see exact pack status and disk estimates.
 
@@ -144,6 +145,7 @@ nvh studio --list            # show rootless LLM/agent/ComfyUI/game packs
 nvh studio --models          # show recommended local model downloads
 nvh studio --install-models recommended -y
 nvh studio --install starter -y
+nvh studio --install creative -y
 nvh doctor --fix             # repair local models/config where possible
 nvh webui                    # launch browser dashboard
 nvh safe "summarize this"    # local-only prompt path

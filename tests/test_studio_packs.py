@@ -16,6 +16,7 @@ def test_catalog_is_rootless_and_grouped() -> None:
     assert "agent-lab" in ids
     assert "comfyui-power-nodes" in ids
     assert "game-dev-lab" in ids
+    assert "blender-creative" in ids
     assert all(pack["no_root"] for pack in catalog)
 
 
@@ -26,6 +27,9 @@ def test_pack_bundles_expand_without_duplicates() -> None:
     assert "llm-starter" in starter
     assert "agent-lab" in starter
     assert len(starter) == len(set(starter))
+
+    creative = studio_packs.expand_pack_ids(["creative"])
+    assert creative == ["blender-creative", "game-dev-lab", "game-mod-helper"]
 
 
 def test_model_catalog_marks_vram_recommendations(monkeypatch) -> None:
@@ -50,6 +54,17 @@ def test_catalog_status_uses_configured_studio_home(tmp_path, monkeypatch) -> No
     assert catalog["root"] == str(tmp_path)
     assert catalog["count"] >= 5
     assert all(pack["status"]["root"].startswith(str(tmp_path)) for pack in catalog["packs"])
+
+
+def test_blender_pack_status_uses_persistent_apps_home(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+
+    pack = studio_packs._find_pack("blender-creative")
+    status = studio_packs.pack_status(pack)
+
+    assert status["installed"] is False
+    assert status["details"]["app_dir"].startswith(str(tmp_path / "nvh" / "apps" / "blender"))
+    assert status["details"]["version"] == studio_packs.BLENDER_VERSION
 
 
 @pytest.mark.asyncio
