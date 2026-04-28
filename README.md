@@ -94,6 +94,7 @@ nvh studio --install llms -y
 nvh studio --install agents -y
 nvh studio --install comfy -y
 nvh studio --install game -y
+nvh studio --install creative -y                # Blender LTS + game/asset workspace
 nvh studio --install python-runtime-fallback -y  # optional rescue pack, not the default path
 ```
 

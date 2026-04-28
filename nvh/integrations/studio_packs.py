@@ -16,6 +16,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from collections.abc import AsyncIterator
@@ -26,6 +27,12 @@ from typing import Any
 from nvh.integrations.storage import storage_layout
 
 OLLAMA_PORT = 11434
+BLENDER_VERSION = "4.5.4"
+BLENDER_MAJOR_MINOR = "4.5"
+BLENDER_LINUX_X64_URL = (
+    "https://download.blender.org/release/Blender4.5/"
+    f"blender-{BLENDER_VERSION}-linux-x64.tar.xz"
+)
 
 
 @dataclass(frozen=True)
@@ -401,6 +408,33 @@ STUDIO_PACKS: list[StudioPack] = [
             "The helper creates structure and docs; it does not bypass anti-cheat or DRM.",
         ],
     ),
+    StudioPack(
+        id="blender-creative",
+        title="Blender Creative Studio",
+        category="creative",
+        tagline="Official Blender LTS without sudo",
+        description=(
+            "Downloads the official Blender LTS Linux archive into NVH_HOME/apps, "
+            "adds a persistent launcher, and creates project folders for AI-assisted "
+            "3D, animation, and game asset work."
+        ),
+        recommended_vram_gb=4,
+        estimated_disk_gb=1.2,
+        install_kind="blender_app",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-blender"],
+        source_urls=[
+            "https://www.blender.org/download/lts/",
+            "https://download.blender.org/release/Blender4.5/",
+        ],
+        notes=[
+            "Installs the portable tarball; no apt, snap, sudo, or system menu edits required.",
+            "Cycles GPU rendering still depends on the NVIDIA driver exposed by the cloud image.",
+        ],
+    ),
 ]
 
 
@@ -410,6 +444,7 @@ PACK_BUNDLES: dict[str, list[str]] = {
     "agents": ["agent-lab"],
     "comfy": ["comfyui-power-nodes"],
     "game": ["game-dev-lab", "game-mod-helper"],
+    "creative": ["blender-creative", "game-dev-lab", "game-mod-helper"],
     "all": [
         "rootless-ollama",
         "llm-starter",
@@ -418,6 +453,7 @@ PACK_BUNDLES: dict[str, list[str]] = {
         "comfyui-power-nodes",
         "game-dev-lab",
         "game-mod-helper",
+        "blender-creative",
     ],
 }
 
@@ -466,6 +502,18 @@ def _venv_python(pack_id: str) -> Path:
     if os.name == "nt":
         return root / "Scripts" / "python.exe"
     return root / "bin" / "python"
+
+
+def _blender_root() -> Path:
+    return storage_layout().apps_dir / "blender"
+
+
+def _blender_app_dir() -> Path:
+    return _blender_root() / f"blender-{BLENDER_VERSION}-linux-x64"
+
+
+def _blender_binary() -> Path:
+    return _blender_app_dir() / "blender"
 
 
 def _find_pack(pack_id: str) -> StudioPack:
@@ -690,6 +738,12 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
     elif pack.install_kind == "scaffold":
         installed = marker is not None
         details["workspace"] = str(_pack_root(pack.id))
+    elif pack.install_kind == "blender_app":
+        binary = _blender_binary()
+        installed = binary.exists() and os.access(binary, os.X_OK)
+        details["binary"] = str(binary)
+        details["app_dir"] = str(_blender_app_dir())
+        details["version"] = BLENDER_VERSION
 
     return {
         "id": pack.id,
@@ -1119,6 +1173,143 @@ async def _install_scaffold(pack: StudioPack, force_update: bool) -> AsyncIterat
     yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
 
 
+def _safe_extract_tar(archive: Path, target: Path) -> None:
+    """Extract a tar archive while refusing path traversal entries."""
+    target.mkdir(parents=True, exist_ok=True)
+    target_resolved = target.resolve()
+    with tarfile.open(archive) as tar:
+        members = []
+        for member in tar.getmembers():
+            destination = (target / member.name).resolve()
+            if not str(destination).startswith(str(target_resolved)):
+                raise RuntimeError(f"Archive member escapes target directory: {member.name}")
+            members.append(member)
+        tar.extractall(target, members=members)
+
+
+def _write_blender_launcher() -> Path:
+    layout = storage_layout()
+    binary = _blender_binary()
+    projects = _blender_root() / "projects"
+    projects.mkdir(parents=True, exist_ok=True)
+    launcher = _local_bin() / "nvhive-blender"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+export NVH_HOME="${{NVH_HOME:-{layout.home}}}"
+export BLENDER_USER_CONFIG="${{BLENDER_USER_CONFIG:-{layout.config_dir}/blender/{BLENDER_VERSION}}}"
+export BLENDER_USER_SCRIPTS="${{BLENDER_USER_SCRIPTS:-{_blender_root()}/scripts}}"
+export BLENDER_USER_DATAFILES="${{BLENDER_USER_DATAFILES:-{_blender_root()}/datafiles}}"
+mkdir -p "$BLENDER_USER_CONFIG" "$BLENDER_USER_SCRIPTS" "$BLENDER_USER_DATAFILES" "{projects}"
+cd "{projects}"
+exec "{binary}" "$@"
+"""
+    _write_script(launcher, content)
+    return launcher
+
+
+async def _install_blender_app(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if platform.system() != "Linux" or platform.machine().lower() not in {"x86_64", "amd64"}:
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": "The Blender rootless pack currently supports Linux x64 desktops.",
+        }
+        return
+
+    root = _blender_root()
+    app_dir = _blender_app_dir()
+    binary = _blender_binary()
+    if binary.exists() and not force_update:
+        launcher = _write_blender_launcher()
+        _write_marker(pack, {"binary": str(binary), "launcher": str(launcher)})
+        yield {"event": "step", "status": "complete", "message": "Blender already installed"}
+        return
+
+    download_dir = storage_layout().cache_dir / "downloads"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    archive = download_dir / f"blender-{BLENDER_VERSION}-linux-x64.tar.xz"
+    root.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix="blender-", dir=str(root.parent)))
+
+    yield {
+        "event": "plan",
+        "status": "running",
+        "message": f"Installing Blender {BLENDER_VERSION} LTS into NVH_HOME",
+        "url": BLENDER_LINUX_X64_URL,
+        "target": str(app_dir),
+    }
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(follow_redirects=True, timeout=600) as client:
+            async with client.stream("GET", BLENDER_LINUX_X64_URL) as response:
+                response.raise_for_status()
+                total = int(response.headers.get("content-length", "0") or "0")
+                downloaded = 0
+                last_emit = time.monotonic()
+                with archive.open("wb") as handle:
+                    async for chunk in response.aiter_bytes(chunk_size=1024 * 512):
+                        handle.write(chunk)
+                        downloaded += len(chunk)
+                        now = time.monotonic()
+                        if total and now - last_emit > 0.75:
+                            yield {
+                                "event": "download",
+                                "status": "running",
+                                "message": f"Downloaded {downloaded / 1024 / 1024:.1f} MB",
+                                "progress": min(85, int(downloaded / total * 85)),
+                            }
+                            last_emit = now
+
+        yield {"event": "step", "status": "running", "message": "Extracting Blender archive"}
+        await asyncio.to_thread(_safe_extract_tar, archive, stage)
+        extracted = stage / app_dir.name
+        if not extracted.is_dir():
+            raise RuntimeError("Blender archive did not contain the expected application folder")
+        if app_dir.exists():
+            shutil.rmtree(app_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(extracted), str(app_dir))
+        binary.chmod(0o755)
+        launcher = _write_blender_launcher()
+    except Exception as exc:
+        yield {"event": "error", "status": "failed", "message": f"Blender install failed: {exc}"}
+        return
+    finally:
+        archive.unlink(missing_ok=True)
+        shutil.rmtree(stage, ignore_errors=True)
+
+    readme = root / "README.md"
+    readme.write_text(
+        f"""# Blender Creative Studio
+
+Blender {BLENDER_VERSION} LTS is installed without root access at:
+
+`{app_dir}`
+
+Launch it:
+
+```bash
+nvhive-blender
+```
+
+Project files are stored in `{root / "projects"}` so students can pair Blender
+with ComfyUI textures, game-dev assets, and nvHive prompts.
+""",
+        encoding="utf-8",
+    )
+    _write_marker(pack, {"binary": str(binary), "launcher": str(launcher), "version": BLENDER_VERSION})
+    yield {
+        "event": "complete",
+        "status": "complete",
+        "message": "Blender Creative Studio installed",
+        "binary": str(binary),
+        "launcher": str(launcher),
+    }
+
+
 async def install_studio_models(
     model_ids: list[str] | tuple[str, ...],
     *,
@@ -1249,6 +1440,9 @@ async def install_studio_packs(
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "scaffold":
                 async for event in _install_scaffold(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "blender_app":
+                async for event in _install_blender_app(pack, force_update):
                     yield {**event, "pack_id": pack.id}
             else:
                 raise RuntimeError(f"Unsupported pack type: {pack.install_kind}")
