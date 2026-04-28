@@ -735,7 +735,7 @@ export default function SetupPage() {
       return expandStudioPackGroups(['rootless-ollama']);
     }
     if (profile === 'creator') {
-      return expandStudioPackGroups(['rootless-ollama', 'creative', 'comfy']);
+      return expandStudioPackGroups(['rootless-ollama', 'creative', 'comfy', 'github-login-helper']);
     }
     if (profile === 'agent') {
       return expandStudioPackGroups(['rootless-ollama', 'agents', 'claw']);
@@ -1385,7 +1385,7 @@ export default function SetupPage() {
       label: 'Recommended',
       outcome: 'Homework, research, chat, embeddings, and a local agent lab.',
       includes: ['Rootless Ollama', 'Starter models', 'Agent lab', 'GitHub connect'],
-      logos: ['ollama', 'github', 'openclaw'],
+      logos: ['ollama', 'github', 'openclaw', 'nvidia'],
       primary: true,
     },
     {
@@ -1404,8 +1404,8 @@ export default function SetupPage() {
       description: catalogText('creator', 'description', 'ComfyUI, Blender, and vision helpers for media projects.'),
       label: 'Creative',
       outcome: 'Generate images, prep video workflows, and open Blender from the persistent drive.',
-      includes: ['ComfyUI', 'Power nodes', 'Blender LTS', 'Workflow plan'],
-      logos: ['comfyui', 'blender', 'nvidia'],
+      includes: ['ComfyUI', 'Power nodes', 'Blender LTS', 'GitHub connect'],
+      logos: ['comfyui', 'blender', 'github', 'nvidia'],
     },
     {
       id: 'agent',
