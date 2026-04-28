@@ -314,6 +314,17 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             reason="Adds Blender LTS and asset workspaces for creative students.",
         ))
 
+    music_pack = by_pack.get("ace-step-music", {})
+    if not music_pack.get("status", {}).get("installed"):
+        actions.append(SetupAction(
+            id="music-tools",
+            title="Install music producer tools",
+            priority=72,
+            status="optional",
+            command="nvh studio --install music -y",
+            reason="Adds ACE-Step music generation, audio AI tools, and a rootless DAW workspace.",
+        ))
+
     receipts = _safe_receipt_summary()
     for receipt in receipts.get("receipts", []):
         health = receipt.get("health", {})

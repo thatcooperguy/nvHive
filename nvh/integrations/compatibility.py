@@ -474,6 +474,23 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             ],
             recommended_action_id="creative-tools",
         ),
+        _overall(
+            "music-producer-lab",
+            "Music Producer Studio",
+            "music",
+            [
+                _req("linux", "Linux desktop session", is_linux, "ACE-Step and AppImage helpers are optimized for Linux cloud desktops.", blocked=not is_linux),
+                _req("python", "Python 3.11+", _version_at_least(py["version"], "3.11"), f"Detected Python {py['version']}.", blocked=not _version_at_least(py["version"], "3.11")),
+                _req("venv", "Python venv/pip", bool(py["venv_available"] and py["pip_available"]), f"Runtime strategy: {py['strategy']}.", fix_action_id="runtime-fallback", rootless_fix_available=True),
+                _req("git", "Git for ACE-Step", shutil.which("git") is not None, "ACE-Step is cloned from the official GitHub repository.", blocked=shutil.which("git") is None),
+                _req("storage", "Persistent music workspace", bool(storage["ok"]), "Music tools and model caches install under NVH_HOME/studio.", fix_action_id="storage", rootless_fix_available=True),
+            ],
+            recommended_action_id="music-tools",
+            notes=[
+                "ACE-Step handles AI music generation; the audio lab handles stems, transcription, and cleanup.",
+                "NVIDIA GPU acceleration depends on the driver/CUDA exposed by the cloud image.",
+            ],
+        ),
     ]
 
     issue_count = sum(1 for app in apps if app.status != "ready")

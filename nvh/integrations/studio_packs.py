@@ -46,6 +46,10 @@ NEMOCLAW_DOC_URL = "https://docs.nvidia.com/nemoclaw/latest/get-started/quicksta
 NEMOCLAW_PACKAGE = "nemoclaw@latest"
 GODOT_RELEASE_API = "https://api.github.com/repos/godotengine/godot/releases/latest"
 GODOT_DOC_URL = "https://docs.godotengine.org/en/stable/"
+ACE_STEP_REPO_URL = "https://github.com/ACE-Step/ACE-Step-1.5.git"
+ACE_STEP_DOC_URL = "https://github.com/ACE-Step/ACE-Step-1.5/blob/main/docs/en/INSTALL.md"
+AUDACITY_RELEASE_API = "https://api.github.com/repos/audacity/audacity/releases/latest"
+LMMS_RELEASE_API = "https://api.github.com/repos/LMMS/lmms/releases/latest"
 
 
 @dataclass(frozen=True)
@@ -593,6 +597,97 @@ STUDIO_PACKS: list[StudioPack] = [
             "Cycles GPU rendering still depends on the NVIDIA driver exposed by the cloud image.",
         ],
     ),
+    StudioPack(
+        id="ace-step-music",
+        title="ACE-Step Music Generator",
+        category="music",
+        tagline="Local AI songs, loops, lyrics, and remixes",
+        description=(
+            "Clones ACE-Step 1.5 into persistent storage, prepares a rootless uv "
+            "environment, and adds a launcher for the local Gradio music studio."
+        ),
+        recommended_vram_gb=6,
+        estimated_disk_gb=12.0,
+        install_kind="ace_step_music",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-ace-step"],
+        source_urls=[ACE_STEP_REPO_URL, ACE_STEP_DOC_URL],
+        notes=[
+            "ACE-Step models download on first launch and can use several additional GB.",
+            "Runs from the persistent block volume; no apt, sudo, or system Python edits.",
+        ],
+    ),
+    StudioPack(
+        id="music-producer-lab",
+        title="Music Producer AI Lab",
+        category="music",
+        tagline="Stem splitting, transcription, audio generation, and notebooks",
+        description=(
+            "Creates a rootless Python audio lab for GPU-backed source separation, "
+            "lyrics/transcription, prompt-to-audio experiments, and batch audio tools."
+        ),
+        recommended_vram_gb=8,
+        estimated_disk_gb=8.0,
+        install_kind="python_venv",
+        no_root=True,
+        models=[],
+        python_packages=[
+            "demucs",
+            "whisperx",
+            "faster-whisper",
+            "stable-audio-tools",
+            "audio-separator",
+            "librosa",
+            "soundfile",
+            "gradio",
+            "huggingface_hub",
+            "jupyterlab",
+        ],
+        comfy_nodes=[],
+        launchers=["nvhive-music-lab"],
+        source_urls=[
+            "https://github.com/m-bain/whisperX",
+            "https://github.com/Stability-AI/stable-audio-tools",
+            "https://docs.pytorch.org/audio/stable/tutorials/hybrid_demucs_tutorial.html",
+        ],
+        notes=[
+            "CUDA acceleration depends on the PyTorch wheels that match the host driver.",
+            "Use this for remixing and cleanup; use ACE-Step for full music generation.",
+        ],
+    ),
+    StudioPack(
+        id="music-daw-helper",
+        title="Rootless DAW Helper",
+        category="music",
+        tagline="Audacity and LMMS AppImages plus DAW workspace",
+        description=(
+            "Downloads official Audacity and LMMS AppImages when available, "
+            "then creates a persistent music production workspace with launch helpers."
+        ),
+        recommended_vram_gb=0,
+        estimated_disk_gb=1.0,
+        install_kind="scaffold",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-music-studio"],
+        source_urls=[
+            AUDACITY_RELEASE_API,
+            LMMS_RELEASE_API,
+            "https://support.audacityteam.org/basics/downloading-and-installing-audacity",
+            "https://lmms.io/download",
+            "https://www.reaper.fm/download.php",
+            "https://musescore.org/en/download",
+        ],
+        notes=[
+            "Desktop apps remain in user space and can use AppImage extract-and-run when FUSE is unavailable.",
+            "Commercial DAWs may require account login or license acceptance outside nvHive.",
+        ],
+    ),
 ]
 
 
@@ -603,6 +698,7 @@ PACK_BUNDLES: dict[str, list[str]] = {
     "claw": ["openclaw-agent", "nemoclaw-sandbox"],
     "comfy": ["comfyui-power-nodes"],
     "connectors": ["github-login-helper"],
+    "music": ["ace-step-music", "music-producer-lab", "music-daw-helper", "github-login-helper"],
     "game": ["game-dev-lab", "game-mod-helper", "godot-engine", "unity-hub-helper", "unreal-engine-helper", "github-login-helper"],
     "creative": ["blender-creative", "game-dev-lab", "game-mod-helper", "godot-engine"],
     "all": [
@@ -620,6 +716,9 @@ PACK_BUNDLES: dict[str, list[str]] = {
         "unreal-engine-helper",
         "github-login-helper",
         "blender-creative",
+        "ace-step-music",
+        "music-producer-lab",
+        "music-daw-helper",
     ],
 }
 
@@ -703,6 +802,28 @@ def _godot_binary_from_state() -> Path | None:
         return None
     path = Path(binary)
     return path if path.exists() else None
+
+
+def _ace_step_root() -> Path:
+    return _pack_root("ace-step-music")
+
+
+def _ace_step_app_dir() -> Path:
+    return _ace_step_root() / "ACE-Step-1.5"
+
+
+def _ace_step_uv_venv_python() -> Path:
+    venv = _ace_step_root() / "uv-venv"
+    if os.name == "nt":
+        return venv / "Scripts" / "python.exe"
+    return venv / "bin" / "python"
+
+
+def _ace_step_uv_binary() -> Path:
+    venv = _ace_step_root() / "uv-venv"
+    if os.name == "nt":
+        return venv / "Scripts" / "uv.exe"
+    return venv / "bin" / "uv"
 
 
 def _node_runtime_root() -> Path:
@@ -1140,6 +1261,18 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
     elif pack.install_kind == "python_venv":
         installed = _venv_python(pack.id).exists() and marker is not None
         details["venv"] = str(_venv_python(pack.id).parent.parent)
+    elif pack.install_kind == "ace_step_music":
+        app_dir = _ace_step_app_dir()
+        uv_binary = _ace_step_uv_binary()
+        installed = app_dir.exists() and uv_binary.exists() and marker is not None
+        details["app_dir"] = str(app_dir)
+        details["uv"] = str(uv_binary)
+        details["launcher"] = str(_local_bin() / "nvhive-ace-step")
+        details["installable"] = platform.system().lower() == "linux" and shutil.which("git") is not None
+        if platform.system().lower() != "linux":
+            details["blocked_reason"] = "ACE-Step music pack targets Linux cloud desktops."
+        elif not details["installable"]:
+            details["blocked_reason"] = "ACE-Step needs git to clone the official repository into persistent storage."
     elif pack.install_kind == "openclaw_agent":
         node = _node_runtime_status()
         binary = _openclaw_binary()
@@ -1181,6 +1314,12 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
     elif pack.install_kind == "scaffold":
         installed = marker is not None
         details["workspace"] = str(_pack_root(pack.id))
+        if pack.id == "music-daw-helper":
+            appimages = sorted((_pack_root(pack.id) / "appimages").glob("*.AppImage"))
+            details["appimages"] = [str(path) for path in appimages]
+            details["installable"] = platform.system().lower() == "linux"
+            if not details["installable"]:
+                details["blocked_reason"] = "Audacity and LMMS AppImage setup targets Linux cloud desktops."
     elif pack.install_kind == "blender_app":
         binary = _blender_binary()
         installed = binary.exists() and os.access(binary, os.X_OK)
@@ -1514,6 +1653,45 @@ python "{demo}"
     _write_script(launcher, content)
 
 
+def _write_music_lab(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    for folder in ["inputs", "outputs", "stems", "transcripts", "notebooks"]:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+
+    sample = root / "notebooks" / "README.md"
+    sample.write_text(
+        """# Music Producer AI Lab
+
+Drop source audio in `inputs/`, then use the launcher to start JupyterLab.
+
+Useful first experiments:
+
+- Split stems with Demucs
+- Transcribe lyrics or vocals with WhisperX
+- Generate short audio textures with Stable Audio tools
+- Batch process files into `outputs/`
+
+Check licenses before publishing generated or transformed audio.
+""",
+        encoding="utf-8",
+    )
+    launcher = _local_bin() / "nvhive-music-lab"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+source "{root}/venv/bin/activate"
+cd "{root}"
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+fi
+echo "NVHive Music Producer AI Lab"
+echo "Inputs:  {root}/inputs"
+echo "Outputs: {root}/outputs"
+exec jupyter lab --no-browser --ip 127.0.0.1 --port 8891
+"""
+    _write_script(launcher, content)
+
+
 async def _install_python_venv(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
     root = _pack_root(pack.id)
     venv_python = _venv_python(pack.id)
@@ -1550,6 +1728,8 @@ async def _install_python_venv(pack: StudioPack, force_update: bool) -> AsyncIte
         _write_agent_launcher(pack)
     if pack.id == "game-dev-lab":
         _write_game_lab(pack)
+    if pack.id == "music-producer-lab":
+        _write_music_lab(pack)
     _write_marker(pack, {"packages": pack.python_packages, "venv": str(root / "venv")})
 
 
@@ -1782,6 +1962,132 @@ async def _install_nemoclaw_sandbox(pack: StudioPack, force_update: bool) -> Asy
     }
 
 
+def _write_ace_step_launcher() -> Path:
+    root = _ace_step_root()
+    app_dir = _ace_step_app_dir()
+    uv_binary = _ace_step_uv_binary()
+    launcher = _local_bin() / "nvhive-ace-step"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+export NVH_HOME="${{NVH_HOME:-{storage_layout().home}}}"
+export HF_HOME="${{HF_HOME:-{storage_layout().models_dir / "huggingface"}}}"
+export TRANSFORMERS_CACHE="${{TRANSFORMERS_CACHE:-$HF_HOME/transformers}}"
+export XDG_CACHE_HOME="${{XDG_CACHE_HOME:-{storage_layout().cache_dir}}}"
+cd "{app_dir}"
+if [ "$#" -gt 0 ]; then
+  exec "{uv_binary}" run "$@"
+fi
+exec "{uv_binary}" run acestep --server-name 127.0.0.1 --port 7865
+"""
+    _write_script(launcher, content)
+    return launcher
+
+
+def _write_ace_step_readme() -> None:
+    root = _ace_step_root()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        f"""# ACE-Step Music Generator
+
+ACE-Step 1.5 is installed under persistent nvHive storage:
+
+`{_ace_step_app_dir()}`
+
+Launch the local music studio:
+
+```bash
+nvhive-ace-step
+```
+
+Then open http://127.0.0.1:7865.
+
+Models download on first launch and are kept on the persistent mount through
+`HF_HOME`. For lower-VRAM GPUs, use ACE-Step's built-in lighter model/offload
+options in the UI.
+""",
+        encoding="utf-8",
+    )
+
+
+async def _install_ace_step_music(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if os.name == "nt":
+        yield {"event": "error", "status": "failed", "message": "ACE-Step music pack targets Linux cloud desktops."}
+        return
+    git = shutil.which("git")
+    if not git:
+        yield {"event": "error", "status": "failed", "message": "Git is required to install ACE-Step."}
+        return
+
+    root = _ace_step_root()
+    root.mkdir(parents=True, exist_ok=True)
+    app_dir = _ace_step_app_dir()
+    env = os.environ.copy()
+    env.update(storage_layout().env())
+    env["PYTHONUTF8"] = "1"
+    env.setdefault("HF_HOME", str(storage_layout().models_dir / "huggingface"))
+    env.setdefault("XDG_CACHE_HOME", str(storage_layout().cache_dir))
+
+    if not app_dir.exists():
+        async for event in _run_command(
+            [git, "clone", "--depth", "1", ACE_STEP_REPO_URL, str(app_dir)],
+            env=env,
+            label="Clone ACE-Step 1.5",
+        ):
+            yield event
+    elif force_update:
+        async for event in _run_command(
+            [git, "-C", str(app_dir), "pull", "--ff-only"],
+            env=env,
+            label="Update ACE-Step 1.5",
+        ):
+            yield event
+    else:
+        yield {"event": "step", "status": "complete", "message": "ACE-Step repository already present"}
+
+    uv_python = _ace_step_uv_venv_python()
+    if not uv_python.exists():
+        async for event in _run_command(
+            [sys.executable, "-m", "venv", str(root / "uv-venv")],
+            env=env,
+            label="Create ACE-Step uv environment",
+        ):
+            yield event
+
+    async for event in _run_command(
+        [str(uv_python), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools", "uv"],
+        env=env,
+        label="Install rootless uv for ACE-Step",
+    ):
+        yield event
+
+    uv_binary = _ace_step_uv_binary()
+    async for event in _run_command(
+        [str(uv_binary), "sync"],
+        cwd=app_dir,
+        env=env,
+        label="Install ACE-Step dependencies",
+        timeout=1800.0,
+    ):
+        yield event
+
+    launcher = _write_ace_step_launcher()
+    _write_ace_step_readme()
+    _write_marker(pack, {
+        "repo": ACE_STEP_REPO_URL,
+        "app_dir": str(app_dir),
+        "uv": str(uv_binary),
+        "launcher": str(launcher),
+        "models_home": env["HF_HOME"],
+    })
+    yield {
+        "event": "complete",
+        "status": "complete",
+        "message": "ACE-Step music generator installed. Launch nvhive-ace-step.",
+        "launcher": str(launcher),
+    }
+
+
 async def _install_comfy_nodes(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
     app_dir = _comfyui_app_dir()
     venv_python = _comfyui_venv_python()
@@ -1986,6 +2292,71 @@ find . -maxdepth 2 -type d | sort
     _write_script(launcher, content)
 
 
+def _write_music_daw_helper(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    for folder in ["projects", "appimages", "plugins", "samples", "exports", "notes"]:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    readme = root / "README.md"
+    readme.write_text(
+        f"""# {pack.title}
+
+This is the persistent desktop-audio workspace for nvHive.
+
+nvHive attempts to download these rootless apps during install:
+
+- Audacity AppImage for waveform editing, vocal cleanup, and quick exports
+- LMMS AppImage for beat making and MIDI sketches
+
+Manual optional additions:
+
+- REAPER Linux tarball for a compact professional DAW trial path
+- MuseScore AppImage for notation and sheet music
+
+Downloaded or manually added apps live in `appimages/`. The launcher lists them
+and can run one by name without writing to the base OS. If FUSE is unavailable
+on a locked-down VM, the launcher uses AppImage extract-and-run.
+
+AI tools live beside this pack:
+
+- `nvhive-ace-step` for full local AI music generation
+- `nvhive-music-lab` for stems, transcription, and batch processing
+
+Always check model and sample licenses before publishing music.
+""",
+        encoding="utf-8",
+    )
+    launcher = _local_bin() / "nvhive-music-studio"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{root}"
+mkdir -p appimages projects plugins samples exports notes
+if [ "$#" -eq 0 ]; then
+  echo "NVHive Music Producer Studio"
+  echo "Workspace: {root}"
+  echo
+  echo "Audacity and LMMS AppImages are downloaded during install when official assets are available."
+  echo "You can also drop REAPER or MuseScore AppImages/tarballs into appimages/."
+  echo "Run: nvhive-music-studio <partial-name>"
+  echo
+  find appimages -maxdepth 1 -type f | sort || true
+  exit 0
+fi
+
+target="$(find appimages -maxdepth 1 -type f -iname "*$1*" | head -n 1)"
+if [ -z "$target" ]; then
+  echo "No matching AppImage/tarball found in {root}/appimages"
+  exit 1
+fi
+chmod +x "$target" || true
+if [[ "$target" == *.AppImage ]]; then
+  export APPIMAGE_EXTRACT_AND_RUN=1
+fi
+exec "$target"
+"""
+    _write_script(launcher, content)
+
+
 def _write_scaffold_pack(pack: StudioPack) -> None:
     if pack.id == "game-mod-helper":
         _write_mod_helper(pack)
@@ -1993,6 +2364,8 @@ def _write_scaffold_pack(pack: StudioPack) -> None:
         _write_github_login_helper(pack)
     elif pack.id in {"unity-hub-helper", "unreal-engine-helper"}:
         _write_game_engine_helper(pack)
+    elif pack.id == "music-daw-helper":
+        _write_music_daw_helper(pack)
     else:
         root = _pack_root(pack.id)
         root.mkdir(parents=True, exist_ok=True)
@@ -2002,7 +2375,93 @@ def _write_scaffold_pack(pack: StudioPack) -> None:
         )
 
 
+async def _download_appimage_asset(
+    client: Any,
+    *,
+    api_url: str,
+    app_name: str,
+    downloads: Path,
+    force_update: bool,
+    required_tokens: tuple[str, ...] = (),
+    preferred_tokens: tuple[str, ...] = (),
+) -> tuple[Path, dict[str, Any]]:
+    release_response = await client.get(api_url)
+    release_response.raise_for_status()
+    release = release_response.json()
+    asset = _select_appimage_asset(
+        release,
+        app_name=app_name,
+        required_tokens=required_tokens,
+        preferred_tokens=preferred_tokens,
+    )
+    asset_name = str(asset["name"])
+    asset_url = str(asset["browser_download_url"])
+    release_tag = str(release.get("tag_name") or "latest")
+    target = downloads / asset_name
+    if target.exists() and not force_update:
+        target.chmod(target.stat().st_mode | stat.S_IXUSR)
+        return target, {"asset": asset_name, "version": release_tag, "url": asset_url, "cached": True}
+
+    async with client.stream("GET", asset_url) as response:
+        response.raise_for_status()
+        with target.open("wb") as handle:
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    handle.write(chunk)
+    target.chmod(target.stat().st_mode | stat.S_IXUSR)
+    return target, {"asset": asset_name, "version": release_tag, "url": asset_url, "cached": False}
+
+
+async def _install_music_daw_helper(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if platform.system().lower() != "linux":
+        yield {"event": "error", "status": "failed", "message": "Music DAW AppImage setup targets Linux cloud desktops."}
+        return
+
+    _write_music_daw_helper(pack)
+    root = _pack_root(pack.id)
+    downloads = root / "appimages"
+    downloads.mkdir(parents=True, exist_ok=True)
+    downloaded: list[dict[str, Any]] = []
+
+    try:
+        import httpx
+    except Exception as exc:
+        yield {"event": "warning", "status": "warning", "message": f"Could not import httpx for AppImage downloads: {exc}"}
+        _write_marker(pack, {"workspace": str(root), "appimages": downloaded, "force_update": force_update})
+        yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
+        return
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=600) as client:
+        for app_name, api_url, required, preferred in [
+            ("Audacity", AUDACITY_RELEASE_API, ("linux",), ("22.04", "x64")),
+            ("LMMS", LMMS_RELEASE_API, tuple(), ("linux", "x86_64", "x64")),
+        ]:
+            try:
+                yield {"event": "step", "status": "running", "message": f"Checking latest official {app_name} AppImage"}
+                target, metadata = await _download_appimage_asset(
+                    client,
+                    api_url=api_url,
+                    app_name=app_name,
+                    downloads=downloads,
+                    force_update=force_update,
+                    required_tokens=required,
+                    preferred_tokens=preferred,
+                )
+                downloaded.append({"name": app_name, "path": str(target), **metadata})
+                verb = "Using cached" if metadata.get("cached") else "Downloaded"
+                yield {"event": "step", "status": "complete", "message": f"{verb} {app_name} AppImage", "path": str(target)}
+            except Exception as exc:
+                yield {"event": "warning", "status": "warning", "message": f"{app_name} AppImage could not be auto-downloaded: {exc}"}
+
+    _write_marker(pack, {"workspace": str(root), "appimages": downloaded, "force_update": force_update})
+    yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
+
+
 async def _install_scaffold(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if pack.id == "music-daw-helper":
+        async for event in _install_music_daw_helper(pack, force_update):
+            yield event
+        return
     _write_scaffold_pack(pack)
     _write_marker(pack, {"workspace": str(_pack_root(pack.id)), "force_update": force_update})
     yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
@@ -2058,6 +2517,39 @@ def _select_godot_asset(release: dict[str, Any]) -> dict[str, Any]:
         ):
             return asset
     raise RuntimeError("No official Godot Linux x86_64 zip asset was found in the latest release")
+
+
+def _select_appimage_asset(
+    release: dict[str, Any],
+    *,
+    app_name: str,
+    required_tokens: tuple[str, ...] = (),
+    preferred_tokens: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeError(f"{app_name} release metadata did not include assets")
+
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        lower_name = name.lower()
+        url = str(asset.get("browser_download_url") or "")
+        if not url or not lower_name.endswith(".appimage"):
+            continue
+        if any(token not in lower_name for token in required_tokens):
+            continue
+        if any(token in lower_name for token in ("aarch64", "arm64", "armv7")):
+            continue
+        score = sum(10 for token in preferred_tokens if token in lower_name)
+        score += sum(1 for token in ("x64", "x86_64", "amd64", "linux") if token in lower_name)
+        candidates.append((score, asset))
+
+    if not candidates:
+        raise RuntimeError(f"No Linux x64 AppImage asset was found in the latest {app_name} release")
+    return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
 
 
 def _find_godot_binary(root: Path) -> Path | None:
@@ -2488,6 +2980,9 @@ async def install_studio_packs(
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "python_venv":
                 async for event in _install_python_venv(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "ace_step_music":
+                async for event in _install_ace_step_music(pack, force_update):
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "openclaw_agent":
                 async for event in _install_openclaw_agent(pack, force_update):

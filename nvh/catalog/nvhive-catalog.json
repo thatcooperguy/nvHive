@@ -5,17 +5,24 @@
   "profiles": [
     {
       "id": "student",
-      "title": "Student Starter",
-      "description": "Small, useful local AI lab for coursework and first experiments.",
+      "title": "AI Starter",
+      "description": "First-time local AI lab for chat, homework, coding help, GitHub, and the helper agent.",
       "pack_ids": ["starter"],
       "model_ids": ["gemma3-4b", "qwen3-8b", "nomic-embed-text"]
     },
     {
       "id": "creator",
-      "title": "Creator Studio",
-      "description": "ComfyUI, Blender, and vision helpers for media projects.",
+      "title": "Graphics Creator Studio",
+      "description": "ComfyUI, Blender, and vision helpers for graphics, image, video, and 3D projects.",
       "pack_ids": ["creative", "comfy"],
       "model_ids": ["gemma3-4b", "llava-7b"]
+    },
+    {
+      "id": "music",
+      "title": "Music Producer Studio",
+      "description": "AI music generation, stem separation, transcription, audio cleanup, and rootless DAW helpers.",
+      "pack_ids": ["music"],
+      "model_ids": ["gemma3-4b"]
     },
     {
       "id": "agent",
@@ -33,8 +40,8 @@
     },
     {
       "id": "full",
-      "title": "Full Workstation",
-      "description": "Everything nvHive can install without root access.",
+      "title": "Power User Workstation",
+      "description": "Everything nvHive can install without root access, guarded by host checks.",
       "pack_ids": ["all"],
       "model_ids": ["recommended"]
     }
@@ -74,6 +81,27 @@
       "category": "creative",
       "latest_version": "4.5.4",
       "install_command": "nvh studio --install creative -y",
+      "recommended": true
+    },
+    {
+      "id": "ace-step-music",
+      "title": "ACE-Step Music Generator",
+      "category": "music",
+      "install_command": "nvh studio --install music -y",
+      "recommended": true
+    },
+    {
+      "id": "music-producer-lab",
+      "title": "Music Producer AI Lab",
+      "category": "music",
+      "install_command": "nvh studio --install music -y",
+      "recommended": true
+    },
+    {
+      "id": "music-daw-helper",
+      "title": "Rootless DAW Helper",
+      "category": "music",
+      "install_command": "nvh studio --install music -y",
       "recommended": true
     }
   ],

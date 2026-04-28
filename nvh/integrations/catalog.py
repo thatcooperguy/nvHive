@@ -64,17 +64,24 @@ def _generated_fallback_catalog() -> dict[str, Any]:
         "profiles": [
             {
                 "id": "student",
-                "title": "Student Starter",
+                "title": "AI Starter",
                 "pack_ids": ["starter"],
                 "model_ids": ["gemma3-4b", "qwen3-8b", "nomic-embed-text"],
-                "description": "Small, useful local AI lab for coursework and experiments.",
+                "description": "First-time local AI lab for chat, homework, coding help, GitHub, and the helper agent.",
             },
             {
                 "id": "creator",
-                "title": "Creator Studio",
+                "title": "Graphics Creator Studio",
                 "pack_ids": ["creative", "comfy"],
                 "model_ids": ["gemma3-4b", "llava-7b"],
-                "description": "ComfyUI, Blender, and vision helpers for media projects.",
+                "description": "ComfyUI, Blender, image/video workflows, and vision helpers for graphics projects.",
+            },
+            {
+                "id": "music",
+                "title": "Music Producer Studio",
+                "pack_ids": ["music"],
+                "model_ids": ["gemma3-4b"],
+                "description": "AI music generation, stems, transcription, and rootless DAW helpers.",
             },
             {
                 "id": "agent",
@@ -85,10 +92,10 @@ def _generated_fallback_catalog() -> dict[str, Any]:
             },
             {
                 "id": "full",
-                "title": "Full Workstation",
+                "title": "Power User Workstation",
                 "pack_ids": ["all"],
                 "model_ids": ["recommended"],
-                "description": "Everything nvHive can install without root access.",
+                "description": "Everything nvHive can install without root access, guarded by host checks.",
             },
         ],
         "packs": packs,

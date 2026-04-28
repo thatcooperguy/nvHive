@@ -93,7 +93,8 @@ pip install "nvhive[all]"       # everything
 nvh                              # guided setup — GPU detect, provider keys, local model pulls
 nvh workstation --all -y         # Linux GPU desktop: launcher + WebUI + ComfyUI + studio packs
 nvh webui                        # Setup > Models lets you choose exact local downloads
-nvh studio --install starter -y  # rootless LLMs + agents + ComfyUI nodes + game-dev tools
+nvh studio --install starter -y  # AI Starter mission: rootless LLMs + agents + ComfyUI nodes
+nvh studio --install music -y    # Music Producer Studio: ACE-Step + stems + DAW helpers
 nvh convene --cabinet product_resilience "How can this setup fail for a beginner?"
 nvh "your question"              # just ask - nvHive figures out the rest
 ```
@@ -108,7 +109,7 @@ source "$NVH_HOME/nvh-env.sh"
 nvh workstation --home-dir "$NVH_HOME" --all -y
 ```
 
-`nvh workstation --all -y` creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds AI Studio packs for LLMs, agents, Claw agent options, ComfyUI nodes, and Linux game projects.
+`nvh workstation --all -y` creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds AI Studio packs for LLMs, agents, Claw agent options, ComfyUI nodes, Linux game projects, creative tools, and AI music production.
 
 Use packs directly when you want a specific no-root lab:
 
@@ -122,6 +123,7 @@ nvh studio --install claw -y                  # OpenClaw + NemoClaw when Docker/
 nvh studio --install comfy -y
 nvh studio --install game -y
 nvh studio --install creative -y                # Blender LTS + game/asset workspace
+nvh studio --install music -y                   # ACE-Step, Demucs, WhisperX, Audacity/LMMS AppImages
 nvh studio --install python-runtime-fallback -y  # optional rescue pack, not the default path
 ```
 
@@ -135,7 +137,7 @@ starting the frontend toolchain from scratch.
 The wizard now opens in Beginner Mode: one recommended action, Fix My Setup,
 and Advanced Details only when the student wants the full diagnostics. It also
 includes a local setup helper that ranks the next storage, runtime, model,
-ComfyUI, OpenClaw/NemoClaw, and creative-tool actions before any local LLM is
+ComfyUI, OpenClaw/NemoClaw, creative-tool, and music-tool actions before any local LLM is
 installed. NemoClaw is shown as a guarded sandbox option only when Docker works
 without sudo; OpenClaw remains the simple rootless agent path.
 The ComfyUI step lets students select workflow examples and save a model

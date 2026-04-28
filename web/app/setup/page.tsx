@@ -60,7 +60,7 @@ import type {
 } from '@/lib/types';
 
 type Step = 'welcome' | 'storage' | 'gpu' | 'models' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
-type WizardProfile = 'student' | 'llm' | 'creator' | 'agent' | 'game' | 'full';
+type WizardProfile = 'student' | 'llm' | 'creator' | 'agent' | 'game' | 'music' | 'full';
 
 type SetupCheckState = 'ready' | 'warn' | 'fix' | 'checking';
 
@@ -93,7 +93,7 @@ const CLOUD_PROVIDERS = [
   { id: 'mistral', name: 'Mistral', description: 'Mistral Large, Small', envKey: 'MISTRAL_API_KEY', placeholder: 'your-key...', signupUrl: 'https://console.mistral.ai/api-keys' },
 ];
 
-type BrandLogoId = 'openclaw' | 'nvidia' | 'comfyui' | 'blender' | 'godot' | 'github' | 'unity' | 'unreal' | 'ollama';
+type BrandLogoId = 'openclaw' | 'nvidia' | 'comfyui' | 'blender' | 'godot' | 'github' | 'unity' | 'unreal' | 'ollama' | 'audacity' | 'lmms';
 
 const BRAND_LOGOS: Record<BrandLogoId, { src: string; alt: string }> = {
   openclaw: { src: '/brand-icons/openclaw.svg', alt: 'OpenClaw logo' },
@@ -105,6 +105,8 @@ const BRAND_LOGOS: Record<BrandLogoId, { src: string; alt: string }> = {
   unity: { src: '/brand-icons/unity.svg', alt: 'Unity logo' },
   unreal: { src: '/brand-icons/unrealengine.svg', alt: 'Unreal Engine logo' },
   ollama: { src: '/brand-icons/ollama.svg', alt: 'Ollama logo' },
+  audacity: { src: '/brand-icons/audacity.svg', alt: 'Audacity logo' },
+  lmms: { src: '/brand-icons/lmms.svg', alt: 'LMMS logo' },
 };
 
 function BrandLogo({ id, className = 'w-7 h-7' }: { id: BrandLogoId; className?: string }) {
@@ -743,13 +745,16 @@ export default function SetupPage() {
     if (profile === 'game') {
       return expandStudioPackGroups(['rootless-ollama', 'game', 'creative', 'comfy']);
     }
+    if (profile === 'music') {
+      return expandStudioPackGroups(['rootless-ollama', 'music']);
+    }
     return expandStudioPackGroups(['all'])
       .filter(packId => packId !== 'llm-starter' && packId !== 'llm-coder-reasoner');
   };
 
   const wizardProfileStep = (profile: WizardProfile): Step => {
     if (profile === 'creator' || profile === 'game') return 'comfyui';
-    if (profile === 'student' || profile === 'llm' || profile === 'agent') return 'studio';
+    if (profile === 'student' || profile === 'llm' || profile === 'agent' || profile === 'music') return 'studio';
     return 'models';
   };
 
@@ -1189,7 +1194,7 @@ export default function SetupPage() {
     setSelectedComfyExamples(new Set(exampleIds));
 
     if (!storageReady) {
-      setWizardBuildMessage('nvWizard is finding the persistent block storage first, then it will build the lab there.');
+      setWizardBuildMessage('nvWizard is finding the persistent block storage first, then it will build the mission there.');
       const detectedStorage = await handleUseRecommendedStorage();
       if (!detectedStorage?.ok || detectedStorage.configured_by === 'default') {
         setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. Advanced Details has the manual override if the host is unusual.');
@@ -1199,12 +1204,12 @@ export default function SetupPage() {
     }
 
     setActiveWizardBuild(profile);
-    setWizardBuildMessage('nvWizard picked the student-safe defaults and is building the lab in dependency order.');
+    setWizardBuildMessage('nvWizard picked the beginner-safe defaults and is building the mission in dependency order.');
     setStep(wizardProfileNeedsComfy(profile) ? 'comfyui' : 'studio');
 
     try {
       if (firstPackIds.length > 0) {
-        setWizardBuildMessage('Installing rootless runtimes and lab tools on the persistent drive.');
+        setWizardBuildMessage('Installing rootless runtimes and mission tools on the persistent drive.');
         await buildStudioPacks(firstPackIds);
       }
 
@@ -1220,7 +1225,7 @@ export default function SetupPage() {
           try {
             await saveComfyUIModelPlan(exampleIds);
           } catch {
-            // The lab can still run; the user can save the plan again from the ComfyUI step.
+            // The mission can still run; the user can save the plan again from the ComfyUI step.
           }
         }
       }
@@ -1230,7 +1235,7 @@ export default function SetupPage() {
         await buildStudioModels(modelIds);
       }
 
-      setWizardBuildMessage('Lab build complete. Try the smoke test, then launch the tools.');
+      setWizardBuildMessage('Mission build complete. Try the smoke test, then launch the tools.');
       setStep('test');
     } catch (err) {
       setWizardBuildMessage(err instanceof Error ? `nvWizard paused: ${err.message}` : 'nvWizard paused: setup needs attention.');
@@ -1256,7 +1261,7 @@ export default function SetupPage() {
         ? 'detected'
         : 'checking';
   const storagePrimaryLabel = storageReady
-    ? 'Build Student Lab'
+    ? 'Build AI Starter'
     : storageAutopilotBusy
       ? 'Finding Storage'
       : 'Auto-Find Storage';
@@ -1361,6 +1366,8 @@ export default function SetupPage() {
     { id: 'nemoclaw', label: 'NemoClaw', logo: 'nvidia', sub: studioPacks.find(pack => pack.id === 'nemoclaw-sandbox')?.status.installed ? 'Ready' : 'Guarded', tone: 'bg-white border-[#76B900]/40' },
     { id: 'comfyui', label: 'ComfyUI', logo: 'comfyui', sub: comfyStatus?.installed ? 'Ready' : 'Images', tone: 'bg-white border-[#e5e5e5]' },
     { id: 'blender', label: 'Blender', logo: 'blender', sub: studioPacks.find(pack => pack.id === 'blender-creative')?.status.installed ? 'Ready' : '3D', tone: 'bg-white border-[#e5e5e5]' },
+    { id: 'audacity', label: 'Audacity', logo: 'audacity', sub: studioPacks.find(pack => pack.id === 'music-daw-helper')?.status.installed ? 'Ready' : 'Audio', tone: 'bg-white border-[#e5e5e5]' },
+    { id: 'lmms', label: 'LMMS', logo: 'lmms', sub: studioPacks.find(pack => pack.id === 'music-daw-helper')?.status.installed ? 'Ready' : 'Beats', tone: 'bg-white border-[#e5e5e5]' },
     { id: 'godot', label: 'Godot', logo: 'godot', sub: studioPacks.find(pack => pack.id === 'godot-engine')?.status.installed ? 'Ready' : 'Games', tone: 'bg-white border-[#e5e5e5]' },
     { id: 'github', label: 'GitHub', logo: 'github', sub: githubPack?.status.installed ? 'Ready' : 'Repos', tone: 'bg-white border-[#e5e5e5]' },
     { id: 'unity', label: 'Unity', logo: 'unity', sub: 'Helper', tone: 'bg-white border-[#e5e5e5]' },
@@ -1380,10 +1387,10 @@ export default function SetupPage() {
   }> = [
     {
       id: 'student',
-      title: catalogText('student', 'title', 'Student Starter'),
-      description: catalogText('student', 'description', 'Small, useful local AI lab for coursework and first experiments.'),
+      title: catalogText('student', 'title', 'AI Starter'),
+      description: catalogText('student', 'description', 'Chat, research, homework, coding help, and starter local models.'),
       label: 'Recommended',
-      outcome: 'Homework, research, chat, embeddings, and a local agent lab.',
+      outcome: 'A practical local AI desk for classes, projects, notes, and first model experiments.',
       includes: ['Rootless Ollama', 'Starter models', 'Agent lab', 'GitHub connect'],
       logos: ['ollama', 'github', 'openclaw', 'nvidia'],
       primary: true,
@@ -1400,10 +1407,10 @@ export default function SetupPage() {
     },
     {
       id: 'creator',
-      title: catalogText('creator', 'title', 'Creator Studio'),
-      description: catalogText('creator', 'description', 'ComfyUI, Blender, and vision helpers for media projects.'),
+      title: catalogText('creator', 'title', 'Graphics Creator Studio'),
+      description: catalogText('creator', 'description', 'Image generation, ComfyUI workflows, Blender, and 3D asset helpers.'),
       label: 'Creative',
-      outcome: 'Generate images, prep video workflows, and open Blender from the persistent drive.',
+      outcome: 'Generate images, prep video/3D workflows, and keep creative assets on persistent storage.',
       includes: ['ComfyUI', 'Power nodes', 'Blender LTS', 'GitHub connect'],
       logos: ['comfyui', 'blender', 'github', 'nvidia'],
     },
@@ -1427,18 +1434,27 @@ export default function SetupPage() {
       logos: ['godot', 'unity', 'unreal', 'github'],
     },
     {
+      id: 'music',
+      title: catalogText('music', 'title', 'Music Producer Studio'),
+      description: catalogText('music', 'description', 'AI music generation, stem separation, transcription, and rootless DAW helpers.'),
+      label: 'Music',
+      outcome: 'Create songs, split stems, transcribe vocals, clean audio, and launch music tools from the persistent drive.',
+      includes: ['ACE-Step', 'Demucs', 'WhisperX', 'Audacity/LMMS'],
+      logos: ['audacity', 'lmms', 'nvidia', 'github'],
+    },
+    {
       id: 'full',
-      title: catalogText('full', 'title', 'Full Workstation'),
-      description: catalogText('full', 'description', 'Everything nvHive can install without root access.'),
-      label: 'Advanced',
+      title: catalogText('full', 'title', 'Power User Workstation'),
+      description: catalogText('full', 'description', 'Everything nvHive can install without root access, guarded by host checks.'),
+      label: 'Power',
       outcome: 'Install every supported rootless tool that passes the host checks.',
-      includes: ['LLMs', 'Agents', 'ComfyUI', 'Blender', 'Game tools', 'GitHub'],
-      logos: ['nvidia', 'ollama', 'comfyui', 'blender', 'godot', 'github'],
+      includes: ['LLMs', 'Agents', 'ComfyUI', 'Blender', 'Game', 'Music'],
+      logos: ['nvidia', 'ollama', 'comfyui', 'blender', 'audacity', 'github'],
       advanced: true,
     },
   ];
 
-  const beginnerProfileIds = new Set<WizardProfile>(['student', 'creator', 'game']);
+  const beginnerProfileIds = new Set<WizardProfile>(['student', 'creator', 'game', 'music']);
   const beginnerProfiles = missionProfiles.filter(profile => beginnerProfileIds.has(profile.id));
   const selectedProfile = missionProfiles.find(profile => profile.id === selectedWizardProfile) ?? missionProfiles[0];
   const selectedProfilePackIds = wizardProfilePackIds(selectedProfile.id);
@@ -1520,6 +1536,10 @@ export default function SetupPage() {
     }
     if (actionId === 'creative-tools') {
       handleInstallStudioPacks(['creative']);
+      return;
+    }
+    if (actionId === 'music-tools') {
+      handleInstallStudioPacks(['music']);
       return;
     }
     if (actionId === 'claw-agents') {
@@ -1608,12 +1628,12 @@ export default function SetupPage() {
         </div>
       </div>
 
-      {/* Student-facing phase indicator */}
+      {/* Beginner-facing phase indicator */}
       <div className="border border-[#e5e5e5] bg-[#ffffff] px-3 py-2 space-y-3">
         <div className="flex flex-wrap gap-2">
           {[
             { label: 'Save Files', mark: '01', active: step === 'storage' || !storageReady, done: storageReady },
-            { label: 'Pick Lab', mark: '02', active: storageReady && step === 'welcome', done: storageReady && currentStepIdx > 0 },
+            { label: 'Pick Mission', mark: '02', active: storageReady && step === 'welcome', done: storageReady && currentStepIdx > 0 },
             { label: 'Install & Try', mark: '03', active: storageReady && !['welcome', 'storage'].includes(step), done: step === 'done' },
           ].map(phase => (
             <div
@@ -1711,7 +1731,7 @@ export default function SetupPage() {
                 disabled={storageAutopilotBusy || Boolean(storageReady && topHelperAction && helperActionDisabled(topHelperAction.id))}
                 className="btn-primary px-4 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
               >
-                {!storageReady ? storagePrimaryLabel : topHelperAction ? helperActionLabel(topHelperAction.id) : 'Start Lab'}
+                {!storageReady ? storagePrimaryLabel : topHelperAction ? helperActionLabel(topHelperAction.id) : 'Start AI Starter'}
               </button>
               <button
                 type="button"
@@ -2326,7 +2346,7 @@ export default function SetupPage() {
               <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-4">
                 <div>
                   <div className="section-label">Beginner Mode</div>
-                  <h2 className="text-3xl font-bold text-[#0a0a0a] mt-2">Choose Your Lab</h2>
+                  <h2 className="text-3xl font-bold text-[#0a0a0a] mt-2">Pick Your Mission</h2>
                   <p className="text-sm text-[#525252] mt-2 leading-relaxed max-w-xl">
                     Pick one path. nvWizard finds persistent storage, checks the GPU, picks compatible models, and installs everything rootlessly.
                   </p>
@@ -2337,7 +2357,7 @@ export default function SetupPage() {
                       disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
                       className="btn-primary px-5 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
                     >
-                      {activeWizardBuild === 'student' ? 'Building Student Lab' : storageReady ? 'Start Student Lab' : storagePrimaryLabel}
+                      {activeWizardBuild === 'student' ? 'Building AI Starter' : storageReady ? 'Start AI Starter' : storagePrimaryLabel}
                     </button>
                     <button
                       type="button"
@@ -2561,7 +2581,7 @@ export default function SetupPage() {
             <div className="space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
                 <div>
-                  <div className="section-label">Three Simple Labs</div>
+                  <div className="section-label">Core Missions</div>
                   <div className="text-sm text-[#525252] mt-1">Pick the outcome. nvWizard handles the install order and keeps manual commands as overrides.</div>
                 </div>
                 {!advancedSetupOpen && (
@@ -2570,7 +2590,7 @@ export default function SetupPage() {
                     onClick={() => setAdvancedSetupOpen(true)}
                     className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
                   >
-                    Show Advanced Labs
+                    Show Power Options
                   </button>
                 )}
               </div>
@@ -2586,8 +2606,8 @@ export default function SetupPage() {
                         </div>
                       </span>
                       <div className="min-w-0">
-                        <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider">Install Summary</div>
-                        <div className="text-base font-bold text-[#0a0a0a] truncate">{selectedProfile.title}</div>
+                        <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider">Mission Summary</div>
+                        <div className="text-base font-bold text-[#0a0a0a] leading-tight">{selectedProfile.title}</div>
                         <div className="text-xs text-[#525252] mt-1">{selectedProfile.outcome}</div>
                       </div>
                     </div>
@@ -2630,7 +2650,7 @@ export default function SetupPage() {
                       disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
                       className="btn-primary px-4 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
                     >
-                      {!storageReady ? storagePrimaryLabel : activeWizardBuild === selectedProfile.id ? 'Installing' : 'Install Lab'}
+                      {!storageReady ? storagePrimaryLabel : activeWizardBuild === selectedProfile.id ? 'Installing' : 'Install Mission'}
                     </button>
                     <button
                       type="button"
@@ -2649,7 +2669,7 @@ export default function SetupPage() {
                   </div>
                 </div>
               </div>
-              <div className={`grid grid-cols-1 gap-3 ${advancedSetupOpen ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
+              <div className={`grid grid-cols-1 gap-3 ${advancedSetupOpen ? 'lg:grid-cols-2' : 'lg:grid-cols-2 xl:grid-cols-4'}`}>
                 {(advancedSetupOpen ? missionProfiles : beginnerProfiles)
                   .map(profile => {
                     const packIds = wizardProfilePackIds(profile.id);
@@ -2680,7 +2700,7 @@ export default function SetupPage() {
                           </span>
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <h3 className="text-base font-bold text-[#0a0a0a] truncate">{profile.title}</h3>
+                              <h3 className="text-base font-bold text-[#0a0a0a] leading-tight min-w-0">{profile.title}</h3>
                               <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border flex-shrink-0 ${
                                 profile.primary
                                   ? 'border-[#76B900]/40 text-[#76B900] bg-[#76B900]/10'
@@ -2709,7 +2729,7 @@ export default function SetupPage() {
                             disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
                             className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                           >
-                            {!storageReady ? storagePrimaryLabel : building ? 'Installing' : 'Install This Lab'}
+                            {!storageReady ? storagePrimaryLabel : building ? 'Installing' : 'Install Mission'}
                           </button>
                           <button
                             type="button"
@@ -3069,7 +3089,7 @@ export default function SetupPage() {
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 4</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Model Picker</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
-                Choose exact local models to download. Recommendations are based on detected VRAM and student-friendly defaults.
+                Choose exact local models to download. Recommendations are based on detected VRAM and beginner-friendly defaults.
               </p>
             </div>
 
@@ -3327,7 +3347,7 @@ export default function SetupPage() {
             <div className="border border-[#76B900]/30 bg-[#76B900]/5 p-4">
               <div className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between">
                 <div>
-                  <div className="text-sm font-mono font-bold text-[#0a0a0a]">Student Lab Starter</div>
+                  <div className="text-sm font-mono font-bold text-[#0a0a0a]">AI Starter Pack</div>
                   <div className="text-[10px] font-mono text-[#76B900] mt-0.5">
                     No sudo. Installs under {studioRoot || storageStatus?.layout.studio_dir || 'NVH_HOME/studio'} and {storageStatus?.layout.bin_dir || 'NVH_HOME/bin'}
                   </div>
@@ -4032,7 +4052,7 @@ export default function SetupPage() {
                       <div className="text-[10px] font-mono text-[#76B900] break-all">source {storageStatus.env_file}</div>
                     </>
                   )}
-                  <div className="text-[10px] font-mono text-[#a3a3a3]"># Rootless all-in-one student lab</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]"># Rootless all-in-one AI workstation</div>
                   <div className="text-[10px] font-mono text-[#76B900] break-all">
                     {`nvh workstation --home-dir "${storageStatus?.layout.home ?? '$NVH_HOME'}" --all -y`}
                   </div>

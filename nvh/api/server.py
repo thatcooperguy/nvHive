@@ -2680,7 +2680,7 @@ async def comfyui_start(
 class StudioPackInstallRequest(BaseModel):
     pack_ids: list[str] = Field(
         default_factory=lambda: ["starter"],
-        description="Studio pack ids or bundle names: starter, all, llms, agents, comfy, game",
+        description="Studio pack ids or bundle names: starter, all, llms, agents, comfy, game, creative, music",
     )
     force_update: bool = False
 
@@ -2756,7 +2756,7 @@ async def studio_pack_install(
     request: StudioPackInstallRequest,
     _auth: None = Depends(require_auth),
 ) -> StreamingResponse:
-    """Install LLM, agent, ComfyUI, and game-dev packs without root access."""
+    """Install LLM, agent, ComfyUI, game-dev, creative, and music packs without root access."""
     return StreamingResponse(
         _studio_pack_install_stream(request),
         media_type="text/event-stream",

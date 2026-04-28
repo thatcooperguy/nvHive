@@ -9,7 +9,7 @@ def test_bundled_catalog_has_student_profiles() -> None:
     data = catalog.bundled_catalog()
 
     assert data["schema_version"] == catalog.SCHEMA_VERSION
-    assert {profile["id"] for profile in data["profiles"]} >= {"student", "creator", "full"}
+    assert {profile["id"] for profile in data["profiles"]} >= {"student", "creator", "music", "full"}
     assert data["models"]
     assert data["comfyui_examples"]
 

@@ -7582,7 +7582,7 @@ def studio(
         None,
         "--install",
         "-i",
-        help="Install a pack id or bundle: starter, all, llms, agents, claw, comfy, game, creative",
+        help="Install a pack id or bundle: starter, all, llms, agents, claw, comfy, game, creative, music",
     ),
     install_models: str | None = typer.Option(
         None,
@@ -7597,7 +7597,7 @@ def studio(
     ),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompts"),
 ):
-    """Install rootless AI Studio packs for LLMs, agents, ComfyUI, and games."""
+    """Install rootless AI Studio packs for LLMs, agents, ComfyUI, games, and music."""
     from nvh.integrations.storage import ensure_storage
     from nvh.integrations.studio_packs import (
         catalog_with_status,
@@ -7754,7 +7754,7 @@ def workstation(
     with_studio_packs: bool = typer.Option(
         False,
         "--with-studio-packs",
-        help="Install rootless LLM, agent, ComfyUI-node, and game-dev packs",
+        help="Install rootless LLM, agent, ComfyUI-node, game-dev, creative, and music packs",
     ),
     port: int = typer.Option(3000, "--port", help="WebUI port"),
     api_port: int = typer.Option(8000, "--api-port", help="API server port"),

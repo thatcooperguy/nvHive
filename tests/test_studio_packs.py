@@ -23,6 +23,9 @@ def test_catalog_is_rootless_and_grouped() -> None:
     assert "unity-hub-helper" in ids
     assert "unreal-engine-helper" in ids
     assert "github-login-helper" in ids
+    assert "ace-step-music" in ids
+    assert "music-producer-lab" in ids
+    assert "music-daw-helper" in ids
     assert all(pack["no_root"] for pack in catalog)
 
 
@@ -51,6 +54,9 @@ def test_pack_bundles_expand_without_duplicates() -> None:
     assert "agent-lab" in agents
     assert "openclaw-agent" in agents
 
+    music = studio_packs.expand_pack_ids(["music"])
+    assert music == ["ace-step-music", "music-producer-lab", "music-daw-helper", "github-login-helper"]
+
 
 def test_model_catalog_marks_vram_recommendations(monkeypatch) -> None:
     monkeypatch.setattr(studio_packs, "_detect_vram_gb", lambda: 8)
@@ -78,6 +84,25 @@ def test_godot_asset_selector_prefers_standard_linux_zip() -> None:
     asset = studio_packs._select_godot_asset(release)
 
     assert asset["browser_download_url"].endswith("godot.zip")
+
+
+def test_appimage_selector_prefers_linux_x64_assets() -> None:
+    release = {
+        "assets": [
+            {"name": "audacity-linux-3.7.7-x64-20.04.AppImage", "browser_download_url": "https://example.invalid/audacity-20.AppImage"},
+            {"name": "audacity-linux-3.7.7-x64-22.04.AppImage", "browser_download_url": "https://example.invalid/audacity-22.AppImage"},
+            {"name": "audacity-linux-3.7.7-aarch64.AppImage", "browser_download_url": "https://example.invalid/audacity-arm.AppImage"},
+        ]
+    }
+
+    asset = studio_packs._select_appimage_asset(
+        release,
+        app_name="Audacity",
+        required_tokens=("linux",),
+        preferred_tokens=("22.04", "x64"),
+    )
+
+    assert asset["browser_download_url"].endswith("audacity-22.AppImage")
 
 
 def test_catalog_status_uses_configured_studio_home(tmp_path, monkeypatch) -> None:
