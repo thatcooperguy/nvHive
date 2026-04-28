@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from nvh.integrations import setup_agent
+from nvh.integrations import receipts, setup_agent
 
 
 def test_setup_helper_prioritizes_storage(tmp_path, monkeypatch) -> None:
@@ -61,3 +61,51 @@ def test_setup_assistant_answers_comfyui_question(tmp_path, monkeypatch) -> None
     assert reply["focus"] == "comfyui"
     assert "ComfyUI" in reply["answer"]
     assert reply["commands"]
+
+
+def test_setup_helper_surfaces_unhealthy_receipt(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    storage = SimpleNamespace(
+        ok=True,
+        configured_by="argument",
+        as_dict=lambda: {
+            "ok": True,
+            "configured_by": "argument",
+            "layout": {"home": str(tmp_path / "nvh")},
+        },
+    )
+    runtime = SimpleNamespace(
+        strategy="python-venv",
+        as_dict=lambda: {"strategy": "python-venv"},
+    )
+    monkeypatch.setattr(setup_agent, "storage_status", lambda **_: storage)
+    monkeypatch.setattr(setup_agent, "runtime_status", lambda: runtime)
+    monkeypatch.setattr(
+        setup_agent,
+        "catalog_with_status",
+        lambda: {
+            "packs": [
+                {"id": "rootless-ollama", "status": {"installed": True}},
+                {"id": "blender-creative", "status": {"installed": True}},
+            ],
+        },
+    )
+    monkeypatch.setattr(setup_agent, "model_catalog_with_status", lambda: {"models": []})
+    monkeypatch.setattr(
+        setup_agent,
+        "detect_comfyui",
+        lambda: {"installed": True, "examples_installed": True},
+    )
+    receipts.write_receipt(
+        kind="studio-pack",
+        item_id="agent-lab",
+        title="Agent Lab",
+        install_path=tmp_path / "missing-agent-lab",
+        launchers=[str(tmp_path / "missing-agent-lab" / "nvhive-agent-lab")],
+    )
+
+    report = setup_agent.setup_helper_report(home_dir=tmp_path / "nvh")
+
+    assert report["issue_count"] >= 1
+    assert any(issue["id"] == "receipt:studio-pack:agent-lab" for issue in report["issues"])
+    assert any(action["id"] == "repair-receipt:studio-pack:agent-lab" for action in report["actions"])

@@ -36,6 +36,23 @@ class SetupAction:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class SetupIssue:
+    """One proactive setup finding the wizard should surface."""
+
+    id: str
+    title: str
+    severity: str
+    reason: str
+    fix_action_id: str | None = None
+    affected_item: str | None = None
+    current_version: str | None = None
+    available_version: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 def _pack_by_id(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {pack["id"]: pack for pack in catalog.get("packs", [])}
 
@@ -54,6 +71,15 @@ def _safe_catalog_status() -> dict[str, Any]:
         return {"source": "unavailable", "error": str(exc)}
 
 
+def _safe_catalog_data() -> dict[str, Any]:
+    try:
+        from nvh.integrations.catalog import load_setup_catalog
+
+        return load_setup_catalog(refresh=False).get("catalog", {})
+    except Exception:
+        return {}
+
+
 def _recent_failed_job() -> dict[str, Any] | None:
     try:
         jobs = list_jobs(limit=10)
@@ -65,6 +91,45 @@ def _recent_failed_job() -> dict[str, Any] | None:
     return None
 
 
+def _action_for_job(job: dict[str, Any]) -> str:
+    kind = job.get("kind")
+    if kind == "comfyui-install":
+        return "comfyui"
+    if kind == "studio-model-install":
+        return "starter-models"
+    if kind == "studio-pack-install":
+        return "studio-packs"
+    return "storage"
+
+
+def _catalog_entry_by_id(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    entries: dict[str, dict[str, Any]] = {}
+    for key in ("packs", "models", "comfyui_examples"):
+        for item in catalog.get(key, []):
+            item_id = item.get("id")
+            if item_id:
+                entries[str(item_id)] = item
+    return entries
+
+
+def _version_from_catalog(entry: dict[str, Any] | None) -> str | None:
+    if not entry:
+        return None
+    value = entry.get("latest_version") or entry.get("version")
+    return str(value) if value else None
+
+
+def _looks_older(current: str | None, latest: str | None) -> bool:
+    if not current or not latest or current == latest:
+        return False
+    try:
+        from packaging.version import Version
+
+        return Version(current) < Version(latest)
+    except Exception:
+        return current != latest
+
+
 def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     """Return a local setup diagnosis and ranked action list."""
     storage = storage_status(home_dir=home_dir, min_free_gb=20)
@@ -74,8 +139,17 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     comfy = detect_comfyui()
     by_pack = _pack_by_id(packs)
     actions: list[SetupAction] = []
+    issues: list[SetupIssue] = []
 
     if not storage.ok or storage.configured_by == "default":
+        issues.append(SetupIssue(
+            id="storage",
+            title="Persistent storage is not ready",
+            severity="required",
+            reason="Large installs may be lost if NVH_HOME is still using the default or an unwritable path.",
+            fix_action_id="storage",
+            affected_item="NVH_HOME",
+        ))
         actions.append(SetupAction(
             id="storage",
             title="Choose persistent NVH_HOME",
@@ -86,6 +160,14 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
         ))
 
     if runtime.strategy == "needs-runtime":
+        issues.append(SetupIssue(
+            id="runtime-fallback",
+            title="Python runtime needs a fallback",
+            severity="recommended",
+            reason="This image does not appear to have a complete Python venv/pip path.",
+            fix_action_id="runtime-fallback",
+            affected_item="python-runtime-fallback",
+        ))
         actions.append(SetupAction(
             id="runtime-fallback",
             title="Install optional runtime fallback",
@@ -97,6 +179,14 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
 
     ollama_pack = by_pack.get("rootless-ollama", {})
     if not ollama_pack.get("status", {}).get("installed"):
+        issues.append(SetupIssue(
+            id="rootless-ollama",
+            title="Local model runtime is missing",
+            severity="recommended",
+            reason="Local LLM downloads need a rootless Ollama runtime.",
+            fix_action_id="rootless-ollama",
+            affected_item="rootless-ollama",
+        ))
         actions.append(SetupAction(
             id="rootless-ollama",
             title="Install local model runtime",
@@ -111,6 +201,14 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
         if model.get("recommended") and not model.get("installed")
     ]
     if missing_models:
+        issues.append(SetupIssue(
+            id="starter-models",
+            title="Recommended local models are missing",
+            severity="recommended",
+            reason=f"{len(missing_models)} recommended model(s) are not installed yet.",
+            fix_action_id="starter-models",
+            affected_item="local-models",
+        ))
         actions.append(SetupAction(
             id="starter-models",
             title="Download recommended local models",
@@ -121,6 +219,14 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
         ))
 
     if not comfy.get("installed"):
+        issues.append(SetupIssue(
+            id="comfyui",
+            title="ComfyUI is not installed",
+            severity="optional",
+            reason="Visual image/video workflows are unavailable until ComfyUI is installed.",
+            fix_action_id="comfyui",
+            affected_item="comfyui",
+        ))
         actions.append(SetupAction(
             id="comfyui",
             title="Install ComfyUI visual workspace",
@@ -130,6 +236,14 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             reason="ComfyUI enables local image/video workflows and nvHive starter examples.",
         ))
     elif not comfy.get("examples_installed"):
+        issues.append(SetupIssue(
+            id="comfyui-examples",
+            title="ComfyUI starter examples need repair",
+            severity="recommended",
+            reason="ComfyUI is present, but the nvHive example manifest is missing.",
+            fix_action_id="comfyui-examples",
+            affected_item="comfyui",
+        ))
         actions.append(SetupAction(
             id="comfyui-examples",
             title="Refresh ComfyUI examples",
@@ -150,17 +264,81 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             reason="Adds Blender LTS and asset workspaces for creative students.",
         ))
 
+    receipts = _safe_receipt_summary()
+    for receipt in receipts.get("receipts", []):
+        health = receipt.get("health", {})
+        if not health.get("healthy", True):
+            action_id = f"repair-receipt:{receipt['id']}"
+            missing = len(health.get("missing_launchers", [])) + len(health.get("missing_files", []))
+            issues.append(SetupIssue(
+                id=f"receipt:{receipt['id']}",
+                title=f"{receipt.get('title', receipt['id'])} needs repair",
+                severity="recommended",
+                reason=f"{missing or 1} expected file or launcher path is missing.",
+                fix_action_id=action_id,
+                affected_item=receipt["id"],
+            ))
+            try:
+                command = repair_plan(receipt["id"])["commands"][0]
+            except Exception:
+                command = f"nvh setup repair {receipt['id']}"
+            actions.append(SetupAction(
+                id=action_id,
+                title=f"Repair {receipt.get('title', receipt['id'])}",
+                priority=25,
+                status="recommended",
+                command=command,
+                reason="A previous rootless install receipt has missing files or launchers.",
+            ))
+
+    catalog_data = _safe_catalog_data()
+    catalog_entries = _catalog_entry_by_id(catalog_data)
+    for receipt in receipts.get("receipts", []):
+        current_version = receipt.get("version")
+        latest_version = _version_from_catalog(catalog_entries.get(receipt.get("item_id")))
+        if _looks_older(current_version, latest_version):
+            action_id = f"repair-receipt:{receipt['id']}"
+            issues.append(SetupIssue(
+                id=f"outdated:{receipt['id']}",
+                title=f"{receipt.get('title', receipt['id'])} has an update",
+                severity="recommended",
+                reason="A newer version is available in the setup catalog.",
+                fix_action_id=action_id,
+                affected_item=receipt["id"],
+                current_version=str(current_version),
+                available_version=str(latest_version),
+            ))
+
+    failed_job = _recent_failed_job()
+    if failed_job:
+        action_id = _action_for_job(failed_job)
+        issues.append(SetupIssue(
+            id=f"job:{failed_job['id']}",
+            title=f"{failed_job.get('title', 'Install job')} needs attention",
+            severity="recommended",
+            reason=str(failed_job.get("message") or "A recent setup job did not finish."),
+            fix_action_id=action_id,
+            affected_item=failed_job.get("kind"),
+        ))
+
     actions.sort(key=lambda action: action.priority)
+    issues.sort(key=lambda issue: {"required": 0, "recommended": 1, "optional": 2}.get(issue.severity, 3))
     ready = not any(action.status == "required" for action in actions)
     return {
         "ready": ready,
-        "summary": "Ready for downloads" if ready else "Persistent storage needs attention",
+        "summary": (
+            "Ready for downloads"
+            if ready and not issues
+            else f"{len(issues)} setup item(s) need attention"
+        ),
         "storage": storage.as_dict(),
         "runtime": runtime.as_dict(),
         "comfyui": comfy,
         "model_recommendation_count": len(missing_models),
         "actions": [action.as_dict() for action in actions],
-        "receipts": _safe_receipt_summary(),
+        "issues": [issue.as_dict() for issue in issues],
+        "issue_count": len(issues),
+        "receipts": receipts,
         "catalog": _safe_catalog_status(),
         "assistant": {
             "mode": "offline-deterministic",
@@ -207,7 +385,8 @@ def setup_assistant_reply(
         answer = (
             "Use the mounted file volume for NVH_HOME before large downloads. "
             f"Current storage source is {report['storage']['configured_by']} at "
-            f"{report['storage']['layout']['home']}."
+            f"{report['storage']['layout']['home']}. The wizard should guide this with a folder picker; "
+            "the CLI command is only an advanced override."
         )
     elif any(word in q for word in ["comfy", "image", "video", "workflow"]):
         focus = "comfyui"
@@ -216,7 +395,7 @@ def setup_assistant_reply(
         ]
         answer = (
             "ComfyUI is managed as a rootless workspace under NVH_HOME. "
-            "Install it from the wizard or run the command below; model weights stay explicit "
+            "Use the install button from the wizard; model weights stay explicit "
             "because many upstream downloads require license acceptance."
         )
     elif any(word in q for word in ["model", "llm", "ollama", "local ai"]):
@@ -227,7 +406,7 @@ def setup_assistant_reply(
         ]
         answer = (
             "Start with the rootless Ollama runtime, then download the recommended models "
-            "that fit the detected GPU. The wizard keeps these under NVH_HOME/models."
+            "that fit the detected GPU. The wizard can run both steps and keeps files under NVH_HOME/models."
         )
     elif any(word in q for word in ["blender", "creative", "game", "asset"]):
         focus = "creative"
@@ -236,7 +415,7 @@ def setup_assistant_reply(
         ]
         answer = (
             "Creative tools are installed without sudo under NVH_HOME/apps and NVH_HOME/studio. "
-            "The creative profile adds Blender plus game asset workspaces."
+            "Use the creative profile or repair button; manual commands are just overrides."
         )
     elif any(word in q for word in ["repair", "fix", "failed", "error", "broken"]):
         focus = "repair"
@@ -244,7 +423,7 @@ def setup_assistant_reply(
             answer = (
                 f"The most recent problem I found is {failed_job['title']} with status "
                 f"{failed_job['status']}: {failed_job.get('message', 'no message')}. "
-                "Retry the matching wizard step after checking storage and network access."
+                "Use the matching repair/install button after checking storage and network access."
             )
         elif receipts.get("unhealthy"):
             first = receipts.get("receipts", [{}])[0]
@@ -279,6 +458,7 @@ def setup_assistant_reply(
         "commands": commands,
         "observations": {
             "ready": report["ready"],
+            "issue_count": report.get("issue_count", 0),
             "receipt_count": receipts.get("count", 0),
             "unhealthy_receipts": receipts.get("unhealthy", 0),
             "catalog_source": report.get("catalog", {}).get("source"),

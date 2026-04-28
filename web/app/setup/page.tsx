@@ -36,6 +36,7 @@ import type {
   ComfyUIInstallEvent,
   ComfyUIStatus,
   InstallJob,
+  InstallReceipt,
   SetupAssistantReply,
   SetupCatalogResult,
   SetupHelperReport,
@@ -636,14 +637,14 @@ export default function SetupPage() {
     ));
   };
 
-  const handleInstallStudioModels = () => {
+  const handleInstallStudioModels = (modelIds?: string[]) => {
     if (modelsInstalling) return;
     if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
       setModelError('Set a persistent NVH_HOME on the mounted volume before downloading models.');
       setStep('storage');
       return;
     }
-    const selected = Array.from(selectedStudioModels);
+    const selected = modelIds?.length ? modelIds : Array.from(selectedStudioModels);
     if (selected.length === 0) {
       setModelError('Select at least one local model.');
       return;
@@ -686,6 +687,12 @@ export default function SetupPage() {
       }
     );
   };
+
+  const recommendedMissingModelIds = () => (
+    studioModels
+      .filter(model => model.recommended && !model.installed)
+      .map(model => model.id)
+  );
 
   const handleInstallStudioPacks = (packIds?: string[]) => {
     if (studioInstalling) return;
@@ -845,16 +852,90 @@ export default function SetupPage() {
   const activeInstallJobs = installJobs.filter(isActiveInstallJob);
   const visibleInstallJobs = installJobs.slice(0, 5);
   const helperActions = setupHelper?.actions.slice(0, 4) ?? [];
+  const helperIssues = setupHelper?.issues?.slice(0, 4) ?? [];
   const visibleReceipts = setupReceipts?.receipts.slice(0, 5) ?? [];
   const unhealthyReceiptCount = setupReceipts?.summary.unhealthy ?? setupHelper?.receipts?.unhealthy ?? 0;
   const receiptCount = setupReceipts?.count ?? setupHelper?.receipts?.count ?? 0;
   const catalogSource = setupCatalog?.source ?? setupHelper?.catalog?.source ?? 'bundled';
 
-  const goToHelperAction = (actionId: string) => {
-    if (actionId === 'storage') setStep('storage');
-    else if (actionId === 'starter-models') setStep('models');
-    else if (actionId === 'comfyui' || actionId === 'comfyui-examples') setStep('comfyui');
-    else setStep('studio');
+  const runHelperAction = (actionId: string) => {
+    if (actionId.startsWith('repair-receipt:')) {
+      const receiptId = actionId.slice('repair-receipt:'.length);
+      const receipt = [
+        ...(setupReceipts?.receipts ?? []),
+        ...(setupHelper?.receipts?.receipts ?? []),
+      ].find(item => item.id === receiptId);
+      if (receipt) handleRepairReceipt(receipt);
+      else void refreshSetupInventory(false);
+      return;
+    }
+    if (actionId === 'storage') {
+      setStep('storage');
+      return;
+    }
+    if (actionId === 'starter-models') {
+      const missing = recommendedMissingModelIds();
+      if (missing.length > 0) handleInstallStudioModels(missing);
+      else setStep('models');
+      return;
+    }
+    if (actionId === 'rootless-ollama') {
+      handleInstallStudioPacks(['rootless-ollama']);
+      return;
+    }
+    if (actionId === 'runtime-fallback') {
+      handleInstallStudioPacks(['python-runtime-fallback']);
+      return;
+    }
+    if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
+      handleInstallComfyUI();
+      return;
+    }
+    if (actionId === 'creative-tools') {
+      handleInstallStudioPacks(['creative']);
+      return;
+    }
+    setStep('studio');
+  };
+
+  const helperActionLabel = (actionId: string) => {
+    if (actionId.startsWith('repair-receipt:')) return !storageReady ? 'Set Storage' : 'Repair';
+    if (actionId === 'storage') return 'Choose Folder';
+    if (!storageReady) return 'Set Storage';
+    if (actionId === 'starter-models') return modelsInstalling ? 'Downloading' : 'Download';
+    if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
+      return comfyInstalling ? 'Installing' : 'Install';
+    }
+    return studioInstalling ? 'Installing' : 'Run';
+  };
+
+  const helperActionDisabled = (actionId: string) => {
+    if (actionId.startsWith('repair-receipt:')) return !storageReady || studioInstalling || modelsInstalling || comfyInstalling;
+    if (actionId === 'storage') return false;
+    if (actionId === 'starter-models') return modelsInstalling || !storageReady;
+    if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
+      return comfyInstalling || !storageReady;
+    }
+    return studioInstalling || !storageReady;
+  };
+
+  const handleRepairReceipt = (receipt: InstallReceipt) => {
+    if (receipt.kind === 'comfyui') {
+      setStep('comfyui');
+      handleInstallComfyUI();
+      return;
+    }
+    if (receipt.kind === 'studio-model') {
+      setStep('models');
+      handleInstallStudioModels([receipt.item_id]);
+      return;
+    }
+    if (receipt.kind === 'studio-pack') {
+      setStep('studio');
+      handleInstallStudioPacks([receipt.item_id]);
+      return;
+    }
+    setStep('studio');
   };
 
   return (
@@ -1049,14 +1130,16 @@ export default function SetupPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      if (receipt.kind === 'comfyui') setStep('comfyui');
-                      else if (receipt.kind === 'studio-model') setStep('models');
-                      else setStep('studio');
-                    }}
-                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                    onClick={() => handleRepairReceipt(receipt)}
+                    disabled={
+                      !storageReady ||
+                      (receipt.kind === 'comfyui' && comfyInstalling) ||
+                      (receipt.kind === 'studio-model' && modelsInstalling) ||
+                      (receipt.kind === 'studio-pack' && studioInstalling)
+                    }
+                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    Repair
+                    {!storageReady ? 'Set Storage' : receipt.health.healthy ? 'Refresh' : 'Repair'}
                   </button>
                 </div>
               ))}
@@ -1089,12 +1172,47 @@ export default function SetupPage() {
           )}
           {setupHelper && (
             <div className="space-y-3">
+              {helperIssues.length > 0 && (
+                <div className="space-y-2">
+                  {helperIssues.map(issue => (
+                    <div key={issue.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-1.5 h-1.5 flex-shrink-0 ${
+                            issue.severity === 'required' ? 'bg-[#dc2626]' : issue.severity === 'recommended' ? 'bg-[#d97706]' : 'bg-[#76B900]'
+                          }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                          <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">{issue.title}</div>
+                          <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                            {issue.severity}
+                          </span>
+                        </div>
+                        <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
+                          {issue.reason}
+                        </div>
+                        {(issue.current_version || issue.available_version) && (
+                          <div className="text-[9px] font-mono text-[#a3a3a3] mt-1">
+                            {issue.current_version ?? 'unknown'} {'>'} {issue.available_version ?? 'unknown'}
+                          </div>
+                        )}
+                      </div>
+                      {issue.fix_action_id && (
+                        <button
+                          type="button"
+                          onClick={() => runHelperAction(issue.fix_action_id as string)}
+                          disabled={helperActionDisabled(issue.fix_action_id)}
+                          className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                        >
+                          {helperActionLabel(issue.fix_action_id)}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {helperActions.map(action => (
-                  <button
+                  <div
                     key={action.id}
-                    type="button"
-                    onClick={() => goToHelperAction(action.id)}
                     className="text-left border border-[#e5e5e5] bg-[#fafafa] p-3 hover:border-[#76B900]/50 transition-colors"
                   >
                     <div className="flex items-center justify-between gap-2">
@@ -1112,10 +1230,37 @@ export default function SetupPage() {
                     <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
                       {action.reason}
                     </div>
-                    <div className="text-[9px] font-mono text-[#a3a3a3] mt-2 break-all">
-                      {action.command}
+                    <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => runHelperAction(action.id)}
+                        disabled={helperActionDisabled(action.id)}
+                        className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                      >
+                        {helperActionLabel(action.id)}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (action.id === 'starter-models') setStep('models');
+                          else if (action.id === 'comfyui' || action.id === 'comfyui-examples') setStep('comfyui');
+                          else if (action.id === 'storage') setStep('storage');
+                          else setStep('studio');
+                        }}
+                        className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                      >
+                        Review
+                      </button>
                     </div>
-                  </button>
+                    <details className="mt-2">
+                      <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                        Manual override
+                      </summary>
+                      <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all">
+                        {action.command}
+                      </div>
+                    </details>
+                  </div>
                 ))}
               </div>
 
@@ -1158,14 +1303,35 @@ export default function SetupPage() {
                     <div className="text-xs font-mono text-[#0a0a0a] leading-relaxed">
                       {assistantReply.answer}
                     </div>
-                    {assistantReply.commands.length > 0 && (
-                      <div className="space-y-1">
-                        {assistantReply.commands.map(command => (
-                          <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all">
-                            {command}
-                          </div>
+                    {assistantReply.actions.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {assistantReply.actions.slice(0, 3).map(action => (
+                          <button
+                            key={action.id}
+                            type="button"
+                            onClick={() => runHelperAction(action.id)}
+                            disabled={helperActionDisabled(action.id)}
+                            title={action.title}
+                            className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                          >
+                            {helperActionLabel(action.id)}
+                          </button>
                         ))}
                       </div>
+                    )}
+                    {assistantReply.commands.length > 0 && (
+                      <details>
+                        <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                          Manual overrides
+                        </summary>
+                        <div className="space-y-1 mt-2">
+                          {assistantReply.commands.map(command => (
+                            <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all">
+                              {command}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     )}
                   </div>
                 )}
@@ -1669,7 +1835,7 @@ export default function SetupPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={handleInstallStudioModels}
+                    onClick={() => handleInstallStudioModels()}
                     disabled={modelsInstalling || selectedModelIds.length === 0 || !storageReady}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >

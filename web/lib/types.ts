@@ -435,6 +435,17 @@ export interface SetupAction {
   can_run_without_root: boolean;
 }
 
+export interface SetupIssue {
+  id: string;
+  title: string;
+  severity: 'required' | 'recommended' | 'optional' | string;
+  reason: string;
+  fix_action_id: string | null;
+  affected_item: string | null;
+  current_version: string | null;
+  available_version: string | null;
+}
+
 export interface SetupHelperReport {
   ready: boolean;
   summary: string;
@@ -443,6 +454,8 @@ export interface SetupHelperReport {
   comfyui: Record<string, unknown>;
   model_recommendation_count: number;
   actions: SetupAction[];
+  issues?: SetupIssue[];
+  issue_count?: number;
   receipts?: SetupReceiptsSummary;
   catalog?: SetupCatalogStatus;
   assistant?: {
@@ -486,6 +499,7 @@ export interface SetupReceiptsSummary {
   by_kind: Record<string, number>;
   unhealthy: number;
   root: string | null;
+  receipts?: InstallReceipt[];
 }
 
 export interface SetupReceiptsResult {
@@ -528,6 +542,7 @@ export interface SetupAssistantReply {
   commands: string[];
   observations: {
     ready: boolean;
+    issue_count?: number;
     receipt_count: number;
     unhealthy_receipts: number;
     catalog_source?: string;

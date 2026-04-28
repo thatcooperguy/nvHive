@@ -72,6 +72,7 @@
       "id": "blender-creative",
       "title": "Blender Creative Studio",
       "category": "creative",
+      "latest_version": "4.5.4",
       "install_command": "nvh studio --install creative -y",
       "recommended": true
     }

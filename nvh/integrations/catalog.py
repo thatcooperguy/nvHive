@@ -50,7 +50,12 @@ def _validate_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
 
 def _generated_fallback_catalog() -> dict[str, Any]:
     from nvh.integrations.comfyui import examples_as_dicts
-    from nvh.integrations.studio_packs import catalog_as_dicts, model_catalog_as_dicts
+    from nvh.integrations.studio_packs import BLENDER_VERSION, catalog_as_dicts, model_catalog_as_dicts
+
+    packs = catalog_as_dicts()
+    for pack in packs:
+        if pack.get("id") == "blender-creative":
+            pack["latest_version"] = BLENDER_VERSION
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -86,7 +91,7 @@ def _generated_fallback_catalog() -> dict[str, Any]:
                 "description": "Everything nvHive can install without root access.",
             },
         ],
-        "packs": catalog_as_dicts(),
+        "packs": packs,
         "models": model_catalog_as_dicts(),
         "comfyui_examples": examples_as_dicts(),
     }
