@@ -27,15 +27,114 @@ set -euo pipefail
 
 G='\033[0;32m'; Y='\033[1;33m'; B='\033[0;34m'; R='\033[0;31m'; D='\033[0;90m'; N='\033[0m'
 
-if [ -z "${NVH_HOME:-}" ]; then
+free_gb_for_path() {
+    df -Pk "$1" 2>/dev/null | awk 'NR==2 {printf "%d", $4 / 1048576}'
+}
+
+score_nvh_home_candidate() {
+    local base="${1%/}"
+    [ -n "$base" ] || return 1
+    [ -d "$base" ] || return 1
+    [ -w "$base" ] || return 1
+
+    local name home free_gb score
+    name="$(basename "$base")"
+    home="$base/nvhive"
+    case "$name" in
+        nvh|nvhive|.nvh) home="$base" ;;
+    esac
+
+    score=0
+    case "$base" in
+        "$HOME"|"$HOME/"*) score=$((score - 15)) ;;
+        /mnt/*|/media/*|/workspace*|/data*|/persistent*|/storage*) score=$((score + 45)) ;;
+    esac
+    case "$base" in
+        *persist*|*Persist*|*workspace*|*Workspace*|*project*|*Project*|*data*|*Data*)
+            score=$((score + 20))
+            ;;
+        *tmp*|*cache*|*Cache*)
+            score=$((score - 40))
+            ;;
+    esac
+    free_gb="$(free_gb_for_path "$base")"
+    free_gb="${free_gb:-0}"
+    if [ "$free_gb" -ge 100 ]; then
+        score=$((score + 35))
+    elif [ "$free_gb" -ge 50 ]; then
+        score=$((score + 30))
+    elif [ "$free_gb" -ge 20 ]; then
+        score=$((score + 20))
+    elif [ "$free_gb" -ge 10 ]; then
+        score=$((score + 8))
+    else
+        score=$((score - 15))
+    fi
+    if [ -f "$home/nvh-env.sh" ] || [ -d "$home/repo" ] || [ -d "$home/models" ]; then
+        score=$((score + 30))
+    fi
+    printf '%s|%s\n' "$score" "$home"
+}
+
+detect_nvh_home() {
+    local roots=()
+    local env_name env_value root child scored score home best_score best_home
+
     if [ -d "$HOME/nvh/repo" ] && [ ! -d "$HOME/.nvh/repo" ]; then
-        NVH_HOME="$HOME/nvh"
+        printf '%s\n' "$HOME/nvh"
+        return 0
+    fi
+
+    for env_name in NVH_MOUNT PERSISTENT_HOME PERSISTENT_DIR PERSISTENT_STORAGE WORKSPACE PROJECTS PROJECT_HOME DATA_DIR; do
+        env_value="${!env_name:-}"
+        [ -n "$env_value" ] && roots+=("$env_value")
+    done
+    roots+=("/mnt" "/media/${USER:-}" "/workspace" "/data" "/persistent" "/storage")
+
+    best_score=-999
+    best_home=""
+    for root in "${roots[@]}"; do
+        [ -n "$root" ] || continue
+        if scored="$(score_nvh_home_candidate "$root")"; then
+            score="${scored%%|*}"
+            home="${scored#*|}"
+            if [ "$score" -gt "$best_score" ]; then
+                best_score="$score"
+                best_home="$home"
+            fi
+        fi
+        [ -d "$root" ] || continue
+        for child in "$root"/*; do
+            [ -d "$child" ] || continue
+            if scored="$(score_nvh_home_candidate "$child")"; then
+                score="${scored%%|*}"
+                home="${scored#*|}"
+                if [ "$score" -gt "$best_score" ]; then
+                    best_score="$score"
+                    best_home="$home"
+                fi
+            fi
+        done
+    done
+
+    if [ -n "$best_home" ] && [ "$best_score" -ge 55 ]; then
+        printf '%s\n' "$best_home"
+        return 0
+    fi
+    return 1
+}
+
+if [ -z "${NVH_HOME:-}" ]; then
+    if NVH_HOME="$(detect_nvh_home)"; then
+        NVH_HOME_AUTOPILOT=true
     else
         NVH_HOME="$HOME/.nvh"
+        NVH_HOME_AUTOPILOT=false
     fi
     NVH_HOME_CONFIGURED=false
 else
     NVH_HOME_CONFIGURED=true
+    NVH_HOME_AUTOPILOT=false
 fi
 NVH_VENV="$NVH_HOME/venv"
 NVH_REPO="$NVH_HOME/repo"
@@ -94,9 +193,14 @@ echo ""
 # Find Python — check common locations since the VM may have it anywhere
 # ---------------------------------------------------------------------------
 if [ "$NVH_HOME_CONFIGURED" = "false" ]; then
-    echo -e "${Y}NVH_HOME was not set; using ${G}$NVH_HOME${N}"
-    echo -e "${D}For cloud desktops, set NVH_HOME to the mounted persistent file volume before install.${N}"
-    echo -e "${D}Example: export NVH_HOME=/mnt/persist/nvhive${N}"
+    if [ "$NVH_HOME_AUTOPILOT" = "true" ]; then
+        echo -e "${G}Mount autopilot selected ${NVH_HOME}${N}"
+        echo -e "${D}Override anytime with: export NVH_HOME=/path/on/persistent/mount${N}"
+    else
+        echo -e "${Y}NVH_HOME was not set; using ${G}$NVH_HOME${N}"
+        echo -e "${D}For cloud desktops, set NVH_HOME to the mounted persistent file volume before install.${N}"
+        echo -e "${D}Example: export NVH_HOME=/mnt/persist/nvhive${N}"
+    fi
     echo ""
 fi
 echo -e "${D}Persistent home: $NVH_HOME${N}"

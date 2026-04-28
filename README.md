@@ -20,9 +20,23 @@ nvh "setup comfyui"                              # → agent installs, configure
 
 ## Install
 
-Three ways to get nvHive — pick the one that matches your setup. No Docker, no container runtime, no root required.
+Four ways to get nvHive - pick the one that matches your setup. No Docker, no container runtime, no root required.
 
-### Option 1 — One-line installer (recommended for GPU VMs)
+### Option 0 - Launch a Linux GPU desktop lab
+
+This is the easiest path for GeForce NOW-style Linux sessions and cloud desktops where only a mounted file volume survives reconnects:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | bash
+```
+
+The launcher auto-detects a likely persistent mount, sets `NVH_HOME`, installs nvHive rootlessly if needed, creates the desktop launcher, starts the API/WebUI, and opens the setup wizard. If Python is missing, set `NVH_USE_BINARY=1` and the same launcher downloads the single-file Linux binary instead of creating a venv.
+
+```bash
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | NVH_USE_BINARY=1 bash
+```
+
+### Option 1 - One-line installer (recommended for GPU VMs)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
@@ -30,12 +44,14 @@ curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh
 
 Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise `~/.nvh/` for new installs, uses Python `venv` + `pip` by default, offers a rootless micromamba fallback only when the cloud image needs it, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config.
 
+If `NVH_HOME` is not set, the installer now checks common persistent mount roots such as `/mnt`, `/media/$USER`, `/workspace`, `/data`, `/persistent`, and `/storage` before falling back to `~/.nvh`.
+
 Windows: `iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex`
 macOS: `curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash`
 
-### Option 2 — Single-file binary (no Python needed)
+### Option 2 - Single-file binary (no Python needed)
 
-Fully standalone. No Python install, no pip, no venv. Click your OS:
+Fully standalone. No Python install, no pip, no venv. Download the asset, make it executable, and run `nvh workstation --launch`. Click your OS:
 
 <p align="center">
   <a href="https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-linux-x86_64">
@@ -51,9 +67,18 @@ Fully standalone. No Python install, no pip, no venv. Click your OS:
   </a>
 </p>
 
-On Linux/macOS after download: `chmod +x nvh-* && ./nvh-*`. Full asset list (wheel, sdist, checksums) lives on the [Releases page](https://github.com/thatcooperguy/nvHive/releases/latest).
+Linux terminal path:
 
-### Option 3 — pip from PyPI (for existing Python environments)
+```bash
+mkdir -p "$HOME/.local/bin"
+curl -fL https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-linux-x86_64 -o "$HOME/.local/bin/nvh"
+chmod +x "$HOME/.local/bin/nvh"
+NVH_HOME=/mnt/persist/nvhive "$HOME/.local/bin/nvh" workstation --launch -y
+```
+
+On Linux/macOS after a browser download: `chmod +x nvh-* && ./nvh-* workstation --launch -y`. Full asset list (wheel, sdist, checksums) lives on the [Releases page](https://github.com/thatcooperguy/nvHive/releases/latest).
+
+### Option 3 - pip from PyPI (for existing Python environments)
 
 ```bash
 pip install nvhive              # core
@@ -69,7 +94,8 @@ nvh                              # guided setup — GPU detect, provider keys, l
 nvh workstation --all -y         # Linux GPU desktop: launcher + WebUI + ComfyUI + studio packs
 nvh webui                        # Setup > Models lets you choose exact local downloads
 nvh studio --install starter -y  # rootless LLMs + agents + ComfyUI nodes + game-dev tools
-nvh "your question"              # just ask — nvHive figures out the rest
+nvh convene --cabinet product_resilience "How can this setup fail for a beginner?"
+nvh "your question"              # just ask - nvHive figures out the rest
 ```
 
 For a fresh Linux cloud desktop where only a mounted file volume persists,
@@ -105,9 +131,10 @@ showing progress after a browser refresh and can be canceled from the wizard.
 For pip installs, the downloaded WebUI, npm cache, and no-root Node fallback
 also live under `$NVH_HOME`, so reconnecting to a cloud desktop does not mean
 starting the frontend toolchain from scratch.
-The wizard now includes a local setup helper that ranks the next storage,
-runtime, model, ComfyUI, and creative-tool actions before any local LLM is
-installed.
+The wizard now opens in Beginner Mode: one recommended action, Fix My Setup,
+and Advanced Details only when the student wants the full diagnostics. It also
+includes a local setup helper that ranks the next storage, runtime, model,
+ComfyUI, and creative-tool actions before any local LLM is installed.
 The ComfyUI step lets students select workflow examples and save a model
 download plan with source links, folder targets, and a helper checklist script,
 because many image/video weights are large or require upstream terms.

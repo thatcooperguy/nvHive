@@ -11,6 +11,22 @@ Target user journey:
 
 ## Quick Start
 
+Easiest path:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | bash
+```
+
+That script chooses a likely persistent mount for `NVH_HOME`, installs nvHive
+without root, creates the desktop launcher, and starts the WebUI setup wizard.
+To force the no-Python binary path:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | NVH_USE_BINARY=1 bash
+```
+
+Manual path:
+
 ```bash
 export NVH_HOME=/mnt/persist/nvhive
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
@@ -33,6 +49,11 @@ nvh workstation
 nvh webui
 ```
 
+The setup wizard starts in Beginner Mode with one recommended action, a Fix My
+Setup repair button, and Advanced Details for diagnostics. It is designed so a
+student can click through storage, models, ComfyUI, and creative packs without
+typing manual commands.
+
 ## What `nvh workstation` Does
 
 - Detects NVIDIA GPU availability with `nvidia-smi`
@@ -40,6 +61,7 @@ nvh webui
 - Creates `$NVH_HOME/bin/nvhive-ai-studio`
 - Creates a Linux desktop launcher named `NVHive AI Studio`
 - Shows a student-friendly setup checklist
+- Runs nvWizard boot checks for storage, Python, CUDA/PyTorch, ComfyUI, models, and install receipts
 - With `--all`, ensures local AI, installs ComfyUI, installs the rootless starter pack, and launches WebUI
 - Uses user-space paths only under `NVH_HOME` for durable models, ComfyUI, packs, runtime fallback tools, apps, WebUI assets, cache, logs, and config
 
@@ -87,6 +109,10 @@ without losing the setup state.
 The local setup helper endpoint, `/v1/setup/helper`, works offline. It ranks the
 next storage, runtime, model, ComfyUI, and creative-tool actions before any local
 LLM is installed.
+
+The council also includes a `product_resilience` preset with an Underdog Student
+Advocate. Use it when you want a skeptical review of what could break for a
+beginner on a no-root cloud GPU desktop.
 
 CLI equivalents:
 

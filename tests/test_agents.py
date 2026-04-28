@@ -95,6 +95,7 @@ class TestPresets:
         assert "security_review" in presets
         assert "code_review" in presets
         assert "product" in presets
+        assert "product_resilience" in presets
         assert "data" in presets
         assert "full_board" in presets
 
@@ -114,6 +115,17 @@ class TestPresets:
     def test_invalid_preset(self):
         with pytest.raises(ValueError, match="Unknown preset"):
             get_preset_agents("nonexistent", "test")
+
+    def test_product_resilience_preset_includes_underdog_advocate(self):
+        agents = get_preset_agents(
+            "product_resilience",
+            "Make nvHive self-healing for rootless GPU cloud desktop students",
+        )
+        roles = [a.role for a in agents]
+        assert "Underdog Student Advocate" in roles
+        advocate = next(a for a in agents if a.role == "Underdog Student Advocate")
+        assert "no root access" in advocate.system_prompt
+        assert "mounted file volume" in advocate.system_prompt
 
     def test_preset_agents_have_system_prompts(self):
         agents = get_preset_agents("engineering", "Build a REST API")

@@ -267,6 +267,7 @@ export default function SetupPage() {
   const [installJobs, setInstallJobs] = useState<InstallJob[]>([]);
   const [jobsError, setJobsError] = useState<string | null>(null);
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
+  const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
 
   // Live-polled provider health drives Ollama status and the
   // configured-providers list so the setup screen reflects newly
@@ -932,6 +933,14 @@ export default function SetupPage() {
       ? detectedTorchProfile
       : 'nvidia-cu121'
   ) as ComfyUITorchProfile;
+  const setupConcernCount =
+    (setupInventoryError ? 1 : 0) +
+    (setupHelperError ? 1 : 0) +
+    unhealthyReceiptCount +
+    compatibilityIssueCount +
+    bootChangeCount;
+  const showAdvancedSetup = advancedSetupOpen || setupConcernCount > 0 || activeInstallJobs.length > 0;
+  const topHelperAction = helperActions[0] ?? null;
 
   const runHelperAction = (actionId: string) => {
     if (actionId.startsWith('repair-receipt:')) {
@@ -1041,9 +1050,9 @@ export default function SetupPage() {
       <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
         <div className="relative">
-          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">First-Time Setup</div>
-          <h1 className="text-2xl font-bold text-[#0a0a0a]">Setup Wizard</h1>
-          <p className="text-xs font-mono text-[#a3a3a3] mt-1">Get Hive configured and running in minutes</p>
+          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">nvWizard Setup</div>
+          <h1 className="text-2xl font-bold text-[#0a0a0a]">Student AI Lab</h1>
+          <p className="text-xs font-mono text-[#a3a3a3] mt-1">Pick a durable home once; nvWizard handles the rest</p>
         </div>
       </div>
 
@@ -1078,6 +1087,90 @@ export default function SetupPage() {
           </div>
         ))}
       </div>
+
+      {step === 'welcome' && (
+        <div className="border border-[#76B900]/40 bg-[#f7fdf0] p-4 space-y-4">
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div className="min-w-0">
+              <div className="section-label">Beginner Mode</div>
+              <div className="text-lg font-mono font-bold text-[#0a0a0a] mt-1">
+                {storageReady ? 'Start with the recommended lab' : 'First, choose the persistent file mount'}
+              </div>
+              <div className="text-xs font-mono text-[#525252] mt-2 leading-relaxed max-w-2xl">
+                nvWizard checks storage, GPU, CUDA, Python, ComfyUI, models, and install receipts, then recommends the next safe action. Manual commands stay available under Advanced Details.
+              </div>
+              {topHelperAction && (
+                <div className="mt-3 border border-[#76B900]/20 bg-white p-3">
+                  <div className="text-[10px] font-mono text-[#737373] uppercase">Recommended next</div>
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a] mt-1">{topHelperAction.title}</div>
+                  <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">{topHelperAction.reason}</div>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col sm:flex-row lg:flex-col gap-2 lg:min-w-[190px]">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!storageReady) {
+                    setStep('storage');
+                    return;
+                  }
+                  if (topHelperAction && !helperActionDisabled(topHelperAction.id)) {
+                    runHelperAction(topHelperAction.id);
+                    return;
+                  }
+                  applyWizardProfile('student');
+                }}
+                disabled={Boolean(storageReady && topHelperAction && helperActionDisabled(topHelperAction.id))}
+                className="btn-primary px-4 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
+              >
+                {!storageReady ? 'Choose Storage' : topHelperAction ? helperActionLabel(topHelperAction.id) : 'Start Lab'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRepairWorkspace()}
+                disabled={workspaceRepairing}
+                className="btn-ghost px-4 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
+              >
+                {workspaceRepairing ? 'Repairing' : 'Fix My Setup'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAdvancedSetupOpen(prev => !prev)}
+                className="btn-ghost px-4 py-2 text-xs font-mono uppercase tracking-wider"
+              >
+                {advancedSetupOpen ? 'Hide Details' : 'Advanced Details'}
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="border border-[#76B900]/20 bg-white p-2">
+              <div className="text-[9px] font-mono text-[#737373] uppercase">Storage</div>
+              <div className={`text-[10px] font-mono mt-1 ${storageReady ? 'text-[#76B900]' : 'text-[#d97706]'}`}>
+                {storageReady ? 'ready' : 'needed'}
+              </div>
+            </div>
+            <div className="border border-[#76B900]/20 bg-white p-2">
+              <div className="text-[9px] font-mono text-[#737373] uppercase">Checks</div>
+              <div className={`text-[10px] font-mono mt-1 ${setupConcernCount ? 'text-[#d97706]' : 'text-[#76B900]'}`}>
+                {setupConcernCount ? `${setupConcernCount} to review` : 'clear'}
+              </div>
+            </div>
+            <div className="border border-[#76B900]/20 bg-white p-2">
+              <div className="text-[9px] font-mono text-[#737373] uppercase">Jobs</div>
+              <div className={`text-[10px] font-mono mt-1 ${activeInstallJobs.length ? 'text-[#d97706]' : 'text-[#76B900]'}`}>
+                {activeInstallJobs.length ? `${activeInstallJobs.length} running` : 'idle'}
+              </div>
+            </div>
+            <div className="border border-[#76B900]/20 bg-white p-2">
+              <div className="text-[9px] font-mono text-[#737373] uppercase">API</div>
+              <div className={`text-[10px] font-mono mt-1 ${apiStatus === 'connected' ? 'text-[#76B900]' : 'text-[#d97706]'}`}>
+                {apiStatus === 'connected' ? 'online' : 'checking'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {(visibleInstallJobs.length > 0 || jobsError) && (
         <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
@@ -1157,7 +1250,7 @@ export default function SetupPage() {
         </div>
       )}
 
-      {(setupReceipts || setupCatalog || setupInventoryError) && (
+      {showAdvancedSetup && (setupReceipts || setupCatalog || setupInventoryError) && (
         <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
@@ -1439,7 +1532,7 @@ export default function SetupPage() {
         </div>
       )}
 
-      {(setupHelper || setupHelperError) && (
+      {showAdvancedSetup && (setupHelper || setupHelperError) && (
         <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
@@ -1645,12 +1738,11 @@ export default function SetupPage() {
                 <span className="text-3xl font-bold text-[#76B900] font-mono">C</span>
               </div>
               <div>
-                <h2 className="text-xl font-bold text-[#0a0a0a] font-mono">Welcome to Hive</h2>
-                <p className="text-xs font-mono text-[#a3a3a3] mt-2">AI Command Center - NVIDIA Powered</p>
+                <h2 className="text-xl font-bold text-[#0a0a0a] font-mono">Welcome to nvHive</h2>
+                <p className="text-xs font-mono text-[#a3a3a3] mt-2">NVIDIA-powered AI lab, guided by nvWizard</p>
               </div>
               <div className="text-sm font-mono text-[#525252] max-w-lg mx-auto leading-relaxed">
-                Hive lets you run multiple AI advisors in parallel - locally on your NVIDIA GPU with zero cost,
-                or via cloud APIs. This wizard will get you set up in minutes.
+                Choose what you want to build. nvWizard keeps the heavy downloads, rootless tools, and ComfyUI setup on your persistent file mount.
               </div>
             </div>
 

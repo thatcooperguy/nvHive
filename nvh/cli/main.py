@@ -1694,7 +1694,7 @@ def convene_cmd(
     preset: str | None = typer.Option(
         None, "--cabinet",
         help="Agent cabinet: executive, engineering,"
-        " security_review, code_review, product, data, full_board",
+        " security_review, code_review, product, product_resilience, data, full_board",
     ),
     num_agents: int | None = typer.Option(
         None, "--num-agents", "-n",
