@@ -196,6 +196,30 @@ STUDIO_PACKS: list[StudioPack] = [
         ],
     ),
     StudioPack(
+        id="python-runtime-fallback",
+        title="Rootless Python Runtime Fallback",
+        category="runtime",
+        tagline="Micromamba rescue kit when venv is broken",
+        description=(
+            "Keeps nvHive's default path on Python venv and pip, but installs a "
+            "micromamba binary under NVH_HOME for cloud images that lack working "
+            "virtualenv or Python build tooling."
+        ),
+        recommended_vram_gb=0,
+        estimated_disk_gb=0.2,
+        install_kind="micromamba_runtime",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-micromamba"],
+        source_urls=["https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html"],
+        notes=[
+            "Not required on the normal nvHive path when Python venv and pip are available.",
+            "Useful on locked-down cloud desktops where students cannot install OS packages.",
+        ],
+    ),
+    StudioPack(
         id="llm-starter",
         title="Top Local LLM Starter",
         category="llm",
@@ -640,6 +664,12 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
         installed = bool(_ollama_binary())
         details["binary"] = _ollama_binary()
         details["running"] = _ollama_reachable()
+    elif pack.install_kind == "micromamba_runtime":
+        from nvh.integrations.runtime import runtime_status
+
+        runtime = runtime_status()
+        installed = runtime.micromamba_installed
+        details.update(runtime.as_dict())
     elif pack.install_kind == "ollama_models":
         installed_models = _ollama_models()
         missing = [
@@ -1202,6 +1232,11 @@ async def install_studio_packs(
         try:
             if pack.install_kind == "rootless_ollama":
                 async for event in _install_rootless_ollama(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "micromamba_runtime":
+                from nvh.integrations.runtime import install_micromamba
+
+                async for event in install_micromamba(force_update=force_update):
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "ollama_models":
                 async for event in _install_ollama_models(pack, force_update):

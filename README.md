@@ -28,7 +28,7 @@ Three ways to get nvHive — pick the one that matches your setup. No Docker, no
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
-Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise `~/.nvh/` for new installs, auto-detects conda/mamba/venv, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config. Re-running heals the venv if the host Python moved (common on fresh cloud VMs).
+Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise `~/.nvh/` for new installs, uses Python `venv` + `pip` by default, offers a rootless micromamba fallback only when the cloud image needs it, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config.
 
 Windows: `iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex`
 macOS: `curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash`
@@ -94,6 +94,7 @@ nvh studio --install llms -y
 nvh studio --install agents -y
 nvh studio --install comfy -y
 nvh studio --install game -y
+nvh studio --install python-runtime-fallback -y  # optional rescue pack, not the default path
 ```
 
 The WebUI setup wizard includes a model picker with GPU-fit badges, disk
@@ -129,7 +130,7 @@ On first run, `nvh` launches a guided 3-step setup — GPU detection, provider k
 | 48 GB | `llama3.3:70b` | `llama3.2-vision` | Full power local |
 | 96+ GB | Multiple 70B models | `llama3.2-vision` | Full local council, $0 |
 
-Setup auto-detects your VRAM and recommends models that fit concurrently. No root/sudo needed for nvHive packs: tools install under `NVH_HOME` (`bin`, `models`, `studio`, `comfyui`, `cache`, and `config`). [Full GPU guide](docs/GPU_DETECTION.md)
+Setup auto-detects your VRAM and recommends models that fit concurrently. No root/sudo needed for nvHive packs: tools install under `NVH_HOME` (`bin`, `models`, `runtimes`, `apps`, `webui`, `studio`, `comfyui`, `cache`, and `config`). [Full GPU guide](docs/GPU_DETECTION.md)
 
 ---
 
