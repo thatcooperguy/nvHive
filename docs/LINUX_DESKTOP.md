@@ -84,6 +84,10 @@ jobs. Job metadata and logs are written to `$NVH_HOME/jobs`, so a student can
 refresh the browser, reconnect to a cloud desktop, or cancel a long download
 without losing the setup state.
 
+The local setup helper endpoint, `/v1/setup/helper`, works offline. It ranks the
+next storage, runtime, model, ComfyUI, and creative-tool actions before any local
+LLM is installed.
+
 CLI equivalents:
 
 ```bash
@@ -119,8 +123,9 @@ Large model downloads remain explicit because many image/video models require li
 
 The ComfyUI step includes a workflow model-plan selector. It saves
 `MODEL_DOWNLOAD_PLAN.md` and `model-download-plan.json` beside the nvHive
-ComfyUI examples so students can see exactly which image/video weights each
-workflow needs before accepting upstream terms.
+ComfyUI examples, plus `download-comfy-models.sh`, so students can see exactly
+which image/video weights each workflow needs and where they belong before
+accepting upstream terms.
 
 ## Student-Safe Defaults
 

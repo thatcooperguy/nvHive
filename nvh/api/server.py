@@ -910,6 +910,17 @@ async def system_runtime(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     return _response_envelope(runtime_status().as_dict())
 
 
+@app.get("/v1/setup/helper", summary="Local setup helper recommendations")
+async def setup_helper(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return offline setup recommendations for the student workstation wizard."""
+    from nvh.integrations.setup_agent import setup_helper_report
+
+    return _response_envelope(setup_helper_report(home_dir=home_dir))
+
+
 # -- /v1/system/info ----------------------------------------------------------
 
 @app.get("/v1/system/info", summary="Combined system status — GPU + providers + budget in one call")

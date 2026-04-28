@@ -184,6 +184,24 @@ def examples_as_dicts() -> list[dict[str, Any]]:
     return [asdict(example) for example in TRENDING_COMFYUI_EXAMPLES]
 
 
+def _model_target_folder(model_name: str) -> str:
+    """Best-effort ComfyUI model folder for a named workflow requirement."""
+    lowered = model_name.lower()
+    if "vae" in lowered:
+        return "vae"
+    if "controlnet" in lowered or "canny" in lowered or "depth" in lowered:
+        return "controlnet"
+    if "clip" in lowered or "t5" in lowered or "text_encoder" in lowered:
+        return "clip"
+    if "lora" in lowered:
+        return "loras"
+    if "gguf" in lowered:
+        return "unet"
+    if "wan" in lowered or "ltx" in lowered:
+        return "diffusion_models"
+    return "checkpoints"
+
+
 def comfyui_model_plan(example_ids: list[str] | None = None) -> dict[str, Any]:
     """Return a model download plan for selected ComfyUI workflow examples."""
     selected_ids = set(example_ids or [])
@@ -200,6 +218,7 @@ def comfyui_model_plan(example_ids: list[str] | None = None) -> dict[str, Any]:
                 "workflow_ids": [],
                 "workflow_titles": [],
                 "source_urls": set(),
+                "target_folder": _model_target_folder(model),
                 "requires_manual_download": True,
             })
             models[model]["workflow_ids"].append(example.id)
@@ -224,6 +243,7 @@ def comfyui_model_plan(example_ids: list[str] | None = None) -> dict[str, Any]:
         "model_count": len(models),
         "custom_node_count": len(custom_nodes),
         "requires_manual_download": True,
+        "download_helper": "download-comfy-models.sh",
         "message": (
             "ComfyUI model weights can be very large and may require upstream license "
             "acceptance. nvHive saves the plan and source links; download only models "
@@ -252,7 +272,9 @@ def write_model_plan(example_ids: list[str] | None = None, root: Path | None = N
     lines.extend(["", "Models:"])
     for model in plan["models"]:
         sources = ", ".join(model["source_urls"])
-        lines.append(f"- {model['name']} - sources: {sources}")
+        lines.append(
+            f"- {model['name']} -> models/{model['target_folder']} - sources: {sources}"
+        )
     if plan["custom_nodes"]:
         lines.extend(["", "Custom nodes:"])
         for node in plan["custom_nodes"]:
@@ -261,6 +283,27 @@ def write_model_plan(example_ids: list[str] | None = None, root: Path | None = N
         "\n".join(lines).strip() + "\n",
         encoding="utf-8",
     )
+    helper = examples_dir / "download-comfy-models.sh"
+    helper_lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "",
+        f'COMFYUI_ROOT="${{COMFYUI_ROOT:-{comfyui_app_dir(target_root)}}}"',
+        'MODELS_DIR="$COMFYUI_ROOT/models"',
+        'echo "ComfyUI models directory: $MODELS_DIR"',
+        "",
+    ]
+    for model in plan["models"]:
+        target = f'$MODELS_DIR/{model["target_folder"]}'
+        helper_lines.extend([
+            f'mkdir -p "{target}"',
+            f'echo "- {model["name"]} -> {target}"',
+            f'echo "  Sources: {", ".join(model["source_urls"])}"',
+            'echo "  Download manually after accepting upstream terms."',
+            "",
+        ])
+    helper.write_text("\n".join(helper_lines).strip() + "\n", encoding="utf-8")
+    helper.chmod(0o755)
     return plan_path
 
 
