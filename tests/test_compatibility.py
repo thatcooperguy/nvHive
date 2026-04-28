@@ -66,6 +66,15 @@ def test_compatibility_report_marks_rootless_fixable(tmp_path, monkeypatch) -> N
             "ollama_running": False,
         },
     )
+    monkeypatch.setattr(
+        compatibility,
+        "catalog_with_status",
+        lambda: {
+            "packs": [
+                {"id": "agent-lab", "status": {"installed": False}},
+            ],
+        },
+    )
 
     report = compatibility.compatibility_report(home_dir=tmp_path / "nvh")
     by_id = {app["id"]: app for app in report["apps"]}
@@ -74,6 +83,7 @@ def test_compatibility_report_marks_rootless_fixable(tmp_path, monkeypatch) -> N
     assert by_id["rootless-ollama"]["status"] == "ready"
     assert by_id["local-models"]["status"] == "fixable"
     assert by_id["local-models"]["recommended_action_id"] == "starter-models"
+    assert by_id["agent-lab"]["recommended_action_id"] == "agent-lab"
 
 
 def test_compatibility_report_blocks_missing_git_for_comfyui(tmp_path, monkeypatch) -> None:
@@ -117,6 +127,11 @@ def test_compatibility_report_blocks_missing_git_for_comfyui(tmp_path, monkeypat
             "ollama_available": True,
             "ollama_running": True,
         },
+    )
+    monkeypatch.setattr(
+        compatibility,
+        "catalog_with_status",
+        lambda: {"packs": [{"id": "agent-lab", "status": {"installed": True}}]},
     )
 
     report = compatibility.compatibility_report(home_dir=tmp_path / "nvh")

@@ -89,6 +89,15 @@ def _safe_compatibility_report(home_dir: str | Path | None = None) -> dict[str, 
         return {"summary": "Compatibility unavailable", "issue_count": 0, "apps": [], "error": str(exc)}
 
 
+def _safe_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
+    try:
+        from nvh.integrations.boot_preflight import boot_preflight_status
+
+        return boot_preflight_status(home_dir=home_dir, run_if_missing=False)
+    except Exception as exc:
+        return {"summary": "Boot preflight unavailable", "changes": [], "agent_helper": {}, "error": str(exc)}
+
+
 def _recent_failed_job() -> dict[str, Any] | None:
     try:
         jobs = list_jobs(limit=10)
@@ -331,6 +340,7 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
         ))
 
     compatibility = _safe_compatibility_report(home_dir=home_dir)
+    boot_preflight = _safe_boot_preflight(home_dir=home_dir)
     for app in compatibility.get("apps", []):
         if app.get("status") == "ready":
             continue
@@ -345,9 +355,21 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             affected_item=app["id"],
         ))
 
+    boot_changes = boot_preflight.get("changes") or []
+    if boot_changes:
+        issues.append(SetupIssue(
+            id="boot:vm-image-changed",
+            title="Base VM image changed since the last nvHive boot",
+            severity="recommended",
+            reason=boot_preflight.get("summary", "Re-run the setup preflight before launching installed apps."),
+            fix_action_id=None,
+            affected_item="boot-preflight",
+        ))
+
     actions.sort(key=lambda action: action.priority)
     issues.sort(key=lambda issue: {"required": 0, "recommended": 1, "optional": 2}.get(issue.severity, 3))
     ready = not any(action.status == "required" for action in actions)
+    agent_helper = boot_preflight.get("agent_helper") or {}
     return {
         "ready": ready,
         "summary": (
@@ -371,14 +393,21 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             "rootless_fixable_count": compatibility.get("rootless_fixable_count", 0),
             "recommended_torch_profile": compatibility.get("recommended_torch_profile"),
         },
+        "boot_preflight": {
+            "summary": boot_preflight.get("summary"),
+            "checked_at": boot_preflight.get("checked_at"),
+            "changed": bool(boot_preflight.get("changed")),
+            "change_count": len(boot_changes),
+            "agent_helper": agent_helper,
+        },
         "assistant": {
-            "mode": "offline-deterministic",
+            "mode": agent_helper.get("mode", "offline-deterministic"),
             "can_read_jobs": True,
             "can_read_receipts": True,
             "can_refresh_catalog": True,
             "description": (
-                "Local setup helper can explain next steps, inspect recent install state, "
-                "and suggest rootless repair commands without requiring a cloud model."
+                "nvWizard is the rootless setup questmaster: it checks the GPU forge, "
+                "watches VM image drift, and suggests repairs without requiring a cloud model."
             ),
         },
     }
@@ -391,6 +420,10 @@ def _commands_for_actions(actions: list[dict[str, Any]], *action_ids: str) -> li
         if action.get("id") in wanted and action.get("command")
     ]
     return commands
+
+
+def _persona_wrap(answer: str) -> str:
+    return f"nvWizard says: {answer}"
 
 
 def setup_assistant_reply(
@@ -484,7 +517,7 @@ def setup_assistant_reply(
 
     return {
         "question": question,
-        "answer": answer,
+        "answer": _persona_wrap(answer),
         "focus": focus,
         "commands": commands,
         "observations": {

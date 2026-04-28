@@ -18,7 +18,7 @@ from typing import Any
 
 from nvh.integrations.runtime import runtime_status
 from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import BLENDER_VERSION, model_catalog_with_status
+from nvh.integrations.studio_packs import BLENDER_VERSION, catalog_with_status, model_catalog_with_status
 
 
 @dataclass(frozen=True)
@@ -341,11 +341,17 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     display_ready = bool(host["display"].get("DISPLAY") or host["display"].get("WAYLAND_DISPLAY"))
     cuda_profile = recommended_torch_profile(gpu.get("cuda_version"))
     model_status = model_catalog_with_status()
+    pack_status = catalog_with_status()
+    pack_by_id = {pack.get("id"): pack for pack in pack_status.get("packs", [])}
     recommended_models = model_status.get("recommended_ids", [])
     missing_recommended_models = [
         model["id"] for model in model_status.get("models", [])
         if model.get("recommended") and not model.get("installed")
     ]
+
+    def _pack_installed(pack_id: str) -> bool:
+        status = pack_by_id.get(pack_id, {}).get("status", {})
+        return bool(status.get("installed"))
 
     apps = [
         _overall(
@@ -421,6 +427,7 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             "Local Agent Lab",
             "agent",
             [
+                _req("pack", "Agent lab pack", _pack_installed("agent-lab"), "Installs the local agent helper environment under NVH_HOME.", fix_action_id="agent-lab", rootless_fix_available=True),
                 _req("python", "Python 3.11+", _version_at_least(py["version"], "3.11"), f"Detected Python {py['version']}.", blocked=not _version_at_least(py["version"], "3.11")),
                 _req("venv", "Python venv/pip", bool(py["venv_available"] and py["pip_available"]), f"Runtime strategy: {py['strategy']}.", fix_action_id="runtime-fallback", rootless_fix_available=True),
                 _req("storage", "Persistent workspace", bool(storage["ok"]), "Agent packages install under NVH_HOME/studio.", fix_action_id="storage", rootless_fix_available=True),

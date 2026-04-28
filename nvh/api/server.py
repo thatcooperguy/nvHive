@@ -273,6 +273,33 @@ def get_engine() -> Engine:
     return _engine
 
 
+async def _run_boot_preflight_on_startup(app: FastAPI) -> None:
+    if os.environ.get("NVH_BOOT_PREFLIGHT", "1").lower() in {"0", "false", "off", "no"}:
+        logger.info("Hive API: boot preflight disabled by NVH_BOOT_PREFLIGHT.")
+        return
+    try:
+        from nvh.integrations.boot_preflight import run_boot_preflight
+
+        result = await asyncio.to_thread(run_boot_preflight)
+        app.state.boot_preflight = result
+        logger.info("Hive API: boot preflight complete. %s", result.get("summary"))
+    except Exception as exc:
+        app.state.boot_preflight = {
+            "summary": "Boot preflight failed",
+            "error": str(exc),
+            "changes": [],
+            "agent_helper": {
+                "offline_helper_ready": True,
+                "local_agent_ready": False,
+                "mode": "offline-deterministic",
+                "recommended_action_id": "agent-lab",
+                "summary": "Offline setup helper is still available.",
+                "requirements": [],
+            },
+        }
+        logger.warning("Hive API: boot preflight failed: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -280,6 +307,7 @@ def get_engine() -> Engine:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine
+    boot_task: asyncio.Task[None] | None = None
     from nvh.utils.logging import setup_logging
     json_mode = os.environ.get("HIVE_LOG_FORMAT", "text") == "json"
     setup_logging(level=os.environ.get("HIVE_LOG_LEVEL", "INFO"), json_format=json_mode)
@@ -288,12 +316,16 @@ async def lifespan(app: FastAPI):
         _engine = Engine()
         enabled = await _engine.initialize()
         logger.info("Hive API: engine ready. Advisors: %s", ", ".join(enabled) or "none")
+        boot_task = asyncio.create_task(_run_boot_preflight_on_startup(app))
         yield
     except Exception as exc:
         logger.error("Hive API: engine initialization error: %s", exc)
+        boot_task = asyncio.create_task(_run_boot_preflight_on_startup(app))
         # Don't crash — partial init is fine; requests will fail gracefully.
         yield
     finally:
+        if boot_task and not boot_task.done():
+            boot_task.cancel()
         logger.info("Hive API: shutting down.")
         if _engine:
             if hasattr(_engine, 'webhooks') and _engine.webhooks:
@@ -962,6 +994,40 @@ async def setup_compatibility(
     from nvh.integrations.compatibility import compatibility_report
 
     return _response_envelope(compatibility_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/boot-preflight", summary="Return boot-time VM image preflight")
+async def setup_boot_preflight(
+    home_dir: str | None = None,
+    recheck: bool = False,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the persisted boot preflight, running it if needed."""
+    from nvh.integrations.boot_preflight import boot_preflight_status, run_boot_preflight
+
+    if recheck:
+        result = await asyncio.to_thread(run_boot_preflight, home_dir=home_dir)
+        app.state.boot_preflight = result
+        return _response_envelope(result)
+
+    cached = getattr(app.state, "boot_preflight", None)
+    if cached and not home_dir:
+        return _response_envelope(cached)
+    result = await asyncio.to_thread(boot_preflight_status, home_dir=home_dir, run_if_missing=True)
+    return _response_envelope(result)
+
+
+@app.post("/v1/setup/boot-preflight/recheck", summary="Run boot-time VM image preflight now")
+async def setup_boot_preflight_recheck(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Force a boot preflight refresh after the user repairs something."""
+    from nvh.integrations.boot_preflight import run_boot_preflight
+
+    result = await asyncio.to_thread(run_boot_preflight, home_dir=home_dir)
+    app.state.boot_preflight = result
+    return _response_envelope(result)
 
 
 @app.get("/v1/setup/receipts", summary="List rootless install receipts")

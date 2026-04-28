@@ -41,6 +41,7 @@ import type {
   SetupHelperReport,
   SetupReceiptsResult,
   CompatibilityReport,
+  BootPreflightReport,
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
@@ -167,6 +168,14 @@ export async function getSetupCatalog(refresh = false): Promise<SetupCatalogResu
 export async function getSetupCompatibility(homeDir?: string): Promise<CompatibilityReport> {
   const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
   return apiGet<CompatibilityReport>(`/v1/setup/compatibility${qs}`);
+}
+
+export async function getSetupBootPreflight(homeDir?: string, recheck = false): Promise<BootPreflightReport> {
+  const params = new URLSearchParams();
+  if (homeDir) params.set('home_dir', homeDir);
+  if (recheck) params.set('recheck', 'true');
+  const qs = params.toString();
+  return apiGet<BootPreflightReport>(`/v1/setup/boot-preflight${qs ? `?${qs}` : ''}`);
 }
 
 export async function getSetupReceipts(options: {

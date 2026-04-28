@@ -19,6 +19,7 @@ import time
 import webbrowser
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 # ----------------------------------------------------------------------
 # Windows asyncio proactor GC crash workaround
@@ -7800,6 +7801,18 @@ def workstation(
 
     storage = ensure_storage(home_dir, min_free_gb=min_free_gb)
     profile = detect_workstation_profile(home_dir=storage.layout.home)
+    boot_report: dict[str, Any] | None = None
+    recommended_torch_profile = "nvidia-cu121"
+    try:
+        from nvh.integrations.boot_preflight import run_boot_preflight
+
+        boot_report = run_boot_preflight(home_dir=storage.layout.home)
+        recommended_torch_profile = (
+            boot_report.get("compatibility", {}).get("recommended_torch_profile")
+            or recommended_torch_profile
+        )
+    except Exception as exc:
+        console.print(f"  [yellow]![/yellow] Boot preflight skipped: {exc}")
     console.print("\n[bold green]NVHive Student Workstation[/bold green]")
     console.print("  [dim]Target: Linux GPU desktop or forwarded cloud session[/dim]\n")
     console.print(f"  NVH_HOME:   [bold]{storage.layout.home}[/bold]")
@@ -7820,6 +7833,17 @@ def workstation(
     if profile.recommended_chat_models:
         console.print(f"  Chat models: {', '.join(profile.recommended_chat_models)}")
     console.print(f"  ComfyUI:    {', '.join(profile.recommended_comfy_profiles)} profiles\n")
+    if boot_report:
+        agent_helper = boot_report.get("agent_helper", {})
+        console.print(f"  Boot check: [bold]{boot_report.get('summary')}[/bold]")
+        console.print(f"  AI helper:  {agent_helper.get('summary', 'Offline setup helper is available.')}")
+        if boot_report.get("changes"):
+            for change in boot_report.get("changes", [])[:5]:
+                console.print(
+                    f"  [yellow]![/yellow] {change.get('label')}: "
+                    f"{change.get('before')} -> {change.get('after')}"
+                )
+        console.print()
 
     for note in profile.notes:
         console.print(f"  [yellow]![/yellow] {note}")
@@ -7900,7 +7924,7 @@ def workstation(
             from nvh.integrations.comfyui import install_comfyui
 
             last_log = 0.0
-            async for event in install_comfyui(torch_profile="nvidia-cu130"):
+            async for event in install_comfyui(torch_profile=recommended_torch_profile):
                 kind = event.get("event", "")
                 message = event.get("message", "")
                 now = _time.monotonic()

@@ -13,7 +13,7 @@ import {
   getStorageStatus,
   configureStorage,
   getSetupCatalog,
-  getSetupCompatibility,
+  getSetupBootPreflight,
   getSetupHelper,
   getSetupReceipts,
   cancelInstallJob,
@@ -36,6 +36,8 @@ import type {
   ComfyUIExample,
   ComfyUIInstallEvent,
   ComfyUIStatus,
+  ComfyUITorchProfile,
+  BootPreflightReport,
   CompatibilityReport,
   InstallJob,
   InstallReceipt,
@@ -218,6 +220,7 @@ export default function SetupPage() {
   const [setupReceipts, setSetupReceipts] = useState<SetupReceiptsResult | null>(null);
   const [setupCatalog, setSetupCatalog] = useState<SetupCatalogResult | null>(null);
   const [setupCompatibility, setSetupCompatibility] = useState<CompatibilityReport | null>(null);
+  const [bootPreflight, setBootPreflight] = useState<BootPreflightReport | null>(null);
   const [setupInventoryError, setSetupInventoryError] = useState<string | null>(null);
   const [assistantQuestion, setAssistantQuestion] = useState('');
   const [assistantReply, setAssistantReply] = useState<SetupAssistantReply | null>(null);
@@ -302,14 +305,15 @@ export default function SetupPage() {
 
   const refreshSetupInventory = useCallback(async (refreshCatalog = false, homeDir?: string) => {
     try {
-      const [receipts, catalog, compatibility] = await Promise.all([
+      const [receipts, catalog, boot] = await Promise.all([
         getSetupReceipts({ limit: 8 }),
         getSetupCatalog(refreshCatalog),
-        getSetupCompatibility(homeDir ?? storageStatus?.layout.home),
+        getSetupBootPreflight(homeDir ?? storageStatus?.layout.home),
       ]);
       setSetupReceipts(receipts);
       setSetupCatalog(catalog);
-      setSetupCompatibility(compatibility);
+      setBootPreflight(boot);
+      setSetupCompatibility(boot.compatibility);
       setSetupInventoryError(null);
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Could not load setup inventory');
@@ -357,6 +361,18 @@ export default function SetupPage() {
       setAssistantError(err instanceof Error ? err.message : 'Setup helper could not answer');
     } finally {
       setAssistantLoading(false);
+    }
+  };
+
+  const handleBootRecheck = async () => {
+    try {
+      const boot = await getSetupBootPreflight(storageStatus?.layout.home, true);
+      setBootPreflight(boot);
+      setSetupCompatibility(boot.compatibility);
+      setSetupInventoryError(null);
+      void refreshSetupHelper(storageStatus?.layout.home);
+    } catch (err) {
+      setSetupInventoryError(err instanceof Error ? err.message : 'Boot preflight could not run');
     }
   };
 
@@ -763,7 +779,7 @@ export default function SetupPage() {
     setComfyEvents([]);
 
     installComfyUIStream(
-      { torch_profile: 'nvidia-cu130', force_update: false },
+      { torch_profile: recommendedTorchProfile, force_update: false },
       {
         onJob: job => {
           mergeInstallJob(job);
@@ -868,6 +884,16 @@ export default function SetupPage() {
   const compatibilityIssueCount = setupCompatibility?.issue_count ?? setupHelper?.compatibility?.issue_count ?? 0;
   const compatibilityBlockedCount = setupCompatibility?.blocked_count ?? setupHelper?.compatibility?.blocked_count ?? 0;
   const compatibilityFixableCount = setupCompatibility?.rootless_fixable_count ?? setupHelper?.compatibility?.rootless_fixable_count ?? 0;
+  const bootChangeCount = bootPreflight?.changes.length ?? setupHelper?.boot_preflight?.change_count ?? 0;
+  const bootAgentHelper = bootPreflight?.agent_helper ?? setupHelper?.boot_preflight?.agent_helper;
+  const detectedTorchProfile = setupCompatibility?.recommended_torch_profile
+    ?? setupHelper?.compatibility?.recommended_torch_profile
+    ?? 'nvidia-cu121';
+  const recommendedTorchProfile: ComfyUITorchProfile = (
+    ['nvidia-cu130', 'nvidia-cu121', 'cpu', 'skip'].includes(detectedTorchProfile)
+      ? detectedTorchProfile
+      : 'nvidia-cu121'
+  ) as ComfyUITorchProfile;
 
   const runHelperAction = (actionId: string) => {
     if (actionId.startsWith('repair-receipt:')) {
@@ -1087,7 +1113,10 @@ export default function SetupPage() {
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => void refreshSetupInventory(false)}
+                onClick={() => {
+                  void refreshSetupInventory(false);
+                  void handleBootRecheck();
+                }}
                 className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
               >
                 Recheck
@@ -1128,6 +1157,53 @@ export default function SetupPage() {
               </div>
             </div>
           </div>
+          {(bootPreflight || setupHelper?.boot_preflight) && (
+            <div className="border border-[#0a0a0a] bg-[#0a0a0a] text-[#f5f5f5] p-3 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                <div>
+                  <div className="text-xs font-mono font-bold text-[#76B900]">nvWizard Boot Watch</div>
+                  <div className="text-[10px] font-mono text-[#d4d4d4] mt-0.5">
+                    {bootPreflight?.summary ?? setupHelper?.boot_preflight?.summary ?? 'Boot preflight runs when nvHive launches.'}
+                  </div>
+                </div>
+                <div className="flex gap-1 flex-wrap">
+                  <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
+                    bootChangeCount ? 'border-[#d97706]/60 text-[#fbbf24]' : 'border-[#76B900]/60 text-[#76B900]'
+                  }`}>
+                    {bootChangeCount ? `${bootChangeCount} shift${bootChangeCount === 1 ? '' : 's'}` : 'image steady'}
+                  </span>
+                  <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
+                    bootAgentHelper?.local_agent_ready ? 'border-[#76B900]/60 text-[#76B900]' : 'border-[#d97706]/60 text-[#fbbf24]'
+                  }`}>
+                    {bootAgentHelper?.local_agent_ready ? 'agent awake' : 'offline guide'}
+                  </span>
+                </div>
+              </div>
+              <div className="text-[10px] font-mono text-[#e5e5e5] leading-relaxed">
+                {bootAgentHelper?.summary ?? 'Offline setup helper is available before any cloud or local model is installed.'}
+              </div>
+              {bootAgentHelper?.recommended_action_id && (
+                <button
+                  type="button"
+                  onClick={() => runHelperAction(bootAgentHelper.recommended_action_id as string)}
+                  disabled={helperActionDisabled(bootAgentHelper.recommended_action_id)}
+                  className="bg-[#76B900] text-[#0a0a0a] px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                >
+                  {helperActionLabel(bootAgentHelper.recommended_action_id)}
+                </button>
+              )}
+              {bootPreflight?.changes && bootPreflight.changes.length > 0 && (
+                <div className="space-y-1">
+                  {bootPreflight.changes.slice(0, 5).map(change => (
+                    <div key={change.id} className="flex items-start gap-2 text-[9px] font-mono text-[#d4d4d4]">
+                      <span className="mt-1 w-1.5 h-1.5 flex-shrink-0 bg-[#fbbf24]" />
+                      <span>{change.label}: {change.before} {'->'} {change.after}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {(setupCompatibility || setupHelper?.compatibility) && (
             <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -1241,7 +1317,7 @@ export default function SetupPage() {
         <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
-              <div className="section-label">Local Setup Helper</div>
+              <div className="section-label">nvWizard Quest Log</div>
               <div className="text-[10px] font-mono text-[#737373] mt-1">
                 {setupHelper?.summary ?? 'Offline setup recommendations'}
               </div>
@@ -1356,9 +1432,9 @@ export default function SetupPage() {
               <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">Ask Setup Helper</div>
+                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">Ask nvWizard</div>
                     <div className="text-[10px] font-mono text-[#737373] mt-0.5">
-                      Offline local guidance using jobs, receipts, storage, and catalog state
+                      GPU questmaster guidance from jobs, receipts, storage, and catalog state
                     </div>
                   </div>
                   <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/40 px-1.5 py-0.5 uppercase">
@@ -1370,7 +1446,7 @@ export default function SetupPage() {
                     value={assistantQuestion}
                     onChange={event => setAssistantQuestion(event.target.value)}
                     onKeyDown={event => { if (event.key === 'Enter') void handleAskAssistant(); }}
-                    placeholder="Why did ComfyUI fail? What should I install next?"
+                    placeholder="What quest is blocked? Why did ComfyUI fail?"
                     className="input-base flex-1 px-3 py-2 text-xs font-mono"
                   />
                   <button

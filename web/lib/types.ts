@@ -465,6 +465,13 @@ export interface SetupHelperReport {
     rootless_fixable_count: number;
     recommended_torch_profile?: string;
   };
+  boot_preflight?: {
+    summary?: string;
+    checked_at?: string | null;
+    changed: boolean;
+    change_count: number;
+    agent_helper?: BootAgentHelper;
+  };
   assistant?: {
     mode: string;
     can_read_jobs: boolean;
@@ -583,6 +590,41 @@ export interface CompatibilityReport {
   host: Record<string, unknown>;
   facts: HostFact[];
   apps: AppCompatibility[];
+}
+
+export interface BootPreflightChange {
+  id: string;
+  label: string;
+  before: string;
+  after: string;
+  severity: 'info' | 'optional' | 'recommended' | 'required' | string;
+  detail: string;
+}
+
+export interface BootAgentHelper {
+  offline_helper_ready: boolean;
+  local_agent_ready: boolean;
+  mode: string;
+  recommended_action_id: string | null;
+  summary: string;
+  requirements: CompatibilityRequirement[];
+}
+
+export interface BootPreflightReport {
+  schema_version: number;
+  checked_at: string | null;
+  state_file: string;
+  first_run: boolean;
+  changed: boolean;
+  needs_attention: boolean;
+  fingerprint_id: string | null;
+  previous_fingerprint_id: string | null;
+  previous_checked_at: string | null;
+  summary: string;
+  changes: BootPreflightChange[];
+  agent_helper: BootAgentHelper;
+  compatibility: CompatibilityReport | null;
+  error?: string;
 }
 
 export interface SetupAssistantReply {
