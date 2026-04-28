@@ -42,6 +42,9 @@ import type {
   SetupReceiptsResult,
   CompatibilityReport,
   BootPreflightReport,
+  MissionControlReport,
+  AutoRepairResult,
+  MountAutopilotReport,
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
@@ -138,6 +141,21 @@ export async function configureStorage(request: StorageConfigureRequest): Promis
   return apiPost<StorageStatus>('/v1/system/storage', request);
 }
 
+export async function getMountAutopilot(minFreeGb = 20): Promise<MountAutopilotReport> {
+  return apiGet<MountAutopilotReport>(`/v1/system/mount-autopilot?min_free_gb=${encodeURIComponent(String(minFreeGb))}`);
+}
+
+export async function activateMountAutopilot(homeDir?: string, minFreeGb = 20): Promise<{
+  summary: string;
+  storage: StorageStatus;
+  mount_autopilot: MountAutopilotReport;
+}> {
+  return apiPost('/v1/system/mount-autopilot/activate', {
+    home_dir: homeDir,
+    min_free_gb: minFreeGb,
+  });
+}
+
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return apiGet<RuntimeStatus>('/v1/system/runtime');
 }
@@ -176,6 +194,17 @@ export async function getSetupBootPreflight(homeDir?: string, recheck = false): 
   if (recheck) params.set('recheck', 'true');
   const qs = params.toString();
   return apiGet<BootPreflightReport>(`/v1/setup/boot-preflight${qs ? `?${qs}` : ''}`);
+}
+
+export async function getSetupMissionControl(homeDir?: string): Promise<MissionControlReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<MissionControlReport>(`/v1/setup/mission-control${qs}`);
+}
+
+export async function repairSetupWorkspace(homeDir?: string): Promise<AutoRepairResult> {
+  return apiPost<AutoRepairResult>('/v1/setup/repair-workspace', {
+    home_dir: homeDir,
+  });
 }
 
 export async function getSetupReceipts(options: {

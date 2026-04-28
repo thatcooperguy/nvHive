@@ -911,6 +911,14 @@ class SetupAssistantRequest(BaseModel):
     )
 
 
+class SetupHomeRequest(BaseModel):
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+    min_free_gb: float = Field(default=20.0, ge=0)
+
+
 @app.get("/v1/system/storage", summary="Inspect rootless persistent storage")
 async def system_storage(
     home_dir: str | None = None,
@@ -942,6 +950,33 @@ async def configure_system_storage(
     )
 
 
+@app.get("/v1/system/mount-autopilot", summary="Detect likely persistent mounts")
+async def system_mount_autopilot(
+    min_free_gb: float = 20.0,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Recommend a persistent NVH_HOME without requiring root access."""
+    from nvh.integrations.mount_autopilot import mount_autopilot_report
+
+    return _response_envelope(mount_autopilot_report(min_free_gb=min_free_gb))
+
+
+@app.post("/v1/system/mount-autopilot/activate", summary="Activate the best persistent mount")
+async def system_mount_autopilot_activate(
+    request: SetupHomeRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Create and activate the highest-scoring discovered NVH_HOME."""
+    from nvh.integrations.mount_autopilot import activate_recommended_mount
+
+    return _response_envelope(
+        activate_recommended_mount(
+            min_free_gb=request.min_free_gb,
+            extra_roots=[request.home_dir] if request.home_dir else None,
+        )
+    )
+
+
 @app.get("/v1/system/runtime", summary="Inspect rootless runtime fallback status")
 async def system_runtime(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return whether nvHive can use Python venv/pip or needs micromamba fallback."""
@@ -959,6 +994,61 @@ async def setup_helper(
     from nvh.integrations.setup_agent import setup_helper_report
 
     return _response_envelope(setup_helper_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/mission-control", summary="Return nvWizard setup mission timeline")
+async def setup_mission_control(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the combined boot, repair, model-fit, and smoke-test timeline."""
+    from nvh.integrations.mission_control import mission_control_report
+
+    return _response_envelope(mission_control_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/auto-repair", summary="Preview safe rootless auto-repairs")
+async def setup_auto_repair(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the safe repair queue without running installers or downloads."""
+    from nvh.integrations.auto_repair import auto_repair_plan
+
+    return _response_envelope(auto_repair_plan(home_dir=home_dir))
+
+
+@app.post("/v1/setup/repair-workspace", summary="Run safe rootless workspace repairs")
+async def setup_repair_workspace(
+    request: SetupHomeRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Run idempotent repairs that leave user files, models, and app data intact."""
+    from nvh.integrations.auto_repair import run_safe_repairs
+
+    return _response_envelope(run_safe_repairs(home_dir=request.home_dir))
+
+
+@app.get("/v1/setup/smoke-tests", summary="Run lightweight app smoke checks")
+async def setup_smoke_tests(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Check installed apps without running destructive actions."""
+    from nvh.integrations.smoke_tests import smoke_test_report
+
+    return _response_envelope(smoke_test_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/model-fit", summary="Recommend models by VRAM and disk fit")
+async def setup_model_fit(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the simplified student model queue and fit scores."""
+    from nvh.integrations.model_fit import model_fit_report
+
+    return _response_envelope(model_fit_report(home_dir=home_dir))
 
 
 @app.post("/v1/setup/assistant", summary="Ask the local setup helper")

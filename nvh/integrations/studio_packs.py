@@ -171,7 +171,7 @@ STUDIO_MODELS: list[StudioModel] = [
         estimated_disk_gb=4.5,
         priority=70,
         capabilities=["vision", "image Q&A", "desktop screenshots"],
-        why_recommended="Adds local image understanding for screenshots and classroom media.",
+        why_recommended="Adds local image understanding for screenshots and creative media.",
         source_url="https://ollama.com/library/llava",
         license_note="Ollama library terms apply.",
     ),
@@ -283,7 +283,7 @@ STUDIO_PACKS: list[StudioPack] = [
         tagline="LangGraph, CrewAI, AutoGen, tools, and notebooks",
         description=(
             "Creates a dedicated Python environment for local agents, tool calling, "
-            "search helpers, and classroom automation experiments."
+            "search helpers, and student automation experiments."
         ),
         recommended_vram_gb=0,
         estimated_disk_gb=2.5,
@@ -355,7 +355,7 @@ STUDIO_PACKS: list[StudioPack] = [
         tagline="Pygame, Panda3D, assets, and modding helpers",
         description=(
             "Creates a no-root Python game development environment for AI-assisted "
-            "prototypes, texture generation workflows, and classroom game projects."
+            "prototypes, texture generation workflows, and personal game projects."
         ),
         recommended_vram_gb=0,
         estimated_disk_gb=2.0,

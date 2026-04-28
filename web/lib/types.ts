@@ -623,8 +623,111 @@ export interface BootPreflightReport {
   summary: string;
   changes: BootPreflightChange[];
   agent_helper: BootAgentHelper;
+  mount_autopilot?: MountAutopilotReport | null;
+  auto_repair?: AutoRepairPlan | AutoRepairResult | null;
+  smoke_tests?: SmokeTestReport | null;
+  model_fit?: {
+    summary?: string;
+    detected_vram_gb?: number;
+    recommended_ids?: string[];
+  } | null;
   compatibility: CompatibilityReport | null;
   error?: string;
+}
+
+export interface MountCandidate {
+  path: string;
+  recommended_home: string;
+  label: string;
+  source: string;
+  exists: boolean;
+  writable: boolean;
+  free_gb: number | null;
+  total_gb: number | null;
+  score: number;
+  warnings: string[];
+  evidence: string[];
+}
+
+export interface MountAutopilotReport {
+  summary: string;
+  confidence: string;
+  current: StorageStatus;
+  recommended: MountCandidate | null;
+  candidates: MountCandidate[];
+}
+
+export interface AutoRepairAction {
+  id: string;
+  title: string;
+  status: string;
+  summary: string;
+  safe_to_auto_run: boolean;
+  action_type: string;
+  button_action_id: string;
+}
+
+export interface AutoRepairPlan {
+  summary: string;
+  auto_count: number;
+  needs_user_count: number;
+  actions: AutoRepairAction[];
+}
+
+export interface AutoRepairResult {
+  summary: string;
+  completed: Array<AutoRepairAction & { result?: string }>;
+  skipped: Array<AutoRepairAction & { reason?: string }>;
+  errors: Array<AutoRepairAction & { error?: string }>;
+  plan: AutoRepairPlan;
+}
+
+export interface SmokeTestItem {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'fail' | 'skip' | string;
+  summary: string;
+  detail: string;
+  action_id: string | null;
+}
+
+export interface SmokeTestReport {
+  summary: string;
+  ready: boolean;
+  passed: number;
+  warnings: number;
+  failed: number;
+  tests: SmokeTestItem[];
+}
+
+export interface ModelFitReport {
+  summary: string;
+  detected_vram_gb: number;
+  free_gb: number | null;
+  recommended_ids: string[];
+  best_by_use_case: Record<string, Record<string, unknown>>;
+  models: Array<Record<string, unknown>>;
+  ollama_available: boolean;
+  ollama_running: boolean;
+}
+
+export interface MissionStage {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'fail' | string;
+  summary: string;
+  action_id: string | null;
+}
+
+export interface MissionControlReport {
+  summary: string;
+  ready: boolean;
+  stages: MissionStage[];
+  boot_preflight: BootPreflightReport;
+  mount_autopilot: MountAutopilotReport;
+  auto_repair: AutoRepairPlan;
+  smoke_tests: SmokeTestReport;
+  model_fit: ModelFitReport;
 }
 
 export interface SetupAssistantReply {

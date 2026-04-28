@@ -10,11 +10,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from nvh.integrations.auto_repair import auto_repair_plan, run_safe_repairs
 from nvh.integrations.compatibility import compatibility_report
+from nvh.integrations.model_fit import model_fit_report
+from nvh.integrations.mount_autopilot import mount_autopilot_report
+from nvh.integrations.smoke_tests import smoke_test_report
 from nvh.integrations.storage import storage_layout
 
 STATE_FILENAME = "boot-preflight.json"
@@ -201,6 +206,13 @@ def run_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
     first_run = previous_fingerprint is None
     checked_at = datetime.now(UTC).isoformat()
     agent_helper = _agent_helper_status(compatibility)
+    mount_autopilot = mount_autopilot_report()
+    repair_plan = auto_repair_plan(home_dir=home_dir)
+    repair_result = None
+    if os.environ.get("NVH_BOOT_AUTO_REPAIR", "1").lower() not in {"0", "false", "off", "no"}:
+        repair_result = run_safe_repairs(home_dir=home_dir)
+    smoke_tests = smoke_test_report(home_dir=home_dir)
+    model_fit = model_fit_report(home_dir=home_dir)
 
     result = {
         "schema_version": STATE_SCHEMA_VERSION,
@@ -215,6 +227,14 @@ def run_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
         "summary": _result_summary(first_run=first_run, changes=changes, compatibility=compatibility),
         "changes": changes,
         "agent_helper": agent_helper,
+        "mount_autopilot": mount_autopilot,
+        "auto_repair": repair_result or repair_plan,
+        "smoke_tests": smoke_tests,
+        "model_fit": {
+            "summary": model_fit.get("summary"),
+            "detected_vram_gb": model_fit.get("detected_vram_gb"),
+            "recommended_ids": model_fit.get("recommended_ids", []),
+        },
         "compatibility": compatibility,
     }
     _write_state(
@@ -261,5 +281,9 @@ def boot_preflight_status(
             "summary": "Offline setup helper is active; boot preflight has not checked Local Agent Lab yet.",
             "requirements": [],
         },
+        "mount_autopilot": None,
+        "auto_repair": None,
+        "smoke_tests": None,
+        "model_fit": None,
         "compatibility": None,
     }

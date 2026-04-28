@@ -52,6 +52,11 @@ def test_boot_preflight_captures_baseline_and_agent_helper(tmp_path, monkeypatch
         "compatibility_report",
         lambda home_dir=None: _compatibility_report(agent_ready=False),
     )
+    monkeypatch.setattr(boot_preflight, "mount_autopilot_report", lambda: {"recommended": None})
+    monkeypatch.setattr(boot_preflight, "auto_repair_plan", lambda home_dir=None: {"actions": []})
+    monkeypatch.setattr(boot_preflight, "run_safe_repairs", lambda home_dir=None: {"completed": [], "plan": {"actions": []}})
+    monkeypatch.setattr(boot_preflight, "smoke_test_report", lambda home_dir=None: {"summary": "ok"})
+    monkeypatch.setattr(boot_preflight, "model_fit_report", lambda home_dir=None: {"summary": "ok", "recommended_ids": [], "detected_vram_gb": 0})
 
     report = boot_preflight.run_boot_preflight(home_dir=tmp_path / "nvh")
 
@@ -71,6 +76,11 @@ def test_boot_preflight_detects_image_drift(tmp_path, monkeypatch) -> None:
         "compatibility_report",
         lambda home_dir=None: reports.pop(0),
     )
+    monkeypatch.setattr(boot_preflight, "mount_autopilot_report", lambda: {"recommended": None})
+    monkeypatch.setattr(boot_preflight, "auto_repair_plan", lambda home_dir=None: {"actions": []})
+    monkeypatch.setattr(boot_preflight, "run_safe_repairs", lambda home_dir=None: {"completed": [], "plan": {"actions": []}})
+    monkeypatch.setattr(boot_preflight, "smoke_test_report", lambda home_dir=None: {"summary": "ok"})
+    monkeypatch.setattr(boot_preflight, "model_fit_report", lambda home_dir=None: {"summary": "ok", "recommended_ids": [], "detected_vram_gb": 0})
 
     boot_preflight.run_boot_preflight(home_dir=tmp_path / "nvh")
     changed = boot_preflight.run_boot_preflight(home_dir=tmp_path / "nvh")

@@ -14,8 +14,10 @@ import {
   configureStorage,
   getSetupCatalog,
   getSetupBootPreflight,
+  getSetupMissionControl,
   getSetupHelper,
   getSetupReceipts,
+  repairSetupWorkspace,
   cancelInstallJob,
   getComfyUIStatus,
   getComfyUIExamples,
@@ -41,6 +43,7 @@ import type {
   CompatibilityReport,
   InstallJob,
   InstallReceipt,
+  MissionControlReport,
   SetupAssistantReply,
   SetupCatalogResult,
   SetupHelperReport,
@@ -221,6 +224,8 @@ export default function SetupPage() {
   const [setupCatalog, setSetupCatalog] = useState<SetupCatalogResult | null>(null);
   const [setupCompatibility, setSetupCompatibility] = useState<CompatibilityReport | null>(null);
   const [bootPreflight, setBootPreflight] = useState<BootPreflightReport | null>(null);
+  const [missionControl, setMissionControl] = useState<MissionControlReport | null>(null);
+  const [workspaceRepairing, setWorkspaceRepairing] = useState(false);
   const [setupInventoryError, setSetupInventoryError] = useState<string | null>(null);
   const [assistantQuestion, setAssistantQuestion] = useState('');
   const [assistantReply, setAssistantReply] = useState<SetupAssistantReply | null>(null);
@@ -305,15 +310,18 @@ export default function SetupPage() {
 
   const refreshSetupInventory = useCallback(async (refreshCatalog = false, homeDir?: string) => {
     try {
-      const [receipts, catalog, boot] = await Promise.all([
+      const activeHome = homeDir ?? storageStatus?.layout.home;
+      const [receipts, catalog, boot, mission] = await Promise.all([
         getSetupReceipts({ limit: 8 }),
         getSetupCatalog(refreshCatalog),
-        getSetupBootPreflight(homeDir ?? storageStatus?.layout.home),
+        getSetupBootPreflight(activeHome),
+        getSetupMissionControl(activeHome),
       ]);
       setSetupReceipts(receipts);
       setSetupCatalog(catalog);
       setBootPreflight(boot);
       setSetupCompatibility(boot.compatibility);
+      setMissionControl(mission);
       setSetupInventoryError(null);
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Could not load setup inventory');
@@ -369,10 +377,30 @@ export default function SetupPage() {
       const boot = await getSetupBootPreflight(storageStatus?.layout.home, true);
       setBootPreflight(boot);
       setSetupCompatibility(boot.compatibility);
+      setMissionControl(await getSetupMissionControl(storageStatus?.layout.home));
       setSetupInventoryError(null);
       void refreshSetupHelper(storageStatus?.layout.home);
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Boot preflight could not run');
+    }
+  };
+
+  const handleRepairWorkspace = async () => {
+    if (workspaceRepairing) return;
+    setWorkspaceRepairing(true);
+    try {
+      await repairSetupWorkspace(storageStatus?.layout.home);
+      await Promise.all([
+        refreshSetupInventory(false, storageStatus?.layout.home),
+        refreshSetupHelper(storageStatus?.layout.home),
+        refreshComfyUI(),
+        refreshInstallJobs(),
+      ]);
+      setSetupInventoryError(null);
+    } catch (err) {
+      setSetupInventoryError(err instanceof Error ? err.message : 'Workspace repair failed');
+    } finally {
+      setWorkspaceRepairing(false);
     }
   };
 
@@ -886,6 +914,16 @@ export default function SetupPage() {
   const compatibilityFixableCount = setupCompatibility?.rootless_fixable_count ?? setupHelper?.compatibility?.rootless_fixable_count ?? 0;
   const bootChangeCount = bootPreflight?.changes.length ?? setupHelper?.boot_preflight?.change_count ?? 0;
   const bootAgentHelper = bootPreflight?.agent_helper ?? setupHelper?.boot_preflight?.agent_helper;
+  const missionStages = missionControl?.stages ?? [];
+  const mountRecommendation = missionControl?.mount_autopilot.recommended ?? bootPreflight?.mount_autopilot?.recommended ?? null;
+  const autoRepair = missionControl?.auto_repair ?? bootPreflight?.auto_repair ?? null;
+  const autoRepairActions = autoRepair && 'actions' in autoRepair
+    ? autoRepair.actions
+    : autoRepair && 'plan' in autoRepair
+      ? autoRepair.plan.actions
+      : [];
+  const smokeTests = missionControl?.smoke_tests ?? bootPreflight?.smoke_tests ?? null;
+  const modelFit = missionControl?.model_fit ?? bootPreflight?.model_fit ?? null;
   const detectedTorchProfile = setupCompatibility?.recommended_torch_profile
     ?? setupHelper?.compatibility?.recommended_torch_profile
     ?? 'nvidia-cu121';
@@ -932,6 +970,19 @@ export default function SetupPage() {
       handleInstallStudioPacks(['creative']);
       return;
     }
+    if (actionId === 'repair-workspace') {
+      void handleRepairWorkspace();
+      return;
+    }
+    if (actionId === 'smoke-tests') {
+      setStep('test');
+      void refreshSetupInventory(false);
+      return;
+    }
+    if (actionId === 'repair-receipts') {
+      void refreshSetupInventory(false);
+      return;
+    }
     if (studioPacks.some(pack => pack.id === actionId)) {
       handleInstallStudioPacks([actionId]);
       return;
@@ -947,6 +998,9 @@ export default function SetupPage() {
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
       return comfyInstalling ? 'Installing' : 'Install';
     }
+    if (actionId === 'repair-workspace') return workspaceRepairing ? 'Repairing' : 'Repair';
+    if (actionId === 'smoke-tests') return 'Open';
+    if (actionId === 'repair-receipts') return 'Review';
     return studioInstalling ? 'Installing' : 'Run';
   };
 
@@ -957,6 +1011,8 @@ export default function SetupPage() {
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
       return comfyInstalling || !storageReady;
     }
+    if (actionId === 'repair-workspace') return workspaceRepairing;
+    if (actionId === 'smoke-tests' || actionId === 'repair-receipts') return false;
     return studioInstalling || !storageReady;
   };
 
@@ -1202,6 +1258,76 @@ export default function SetupPage() {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+          {missionControl && (
+            <div className="border border-[#e5e5e5] bg-[#ffffff] p-3 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                <div>
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a]">Mission Timeline</div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-0.5">{missionControl.summary}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleRepairWorkspace()}
+                  disabled={workspaceRepairing}
+                  className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                >
+                  {workspaceRepairing ? 'Repairing' : 'Fix My Setup'}
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {missionStages.slice(0, 6).map(stage => (
+                  <button
+                    key={stage.id}
+                    type="button"
+                    onClick={() => stage.action_id && runHelperAction(stage.action_id)}
+                    disabled={!stage.action_id || helperActionDisabled(stage.action_id)}
+                    className="text-left border border-[#e5e5e5] bg-[#fafafa] p-3 hover:border-[#76B900]/50 transition-colors disabled:opacity-70"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">{stage.title}</div>
+                      <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
+                        stage.status === 'pass'
+                          ? 'border-[#76B900]/40 text-[#76B900]'
+                          : 'border-[#d97706]/40 text-[#d97706]'
+                      }`}>
+                        {stage.status}
+                      </span>
+                    </div>
+                    <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">{stage.summary}</div>
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                  <div className="text-[9px] font-mono text-[#737373] uppercase">Mount Autopilot</div>
+                  <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 break-all">
+                    {mountRecommendation?.recommended_home ?? 'No mount picked yet'}
+                  </div>
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-1">
+                    score {mountRecommendation?.score ?? 0}
+                  </div>
+                </div>
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                  <div className="text-[9px] font-mono text-[#737373] uppercase">Auto Repair</div>
+                  <div className="text-[10px] font-mono text-[#0a0a0a] mt-1">
+                    {autoRepairActions.filter(action => action.safe_to_auto_run).length} safe / {autoRepairActions.filter(action => !action.safe_to_auto_run).length} confirm
+                  </div>
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-1">
+                    env, catalog, examples only
+                  </div>
+                </div>
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                  <div className="text-[9px] font-mono text-[#737373] uppercase">Smoke Tests</div>
+                  <div className="text-[10px] font-mono text-[#0a0a0a] mt-1">
+                    {smokeTests?.summary ?? 'Waiting for checks'}
+                  </div>
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-1">
+                    models: {modelFit?.recommended_ids?.slice(0, 3).join(', ') || 'no queue'}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
           {(setupCompatibility || setupHelper?.compatibility) && (
