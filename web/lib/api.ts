@@ -36,7 +36,10 @@ import type {
   StorageConfigureRequest,
   StorageStatus,
   RuntimeStatus,
+  SetupAssistantReply,
+  SetupCatalogResult,
   SetupHelperReport,
+  SetupReceiptsResult,
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
@@ -145,6 +148,33 @@ export async function getSetupHelper(homeDir?: string): Promise<SetupHelperRepor
 // ─── Analytics ──────────────────────────────────────────────────────────────
 
 // ComfyUI visual workflow setup
+
+export async function askSetupAssistant(
+  question: string,
+  homeDir?: string
+): Promise<SetupAssistantReply> {
+  return apiPost<SetupAssistantReply>('/v1/setup/assistant', {
+    question,
+    home_dir: homeDir,
+  });
+}
+
+export async function getSetupCatalog(refresh = false): Promise<SetupCatalogResult> {
+  return apiGet<SetupCatalogResult>(`/v1/setup/catalog${refresh ? '?refresh=true' : ''}`);
+}
+
+export async function getSetupReceipts(options: {
+  kind?: string;
+  status?: string;
+  limit?: number;
+} = {}): Promise<SetupReceiptsResult> {
+  const params = new URLSearchParams();
+  if (options.kind) params.set('kind', options.kind);
+  if (options.status) params.set('status_filter', options.status);
+  if (options.limit) params.set('limit', String(options.limit));
+  const qs = params.toString();
+  return apiGet<SetupReceiptsResult>(`/v1/setup/receipts${qs ? `?${qs}` : ''}`);
+}
 
 const TERMINAL_JOB_STATUSES = new Set(['complete', 'failed', 'canceled', 'interrupted']);
 

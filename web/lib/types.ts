@@ -443,6 +443,97 @@ export interface SetupHelperReport {
   comfyui: Record<string, unknown>;
   model_recommendation_count: number;
   actions: SetupAction[];
+  receipts?: SetupReceiptsSummary;
+  catalog?: SetupCatalogStatus;
+  assistant?: {
+    mode: string;
+    can_read_jobs: boolean;
+    can_read_receipts: boolean;
+    can_refresh_catalog: boolean;
+    description: string;
+  };
+}
+
+export interface InstallReceiptHealth {
+  install_path_exists: boolean;
+  missing_launchers: string[];
+  missing_files: string[];
+  healthy: boolean;
+}
+
+export interface InstallReceipt {
+  id: string;
+  kind: string;
+  item_id: string;
+  title: string;
+  status: string;
+  installed_at: string;
+  updated_at: string;
+  install_path: string;
+  version: string | null;
+  source_urls: string[];
+  launchers: string[];
+  models: string[];
+  files: string[];
+  no_root: boolean;
+  metadata: Record<string, unknown>;
+  schema_version: number;
+  health: InstallReceiptHealth;
+}
+
+export interface SetupReceiptsSummary {
+  count: number;
+  by_kind: Record<string, number>;
+  unhealthy: number;
+  root: string | null;
+}
+
+export interface SetupReceiptsResult {
+  receipts: InstallReceipt[];
+  count: number;
+  summary: SetupReceiptsSummary;
+}
+
+export interface SetupCatalogStatus {
+  source: string;
+  url?: string;
+  error?: string | null;
+  schema_version?: number;
+  updated_at?: string;
+  profile_count?: number;
+  pack_count?: number;
+  model_count?: number;
+  comfyui_example_count?: number;
+}
+
+export interface SetupCatalogResult {
+  source: string;
+  url: string;
+  error: string | null;
+  catalog: {
+    schema_version: number;
+    updated_at: string;
+    channel?: string;
+    profiles: Array<Record<string, unknown>>;
+    packs: Array<Record<string, unknown>>;
+    models: Array<Record<string, unknown>>;
+    comfyui_examples: Array<Record<string, unknown>>;
+  };
+}
+
+export interface SetupAssistantReply {
+  question: string;
+  answer: string;
+  focus: string;
+  commands: string[];
+  observations: {
+    ready: boolean;
+    receipt_count: number;
+    unhealthy_receipts: number;
+    catalog_source?: string;
+    recent_problem?: InstallJob | null;
+  };
+  actions: SetupAction[];
 }
 
 // ─── UI State helpers ────────────────────────────────────────────────────────

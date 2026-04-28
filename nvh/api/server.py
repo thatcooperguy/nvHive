@@ -871,6 +871,14 @@ class StorageConfigureRequest(BaseModel):
         return cleaned or None
 
 
+class SetupAssistantRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME candidate to use while answering setup questions",
+    )
+
+
 @app.get("/v1/system/storage", summary="Inspect rootless persistent storage")
 async def system_storage(
     home_dir: str | None = None,
@@ -919,6 +927,89 @@ async def setup_helper(
     from nvh.integrations.setup_agent import setup_helper_report
 
     return _response_envelope(setup_helper_report(home_dir=home_dir))
+
+
+@app.post("/v1/setup/assistant", summary="Ask the local setup helper")
+async def setup_assistant(
+    request: SetupAssistantRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Answer setup questions with local state, receipts, and deterministic rules."""
+    from nvh.integrations.setup_agent import setup_assistant_reply
+
+    return _response_envelope(
+        setup_assistant_reply(request.question, home_dir=request.home_dir)
+    )
+
+
+@app.get("/v1/setup/catalog", summary="Load the setup catalog")
+async def setup_catalog(
+    refresh: bool = False,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return remote/cache/bundled setup catalog data for the wizard."""
+    from nvh.integrations.catalog import load_setup_catalog
+
+    return _response_envelope(load_setup_catalog(refresh=refresh))
+
+
+@app.get("/v1/setup/receipts", summary="List rootless install receipts")
+async def setup_receipts(
+    kind: str | None = None,
+    status_filter: str | None = None,
+    limit: int = 100,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return install receipts written under NVH_HOME."""
+    from nvh.integrations.receipts import list_receipts, receipt_summary
+
+    safe_limit = max(1, min(limit, 500))
+    receipts = list_receipts(kind=kind, status=status_filter, limit=safe_limit)
+    summary = receipt_summary()
+    return _response_envelope({
+        "receipts": receipts,
+        "count": len(receipts),
+        "summary": {key: value for key, value in summary.items() if key != "receipts"},
+    })
+
+
+def _receipt_or_404(receipt_id: str) -> dict[str, Any]:
+    from nvh.integrations.receipts import load_receipt
+
+    try:
+        return load_receipt(receipt_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@app.get("/v1/setup/receipts/{receipt_id}", summary="Get one install receipt")
+async def setup_receipt(
+    receipt_id: str,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    return _response_envelope(_receipt_or_404(receipt_id))
+
+
+@app.get("/v1/setup/receipts/{receipt_id}/repair-plan", summary="Preview receipt repair")
+async def setup_receipt_repair_plan(
+    receipt_id: str,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    from nvh.integrations.receipts import repair_plan
+
+    _receipt_or_404(receipt_id)
+    return _response_envelope(repair_plan(receipt_id))
+
+
+@app.get("/v1/setup/receipts/{receipt_id}/uninstall-plan", summary="Preview receipt uninstall")
+async def setup_receipt_uninstall_plan(
+    receipt_id: str,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    from nvh.integrations.receipts import uninstall_plan
+
+    _receipt_or_404(receipt_id)
+    return _response_envelope(uninstall_plan(receipt_id))
 
 
 # -- /v1/system/info ----------------------------------------------------------

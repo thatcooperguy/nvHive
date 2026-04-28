@@ -9085,6 +9085,40 @@ def doctor(
             "Run `nvh doctor --storage --home-dir /path/on/mounted/volume/nvhive`",
         )
 
+    try:
+        from nvh.integrations.receipts import receipt_summary
+
+        receipts = receipt_summary()
+        detail = (
+            f"{receipts['count']} receipt(s), "
+            f"{receipts['unhealthy']} need attention, root {receipts['root']}"
+        )
+        if receipts["unhealthy"]:
+            _warn(
+                "Install receipts",
+                detail,
+                "Open the setup wizard or rerun the matching `nvh studio` / `nvh workstation` command.",
+            )
+        else:
+            _pass("Install receipts", detail)
+    except Exception as e:
+        _warn("Install receipts", str(e))
+
+    try:
+        from nvh.integrations.catalog import catalog_status
+
+        catalog = catalog_status(refresh=False)
+        detail = (
+            f"{catalog.get('source')} catalog, {catalog.get('profile_count', 0)} profiles, "
+            f"{catalog.get('model_count', 0)} models"
+        )
+        if catalog.get("error"):
+            _warn("Setup catalog", f"{detail}; {catalog['error']}")
+        else:
+            _pass("Setup catalog", detail)
+    except Exception as e:
+        _warn("Setup catalog", str(e))
+
     # 2. Config file exists and is valid YAML
     from nvh.config.settings import DEFAULT_CONFIG_PATH
     if not DEFAULT_CONFIG_PATH.exists():

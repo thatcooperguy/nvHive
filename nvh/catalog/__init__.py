@@ -1,0 +1,1 @@
+"""Bundled nvHive setup catalog."""

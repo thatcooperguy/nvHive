@@ -552,6 +552,10 @@ def catalog_as_dicts() -> list[dict[str, Any]]:
     return [asdict(pack) for pack in STUDIO_PACKS]
 
 
+def model_catalog_as_dicts() -> list[dict[str, Any]]:
+    return [asdict(model) for model in STUDIO_MODELS]
+
+
 def bundles_as_dict() -> dict[str, list[str]]:
     return {key: list(value) for key, value in PACK_BUNDLES.items()}
 
@@ -823,6 +827,31 @@ def _write_marker(pack: StudioPack, extra: dict[str, Any] | None = None) -> None
     if extra:
         marker.update(extra)
     _marker_path(pack.id).write_text(json.dumps(marker, indent=2), encoding="utf-8")
+    try:
+        from nvh.integrations.receipts import write_receipt
+
+        launcher_paths = [str(_local_bin() / launcher) for launcher in pack.launchers]
+        version = str(marker.get("version")) if marker.get("version") else None
+        write_receipt(
+            kind="studio-pack",
+            item_id=pack.id,
+            title=pack.title,
+            install_path=root,
+            version=version,
+            source_urls=pack.source_urls,
+            launchers=launcher_paths,
+            models=pack.models,
+            files=[str(_marker_path(pack.id))],
+            metadata={
+                "category": pack.category,
+                "install_kind": pack.install_kind,
+                "recommended_vram_gb": pack.recommended_vram_gb,
+                "estimated_disk_gb": pack.estimated_disk_gb,
+                "marker": marker,
+            },
+        )
+    except Exception:
+        pass
 
 
 def _write_script(path: Path, content: str) -> None:
@@ -1208,6 +1237,32 @@ exec "{binary}" "$@"
     return launcher
 
 
+def _write_model_receipt(model: StudioModel) -> None:
+    try:
+        from nvh.integrations.receipts import write_receipt
+
+        layout = storage_layout()
+        write_receipt(
+            kind="studio-model",
+            item_id=model.id,
+            title=model.title,
+            install_path=layout.ollama_models_dir,
+            source_urls=[model.source_url],
+            models=[model.install_target],
+            metadata={
+                "provider": model.provider,
+                "install_target": model.install_target,
+                "category": model.category,
+                "recommended_vram_gb": model.recommended_vram_gb,
+                "estimated_disk_gb": model.estimated_disk_gb,
+                "capabilities": model.capabilities,
+                "license_note": model.license_note,
+            },
+        )
+    except Exception:
+        pass
+
+
 async def _install_blender_app(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
     if platform.system() != "Linux" or platform.machine().lower() not in {"x86_64", "amd64"}:
         yield {
@@ -1365,6 +1420,7 @@ async def install_studio_models(
             model.install_target in installed
             or model.install_target.split(":")[0] in installed
         ):
+            _write_model_receipt(model)
             yield {
                 "event": "model",
                 "status": "complete",
@@ -1378,6 +1434,7 @@ async def install_studio_models(
             env=_ollama_env(),
         ):
             yield {**event, "model_id": model.id}
+        _write_model_receipt(model)
 
     yield {
         "event": "complete",

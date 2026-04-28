@@ -9,9 +9,12 @@ import {
   getRecommendations,
   getFreeProviders,
   saveProviderKey,
+  askSetupAssistant,
   getStorageStatus,
   configureStorage,
+  getSetupCatalog,
   getSetupHelper,
+  getSetupReceipts,
   cancelInstallJob,
   getComfyUIStatus,
   getComfyUIExamples,
@@ -33,7 +36,10 @@ import type {
   ComfyUIInstallEvent,
   ComfyUIStatus,
   InstallJob,
+  SetupAssistantReply,
+  SetupCatalogResult,
   SetupHelperReport,
+  SetupReceiptsResult,
   StorageStatus,
   StudioPack,
   StudioPackInstallEvent,
@@ -206,6 +212,13 @@ export default function SetupPage() {
   const [storageError, setStorageError] = useState<string | null>(null);
   const [setupHelper, setSetupHelper] = useState<SetupHelperReport | null>(null);
   const [setupHelperError, setSetupHelperError] = useState<string | null>(null);
+  const [setupReceipts, setSetupReceipts] = useState<SetupReceiptsResult | null>(null);
+  const [setupCatalog, setSetupCatalog] = useState<SetupCatalogResult | null>(null);
+  const [setupInventoryError, setSetupInventoryError] = useState<string | null>(null);
+  const [assistantQuestion, setAssistantQuestion] = useState('');
+  const [assistantReply, setAssistantReply] = useState<SetupAssistantReply | null>(null);
+  const [assistantLoading, setAssistantLoading] = useState(false);
+  const [assistantError, setAssistantError] = useState<string | null>(null);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -283,13 +296,28 @@ export default function SetupPage() {
     }
   }, []);
 
+  const refreshSetupInventory = useCallback(async (refreshCatalog = false) => {
+    try {
+      const [receipts, catalog] = await Promise.all([
+        getSetupReceipts({ limit: 8 }),
+        getSetupCatalog(refreshCatalog),
+      ]);
+      setSetupReceipts(receipts);
+      setSetupCatalog(catalog);
+      setSetupInventoryError(null);
+    } catch (err) {
+      setSetupInventoryError(err instanceof Error ? err.message : 'Could not load setup inventory');
+    }
+  }, []);
+
   useEffect(() => {
     void refreshInstallJobs();
+    void refreshSetupInventory(false);
     const timer = window.setInterval(() => {
       void refreshInstallJobs();
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [refreshInstallJobs]);
+  }, [refreshInstallJobs, refreshSetupInventory]);
 
   useEffect(() => {
     setComfyInstalling(installJobs.some(job => job.kind === 'comfyui-install' && isActiveInstallJob(job)));
@@ -308,6 +336,21 @@ export default function SetupPage() {
       setJobsError(err instanceof Error ? err.message : 'Could not cancel install job');
     } finally {
       setCancelingJobId(null);
+    }
+  };
+
+  const handleAskAssistant = async () => {
+    const question = assistantQuestion.trim();
+    if (!question) return;
+    setAssistantLoading(true);
+    setAssistantError(null);
+    try {
+      const reply = await askSetupAssistant(question, storageStatus?.layout.home);
+      setAssistantReply(reply);
+    } catch (err) {
+      setAssistantError(err instanceof Error ? err.message : 'Setup helper could not answer');
+    } finally {
+      setAssistantLoading(false);
     }
   };
 
@@ -452,6 +495,7 @@ export default function SetupPage() {
         refreshStudioPacks(),
         refreshComfyUI(),
         refreshSetupHelper(status.layout.home),
+        refreshSetupInventory(false),
       ]);
     } catch (err) {
       setStorageError(err instanceof Error ? err.message : 'Could not configure persistent storage');
@@ -630,11 +674,14 @@ export default function SetupPage() {
           setModelsInstalling(false);
           refreshStudioModels();
           void refreshInstallJobs();
+          void refreshSetupInventory(false);
+          void refreshSetupHelper(storageStatus?.layout.home);
         },
         onError: error => {
           setModelError(error);
           setModelsInstalling(false);
           void refreshInstallJobs();
+          void refreshSetupHelper(storageStatus?.layout.home);
         },
       }
     );
@@ -679,11 +726,14 @@ export default function SetupPage() {
           setStudioInstalling(false);
           refreshStudioPacks();
           void refreshInstallJobs();
+          void refreshSetupInventory(false);
+          void refreshSetupHelper(storageStatus?.layout.home);
         },
         onError: error => {
           setStudioError(error);
           setStudioInstalling(false);
           void refreshInstallJobs();
+          void refreshSetupHelper(storageStatus?.layout.home);
         },
       }
     );
@@ -720,11 +770,14 @@ export default function SetupPage() {
           setComfyInstalling(false);
           refreshComfyUI();
           void refreshInstallJobs();
+          void refreshSetupInventory(false);
+          void refreshSetupHelper(storageStatus?.layout.home);
         },
         onError: error => {
           setComfyError(error);
           setComfyInstalling(false);
           void refreshInstallJobs();
+          void refreshSetupHelper(storageStatus?.layout.home);
         },
       }
     );
@@ -792,6 +845,10 @@ export default function SetupPage() {
   const activeInstallJobs = installJobs.filter(isActiveInstallJob);
   const visibleInstallJobs = installJobs.slice(0, 5);
   const helperActions = setupHelper?.actions.slice(0, 4) ?? [];
+  const visibleReceipts = setupReceipts?.receipts.slice(0, 5) ?? [];
+  const unhealthyReceiptCount = setupReceipts?.summary.unhealthy ?? setupHelper?.receipts?.unhealthy ?? 0;
+  const receiptCount = setupReceipts?.count ?? setupHelper?.receipts?.count ?? 0;
+  const catalogSource = setupCatalog?.source ?? setupHelper?.catalog?.source ?? 'bundled';
 
   const goToHelperAction = (actionId: string) => {
     if (actionId === 'storage') setStep('storage');
@@ -922,6 +979,92 @@ export default function SetupPage() {
         </div>
       )}
 
+      {(setupReceipts || setupCatalog || setupInventoryError) && (
+        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <div className="section-label">Setup Inventory</div>
+              <div className="text-[10px] font-mono text-[#737373] mt-1">
+                {receiptCount} receipt{receiptCount === 1 ? '' : 's'} tracked / catalog source {catalogSource}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void refreshSetupInventory(false)}
+                className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+              >
+                Recheck
+              </button>
+              <button
+                type="button"
+                onClick={() => void refreshSetupInventory(true)}
+                className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+              >
+                Refresh Catalog
+              </button>
+            </div>
+          </div>
+          {setupInventoryError && (
+            <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
+              {setupInventoryError}
+            </div>
+          )}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+              <div className="text-[9px] font-mono text-[#737373] uppercase">Receipts</div>
+              <div className="text-lg font-mono font-bold text-[#0a0a0a]">{receiptCount}</div>
+            </div>
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+              <div className="text-[9px] font-mono text-[#737373] uppercase">Needs Repair</div>
+              <div className={`text-lg font-mono font-bold ${unhealthyReceiptCount ? 'text-[#d97706]' : 'text-[#76B900]'}`}>{unhealthyReceiptCount}</div>
+            </div>
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+              <div className="text-[9px] font-mono text-[#737373] uppercase">Profiles</div>
+              <div className="text-lg font-mono font-bold text-[#0a0a0a]">
+                {setupCatalog?.catalog.profiles.length ?? setupHelper?.catalog?.profile_count ?? 0}
+              </div>
+            </div>
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+              <div className="text-[9px] font-mono text-[#737373] uppercase">Models</div>
+              <div className="text-lg font-mono font-bold text-[#0a0a0a]">
+                {setupCatalog?.catalog.models.length ?? setupHelper?.catalog?.model_count ?? 0}
+              </div>
+            </div>
+          </div>
+          {visibleReceipts.length > 0 && (
+            <div className="space-y-2">
+              {visibleReceipts.map(receipt => (
+                <div key={receipt.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-1.5 h-1.5 flex-shrink-0 ${receipt.health.healthy ? 'bg-[#76B900]' : 'bg-[#d97706]'}`}
+                        style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">{receipt.title}</div>
+                      <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                        {receipt.kind}
+                      </span>
+                    </div>
+                    <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all">{receipt.install_path}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (receipt.kind === 'comfyui') setStep('comfyui');
+                      else if (receipt.kind === 'studio-model') setStep('models');
+                      else setStep('studio');
+                    }}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                  >
+                    Repair
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {(setupHelper || setupHelperError) && (
         <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -945,34 +1088,88 @@ export default function SetupPage() {
             </div>
           )}
           {setupHelper && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {helperActions.map(action => (
-                <button
-                  key={action.id}
-                  type="button"
-                  onClick={() => goToHelperAction(action.id)}
-                  className="text-left border border-[#e5e5e5] bg-[#fafafa] p-3 hover:border-[#76B900]/50 transition-colors"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">{action.title}</div>
-                    <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
-                      action.status === 'required'
-                        ? 'border-[#dc2626]/40 text-[#dc2626]'
-                        : action.status === 'recommended'
-                        ? 'border-[#76B900]/40 text-[#76B900]'
-                        : 'border-[#d4d4d4] text-[#737373]'
-                    }`}>
-                      {action.status}
-                    </span>
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {helperActions.map(action => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    onClick={() => goToHelperAction(action.id)}
+                    className="text-left border border-[#e5e5e5] bg-[#fafafa] p-3 hover:border-[#76B900]/50 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">{action.title}</div>
+                      <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
+                        action.status === 'required'
+                          ? 'border-[#dc2626]/40 text-[#dc2626]'
+                          : action.status === 'recommended'
+                          ? 'border-[#76B900]/40 text-[#76B900]'
+                          : 'border-[#d4d4d4] text-[#737373]'
+                      }`}>
+                        {action.status}
+                      </span>
+                    </div>
+                    <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
+                      {action.reason}
+                    </div>
+                    <div className="text-[9px] font-mono text-[#a3a3a3] mt-2 break-all">
+                      {action.command}
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">Ask Setup Helper</div>
+                    <div className="text-[10px] font-mono text-[#737373] mt-0.5">
+                      Offline local guidance using jobs, receipts, storage, and catalog state
+                    </div>
                   </div>
-                  <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
-                    {action.reason}
+                  <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/40 px-1.5 py-0.5 uppercase">
+                    {setupHelper.assistant?.mode ?? 'offline'}
+                  </span>
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    value={assistantQuestion}
+                    onChange={event => setAssistantQuestion(event.target.value)}
+                    onKeyDown={event => { if (event.key === 'Enter') void handleAskAssistant(); }}
+                    placeholder="Why did ComfyUI fail? What should I install next?"
+                    className="input-base flex-1 px-3 py-2 text-xs font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleAskAssistant()}
+                    disabled={assistantLoading || !assistantQuestion.trim()}
+                    className="btn-primary px-3 py-2 text-xs font-mono disabled:opacity-40"
+                  >
+                    {assistantLoading ? 'Thinking' : 'Ask'}
+                  </button>
+                </div>
+                {assistantError && (
+                  <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
+                    {assistantError}
                   </div>
-                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-2 break-all">
-                    {action.command}
+                )}
+                {assistantReply && (
+                  <div className="border border-[#d4d4d4] bg-[#ffffff] p-3 space-y-2">
+                    <div className="text-xs font-mono text-[#0a0a0a] leading-relaxed">
+                      {assistantReply.answer}
+                    </div>
+                    {assistantReply.commands.length > 0 && (
+                      <div className="space-y-1">
+                        {assistantReply.commands.map(command => (
+                          <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all">
+                            {command}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </button>
-              ))}
+                )}
+              </div>
             </div>
           )}
         </div>
