@@ -9,6 +9,8 @@ import {
   getRecommendations,
   getFreeProviders,
   saveProviderKey,
+  getStorageStatus,
+  configureStorage,
   getComfyUIStatus,
   getComfyUIExamples,
   installComfyUIStream,
@@ -27,25 +29,27 @@ import type {
   ComfyUIExample,
   ComfyUIInstallEvent,
   ComfyUIStatus,
+  StorageStatus,
   StudioPack,
   StudioPackInstallEvent,
   StudioModel,
   StudioModelInstallEvent,
 } from '@/lib/types';
 
-type Step = 'welcome' | 'gpu' | 'models' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
+type Step = 'welcome' | 'storage' | 'gpu' | 'models' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
 type WizardProfile = 'student' | 'creator' | 'game' | 'full';
 
 const STEPS: { id: Step; label: string; num: number }[] = [
   { id: 'welcome', label: 'Welcome', num: 1 },
-  { id: 'gpu', label: 'GPU', num: 2 },
-  { id: 'models', label: 'Models', num: 3 },
-  { id: 'local-ai', label: 'Local AI', num: 4 },
-  { id: 'studio', label: 'Packs', num: 5 },
-  { id: 'comfyui', label: 'ComfyUI', num: 6 },
-  { id: 'cloud', label: 'Cloud', num: 7 },
-  { id: 'test', label: 'Test', num: 8 },
-  { id: 'done', label: 'Done', num: 9 },
+  { id: 'storage', label: 'Storage', num: 2 },
+  { id: 'gpu', label: 'GPU', num: 3 },
+  { id: 'models', label: 'Models', num: 4 },
+  { id: 'local-ai', label: 'Local AI', num: 5 },
+  { id: 'studio', label: 'Packs', num: 6 },
+  { id: 'comfyui', label: 'ComfyUI', num: 7 },
+  { id: 'cloud', label: 'Cloud', num: 8 },
+  { id: 'test', label: 'Test', num: 9 },
+  { id: 'done', label: 'Done', num: 10 },
 ];
 
 const CLOUD_PROVIDERS = [
@@ -189,6 +193,10 @@ export default function SetupPage() {
   const [configuredProviders, setConfiguredProviders] = useState<string[]>([]);
   const [freeProviders, setFreeProviders] = useState<FreeProvider[]>([]);
   const [freeProvidersLoading, setFreeProvidersLoading] = useState(false);
+  const [storageStatus, setStorageStatus] = useState<StorageStatus | null>(null);
+  const [storageHomeInput, setStorageHomeInput] = useState('');
+  const [storageSaving, setStorageSaving] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -251,6 +259,16 @@ export default function SetupPage() {
       .then(data => setFreeProviders(data.providers))
       .catch(() => {})
       .finally(() => setFreeProvidersLoading(false));
+
+    // Fetch persistent storage preflight before any large local downloads.
+    getStorageStatus()
+      .then(status => {
+        setStorageStatus(status);
+        setStorageHomeInput(status.layout.home);
+      })
+      .catch(() => {
+        setStorageError('Storage preflight is unavailable. Start the API with nvh serve.');
+      });
 
     // Fetch GPU info for the GPU step
     setGpuLoading(true);
@@ -339,6 +357,35 @@ export default function SetupPage() {
       }));
     } finally {
       setSavingKey(null);
+    }
+  };
+
+  const handleConfigureStorage = async () => {
+    const home = storageHomeInput.trim();
+    if (!home) {
+      setStorageError('Choose the mounted folder that survives every session.');
+      return;
+    }
+
+    setStorageSaving(true);
+    setStorageError(null);
+    try {
+      const status = await configureStorage({
+        home_dir: home,
+        min_free_gb: 20,
+        activate: true,
+      });
+      setStorageStatus(status);
+      setStorageHomeInput(status.layout.home);
+      await Promise.allSettled([
+        refreshStudioModels(),
+        refreshStudioPacks(),
+        refreshComfyUI(),
+      ]);
+    } catch (err) {
+      setStorageError(err instanceof Error ? err.message : 'Could not configure persistent storage');
+    } finally {
+      setStorageSaving(false);
     }
   };
 
@@ -475,6 +522,11 @@ export default function SetupPage() {
 
   const handleInstallStudioModels = () => {
     if (modelsInstalling) return;
+    if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
+      setModelError('Set a persistent NVH_HOME on the mounted volume before downloading models.');
+      setStep('storage');
+      return;
+    }
     const selected = Array.from(selectedStudioModels);
     if (selected.length === 0) {
       setModelError('Select at least one local model.');
@@ -510,6 +562,11 @@ export default function SetupPage() {
 
   const handleInstallStudioPacks = (packIds?: string[]) => {
     if (studioInstalling) return;
+    if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
+      setStudioError('Set a persistent NVH_HOME on the mounted volume before installing packs.');
+      setStep('storage');
+      return;
+    }
     const selected = packIds?.length ? packIds : Array.from(selectedStudioPacks);
     if (selected.length === 0) {
       setStudioError('Select at least one AI Studio pack.');
@@ -546,6 +603,11 @@ export default function SetupPage() {
 
   const handleInstallComfyUI = () => {
     if (comfyInstalling) return;
+    if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
+      setComfyError('Set a persistent NVH_HOME on the mounted volume before installing ComfyUI.');
+      setStep('storage');
+      return;
+    }
     setComfyInstalling(true);
     setComfyError(null);
     setComfyEvents([]);
@@ -609,6 +671,9 @@ export default function SetupPage() {
   };
 
   const currentStepIdx = STEPS.findIndex(s => s.id === step);
+  const storageReady = Boolean(storageStatus?.ok && storageStatus.configured_by !== 'default');
+  const storageFreeGb = storageStatus?.free_gb ?? null;
+  const profilesReady = Boolean(storageStatus) && !modelsLoading && !studioLoading && !comfyLoading;
   const visibleComfyExamples = comfyStatus?.examples?.length ? comfyStatus.examples : comfyExamples;
   const selectedComfyModelCount = new Set(
     visibleComfyExamples
@@ -618,6 +683,9 @@ export default function SetupPage() {
   const selectedStudioPackIds = Array.from(selectedStudioPacks);
   const starterStudioPackIds = studioBundles.starter ?? [];
   const studioCategories = Array.from(new Set(studioPacks.map(pack => pack.category)));
+  const selectedStudioPackDiskGb = studioPacks
+    .filter(pack => selectedStudioPacks.has(pack.id))
+    .reduce((total, pack) => total + pack.estimated_disk_gb, 0);
   const selectedModelIds = Array.from(selectedStudioModels);
   const modelCategories = Array.from(new Set(studioModels.map(model => model.category)));
   const selectedModelDiskGb = studioModels
@@ -704,6 +772,70 @@ export default function SetupPage() {
               ))}
             </div>
 
+            <div className={`border p-4 ${storageReady ? 'border-[#76B900]/40 bg-[#76B900]/5' : 'border-[#d4d4d4] bg-[#ffffff]'}`}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="section-label">Persistent Home</div>
+                  <div className="text-sm font-mono font-bold text-[#0a0a0a] mt-1">
+                    {storageReady ? 'Mounted storage is ready' : 'Choose the mounted folder first'}
+                  </div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-1 leading-relaxed">
+                    Models, ComfyUI, packs, cache, logs, and config should live on the file mount that attaches every session.
+                  </div>
+                </div>
+                <span className={`text-[9px] font-mono px-2 py-1 border flex-shrink-0 ${
+                  storageReady
+                    ? 'border-[#76B900]/40 text-[#76B900] bg-[#76B900]/10'
+                    : 'border-[#d97706]/40 text-[#d97706] bg-[#d97706]/10'
+                }`}>
+                  {storageReady ? 'READY' : 'REQUIRED'}
+                </span>
+              </div>
+
+              <div className="mt-4 flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={storageHomeInput}
+                  onChange={e => setStorageHomeInput(e.target.value)}
+                  placeholder="/mnt/persist/nvhive or /workspace/nvhive"
+                  className="input-base flex-1 px-3 py-2 text-xs font-mono"
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  onClick={handleConfigureStorage}
+                  disabled={storageSaving}
+                  className="btn-primary px-4 py-2 text-xs font-mono disabled:opacity-40"
+                >
+                  {storageSaving ? 'Checking...' : storageReady ? 'Update' : 'Use This Home'}
+                </button>
+              </div>
+
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px] font-mono">
+                <div className="bg-white border border-[#e5e5e5] p-2">
+                  <div className="text-[#a3a3a3] uppercase">Free Space</div>
+                  <div className="text-[#0a0a0a] mt-0.5">{storageFreeGb === null ? 'Unknown' : `${storageFreeGb} GB`}</div>
+                </div>
+                <div className="bg-white border border-[#e5e5e5] p-2">
+                  <div className="text-[#a3a3a3] uppercase">Config</div>
+                  <div className="text-[#0a0a0a] mt-0.5 truncate">{storageStatus?.layout.config_dir ?? 'Not set'}</div>
+                </div>
+                <div className="bg-white border border-[#e5e5e5] p-2">
+                  <div className="text-[#a3a3a3] uppercase">Activate</div>
+                  <div className="text-[#0a0a0a] mt-0.5 truncate">{storageStatus ? `source ${storageStatus.env_file}` : 'Waiting'}</div>
+                </div>
+              </div>
+
+              {(storageError || storageStatus?.warnings?.length) && (
+                <div className="mt-3 space-y-1">
+                  {storageError && <div className="text-[10px] font-mono text-[#dc2626]">{storageError}</div>}
+                  {storageStatus?.warnings.map(warning => (
+                    <div key={warning} className="text-[10px] font-mono text-[#d97706]">{warning}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="space-y-3">
               <div className="section-label">Quick Profiles</div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -736,8 +868,19 @@ export default function SetupPage() {
                   <button
                     key={profile.id}
                     type="button"
-                    onClick={() => applyWizardProfile(profile.id)}
-                    className="text-left border border-[#e5e5e5] bg-[#ffffff] p-4 hover:border-[#76B900]/50 hover:bg-[#76B900]/5 transition-colors"
+                    onClick={() => {
+                      if (!storageReady) {
+                        setStep('storage');
+                        return;
+                      }
+                      applyWizardProfile(profile.id);
+                    }}
+                    disabled={!profilesReady}
+                    className={`text-left border border-[#e5e5e5] bg-[#ffffff] p-4 transition-colors ${
+                      profilesReady
+                        ? 'hover:border-[#76B900]/50 hover:bg-[#76B900]/5'
+                        : 'opacity-50 cursor-not-allowed'
+                    }`}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -745,7 +888,7 @@ export default function SetupPage() {
                         <div className="text-[10px] font-mono text-[#737373] leading-relaxed mt-2">{profile.desc}</div>
                       </div>
                       <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/30 px-1.5 py-0.5 flex-shrink-0">
-                        {profile.next}
+                        {storageReady ? profile.next : 'Storage'}
                       </span>
                     </div>
                   </button>
@@ -763,11 +906,95 @@ export default function SetupPage() {
           </div>
         )}
 
+        {/* STORAGE */}
+        {step === 'storage' && (
+          <div className="space-y-6">
+            <div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 2</div>
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Persistent Storage</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1">Point nvHive at the mounted folder that survives cloud desktop resets</p>
+            </div>
+
+            <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="border border-[#e5e5e5] p-3">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">Models</div>
+                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.models_dir ?? 'Set NVH_HOME first'}</div>
+                </div>
+                <div className="border border-[#e5e5e5] p-3">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">ComfyUI</div>
+                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.comfyui_dir ?? 'Set NVH_HOME first'}</div>
+                </div>
+                <div className="border border-[#e5e5e5] p-3">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">Cache</div>
+                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.cache_dir ?? 'Set NVH_HOME first'}</div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">NVH_HOME</label>
+                <div className="mt-2 flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    value={storageHomeInput}
+                    onChange={e => setStorageHomeInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleConfigureStorage(); }}
+                    placeholder="/mnt/persist/nvhive or /workspace/nvhive"
+                    className="input-base flex-1 px-3 py-2 text-xs font-mono"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleConfigureStorage}
+                    disabled={storageSaving}
+                    className="btn-primary px-4 py-2 text-xs font-mono disabled:opacity-40"
+                  >
+                    {storageSaving ? 'Checking...' : 'Configure'}
+                  </button>
+                </div>
+              </div>
+
+              <div className={`border p-3 ${storageReady ? 'border-[#76B900]/40 bg-[#76B900]/5' : 'border-[#d97706]/40 bg-[#d97706]/5'}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className={`text-xs font-mono font-bold ${storageReady ? 'text-[#76B900]' : 'text-[#d97706]'}`}>
+                      {storageReady ? 'Storage preflight passed' : 'Storage preflight needs attention'}
+                    </div>
+                    <div className="text-[10px] font-mono text-[#737373] mt-1">
+                      {storageStatus ? `${storageStatus.free_gb ?? 'Unknown'} GB free / ${storageStatus.total_gb ?? 'unknown'} GB total` : 'Waiting for API status'}
+                    </div>
+                  </div>
+                  <span className={`text-[9px] font-mono px-2 py-1 border ${storageReady ? 'border-[#76B900]/40 text-[#76B900]' : 'border-[#d97706]/40 text-[#d97706]'}`}>
+                    {storageStatus?.configured_by ?? 'unchecked'}
+                  </span>
+                </div>
+
+                {(storageError || storageStatus?.warnings?.length) && (
+                  <div className="mt-3 space-y-1">
+                    {storageError && <div className="text-[10px] font-mono text-[#dc2626]">{storageError}</div>}
+                    {storageStatus?.warnings.map(warning => (
+                      <div key={warning} className="text-[10px] font-mono text-[#d97706]">{warning}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {storageStatus && (
+                <div className="bg-[#0a0a0a] border border-[#333333] p-3 overflow-x-auto">
+                  <code className="text-[10px] font-mono text-[#76B900] whitespace-pre">
+                    {`source ${storageStatus.env_file}`}
+                  </code>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* GPU DETECTION */}
         {step === 'gpu' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 2</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 3</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">GPU Detection</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">Your NVIDIA GPU will power local AI inference</p>
             </div>
@@ -954,7 +1181,7 @@ export default function SetupPage() {
         {step === 'models' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 3</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 4</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Model Picker</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
                 Choose exact local models to download. Recommendations are based on detected VRAM and student-friendly defaults.
@@ -966,7 +1193,7 @@ export default function SetupPage() {
                 <div>
                   <div className="text-sm font-mono font-bold text-[#0a0a0a]">Recommended Local Model Queue</div>
                   <div className="text-[10px] font-mono text-[#76B900] mt-0.5">
-                    Detected VRAM: {detectedModelVram ? `${detectedModelVram} GB` : 'unknown'} / selected download: ~{selectedModelDiskGb.toFixed(1)} GB
+                    Detected VRAM: {detectedModelVram ? `${detectedModelVram} GB` : 'unknown'} / selected download: ~{selectedModelDiskGb.toFixed(1)} GB / persistent free: {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
                   </div>
                   <div className="text-[10px] font-mono text-[#737373] mt-2">
                     {studioModels.filter(model => model.installed).length}/{studioModels.length} installed
@@ -990,10 +1217,10 @@ export default function SetupPage() {
                   <button
                     type="button"
                     onClick={handleInstallStudioModels}
-                    disabled={modelsInstalling || selectedModelIds.length === 0}
+                    disabled={modelsInstalling || selectedModelIds.length === 0 || !storageReady}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {modelsInstalling ? 'Downloading...' : `Download ${selectedModelIds.length || ''}`}
+                    {!storageReady ? 'Set Storage' : modelsInstalling ? 'Downloading...' : `Download ${selectedModelIds.length || ''}`}
                   </button>
                 </div>
               </div>
@@ -1114,7 +1341,7 @@ export default function SetupPage() {
         {step === 'local-ai' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 4</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 5</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Local AI Setup</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">Install NVIDIA Nemotron via Ollama - runs on your GPU, free forever</p>
             </div>
@@ -1205,7 +1432,7 @@ export default function SetupPage() {
         {step === 'studio' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 5</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 6</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">AI Studio Packs</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
                 One-click rootless packs for LLMs, local agents, ComfyUI sub software, and Linux game projects.
@@ -1217,10 +1444,10 @@ export default function SetupPage() {
                 <div>
                   <div className="text-sm font-mono font-bold text-[#0a0a0a]">Student Lab Starter</div>
                   <div className="text-[10px] font-mono text-[#76B900] mt-0.5">
-                    No sudo. Installs under {studioRoot || '~/.nvh/studio'} and ~/.local/bin
+                    No sudo. Installs under {studioRoot || storageStatus?.layout.studio_dir || 'NVH_HOME/studio'} and {storageStatus?.layout.bin_dir || 'NVH_HOME/bin'}
                   </div>
                   <div className="text-[10px] font-mono text-[#737373] mt-2">
-                    {starterStudioPackIds.length} packs - {studioPacks.filter(pack => pack.status.installed).length}/{studioPacks.length} installed
+                    {starterStudioPackIds.length} packs - {studioPacks.filter(pack => pack.status.installed).length}/{studioPacks.length} installed - selected ~{selectedStudioPackDiskGb.toFixed(1)} GB - free {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -1241,10 +1468,10 @@ export default function SetupPage() {
                   <button
                     type="button"
                     onClick={() => handleInstallStudioPacks(selectedStudioPackIds)}
-                    disabled={studioInstalling || selectedStudioPackIds.length === 0}
+                    disabled={studioInstalling || selectedStudioPackIds.length === 0 || !storageReady}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {studioInstalling ? 'Installing...' : `Install ${selectedStudioPackIds.length || ''}`}
+                    {!storageReady ? 'Set Storage' : studioInstalling ? 'Installing...' : `Install ${selectedStudioPackIds.length || ''}`}
                   </button>
                 </div>
               </div>
@@ -1368,7 +1595,7 @@ export default function SetupPage() {
         {step === 'comfyui' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 6</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 7</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">ComfyUI Visual Workflows</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
                 Auto-install a local ComfyUI workspace with NVIDIA-ready PyTorch, Manager support, and nvHive example packs.
@@ -1389,7 +1616,10 @@ export default function SetupPage() {
                       ComfyUI {comfyLoading ? 'CHECKING...' : comfyStatus?.running ? 'RUNNING' : comfyStatus?.installed ? 'INSTALLED' : 'NOT INSTALLED'}
                     </div>
                     <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 break-all">
-                      {comfyStatus?.installed ? comfyStatus.app_dir : 'Install target: ~/.nvh/comfyui/ComfyUI'}
+                      {comfyStatus?.installed ? comfyStatus.app_dir : `Install target: ${storageStatus?.layout.comfyui_dir ?? 'NVH_HOME/comfyui'}/ComfyUI`}
+                    </div>
+                    <div className="text-[10px] font-mono text-[#737373] mt-1">
+                      Persistent free: {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
                     </div>
                     {comfyStatus?.examples_installed && (
                       <div className="text-[10px] font-mono text-[#76B900] mt-1 break-all">
@@ -1403,10 +1633,10 @@ export default function SetupPage() {
                   <button
                     type="button"
                     onClick={handleInstallComfyUI}
-                    disabled={comfyInstalling}
+                    disabled={comfyInstalling || !storageReady}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {comfyInstalling ? 'Installing...' : comfyStatus?.installed ? 'Refresh Install' : 'Install ComfyUI'}
+                    {!storageReady ? 'Set Storage' : comfyInstalling ? 'Installing...' : comfyStatus?.installed ? 'Refresh Install' : 'Install ComfyUI'}
                   </button>
                   <button
                     type="button"
@@ -1549,7 +1779,7 @@ export default function SetupPage() {
         {step === 'cloud' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 7</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 8</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Cloud Providers</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
                 Optional - add API keys for cloud providers. Local Nemotron works without any keys.
@@ -1678,7 +1908,7 @@ export default function SetupPage() {
         {step === 'test' && (
           <div className="space-y-6">
             <div>
-              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 8</div>
+              <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 9</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Quick Test</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">Verify everything is working correctly</p>
             </div>
@@ -1792,6 +2022,7 @@ export default function SetupPage() {
               <div className="section-label">Configuration Summary</div>
               <div className="space-y-2">
                 {[
+                  { label: 'Persistent Home', value: storageStatus?.layout.home ?? 'Not configured', ok: storageReady },
                   { label: 'Local AI', value: ollamaStatus === 'online' ? 'Ollama Running' : 'Not configured', ok: ollamaStatus === 'online' },
                   { label: 'Local Models', value: `${studioModels.filter(model => model.installed).length}/${studioModels.length || 0} installed`, ok: studioModels.some(model => model.installed) },
                   { label: 'AI Studio Packs', value: `${studioPacks.filter(pack => pack.status.installed).length}/${studioPacks.length || 0} installed`, ok: studioPacks.some(pack => pack.status.installed) },
@@ -1812,8 +2043,16 @@ export default function SetupPage() {
             {/* Quick start commands */}
             <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2">
               <div className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider mb-2">Quick Commands</div>
+              {storageStatus && (
+                <>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]"># Persist this shell session</div>
+                  <div className="text-[10px] font-mono text-[#76B900] break-all">source {storageStatus.env_file}</div>
+                </>
+              )}
               <div className="text-[10px] font-mono text-[#a3a3a3]"># Rootless all-in-one student lab</div>
-              <div className="text-[10px] font-mono text-[#76B900]">nvh workstation --all -y</div>
+              <div className="text-[10px] font-mono text-[#76B900] break-all">
+                {`nvh workstation --home-dir "${storageStatus?.layout.home ?? '$NVH_HOME'}" --all -y`}
+              </div>
               <div className="text-[10px] font-mono text-[#a3a3a3] mt-2"># Packs only</div>
               <div className="text-[10px] font-mono text-[#76B900]">nvh studio --install starter -y</div>
               <div className="text-[10px] font-mono text-[#a3a3a3] mt-2"># Launch dashboard</div>
@@ -1851,12 +2090,14 @@ export default function SetupPage() {
           {step !== 'done' ? (
             <button
               onClick={() => {
+                if (step === 'storage' && !storageReady) return;
                 const idx = STEPS.findIndex(s => s.id === step);
                 if (idx < STEPS.length - 1) setStep(STEPS[idx + 1].id);
               }}
-              className="btn-primary px-6 py-2 text-xs font-mono uppercase tracking-wider"
+              disabled={step === 'storage' && !storageReady}
+              className="btn-primary px-6 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
             >
-              Next &gt;
+              {step === 'storage' && !storageReady ? 'Set Storage' : 'Next >'}
             </button>
           ) : (
             <Link href="/" className="btn-primary px-6 py-2 text-xs font-mono uppercase tracking-wider">

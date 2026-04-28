@@ -28,7 +28,7 @@ Three ways to get nvHive — pick the one that matches your setup. No Docker, no
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
-Works on any Linux box with no root. Installs to `~/nvh/`, auto-detects conda/mamba/venv, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config. Re-running heals the venv if the host Python moved (common on fresh cloud VMs).
+Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise `~/.nvh/` for new installs, auto-detects conda/mamba/venv, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config. Re-running heals the venv if the host Python moved (common on fresh cloud VMs).
 
 Windows: `iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex`
 macOS: `curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash`
@@ -70,6 +70,16 @@ nvh workstation --all -y         # Linux GPU desktop: launcher + WebUI + ComfyUI
 nvh webui                        # Setup > Models lets you choose exact local downloads
 nvh studio --install starter -y  # rootless LLMs + agents + ComfyUI nodes + game-dev tools
 nvh "your question"              # just ask — nvHive figures out the rest
+```
+
+For a fresh Linux cloud desktop where only a mounted file volume persists,
+choose that mount before installing large local assets:
+
+```bash
+export NVH_HOME=/mnt/persist/nvhive
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
+source "$NVH_HOME/nvh-env.sh"
+nvh workstation --home-dir "$NVH_HOME" --all -y
 ```
 
 `nvh workstation --all -y` creates a desktop launcher, starts the WebUI, prepares rootless local model tooling, installs ComfyUI with nvHive starter workflow examples, and adds AI Studio packs for LLMs, agents, ComfyUI nodes, and Linux game projects.
@@ -116,7 +126,7 @@ On first run, `nvh` launches a guided 3-step setup — GPU detection, provider k
 | 48 GB | `llama3.3:70b` | `llama3.2-vision` | Full power local |
 | 96+ GB | Multiple 70B models | `llama3.2-vision` | Full local council, $0 |
 
-Setup auto-detects your VRAM and recommends models that fit concurrently. No root/sudo needed for nvHive packs: tools install under `~/.nvh/` and `~/.local/bin`. [Full GPU guide](docs/GPU_DETECTION.md)
+Setup auto-detects your VRAM and recommends models that fit concurrently. No root/sudo needed for nvHive packs: tools install under `NVH_HOME` (`bin`, `models`, `studio`, `comfyui`, `cache`, and `config`). [Full GPU guide](docs/GPU_DETECTION.md)
 
 ---
 

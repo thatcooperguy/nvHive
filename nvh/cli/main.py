@@ -7580,9 +7580,15 @@ def studio(
         help="Install comma-separated model ids, or 'recommended'",
     ),
     force_update: bool = typer.Option(False, "--force-update", help="Update existing packs where possible"),
+    home_dir: str | None = typer.Option(
+        None,
+        "--home-dir",
+        help="Persistent NVH_HOME on a mounted volume for models, packs, cache, and ComfyUI",
+    ),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompts"),
 ):
     """Install rootless AI Studio packs for LLMs, agents, ComfyUI, and games."""
+    from nvh.integrations.storage import ensure_storage
     from nvh.integrations.studio_packs import (
         catalog_with_status,
         expand_pack_ids,
@@ -7591,12 +7597,14 @@ def studio(
         model_catalog_with_status,
     )
 
+    storage = ensure_storage(home_dir)
     catalog = catalog_with_status()
     packs = catalog["packs"]
 
     if list_models or install_models:
         model_catalog = model_catalog_with_status()
         console.print("\n[bold green]NVHive Local Models[/bold green]")
+        console.print(f"  [dim]Persistent home: {storage.layout.home}[/dim]")
         console.print(f"  [dim]Detected VRAM: {model_catalog['detected_vram_gb'] or 'unknown'} GB[/dim]\n")
         table = Table(show_header=True, header_style="bold green")
         table.add_column("Model")
@@ -7656,6 +7664,7 @@ def studio(
 
     if list_packs or not install:
         console.print("\n[bold green]NVHive AI Studio Packs[/bold green]")
+        console.print(f"  [dim]Persistent home: {storage.layout.home}[/dim]")
         console.print(f"  [dim]Rootless install home: {catalog['root']}[/dim]\n")
 
         table = Table(show_header=True, header_style="bold green")
@@ -7691,7 +7700,7 @@ def studio(
 
     console.print("\n[bold green]AI Studio Pack Install[/bold green]")
     console.print(f"  Packs: [bold]{', '.join(pack_ids)}[/bold]")
-    console.print("  Scope: user-space only (~/.nvh and ~/.local/bin)")
+    console.print(f"  Scope: user-space only under {storage.layout.home}")
     if not yes and not typer.confirm("Install selected packs now?", default=True):
         console.print("Cancelled.")
         return
@@ -7739,6 +7748,21 @@ def workstation(
     ),
     port: int = typer.Option(3000, "--port", help="WebUI port"),
     api_port: int = typer.Option(8000, "--api-port", help="API server port"),
+    home_dir: str | None = typer.Option(
+        None,
+        "--home-dir",
+        help="Persistent NVH_HOME on a mounted volume for models, packs, cache, and ComfyUI",
+    ),
+    min_free_gb: float = typer.Option(
+        20.0,
+        "--min-free-gb",
+        help="Minimum free space required before large local installs",
+    ),
+    force_large_downloads: bool = typer.Option(
+        False,
+        "--force-large-downloads",
+        help="Proceed with model/ComfyUI downloads even when storage preflight warns",
+    ),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompts"),
 ):
     """Prepare an all-in-one AI workstation for students and cloud GPU desktops.
@@ -7759,14 +7783,22 @@ def workstation(
 
     from nvh.integrations.workstation import (
         detect_workstation_profile,
+        ensure_storage,
         workstation_next_steps,
         write_desktop_launcher,
         write_launch_script,
     )
 
-    profile = detect_workstation_profile()
+    storage = ensure_storage(home_dir, min_free_gb=min_free_gb)
+    profile = detect_workstation_profile(home_dir=storage.layout.home)
     console.print("\n[bold green]NVHive Student Workstation[/bold green]")
     console.print("  [dim]Target: Linux GPU desktop or forwarded cloud session[/dim]\n")
+    console.print(f"  NVH_HOME:   [bold]{storage.layout.home}[/bold]")
+    console.print(f"  Env file:   {storage.env_file}")
+    console.print(
+        f"  Storage:    {'ok' if storage.ok else 'check'}"
+        f" ({storage.free_gb if storage.free_gb is not None else '?'} GB free)"
+    )
     gpu_label = (
         f"{profile.gpu_name or 'NVIDIA GPU'} ({profile.vram_gb} GB VRAM)"
         if profile.has_gpu
@@ -7785,17 +7817,34 @@ def workstation(
     if profile.notes:
         console.print()
 
+    storage_needs_attention = (not storage.ok) or storage.configured_by == "default"
+    if (with_local_ai or with_comfyui or with_studio_packs) and storage_needs_attention:
+        console.print("[yellow]Storage preflight has warnings for large local installs.[/yellow]")
+        if storage.warnings:
+            for warning in storage.warnings:
+                console.print(f"  [yellow]![/yellow] {warning}")
+        if storage.configured_by == "default":
+            console.print("  [yellow]![/yellow] Choose --home-dir on the mounted persistent file volume.")
+        if not force_large_downloads:
+            console.print(
+                "  [dim]Pick a mounted persistent directory with --home-dir"
+                " or rerun with --force-large-downloads.[/dim]"
+            )
+            raise typer.Exit(1)
+
     if desktop:
         try:
             desktop_file = write_desktop_launcher(
                 port=port,
                 api_port=api_port,
                 install_comfyui=with_comfyui,
+                storage=storage,
             )
             launch_script = write_launch_script(
                 port=port,
                 api_port=api_port,
                 install_comfyui=with_comfyui,
+                storage=storage,
             )
             console.print(f"  [green]ok[/green] Desktop launcher: {desktop_file}")
             console.print(f"  [green]ok[/green] Terminal launcher: {launch_script}")
@@ -7888,7 +7937,7 @@ def workstation(
             console.print("  [dim]Skipped. You can install later with: nvh studio --install starter[/dim]")
 
     console.print("\n[bold]Next steps[/bold]")
-    for step in workstation_next_steps(port=port):
+    for step in workstation_next_steps(port=port, storage=storage):
         console.print(f"  - {step}")
 
     if launch:
@@ -8924,6 +8973,21 @@ def doctor(
         False, "--fix",
         help="Interactively apply fixes for detected problems (e.g. restart Ollama)",
     ),
+    storage_only: bool = typer.Option(
+        False,
+        "--storage",
+        help="Only run the rootless persistent storage preflight",
+    ),
+    home_dir: str | None = typer.Option(
+        None,
+        "--home-dir",
+        help="Persistent NVH_HOME on a mounted volume to check",
+    ),
+    min_free_gb: float = typer.Option(
+        20.0,
+        "--min-free-gb",
+        help="Minimum free space recommended for local models and ComfyUI",
+    ),
 ):
     """Run comprehensive system diagnostic."""
     import os
@@ -8956,6 +9020,23 @@ def doctor(
 
     console.print("[bold]Hive Doctor[/bold] — running diagnostics...\n")
 
+    from nvh.integrations.storage import ensure_storage, storage_status
+
+    if storage_only:
+        storage = ensure_storage(home_dir, min_free_gb=min_free_gb)
+        console.print("[bold]Hive Storage Doctor[/bold]\n")
+        console.print(f"  NVH_HOME:  [bold]{storage.layout.home}[/bold]")
+        console.print(f"  Env file:  {storage.env_file}")
+        console.print(f"  Writable:  {'yes' if storage.writable else 'no'}")
+        console.print(
+            f"  Free:      {storage.free_gb if storage.free_gb is not None else '?'} GB"
+            f" / minimum {storage.min_free_gb:.0f} GB"
+        )
+        for warning in storage.warnings:
+            console.print(f"  [yellow]![/yellow] {warning}")
+        console.print(f"\n  [green]Activate:[/green] source {storage.env_file}")
+        raise typer.Exit(0 if storage.ok and storage.configured_by != "default" else 1)
+
     # 1. Python version
     py_version = sys.version_info
     if py_version >= (3, 11):
@@ -8965,6 +9046,20 @@ def doctor(
             "Python version",
             f"{py_version.major}.{py_version.minor}.{py_version.micro} (need >= 3.11)",
             "Upgrade Python to 3.11+: https://python.org/downloads",
+        )
+
+    rootless_storage = storage_status(home_dir=home_dir, min_free_gb=min_free_gb)
+    storage_detail = (
+        f"{rootless_storage.layout.home}"
+        f" ({rootless_storage.free_gb if rootless_storage.free_gb is not None else '?'} GB free)"
+    )
+    if rootless_storage.ok and rootless_storage.configured_by != "default":
+        _pass("Rootless storage", storage_detail)
+    else:
+        _warn(
+            "Rootless storage",
+            "; ".join(rootless_storage.warnings) or storage_detail,
+            "Run `nvh doctor --storage --home-dir /path/on/mounted/volume/nvhive`",
         )
 
     # 2. Config file exists and is valid YAML

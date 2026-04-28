@@ -316,10 +316,10 @@ class Engine:
         """Try to start a locally-installed Ollama in the background."""
         import subprocess
         import time
-        from pathlib import Path
 
         try:
             from nvh.cli.setup import _find_ollama_binary
+            from nvh.integrations.storage import storage_layout
         except Exception:
             return
 
@@ -327,17 +327,19 @@ class Engine:
         if not ollama_bin:
             return
 
-        nvh_home = Path.home() / ".nvh"
-        models_dir = nvh_home / "models"
+        layout = storage_layout()
+        models_dir = layout.ollama_models_dir
         models_dir.mkdir(parents=True, exist_ok=True)
-        log_path = nvh_home / "ollama.log"
+        log_path = layout.logs_dir / "ollama.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
 
         env = os.environ.copy()
+        env.update(layout.env())
         env["OLLAMA_MODELS"] = str(models_dir)
         env["OLLAMA_HOST"] = "127.0.0.1:11434"  # bind to localhost only
 
         # Add CUDA libs from local install
-        lib_dir = nvh_home / "lib" / "ollama"
+        lib_dir = layout.home / "lib" / "ollama"
         if lib_dir.is_dir():
             existing_ld = env.get("LD_LIBRARY_PATH", "")
             env["LD_LIBRARY_PATH"] = f"{lib_dir}:{existing_ld}" if existing_ld else str(lib_dir)

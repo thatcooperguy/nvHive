@@ -3,7 +3,10 @@
 # NVHive — One-Line Installer
 #
 # Works on any Linux machine with NO root access.
-# Everything lives in ~/nvh/ (persists on mounted home directories).
+# Everything lives in NVH_HOME. On cloud desktops, set NVH_HOME to the
+# mounted file volume that survives every session before running this script:
+#
+#   export NVH_HOME=/mnt/persist/nvhive
 #
 # Install:
 #   curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
@@ -11,32 +14,95 @@
 # On new VM sessions (same mounted home dir):
 #   Just type 'nvh' — the installer auto-heals the venv if Python moved.
 #
-# What lives in ~/nvh/:
-#   ~/nvh/repo/       — the NVHive source code
-#   ~/nvh/venv/       — Python virtual environment
-#   ~/nvh/ollama      — Ollama binary (for local AI)
-#   ~/nvh/models/     — Downloaded AI models (can be large)
-#   ~/.hive/          — Config, database, API keys
+# What lives in NVH_HOME:
+#   $NVH_HOME/repo/       — NVHive source code
+#   $NVH_HOME/venv/       — Python virtual environment
+#   $NVH_HOME/bin/        — rootless launchers and Ollama
+#   $NVH_HOME/models/     — downloaded AI models (can be large)
+#   $NVH_HOME/config/     — config, database, API keys
+#   $NVH_HOME/cache/      — pip, torch, Hugging Face, temp caches
 # =============================================================================
 
 set -euo pipefail
 
 G='\033[0;32m'; Y='\033[1;33m'; B='\033[0;34m'; R='\033[0;31m'; D='\033[0;90m'; N='\033[0m'
 
-NVH_HOME="${NVH_HOME:-$HOME/nvh}"
+if [ -z "${NVH_HOME:-}" ]; then
+    if [ -d "$HOME/nvh/repo" ] && [ ! -d "$HOME/.nvh/repo" ]; then
+        NVH_HOME="$HOME/nvh"
+    else
+        NVH_HOME="$HOME/.nvh"
+    fi
+    NVH_HOME_CONFIGURED=false
+else
+    NVH_HOME_CONFIGURED=true
+fi
 NVH_VENV="$NVH_HOME/venv"
 NVH_REPO="$NVH_HOME/repo"
+NVH_BIN="$NVH_HOME/bin"
+NVH_MODELS="$NVH_HOME/models"
+NVH_CACHE="$NVH_HOME/cache"
+NVH_LOGS="$NVH_HOME/logs"
+NVH_STUDIO_HOME="${NVH_STUDIO_HOME:-$NVH_HOME/studio}"
+COMFYUI_HOME="${COMFYUI_HOME:-$NVH_HOME/comfyui}"
+OLLAMA_MODELS="${OLLAMA_MODELS:-$NVH_MODELS/ollama}"
+HIVE_CONFIG_HOME="${HIVE_CONFIG_HOME:-$NVH_HOME/config}"
+export NVH_HOME NVH_BIN NVH_MODELS NVH_CACHE NVH_LOGS NVH_STUDIO_HOME COMFYUI_HOME OLLAMA_MODELS HIVE_CONFIG_HOME
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$NVH_CACHE/xdg}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$NVH_CACHE/pip}"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$NVH_CACHE/uv}"
+export HF_HOME="${HF_HOME:-$NVH_CACHE/huggingface}"
+export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-$HF_HOME/hub}"
+export TORCH_HOME="${TORCH_HOME:-$NVH_CACHE/torch}"
+export TMPDIR="${TMPDIR:-$NVH_CACHE/tmp}"
+export TEMP="$TMPDIR"
+export TMP="$TMPDIR"
+
+mkdir -p "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CACHE" "$NVH_LOGS" "$NVH_STUDIO_HOME" "$COMFYUI_HOME" "$HIVE_CONFIG_HOME" "$TMPDIR"
+cat > "$NVH_HOME/nvh-env.sh" << ENVEOF
+export NVH_HOME="$NVH_HOME"
+export NVH_BIN="$NVH_BIN"
+export NVH_MODELS="$NVH_MODELS"
+export NVH_CACHE="$NVH_CACHE"
+export NVH_LOGS="$NVH_LOGS"
+export NVH_STUDIO_HOME="$NVH_STUDIO_HOME"
+export COMFYUI_HOME="$COMFYUI_HOME"
+export OLLAMA_MODELS="$OLLAMA_MODELS"
+export HIVE_CONFIG_HOME="$HIVE_CONFIG_HOME"
+export XDG_CACHE_HOME="$XDG_CACHE_HOME"
+export PIP_CACHE_DIR="$PIP_CACHE_DIR"
+export UV_CACHE_DIR="$UV_CACHE_DIR"
+export HF_HOME="$HF_HOME"
+export HUGGINGFACE_HUB_CACHE="$HUGGINGFACE_HUB_CACHE"
+export TORCH_HOME="$TORCH_HOME"
+export TMPDIR="$TMPDIR"
+export TEMP="$TMPDIR"
+export TMP="$TMPDIR"
+export PATH="$NVH_BIN:\$PATH"
+ENVEOF
+chmod 600 "$NVH_HOME/nvh-env.sh" 2>/dev/null || true
+export PATH="$NVH_BIN:$PATH"
 
 echo ""
 echo -e "${G}╔══════════════════════════════════════╗${N}"
 echo -e "${G}║       NVHive — Quick Install         ║${N}"
-echo -e "${G}║   No root needed. Installs to ~/nvh  ║${N}"
+echo -e "${G}║  No root. Installs to NVH_HOME     ║${N}"
 echo -e "${G}╚══════════════════════════════════════╝${N}"
 echo ""
 
 # ---------------------------------------------------------------------------
 # Find Python — check common locations since the VM may have it anywhere
 # ---------------------------------------------------------------------------
+if [ "$NVH_HOME_CONFIGURED" = "false" ]; then
+    echo -e "${Y}NVH_HOME was not set; using ${G}$NVH_HOME${N}"
+    echo -e "${D}For cloud desktops, set NVH_HOME to the mounted persistent file volume before install.${N}"
+    echo -e "${D}Example: export NVH_HOME=/mnt/persist/nvhive${N}"
+    echo ""
+fi
+echo -e "${D}Persistent home: $NVH_HOME${N}"
+echo -e "${D}Activate later:  source $NVH_HOME/nvh-env.sh${N}"
+echo ""
+
 find_python() {
     for py in python3.12 python3.11 python3.10 python3; do
         if command -v "$py" &>/dev/null; then
@@ -62,7 +128,7 @@ echo -e "${D}Python: $($PYTHON --version 2>&1) [$PYTHON]${N}"
 
 # ---------------------------------------------------------------------------
 # Detect active conda/micromamba/venv — if one is active, offer to install
-# into it instead of creating a fresh venv at ~/nvh/venv. This avoids the
+# into it instead of creating a fresh venv at $NVH_HOME/venv. This avoids the
 # common case of users pip-installing into their existing env and ending up
 # with `nvh` at ~/<env>/bin/nvh, not on PATH unless the env is activated.
 # ---------------------------------------------------------------------------
@@ -89,7 +155,7 @@ if [ -n "$ACTIVE_ENV_KIND" ] && [ -z "${NVH_FORCE_VENV:-}" ]; then
     # (non-interactive, e.g. piped-from-curl, preserves the user's choice to
     # activate an env before running the installer).
     if [ -t 0 ]; then
-        read -r -p "  Install into this env instead of ~/nvh/venv? [Y/n] " ANSWER
+        read -r -p "  Install into this env instead of $NVH_HOME/venv? [Y/n] " ANSWER
         case "${ANSWER:-Y}" in
             n|N|no|NO) USE_ACTIVE_ENV=false ;;
             *)         USE_ACTIVE_ENV=true ;;
@@ -191,21 +257,24 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
     fi
 
     # Ensure Ollama is running
-    if [ -f "$NVH_HOME/ollama" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    OLLAMA_BIN="$NVH_BIN/ollama"
+    [ -x "$NVH_HOME/ollama" ] && [ ! -x "$OLLAMA_BIN" ] && OLLAMA_BIN="$NVH_HOME/ollama"
+    if [ -x "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
         echo -e "${D}Starting Ollama...${N}"
-        OLLAMA_MODELS="$NVH_HOME/models" "$NVH_HOME/ollama" serve &>/dev/null &
+        OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" serve &>/dev/null &
         sleep 2
     fi
 
-    export PATH="$NVH_VENV/bin:$PATH"
+    export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
 
     # Ensure .bashrc has our PATH
     RC="$HOME/.bashrc"; [ -f "$HOME/.zshrc" ] && RC="$HOME/.zshrc"
-    grep -q "nvh/venv/bin" "$RC" 2>/dev/null || {
+    grep -q "nvh-env.sh" "$RC" 2>/dev/null || {
         echo "" >> "$RC"
         echo "# NVHive" >> "$RC"
+        echo "source \"$NVH_HOME/nvh-env.sh\"" >> "$RC"
         echo "export PATH=\"$NVH_VENV/bin:\$PATH\"" >> "$RC"
-        echo "[ -f \"$NVH_HOME/ollama\" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null && OLLAMA_MODELS=\"$NVH_HOME/models\" \"$NVH_HOME/ollama\" serve &>/dev/null &" >> "$RC"
+        echo "[ -x \"$NVH_BIN/ollama\" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null && OLLAMA_MODELS=\"$OLLAMA_MODELS\" \"$NVH_BIN/ollama\" serve &>/dev/null &" >> "$RC"
     }
 
     echo ""
@@ -217,7 +286,7 @@ fi
 # ---------------------------------------------------------------------------
 # Fresh install
 # ---------------------------------------------------------------------------
-echo -e "${B}Fresh install — setting up ~/nvh/...${N}"
+echo -e "${B}Fresh install - setting up $NVH_HOME/...${N}"
 mkdir -p "$NVH_HOME"
 
 # Clone repo
@@ -265,12 +334,12 @@ command -v nvh &>/dev/null || {
     exit 1
 }
 
-export PATH="$NVH_VENV/bin:$PATH"
+export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
 
 # ---------------------------------------------------------------------------
 # Auto-create config with zero-signup providers enabled
 # ---------------------------------------------------------------------------
-HIVE_DIR="$HOME/.hive"
+HIVE_DIR="$HIVE_CONFIG_HOME"
 mkdir -p "$HIVE_DIR"
 if [ ! -f "$HIVE_DIR/config.yaml" ]; then
     echo -e "${B}Creating auto-config (Ollama + LLM7 enabled by default)...${N}"
@@ -343,12 +412,13 @@ if [ "$USE_ACTIVE_ENV" = "true" ]; then
     echo -e "${D}  Remember to activate '$ACTIVE_ENV_NAME' before running nvh.${N}"
 else
     RC="$HOME/.bashrc"; [ -f "$HOME/.zshrc" ] && RC="$HOME/.zshrc"
-    grep -q "nvh/venv/bin" "$RC" 2>/dev/null || {
+    grep -q "nvh-env.sh" "$RC" 2>/dev/null || {
         echo "" >> "$RC"
         echo "# NVHive — Multi-LLM Orchestration" >> "$RC"
+        echo "source \"$NVH_HOME/nvh-env.sh\"" >> "$RC"
         echo "export PATH=\"$NVH_VENV/bin:\$PATH\"" >> "$RC"
         echo "# Auto-start Ollama on login if installed" >> "$RC"
-        echo "[ -f \"$NVH_HOME/ollama\" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null 2>&1 && OLLAMA_MODELS=\"$NVH_HOME/models\" \"$NVH_HOME/ollama\" serve &>/dev/null &" >> "$RC"
+        echo "[ -x \"$NVH_BIN/ollama\" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null 2>&1 && OLLAMA_MODELS=\"$OLLAMA_MODELS\" \"$NVH_BIN/ollama\" serve &>/dev/null &" >> "$RC"
     }
 fi
 
@@ -356,7 +426,7 @@ fi
 # Set up Ollama (local AI) — only if we have a GPU
 # ---------------------------------------------------------------------------
 if [ -n "$GPU_NAME" ]; then
-    OLLAMA_BIN="$NVH_HOME/ollama"
+    OLLAMA_BIN="$NVH_BIN/ollama"
     if [ ! -f "$OLLAMA_BIN" ]; then
         echo -e "${B}Installing Ollama (local AI)...${N}"
         curl -sSL https://ollama.com/download/ollama-linux-amd64 -o "$OLLAMA_BIN" 2>/dev/null
@@ -366,8 +436,8 @@ if [ -n "$GPU_NAME" ]; then
     # Start Ollama
     if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
         echo -e "${B}Starting Ollama...${N}"
-        mkdir -p "$NVH_HOME/models"
-        OLLAMA_MODELS="$NVH_HOME/models" "$OLLAMA_BIN" serve &>/dev/null &
+        mkdir -p "$OLLAMA_MODELS"
+        OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" serve &>/dev/null &
         sleep 3
     fi
 
@@ -380,7 +450,7 @@ if [ -n "$GPU_NAME" ]; then
 
         if ! "$OLLAMA_BIN" list 2>/dev/null | grep -q "$MODEL"; then
             echo -e "${B}Pulling $MODEL in background (you can start using nvh now)...${N}"
-            OLLAMA_MODELS="$NVH_HOME/models" "$OLLAMA_BIN" pull "$MODEL" &>/dev/null &
+            OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" pull "$MODEL" &>/dev/null &
         else
             echo -e "${G}Model $MODEL ready.${N}"
         fi
@@ -412,8 +482,9 @@ echo -e "  ${G}nvh bench${N}      Benchmark your GPU"
 echo -e "  ${G}nvh status${N}     System overview"
 echo -e "  ${G}nvh update${N}     Pull latest version"
 echo ""
-echo -e "  ${D}Install dir: ~/nvh/${N}"
-echo -e "  ${D}Config: ~/.hive/config.yaml${N}"
+echo -e "  ${D}Install dir: $NVH_HOME/${N}"
+echo -e "  ${D}Config: $HIVE_CONFIG_HOME/config.yaml${N}"
+echo -e "  ${D}Activate: source $NVH_HOME/nvh-env.sh${N}"
 echo -e "  ${D}On reconnect: just type 'nvh'${N}"
 echo ""
 echo -e "  ${G}Start now:${N}"

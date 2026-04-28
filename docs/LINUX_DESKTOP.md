@@ -12,15 +12,18 @@ Target user journey:
 ## Quick Start
 
 ```bash
+export NVH_HOME=/mnt/persist/nvhive
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
-nvh workstation --all -y
+source "$NVH_HOME/nvh-env.sh"
+nvh workstation --home-dir "$NVH_HOME" --all -y
 ```
 
 For a pip install path:
 
 ```bash
+export NVH_HOME=/mnt/persist/nvhive
 python3 -m pip install --user "nvhive[all]"
-nvh workstation --all -y
+nvh workstation --home-dir "$NVH_HOME" --all -y
 ```
 
 For a lighter setup that avoids large downloads:
@@ -34,11 +37,11 @@ nvh webui
 
 - Detects NVIDIA GPU availability with `nvidia-smi`
 - Estimates VRAM and recommends local chat models
-- Creates `~/.local/bin/nvhive-ai-studio`
+- Creates `$NVH_HOME/bin/nvhive-ai-studio`
 - Creates a Linux desktop launcher named `NVHive AI Studio`
 - Shows a student-friendly setup checklist
 - With `--all`, ensures local AI, installs ComfyUI, installs the rootless starter pack, and launches WebUI
-- Uses user-space paths only: `~/.nvh`, `~/.local/bin`, and project folders under the student's home directory
+- Uses user-space paths only under `NVH_HOME` for durable models, ComfyUI, packs, cache, logs, and config
 
 ## Rootless AI Studio Packs
 
@@ -87,7 +90,7 @@ nvh studio --install-models gemma3-4b,qwen25-coder-7b -y
 | 12-24 GB | `llama3.1:8b`, `nemotron-mini` | starter, edit, control, video |
 | 24+ GB | `nemotron`, `llama3.1:8b`, `nemotron-mini` | starter, edit, control, video, video-pro |
 
-The ComfyUI installer uses an isolated environment under `~/.nvh/comfyui`, installs current NVIDIA PyTorch support, enables ComfyUI Manager when available, and writes nvHive starter examples.
+The ComfyUI installer uses an isolated environment under `$NVH_HOME/comfyui`, installs current NVIDIA PyTorch support, enables ComfyUI Manager when available, and writes nvHive starter examples.
 
 ## ComfyUI Starter Examples
 
@@ -111,7 +114,7 @@ workflow needs before accepting upstream terms.
 
 - No root required for nvHive itself
 - AI Studio packs are rootless and install to user-owned directories
-- Local data path: `~/nvh`, `~/.hive`, `~/.nvh`
+- Local data path: `$NVH_HOME` on the mounted persistent file volume
 - API binds to localhost by default
 - WebUI starts a local API automatically unless `--no-api` is used
 - ComfyUI auto-start binds to `127.0.0.1:8188`
@@ -121,6 +124,7 @@ workflow needs before accepting upstream terms.
 
 ```bash
 nvh workstation              # detect and prepare the student AI lab
+nvh doctor --storage --home-dir "$NVH_HOME"
 nvh workstation --launch     # open WebUI from the same flow
 nvh workstation --with-comfyui
 nvh workstation --with-studio-packs

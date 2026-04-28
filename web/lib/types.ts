@@ -377,6 +377,39 @@ export interface SystemInfo {
   ollama_status: 'connected' | 'disconnected';
 }
 
+export interface StorageLayout {
+  home: string;
+  bin_dir: string;
+  models_dir: string;
+  ollama_models_dir: string;
+  cache_dir: string;
+  logs_dir: string;
+  tmp_dir: string;
+  studio_dir: string;
+  comfyui_dir: string;
+  config_dir: string;
+}
+
+export interface StorageStatus {
+  layout: StorageLayout;
+  configured_by: string;
+  exists: boolean;
+  writable: boolean;
+  free_gb: number | null;
+  total_gb: number | null;
+  min_free_gb: number;
+  ok: boolean;
+  warnings: string[];
+  env_file: string;
+  export_lines: string[];
+}
+
+export interface StorageConfigureRequest {
+  home_dir?: string;
+  min_free_gb?: number;
+  activate?: boolean;
+}
+
 // ─── UI State helpers ────────────────────────────────────────────────────────
 
 export interface ComfyUIExample {
