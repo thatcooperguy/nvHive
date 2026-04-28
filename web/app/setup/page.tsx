@@ -61,6 +61,24 @@ import type {
 type Step = 'welcome' | 'storage' | 'gpu' | 'models' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
 type WizardProfile = 'student' | 'llm' | 'creator' | 'agent' | 'game' | 'full';
 
+const PROFILE_MARKS: Record<WizardProfile, string> = {
+  student: 'AI',
+  llm: 'LLM',
+  creator: '3D',
+  agent: 'BOT',
+  game: 'GM',
+  full: 'ALL',
+};
+
+const PROFILE_TONES: Record<WizardProfile, string> = {
+  student: 'bg-[#76B900] text-black border-[#76B900]',
+  llm: 'bg-[#0a0a0a] text-white border-[#0a0a0a]',
+  creator: 'bg-[#2563eb] text-white border-[#2563eb]',
+  agent: 'bg-[#7c3aed] text-white border-[#7c3aed]',
+  game: 'bg-[#dc2626] text-white border-[#dc2626]',
+  full: 'bg-[#525252] text-white border-[#525252]',
+};
+
 const STEPS: { id: Step; label: string; num: number }[] = [
   { id: 'welcome', label: 'Welcome', num: 1 },
   { id: 'storage', label: 'Storage', num: 2 },
@@ -82,6 +100,90 @@ const CLOUD_PROVIDERS = [
   { id: 'grok', name: 'xAI Grok', description: 'Grok 2, Grok 3', envKey: 'XAI_API_KEY', placeholder: 'xai-...', signupUrl: 'https://console.x.ai' },
   { id: 'mistral', name: 'Mistral', description: 'Mistral Large, Small', envKey: 'MISTRAL_API_KEY', placeholder: 'your-key...', signupUrl: 'https://console.mistral.ai/api-keys' },
 ];
+
+type SoftwareGlyphKind = 'claw' | 'nodes' | 'blender' | 'godot' | 'cube' | 'unreal' | 'github' | 'nvidia' | 'llm';
+
+function SoftwareGlyph({ kind }: { kind: SoftwareGlyphKind }) {
+  if (kind === 'claw') {
+    return (
+      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="M9 24 16 5M16 25l4-18M23 24l-1-15" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        <path d="M7 25c5 3 13 3 18 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (kind === 'nodes') {
+    return (
+      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="M10 10h12v12H10zM10 16H5M27 16h-5M16 10V5M16 27v-5" stroke="currentColor" strokeWidth="2" />
+        <circle cx="5" cy="16" r="2.5" fill="currentColor" />
+        <circle cx="27" cy="16" r="2.5" fill="currentColor" />
+        <circle cx="16" cy="5" r="2.5" fill="currentColor" />
+        <circle cx="16" cy="27" r="2.5" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (kind === 'blender') {
+    return (
+      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="M6 12h13c5 0 8 3 8 7s-4 7-10 7c-5 0-9-3-9-7 0-2 1-4 3-5" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+        <path d="M7 7l8 5M11 4l8 8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+        <circle cx="18" cy="19" r="3" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (kind === 'godot') {
+    return (
+      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="m6 13 4-5 3 3 3-5 3 5 3-3 4 5-2 12H8L6 13Z" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round" />
+        <circle cx="12" cy="18" r="1.8" fill="currentColor" />
+        <circle cx="20" cy="18" r="1.8" fill="currentColor" />
+        <path d="M12 23h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (kind === 'cube') {
+    return (
+      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="m16 4 10 6v12l-10 6-10-6V10l10-6Z" stroke="currentColor" strokeWidth="2.4" strokeLinejoin="round" />
+        <path d="M6 10l10 6 10-6M16 16v12" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (kind === 'unreal') {
+    return (
+      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="M16 4c6 0 11 5 11 11 0 8-6 12-11 13C11 27 5 23 5 15 5 9 10 4 16 4Z" stroke="currentColor" strokeWidth="2.2" />
+        <path d="M11 10v8c0 3 2 5 5 5s5-2 5-5v-8M9 10h6M17 10h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (kind === 'github') {
+    return (
+      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="2.2" />
+        <circle cx="23" cy="24" r="3" stroke="currentColor" strokeWidth="2.2" />
+        <circle cx="9" cy="24" r="3" stroke="currentColor" strokeWidth="2.2" />
+        <path d="M9 11v10M12 8h5c3 0 6 3 6 7v6" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (kind === 'nvidia') {
+    return (
+      <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <path d="M5 17c5-7 15-7 22 0-7 7-17 7-22 0Z" stroke="currentColor" strokeWidth="2.2" />
+        <circle cx="16" cy="17" r="4" stroke="currentColor" strokeWidth="2.2" />
+        <path d="M16 13c4 0 7 2 9 4" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  return (
+    <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path d="M8 24V8h16v16H8Z" stroke="currentColor" strokeWidth="2.4" />
+      <path d="M12 20 16 9l4 11M13 17h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 // Provider Card (used in Cloud step)
 
@@ -1315,6 +1417,18 @@ export default function SetupPage() {
   const visibleHardwareModelIds = visibleHardwareModels.map(model => model.id);
   const githubPack = studioPacks.find(pack => pack.id === 'github-login-helper') ?? null;
   const gameEnginePacks = studioPacks.filter(pack => ['godot-engine', 'unity-hub-helper', 'unreal-engine-helper'].includes(pack.id));
+  const modelPickPreview = visibleHardwareModels.slice(0, 3);
+  const softwareHighlights = [
+    { id: 'openclaw', label: 'OpenClaw', kind: 'claw' as SoftwareGlyphKind, sub: studioPacks.find(pack => pack.id === 'openclaw-agent')?.status.installed ? 'Ready' : 'Agent', tone: 'bg-[#111827] text-[#76B900] border-[#111827]' },
+    { id: 'nemoclaw', label: 'NemoClaw', kind: 'nvidia' as SoftwareGlyphKind, sub: studioPacks.find(pack => pack.id === 'nemoclaw-sandbox')?.status.installed ? 'Ready' : 'Guarded', tone: 'bg-[#76B900] text-black border-[#76B900]' },
+    { id: 'comfyui', label: 'ComfyUI', kind: 'nodes' as SoftwareGlyphKind, sub: comfyStatus?.installed ? 'Ready' : 'Images', tone: 'bg-[#2563eb] text-white border-[#2563eb]' },
+    { id: 'blender', label: 'Blender', kind: 'blender' as SoftwareGlyphKind, sub: studioPacks.find(pack => pack.id === 'blender-creative')?.status.installed ? 'Ready' : '3D', tone: 'bg-[#f97316] text-white border-[#f97316]' },
+    { id: 'godot', label: 'Godot', kind: 'godot' as SoftwareGlyphKind, sub: studioPacks.find(pack => pack.id === 'godot-engine')?.status.installed ? 'Ready' : 'Games', tone: 'bg-[#478cbf] text-white border-[#478cbf]' },
+    { id: 'github', label: 'GitHub', kind: 'github' as SoftwareGlyphKind, sub: githubPack?.status.installed ? 'Ready' : 'Repos', tone: 'bg-[#0a0a0a] text-white border-[#0a0a0a]' },
+    { id: 'unity', label: 'Unity', kind: 'cube' as SoftwareGlyphKind, sub: 'Helper', tone: 'bg-[#525252] text-white border-[#525252]' },
+    { id: 'unreal', label: 'Unreal', kind: 'unreal' as SoftwareGlyphKind, sub: 'Helper', tone: 'bg-[#7c3aed] text-white border-[#7c3aed]' },
+  ];
+  const repoAndGameHighlights = softwareHighlights.filter(item => ['github', 'godot', 'unity', 'unreal'].includes(item.id));
   const missionProfiles: Array<{
     id: WizardProfile;
     title: string;
@@ -1501,23 +1615,32 @@ export default function SetupPage() {
       </div>
 
       {/* Student-facing phase indicator */}
-      <div className="border border-[#e5e5e5] bg-[#ffffff] p-3 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+      <div className="border border-[#e5e5e5] bg-[#ffffff] px-3 py-2 space-y-3">
+        <div className="flex flex-wrap gap-2">
           {[
-            { label: '1. Save Files', active: step === 'storage' || !storageReady, done: storageReady },
-            { label: '2. Pick Lab', active: storageReady && step === 'welcome', done: storageReady && currentStepIdx > 0 },
-            { label: '3. Install & Try', active: storageReady && !['welcome', 'storage'].includes(step), done: step === 'done' },
+            { label: 'Save Files', mark: '01', active: step === 'storage' || !storageReady, done: storageReady },
+            { label: 'Pick Lab', mark: '02', active: storageReady && step === 'welcome', done: storageReady && currentStepIdx > 0 },
+            { label: 'Install & Try', mark: '03', active: storageReady && !['welcome', 'storage'].includes(step), done: step === 'done' },
           ].map(phase => (
             <div
               key={phase.label}
-              className={`border p-3 ${
+              className={`flex items-center gap-2 border px-3 py-2 min-w-[128px] ${
                 phase.active
                   ? 'border-[#76B900]/40 bg-[#76B900]/5'
                   : phase.done
                     ? 'border-[#76B900]/20 bg-[#ffffff]'
                     : 'border-[#e5e5e5] bg-[#fafafa]'
-              }`}
+                  }`}
             >
+              <span className={`w-7 h-7 flex items-center justify-center border text-[10px] font-mono ${
+                phase.active
+                  ? 'border-[#76B900] bg-[#76B900] text-black'
+                  : phase.done
+                    ? 'border-[#76B900]/40 text-[#76B900]'
+                    : 'border-[#d4d4d4] text-[#737373]'
+              }`}>
+                {phase.done ? 'OK' : phase.mark}
+              </span>
               <div className={`text-xs font-bold ${phase.active ? 'text-[#0a0a0a]' : phase.done ? 'text-[#76B900]' : 'text-[#737373]'}`}>
                 {phase.label}
               </div>
@@ -2199,20 +2322,33 @@ export default function SetupPage() {
       )}
 
       {/* Step content */}
-      <div className="card p-6 nvidia-corner relative">
+      <div className="card p-4 sm:p-6 nvidia-corner relative">
         <div className="absolute top-0 left-0 right-0 h-px bg-[#76B900]/20" />
 
         {/* WELCOME */}
         {step === 'welcome' && (
           <div className="space-y-6">
-            <div className="border border-[#76B900]/30 bg-[#f7fdf0] p-5">
-              <div className="grid grid-cols-1 lg:grid-cols-[1.35fr_0.65fr] gap-5">
+            <div className="border border-[#76B900]/30 bg-[#f7fdf0] p-4 sm:p-5">
+              <div className="grid grid-cols-1 lg:grid-cols-[1.25fr_0.75fr] gap-4">
                 <div>
                   <div className="section-label">Beginner Mode</div>
                   <h2 className="text-3xl font-bold text-[#0a0a0a] mt-2">Pick Your AI Lab</h2>
-                  <p className="text-sm text-[#525252] mt-3 leading-relaxed max-w-2xl">
-                    nvWizard is your calm lab TA: it keeps big downloads on the persistent drive, avoids root-only tricks, checks the changing VM image, and only shows the manual commands when you ask.
+                  <p className="text-sm text-[#525252] mt-2 leading-relaxed max-w-xl">
+                    Choose a lab. nvWizard finds storage, checks the GPU, picks compatible models, then installs rootless tools.
                   </p>
+                  <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {softwareHighlights.slice(0, 6).map(item => (
+                      <div key={item.id} className="flex items-center gap-2 border border-[#d8e8c3] bg-white/70 p-2 min-w-0">
+                        <span className={`w-10 h-10 flex items-center justify-center border flex-shrink-0 ${item.tone}`}>
+                          <SoftwareGlyph kind={item.kind} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-[11px] font-bold text-[#0a0a0a] truncate">{item.label}</span>
+                          <span className="block text-[9px] font-mono text-[#737373] uppercase truncate">{item.sub}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -2231,21 +2367,26 @@ export default function SetupPage() {
                     </button>
                   </div>
                 </div>
-                <div className="border border-[#76B900]/20 bg-white p-4 space-y-3 min-w-0 overflow-hidden">
-                  <div className="text-xs font-bold text-[#0a0a0a]">nvWizard Status</div>
+                <div className="border border-[#76B900]/20 bg-white p-3 space-y-3 min-w-0 overflow-hidden">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-bold text-[#0a0a0a]">nvWizard Status</div>
+                    <span className="text-[9px] font-mono text-[#76B900] uppercase">Auto</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
                   {[
                     { label: 'Storage', value: storageBeginnerLabel, good: storageReady },
                     { label: 'API', value: apiStatus === 'connected' ? 'online' : apiStatus === 'disconnected' ? 'waking up' : 'checking', good: apiStatus === 'connected' },
                     { label: 'Checks', value: setupConcernCount ? `${setupConcernCount} review` : 'clear', good: setupConcernCount === 0 },
                     { label: 'Jobs', value: activeInstallJobs.length ? `${activeInstallJobs.length} running` : 'idle', good: activeInstallJobs.length === 0 },
                   ].map(item => (
-                    <div key={item.label} className="flex items-center justify-between gap-3 text-xs min-w-0">
-                      <span className="text-[#737373]">{item.label}</span>
-                      <span className={`font-mono text-right ${item.good ? 'text-[#76B900]' : 'text-[#d97706]'}`}>{item.value}</span>
+                    <div key={item.label} className="border border-[#e5e5e5] bg-[#fafafa] p-2 min-w-0">
+                      <span className="block text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
+                      <span className={`block text-[10px] font-mono mt-1 truncate ${item.good ? 'text-[#76B900]' : 'text-[#d97706]'}`}>{item.value}</span>
                     </div>
                   ))}
+                  </div>
                   {wizardBuildMessage && (
-                    <div className="border border-[#76B900]/20 bg-[#76B900]/5 p-3 text-[10px] font-mono text-[#0a0a0a] leading-relaxed">
+                    <div className="border border-[#76B900]/20 bg-[#76B900]/5 p-2 text-[10px] font-mono text-[#0a0a0a] leading-relaxed">
                       {wizardBuildMessage}
                     </div>
                   )}
@@ -2253,174 +2394,134 @@ export default function SetupPage() {
               </div>
             </div>
 
-            <div className={`border p-4 ${storageReady ? 'border-[#76B900]/30 bg-white' : 'border-[#d97706]/30 bg-[#fffaf2]'}`}>
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                <div>
-                  <div className="section-label">Storage Autopilot</div>
-                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">
-                    {storageReady ? 'Persistent storage is ready' : 'Finding the persistent block storage'}
-                  </div>
-                  <div className="text-xs text-[#737373] mt-1 leading-relaxed">
-                    nvWizard looks for a 200GB+ writable block-backed home/data mount and prepares it automatically. No root access, no guessing paths.
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+              <div className={`border bg-white p-4 ${storageReady ? 'border-[#76B900]/30' : 'border-[#d97706]/30'}`}>
+                <div className="flex items-start gap-3">
+                  <span className={`w-12 h-12 flex items-center justify-center border flex-shrink-0 ${storageReady ? 'bg-[#76B900] text-black border-[#76B900]' : 'bg-[#fff7ed] text-[#d97706] border-[#d97706]/30'}`}>
+                    <SoftwareGlyph kind="nvidia" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="section-label">Storage Autopilot</div>
+                    <div className="text-sm font-bold text-[#0a0a0a] mt-1">
+                      {storageReady ? 'Persistent home ready' : storageAutopilotBusy ? 'Scanning storage' : 'Auto-find storage'}
+                    </div>
+                    <div className="text-[10px] font-mono text-[#737373] mt-1 truncate">
+                      {storageReady
+                        ? storageFreeGb === null ? 'Space unknown' : `${storageFreeGb} GB free`
+                        : mountRecommendation?.recommended_home ?? 'Large writable block mount'}
+                    </div>
                   </div>
                 </div>
-                <span className={`text-[9px] font-mono px-2 py-1 border flex-shrink-0 ${
-                  storageReady
-                    ? 'border-[#76B900]/40 text-[#76B900] bg-[#76B900]/10'
-                    : 'border-[#d97706]/40 text-[#d97706] bg-[#d97706]/10'
-                }`}>
-                  {storageReady ? storageFreeGb === null ? 'space unknown' : `${storageFreeGb} GB free` : storageAutopilotBusy ? 'scanning' : 'auto'}
-                </span>
-              </div>
-              {!storageReady && (
-                <div className="mt-4 border border-[#76B900]/30 bg-[#76B900]/5 p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-mono uppercase tracking-wider text-[#76B900]">
-                      {mountRecommendation ? 'Detected Candidate' : 'Storage Scan'}
-                    </div>
-                    <div className="text-xs text-[#0a0a0a] mt-1 leading-relaxed">
-                      {mountRecommendation
-                        ? 'nvWizard found a likely persistent home and can prepare it now.'
-                        : apiStatus === 'disconnected'
-                          ? 'Waiting for the local nvHive API so the host scan can run.'
-                          : 'Scanning local mounts for a large writable persistent volume.'}
-                    </div>
-                    {mountRecommendation && (
-                      <div className="text-[10px] font-mono text-[#525252] mt-2 break-all">
+                <button
+                  type="button"
+                  onClick={() => void handleUseRecommendedStorage()}
+                  disabled={storageReady || storageAutopilotBusy}
+                  className="btn-primary w-full mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                >
+                  {storageReady ? 'Storage Ready' : storageAutopilotBusy ? 'Finding' : 'Run Auto-Detect'}
+                </button>
+                {advancedSetupOpen && (
+                  <div className="mt-3 space-y-2">
+                    {!storageReady && mountRecommendation && (
+                      <div className="text-[10px] font-mono text-[#525252] break-all border border-[#e5e5e5] bg-[#fafafa] p-2">
                         {mountRecommendation.recommended_home}
-                        {mountRecommendation.fs_type ? ` / ${mountRecommendation.fs_type}` : ''}
-                        {mountRecommendation.total_gb ? ` / ${mountRecommendation.total_gb} GB` : ''}
+                      </div>
+                    )}
+                    {!storageReady && (
+                      <div className="flex flex-col gap-2">
+                        <input
+                          type="text"
+                          value={storageHomeInput}
+                          onChange={e => setStorageHomeInput(e.target.value)}
+                          placeholder="/mnt/persist/nvhive"
+                          className="input-base px-3 py-2 text-xs font-mono"
+                          spellCheck={false}
+                        />
+                        <button
+                          type="button"
+                          onClick={handleConfigureStorage}
+                          disabled={storageSaving}
+                          className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                        >
+                          {storageSaving ? 'Checking' : 'Manual Override'}
+                        </button>
                       </div>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleUseRecommendedStorage()}
-                    disabled={storageAutopilotBusy}
-                    className="btn-primary px-4 py-2 text-xs font-mono disabled:opacity-40 flex-shrink-0"
-                  >
-                    {storageAutopilotBusy ? 'Finding' : 'Run Auto-Detect'}
-                  </button>
-                </div>
-              )}
-              {!storageReady && mountRecommendation && advancedSetupOpen && (
-                <div className="mt-4 border border-[#76B900]/30 bg-[#76B900]/5 p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[10px] font-mono uppercase tracking-wider text-[#76B900]">Recommended Persistent Home</div>
-                    <div className="text-xs font-mono text-[#0a0a0a] mt-1 break-all">{mountRecommendation.recommended_home}</div>
-                    <div className="text-[10px] text-[#525252] mt-1">
-                      {mountRecommendation.large_block_mount ? 'large local block mount' : 'best writable candidate'}
-                      {mountRecommendation.fs_type ? ` / ${mountRecommendation.fs_type}` : ''}
-                      {mountRecommendation.total_gb ? ` / ${mountRecommendation.total_gb} GB` : ''}
-                      {mountRecommendation.network_mount ? ' / network share' : ''}
-                      {mountRecommendation.os_mount ? ' / OS disk' : ''}
-                    </div>
+                )}
+                {(storageError || storageStatus?.warnings?.length) && (
+                  <div className="mt-3 space-y-1">
+                    {storageError && <div className="text-[10px] font-mono text-[#dc2626]">{storageError}</div>}
+                    {storageStatus?.warnings.map(warning => (
+                      <div key={warning} className="text-[10px] font-mono text-[#d97706]">{warning}</div>
+                    ))}
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleUseRecommendedStorage}
-                    disabled={mountActivating || storageSaving || !mountRecommendation.writable || mountRecommendation.read_only}
-                    className="btn-primary px-4 py-2 text-xs font-mono disabled:opacity-40 flex-shrink-0"
-                  >
-                    {mountActivating ? 'Preparing' : 'Use Recommended'}
-                  </button>
-                </div>
-              )}
-              {!storageReady && advancedSetupOpen && (
-                <div className="mt-4 flex flex-col sm:flex-row gap-2">
-                  <input
-                    type="text"
-                    value={storageHomeInput}
-                    onChange={e => setStorageHomeInput(e.target.value)}
-                    placeholder="/mnt/persist/nvhive or /workspace/nvhive"
-                    className="input-base flex-1 px-3 py-2 text-xs font-mono"
-                    spellCheck={false}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleConfigureStorage}
-                    disabled={storageSaving}
-                    className="btn-primary px-4 py-2 text-xs font-mono disabled:opacity-40"
-                  >
-                    {storageSaving ? 'Checking' : 'Use This Folder'}
-                  </button>
-                </div>
-              )}
-              {!storageReady && !advancedSetupOpen && (
-                <button
-                  type="button"
-                  onClick={() => setAdvancedSetupOpen(true)}
-                  className="mt-3 text-[10px] font-mono uppercase tracking-wider text-[#737373] hover:text-[#76B900]"
-                >
-                  Manual storage override
-                </button>
-              )}
-              {(storageError || storageStatus?.warnings?.length) && (
-                <div className="mt-3 space-y-1">
-                  {storageError && <div className="text-[10px] font-mono text-[#dc2626]">{storageError}</div>}
-                  {storageStatus?.warnings.map(warning => (
-                    <div key={warning} className="text-[10px] font-mono text-[#d97706]">{warning}</div>
-                  ))}
-                </div>
-              )}
-            </div>
+                )}
+              </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-3">
               <div className="border border-[#e5e5e5] bg-white p-4">
-                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-                  <div>
-                    <div className="section-label">Hardware-Matched LLM Picks</div>
-                    <div className="text-sm font-bold text-[#0a0a0a] mt-1">{hardwareName}</div>
-                    <div className="text-xs text-[#737373] mt-1">
-                      {hardwareVramLabel} - nvWizard picks models that should fit before downloading.
-                    </div>
+                <div className="flex items-start gap-3">
+                  <span className="w-12 h-12 flex items-center justify-center border bg-[#0a0a0a] text-[#76B900] border-[#0a0a0a] flex-shrink-0">
+                    <SoftwareGlyph kind="llm" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="section-label">LLM Picks</div>
+                    <div className="text-sm font-bold text-[#0a0a0a] mt-1 truncate">{hardwareName}</div>
+                    <div className="text-[10px] font-mono text-[#737373] mt-1">{hardwareVramLabel}</div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!storageReady) {
-                        void handleUseRecommendedStorage();
-                        return;
-                      }
-                      if (visibleHardwareModelIds.length > 0) handleInstallStudioModels(visibleHardwareModelIds);
-                    }}
-                    disabled={storageAutopilotBusy || anyInstallRunning || modelsInstalling || (storageReady && visibleHardwareModelIds.length === 0)}
-                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40 flex-shrink-0"
-                  >
-                    {!storageReady ? storagePrimaryLabel : modelsInstalling ? 'Downloading' : 'Download Picks'}
-                  </button>
                 </div>
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {visibleHardwareModels.length > 0 ? visibleHardwareModels.map(model => (
-                    <div key={model.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 min-w-0">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="text-xs font-bold text-[#0a0a0a] truncate">{model.title}</div>
-                        <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/30 bg-[#76B900]/10 px-1.5 py-0.5 flex-shrink-0">
-                          {model.recommended_vram_gb}GB+
-                        </span>
-                      </div>
-                      <div className="text-[10px] font-mono text-[#737373] mt-1">
-                        {model.category} - ~{model.estimated_disk_gb.toFixed(1)} GB
-                      </div>
-                      <div className="text-[10px] text-[#525252] mt-2 leading-relaxed">{model.why_recommended}</div>
+                <div className="mt-3 space-y-2">
+                  {modelPickPreview.length > 0 ? modelPickPreview.map(model => (
+                    <div key={model.id} className="flex items-center justify-between gap-2 border border-[#e5e5e5] bg-[#fafafa] px-2 py-2">
+                      <span className="text-xs font-bold text-[#0a0a0a] truncate">{model.title}</span>
+                      <span className="text-[9px] font-mono text-[#76B900] flex-shrink-0">{model.recommended_vram_gb}GB+</span>
                     </div>
                   )) : (
-                    <div className="sm:col-span-2 border border-[#e5e5e5] bg-[#fafafa] p-3 text-xs text-[#737373]">
-                      Waiting for the local GPU and model catalog scan.
+                    <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 text-xs text-[#737373]">
+                      Waiting for GPU scan.
                     </div>
                   )}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!storageReady) {
+                      void handleUseRecommendedStorage();
+                      return;
+                    }
+                    if (visibleHardwareModelIds.length > 0) handleInstallStudioModels(visibleHardwareModelIds);
+                  }}
+                  disabled={storageAutopilotBusy || anyInstallRunning || modelsInstalling || (storageReady && visibleHardwareModelIds.length === 0)}
+                  className="btn-primary w-full mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                >
+                  {!storageReady ? storagePrimaryLabel : modelsInstalling ? 'Downloading' : 'Download Picks'}
+                </button>
               </div>
 
-              <div className="border border-[#e5e5e5] bg-white p-4 space-y-3">
-                <div>
-                  <div className="section-label">Connect & Build</div>
-                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">GitHub, Godot, Unity, and Unreal</div>
-                  <div className="text-xs text-[#737373] mt-1 leading-relaxed">
-                    GitHub Connect helps private repos and PRs. Godot installs as a portable app; Unity and Unreal get persistent workspaces for their account-gated installers.
+              <div className="border border-[#e5e5e5] bg-white p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="section-label">Connect & Build</div>
+                    <div className="text-sm font-bold text-[#0a0a0a] mt-1">Repos and game engines</div>
                   </div>
+                  <span className="text-[9px] font-mono text-[#737373] uppercase">{repoAndGameHighlights.length} tools</span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-2">
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {repoAndGameHighlights.map(item => (
+                    <div key={item.id} className="border border-[#e5e5e5] bg-[#fafafa] p-2 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-9 h-9 flex items-center justify-center border flex-shrink-0 ${item.tone}`}>
+                          <SoftwareGlyph kind={item.kind} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-[10px] font-bold text-[#0a0a0a] truncate">{item.label}</span>
+                          <span className="block text-[9px] font-mono text-[#737373] uppercase truncate">{item.sub}</span>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-2 mt-3">
                   <button
                     type="button"
                     onClick={() => {
@@ -2433,7 +2534,7 @@ export default function SetupPage() {
                     disabled={storageAutopilotBusy || anyInstallRunning || studioInstalling || !githubPack}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {!storageReady ? storagePrimaryLabel : githubPack?.status.installed ? 'Refresh GitHub Connect' : 'Install GitHub Connect'}
+                    {!storageReady ? storagePrimaryLabel : githubPack?.status.installed ? 'Refresh GitHub' : 'Connect GitHub'}
                   </button>
                   <button
                     type="button"
@@ -2447,18 +2548,8 @@ export default function SetupPage() {
                     disabled={storageAutopilotBusy || anyInstallRunning || studioInstalling || gameEnginePacks.length === 0}
                     className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {!storageReady ? 'Auto-Find Storage' : 'Prepare Game Engines'}
+                    {!storageReady ? 'Auto-Find Storage' : 'Game Engines'}
                   </button>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {[
-                    githubPack,
-                    ...gameEnginePacks,
-                  ].filter((pack): pack is StudioPack => Boolean(pack)).map(pack => (
-                    <span key={pack.id} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
-                      {pack.title}{pack.status.installed ? ' ready' : ''}
-                    </span>
-                  ))}
                 </div>
               </div>
             </div>
@@ -2467,9 +2558,7 @@ export default function SetupPage() {
               <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
                 <div>
                   <div className="section-label">One-Click Labs</div>
-                  <div className="text-sm text-[#525252] mt-1">
-                    Each lab installs the rootless dependencies, then models and app pieces in the right order.
-                  </div>
+                  <div className="text-sm text-[#525252] mt-1">Pick the outcome. nvWizard handles the install order.</div>
                 </div>
                 {!advancedSetupOpen && (
                   <button
@@ -2498,11 +2587,14 @@ export default function SetupPage() {
                             : 'border-[#e5e5e5]'
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="text-base font-bold text-[#0a0a0a]">{profile.title}</h3>
-                              <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
+                        <div className="flex items-start gap-3">
+                          <span className={`w-12 h-12 flex items-center justify-center border text-sm font-mono font-bold flex-shrink-0 ${PROFILE_TONES[profile.id]}`}>
+                            {PROFILE_MARKS[profile.id]}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <h3 className="text-base font-bold text-[#0a0a0a] truncate">{profile.title}</h3>
+                              <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border flex-shrink-0 ${
                                 profile.primary
                                   ? 'border-[#76B900]/40 text-[#76B900] bg-[#76B900]/10'
                                   : 'border-[#d4d4d4] text-[#737373]'
@@ -2510,13 +2602,12 @@ export default function SetupPage() {
                                 {profile.label}
                               </span>
                             </div>
-                            <p className="text-xs text-[#525252] leading-relaxed mt-2">{profile.description}</p>
+                            <p className="text-xs text-[#525252] leading-relaxed mt-1">{profile.description}</p>
                           </div>
                           <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] px-1.5 py-0.5 flex-shrink-0">
                             {hasCatalogSizing ? `~${Math.max(0, estimatedGb).toFixed(1)} GB` : 'after check'}
                           </span>
                         </div>
-                        <div className="text-xs text-[#0a0a0a] mt-3 leading-relaxed">{profile.outcome}</div>
                         <div className="mt-3 flex flex-wrap gap-1">
                           {profile.includes.map(item => (
                             <span key={item} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
