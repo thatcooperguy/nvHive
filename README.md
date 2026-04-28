@@ -1,16 +1,28 @@
 # nvHive
 
-**One command. Every AI model you have. Automatically assembled into the best team for each task.**
+**A rootless NVIDIA AI lab for students, creators, agents, ComfyUI, and local models.**
 
 ![version](https://img.shields.io/badge/version-0.34.1-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
-```bash
-nvh "What is a binary search tree?"              # → answers (single best advisor)
-nvh "Fix the timeout bug in council.py"          # → auto-detects coding task → agent mode
-nvh "Should we use Redis or Postgres?"           # → auto-detects debate → council (3+ advisors)
-nvh "take a screenshot and describe my desktop"  # → desktop agent (vision + tools)
-nvh "setup comfyui"                              # → agent installs, configures, launches
-```
+nvHive turns a fresh cloud Linux GPU desktop into a ready-to-use AI workstation
+without `sudo`: it finds persistent storage, installs into user-owned paths,
+opens a setup wizard, recommends models for the detected GPU, and gives students
+one-click paths for local LLMs, ComfyUI, agents, creative tools, game-dev tools,
+and music production.
+
+What you get on the happy path:
+
+- A desktop launcher and WebUI setup wizard.
+- Persistent `NVH_HOME` storage for models, ComfyUI, apps, logs, jobs, and config.
+- GPU-aware model recommendations and disk estimates.
+- Mission cards for AI Starter, Graphics Creator, Game Dev, Music Producer, and Agent Builder.
+- Self-healing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts.
+- Redacted error reports with request IDs when something needs debugging.
+
+Release status: CI is green across Linux, Windows, and macOS. nvHive should be
+treated as a production candidate until the
+[target NVIDIA Linux VM checklist](docs/PRODUCTION_READINESS.md) passes on the
+actual no-root GPU desktop.
 
 <p align="center">
   <img src="docs/screenshots/terminal-demo-v2.gif" alt="nvHive CLI" width="640">
@@ -20,23 +32,39 @@ nvh "setup comfyui"                              # → agent installs, configure
 
 ## Install
 
-Four ways to get nvHive - pick the one that matches your setup. No Docker, no container runtime, no root required.
+Start with the Linux GPU desktop path if you are on a cloud workstation or
+GeForce NOW-style session. Other install paths are below for existing Python
+environments, local laptops, and single-file binary installs. No Docker, no
+container runtime, and no root access are required for nvHive itself.
 
-### Option 0 - Launch a Linux GPU desktop lab
+For cloud desktops, large downloads should live on the persistent block-backed
+mount, not the read-only OS disk. The launcher finds the best candidate
+automatically. If you already know the mount path, set `NVH_HOME` first:
 
-This is the easiest path for GeForce NOW-style Linux sessions and cloud desktops where only a mounted file volume survives reconnects:
+```bash
+export NVH_HOME=/mnt/persist/nvhive
+```
+
+### Recommended - Launch a Linux GPU desktop lab
+
+This is the easiest path for cloud Linux GPU sessions where only a mounted file
+volume survives reconnects:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | bash
 ```
 
-The launcher auto-detects a likely persistent mount, sets `NVH_HOME`, installs nvHive rootlessly if needed, creates the desktop launcher, starts the API/WebUI, and opens the setup wizard. If Python is missing, set `NVH_USE_BINARY=1` and the same launcher downloads the single-file Linux binary instead of creating a venv.
+The launcher auto-detects a likely persistent block-backed mount, sets
+`NVH_HOME`, installs nvHive rootlessly if needed, creates the desktop launcher,
+starts the API/WebUI, and opens the setup wizard. If Python is missing, set
+`NVH_USE_BINARY=1` and the same launcher downloads the single-file Linux binary
+instead of creating a venv.
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | NVH_USE_BINARY=1 bash
 ```
 
-### Option 1 - One-line installer (recommended for GPU VMs)
+### General Linux installer
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
@@ -49,7 +77,7 @@ If `NVH_HOME` is not set, the installer now checks common persistent mount roots
 Windows: `iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex`
 macOS: `curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash`
 
-### Option 2 - Single-file binary (no Python needed)
+### Single-file binary (no Python needed)
 
 Fully standalone. No Python install, no pip, no venv. Download the asset, make it executable, and run `nvh workstation --launch`. Click your OS:
 
@@ -76,9 +104,12 @@ chmod +x "$HOME/.local/bin/nvh"
 NVH_HOME=/mnt/persist/nvhive "$HOME/.local/bin/nvh" workstation --launch -y
 ```
 
-On Linux/macOS after a browser download: `chmod +x nvh-* && ./nvh-* workstation --launch -y`. Full asset list (wheel, sdist, checksums) lives on the [Releases page](https://github.com/thatcooperguy/nvHive/releases/latest).
+On Linux/macOS after a browser download:
+`chmod +x nvh-* && NVH_HOME=/mnt/persist/nvhive ./nvh-* workstation --launch -y`.
+Full asset list (wheel, sdist, checksums) lives on the
+[Releases page](https://github.com/thatcooperguy/nvHive/releases/latest).
 
-### Option 3 - pip from PyPI (for existing Python environments)
+### pip from PyPI (for existing Python environments)
 
 ```bash
 pip install nvhive              # core
@@ -87,15 +118,16 @@ pip install "nvhive[browser]"   # + headless browser (playwright)
 pip install "nvhive[all]"       # everything
 ```
 
+`pip install` installs the Python package only. For large local models,
+ComfyUI, and Studio packs, launch the workstation with a persistent `NVH_HOME`
+so assets survive reconnects.
+
 ### First run
 
 ```bash
-nvh                              # guided setup — GPU detect, provider keys, local model pulls
+nvh                              # guided setup: GPU detect, provider keys, local model pulls
 nvh workstation --all -y         # Linux GPU desktop: launcher + WebUI + ComfyUI + studio packs
-nvh webui                        # Setup > Models lets you choose exact local downloads
-nvh studio --install starter -y  # AI Starter mission: rootless LLMs + agents + ComfyUI nodes
-nvh studio --install music -y    # Music Producer Studio: ACE-Step + stems + DAW helpers
-nvh convene --cabinet product_resilience "How can this setup fail for a beginner?"
+nvh webui                        # open the dashboard and setup wizard
 nvh "your question"              # just ask - nvHive figures out the rest
 ```
 
@@ -129,47 +161,54 @@ nvh studio --install python-runtime-fallback -y  # optional rescue pack, not the
 
 ### Pick Your Mission
 
-The WebUI setup now starts with simple mission cards instead of a long
-checklist. A first-time student can choose one path and let nvWizard handle
-the storage, GPU, CUDA/Python/Node checks, rootless installers, model choices,
-and background jobs:
+The setup wizard starts with one simple question: **what do you want to make?**
+Pick a mission and nvWizard handles storage, GPU checks, Python/Node runtime
+checks, model recommendations, rootless installers, and background jobs.
 
-| Mission | One-click path |
+The wizard does six things before heavy installs:
+
+1. Finds the best user-writable persistent storage path.
+2. Checks GPU, driver, CUDA, VRAM, Python, Node, and npm health.
+3. Recommends local models that fit the detected hardware and disk.
+4. Installs selected tools into `NVH_HOME` without root.
+5. Tracks long downloads as resumable jobs with logs and receipts.
+6. Offers **Fix My Setup** and **Copy Error Report** when something breaks.
+
+| Mission | What it sets up |
 | --- | --- |
-| AI Starter | Local chat/coding models, Ollama, GitHub helper, the local agent helper, and a lightweight NVIDIA Omni Agent upgrade path for Nemotron 3 Nano Omni via NIM or guarded local weights |
+| AI Starter | Local chat and coding models, Ollama, GitHub helper, and a local agent helper |
 | Graphics Creator Studio | ComfyUI, Blender, image/video workflow examples, and model download plans |
-| Game Dev Lab | Godot helper, Unity/Unreal download guidance, Blender assets, GitHub, and Linux game tooling |
-| Music Producer Studio | ACE-Step AI music generation, Demucs stems, WhisperX transcription, Audacity, LMMS, and audio notebooks |
-| Agent Builder | OpenClaw rootless agent workspace plus guarded NemoClaw when Docker/OpenShell is already usable without sudo |
+| Game Dev Lab | Godot helpers, Blender assets, GitHub, Linux game tooling, and Unity/Unreal guidance |
+| Music Producer Studio | AI music generation, stem splitting, transcription, audio apps, and notebooks |
+| Agent Builder | OpenClaw by default, with NemoClaw unlocked only when Docker already works without sudo |
 
-The WebUI setup wizard includes a model picker with GPU-fit badges, disk
-estimates, installed status, and persistent install jobs saved under
-`$NVH_HOME/jobs`. ComfyUI, AI Studio packs, and local model downloads keep
-showing progress after a browser refresh and can be canceled from the wizard.
-For pip installs, the downloaded WebUI, npm cache, and no-root Node fallback
-also live under `$NVH_HOME`, so reconnecting to a cloud desktop does not mean
-starting the frontend toolchain from scratch.
-The wizard now opens in Beginner Mode: one recommended action, Fix My Setup,
-and Advanced Details only when the student wants the full diagnostics. It also
-includes a local setup helper that ranks the next storage, runtime, model,
-ComfyUI, OpenClaw/NemoClaw, creative-tool, and music-tool actions before any local LLM is
-installed. NemoClaw is shown as a guarded sandbox option only when Docker works
-without sudo; OpenClaw remains the simple rootless agent path.
-Advanced Details includes Release Readiness gates for storage, boot drift,
-smoke tests, model fit, receipts, and target VM acceptance; see
-[Production Readiness](docs/PRODUCTION_READINESS.md).
-It also has a redacted Copy Error Report action with request IDs and log
-locations, so students can send useful diagnostics without exposing API keys.
-The ComfyUI step lets students select workflow examples and save a model
-download plan with source links, folder targets, and a helper checklist script,
-because many image/video weights are large or require upstream terms.
+Beginner Mode shows one recommended action, a **Fix My Setup** repair path, and
+mission cards. Advanced Details stays available for storage, driver, CUDA,
+Python, Node, logs, receipts, boot drift, and release-readiness diagnostics.
 
-On every API/WebUI boot, nvWizard records a VM image fingerprint under
-`$NVH_HOME/config/boot-preflight.json`. It checks the base OS, kernel,
-architecture, NVIDIA driver/CUDA, detected GPU architecture, framebuffer,
-Python, Node/npm, persistent storage capacity, and a real storage write probe.
-If the cloud image changes between sessions, the wizard flags what changed and
-recommends rootless repair actions before launching large installs.
+ComfyUI, AI Studio packs, and local model downloads run as persistent jobs under
+`$NVH_HOME/jobs`, so setup progress survives browser refreshes and cloud desktop
+reconnects. The model picker shows GPU-fit badges, disk estimates, installed
+status, and a selected download queue.
+
+When the VM image changes between sessions, nvWizard compares the new boot
+fingerprint with `$NVH_HOME/config/boot-preflight.json` and recommends rootless
+repairs before launching large installs. If something still fails, **Copy Error
+Report** creates a redacted report with request IDs and log locations. See
+[Production Readiness](docs/PRODUCTION_READINESS.md) for the release gates and
+target NVIDIA Linux VM acceptance checklist.
+
+If setup gets stuck:
+
+```bash
+nvh webui                                      # reopen the wizard
+nvh doctor --storage --home-dir "$NVH_HOME"   # verify the persistent mount
+nvh doctor --fix                              # try safe local repairs
+tail -n 80 "$NVH_HOME/logs/nvhive.log"        # inspect rootless logs
+```
+
+When the local API is running, Advanced Details can copy the same redacted report
+from the UI, or you can call `GET /v1/setup/diagnostics` directly.
 
 <p align="center">
   <img src="docs/screenshots/rootless-runtime.svg" alt="Rootless NVIDIA cloud desktop layout" width="900">
@@ -186,13 +225,17 @@ with local models when available. Every advanced step is skippable. Run
 
 ### WebUI
 
-`nvh webui` launches an optimized full-screen dashboard at `localhost:3000` - chat, council mode, advisor status, analytics, system stats, and setup flows. First run installs dependencies and builds the WebUI under persistent `NVH_HOME`; later launches use the production server for fast loading. If the WebUI is not bundled, nvHive downloads the matching release tag with `git` or a GitHub archive fallback when `git` is missing, then falls back to `main` only if needed. Use `nvh webui --dev` only when editing the frontend. NVIDIA corporate theme, keyboard-first (Ctrl+K command palette, Ctrl+B collapse sidebar).
+`nvh webui` launches the local dashboard at `localhost:3000`: setup wizard,
+chat, council mode, advisor status, analytics, and system health. First run
+installs frontend dependencies under persistent `NVH_HOME`; later launches use
+the production server for faster startup. Use `nvh webui --dev` only when
+editing the frontend.
 
 <p align="center">
   <img src="docs/screenshots/webui-walkthrough.gif" alt="nvHive WebUI walkthrough" width="900">
 </p>
 
-**GPU tier → model recommendations:**
+**GPU tier model recommendations:**
 
 | VRAM | Text Model | Vision Model | Behavior |
 |------|-----------|-------------|----------|
@@ -368,8 +411,11 @@ Results vary by hardware and workload — run `nvh bench` to measure on your set
 
 | Guide | Description |
 |-------|-------------|
-| [Getting Started](docs/GETTING_STARTED.md) | First-time setup |
 | [Student GPU Cloud / Linux Desktop](docs/LINUX_DESKTOP.md) | No-root NVIDIA Linux workstation and ComfyUI guide |
+| [Production Readiness](docs/PRODUCTION_READINESS.md) | Release gates and target NVIDIA Linux VM acceptance checklist |
+| [Deploy Without Root](docs/DEPLOY_NO_ROOT.md) | No-root install on servers |
+| [Windows Troubleshooting](docs/TROUBLESHOOTING_WINDOWS.md) | Encoding, segfaults, port issues |
+| [Getting Started](docs/GETTING_STARTED.md) | General CLI/provider setup after the no-root workstation path |
 | [Commands](docs/COMMANDS.md) | Full CLI reference (50+ commands) |
 | [Providers](docs/PROVIDERS.md) | 23 providers, rate limits, free tiers |
 | [Council System](docs/COUNCIL.md) | Multi-LLM consensus with confidence scoring |
@@ -379,9 +425,6 @@ Results vary by hardware and workload — run `nvh bench` to measure on your set
 | [Agent Tools](docs/TOOLS.md) | Agent tools and capabilities |
 | [Configuration](docs/CONFIGURATION.md) | Configuration reference |
 | [Web UI](docs/WEBUI.md) | Web dashboard |
-| [Deploy Without Root](docs/DEPLOY_NO_ROOT.md) | No-root install on servers |
-| [Windows Troubleshooting](docs/TROUBLESHOOTING_WINDOWS.md) | Encoding, segfaults, port issues |
-| [Production Readiness](docs/PRODUCTION_READINESS.md) | Release gates and target NVIDIA Linux VM acceptance checklist |
 | [Releasing](docs/RELEASING.md) | Release runbook |
 
 ---

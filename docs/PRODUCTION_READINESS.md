@@ -23,6 +23,11 @@ The report is intentionally conservative. It will not mark production-ready
 until a real NVIDIA Linux VM test has been completed and
 `NVH_TARGET_VM_VALIDATED=1` is present for the final check.
 
+Automatic storage detection is best-effort. nvHive can rank writable local
+mount candidates and warn about obvious OS, network, read-only, or ephemeral
+paths, but the target VM acceptance run is the final attestation that the chosen
+`NVH_HOME` is the real persistent block-backed volume for that cloud desktop.
+
 ## Gates
 
 The readiness report checks:
@@ -46,13 +51,15 @@ Run this on a fresh NVIDIA Linux cloud desktop without root access:
 1. Install from GitHub or PyPI into the user-owned persistent mount.
 2. Confirm `NVH_HOME` lands on the 200 GB+ block-backed mount, not the OS disk
    or a read-only share.
-3. Launch the WebUI from the desktop launcher.
-4. Install **AI Starter** and verify Ollama plus the recommended model queue.
-5. Install **Graphics Creator Studio** and launch ComfyUI with starter examples.
-6. Install **Game Dev Lab** and verify Blender/Godot helper launchers.
-7. Install **Music Producer Studio** and verify helper workspaces without sudo.
-8. Reboot or reconnect the VM and confirm boot preflight reports a stable image.
-9. Run the readiness report again with:
+3. Run a real write probe under `$NVH_HOME` and confirm available capacity before
+   downloading large models or ComfyUI assets.
+4. Launch the WebUI from the desktop launcher.
+5. Install **AI Starter** and verify Ollama plus the recommended model queue.
+6. Install **Graphics Creator Studio** and launch ComfyUI with starter examples.
+7. Install **Game Dev Lab** and verify Blender/Godot helper launchers.
+8. Install **Music Producer Studio** and verify helper workspaces without sudo.
+9. Reboot or reconnect the VM and confirm boot preflight reports a stable image.
+10. Run the readiness report again with:
 
 ```bash
 export NVH_TARGET_VM_VALIDATED=1
@@ -82,6 +89,20 @@ That report includes storage status, release gates, recent setup jobs, install
 receipts, safe environment facts, and recent warning/error log lines. API keys,
 bearer tokens, GitHub tokens, and common secret-shaped values are redacted before
 the report is shown or copied.
+
+If the WebUI does not open, use the CLI/headless path:
+
+```bash
+nvh doctor --storage --home-dir "$NVH_HOME"
+nvh doctor --fix
+tail -n 120 "$NVH_HOME/logs/nvhive.log"
+curl -s http://127.0.0.1:8000/v1/setup/diagnostics
+```
+
+Diagnostics redact API keys, bearer tokens, GitHub tokens, and common
+secret-shaped values. They can still include usernames, mount names, project
+paths, and recent warning/error log lines, so review reports before posting them
+publicly.
 
 ## Release Rule
 

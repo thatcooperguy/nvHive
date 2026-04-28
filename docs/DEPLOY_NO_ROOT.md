@@ -37,6 +37,11 @@ nvh nvidia                           # nvHive's GPU detection
 
 ## Ollama Without Root
 
+For cloud desktops with persistent block storage, prefer the nvHive workstation
+or Studio pack flow so model state is tied to `NVH_HOME`. The manual Ollama path
+below is useful on generic no-root servers, but the default `~/.ollama` location
+may be ephemeral on some managed desktops.
+
 The standard Ollama installer (`curl | sh`) needs root. User-space
 alternative:
 
@@ -62,7 +67,9 @@ ollama pull qwen2.5-coder:32b       # ~34 GB, reviewer
 nvh agent --setup
 ```
 
-Models are stored in `~/.ollama/models/` — no root needed.
+Models are stored in `~/.ollama/models/` by default, no root needed. On cloud
+desktops, confirm that `$HOME` is persistent or set the equivalent model path to
+your durable `NVH_HOME` volume before pulling large models.
 
 ## API Keys Without Keyring
 

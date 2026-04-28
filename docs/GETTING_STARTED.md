@@ -6,7 +6,12 @@ NVHive is a multi-LLM orchestration platform that routes queries to the best AI 
 
 ## Quick Start (3 minutes)
 
-### Option A: Docker (recommended for Ubuntu/Linux)
+If you are on a no-root NVIDIA Linux cloud desktop or a session where only a
+mounted block volume survives reconnects, start with the
+[Student GPU Cloud / Linux Desktop guide](LINUX_DESKTOP.md) instead. That is
+the rootless workstation path for local models, ComfyUI, and Studio packs.
+
+### Option A: Docker (local development / managed workstations)
 
 ```bash
 # Clone the repo
@@ -27,13 +32,15 @@ open http://localhost:3000        # macOS
 
 That's it. The web UI is at **http://localhost:3000** and the API is at **http://localhost:8000**.
 
-### Option B: One-line setup (Ubuntu with NVIDIA GPU)
+### Option B: One-line setup (Ubuntu with NVIDIA GPU and install privileges)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvhive/main/scripts/setup.sh | bash
 ```
 
-This installs Docker (rootless, no root needed), starts NVHive, and pulls a local AI model.
+This prepares a Docker-backed local stack, starts NVHive, and pulls a local AI
+model. Use the Linux Desktop guide instead when Docker or system changes are not
+allowed.
 
 ### Option C: pip install (CLI only)
 
