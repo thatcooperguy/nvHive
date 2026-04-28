@@ -11,6 +11,7 @@ import {
   saveProviderKey,
   getStorageStatus,
   configureStorage,
+  getSetupHelper,
   cancelInstallJob,
   getComfyUIStatus,
   getComfyUIExamples,
@@ -32,6 +33,7 @@ import type {
   ComfyUIInstallEvent,
   ComfyUIStatus,
   InstallJob,
+  SetupHelperReport,
   StorageStatus,
   StudioPack,
   StudioPackInstallEvent,
@@ -202,6 +204,8 @@ export default function SetupPage() {
   const [storageHomeInput, setStorageHomeInput] = useState('');
   const [storageSaving, setStorageSaving] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [setupHelper, setSetupHelper] = useState<SetupHelperReport | null>(null);
+  const [setupHelperError, setSetupHelperError] = useState<string | null>(null);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
@@ -269,6 +273,16 @@ export default function SetupPage() {
     }
   }, []);
 
+  const refreshSetupHelper = useCallback(async (homeDir?: string) => {
+    try {
+      const data = await getSetupHelper(homeDir);
+      setSetupHelper(data);
+      setSetupHelperError(null);
+    } catch (err) {
+      setSetupHelperError(err instanceof Error ? err.message : 'Setup helper unavailable');
+    }
+  }, []);
+
   useEffect(() => {
     void refreshInstallJobs();
     const timer = window.setInterval(() => {
@@ -320,6 +334,7 @@ export default function SetupPage() {
       .then(status => {
         setStorageStatus(status);
         setStorageHomeInput(status.layout.home);
+        void refreshSetupHelper(status.layout.home);
       })
       .catch(() => {
         setStorageError('Storage preflight is unavailable. Start the API with nvh serve.');
@@ -377,7 +392,7 @@ export default function SetupPage() {
       })
       .catch(() => {})
       .finally(() => setModelsLoading(false));
-  }, []);
+  }, [refreshSetupHelper]);
 
   const handleTest = async () => {
     setTestLoading(true);
@@ -436,6 +451,7 @@ export default function SetupPage() {
         refreshStudioModels(),
         refreshStudioPacks(),
         refreshComfyUI(),
+        refreshSetupHelper(status.layout.home),
       ]);
     } catch (err) {
       setStorageError(err instanceof Error ? err.message : 'Could not configure persistent storage');
@@ -503,6 +519,7 @@ export default function SetupPage() {
       .map(model => model.id);
     const vramLimit = detectedModelVram || 12;
     const starterPackIds = studioBundles.starter ?? studioPacks.map(pack => pack.id);
+    const creativePackIds = studioBundles.creative ?? ['blender-creative', 'game-dev-lab', 'game-mod-helper'];
     const starterExamples = visibleComfyExamples
       .filter(example => example.recommended_vram_gb <= vramLimit)
       .map(example => example.id);
@@ -517,7 +534,7 @@ export default function SetupPage() {
 
     if (profile === 'creator') {
       setSelectedStudioModels(new Set(recommendedModels));
-      setSelectedStudioPacks(new Set(studioBundles.comfy ?? ['comfyui-power-nodes']));
+      setSelectedStudioPacks(new Set([...(studioBundles.comfy ?? ['comfyui-power-nodes']), ...creativePackIds]));
       setSelectedComfyExamples(new Set(starterExamples));
       setStep('comfyui');
       return;
@@ -525,7 +542,7 @@ export default function SetupPage() {
 
     if (profile === 'game') {
       setSelectedStudioModels(new Set(recommendedModels));
-      setSelectedStudioPacks(new Set(studioBundles.game ?? ['game-dev-lab', 'game-mod-helper']));
+      setSelectedStudioPacks(new Set(creativePackIds));
       setSelectedComfyExamples(new Set(starterExamples));
       setStep('studio');
       return;
@@ -741,7 +758,9 @@ export default function SetupPage() {
     setComfyPlanMessage(null);
     try {
       const plan = await saveComfyUIModelPlan(Array.from(selectedComfyExamples));
-      setComfyPlanMessage(`Saved ${plan.model_count} model requirement(s) to ${plan.plan_path}`);
+      setComfyPlanMessage(
+        `Saved ${plan.model_count} model requirement(s), folder targets, and ${plan.download_helper} beside ${plan.plan_path}`
+      );
     } catch (err) {
       setComfyError(err instanceof Error ? err.message : 'Failed to save ComfyUI model plan');
     } finally {
@@ -772,6 +791,14 @@ export default function SetupPage() {
     .reduce((total, model) => total + model.estimated_disk_gb, 0);
   const activeInstallJobs = installJobs.filter(isActiveInstallJob);
   const visibleInstallJobs = installJobs.slice(0, 5);
+  const helperActions = setupHelper?.actions.slice(0, 4) ?? [];
+
+  const goToHelperAction = (actionId: string) => {
+    if (actionId === 'storage') setStep('storage');
+    else if (actionId === 'starter-models') setStep('models');
+    else if (actionId === 'comfyui' || actionId === 'comfyui-examples') setStep('comfyui');
+    else setStep('studio');
+  };
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -895,6 +922,62 @@ export default function SetupPage() {
         </div>
       )}
 
+      {(setupHelper || setupHelperError) && (
+        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <div className="section-label">Local Setup Helper</div>
+              <div className="text-[10px] font-mono text-[#737373] mt-1">
+                {setupHelper?.summary ?? 'Offline setup recommendations'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void refreshSetupHelper(storageStatus?.layout.home)}
+              className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+            >
+              Recheck
+            </button>
+          </div>
+          {setupHelperError && (
+            <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
+              {setupHelperError}
+            </div>
+          )}
+          {setupHelper && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {helperActions.map(action => (
+                <button
+                  key={action.id}
+                  type="button"
+                  onClick={() => goToHelperAction(action.id)}
+                  className="text-left border border-[#e5e5e5] bg-[#fafafa] p-3 hover:border-[#76B900]/50 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">{action.title}</div>
+                    <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
+                      action.status === 'required'
+                        ? 'border-[#dc2626]/40 text-[#dc2626]'
+                        : action.status === 'recommended'
+                        ? 'border-[#76B900]/40 text-[#76B900]'
+                        : 'border-[#d4d4d4] text-[#737373]'
+                    }`}>
+                      {action.status}
+                    </span>
+                  </div>
+                  <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
+                    {action.reason}
+                  </div>
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-2 break-all">
+                    {action.command}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Step content */}
       <div className="card p-6 nvidia-corner relative animate-fade-in">
         <div className="absolute top-0 left-0 right-0 h-px bg-[#76B900]/20" />
@@ -939,7 +1022,7 @@ export default function SetupPage() {
                     {storageReady ? 'Mounted storage is ready' : 'Choose the mounted folder first'}
                   </div>
                   <div className="text-[10px] font-mono text-[#737373] mt-1 leading-relaxed">
-                    Models, ComfyUI, packs, cache, logs, and config should live on the file mount that attaches every session.
+                    Models, ComfyUI, packs, apps, WebUI assets, cache, logs, and config should live on the file mount that attaches every session.
                   </div>
                 </div>
                 <span className={`text-[9px] font-mono px-2 py-1 border flex-shrink-0 ${
@@ -1007,14 +1090,14 @@ export default function SetupPage() {
                   },
                   {
                     id: 'creator' as WizardProfile,
-                    title: 'Creator / ComfyUI',
-                    desc: 'ComfyUI power nodes plus image, edit, ControlNet, and video workflow planning.',
+                    title: 'Creator Studio',
+                    desc: 'ComfyUI power nodes, Blender LTS, image/edit/video planning, and asset workspaces.',
                     next: 'ComfyUI',
                   },
                   {
                     id: 'game' as WizardProfile,
                     title: 'Game Dev',
-                    desc: 'Linux game-dev pack, mod helper workspace, and local AI helpers.',
+                    desc: 'Blender, Linux game-dev pack, mod helper workspace, and local AI helpers.',
                     next: 'Packs',
                   },
                   {
@@ -1087,6 +1170,20 @@ export default function SetupPage() {
                 <div className="border border-[#e5e5e5] p-3">
                   <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">Cache</div>
                   <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.cache_dir ?? 'Set NVH_HOME first'}</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="border border-[#e5e5e5] p-3">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">Runtimes</div>
+                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.runtime_dir ?? 'Set NVH_HOME first'}</div>
+                </div>
+                <div className="border border-[#e5e5e5] p-3">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">Apps</div>
+                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.apps_dir ?? 'Set NVH_HOME first'}</div>
+                </div>
+                <div className="border border-[#e5e5e5] p-3">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">WebUI</div>
+                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.webui_dir ?? 'Set NVH_HOME first'}</div>
                 </div>
               </div>
 
@@ -1594,7 +1691,7 @@ export default function SetupPage() {
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 6</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">AI Studio Packs</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
-                One-click rootless packs for LLMs, local agents, ComfyUI sub software, and Linux game projects.
+                One-click rootless packs for LLMs, local agents, ComfyUI sub software, Blender, runtime fallback, and Linux game projects.
               </p>
             </div>
 

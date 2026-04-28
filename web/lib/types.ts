@@ -385,6 +385,9 @@ export interface StorageLayout {
   cache_dir: string;
   logs_dir: string;
   tmp_dir: string;
+  runtime_dir: string;
+  apps_dir: string;
+  webui_dir: string;
   studio_dir: string;
   comfyui_dir: string;
   config_dir: string;
@@ -408,6 +411,38 @@ export interface StorageConfigureRequest {
   home_dir?: string;
   min_free_gb?: number;
   activate?: boolean;
+}
+
+export interface RuntimeStatus {
+  python_executable: string;
+  python_version: string;
+  venv_available: boolean;
+  pip_available: boolean;
+  strategy: 'python-venv' | 'micromamba-fallback' | 'needs-runtime' | string;
+  micromamba_installed: boolean;
+  micromamba_binary: string;
+  micromamba_root_prefix: string;
+  notes: string[];
+}
+
+export interface SetupAction {
+  id: string;
+  title: string;
+  priority: number;
+  status: 'required' | 'recommended' | 'optional' | string;
+  command: string;
+  reason: string;
+  can_run_without_root: boolean;
+}
+
+export interface SetupHelperReport {
+  ready: boolean;
+  summary: string;
+  storage: StorageStatus;
+  runtime: RuntimeStatus;
+  comfyui: Record<string, unknown>;
+  model_recommendation_count: number;
+  actions: SetupAction[];
 }
 
 // ─── UI State helpers ────────────────────────────────────────────────────────
@@ -519,6 +554,7 @@ export interface ComfyUIModelPlanModel {
   workflow_ids: string[];
   workflow_titles: string[];
   source_urls: string[];
+  target_folder: string;
   requires_manual_download: boolean;
 }
 
@@ -533,6 +569,7 @@ export interface ComfyUIModelPlanResult {
   model_count: number;
   custom_node_count: number;
   requires_manual_download: boolean;
+  download_helper: string;
   message: string;
   plan_path: string;
 }
@@ -554,7 +591,7 @@ export interface StudioComfyNode {
 export interface StudioPack {
   id: string;
   title: string;
-  category: 'runtime' | 'llm' | 'agents' | 'comfyui' | 'game' | string;
+  category: 'runtime' | 'llm' | 'agents' | 'comfyui' | 'game' | 'creative' | string;
   tagline: string;
   description: string;
   recommended_vram_gb: number;
