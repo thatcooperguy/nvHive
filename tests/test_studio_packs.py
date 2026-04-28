@@ -19,6 +19,10 @@ def test_catalog_is_rootless_and_grouped() -> None:
     assert "comfyui-power-nodes" in ids
     assert "game-dev-lab" in ids
     assert "blender-creative" in ids
+    assert "godot-engine" in ids
+    assert "unity-hub-helper" in ids
+    assert "unreal-engine-helper" in ids
+    assert "github-login-helper" in ids
     assert all(pack["no_root"] for pack in catalog)
 
 
@@ -29,9 +33,16 @@ def test_pack_bundles_expand_without_duplicates() -> None:
     assert "llm-starter" in starter
     assert "agent-lab" in starter
     assert len(starter) == len(set(starter))
+    assert "github-login-helper" in starter
 
     creative = studio_packs.expand_pack_ids(["creative"])
-    assert creative == ["blender-creative", "game-dev-lab", "game-mod-helper"]
+    assert creative == ["blender-creative", "game-dev-lab", "game-mod-helper", "godot-engine"]
+
+    game = studio_packs.expand_pack_ids(["game"])
+    assert "godot-engine" in game
+    assert "unity-hub-helper" in game
+    assert "unreal-engine-helper" in game
+    assert "github-login-helper" in game
 
     claw = studio_packs.expand_pack_ids(["claw"])
     assert claw == ["openclaw-agent", "nemoclaw-sandbox"]
@@ -53,6 +64,20 @@ def test_model_catalog_marks_vram_recommendations(monkeypatch) -> None:
     assert by_id["gemma3-4b"]["installed"] is True
     assert by_id["qwen3-8b"]["recommended"] is True
     assert by_id["deepseek-r1-8b"]["fits_vram"] is False
+
+
+def test_godot_asset_selector_prefers_standard_linux_zip() -> None:
+    release = {
+        "assets": [
+            {"name": "Godot_v4.5-stable_mono_linux_x86_64.zip", "browser_download_url": "https://example.invalid/mono.zip"},
+            {"name": "Godot_v4.5-stable_export_templates.tpz", "browser_download_url": "https://example.invalid/templates.tpz"},
+            {"name": "Godot_v4.5-stable_linux.x86_64.zip", "browser_download_url": "https://example.invalid/godot.zip"},
+        ]
+    }
+
+    asset = studio_packs._select_godot_asset(release)
+
+    assert asset["browser_download_url"].endswith("godot.zip")
 
 
 def test_catalog_status_uses_configured_studio_home(tmp_path, monkeypatch) -> None:

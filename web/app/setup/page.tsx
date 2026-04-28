@@ -227,9 +227,9 @@ const shouldAutoActivateStorage = (status: StorageStatus, report: MountAutopilot
   return Boolean(
     needsStorage &&
     candidate &&
-    report.confidence === 'high' &&
+    ['high', 'medium'].includes(report.confidence) &&
     candidate.writable &&
-    candidate.large_block_mount &&
+    (candidate.large_block_mount || (candidate.total_gb ?? 0) >= 180 || candidate.source.startsWith('env:')) &&
     !candidate.read_only &&
     !candidate.network_mount &&
     !candidate.os_mount
@@ -772,7 +772,7 @@ export default function SetupPage() {
     }
   };
 
-  const handleUseRecommendedStorage = async () => {
+  const handleUseRecommendedStorage = async (): Promise<StorageStatus | null> => {
     const recommendedHome = mountRecommendation?.recommended_home;
     setMountActivating(true);
     setStorageSaving(true);
@@ -790,8 +790,10 @@ export default function SetupPage() {
         refreshSetupHelper(activated.storage.layout.home),
         refreshSetupInventory(false, activated.storage.layout.home),
       ]);
+      return activated.storage;
     } catch (err) {
       setStorageError(err instanceof Error ? err.message : 'Could not activate recommended persistent storage');
+      return null;
     } finally {
       setStorageSaving(false);
       setMountActivating(false);
@@ -822,8 +824,8 @@ export default function SetupPage() {
   const handleInstallStudioModels = (modelIds?: string[]) => {
     if (modelsInstalling) return;
     if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
-      setModelError('Set a persistent NVH_HOME on the mounted volume before downloading models.');
-      setStep('storage');
+      setModelError('nvWizard is finding persistent storage before downloading models.');
+      void handleUseRecommendedStorage();
       return;
     }
     const selected = modelIds?.length ? modelIds : Array.from(selectedStudioModels);
@@ -879,8 +881,8 @@ export default function SetupPage() {
   const handleInstallStudioPacks = (packIds?: string[]) => {
     if (studioInstalling) return;
     if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
-      setStudioError('Set a persistent NVH_HOME on the mounted volume before installing packs.');
-      setStep('storage');
+      setStudioError('nvWizard is finding persistent storage before installing packs.');
+      void handleUseRecommendedStorage();
       return;
     }
     const selected = packIds?.length ? packIds : Array.from(selectedStudioPacks);
@@ -931,8 +933,8 @@ export default function SetupPage() {
   const handleInstallComfyUI = () => {
     if (comfyInstalling) return;
     if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
-      setComfyError('Set a persistent NVH_HOME on the mounted volume before installing ComfyUI.');
-      setStep('storage');
+      setComfyError('nvWizard is finding persistent storage before installing ComfyUI.');
+      void handleUseRecommendedStorage();
       return;
     }
     setComfyInstalling(true);
@@ -1147,9 +1149,13 @@ export default function SetupPage() {
     setSelectedComfyExamples(new Set(exampleIds));
 
     if (!storageReady) {
-      setWizardBuildMessage('Pick the mounted folder first. nvWizard needs one place that survives the next cloud desktop reset.');
-      setStep('storage');
-      return;
+      setWizardBuildMessage('nvWizard is finding the persistent block storage first, then it will build the lab there.');
+      const detectedStorage = await handleUseRecommendedStorage();
+      if (!detectedStorage?.ok || detectedStorage.configured_by === 'default') {
+        setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. Advanced Details has the manual override if the host is unusual.');
+        setAdvancedSetupOpen(true);
+        return;
+      }
     }
 
     setActiveWizardBuild(profile);
@@ -1200,6 +1206,20 @@ export default function SetupPage() {
   const currentStepIdx = STEPS.findIndex(s => s.id === step);
   const storageReady = Boolean(storageStatus?.ok && storageStatus.configured_by !== 'default');
   const storageFreeGb = storageStatus?.free_gb ?? null;
+  const mountRecommendation = mountAutopilot?.recommended ?? missionControl?.mount_autopilot.recommended ?? bootPreflight?.mount_autopilot?.recommended ?? null;
+  const storageAutopilotBusy = !storageReady && (mountActivating || storageSaving || apiStatus === 'checking' || storageStatus === null);
+  const storageBeginnerLabel = storageReady
+    ? 'ready'
+    : storageAutopilotBusy
+      ? 'finding'
+      : mountRecommendation
+        ? 'detected'
+        : 'checking';
+  const storagePrimaryLabel = storageReady
+    ? 'Build Student Lab'
+    : storageAutopilotBusy
+      ? 'Finding Storage'
+      : 'Auto-Find Storage';
   const profilesReady = !modelsLoading && !studioLoading && !comfyLoading;
   const visibleComfyExamples = comfyStatus?.examples?.length ? comfyStatus.examples : comfyExamples;
   const selectedComfyModelCount = new Set(
@@ -1237,7 +1257,6 @@ export default function SetupPage() {
   const bootChangeCount = bootPreflight?.changes.length ?? setupHelper?.boot_preflight?.change_count ?? 0;
   const bootAgentHelper = bootPreflight?.agent_helper ?? setupHelper?.boot_preflight?.agent_helper;
   const missionStages = missionControl?.stages ?? [];
-  const mountRecommendation = mountAutopilot?.recommended ?? missionControl?.mount_autopilot.recommended ?? bootPreflight?.mount_autopilot?.recommended ?? null;
   const autoRepair = missionControl?.auto_repair ?? bootPreflight?.auto_repair ?? null;
   const autoRepairActions = autoRepair && 'actions' in autoRepair
     ? autoRepair.actions
@@ -1279,6 +1298,23 @@ export default function SetupPage() {
     .filter(model => modelIds.includes(model.id))
     .reduce((total, model) => total + model.estimated_disk_gb, 0);
   const hasCatalogSizing = studioPacks.length > 0 || studioModels.length > 0;
+  const recommendedHardwareModels = studioModels
+    .filter(model => model.recommended)
+    .sort((a, b) => a.priority - b.priority)
+    .slice(0, 4);
+  const visibleHardwareModels = (
+    recommendedHardwareModels.length > 0
+      ? recommendedHardwareModels
+      : studioModels
+          .filter(model => model.fits_vram)
+          .sort((a, b) => a.priority - b.priority)
+          .slice(0, 4)
+  );
+  const hardwareName = gpuInfo?.gpus?.[0]?.name ?? 'GPU scan pending';
+  const hardwareVramLabel = detectedModelVram ? `${detectedModelVram} GB VRAM` : 'VRAM scan pending';
+  const visibleHardwareModelIds = visibleHardwareModels.map(model => model.id);
+  const githubPack = studioPacks.find(pack => pack.id === 'github-login-helper') ?? null;
+  const gameEnginePacks = studioPacks.filter(pack => ['godot-engine', 'unity-hub-helper', 'unreal-engine-helper'].includes(pack.id));
   const missionProfiles: Array<{
     id: WizardProfile;
     title: string;
@@ -1295,7 +1331,7 @@ export default function SetupPage() {
       description: catalogText('student', 'description', 'Small, useful local AI lab for coursework and first experiments.'),
       label: 'Recommended',
       outcome: 'Homework, research, chat, embeddings, and a local agent lab.',
-      includes: ['Rootless Ollama', 'Starter models', 'Agent lab', 'No API keys'],
+      includes: ['Rootless Ollama', 'Starter models', 'Agent lab', 'GitHub connect'],
       primary: true,
     },
     {
@@ -1327,8 +1363,8 @@ export default function SetupPage() {
       title: catalogText('game', 'title', 'Game Dev Lab'),
       description: catalogText('game', 'description', 'Game prototyping, Blender assets, and mod helper workspace.'),
       label: 'Game',
-      outcome: 'Prototype games, build assets, and keep mod notes in a rootless workspace.',
-      includes: ['Blender', 'Game tools', 'Mod workspace', 'Comfy assets'],
+      outcome: 'Prototype games, build assets, connect repos, and keep engines on persistent storage.',
+      includes: ['Godot', 'Unity helper', 'Unreal helper', 'GitHub connect'],
     },
     {
       id: 'full',
@@ -1336,7 +1372,7 @@ export default function SetupPage() {
       description: catalogText('full', 'description', 'Everything nvHive can install without root access.'),
       label: 'Advanced',
       outcome: 'Install every supported rootless tool that passes the host checks.',
-      includes: ['LLMs', 'Agents', 'ComfyUI', 'Blender', 'Game tools'],
+      includes: ['LLMs', 'Agents', 'ComfyUI', 'Blender', 'Game tools', 'GitHub'],
       advanced: true,
     },
   ];
@@ -1353,7 +1389,7 @@ export default function SetupPage() {
       return;
     }
     if (actionId === 'storage') {
-      setStep('storage');
+      void handleUseRecommendedStorage();
       return;
     }
     if (actionId === 'starter-models') {
@@ -1408,9 +1444,9 @@ export default function SetupPage() {
   };
 
   const helperActionLabel = (actionId: string) => {
-    if (actionId.startsWith('repair-receipt:')) return !storageReady ? 'Set Storage' : 'Repair';
-    if (actionId === 'storage') return 'Choose Folder';
-    if (!storageReady) return 'Set Storage';
+    if (actionId.startsWith('repair-receipt:')) return !storageReady ? 'Auto Storage' : 'Repair';
+    if (actionId === 'storage') return storageAutopilotBusy ? 'Finding' : 'Auto Storage';
+    if (!storageReady) return storageAutopilotBusy ? 'Finding' : 'Auto Storage';
     if (actionId === 'starter-models') return modelsInstalling ? 'Downloading' : 'Download';
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
       return comfyInstalling ? 'Installing' : 'Install';
@@ -1423,7 +1459,7 @@ export default function SetupPage() {
 
   const helperActionDisabled = (actionId: string) => {
     if (actionId.startsWith('repair-receipt:')) return !storageReady || studioInstalling || modelsInstalling || comfyInstalling;
-    if (actionId === 'storage') return false;
+    if (actionId === 'storage') return storageAutopilotBusy;
     if (actionId === 'starter-models') return modelsInstalling || !storageReady;
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
       return comfyInstalling || !storageReady;
@@ -1528,7 +1564,7 @@ export default function SetupPage() {
             <div className="min-w-0">
               <div className="section-label">Beginner Mode</div>
               <div className="text-lg font-mono font-bold text-[#0a0a0a] mt-1">
-                {storageReady ? 'Start with the recommended lab' : 'First, choose the persistent file mount'}
+                {storageReady ? 'Start with the recommended lab' : 'nvWizard is finding persistent storage'}
               </div>
               <div className="text-xs font-mono text-[#525252] mt-2 leading-relaxed max-w-2xl">
                 nvWizard checks storage, GPU, CUDA, Python, ComfyUI, models, and install receipts, then recommends the next safe action. Manual commands stay available under Advanced Details.
@@ -1546,7 +1582,7 @@ export default function SetupPage() {
                 type="button"
                 onClick={() => {
                   if (!storageReady) {
-                    setStep('storage');
+                    void handleUseRecommendedStorage();
                     return;
                   }
                   if (topHelperAction && !helperActionDisabled(topHelperAction.id)) {
@@ -1555,10 +1591,10 @@ export default function SetupPage() {
                   }
                   applyWizardProfile('student');
                 }}
-                disabled={Boolean(storageReady && topHelperAction && helperActionDisabled(topHelperAction.id))}
+                disabled={storageAutopilotBusy || Boolean(storageReady && topHelperAction && helperActionDisabled(topHelperAction.id))}
                 className="btn-primary px-4 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
               >
-                {!storageReady ? 'Choose Storage' : topHelperAction ? helperActionLabel(topHelperAction.id) : 'Start Lab'}
+                {!storageReady ? storagePrimaryLabel : topHelperAction ? helperActionLabel(topHelperAction.id) : 'Start Lab'}
               </button>
               <button
                 type="button"
@@ -1581,7 +1617,7 @@ export default function SetupPage() {
             <div className="border border-[#76B900]/20 bg-white p-2">
               <div className="text-[9px] font-mono text-[#737373] uppercase">Storage</div>
               <div className={`text-[10px] font-mono mt-1 ${storageReady ? 'text-[#76B900]' : 'text-[#d97706]'}`}>
-                {storageReady ? 'ready' : 'needed'}
+                {storageBeginnerLabel}
               </div>
             </div>
             <div className="border border-[#76B900]/20 bg-white p-2">
@@ -1960,7 +1996,7 @@ export default function SetupPage() {
                     }
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {!storageReady ? 'Set Storage' : receipt.health.healthy ? 'Refresh' : 'Repair'}
+                    {!storageReady ? storagePrimaryLabel : receipt.health.healthy ? 'Refresh' : 'Repair'}
                   </button>
                 </div>
               ))}
@@ -2065,7 +2101,7 @@ export default function SetupPage() {
                         onClick={() => {
                           if (action.id === 'starter-models') setStep('models');
                           else if (action.id === 'comfyui' || action.id === 'comfyui-examples') setStep('comfyui');
-                          else if (action.id === 'storage') setStep('storage');
+                          else if (action.id === 'storage') void handleUseRecommendedStorage();
                           else setStep('studio');
                         }}
                         className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
@@ -2180,11 +2216,11 @@ export default function SetupPage() {
                   <div className="mt-4 flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => storageReady ? void handleBuildWizardProfile('student') : setStep('storage')}
-                      disabled={!profilesReady || anyInstallRunning}
+                      onClick={() => storageReady ? void handleBuildWizardProfile('student') : void handleUseRecommendedStorage()}
+                      disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
                       className="btn-primary px-5 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
                     >
-                      {storageReady ? activeWizardBuild === 'student' ? 'Building Student Lab' : 'Build Student Lab' : 'Choose Storage'}
+                      {activeWizardBuild === 'student' ? 'Building Student Lab' : storagePrimaryLabel}
                     </button>
                     <button
                       type="button"
@@ -2198,7 +2234,7 @@ export default function SetupPage() {
                 <div className="border border-[#76B900]/20 bg-white p-4 space-y-3 min-w-0 overflow-hidden">
                   <div className="text-xs font-bold text-[#0a0a0a]">nvWizard Status</div>
                   {[
-                    { label: 'Storage', value: storageReady ? 'ready' : 'needed', good: storageReady },
+                    { label: 'Storage', value: storageBeginnerLabel, good: storageReady },
                     { label: 'API', value: apiStatus === 'connected' ? 'online' : apiStatus === 'disconnected' ? 'waking up' : 'checking', good: apiStatus === 'connected' },
                     { label: 'Checks', value: setupConcernCount ? `${setupConcernCount} review` : 'clear', good: setupConcernCount === 0 },
                     { label: 'Jobs', value: activeInstallJobs.length ? `${activeInstallJobs.length} running` : 'idle', good: activeInstallJobs.length === 0 },
@@ -2220,12 +2256,12 @@ export default function SetupPage() {
             <div className={`border p-4 ${storageReady ? 'border-[#76B900]/30 bg-white' : 'border-[#d97706]/30 bg-[#fffaf2]'}`}>
               <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                 <div>
-                  <div className="section-label">Where should nvHive save files?</div>
+                  <div className="section-label">Storage Autopilot</div>
                   <div className="text-sm font-bold text-[#0a0a0a] mt-1">
-                    {storageReady ? 'Persistent storage is ready' : 'Cloud desktops forget things. This folder does not.'}
+                    {storageReady ? 'Persistent storage is ready' : 'Finding the persistent block storage'}
                   </div>
                   <div className="text-xs text-[#737373] mt-1 leading-relaxed">
-                    nvWizard looks for a 200GB+ writable block-backed home/data mount first. Models, ComfyUI, Blender, agents, logs, and cache stay there.
+                    nvWizard looks for a 200GB+ writable block-backed home/data mount and prepares it automatically. No root access, no guessing paths.
                   </div>
                 </div>
                 <span className={`text-[9px] font-mono px-2 py-1 border flex-shrink-0 ${
@@ -2233,10 +2269,41 @@ export default function SetupPage() {
                     ? 'border-[#76B900]/40 text-[#76B900] bg-[#76B900]/10'
                     : 'border-[#d97706]/40 text-[#d97706] bg-[#d97706]/10'
                 }`}>
-                  {storageReady ? storageFreeGb === null ? 'space unknown' : `${storageFreeGb} GB free` : 'required'}
+                  {storageReady ? storageFreeGb === null ? 'space unknown' : `${storageFreeGb} GB free` : storageAutopilotBusy ? 'scanning' : 'auto'}
                 </span>
               </div>
-              {!storageReady && mountRecommendation && (
+              {!storageReady && (
+                <div className="mt-4 border border-[#76B900]/30 bg-[#76B900]/5 p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-[#76B900]">
+                      {mountRecommendation ? 'Detected Candidate' : 'Storage Scan'}
+                    </div>
+                    <div className="text-xs text-[#0a0a0a] mt-1 leading-relaxed">
+                      {mountRecommendation
+                        ? 'nvWizard found a likely persistent home and can prepare it now.'
+                        : apiStatus === 'disconnected'
+                          ? 'Waiting for the local nvHive API so the host scan can run.'
+                          : 'Scanning local mounts for a large writable persistent volume.'}
+                    </div>
+                    {mountRecommendation && (
+                      <div className="text-[10px] font-mono text-[#525252] mt-2 break-all">
+                        {mountRecommendation.recommended_home}
+                        {mountRecommendation.fs_type ? ` / ${mountRecommendation.fs_type}` : ''}
+                        {mountRecommendation.total_gb ? ` / ${mountRecommendation.total_gb} GB` : ''}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleUseRecommendedStorage()}
+                    disabled={storageAutopilotBusy}
+                    className="btn-primary px-4 py-2 text-xs font-mono disabled:opacity-40 flex-shrink-0"
+                  >
+                    {storageAutopilotBusy ? 'Finding' : 'Run Auto-Detect'}
+                  </button>
+                </div>
+              )}
+              {!storageReady && mountRecommendation && advancedSetupOpen && (
                 <div className="mt-4 border border-[#76B900]/30 bg-[#76B900]/5 p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[10px] font-mono uppercase tracking-wider text-[#76B900]">Recommended Persistent Home</div>
@@ -2259,7 +2326,7 @@ export default function SetupPage() {
                   </button>
                 </div>
               )}
-              {!storageReady && (
+              {!storageReady && advancedSetupOpen && (
                 <div className="mt-4 flex flex-col sm:flex-row gap-2">
                   <input
                     type="text"
@@ -2279,6 +2346,15 @@ export default function SetupPage() {
                   </button>
                 </div>
               )}
+              {!storageReady && !advancedSetupOpen && (
+                <button
+                  type="button"
+                  onClick={() => setAdvancedSetupOpen(true)}
+                  className="mt-3 text-[10px] font-mono uppercase tracking-wider text-[#737373] hover:text-[#76B900]"
+                >
+                  Manual storage override
+                </button>
+              )}
               {(storageError || storageStatus?.warnings?.length) && (
                 <div className="mt-3 space-y-1">
                   {storageError && <div className="text-[10px] font-mono text-[#dc2626]">{storageError}</div>}
@@ -2287,6 +2363,104 @@ export default function SetupPage() {
                   ))}
                 </div>
               )}
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-3">
+              <div className="border border-[#e5e5e5] bg-white p-4">
+                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                  <div>
+                    <div className="section-label">Hardware-Matched LLM Picks</div>
+                    <div className="text-sm font-bold text-[#0a0a0a] mt-1">{hardwareName}</div>
+                    <div className="text-xs text-[#737373] mt-1">
+                      {hardwareVramLabel} - nvWizard picks models that should fit before downloading.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!storageReady) {
+                        void handleUseRecommendedStorage();
+                        return;
+                      }
+                      if (visibleHardwareModelIds.length > 0) handleInstallStudioModels(visibleHardwareModelIds);
+                    }}
+                    disabled={storageAutopilotBusy || anyInstallRunning || modelsInstalling || (storageReady && visibleHardwareModelIds.length === 0)}
+                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40 flex-shrink-0"
+                  >
+                    {!storageReady ? storagePrimaryLabel : modelsInstalling ? 'Downloading' : 'Download Picks'}
+                  </button>
+                </div>
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {visibleHardwareModels.length > 0 ? visibleHardwareModels.map(model => (
+                    <div key={model.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-xs font-bold text-[#0a0a0a] truncate">{model.title}</div>
+                        <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/30 bg-[#76B900]/10 px-1.5 py-0.5 flex-shrink-0">
+                          {model.recommended_vram_gb}GB+
+                        </span>
+                      </div>
+                      <div className="text-[10px] font-mono text-[#737373] mt-1">
+                        {model.category} - ~{model.estimated_disk_gb.toFixed(1)} GB
+                      </div>
+                      <div className="text-[10px] text-[#525252] mt-2 leading-relaxed">{model.why_recommended}</div>
+                    </div>
+                  )) : (
+                    <div className="sm:col-span-2 border border-[#e5e5e5] bg-[#fafafa] p-3 text-xs text-[#737373]">
+                      Waiting for the local GPU and model catalog scan.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="border border-[#e5e5e5] bg-white p-4 space-y-3">
+                <div>
+                  <div className="section-label">Connect & Build</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">GitHub, Godot, Unity, and Unreal</div>
+                  <div className="text-xs text-[#737373] mt-1 leading-relaxed">
+                    GitHub Connect helps private repos and PRs. Godot installs as a portable app; Unity and Unreal get persistent workspaces for their account-gated installers.
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!storageReady) {
+                        void handleUseRecommendedStorage();
+                        return;
+                      }
+                      handleInstallStudioPacks(['github-login-helper']);
+                    }}
+                    disabled={storageAutopilotBusy || anyInstallRunning || studioInstalling || !githubPack}
+                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {!storageReady ? storagePrimaryLabel : githubPack?.status.installed ? 'Refresh GitHub Connect' : 'Install GitHub Connect'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!storageReady) {
+                        void handleUseRecommendedStorage();
+                        return;
+                      }
+                      handleInstallStudioPacks(['game']);
+                    }}
+                    disabled={storageAutopilotBusy || anyInstallRunning || studioInstalling || gameEnginePacks.length === 0}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {!storageReady ? 'Auto-Find Storage' : 'Prepare Game Engines'}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    githubPack,
+                    ...gameEnginePacks,
+                  ].filter((pack): pack is StudioPack => Boolean(pack)).map(pack => (
+                    <span key={pack.id} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                      {pack.title}{pack.status.installed ? ' ready' : ''}
+                    </span>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -2354,21 +2528,25 @@ export default function SetupPage() {
                           <button
                             type="button"
                             onClick={() => void handleBuildWizardProfile(profile.id)}
-                            disabled={!profilesReady || anyInstallRunning}
+                            disabled={!profilesReady || anyInstallRunning || storageAutopilotBusy}
                             className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                           >
-                            {!storageReady ? 'Choose Storage' : building ? 'Building' : 'Build This Lab'}
+                            {!storageReady ? storagePrimaryLabel : building ? 'Building' : 'Build This Lab'}
                           </button>
                           <button
                             type="button"
                             onClick={() => {
                               if (!storageReady) {
-                                setStep('storage');
+                                void handleUseRecommendedStorage().then(status => {
+                                  if (!status?.ok || status.configured_by === 'default') {
+                                    setAdvancedSetupOpen(true);
+                                  }
+                                });
                                 return;
                               }
                               applyWizardProfile(profile.id);
                             }}
-                            disabled={!profilesReady || Boolean(activeWizardBuild)}
+                            disabled={!profilesReady || Boolean(activeWizardBuild) || storageAutopilotBusy}
                             className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                           >
                             Customize
@@ -2749,7 +2927,7 @@ export default function SetupPage() {
                     disabled={modelsInstalling || selectedModelIds.length === 0 || !storageReady}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {!storageReady ? 'Set Storage' : modelsInstalling ? 'Downloading...' : `Download ${selectedModelIds.length || ''}`}
+                    {!storageReady ? storagePrimaryLabel : modelsInstalling ? 'Downloading...' : `Download ${selectedModelIds.length || ''}`}
                   </button>
                 </div>
               </div>
@@ -3007,7 +3185,7 @@ export default function SetupPage() {
                     disabled={studioInstalling || selectedStudioPackIds.length === 0 || !storageReady}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {!storageReady ? 'Set Storage' : studioInstalling ? 'Installing...' : `Install ${selectedStudioPackIds.length || ''}`}
+                    {!storageReady ? storagePrimaryLabel : studioInstalling ? 'Installing...' : `Install ${selectedStudioPackIds.length || ''}`}
                   </button>
                 </div>
               </div>
@@ -3185,7 +3363,7 @@ export default function SetupPage() {
                     disabled={comfyInstalling || !storageReady}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {!storageReady ? 'Set Storage' : comfyInstalling ? 'Installing...' : comfyStatus?.installed ? 'Refresh Install' : 'Install ComfyUI'}
+                    {!storageReady ? storagePrimaryLabel : comfyInstalling ? 'Installing...' : comfyStatus?.installed ? 'Refresh Install' : 'Install ComfyUI'}
                   </button>
                   <button
                     type="button"
@@ -3619,7 +3797,8 @@ export default function SetupPage() {
           </div>
         )}
 
-        {/* Navigation */}
+        {/* Advanced navigation */}
+        {advancedSetupOpen && (
         <div className="flex items-center justify-between mt-8 pt-6 border-t border-[#e5e5e5]">
           <button
             onClick={() => {
@@ -3633,20 +3812,23 @@ export default function SetupPage() {
           </button>
 
           <span className="text-[10px] font-mono text-[#333333]">
-            {currentStepIdx + 1} / {STEPS.length}
+            Advanced step {currentStepIdx + 1} / {STEPS.length}
           </span>
 
           {step !== 'done' ? (
             <button
               onClick={() => {
-                if (step === 'storage' && !storageReady) return;
+                if (step === 'storage' && !storageReady) {
+                  void handleUseRecommendedStorage();
+                  return;
+                }
                 const idx = STEPS.findIndex(s => s.id === step);
                 if (idx < STEPS.length - 1) setStep(STEPS[idx + 1].id);
               }}
-              disabled={step === 'storage' && !storageReady}
+              disabled={step === 'storage' && storageAutopilotBusy}
               className="btn-primary px-6 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
             >
-              {step === 'storage' && !storageReady ? 'Set Storage' : 'Next >'}
+              {step === 'storage' && !storageReady ? storagePrimaryLabel : 'Next >'}
             </button>
           ) : (
             <Link href="/" className="btn-primary px-6 py-2 text-xs font-mono uppercase tracking-wider">
@@ -3654,6 +3836,7 @@ export default function SetupPage() {
             </Link>
           )}
         </div>
+        )}
       </div>
     </div>
   );

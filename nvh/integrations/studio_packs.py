@@ -21,6 +21,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import zipfile
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -43,6 +44,8 @@ OPENCLAW_DOC_URL = "https://openclawdoc.com/docs/getting-started/installation/"
 NEMOCLAW_INSTALL_URL = "https://www.nvidia.com/nemoclaw.sh"
 NEMOCLAW_DOC_URL = "https://docs.nvidia.com/nemoclaw/latest/get-started/quickstart.html"
 NEMOCLAW_PACKAGE = "nemoclaw@latest"
+GODOT_RELEASE_API = "https://api.github.com/repos/godotengine/godot/releases/latest"
+GODOT_DOC_URL = "https://docs.godotengine.org/en/stable/"
 
 
 @dataclass(frozen=True)
@@ -466,6 +469,104 @@ STUDIO_PACKS: list[StudioPack] = [
         ],
     ),
     StudioPack(
+        id="godot-engine",
+        title="Godot Engine",
+        category="game",
+        tagline="Open-source game engine as a rootless app",
+        description=(
+            "Downloads the latest official Godot Linux x86_64 release into NVH_HOME/apps, "
+            "adds a persistent launcher, and creates a project folder beside the rest of the lab."
+        ),
+        recommended_vram_gb=2,
+        estimated_disk_gb=0.4,
+        install_kind="godot_app",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-godot"],
+        source_urls=[GODOT_RELEASE_API, GODOT_DOC_URL],
+        notes=[
+            "Uses the official GitHub release asset selected at install time.",
+            "Godot projects stay under persistent storage and can use Blender or ComfyUI assets.",
+        ],
+    ),
+    StudioPack(
+        id="unity-hub-helper",
+        title="Unity Hub Helper",
+        category="game",
+        tagline="Persistent Unity workspace and account handoff",
+        description=(
+            "Creates a rootless Unity workspace with launcher notes for Unity Hub AppImage/manual "
+            "installs. The wizard keeps the storage and cache paths ready, while Unity handles sign-in."
+        ),
+        recommended_vram_gb=6,
+        estimated_disk_gb=12.0,
+        install_kind="scaffold",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-unity-hub"],
+        source_urls=["https://unity.com/download"],
+        notes=[
+            "Unity requires a Unity account and license acceptance.",
+            "Use the helper to keep projects and downloaded editors on the persistent block volume.",
+        ],
+    ),
+    StudioPack(
+        id="unreal-engine-helper",
+        title="Unreal Engine Helper",
+        category="game",
+        tagline="Epic/GitHub prep for a large rootless UE workspace",
+        description=(
+            "Creates the persistent Unreal workspace, explains the Epic-to-GitHub account link, "
+            "and prepares folders for source builds or provider-supplied Unreal installs."
+        ),
+        recommended_vram_gb=8,
+        estimated_disk_gb=150.0,
+        install_kind="scaffold",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-unreal-helper"],
+        source_urls=[
+            "https://www.unrealengine.com/en-US/download",
+            "https://www.unrealengine.com/en-US/ue-on-github",
+        ],
+        notes=[
+            "Unreal access requires an Epic account and linked GitHub account.",
+            "Large Unreal source/editor builds can exceed 150 GB; nvWizard should reserve the block volume first.",
+        ],
+    ),
+    StudioPack(
+        id="github-login-helper",
+        title="GitHub Connect",
+        category="connector",
+        tagline="Simple GitHub login helper for cloning and PR work",
+        description=(
+            "Adds a rootless GitHub login workspace and launcher that uses GitHub CLI when present "
+            "or a GITHUB_TOKEN fallback for cloud images without system package access."
+        ),
+        recommended_vram_gb=0,
+        estimated_disk_gb=0.1,
+        install_kind="scaffold",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-github-login"],
+        source_urls=[
+            "https://cli.github.com/manual/gh_auth_login",
+            "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens",
+        ],
+        notes=[
+            "The helper never stores a password. Prefer GitHub CLI browser login or a fine-grained token.",
+            "Public repositories can still clone over HTTPS without login.",
+        ],
+    ),
+    StudioPack(
         id="blender-creative",
         title="Blender Creative Studio",
         category="creative",
@@ -496,13 +597,14 @@ STUDIO_PACKS: list[StudioPack] = [
 
 
 PACK_BUNDLES: dict[str, list[str]] = {
-    "starter": ["rootless-ollama", "llm-starter", "agent-lab", "comfyui-power-nodes", "game-dev-lab"],
+    "starter": ["rootless-ollama", "llm-starter", "agent-lab", "comfyui-power-nodes", "game-dev-lab", "github-login-helper"],
     "llms": ["rootless-ollama", "llm-starter", "llm-coder-reasoner"],
-    "agents": ["agent-lab", "openclaw-agent"],
+    "agents": ["agent-lab", "openclaw-agent", "github-login-helper"],
     "claw": ["openclaw-agent", "nemoclaw-sandbox"],
     "comfy": ["comfyui-power-nodes"],
-    "game": ["game-dev-lab", "game-mod-helper"],
-    "creative": ["blender-creative", "game-dev-lab", "game-mod-helper"],
+    "connectors": ["github-login-helper"],
+    "game": ["game-dev-lab", "game-mod-helper", "godot-engine", "unity-hub-helper", "unreal-engine-helper", "github-login-helper"],
+    "creative": ["blender-creative", "game-dev-lab", "game-mod-helper", "godot-engine"],
     "all": [
         "rootless-ollama",
         "llm-starter",
@@ -513,6 +615,10 @@ PACK_BUNDLES: dict[str, list[str]] = {
         "comfyui-power-nodes",
         "game-dev-lab",
         "game-mod-helper",
+        "godot-engine",
+        "unity-hub-helper",
+        "unreal-engine-helper",
+        "github-login-helper",
         "blender-creative",
     ],
 }
@@ -574,6 +680,29 @@ def _blender_app_dir() -> Path:
 
 def _blender_binary() -> Path:
     return _blender_app_dir() / "blender"
+
+
+def _godot_root() -> Path:
+    return storage_layout().apps_dir / "godot"
+
+
+def _godot_current_file() -> Path:
+    return _godot_root() / "current.json"
+
+
+def _godot_binary_from_state() -> Path | None:
+    state_file = _godot_current_file()
+    if not state_file.exists():
+        return None
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    binary = state.get("binary")
+    if not isinstance(binary, str):
+        return None
+    path = Path(binary)
+    return path if path.exists() else None
 
 
 def _node_runtime_root() -> Path:
@@ -1058,6 +1187,12 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
         details["binary"] = str(binary)
         details["app_dir"] = str(_blender_app_dir())
         details["version"] = BLENDER_VERSION
+    elif pack.install_kind == "godot_app":
+        binary = _godot_binary_from_state()
+        installed = binary is not None and marker is not None
+        details["binary"] = str(binary) if binary else ""
+        details["app_dir"] = str(_godot_root())
+        details["release_api"] = GODOT_RELEASE_API
 
     return {
         "id": pack.id,
@@ -1735,8 +1870,140 @@ find . -maxdepth 2 -type d | sort
     _write_script(launcher, content)
 
 
+def _write_github_login_helper(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    for folder in ["repos", "tokens", "notes"]:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        f"""# {pack.title}
+
+This helper keeps GitHub setup rootless and persistent.
+
+Preferred path:
+
+1. Run `nvhive-github-login`.
+2. If GitHub CLI is available, use browser login.
+3. If GitHub CLI is not available, add a fine-grained token as `GITHUB_TOKEN`
+   in your nvHive environment file and relaunch the WebUI.
+
+Public repositories can clone over HTTPS without login. Private repositories,
+pull requests, and Unreal Engine source access need authenticated GitHub.
+""",
+        encoding="utf-8",
+    )
+    launcher = _local_bin() / "nvhive-github-login"
+    token_hint = storage_layout().config_dir / "env"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+echo "nvHive GitHub Connect"
+echo "Workspace: {root}"
+
+if [ -n "${{GITHUB_TOKEN:-}}" ]; then
+  echo "GITHUB_TOKEN is present in this shell. GitHub API and private HTTPS clones can use it."
+fi
+
+if command -v gh >/dev/null 2>&1; then
+  if gh auth status >/dev/null 2>&1; then
+    echo "GitHub CLI is already authenticated."
+    gh auth status
+    exit 0
+  fi
+  echo "Starting GitHub browser login with GitHub CLI..."
+  gh auth login --web --git-protocol https
+  gh auth setup-git || true
+  gh auth status
+  exit 0
+fi
+
+cat <<'EOF'
+GitHub CLI is not installed on this image.
+
+Rootless fallback:
+1. Create a fine-grained GitHub token in the browser.
+2. Add this line to the nvHive env file:
+   export GITHUB_TOKEN=your_token_here
+3. Relaunch nvHive.
+
+Env file:
+EOF
+echo "{token_hint}"
+"""
+    _write_script(launcher, content)
+
+
+def _write_game_engine_helper(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    for folder in ["projects", "downloads", "notes", "assets"]:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+
+    if pack.id == "unity-hub-helper":
+        body = """# Unity Hub Helper
+
+Unity requires a Unity account and license acceptance. nvHive prepares the
+persistent storage layout, then students can keep Unity editors and projects on
+the block volume instead of the read-only OS disk.
+
+Suggested paths:
+
+- Projects: `projects/`
+- Downloads: `downloads/`
+- Shared AI assets: `assets/`
+
+Open https://unity.com/download if the provider image does not already include
+Unity Hub.
+"""
+        launcher_name = "nvhive-unity-hub"
+        launcher_message = "Unity Hub requires account sign-in. Use this workspace for downloads and projects."
+    else:
+        body = """# Unreal Engine Helper
+
+Unreal Engine is large and account-gated. nvHive prepares persistent storage,
+GitHub/Epic notes, and asset folders so the setup can survive cloud session
+rebuilds.
+
+Checklist:
+
+1. Connect GitHub with `nvhive-github-login`.
+2. Link Epic and GitHub accounts for Unreal source access.
+3. Keep source trees, derived data cache, and projects on the block volume.
+
+Unreal source/editor installs can exceed 150 GB.
+"""
+        launcher_name = "nvhive-unreal-helper"
+        launcher_message = "Unreal setup needs Epic/GitHub access and plenty of persistent storage."
+
+    (root / "README.md").write_text(body, encoding="utf-8")
+    launcher = _local_bin() / launcher_name
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{root}"
+echo "{launcher_message}"
+echo "Workspace: {root}"
+find . -maxdepth 2 -type d | sort
+"""
+    _write_script(launcher, content)
+
+
+def _write_scaffold_pack(pack: StudioPack) -> None:
+    if pack.id == "game-mod-helper":
+        _write_mod_helper(pack)
+    elif pack.id == "github-login-helper":
+        _write_github_login_helper(pack)
+    elif pack.id in {"unity-hub-helper", "unreal-engine-helper"}:
+        _write_game_engine_helper(pack)
+    else:
+        root = _pack_root(pack.id)
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "README.md").write_text(
+            f"# {pack.title}\n\n{pack.description}\n",
+            encoding="utf-8",
+        )
+
+
 async def _install_scaffold(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
-    _write_mod_helper(pack)
+    _write_scaffold_pack(pack)
     _write_marker(pack, {"workspace": str(_pack_root(pack.id)), "force_update": force_update})
     yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
 
@@ -1753,6 +2020,77 @@ def _safe_extract_tar(archive: Path, target: Path) -> None:
                 raise RuntimeError(f"Archive member escapes target directory: {member.name}")
             members.append(member)
         tar.extractall(target, members=members)
+
+
+def _safe_extract_zip(archive: Path, target: Path) -> None:
+    """Extract a zip archive while refusing path traversal entries."""
+    target.mkdir(parents=True, exist_ok=True)
+    target_resolved = target.resolve()
+    with zipfile.ZipFile(archive) as zf:
+        for member in zf.infolist():
+            destination = (target / member.filename).resolve()
+            try:
+                destination.relative_to(target_resolved)
+            except ValueError as exc:
+                raise RuntimeError(f"Archive member escapes target directory: {member.filename}") from exc
+        zf.extractall(target)
+
+
+def _select_godot_asset(release: dict[str, Any]) -> dict[str, Any]:
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeError("Godot release metadata did not include assets")
+
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        lower_name = name.lower()
+        url = str(asset.get("browser_download_url") or "")
+        if (
+            url
+            and lower_name.endswith(".zip")
+            and "linux" in lower_name
+            and "x86_64" in lower_name
+            and "mono" not in lower_name
+            and "server" not in lower_name
+            and "template" not in lower_name
+        ):
+            return asset
+    raise RuntimeError("No official Godot Linux x86_64 zip asset was found in the latest release")
+
+
+def _find_godot_binary(root: Path) -> Path | None:
+    candidates: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        name = path.name.lower()
+        if name.startswith("godot") and "linux" in name and "x86_64" in name and not name.endswith(".zip"):
+            candidates.append(path)
+    if candidates:
+        return sorted(candidates, key=lambda item: len(str(item)))[0]
+    return None
+
+
+def _write_godot_launcher(binary: Path) -> Path:
+    layout = storage_layout()
+    root = _godot_root()
+    projects = root / "projects"
+    settings = layout.config_dir / "godot"
+    projects.mkdir(parents=True, exist_ok=True)
+    settings.mkdir(parents=True, exist_ok=True)
+    launcher = _local_bin() / "nvhive-godot"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+export GODOT_EDITOR_SETTINGS_DIR="${{GODOT_EDITOR_SETTINGS_DIR:-{settings}}}"
+mkdir -p "$GODOT_EDITOR_SETTINGS_DIR" "{projects}"
+cd "{projects}"
+exec "{binary}" "$@"
+"""
+    _write_script(launcher, content)
+    return launcher
 
 
 def _write_blender_launcher() -> Path:
@@ -1800,6 +2138,126 @@ def _write_model_receipt(model: StudioModel) -> None:
         )
     except Exception:
         pass
+
+
+async def _install_godot_app(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if platform.system().lower() != "linux" or platform.machine().lower() not in {"x86_64", "amd64"}:
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": "The Godot rootless pack currently supports Linux x86_64 desktops.",
+        }
+        return
+
+    root = _godot_root()
+    downloads = root / "downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+
+    existing = _godot_binary_from_state()
+    if existing and not force_update:
+        launcher = _write_godot_launcher(existing)
+        _write_marker(pack, {"binary": str(existing), "launcher": str(launcher), "force_update": force_update})
+        yield {"event": "step", "status": "complete", "message": "Godot already installed"}
+        return
+
+    yield {"event": "step", "status": "running", "message": "Checking latest official Godot release"}
+    import httpx
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=600) as client:
+        release_response = await client.get(GODOT_RELEASE_API)
+        release_response.raise_for_status()
+        release = release_response.json()
+        asset = _select_godot_asset(release)
+        asset_name = str(asset["name"])
+        asset_url = str(asset["browser_download_url"])
+        release_tag = str(release.get("tag_name") or "latest")
+        safe_tag = re.sub(r"[^A-Za-z0-9._-]+", "-", release_tag).strip("-") or "latest"
+        app_dir = root / safe_tag
+
+        if app_dir.exists() and not force_update:
+            binary = _find_godot_binary(app_dir)
+            if binary:
+                binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+                launcher = _write_godot_launcher(binary)
+                _godot_current_file().write_text(
+                    json.dumps({"version": release_tag, "binary": str(binary), "app_dir": str(app_dir)}, indent=2),
+                    encoding="utf-8",
+                )
+                _write_marker(pack, {"binary": str(binary), "launcher": str(launcher), "version": release_tag})
+                yield {"event": "step", "status": "complete", "message": f"Godot {release_tag} already installed"}
+                return
+
+        if app_dir.exists():
+            shutil.rmtree(app_dir)
+
+        archive = downloads / asset_name
+        yield {"event": "step", "status": "running", "message": f"Downloading Godot {release_tag}", "url": asset_url}
+        async with client.stream("GET", asset_url) as response:
+            response.raise_for_status()
+            with archive.open("wb") as fh:
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        fh.write(chunk)
+
+    stage = Path(tempfile.mkdtemp(prefix="godot-", dir=str(root)))
+    try:
+        yield {"event": "step", "status": "running", "message": "Extracting Godot archive"}
+        _safe_extract_zip(archive, stage)
+        binary = _find_godot_binary(stage)
+        if not binary:
+            raise RuntimeError("Godot archive did not contain the expected Linux executable")
+        app_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(stage), str(app_dir))
+        final_binary = app_dir / binary.relative_to(stage)
+        final_binary.chmod(final_binary.stat().st_mode | stat.S_IXUSR)
+        launcher = _write_godot_launcher(final_binary)
+    except Exception as exc:
+        if stage.exists():
+            shutil.rmtree(stage, ignore_errors=True)
+        yield {"event": "error", "status": "failed", "message": f"Godot install failed: {exc}"}
+        return
+
+    (root / "README.md").write_text(
+        f"""# Godot Engine
+
+Godot {release_tag} is installed without root access at:
+
+`{final_binary}`
+
+Launch it with:
+
+```bash
+nvhive-godot
+```
+
+Projects live in `{root / "projects"}` so game prototypes, Blender exports, and
+ComfyUI textures stay on persistent storage.
+""",
+        encoding="utf-8",
+    )
+    _godot_current_file().write_text(
+        json.dumps(
+            {
+                "version": release_tag,
+                "binary": str(final_binary),
+                "app_dir": str(app_dir),
+                "asset": asset_name,
+                "source_url": asset_url,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _write_marker(
+        pack,
+        {
+            "binary": str(final_binary),
+            "launcher": str(launcher),
+            "version": release_tag,
+            "asset": asset_name,
+        },
+    )
+    yield {"event": "step", "status": "complete", "message": f"Godot {release_tag} installed"}
 
 
 async def _install_blender_app(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
@@ -2042,6 +2500,9 @@ async def install_studio_packs(
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "scaffold":
                 async for event in _install_scaffold(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "godot_app":
+                async for event in _install_godot_app(pack, force_update):
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "blender_app":
                 async for event in _install_blender_app(pack, force_update):
