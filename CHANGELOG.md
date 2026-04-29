@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.35.0] - 2026-04-29
+
+### Added
+- Production-candidate rootless NVIDIA GPU AI lab release with the self-healing
+  setup wizard promoted as the primary first-run path.
+- Release-readiness and diagnostic reports with request IDs, error IDs, and
+  redacted copyable troubleshooting bundles.
+- Rootless Studio mission coverage for AI Starter, Graphics Creator Studio,
+  Game Dev Lab, Music Producer Studio, Agent Builder, OpenClaw/NemoClaw,
+  ComfyUI, Blender, NVIDIA Omni/NeMo/Nemotron paths, and music tooling.
+- README and docs now lead with the no-root cloud GPU desktop journey and the
+  target VM acceptance checklist.
+
+### Fixed
+- Persistent mount discovery ignores permission-denied probe paths such as
+  locked `/mnt/lost+found` entries instead of crashing setup diagnostics.
+
 ## [0.34.1] - 2026-04-28
 
 ### Added
