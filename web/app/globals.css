@@ -281,6 +281,17 @@ button {
   min-height: 100vh;
 }
 
+@media (max-width: 900px) {
+  .layout-with-sidebar {
+    display: block;
+    min-height: calc(100vh - 2rem);
+  }
+
+  .layout-with-sidebar > aside {
+    display: none;
+  }
+}
+
 /* ============================================================
    NVIDIA green accent left-border for active nav items
    ============================================================ */

@@ -195,28 +195,27 @@ class TestWebUINavigation:
 # ---------------------------------------------------------------------------
 
 class TestWebUISetup:
-    def test_setup_wizard_steps(self, page):
-        """Setup wizard should show step indicators."""
+    def test_setup_installer_home_loads(self, page):
+        """Setup home should show compact system check and install options."""
         page.goto(f"{BASE}/setup")
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(2000)
 
-        # Should show step 1 (Welcome)
-        assert page.locator("text=Welcome").count() > 0
+        assert page.locator("text=System Check").count() > 0
+        assert page.locator("text=Install Options").count() > 0
 
-    def test_setup_next_button(self, page):
-        """NEXT button should advance to next step."""
+    def test_setup_advanced_details_reveals_controls(self, page):
+        """Advanced Details should reveal the deeper setup controls."""
         page.goto(f"{BASE}/setup")
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(2000)
 
-        next_btn = page.locator('button:has-text("NEXT")')
-        if next_btn.count() > 0:
-            next_btn.click()
+        details_btn = page.locator('button:has-text("Advanced Details")')
+        if details_btn.count() > 0:
+            details_btn.click()
             page.wait_for_timeout(1000)
-            # Should have advanced (GPU step or Local AI step)
             content = page.content()
-            assert "GPU" in content or "Local" in content or "Step" in content
+            assert "Storage Autopilot" in content or "LLM Picks" in content or "Mission Summary" in content
 
 
 # ---------------------------------------------------------------------------

@@ -141,6 +141,23 @@ _PERSONA_POOL: list[PersonaTemplate] = [
                   "accessibility", "information architecture", "user flow", "persona"],
     ),
     PersonaTemplate(
+        role="Underdog Student Advocate",
+        expertise="beginner onboarding, rootless Linux cloud desktops, self-healing setup, failure-mode discovery",
+        perspective="skeptical review from a smart student with no sudo, limited time, shifting VM images, and one persistent file mount",
+        triggers=["student", "beginner", "wizard", "self-healing", "self healing", "rootless",
+                  "install", "setup", "comfyui", "gpu", "driver", "cuda", "mount",
+                  "persistent", "cloud desktop", "geforce now", "easy to use", "broken"],
+        weight_boost=0.18,
+        system_prompt=(
+            "You are the **Underdog Student Advocate**. Your job is to be the useful skeptic "
+            "in the room: assume the user is smart but busy, has no root access, may be on a "
+            "fresh Linux GPU VM, and may lose everything outside the mounted file volume. "
+            "Look for confusing copy, hidden manual steps, fragile installs, old CUDA or Python "
+            "versions, missing disk checks, slow downloads, and places where nvHive should heal "
+            "itself or clearly explain the next safe action."
+        ),
+    ),
+    PersonaTemplate(
         role="Engineering Manager",
         expertise="team leadership, project management, hiring, engineering culture",
         perspective="team velocity, developer experience, hiring/retention, process efficiency",
@@ -278,7 +295,7 @@ def generate_agents(
             role=template.role,
             expertise=template.expertise,
             perspective=template.perspective,
-            system_prompt=_build_system_prompt(template, query),
+            system_prompt=template.system_prompt if template.system_prompt else _build_system_prompt(template, query),
             weight_boost=template.weight_boost,
         ))
 
@@ -347,6 +364,11 @@ COUNCIL_PRESETS: dict[str, list[PersonaTemplate]] = {
         t for t in _PERSONA_POOL
         if t.role in ("Product Manager", "UX Designer", "Engineering Manager",
                        "CEO / Business Strategist")
+    ],
+    "product_resilience": [
+        t for t in _PERSONA_POOL
+        if t.role in ("Underdog Student Advocate", "Product Manager", "UX Designer",
+                       "DevOps/SRE Engineer", "QA/Test Engineer", "ML/AI Engineer")
     ],
     "data": [
         t for t in _PERSONA_POOL

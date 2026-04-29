@@ -610,6 +610,28 @@ async def install_comfyui(
             "message": "Installed nvHive ComfyUI example pack",
             "examples_dir": str(examples_dir),
         }
+        try:
+            from nvh.integrations.receipts import write_receipt
+
+            write_receipt(
+                kind="comfyui",
+                item_id="workspace",
+                title="ComfyUI Workspace",
+                install_path=app_dir,
+                source_urls=[COMFYUI_REPO_URL],
+                files=[
+                    str(examples_dir / "examples.json"),
+                    str(examples_dir / "README.md"),
+                ],
+                metadata={
+                    "torch_profile": torch_profile,
+                    "venv_python": str(venv_python),
+                    "examples_dir": str(examples_dir),
+                    "status": detect_comfyui(),
+                },
+            )
+        except Exception:
+            pass
 
         yield {
             "event": "complete",

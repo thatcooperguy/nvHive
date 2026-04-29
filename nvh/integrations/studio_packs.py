@@ -2,7 +2,8 @@
 
 Packs are intentionally user-space only: files, launchers, models, and caches
 go under ``NVH_HOME``. The installer never calls sudo, apt,
-dnf, pacman, systemctl, or Docker.
+dnf, pacman, or systemctl. Container-backed packs only run when a provider
+already exposes Docker without sudo.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import asyncio
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import stat
@@ -19,12 +21,14 @@ import sys
 import tarfile
 import tempfile
 import time
+import zipfile
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from nvh.integrations.storage import storage_layout
+from nvh.utils.gpu import detect_gpus
 
 OLLAMA_PORT = 11434
 BLENDER_VERSION = "4.5.4"
@@ -33,6 +37,33 @@ BLENDER_LINUX_X64_URL = (
     "https://download.blender.org/release/Blender4.5/"
     f"blender-{BLENDER_VERSION}-linux-x64.tar.xz"
 )
+NODE_MAJOR_VERSION = "22"
+NODE_MIN_VERSION = (22, 16, 0)
+NPM_MIN_VERSION = (10, 0, 0)
+OPENCLAW_PACKAGE = "openclaw@latest"
+OPENCLAW_DOC_URL = "https://openclawdoc.com/docs/getting-started/installation/"
+NEMOCLAW_INSTALL_URL = "https://www.nvidia.com/nemoclaw.sh"
+NEMOCLAW_DOC_URL = "https://docs.nvidia.com/nemoclaw/latest/get-started/quickstart.html"
+NEMOCLAW_PACKAGE = "nemoclaw@latest"
+NVIDIA_OMNI_BLOG_URL = (
+    "https://blogs.nvidia.com/blog/nemotron-3-nano-omni-multimodal-ai-agents/"
+    "?nvid=nv-int-csfg-551280"
+)
+NVIDIA_OMNI_TECH_BLOG_URL = (
+    "https://developer.nvidia.com/blog/"
+    "nvidia-nemotron-3-nano-omni-powers-multimodal-agent-reasoning-in-a-single-efficient-open-model"
+)
+NVIDIA_OMNI_HF_URL = (
+    "https://huggingface.co/nvidia/"
+    "Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16"
+)
+NVIDIA_BUILD_URL = "https://build.nvidia.com/"
+GODOT_RELEASE_API = "https://api.github.com/repos/godotengine/godot/releases/latest"
+GODOT_DOC_URL = "https://docs.godotengine.org/en/stable/"
+ACE_STEP_REPO_URL = "https://github.com/ACE-Step/ACE-Step-1.5.git"
+ACE_STEP_DOC_URL = "https://github.com/ACE-Step/ACE-Step-1.5/blob/main/docs/en/INSTALL.md"
+AUDACITY_RELEASE_API = "https://api.github.com/repos/audacity/audacity/releases/latest"
+LMMS_RELEASE_API = "https://api.github.com/repos/LMMS/lmms/releases/latest"
 
 
 @dataclass(frozen=True)
@@ -171,7 +202,7 @@ STUDIO_MODELS: list[StudioModel] = [
         estimated_disk_gb=4.5,
         priority=70,
         capabilities=["vision", "image Q&A", "desktop screenshots"],
-        why_recommended="Adds local image understanding for screenshots and classroom media.",
+        why_recommended="Adds local image understanding for screenshots and creative media.",
         source_url="https://ollama.com/library/llava",
         license_note="Ollama library terms apply.",
     ),
@@ -283,7 +314,7 @@ STUDIO_PACKS: list[StudioPack] = [
         tagline="LangGraph, CrewAI, AutoGen, tools, and notebooks",
         description=(
             "Creates a dedicated Python environment for local agents, tool calling, "
-            "search helpers, and classroom automation experiments."
+            "search helpers, and student automation experiments."
         ),
         recommended_vram_gb=0,
         estimated_disk_gb=2.5,
@@ -312,6 +343,88 @@ STUDIO_PACKS: list[StudioPack] = [
         notes=[
             "Browser automation packages may need extra browser binaries later, but no sudo is used here.",
             "This pack gives the local AI agent layer a ready Python home.",
+        ],
+    ),
+    StudioPack(
+        id="nvidia-omni-agent",
+        title="NVIDIA Omni Agent",
+        category="agents",
+        tagline="Optional multimodal Nemotron 3 Nano Omni upgrade for AI Starter",
+        description=(
+            "Adds an NVIDIA Omni Agent workspace that routes first to NVIDIA NIM/build.nvidia.com "
+            "and only recommends local Nemotron 3 Nano Omni weights when GPU VRAM and persistent "
+            "storage are large enough."
+        ),
+        recommended_vram_gb=24,
+        estimated_disk_gb=0.2,
+        install_kind="scaffold",
+        no_root=True,
+        models=[
+            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
+            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-FP8",
+            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
+        ],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-omni-agent"],
+        source_urls=[
+            NVIDIA_OMNI_BLOG_URL,
+            NVIDIA_OMNI_TECH_BLOG_URL,
+            NVIDIA_OMNI_HF_URL,
+            NVIDIA_BUILD_URL,
+        ],
+        notes=[
+            "AI Starter installs this as a lightweight guide and launcher, not a default model download.",
+            "Use NVIDIA NIM/build.nvidia.com first on smaller student VMs.",
+            "Local BF16 weights are roughly 61.5 GB; FP8 is roughly 32.8 GB; NVFP4 is roughly 20.9 GB.",
+            "nvWizard should require persistent storage headroom before recommending local weights.",
+        ],
+    ),
+    StudioPack(
+        id="openclaw-agent",
+        title="OpenClaw Agent Workspace",
+        category="claw",
+        tagline="Self-hosted agent platform with local model support",
+        description=(
+            "Installs OpenClaw into a persistent user-space Node workspace, adds a "
+            "launcher, and keeps agent state under NVH_HOME/studio instead of the base OS."
+        ),
+        recommended_vram_gb=0,
+        estimated_disk_gb=2.0,
+        install_kind="openclaw_agent",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-openclaw"],
+        source_urls=[OPENCLAW_DOC_URL, "https://openclaw.ai/install.sh"],
+        notes=[
+            "Requires Node.js 22.16+ and npm 10+; nvHive can install a rootless Node runtime on Linux.",
+            "Use with local Ollama models or a configured cloud provider.",
+        ],
+    ),
+    StudioPack(
+        id="nemoclaw-sandbox",
+        title="NVIDIA NemoClaw Sandbox",
+        category="claw",
+        tagline="OpenClaw inside NVIDIA OpenShell guardrails",
+        description=(
+            "Adds NVIDIA NemoClaw as the guarded OpenClaw path when the host exposes "
+            "a Docker runtime that works without sudo. The wizard blocks this pack on "
+            "locked-down sessions that cannot run containers."
+        ),
+        recommended_vram_gb=0,
+        estimated_disk_gb=40.0,
+        install_kind="nemoclaw_sandbox",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-nemoclaw"],
+        source_urls=[NEMOCLAW_DOC_URL, NEMOCLAW_INSTALL_URL],
+        notes=[
+            "NemoClaw is alpha software and requires a usable Docker/OpenShell path.",
+            "Recommended only when the cloud image grants rootless Docker or docker group access.",
         ],
     ),
     StudioPack(
@@ -355,7 +468,7 @@ STUDIO_PACKS: list[StudioPack] = [
         tagline="Pygame, Panda3D, assets, and modding helpers",
         description=(
             "Creates a no-root Python game development environment for AI-assisted "
-            "prototypes, texture generation workflows, and classroom game projects."
+            "prototypes, texture generation workflows, and personal game projects."
         ),
         recommended_vram_gb=0,
         estimated_disk_gb=2.0,
@@ -409,6 +522,104 @@ STUDIO_PACKS: list[StudioPack] = [
         ],
     ),
     StudioPack(
+        id="godot-engine",
+        title="Godot Engine",
+        category="game",
+        tagline="Open-source game engine as a rootless app",
+        description=(
+            "Downloads the latest official Godot Linux x86_64 release into NVH_HOME/apps, "
+            "adds a persistent launcher, and creates a project folder beside the rest of the lab."
+        ),
+        recommended_vram_gb=2,
+        estimated_disk_gb=0.4,
+        install_kind="godot_app",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-godot"],
+        source_urls=[GODOT_RELEASE_API, GODOT_DOC_URL],
+        notes=[
+            "Uses the official GitHub release asset selected at install time.",
+            "Godot projects stay under persistent storage and can use Blender or ComfyUI assets.",
+        ],
+    ),
+    StudioPack(
+        id="unity-hub-helper",
+        title="Unity Hub Helper",
+        category="game",
+        tagline="Persistent Unity workspace and account handoff",
+        description=(
+            "Creates a rootless Unity workspace with launcher notes for Unity Hub AppImage/manual "
+            "installs. The wizard keeps the storage and cache paths ready, while Unity handles sign-in."
+        ),
+        recommended_vram_gb=6,
+        estimated_disk_gb=12.0,
+        install_kind="scaffold",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-unity-hub"],
+        source_urls=["https://unity.com/download"],
+        notes=[
+            "Unity requires a Unity account and license acceptance.",
+            "Use the helper to keep projects and downloaded editors on the persistent block volume.",
+        ],
+    ),
+    StudioPack(
+        id="unreal-engine-helper",
+        title="Unreal Engine Helper",
+        category="game",
+        tagline="Epic/GitHub prep for a large rootless UE workspace",
+        description=(
+            "Creates the persistent Unreal workspace, explains the Epic-to-GitHub account link, "
+            "and prepares folders for source builds or provider-supplied Unreal installs."
+        ),
+        recommended_vram_gb=8,
+        estimated_disk_gb=150.0,
+        install_kind="scaffold",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-unreal-helper"],
+        source_urls=[
+            "https://www.unrealengine.com/en-US/download",
+            "https://www.unrealengine.com/en-US/ue-on-github",
+        ],
+        notes=[
+            "Unreal access requires an Epic account and linked GitHub account.",
+            "Large Unreal source/editor builds can exceed 150 GB; nvWizard should reserve the block volume first.",
+        ],
+    ),
+    StudioPack(
+        id="github-login-helper",
+        title="GitHub Connect",
+        category="connector",
+        tagline="Simple GitHub login helper for cloning and PR work",
+        description=(
+            "Adds a rootless GitHub login workspace and launcher that uses GitHub CLI when present "
+            "or a GITHUB_TOKEN fallback for cloud images without system package access."
+        ),
+        recommended_vram_gb=0,
+        estimated_disk_gb=0.1,
+        install_kind="scaffold",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-github-login"],
+        source_urls=[
+            "https://cli.github.com/manual/gh_auth_login",
+            "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens",
+        ],
+        notes=[
+            "The helper never stores a password. Prefer GitHub CLI browser login or a fine-grained token.",
+            "Public repositories can still clone over HTTPS without login.",
+        ],
+    ),
+    StudioPack(
         id="blender-creative",
         title="Blender Creative Studio",
         category="creative",
@@ -435,25 +646,138 @@ STUDIO_PACKS: list[StudioPack] = [
             "Cycles GPU rendering still depends on the NVIDIA driver exposed by the cloud image.",
         ],
     ),
+    StudioPack(
+        id="ace-step-music",
+        title="ACE-Step Music Generator",
+        category="music",
+        tagline="Local AI songs, loops, lyrics, and remixes",
+        description=(
+            "Clones ACE-Step 1.5 into persistent storage, prepares a rootless uv "
+            "environment, and adds a launcher for the local Gradio music studio."
+        ),
+        recommended_vram_gb=6,
+        estimated_disk_gb=12.0,
+        install_kind="ace_step_music",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-ace-step"],
+        source_urls=[ACE_STEP_REPO_URL, ACE_STEP_DOC_URL],
+        notes=[
+            "ACE-Step models download on first launch and can use several additional GB.",
+            "Runs from the persistent block volume; no apt, sudo, or system Python edits.",
+        ],
+    ),
+    StudioPack(
+        id="music-producer-lab",
+        title="Music Producer AI Lab",
+        category="music",
+        tagline="Stem splitting, transcription, audio generation, and notebooks",
+        description=(
+            "Creates a rootless Python audio lab for GPU-backed source separation, "
+            "lyrics/transcription, prompt-to-audio experiments, and batch audio tools."
+        ),
+        recommended_vram_gb=8,
+        estimated_disk_gb=8.0,
+        install_kind="python_venv",
+        no_root=True,
+        models=[],
+        python_packages=[
+            "demucs",
+            "whisperx",
+            "faster-whisper",
+            "stable-audio-tools",
+            "audio-separator",
+            "librosa",
+            "soundfile",
+            "gradio",
+            "huggingface_hub",
+            "jupyterlab",
+        ],
+        comfy_nodes=[],
+        launchers=["nvhive-music-lab"],
+        source_urls=[
+            "https://github.com/m-bain/whisperX",
+            "https://github.com/Stability-AI/stable-audio-tools",
+            "https://docs.pytorch.org/audio/stable/tutorials/hybrid_demucs_tutorial.html",
+        ],
+        notes=[
+            "CUDA acceleration depends on the PyTorch wheels that match the host driver.",
+            "Use this for remixing and cleanup; use ACE-Step for full music generation.",
+        ],
+    ),
+    StudioPack(
+        id="music-daw-helper",
+        title="Rootless DAW Helper",
+        category="music",
+        tagline="Audacity and LMMS AppImages plus DAW workspace",
+        description=(
+            "Downloads official Audacity and LMMS AppImages when available, "
+            "then creates a persistent music production workspace with launch helpers."
+        ),
+        recommended_vram_gb=0,
+        estimated_disk_gb=1.0,
+        install_kind="scaffold",
+        no_root=True,
+        models=[],
+        python_packages=[],
+        comfy_nodes=[],
+        launchers=["nvhive-music-studio"],
+        source_urls=[
+            AUDACITY_RELEASE_API,
+            LMMS_RELEASE_API,
+            "https://support.audacityteam.org/basics/downloading-and-installing-audacity",
+            "https://lmms.io/download",
+            "https://www.reaper.fm/download.php",
+            "https://musescore.org/en/download",
+        ],
+        notes=[
+            "Desktop apps remain in user space and can use AppImage extract-and-run when FUSE is unavailable.",
+            "Commercial DAWs may require account login or license acceptance outside nvHive.",
+        ],
+    ),
 ]
 
 
 PACK_BUNDLES: dict[str, list[str]] = {
-    "starter": ["rootless-ollama", "llm-starter", "agent-lab", "comfyui-power-nodes", "game-dev-lab"],
+    "starter": [
+        "rootless-ollama",
+        "llm-starter",
+        "agent-lab",
+        "nvidia-omni-agent",
+        "comfyui-power-nodes",
+        "game-dev-lab",
+        "github-login-helper",
+    ],
     "llms": ["rootless-ollama", "llm-starter", "llm-coder-reasoner"],
-    "agents": ["agent-lab"],
+    "agents": ["agent-lab", "nvidia-omni-agent", "openclaw-agent", "github-login-helper"],
+    "claw": ["openclaw-agent", "nemoclaw-sandbox"],
+    "omni": ["nvidia-omni-agent"],
     "comfy": ["comfyui-power-nodes"],
-    "game": ["game-dev-lab", "game-mod-helper"],
-    "creative": ["blender-creative", "game-dev-lab", "game-mod-helper"],
+    "connectors": ["github-login-helper"],
+    "music": ["ace-step-music", "music-producer-lab", "music-daw-helper", "github-login-helper"],
+    "game": ["game-dev-lab", "game-mod-helper", "godot-engine", "unity-hub-helper", "unreal-engine-helper", "github-login-helper"],
+    "creative": ["blender-creative", "game-dev-lab", "game-mod-helper", "godot-engine"],
     "all": [
         "rootless-ollama",
         "llm-starter",
         "llm-coder-reasoner",
         "agent-lab",
+        "nvidia-omni-agent",
+        "openclaw-agent",
+        "nemoclaw-sandbox",
         "comfyui-power-nodes",
         "game-dev-lab",
         "game-mod-helper",
+        "godot-engine",
+        "unity-hub-helper",
+        "unreal-engine-helper",
+        "github-login-helper",
         "blender-creative",
+        "ace-step-music",
+        "music-producer-lab",
+        "music-daw-helper",
     ],
 }
 
@@ -516,6 +840,269 @@ def _blender_binary() -> Path:
     return _blender_app_dir() / "blender"
 
 
+def _godot_root() -> Path:
+    return storage_layout().apps_dir / "godot"
+
+
+def _godot_current_file() -> Path:
+    return _godot_root() / "current.json"
+
+
+def _godot_binary_from_state() -> Path | None:
+    state_file = _godot_current_file()
+    if not state_file.exists():
+        return None
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    binary = state.get("binary")
+    if not isinstance(binary, str):
+        return None
+    path = Path(binary)
+    return path if path.exists() else None
+
+
+def _ace_step_root() -> Path:
+    return _pack_root("ace-step-music")
+
+
+def _ace_step_app_dir() -> Path:
+    return _ace_step_root() / "ACE-Step-1.5"
+
+
+def _ace_step_uv_venv_python() -> Path:
+    venv = _ace_step_root() / "uv-venv"
+    if os.name == "nt":
+        return venv / "Scripts" / "python.exe"
+    return venv / "bin" / "python"
+
+
+def _ace_step_uv_binary() -> Path:
+    venv = _ace_step_root() / "uv-venv"
+    if os.name == "nt":
+        return venv / "Scripts" / "uv.exe"
+    return venv / "bin" / "uv"
+
+
+def _node_runtime_root() -> Path:
+    return storage_layout().runtime_dir / "node"
+
+
+def _fnm_root() -> Path:
+    return storage_layout().runtime_dir / "fnm"
+
+
+def _openclaw_workspace() -> Path:
+    return _pack_root("openclaw-agent") / "workspace"
+
+
+def _openclaw_prefix() -> Path:
+    return _pack_root("openclaw-agent") / "node"
+
+
+def _openclaw_binary() -> Path:
+    suffix = ".cmd" if os.name == "nt" else ""
+    return _openclaw_prefix() / "bin" / f"openclaw{suffix}"
+
+
+def _nemoclaw_workspace() -> Path:
+    return _pack_root("nemoclaw-sandbox") / "workspace"
+
+
+def _nemoclaw_prefix() -> Path:
+    return _pack_root("nemoclaw-sandbox") / "node"
+
+
+def _nemoclaw_binary_from_env(env: dict[str, str] | None = None) -> str:
+    suffix = ".cmd" if os.name == "nt" else ""
+    candidates = [
+        _nemoclaw_prefix() / "bin" / f"nemoclaw{suffix}",
+        _local_bin() / "nemoclaw",
+        _pack_root("nemoclaw-sandbox") / "home" / ".local" / "bin" / "nemoclaw",
+        _pack_root("nemoclaw-sandbox") / "home" / ".npm-global" / "bin" / "nemoclaw",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    found = shutil.which("nemoclaw", path=env.get("PATH") if env else None)
+    return found or ""
+
+
+def _parse_semver(value: str | None) -> tuple[int, int, int] | None:
+    if not value:
+        return None
+    match = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", value)
+    if not match:
+        return None
+    return tuple(int(part or 0) for part in match.groups())  # type: ignore[return-value]
+
+
+def _semver_at_least(value: tuple[int, int, int] | None, minimum: tuple[int, int, int]) -> bool:
+    return bool(value and value >= minimum)
+
+
+def _run_capture(cmd: list[str], *, env: dict[str, str] | None = None, timeout: float = 8.0) -> str:
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    except Exception:
+        return ""
+    return ((result.stdout or result.stderr) or "").strip().splitlines()[0] if (result.stdout or result.stderr) else ""
+
+
+def _find_rootless_node_bin() -> Path | None:
+    root = _fnm_root() / "node-versions"
+    if not root.exists():
+        return None
+    installs = sorted(root.glob(f"v{NODE_MAJOR_VERSION}.*/installation/bin"), reverse=True)
+    for install in installs:
+        if (install / "node").exists() and (install / "npm").exists():
+            return install
+    return None
+
+
+def _node_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(storage_layout().env())
+    rootless_bin = _find_rootless_node_bin()
+    path_parts = [
+        str(_local_bin()),
+        str(_openclaw_prefix() / "bin"),
+        str(_nemoclaw_prefix() / "bin"),
+        str(_pack_root("nemoclaw-sandbox") / "home" / ".local" / "bin"),
+        str(_pack_root("nemoclaw-sandbox") / "home" / ".npm-global" / "bin"),
+    ]
+    if rootless_bin:
+        path_parts.insert(0, str(rootless_bin))
+    env["PATH"] = os.pathsep.join(path_parts + [env.get("PATH", "")])
+    env["NPM_CONFIG_PREFIX"] = str(_openclaw_prefix())
+    env["OPENCLAW_HOME"] = str(_openclaw_workspace())
+    env["NEMOCLAW_WORKSPACE"] = str(_nemoclaw_workspace())
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _node_runtime_status(env: dict[str, str] | None = None) -> dict[str, Any]:
+    env = env or _node_env()
+    node = shutil.which("node", path=env.get("PATH"))
+    npm = shutil.which("npm", path=env.get("PATH"))
+    node_text = _run_capture([node, "--version"], env=env) if node else ""
+    npm_text = _run_capture([npm, "--version"], env=env) if npm else ""
+    node_version = _parse_semver(node_text)
+    npm_version = _parse_semver(npm_text)
+    node_ok = _semver_at_least(node_version, NODE_MIN_VERSION)
+    npm_ok = _semver_at_least(npm_version, NPM_MIN_VERSION)
+    can_auto_install = (
+        platform.system() == "Linux"
+        and bool(shutil.which("bash"))
+        and bool(shutil.which("curl"))
+    )
+    return {
+        "node": node or "",
+        "npm": npm or "",
+        "node_version": node_text,
+        "npm_version": npm_text,
+        "node_ok": node_ok,
+        "npm_ok": npm_ok,
+        "ready": node_ok and npm_ok,
+        "can_auto_install": can_auto_install,
+        "minimum_node": ".".join(str(part) for part in NODE_MIN_VERSION),
+        "minimum_npm": ".".join(str(part) for part in NPM_MIN_VERSION),
+    }
+
+
+def _docker_status() -> dict[str, Any]:
+    docker = shutil.which("docker")
+    if not docker:
+        return {
+            "binary": "",
+            "ready": False,
+            "detail": "Docker was not found on PATH.",
+            "rootless_hint": "NemoClaw needs Docker or a provider-enabled rootless container runtime.",
+        }
+    try:
+        result = subprocess.run(
+            [docker, "info"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        return {
+            "binary": docker,
+            "ready": False,
+            "detail": f"Docker could not be checked: {exc}",
+            "rootless_hint": "Ask the provider to enable rootless Docker or docker group access.",
+        }
+    if result.returncode == 0:
+        return {
+            "binary": docker,
+            "ready": True,
+            "detail": "Docker daemon is reachable without sudo.",
+            "rootless_hint": "",
+        }
+    detail = (result.stderr or result.stdout or "Docker daemon is not reachable.").strip().splitlines()[0]
+    return {
+        "binary": docker,
+        "ready": False,
+        "detail": detail,
+        "rootless_hint": "NemoClaw is blocked until Docker works without sudo in this session.",
+    }
+
+
+def _prepare_node_runtime() -> tuple[dict[str, str], dict[str, Any]]:
+    env = _node_env()
+    status = _node_runtime_status(env)
+    if status["ready"]:
+        return env, status
+    if not status["can_auto_install"]:
+        raise RuntimeError(
+            "OpenClaw needs Node.js 22.16+ and npm 10+. This host cannot auto-install "
+            "the rootless Node runtime because Linux, bash, and curl are not all available."
+        )
+
+    fnm_dir = _fnm_root()
+    fnm_dir.mkdir(parents=True, exist_ok=True)
+    install_env = os.environ.copy()
+    install_env.update(storage_layout().env())
+    install_env["FNM_DIR"] = str(fnm_dir)
+    install_env["NODE_VERSION"] = NODE_MAJOR_VERSION
+    subprocess.run(
+        ["bash", "-lc", "curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell"],
+        check=True,
+        timeout=180,
+        env=install_env,
+    )
+
+    fnm = fnm_dir / "fnm"
+    if not fnm.exists():
+        fnm = fnm_dir / "fnm.exe"
+    if not fnm.exists():
+        raise RuntimeError("Rootless Node install finished, but fnm was not found.")
+    subprocess.run(
+        [str(fnm), "install", NODE_MAJOR_VERSION],
+        check=True,
+        timeout=300,
+        env=install_env,
+    )
+
+    env = _node_env()
+    status = _node_runtime_status(env)
+    if not status["ready"]:
+        raise RuntimeError(
+            f"Node runtime is still not ready. Node={status['node_version'] or 'missing'} "
+            f"npm={status['npm_version'] or 'missing'}."
+        )
+    return env, status
+
+
 def _find_pack(pack_id: str) -> StudioPack:
     for pack in STUDIO_PACKS:
         if pack.id == pack_id:
@@ -552,11 +1139,22 @@ def catalog_as_dicts() -> list[dict[str, Any]]:
     return [asdict(pack) for pack in STUDIO_PACKS]
 
 
+def model_catalog_as_dicts() -> list[dict[str, Any]]:
+    return [asdict(model) for model in STUDIO_MODELS]
+
+
 def bundles_as_dict() -> dict[str, list[str]]:
     return {key: list(value) for key, value in PACK_BUNDLES.items()}
 
 
 def _detect_vram_gb() -> int:
+    try:
+        gpus = detect_gpus()
+    except Exception:
+        gpus = []
+    if gpus:
+        return int(sum(gpu.vram_mb for gpu in gpus) // 1024)
+
     nvidia_smi = shutil.which("nvidia-smi")
     if not nvidia_smi:
         return 0
@@ -729,6 +1327,50 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
     elif pack.install_kind == "python_venv":
         installed = _venv_python(pack.id).exists() and marker is not None
         details["venv"] = str(_venv_python(pack.id).parent.parent)
+    elif pack.install_kind == "ace_step_music":
+        app_dir = _ace_step_app_dir()
+        uv_binary = _ace_step_uv_binary()
+        installed = app_dir.exists() and uv_binary.exists() and marker is not None
+        details["app_dir"] = str(app_dir)
+        details["uv"] = str(uv_binary)
+        details["launcher"] = str(_local_bin() / "nvhive-ace-step")
+        details["installable"] = platform.system().lower() == "linux" and shutil.which("git") is not None
+        if platform.system().lower() != "linux":
+            details["blocked_reason"] = "ACE-Step music pack targets Linux cloud desktops."
+        elif not details["installable"]:
+            details["blocked_reason"] = "ACE-Step needs git to clone the official repository into persistent storage."
+    elif pack.install_kind == "openclaw_agent":
+        node = _node_runtime_status()
+        binary = _openclaw_binary()
+        installed = binary.exists() or marker is not None
+        installable = bool(node["ready"] or node["can_auto_install"])
+        details.update(node)
+        details["binary"] = str(binary)
+        details["workspace"] = str(_openclaw_workspace())
+        details["installable"] = installable
+        if not installable:
+            details["blocked_reason"] = "OpenClaw needs Node.js 22.16+ and npm 10+, or a Linux host where nvHive can install Node rootlessly."
+    elif pack.install_kind == "nemoclaw_sandbox":
+        node = _node_runtime_status()
+        docker = _docker_status()
+        binary = _nemoclaw_binary_from_env(_node_env())
+        installed = bool(binary) or marker is not None
+        installable = bool(docker["ready"] and (node["ready"] or node["can_auto_install"]))
+        details.update({
+            "node": node,
+            "docker": docker,
+            "binary": binary,
+            "workspace": str(_nemoclaw_workspace()),
+            "installable": installable,
+            "alpha": True,
+            "estimated_min_disk_gb": 20,
+            "estimated_recommended_disk_gb": 40,
+            "recommended_ram_gb": 16,
+        })
+        if not docker["ready"]:
+            details["blocked_reason"] = "NemoClaw needs Docker/OpenShell access that works without sudo; use OpenClaw or ask the provider to enable rootless Docker."
+        elif not installable:
+            details["blocked_reason"] = "NemoClaw needs Node.js 22.16+ and npm 10+."
     elif pack.install_kind == "comfy_nodes":
         custom_nodes = _comfyui_app_dir() / "custom_nodes"
         missing_nodes = [node.name for node in pack.comfy_nodes if not (custom_nodes / node.name).exists()]
@@ -738,12 +1380,48 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
     elif pack.install_kind == "scaffold":
         installed = marker is not None
         details["workspace"] = str(_pack_root(pack.id))
+        if pack.id == "nvidia-omni-agent":
+            vram_gb = _detect_vram_gb()
+            layout = storage_layout()
+            min_local_gb = 70.0
+            free_gb = None
+            try:
+                usage = shutil.disk_usage(layout.home)
+                free_gb = round(usage.free / (1024**3), 1)
+            except Exception:
+                pass
+            local_ok = bool(
+                vram_gb >= pack.recommended_vram_gb
+                and free_gb is not None
+                and free_gb >= min_local_gb
+            )
+            details.update({
+                "nim_recommended": True,
+                "local_recommended": local_ok,
+                "detected_vram_gb": vram_gb,
+                "free_gb": free_gb,
+                "min_local_free_gb": min_local_gb,
+                "model_sizes_gb": {"BF16": 61.5, "FP8": 32.8, "NVFP4": 20.9},
+                "recommended_path": "local" if local_ok else "nvidia-nim",
+            })
+        if pack.id == "music-daw-helper":
+            appimages = sorted((_pack_root(pack.id) / "appimages").glob("*.AppImage"))
+            details["appimages"] = [str(path) for path in appimages]
+            details["installable"] = platform.system().lower() == "linux"
+            if not details["installable"]:
+                details["blocked_reason"] = "Audacity and LMMS AppImage setup targets Linux cloud desktops."
     elif pack.install_kind == "blender_app":
         binary = _blender_binary()
         installed = binary.exists() and os.access(binary, os.X_OK)
         details["binary"] = str(binary)
         details["app_dir"] = str(_blender_app_dir())
         details["version"] = BLENDER_VERSION
+    elif pack.install_kind == "godot_app":
+        binary = _godot_binary_from_state()
+        installed = binary is not None and marker is not None
+        details["binary"] = str(binary) if binary else ""
+        details["app_dir"] = str(_godot_root())
+        details["release_api"] = GODOT_RELEASE_API
 
     return {
         "id": pack.id,
@@ -775,6 +1453,7 @@ async def _run_command(
     label: str,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
+    timeout: float | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     yield {"event": "step", "status": "running", "message": label, "command": cmd}
     process = await asyncio.create_subprocess_exec(
@@ -799,7 +1478,13 @@ async def _run_command(
                 process.kill()
                 await process.wait()
         raise
-    return_code = await process.wait()
+    try:
+        return_code = await asyncio.wait_for(process.wait(), timeout=timeout)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        yield {"event": "error", "status": "failed", "message": f"{label} timed out"}
+        raise RuntimeError(f"{label} timed out")
     if return_code != 0:
         yield {
             "event": "error",
@@ -823,6 +1508,31 @@ def _write_marker(pack: StudioPack, extra: dict[str, Any] | None = None) -> None
     if extra:
         marker.update(extra)
     _marker_path(pack.id).write_text(json.dumps(marker, indent=2), encoding="utf-8")
+    try:
+        from nvh.integrations.receipts import write_receipt
+
+        launcher_paths = [str(_local_bin() / launcher) for launcher in pack.launchers]
+        version = str(marker.get("version")) if marker.get("version") else None
+        write_receipt(
+            kind="studio-pack",
+            item_id=pack.id,
+            title=pack.title,
+            install_path=root,
+            version=version,
+            source_urls=pack.source_urls,
+            launchers=launcher_paths,
+            models=pack.models,
+            files=[str(_marker_path(pack.id))],
+            metadata={
+                "category": pack.category,
+                "install_kind": pack.install_kind,
+                "recommended_vram_gb": pack.recommended_vram_gb,
+                "estimated_disk_gb": pack.estimated_disk_gb,
+                "marker": marker,
+            },
+        )
+    except Exception:
+        pass
 
 
 def _write_script(path: Path, content: str) -> None:
@@ -1040,6 +1750,45 @@ python "{demo}"
     _write_script(launcher, content)
 
 
+def _write_music_lab(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    for folder in ["inputs", "outputs", "stems", "transcripts", "notebooks"]:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+
+    sample = root / "notebooks" / "README.md"
+    sample.write_text(
+        """# Music Producer AI Lab
+
+Drop source audio in `inputs/`, then use the launcher to start JupyterLab.
+
+Useful first experiments:
+
+- Split stems with Demucs
+- Transcribe lyrics or vocals with WhisperX
+- Generate short audio textures with Stable Audio tools
+- Batch process files into `outputs/`
+
+Check licenses before publishing generated or transformed audio.
+""",
+        encoding="utf-8",
+    )
+    launcher = _local_bin() / "nvhive-music-lab"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+source "{root}/venv/bin/activate"
+cd "{root}"
+if [ "$#" -gt 0 ]; then
+  exec "$@"
+fi
+echo "NVHive Music Producer AI Lab"
+echo "Inputs:  {root}/inputs"
+echo "Outputs: {root}/outputs"
+exec jupyter lab --no-browser --ip 127.0.0.1 --port 8891
+"""
+    _write_script(launcher, content)
+
+
 async def _install_python_venv(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
     root = _pack_root(pack.id)
     venv_python = _venv_python(pack.id)
@@ -1076,7 +1825,364 @@ async def _install_python_venv(pack: StudioPack, force_update: bool) -> AsyncIte
         _write_agent_launcher(pack)
     if pack.id == "game-dev-lab":
         _write_game_lab(pack)
+    if pack.id == "music-producer-lab":
+        _write_music_lab(pack)
     _write_marker(pack, {"packages": pack.python_packages, "venv": str(root / "venv")})
+
+
+def _write_openclaw_launcher() -> Path:
+    root = _pack_root("openclaw-agent")
+    workspace = _openclaw_workspace()
+    launcher = _local_bin() / "nvhive-openclaw"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+export NVH_HOME="${{NVH_HOME:-{storage_layout().home}}}"
+export OPENCLAW_HOME="${{OPENCLAW_HOME:-{workspace}}}"
+export NPM_CONFIG_PREFIX="${{NPM_CONFIG_PREFIX:-{_openclaw_prefix()}}}"
+export PATH="{_openclaw_prefix()}/bin:{_local_bin()}:$PATH"
+mkdir -p "$OPENCLAW_HOME" "{root}/logs"
+cd "$OPENCLAW_HOME"
+if [ "$#" -eq 0 ]; then
+  exec openclaw onboard --install-daemon
+fi
+exec openclaw "$@"
+"""
+    _write_script(launcher, content)
+    return launcher
+
+
+def _write_openclaw_readme() -> None:
+    root = _pack_root("openclaw-agent")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        f"""# OpenClaw Agent Workspace
+
+OpenClaw is installed in this rootless nvHive pack:
+
+`{root}`
+
+Launch the guided OpenClaw onboarding:
+
+```bash
+nvhive-openclaw
+```
+
+Advanced overrides:
+
+```bash
+nvhive-openclaw --help
+nvhive-openclaw tui
+```
+
+The wizard keeps OpenClaw state in `{_openclaw_workspace()}` and can route to
+local Ollama models or configured cloud model providers.
+""",
+        encoding="utf-8",
+    )
+
+
+async def _install_openclaw_agent(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if os.name == "nt":
+        yield {"event": "error", "status": "failed", "message": "OpenClaw rootless pack currently targets Linux/WSL sessions."}
+        return
+
+    root = _pack_root(pack.id)
+    root.mkdir(parents=True, exist_ok=True)
+    _openclaw_workspace().mkdir(parents=True, exist_ok=True)
+
+    if _openclaw_binary().exists() and not force_update:
+        launcher = _write_openclaw_launcher()
+        _write_openclaw_readme()
+        _write_marker(pack, {"binary": str(_openclaw_binary()), "launcher": str(launcher), "workspace": str(_openclaw_workspace())})
+        yield {"event": "step", "status": "complete", "message": "OpenClaw already installed"}
+        return
+
+    yield {"event": "step", "status": "running", "message": "Checking Node.js 22.16+ and npm 10+ for OpenClaw"}
+    try:
+        env, node_status = await asyncio.to_thread(_prepare_node_runtime)
+    except Exception as exc:
+        yield {"event": "error", "status": "failed", "message": str(exc)}
+        return
+    npm = shutil.which("npm", path=env.get("PATH"))
+    if not npm:
+        yield {"event": "error", "status": "failed", "message": "npm is unavailable after Node runtime setup."}
+        return
+
+    _openclaw_prefix().mkdir(parents=True, exist_ok=True)
+    async for event in _run_command(
+        [npm, "install", "--prefix", str(_openclaw_prefix()), OPENCLAW_PACKAGE],
+        label="Install OpenClaw package",
+        env=env,
+    ):
+        yield event
+
+    launcher = _write_openclaw_launcher()
+    _write_openclaw_readme()
+    _write_marker(pack, {
+        "binary": str(_openclaw_binary()),
+        "launcher": str(launcher),
+        "workspace": str(_openclaw_workspace()),
+        "node": node_status,
+    })
+    yield {
+        "event": "complete",
+        "status": "complete",
+        "message": "OpenClaw installed. Launch nvhive-openclaw to onboard the agent.",
+        "launcher": str(launcher),
+    }
+
+
+def _write_nemoclaw_launcher() -> Path:
+    root = _pack_root("nemoclaw-sandbox")
+    workspace = _nemoclaw_workspace()
+    launcher = _local_bin() / "nvhive-nemoclaw"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+export NVH_HOME="${{NVH_HOME:-{storage_layout().home}}}"
+export NEMOCLAW_WORKSPACE="${{NEMOCLAW_WORKSPACE:-{workspace}}}"
+export NPM_CONFIG_PREFIX="${{NPM_CONFIG_PREFIX:-{_nemoclaw_prefix()}}}"
+export PATH="{_nemoclaw_prefix()}/bin:{_local_bin()}:$PATH"
+mkdir -p "$NEMOCLAW_WORKSPACE" "{root}/logs"
+cd "$NEMOCLAW_WORKSPACE"
+if [ "$#" -eq 0 ]; then
+  exec nemoclaw onboard
+fi
+exec nemoclaw "$@"
+"""
+    _write_script(launcher, content)
+    return launcher
+
+
+def _write_nemoclaw_readme(docker: dict[str, Any]) -> None:
+    root = _pack_root("nemoclaw-sandbox")
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        f"""# NVIDIA NemoClaw Sandbox
+
+NemoClaw is the guarded OpenClaw path. It uses NVIDIA OpenShell and requires a
+Docker runtime that works without sudo in this Linux session.
+
+Docker check:
+
+`{docker.get("detail", "not checked")}`
+
+Launch onboarding:
+
+```bash
+nvhive-nemoclaw
+```
+
+Advanced overrides:
+
+```bash
+nvhive-nemoclaw --help
+nvhive-nemoclaw <sandbox-name> status
+```
+
+Keep the sandbox workspace on the persistent mount:
+
+`{_nemoclaw_workspace()}`
+""",
+        encoding="utf-8",
+    )
+
+
+async def _install_nemoclaw_sandbox(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if os.name == "nt":
+        yield {"event": "error", "status": "failed", "message": "NemoClaw requires a Linux, macOS, or WSL2 container runtime; nvHive only enables this pack on Linux sessions."}
+        return
+    if platform.system() != "Linux":
+        yield {"event": "error", "status": "failed", "message": "This nvHive pack targets Linux cloud desktops."}
+        return
+
+    docker = _docker_status()
+    if not docker["ready"]:
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": f"NemoClaw is blocked: {docker['detail']} {docker['rootless_hint']}",
+            "details": docker,
+        }
+        return
+
+    root = _pack_root(pack.id)
+    root.mkdir(parents=True, exist_ok=True)
+    _nemoclaw_workspace().mkdir(parents=True, exist_ok=True)
+
+    current_env = _node_env({"NPM_CONFIG_PREFIX": str(_nemoclaw_prefix())})
+    existing_binary = _nemoclaw_binary_from_env(current_env)
+    if existing_binary and not force_update:
+        launcher = _write_nemoclaw_launcher()
+        _write_nemoclaw_readme(docker)
+        _write_marker(pack, {"binary": existing_binary, "launcher": str(launcher), "workspace": str(_nemoclaw_workspace()), "docker": docker})
+        yield {"event": "step", "status": "complete", "message": "NemoClaw CLI already installed"}
+        return
+
+    yield {"event": "step", "status": "running", "message": "Checking Node.js 22.16+ and npm 10+ for NemoClaw"}
+    try:
+        env, node_status = await asyncio.to_thread(_prepare_node_runtime)
+    except Exception as exc:
+        yield {"event": "error", "status": "failed", "message": str(exc)}
+        return
+    env = _node_env({"NPM_CONFIG_PREFIX": str(_nemoclaw_prefix())})
+    npm = shutil.which("npm", path=env.get("PATH"))
+    if not npm:
+        yield {"event": "error", "status": "failed", "message": "npm is unavailable after Node runtime setup."}
+        return
+
+    _nemoclaw_prefix().mkdir(parents=True, exist_ok=True)
+    async for event in _run_command(
+        [npm, "install", "--prefix", str(_nemoclaw_prefix()), NEMOCLAW_PACKAGE],
+        label="Install NemoClaw CLI",
+        env=env,
+    ):
+        yield event
+
+    binary = _nemoclaw_binary_from_env(env)
+    launcher = _write_nemoclaw_launcher()
+    _write_nemoclaw_readme(docker)
+    _write_marker(pack, {
+        "binary": binary,
+        "launcher": str(launcher),
+        "workspace": str(_nemoclaw_workspace()),
+        "node": node_status,
+        "docker": docker,
+        "onboard_next": "nvhive-nemoclaw",
+    })
+    yield {
+        "event": "complete",
+        "status": "complete",
+        "message": "NemoClaw CLI installed. Launch nvhive-nemoclaw to create the OpenShell sandbox.",
+        "launcher": str(launcher),
+    }
+
+
+def _write_ace_step_launcher() -> Path:
+    root = _ace_step_root()
+    app_dir = _ace_step_app_dir()
+    uv_binary = _ace_step_uv_binary()
+    launcher = _local_bin() / "nvhive-ace-step"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+export NVH_HOME="${{NVH_HOME:-{storage_layout().home}}}"
+export HF_HOME="${{HF_HOME:-{storage_layout().models_dir / "huggingface"}}}"
+export TRANSFORMERS_CACHE="${{TRANSFORMERS_CACHE:-$HF_HOME/transformers}}"
+export XDG_CACHE_HOME="${{XDG_CACHE_HOME:-{storage_layout().cache_dir}}}"
+cd "{app_dir}"
+if [ "$#" -gt 0 ]; then
+  exec "{uv_binary}" run "$@"
+fi
+exec "{uv_binary}" run acestep --server-name 127.0.0.1 --port 7865
+"""
+    _write_script(launcher, content)
+    return launcher
+
+
+def _write_ace_step_readme() -> None:
+    root = _ace_step_root()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        f"""# ACE-Step Music Generator
+
+ACE-Step 1.5 is installed under persistent nvHive storage:
+
+`{_ace_step_app_dir()}`
+
+Launch the local music studio:
+
+```bash
+nvhive-ace-step
+```
+
+Then open http://127.0.0.1:7865.
+
+Models download on first launch and are kept on the persistent mount through
+`HF_HOME`. For lower-VRAM GPUs, use ACE-Step's built-in lighter model/offload
+options in the UI.
+""",
+        encoding="utf-8",
+    )
+
+
+async def _install_ace_step_music(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if platform.system().lower() != "linux":
+        yield {"event": "error", "status": "failed", "message": "ACE-Step music pack targets Linux cloud desktops."}
+        return
+    git = shutil.which("git")
+    if not git:
+        yield {"event": "error", "status": "failed", "message": "Git is required to install ACE-Step."}
+        return
+
+    root = _ace_step_root()
+    root.mkdir(parents=True, exist_ok=True)
+    app_dir = _ace_step_app_dir()
+    env = os.environ.copy()
+    env.update(storage_layout().env())
+    env["PYTHONUTF8"] = "1"
+    env.setdefault("HF_HOME", str(storage_layout().models_dir / "huggingface"))
+    env.setdefault("XDG_CACHE_HOME", str(storage_layout().cache_dir))
+
+    if not app_dir.exists():
+        async for event in _run_command(
+            [git, "clone", "--depth", "1", ACE_STEP_REPO_URL, str(app_dir)],
+            env=env,
+            label="Clone ACE-Step 1.5",
+        ):
+            yield event
+    elif force_update:
+        async for event in _run_command(
+            [git, "-C", str(app_dir), "pull", "--ff-only"],
+            env=env,
+            label="Update ACE-Step 1.5",
+        ):
+            yield event
+    else:
+        yield {"event": "step", "status": "complete", "message": "ACE-Step repository already present"}
+
+    uv_python = _ace_step_uv_venv_python()
+    if not uv_python.exists():
+        async for event in _run_command(
+            [sys.executable, "-m", "venv", str(root / "uv-venv")],
+            env=env,
+            label="Create ACE-Step uv environment",
+        ):
+            yield event
+
+    async for event in _run_command(
+        [str(uv_python), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools", "uv"],
+        env=env,
+        label="Install rootless uv for ACE-Step",
+    ):
+        yield event
+
+    uv_binary = _ace_step_uv_binary()
+    async for event in _run_command(
+        [str(uv_binary), "sync"],
+        cwd=app_dir,
+        env=env,
+        label="Install ACE-Step dependencies",
+        timeout=1800.0,
+    ):
+        yield event
+
+    launcher = _write_ace_step_launcher()
+    _write_ace_step_readme()
+    _write_marker(pack, {
+        "repo": ACE_STEP_REPO_URL,
+        "app_dir": str(app_dir),
+        "uv": str(uv_binary),
+        "launcher": str(launcher),
+        "models_home": env["HF_HOME"],
+    })
+    yield {
+        "event": "complete",
+        "status": "complete",
+        "message": "ACE-Step music generator installed. Launch nvhive-ace-step.",
+        "launcher": str(launcher),
+    }
 
 
 async def _install_comfy_nodes(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
@@ -1167,8 +2273,368 @@ find . -maxdepth 2 -type d | sort
     _write_script(launcher, content)
 
 
+def _write_github_login_helper(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    for folder in ["repos", "tokens", "notes"]:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        f"""# {pack.title}
+
+This helper keeps GitHub setup rootless and persistent.
+
+Preferred path:
+
+1. Run `nvhive-github-login`.
+2. If GitHub CLI is available, use browser login.
+3. If GitHub CLI is not available, add a fine-grained token as `GITHUB_TOKEN`
+   in your nvHive environment file and relaunch the WebUI.
+
+Public repositories can clone over HTTPS without login. Private repositories,
+pull requests, and Unreal Engine source access need authenticated GitHub.
+""",
+        encoding="utf-8",
+    )
+    launcher = _local_bin() / "nvhive-github-login"
+    token_hint = storage_layout().config_dir / "env"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+echo "nvHive GitHub Connect"
+echo "Workspace: {root}"
+
+if [ -n "${{GITHUB_TOKEN:-}}" ]; then
+  echo "GITHUB_TOKEN is present in this shell. GitHub API and private HTTPS clones can use it."
+fi
+
+if command -v gh >/dev/null 2>&1; then
+  if gh auth status >/dev/null 2>&1; then
+    echo "GitHub CLI is already authenticated."
+    gh auth status
+    exit 0
+  fi
+  echo "Starting GitHub browser login with GitHub CLI..."
+  gh auth login --web --git-protocol https
+  gh auth setup-git || true
+  gh auth status
+  exit 0
+fi
+
+cat <<'EOF'
+GitHub CLI is not installed on this image.
+
+Rootless fallback:
+1. Create a fine-grained GitHub token in the browser.
+2. Add this line to the nvHive env file:
+   export GITHUB_TOKEN=your_token_here
+3. Relaunch nvHive.
+
+Env file:
+EOF
+echo "{token_hint}"
+"""
+    _write_script(launcher, content)
+
+
+def _write_game_engine_helper(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    for folder in ["projects", "downloads", "notes", "assets"]:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+
+    if pack.id == "unity-hub-helper":
+        body = """# Unity Hub Helper
+
+Unity requires a Unity account and license acceptance. nvHive prepares the
+persistent storage layout, then students can keep Unity editors and projects on
+the block volume instead of the read-only OS disk.
+
+Suggested paths:
+
+- Projects: `projects/`
+- Downloads: `downloads/`
+- Shared AI assets: `assets/`
+
+Open https://unity.com/download if the provider image does not already include
+Unity Hub.
+"""
+        launcher_name = "nvhive-unity-hub"
+        launcher_message = "Unity Hub requires account sign-in. Use this workspace for downloads and projects."
+    else:
+        body = """# Unreal Engine Helper
+
+Unreal Engine is large and account-gated. nvHive prepares persistent storage,
+GitHub/Epic notes, and asset folders so the setup can survive cloud session
+rebuilds.
+
+Checklist:
+
+1. Connect GitHub with `nvhive-github-login`.
+2. Link Epic and GitHub accounts for Unreal source access.
+3. Keep source trees, derived data cache, and projects on the block volume.
+
+Unreal source/editor installs can exceed 150 GB.
+"""
+        launcher_name = "nvhive-unreal-helper"
+        launcher_message = "Unreal setup needs Epic/GitHub access and plenty of persistent storage."
+
+    (root / "README.md").write_text(body, encoding="utf-8")
+    launcher = _local_bin() / launcher_name
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{root}"
+echo "{launcher_message}"
+echo "Workspace: {root}"
+find . -maxdepth 2 -type d | sort
+"""
+    _write_script(launcher, content)
+
+
+def _write_music_daw_helper(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    for folder in ["projects", "appimages", "plugins", "samples", "exports", "notes"]:
+        (root / folder).mkdir(parents=True, exist_ok=True)
+    readme = root / "README.md"
+    readme.write_text(
+        f"""# {pack.title}
+
+This is the persistent desktop-audio workspace for nvHive.
+
+nvHive attempts to download these rootless apps during install:
+
+- Audacity AppImage for waveform editing, vocal cleanup, and quick exports
+- LMMS AppImage for beat making and MIDI sketches
+
+Manual optional additions:
+
+- REAPER Linux tarball for a compact professional DAW trial path
+- MuseScore AppImage for notation and sheet music
+
+Downloaded or manually added apps live in `appimages/`. The launcher lists them
+and can run one by name without writing to the base OS. If FUSE is unavailable
+on a locked-down VM, the launcher uses AppImage extract-and-run.
+
+AI tools live beside this pack:
+
+- `nvhive-ace-step` for full local AI music generation
+- `nvhive-music-lab` for stems, transcription, and batch processing
+
+Always check model and sample licenses before publishing music.
+""",
+        encoding="utf-8",
+    )
+    launcher = _local_bin() / "nvhive-music-studio"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+cd "{root}"
+mkdir -p appimages projects plugins samples exports notes
+if [ "$#" -eq 0 ]; then
+  echo "NVHive Music Producer Studio"
+  echo "Workspace: {root}"
+  echo
+  echo "Audacity and LMMS AppImages are downloaded during install when official assets are available."
+  echo "You can also drop REAPER or MuseScore AppImages/tarballs into appimages/."
+  echo "Run: nvhive-music-studio <partial-name>"
+  echo
+  find appimages -maxdepth 1 -type f | sort || true
+  exit 0
+fi
+
+target="$(find appimages -maxdepth 1 -type f -iname "*$1*" | head -n 1)"
+if [ -z "$target" ]; then
+  echo "No matching AppImage/tarball found in {root}/appimages"
+  exit 1
+fi
+chmod +x "$target" || true
+if [[ "$target" == *.AppImage ]]; then
+  export APPIMAGE_EXTRACT_AND_RUN=1
+fi
+exec "$target"
+"""
+    _write_script(launcher, content)
+
+
+def _write_omni_agent_helper(pack: StudioPack) -> None:
+    root = _pack_root(pack.id)
+    root.mkdir(parents=True, exist_ok=True)
+    readme = f"""# {pack.title}
+
+{pack.description}
+
+## Default Path
+
+Use NVIDIA NIM / build.nvidia.com first. This keeps AI Starter fast, rootless,
+and usable on smaller student VMs while still exposing the new multimodal
+Nemotron 3 Nano Omni workflow.
+
+## Local Path
+
+Only try a local download when nvWizard reports enough persistent storage and
+GPU headroom. The current published footprints are approximately:
+
+- BF16: 61.5 GB
+- FP8: 32.8 GB
+- NVFP4: 20.9 GB
+
+The local path should be treated as an advanced option for large NVIDIA GPUs or
+cloud instances with ample block storage.
+
+## Use Cases
+
+- Document intelligence and OCR
+- Screenshot / GUI reasoning
+- Audio-video reasoning
+- Multimodal agent perception before OpenClaw or NemoClaw actions
+
+## Sources
+
+- {NVIDIA_OMNI_BLOG_URL}
+- {NVIDIA_OMNI_TECH_BLOG_URL}
+- {NVIDIA_OMNI_HF_URL}
+- {NVIDIA_BUILD_URL}
+"""
+    (root / "README.md").write_text(readme, encoding="utf-8")
+    plan = {
+        "name": "nvidia-omni-agent",
+        "default_path": "nvidia-nim",
+        "local_guardrails": {
+            "min_free_gb": 70,
+            "recommended_vram_gb": pack.recommended_vram_gb,
+            "model_sizes_gb": {"BF16": 61.5, "FP8": 32.8, "NVFP4": 20.9},
+        },
+        "models": pack.models,
+        "sources": pack.source_urls,
+    }
+    (root / "omni-agent-plan.json").write_text(json.dumps(plan, indent=2), encoding="utf-8")
+    launcher = _local_bin() / "nvhive-omni-agent"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="{root}"
+echo "NVHive NVIDIA Omni Agent"
+echo "Workspace: $ROOT"
+echo
+echo "Default: use NVIDIA NIM / build.nvidia.com for Nemotron 3 Nano Omni."
+echo "Local weights are advanced and gated by nvWizard storage + GPU checks."
+echo
+echo "Open: $ROOT/README.md"
+"""
+    _write_script(launcher, content)
+
+
+def _write_scaffold_pack(pack: StudioPack) -> None:
+    if pack.id == "game-mod-helper":
+        _write_mod_helper(pack)
+    elif pack.id == "github-login-helper":
+        _write_github_login_helper(pack)
+    elif pack.id in {"unity-hub-helper", "unreal-engine-helper"}:
+        _write_game_engine_helper(pack)
+    elif pack.id == "music-daw-helper":
+        _write_music_daw_helper(pack)
+    elif pack.id == "nvidia-omni-agent":
+        _write_omni_agent_helper(pack)
+    else:
+        root = _pack_root(pack.id)
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "README.md").write_text(
+            f"# {pack.title}\n\n{pack.description}\n",
+            encoding="utf-8",
+        )
+
+
+async def _download_appimage_asset(
+    client: Any,
+    *,
+    api_url: str,
+    app_name: str,
+    downloads: Path,
+    force_update: bool,
+    required_tokens: tuple[str, ...] = (),
+    preferred_tokens: tuple[str, ...] = (),
+) -> tuple[Path, dict[str, Any]]:
+    release_response = await client.get(api_url)
+    release_response.raise_for_status()
+    release = release_response.json()
+    asset = _select_appimage_asset(
+        release,
+        app_name=app_name,
+        required_tokens=required_tokens,
+        preferred_tokens=preferred_tokens,
+    )
+    asset_name = str(asset["name"])
+    asset_url = str(asset["browser_download_url"])
+    release_tag = str(release.get("tag_name") or "latest")
+    target = downloads / asset_name
+    if target.exists() and not force_update:
+        target.chmod(target.stat().st_mode | stat.S_IXUSR)
+        return target, {"asset": asset_name, "version": release_tag, "url": asset_url, "cached": True}
+
+    async with client.stream("GET", asset_url) as response:
+        response.raise_for_status()
+        with target.open("wb") as handle:
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    handle.write(chunk)
+    target.chmod(target.stat().st_mode | stat.S_IXUSR)
+    return target, {"asset": asset_name, "version": release_tag, "url": asset_url, "cached": False}
+
+
+async def _install_music_daw_helper(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if platform.system().lower() != "linux":
+        yield {"event": "error", "status": "failed", "message": "Music DAW AppImage setup targets Linux cloud desktops."}
+        return
+
+    _write_music_daw_helper(pack)
+    root = _pack_root(pack.id)
+    downloads = root / "appimages"
+    downloads.mkdir(parents=True, exist_ok=True)
+    downloaded: list[dict[str, Any]] = []
+    download_errors: list[str] = []
+
+    try:
+        import httpx
+    except Exception as exc:
+        yield {"event": "error", "status": "failed", "message": f"Could not import httpx for AppImage downloads: {exc}"}
+        return
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=600) as client:
+        for app_name, api_url, required, preferred in [
+            ("Audacity", AUDACITY_RELEASE_API, ("linux",), ("22.04", "x64")),
+            ("LMMS", LMMS_RELEASE_API, tuple(), ("linux", "x86_64", "x64")),
+        ]:
+            try:
+                yield {"event": "step", "status": "running", "message": f"Checking latest official {app_name} AppImage"}
+                target, metadata = await _download_appimage_asset(
+                    client,
+                    api_url=api_url,
+                    app_name=app_name,
+                    downloads=downloads,
+                    force_update=force_update,
+                    required_tokens=required,
+                    preferred_tokens=preferred,
+                )
+                downloaded.append({"name": app_name, "path": str(target), **metadata})
+                verb = "Using cached" if metadata.get("cached") else "Downloaded"
+                yield {"event": "step", "status": "complete", "message": f"{verb} {app_name} AppImage", "path": str(target)}
+            except Exception as exc:
+                message = f"{app_name} AppImage could not be auto-downloaded: {exc}"
+                download_errors.append(message)
+                yield {"event": "warning", "status": "warning", "message": message}
+
+    if not downloaded:
+        yield {"event": "error", "status": "failed", "message": "No Audacity or LMMS AppImages were downloaded; retry later or use manual AppImage overrides."}
+        return
+
+    _write_marker(pack, {"workspace": str(root), "appimages": downloaded, "download_errors": download_errors, "force_update": force_update})
+    yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
+
+
 async def _install_scaffold(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
-    _write_mod_helper(pack)
+    if pack.id == "music-daw-helper":
+        async for event in _install_music_daw_helper(pack, force_update):
+            yield event
+        return
+    _write_scaffold_pack(pack)
     _write_marker(pack, {"workspace": str(_pack_root(pack.id)), "force_update": force_update})
     yield {"event": "step", "status": "complete", "message": f"{pack.title} workspace ready"}
 
@@ -1185,6 +2651,110 @@ def _safe_extract_tar(archive: Path, target: Path) -> None:
                 raise RuntimeError(f"Archive member escapes target directory: {member.name}")
             members.append(member)
         tar.extractall(target, members=members)
+
+
+def _safe_extract_zip(archive: Path, target: Path) -> None:
+    """Extract a zip archive while refusing path traversal entries."""
+    target.mkdir(parents=True, exist_ok=True)
+    target_resolved = target.resolve()
+    with zipfile.ZipFile(archive) as zf:
+        for member in zf.infolist():
+            destination = (target / member.filename).resolve()
+            try:
+                destination.relative_to(target_resolved)
+            except ValueError as exc:
+                raise RuntimeError(f"Archive member escapes target directory: {member.filename}") from exc
+        zf.extractall(target)
+
+
+def _select_godot_asset(release: dict[str, Any]) -> dict[str, Any]:
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeError("Godot release metadata did not include assets")
+
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        lower_name = name.lower()
+        url = str(asset.get("browser_download_url") or "")
+        if (
+            url
+            and lower_name.endswith(".zip")
+            and "linux" in lower_name
+            and "x86_64" in lower_name
+            and "mono" not in lower_name
+            and "server" not in lower_name
+            and "template" not in lower_name
+        ):
+            return asset
+    raise RuntimeError("No official Godot Linux x86_64 zip asset was found in the latest release")
+
+
+def _select_appimage_asset(
+    release: dict[str, Any],
+    *,
+    app_name: str,
+    required_tokens: tuple[str, ...] = (),
+    preferred_tokens: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeError(f"{app_name} release metadata did not include assets")
+
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "")
+        lower_name = name.lower()
+        url = str(asset.get("browser_download_url") or "")
+        if not url or not lower_name.endswith(".appimage"):
+            continue
+        if any(token not in lower_name for token in required_tokens):
+            continue
+        if any(token in lower_name for token in ("aarch64", "arm64", "armv7")):
+            continue
+        score = sum(10 for token in preferred_tokens if token in lower_name)
+        score += sum(1 for token in ("x64", "x86_64", "amd64", "linux") if token in lower_name)
+        candidates.append((score, asset))
+
+    if not candidates:
+        raise RuntimeError(f"No Linux x64 AppImage asset was found in the latest {app_name} release")
+    return sorted(candidates, key=lambda item: item[0], reverse=True)[0][1]
+
+
+def _find_godot_binary(root: Path) -> Path | None:
+    candidates: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        name = path.name.lower()
+        if name.startswith("godot") and "linux" in name and "x86_64" in name and not name.endswith(".zip"):
+            candidates.append(path)
+    if candidates:
+        return sorted(candidates, key=lambda item: len(str(item)))[0]
+    return None
+
+
+def _write_godot_launcher(binary: Path) -> Path:
+    layout = storage_layout()
+    root = _godot_root()
+    projects = root / "projects"
+    settings = layout.config_dir / "godot"
+    projects.mkdir(parents=True, exist_ok=True)
+    settings.mkdir(parents=True, exist_ok=True)
+    launcher = _local_bin() / "nvhive-godot"
+    content = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+export GODOT_EDITOR_SETTINGS_DIR="${{GODOT_EDITOR_SETTINGS_DIR:-{settings}}}"
+mkdir -p "$GODOT_EDITOR_SETTINGS_DIR" "{projects}"
+cd "{projects}"
+exec "{binary}" "$@"
+"""
+    _write_script(launcher, content)
+    return launcher
 
 
 def _write_blender_launcher() -> Path:
@@ -1206,6 +2776,152 @@ exec "{binary}" "$@"
 """
     _write_script(launcher, content)
     return launcher
+
+
+def _write_model_receipt(model: StudioModel) -> None:
+    try:
+        from nvh.integrations.receipts import write_receipt
+
+        layout = storage_layout()
+        write_receipt(
+            kind="studio-model",
+            item_id=model.id,
+            title=model.title,
+            install_path=layout.ollama_models_dir,
+            source_urls=[model.source_url],
+            models=[model.install_target],
+            metadata={
+                "provider": model.provider,
+                "install_target": model.install_target,
+                "category": model.category,
+                "recommended_vram_gb": model.recommended_vram_gb,
+                "estimated_disk_gb": model.estimated_disk_gb,
+                "capabilities": model.capabilities,
+                "license_note": model.license_note,
+            },
+        )
+    except Exception:
+        pass
+
+
+async def _install_godot_app(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
+    if platform.system().lower() != "linux" or platform.machine().lower() not in {"x86_64", "amd64"}:
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": "The Godot rootless pack currently supports Linux x86_64 desktops.",
+        }
+        return
+
+    root = _godot_root()
+    downloads = root / "downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+
+    existing = _godot_binary_from_state()
+    if existing and not force_update:
+        launcher = _write_godot_launcher(existing)
+        _write_marker(pack, {"binary": str(existing), "launcher": str(launcher), "force_update": force_update})
+        yield {"event": "step", "status": "complete", "message": "Godot already installed"}
+        return
+
+    yield {"event": "step", "status": "running", "message": "Checking latest official Godot release"}
+    import httpx
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=600) as client:
+        release_response = await client.get(GODOT_RELEASE_API)
+        release_response.raise_for_status()
+        release = release_response.json()
+        asset = _select_godot_asset(release)
+        asset_name = str(asset["name"])
+        asset_url = str(asset["browser_download_url"])
+        release_tag = str(release.get("tag_name") or "latest")
+        safe_tag = re.sub(r"[^A-Za-z0-9._-]+", "-", release_tag).strip("-") or "latest"
+        app_dir = root / safe_tag
+
+        if app_dir.exists() and not force_update:
+            binary = _find_godot_binary(app_dir)
+            if binary:
+                binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+                launcher = _write_godot_launcher(binary)
+                _godot_current_file().write_text(
+                    json.dumps({"version": release_tag, "binary": str(binary), "app_dir": str(app_dir)}, indent=2),
+                    encoding="utf-8",
+                )
+                _write_marker(pack, {"binary": str(binary), "launcher": str(launcher), "version": release_tag})
+                yield {"event": "step", "status": "complete", "message": f"Godot {release_tag} already installed"}
+                return
+
+        if app_dir.exists():
+            shutil.rmtree(app_dir)
+
+        archive = downloads / asset_name
+        yield {"event": "step", "status": "running", "message": f"Downloading Godot {release_tag}", "url": asset_url}
+        async with client.stream("GET", asset_url) as response:
+            response.raise_for_status()
+            with archive.open("wb") as fh:
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        fh.write(chunk)
+
+    stage = Path(tempfile.mkdtemp(prefix="godot-", dir=str(root)))
+    try:
+        yield {"event": "step", "status": "running", "message": "Extracting Godot archive"}
+        _safe_extract_zip(archive, stage)
+        binary = _find_godot_binary(stage)
+        if not binary:
+            raise RuntimeError("Godot archive did not contain the expected Linux executable")
+        app_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(stage), str(app_dir))
+        final_binary = app_dir / binary.relative_to(stage)
+        final_binary.chmod(final_binary.stat().st_mode | stat.S_IXUSR)
+        launcher = _write_godot_launcher(final_binary)
+    except Exception as exc:
+        if stage.exists():
+            shutil.rmtree(stage, ignore_errors=True)
+        yield {"event": "error", "status": "failed", "message": f"Godot install failed: {exc}"}
+        return
+
+    (root / "README.md").write_text(
+        f"""# Godot Engine
+
+Godot {release_tag} is installed without root access at:
+
+`{final_binary}`
+
+Launch it with:
+
+```bash
+nvhive-godot
+```
+
+Projects live in `{root / "projects"}` so game prototypes, Blender exports, and
+ComfyUI textures stay on persistent storage.
+""",
+        encoding="utf-8",
+    )
+    _godot_current_file().write_text(
+        json.dumps(
+            {
+                "version": release_tag,
+                "binary": str(final_binary),
+                "app_dir": str(app_dir),
+                "asset": asset_name,
+                "source_url": asset_url,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    _write_marker(
+        pack,
+        {
+            "binary": str(final_binary),
+            "launcher": str(launcher),
+            "version": release_tag,
+            "asset": asset_name,
+        },
+    )
+    yield {"event": "step", "status": "complete", "message": f"Godot {release_tag} installed"}
 
 
 async def _install_blender_app(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
@@ -1365,6 +3081,7 @@ async def install_studio_models(
             model.install_target in installed
             or model.install_target.split(":")[0] in installed
         ):
+            _write_model_receipt(model)
             yield {
                 "event": "model",
                 "status": "complete",
@@ -1378,6 +3095,7 @@ async def install_studio_models(
             env=_ollama_env(),
         ):
             yield {**event, "model_id": model.id}
+        _write_model_receipt(model)
 
     yield {
         "event": "complete",
@@ -1435,11 +3153,23 @@ async def install_studio_packs(
             elif pack.install_kind == "python_venv":
                 async for event in _install_python_venv(pack, force_update):
                     yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "ace_step_music":
+                async for event in _install_ace_step_music(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "openclaw_agent":
+                async for event in _install_openclaw_agent(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "nemoclaw_sandbox":
+                async for event in _install_nemoclaw_sandbox(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "comfy_nodes":
                 async for event in _install_comfy_nodes(pack, force_update):
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "scaffold":
                 async for event in _install_scaffold(pack, force_update):
+                    yield {**event, "pack_id": pack.id}
+            elif pack.install_kind == "godot_app":
+                async for event in _install_godot_app(pack, force_update):
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "blender_app":
                 async for event in _install_blender_app(pack, force_update):

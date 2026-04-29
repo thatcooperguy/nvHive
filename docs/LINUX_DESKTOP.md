@@ -7,9 +7,29 @@ Target user journey:
 1. Launch the Linux desktop instance.
 2. Run one install command or `pip install nvhive`.
 3. Click the NVHive AI Studio desktop icon, or run `nvh workstation --launch`.
-4. Use local chat models, cloud/free advisors, ComfyUI examples, agent packs, and game-dev helpers from one WebUI.
+4. Use local chat models, cloud/free advisors, ComfyUI examples, OpenClaw/NemoClaw agent packs, game-dev helpers, creative tools, and music production helpers from one WebUI.
 
 ## Quick Start
+
+Easiest path:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | bash
+```
+
+That script chooses a likely persistent mount for `NVH_HOME`, installs nvHive
+without root, creates the desktop launcher, and starts the WebUI setup wizard.
+For the target cloud desktop shape, `NVH_HOME` should land on the writable
+block-backed home/data volume that survives reconnects, ideally 200GB or
+larger for local LLMs and ComfyUI assets. Avoid read-only CIFS/SMB mounts and
+the ephemeral OS disk.
+To force the no-Python binary path:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | NVH_USE_BINARY=1 bash
+```
+
+Manual path:
 
 ```bash
 export NVH_HOME=/mnt/persist/nvhive
@@ -33,29 +53,40 @@ nvh workstation
 nvh webui
 ```
 
+The setup wizard starts in Beginner Mode with one recommended action, a Fix My
+Setup repair button, and Advanced Details for diagnostics. It is designed so a
+student can pick a mission, then click through storage, models, ComfyUI, Claw
+agents, creative tools, game engines, and music packs without typing manual
+commands.
+
 ## What `nvh workstation` Does
 
-- Detects NVIDIA GPU availability with `nvidia-smi`
-- Estimates VRAM and recommends local chat models
+- Detects NVIDIA GPU availability with NVML/`nvidia-smi` and reports when a
+  rootless session can see NVIDIA device files but cannot query them
+- Estimates framebuffer/VRAM, architecture, and storage capacity before
+  recommending local chat models
 - Creates `$NVH_HOME/bin/nvhive-ai-studio`
 - Creates a Linux desktop launcher named `NVHive AI Studio`
 - Shows a student-friendly setup checklist
+- Runs nvWizard boot checks for storage, Python, CUDA/PyTorch, ComfyUI, models, and install receipts
 - With `--all`, ensures local AI, installs ComfyUI, installs the rootless starter pack, and launches WebUI
 - Uses user-space paths only under `NVH_HOME` for durable models, ComfyUI, packs, runtime fallback tools, apps, WebUI assets, cache, logs, and config
 
 ## Rootless AI Studio Packs
 
-`nvh studio` installs optional packs without root access. It never calls `sudo`, `apt`, `dnf`, `pacman`, `systemctl`, or Docker.
+`nvh studio` installs optional packs without root access. It never calls `sudo`, `apt`, `dnf`, `pacman`, or `systemctl`. NemoClaw is the exception that checks Docker because it is an OpenShell sandbox stack; the wizard blocks it unless Docker already works without sudo.
 
 | Bundle | Command | Installs |
 | --- | --- | --- |
-| Starter lab | `nvh studio --install starter -y` | Rootless Ollama, top local LLMs, agent lab, ComfyUI power nodes, game-dev lab |
+| AI Starter | `nvh studio --install starter -y` | Rootless Ollama, top local LLMs, agent lab, ComfyUI power nodes, game-dev lab |
 | Runtime fallback | `nvh studio --install python-runtime-fallback -y` | Optional micromamba binary under `$NVH_HOME` for cloud images where Python `venv` is broken |
 | LLMs | `nvh studio --install llms -y` | Gemma 3, Qwen 3, Llama 3.1, Qwen coder, DeepSeek reasoning, embeddings |
-| Agents | `nvh studio --install agents -y` | LangGraph, CrewAI, AutoGen, JupyterLab, search/tool packages |
+| Agents | `nvh studio --install agents -y` | LangGraph, CrewAI, AutoGen, JupyterLab, search/tool packages, OpenClaw |
+| Claw agents | `nvh studio --install claw -y` | OpenClaw rootless workspace, plus NVIDIA NemoClaw when Docker/OpenShell is usable |
 | ComfyUI | `nvh studio --install comfy -y` | ComfyUI Manager, Impact Pack, ControlNet Aux, Video Helper Suite, GGUF, rgthree |
 | Games | `nvh studio --install game -y` | Pygame/Panda3D lab, asset helpers, Linux/Wine mod workspace |
 | Creative | `nvh studio --install creative -y` | Blender 4.5 LTS portable install, launcher, game/asset workspace |
+| Music | `nvh studio --install music -y` | ACE-Step music generator, Demucs stems, WhisperX transcription, Audacity/LMMS AppImages, and a DAW helper workspace |
 
 Run `nvh studio --list` to see exact pack status and disk estimates.
 
@@ -85,8 +116,18 @@ refresh the browser, reconnect to a cloud desktop, or cancel a long download
 without losing the setup state.
 
 The local setup helper endpoint, `/v1/setup/helper`, works offline. It ranks the
-next storage, runtime, model, ComfyUI, and creative-tool actions before any local
-LLM is installed.
+next storage, runtime, model, ComfyUI, OpenClaw/NemoClaw, creative-tool, and
+music-tool actions before any local LLM is installed.
+
+OpenClaw is the simple agent option. nvHive installs it into a persistent
+user-owned Node workspace and writes `nvhive-openclaw`. NemoClaw is the guarded
+NVIDIA/OpenShell path. It remains visible in the wizard, but it is marked
+blocked until Docker is installed, running, and reachable by the current user
+without sudo.
+
+The council also includes a `product_resilience` preset with an Underdog Student
+Advocate. Use it when you want a skeptical review of what could break for a
+beginner on a no-root cloud GPU desktop.
 
 CLI equivalents:
 
@@ -151,7 +192,9 @@ nvh studio --list            # show rootless LLM/agent/ComfyUI/game packs
 nvh studio --models          # show recommended local model downloads
 nvh studio --install-models recommended -y
 nvh studio --install starter -y
+nvh studio --install claw -y
 nvh studio --install creative -y
+nvh studio --install music -y
 nvh doctor --fix             # repair local models/config where possible
 nvh webui                    # launch browser dashboard
 nvh safe "summarize this"    # local-only prompt path

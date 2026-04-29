@@ -22,6 +22,8 @@ def test_ensure_storage_creates_canonical_layout(tmp_path, monkeypatch) -> None:
     assert status.layout.comfyui_dir.is_dir()
     assert status.layout.config_dir.is_dir()
     assert status.env_file.exists()
+    assert status.write_probe_ok is True
+    assert status.write_probe_error == ""
     assert "NVH_HOME" in status.layout.env()
     assert "NVH_RUNTIME_HOME" in status.layout.env()
     assert "NVH_APPS_HOME" in status.layout.env()

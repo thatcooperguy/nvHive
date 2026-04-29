@@ -7,6 +7,14 @@ nvh webui
 ```
 
 The dashboard opens at `http://localhost:3000` and connects to the nvHive API automatically.
+First launch installs dependencies and builds the WebUI under persistent `NVH_HOME`.
+Later launches run the optimized production server. Use `nvh webui --dev` only
+when developing the frontend. Pip and binary installs can fetch the WebUI with
+`git` or, when `git` is absent, a GitHub source-archive fallback. The bootstrap
+tries the installed release tag first and falls back to `main` only if needed.
+The API allows local WebUI fallback ports automatically, so rootless launches on
+`localhost`, `127.0.0.1`, `nvhive`, or loopback IPv6 keep working when the
+preferred port is already occupied.
 
 ## Pages
 

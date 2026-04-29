@@ -19,6 +19,7 @@ import time
 import webbrowser
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 # ----------------------------------------------------------------------
 # Windows asyncio proactor GC crash workaround
@@ -1693,7 +1694,7 @@ def convene_cmd(
     preset: str | None = typer.Option(
         None, "--cabinet",
         help="Agent cabinet: executive, engineering,"
-        " security_review, code_review, product, data, full_board",
+        " security_review, code_review, product, product_resilience, data, full_board",
     ),
     num_agents: int | None = typer.Option(
         None, "--num-agents", "-n",
@@ -7124,7 +7125,11 @@ def _is_package_installed(module_name: str) -> bool:
     return importlib.util.find_spec(module_name) is not None
 
 
-def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]:
+def _try_install_node_no_root(
+    console: Console,
+    *,
+    assume_yes: bool = False,
+) -> tuple[str | None, str | None]:
     """Offer to auto-install Node.js into the user's home without root.
 
     Uses ``fnm`` (Fast Node Manager) - a single-binary, no-root Node manager:
@@ -7134,7 +7139,8 @@ def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]
     calls in ``nvh webui`` find it.
 
     Returns ``(node_path, npm_path)`` on success, ``(None, None)`` otherwise.
-    Interactive: prompts the user before making any network call.
+    Interactive by default: prompts the user before making any network call.
+    Pass ``assume_yes=True`` from one-click setup paths.
 
     Windows is intentionally out of scope — users there should use winget
     (which requires admin for some installs but is the native path).
@@ -7155,14 +7161,15 @@ def _try_install_node_no_root(console: Console) -> tuple[str | None, str | None]
     env.update(layout.env())
     env["FNM_DIR"] = str(fnm_root)
 
-    try:
-        answer = console.input(
-            f"  Auto-install Node.js into {fnm_root} via fnm (no root)? [Y/n] "
-        ).strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        return None, None
-    if answer in ("n", "no"):
-        return None, None
+    if not assume_yes:
+        try:
+            answer = console.input(
+                f"  Auto-install Node.js into {fnm_root} via fnm (no root)? [Y/n] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return None, None
+        if answer in ("n", "no"):
+            return None, None
 
     # Step 1: install fnm if missing. The official installer writes to
     # FNM_DIR and optionally edits shell rc; we bypass the rc
@@ -7581,7 +7588,7 @@ def studio(
         None,
         "--install",
         "-i",
-        help="Install a pack id or bundle: starter, all, llms, agents, comfy, game",
+        help="Install a pack id or bundle: starter, all, llms, agents, claw, comfy, game, creative, music",
     ),
     install_models: str | None = typer.Option(
         None,
@@ -7596,7 +7603,7 @@ def studio(
     ),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompts"),
 ):
-    """Install rootless AI Studio packs for LLMs, agents, ComfyUI, and games."""
+    """Install rootless AI Studio packs for LLMs, agents, ComfyUI, games, and music."""
     from nvh.integrations.storage import ensure_storage
     from nvh.integrations.studio_packs import (
         catalog_with_status,
@@ -7753,7 +7760,7 @@ def workstation(
     with_studio_packs: bool = typer.Option(
         False,
         "--with-studio-packs",
-        help="Install rootless LLM, agent, ComfyUI-node, and game-dev packs",
+        help="Install rootless LLM, agent, ComfyUI-node, game-dev, creative, and music packs",
     ),
     port: int = typer.Option(3000, "--port", help="WebUI port"),
     api_port: int = typer.Option(8000, "--api-port", help="API server port"),
@@ -7800,6 +7807,18 @@ def workstation(
 
     storage = ensure_storage(home_dir, min_free_gb=min_free_gb)
     profile = detect_workstation_profile(home_dir=storage.layout.home)
+    boot_report: dict[str, Any] | None = None
+    recommended_torch_profile = "nvidia-cu121"
+    try:
+        from nvh.integrations.boot_preflight import run_boot_preflight
+
+        boot_report = run_boot_preflight(home_dir=storage.layout.home)
+        recommended_torch_profile = (
+            boot_report.get("compatibility", {}).get("recommended_torch_profile")
+            or recommended_torch_profile
+        )
+    except Exception as exc:
+        console.print(f"  [yellow]![/yellow] Boot preflight skipped: {exc}")
     console.print("\n[bold green]NVHive Student Workstation[/bold green]")
     console.print("  [dim]Target: Linux GPU desktop or forwarded cloud session[/dim]\n")
     console.print(f"  NVH_HOME:   [bold]{storage.layout.home}[/bold]")
@@ -7820,6 +7839,17 @@ def workstation(
     if profile.recommended_chat_models:
         console.print(f"  Chat models: {', '.join(profile.recommended_chat_models)}")
     console.print(f"  ComfyUI:    {', '.join(profile.recommended_comfy_profiles)} profiles\n")
+    if boot_report:
+        agent_helper = boot_report.get("agent_helper", {})
+        console.print(f"  Boot check: [bold]{boot_report.get('summary')}[/bold]")
+        console.print(f"  AI helper:  {agent_helper.get('summary', 'Offline setup helper is available.')}")
+        if boot_report.get("changes"):
+            for change in boot_report.get("changes", [])[:5]:
+                console.print(
+                    f"  [yellow]![/yellow] {change.get('label')}: "
+                    f"{change.get('before')} -> {change.get('after')}"
+                )
+        console.print()
 
     for note in profile.notes:
         console.print(f"  [yellow]![/yellow] {note}")
@@ -7900,7 +7930,7 @@ def workstation(
             from nvh.integrations.comfyui import install_comfyui
 
             last_log = 0.0
-            async for event in install_comfyui(torch_profile="nvidia-cu130"):
+            async for event in install_comfyui(torch_profile=recommended_torch_profile):
                 kind = event.get("event", "")
                 message = event.get("message", "")
                 now = _time.monotonic()
@@ -7959,6 +7989,7 @@ def workstation(
             yes=True,
             no_api=False,
             api_port=api_port,
+            dev=False,
         )
 
 
@@ -7986,11 +8017,17 @@ def webui(
         8000, "--api-port",
         help="Port the API server is expected to listen on",
     ),
+    dev: bool = typer.Option(
+        False, "--dev",
+        help="Run the Next.js development server instead of the production server",
+    ),
 ):
     """Install and launch the nvHive web UI.
 
     The web UI is optional — nvHive works fully from the CLI.
-    This command installs Node.js dependencies and starts the Next.js dev server.
+    This command installs Node.js dependencies, builds the WebUI when needed,
+    and starts the optimized Next.js production server. Use --dev only when
+    editing the WebUI source.
 
     First run installs dependencies (~30 seconds).
     Subsequent runs start instantly.
@@ -7999,6 +8036,7 @@ def webui(
         nvh webui              # install (if needed) and launch on port 3000
         nvh webui --install    # install dependencies only
         nvh webui --port 8080  # launch on a different port
+        nvh webui --dev        # run Next.js dev mode for WebUI development
         nvh webui --clean      # wipe node_modules/.next, keep source
         nvh webui --uninstall  # remove the downloaded Web UI entirely
     """
@@ -8134,47 +8172,133 @@ def webui(
             web_dir = candidate
             break
 
+    web_ref = os.environ.get("NVH_WEB_REF") or f"v{__version__}"
+
+    def _download_webui_zip(destination: str, ref: str) -> bool:
+        """Download web/ from GitHub without requiring git."""
+        import zipfile
+        from urllib.request import Request, urlopen
+
+        ref_kind = "heads" if ref in {"main", "master"} or "/" in ref else "tags"
+        zip_url = f"https://github.com/thatcooperguy/nvHive/archive/refs/{ref_kind}/{ref}.zip"
+        zip_path = destination + ".zip"
+        extract_dir = destination + ".ziptmp"
+        try:
+            for path in (zip_path, extract_dir):
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                elif os.path.exists(path):
+                    os.remove(path)
+
+            req = Request(zip_url, headers={"User-Agent": "nvhive-webui-bootstrap"})
+            with urlopen(req, timeout=120) as response, open(zip_path, "wb") as fh:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+
+            os.makedirs(extract_dir, exist_ok=True)
+            extract_root = os.path.abspath(extract_dir)
+            with zipfile.ZipFile(zip_path) as zf:
+                for member in zf.infolist():
+                    target = os.path.abspath(os.path.join(extract_dir, member.filename))
+                    if not target.startswith(extract_root + os.sep) and target != extract_root:
+                        raise ValueError(f"unsafe zip member: {member.filename}")
+                zf.extractall(extract_dir)
+
+            src_web = ""
+            for name in os.listdir(extract_dir):
+                candidate_web = os.path.join(extract_dir, name, "web")
+                if os.path.isfile(os.path.join(candidate_web, "package.json")):
+                    src_web = candidate_web
+                    break
+            if not src_web:
+                console.print("[red]Downloaded archive has no web/ directory.[/red]")
+                return False
+
+            if os.path.isdir(destination):
+                shutil.rmtree(destination, ignore_errors=True)
+            shutil.move(src_web, destination)
+            return True
+        except Exception as exc:
+            console.print(f"[red]Web UI archive download failed:[/red] {exc}")
+            return False
+        finally:
+            if os.path.exists(zip_path):
+                try:
+                    os.remove(zip_path)
+                except OSError:
+                    pass
+            if os.path.isdir(extract_dir):
+                shutil.rmtree(extract_dir, ignore_errors=True)
+
     if not web_dir:
         # Attempt to download the web/ directory from the upstream repo
         # so pip-installed users get a working `nvh webui` out of the box.
         git = shutil.which("git")
-        if not git:
-            console.print("[red]Web UI not found.[/red]")
-            console.print(
-                "Install git so nvHive can fetch the Web UI, "
-                "or install nvHive from source (git clone)."
-            )
-            raise typer.Exit(1)
 
         console.print("[bold]Downloading Web UI (first run)...[/bold]")
         os.makedirs(os.path.dirname(cache_web_dir), exist_ok=True)
         tmp_clone = cache_web_dir + ".tmp"
         if os.path.isdir(tmp_clone):
             shutil.rmtree(tmp_clone, ignore_errors=True)
-        result = subprocess.run(
-            [
-                "git", "clone", "--depth", "1",
-                "https://github.com/thatcooperguy/nvHive.git",
-                tmp_clone,
-            ],
-            capture_output=True,
-            text=True,
-            env=webui_env,
-        )
-        if result.returncode != 0:
-            console.print("[red]Failed to download Web UI.[/red]")
-            console.print(f"[dim]{result.stderr.strip()}[/dim]")
-            raise typer.Exit(1)
+        downloaded = False
+        if git:
+            result = subprocess.run(
+                [
+                    git, "clone", "--depth", "1", "--branch", web_ref,
+                    "https://github.com/thatcooperguy/nvHive.git",
+                    tmp_clone,
+                ],
+                capture_output=True,
+                text=True,
+                env=webui_env,
+            )
+            if result.returncode != 0 and web_ref != "main":
+                console.print(
+                    f"[yellow]Could not fetch WebUI ref {web_ref}; trying main.[/yellow]"
+                )
+                if os.path.isdir(tmp_clone):
+                    shutil.rmtree(tmp_clone, ignore_errors=True)
+                result = subprocess.run(
+                    [
+                        git, "clone", "--depth", "1", "--branch", "main",
+                        "https://github.com/thatcooperguy/nvHive.git",
+                        tmp_clone,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    env=webui_env,
+                )
+            if result.returncode == 0:
+                src_web = os.path.join(tmp_clone, "web")
+                if os.path.isdir(src_web):
+                    if os.path.isdir(cache_web_dir):
+                        shutil.rmtree(cache_web_dir, ignore_errors=True)
+                    shutil.move(src_web, cache_web_dir)
+                    downloaded = True
+                else:
+                    console.print("[yellow]Downloaded repo has no web/ directory.[/yellow]")
+            else:
+                console.print("[yellow]git clone failed; trying GitHub archive fallback.[/yellow]")
+                stderr = result.stderr.strip()
+                if stderr:
+                    console.print(f"[dim]{stderr}[/dim]")
 
-        src_web = os.path.join(tmp_clone, "web")
-        if not os.path.isdir(src_web):
-            console.print("[red]Upstream repo has no web/ directory.[/red]")
-            raise typer.Exit(1)
+        if not downloaded:
+            downloaded = _download_webui_zip(cache_web_dir, web_ref)
+            if not downloaded and web_ref != "main":
+                console.print("[yellow]Trying WebUI archive from main.[/yellow]")
+                downloaded = _download_webui_zip(cache_web_dir, "main")
 
-        if os.path.isdir(cache_web_dir):
-            shutil.rmtree(cache_web_dir, ignore_errors=True)
-        shutil.move(src_web, cache_web_dir)
         shutil.rmtree(tmp_clone, ignore_errors=True)
+        if not downloaded:
+            console.print("[red]Failed to download Web UI.[/red]")
+            console.print(
+                "Check network access, or install from a GitHub release/source checkout."
+            )
+            raise typer.Exit(1)
         web_dir = cache_web_dir
         console.print(f"[green]Web UI downloaded to {cache_web_dir}[/green]")
 
@@ -8198,7 +8322,7 @@ def webui(
         # use fnm (Fast Node Manager): single-binary installer, drops Node
         # under ~/.local/share/fnm and adds to PATH for this process.
         # Windows stays with winget guidance (requires user action).
-        node, npm = _try_install_node_no_root(console)
+        node, npm = _try_install_node_no_root(console, assume_yes=yes)
         if not node or not npm:
             console.print("[red]Auto-install failed or declined.[/red]")
             console.print("Install Node.js 18+:")
@@ -8238,6 +8362,25 @@ def webui(
             console.print("[red]npm install failed.[/red]")
             raise typer.Exit(1)
         console.print("[green]Dependencies installed.[/green]")
+
+    def _web_build_ready(path: str) -> bool:
+        return os.path.isfile(os.path.join(path, ".next", "BUILD_ID"))
+
+    if not dev and not _web_build_ready(web_dir):
+        console.print("[bold]Building optimized Web UI (first run)...[/bold]")
+        result = subprocess.run(
+            [npm, "run", "build"],
+            cwd=web_dir,
+            env=webui_env,
+        )
+        if result.returncode != 0:
+            console.print("[red]Web UI build failed.[/red]")
+            console.print(
+                "Run [bold]nvh webui --clean[/bold] and try again, "
+                "or use [bold]nvh webui --dev[/bold] while developing."
+            )
+            raise typer.Exit(1)
+        console.print("[green]Optimized Web UI build ready.[/green]")
 
     if install_only:
         console.print("[green]Web UI ready. Run 'nvh webui' to launch.[/green]")
@@ -8386,11 +8529,8 @@ def webui(
     console.print()
 
     try:
-        subprocess.run(
-            [npm, "run", "dev", "--", "-p", str(chosen_port)],
-            cwd=web_dir,
-            env=webui_env,
-        )
+        command = [npm, "run", "dev" if dev else "start", "--", "-p", str(chosen_port)]
+        subprocess.run(command, cwd=web_dir, env=webui_env)
     except KeyboardInterrupt:
         console.print("\n[dim]Web UI stopped.[/dim]")
     finally:
@@ -9084,6 +9224,40 @@ def doctor(
             "; ".join(rootless_storage.warnings) or storage_detail,
             "Run `nvh doctor --storage --home-dir /path/on/mounted/volume/nvhive`",
         )
+
+    try:
+        from nvh.integrations.receipts import receipt_summary
+
+        receipts = receipt_summary()
+        detail = (
+            f"{receipts['count']} receipt(s), "
+            f"{receipts['unhealthy']} need attention, root {receipts['root']}"
+        )
+        if receipts["unhealthy"]:
+            _warn(
+                "Install receipts",
+                detail,
+                "Open the setup wizard or rerun the matching `nvh studio` / `nvh workstation` command.",
+            )
+        else:
+            _pass("Install receipts", detail)
+    except Exception as e:
+        _warn("Install receipts", str(e))
+
+    try:
+        from nvh.integrations.catalog import catalog_status
+
+        catalog = catalog_status(refresh=False)
+        detail = (
+            f"{catalog.get('source')} catalog, {catalog.get('profile_count', 0)} profiles, "
+            f"{catalog.get('model_count', 0)} models"
+        )
+        if catalog.get("error"):
+            _warn("Setup catalog", f"{detail}; {catalog['error']}")
+        else:
+            _pass("Setup catalog", detail)
+    except Exception as e:
+        _warn("Setup catalog", str(e))
 
     # 2. Config file exists and is valid YAML
     from nvh.config.settings import DEFAULT_CONFIG_PATH

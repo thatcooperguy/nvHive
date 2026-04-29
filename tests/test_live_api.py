@@ -191,6 +191,23 @@ class TestLiveServerStartup:
         allow_origin = r.headers.get("access-control-allow-origin", "")
         assert allow_origin == "http://nvhive" or allow_origin == "*"
 
+    def test_cors_preflight_allows_dynamic_local_webui_port(self, live_server: str):
+        """Fallback WebUI ports must still be able to reach the API."""
+        origin = "http://127.0.0.1:3032"
+        r = httpx.options(
+            f"{live_server}/v1/advisors",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "content-type",
+            },
+            timeout=5.0,
+        )
+
+        assert r.status_code in (200, 204)
+        allow_origin = r.headers.get("access-control-allow-origin", "")
+        assert allow_origin == origin or allow_origin == "*"
+
     def test_404_on_unknown_route(self, live_server: str):
         """Unknown paths must 404 cleanly, not 500."""
         r = httpx.get(f"{live_server}/this/does/not/exist", timeout=5.0)

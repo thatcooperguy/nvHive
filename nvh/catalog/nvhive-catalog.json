@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-04-28T00:00:00Z",
+  "channel": "bundled",
+  "profiles": [
+    {
+      "id": "student",
+      "title": "AI Starter",
+      "description": "First-time local AI lab for chat, homework, coding help, GitHub, and the helper agent.",
+      "pack_ids": ["starter"],
+      "model_ids": ["gemma3-4b", "qwen3-8b", "nomic-embed-text"]
+    },
+    {
+      "id": "creator",
+      "title": "Graphics Creator Studio",
+      "description": "ComfyUI, Blender, and vision helpers for graphics, image, video, and 3D projects.",
+      "pack_ids": ["creative", "comfy"],
+      "model_ids": ["gemma3-4b", "llava-7b"]
+    },
+    {
+      "id": "music",
+      "title": "Music Producer Studio",
+      "description": "AI music generation, stem separation, transcription, audio cleanup, and rootless DAW helpers.",
+      "pack_ids": ["music"],
+      "model_ids": ["gemma3-4b"]
+    },
+    {
+      "id": "agent",
+      "title": "Agent Builder",
+      "description": "Local agent libraries, a coding model, and embeddings.",
+      "pack_ids": ["agents"],
+      "model_ids": ["qwen25-coder-7b", "nomic-embed-text"]
+    },
+    {
+      "id": "game",
+      "title": "Game Dev Lab",
+      "description": "Game prototyping, Blender assets, and mod helper workspace.",
+      "pack_ids": ["game", "creative"],
+      "model_ids": ["qwen25-coder-7b", "llava-7b"]
+    },
+    {
+      "id": "full",
+      "title": "Power User Workstation",
+      "description": "Everything nvHive can install without root access, guarded by host checks.",
+      "pack_ids": ["all"],
+      "model_ids": ["recommended"]
+    }
+  ],
+  "packs": [
+    {
+      "id": "rootless-ollama",
+      "title": "Rootless Ollama Runtime",
+      "category": "runtime",
+      "install_command": "nvh studio --install rootless-ollama -y",
+      "recommended": true
+    },
+    {
+      "id": "llm-starter",
+      "title": "Top Local LLM Starter",
+      "category": "llm",
+      "install_command": "nvh studio --install llm-starter -y",
+      "recommended": true
+    },
+    {
+      "id": "agent-lab",
+      "title": "Agent Lab",
+      "category": "agent",
+      "install_command": "nvh studio --install agent-lab -y",
+      "recommended": true
+    },
+    {
+      "id": "comfyui-power-nodes",
+      "title": "ComfyUI Power Nodes",
+      "category": "comfyui",
+      "install_command": "nvh studio --install comfy -y",
+      "recommended": true
+    },
+    {
+      "id": "blender-creative",
+      "title": "Blender Creative Studio",
+      "category": "creative",
+      "latest_version": "4.5.4",
+      "install_command": "nvh studio --install creative -y",
+      "recommended": true
+    },
+    {
+      "id": "ace-step-music",
+      "title": "ACE-Step Music Generator",
+      "category": "music",
+      "install_command": "nvh studio --install music -y",
+      "recommended": true
+    },
+    {
+      "id": "music-producer-lab",
+      "title": "Music Producer AI Lab",
+      "category": "music",
+      "install_command": "nvh studio --install music -y",
+      "recommended": true
+    },
+    {
+      "id": "music-daw-helper",
+      "title": "Rootless DAW Helper",
+      "category": "music",
+      "install_command": "nvh studio --install music -y",
+      "recommended": true
+    }
+  ],
+  "models": [
+    {
+      "id": "gemma3-4b",
+      "title": "Gemma 3 4B",
+      "provider": "ollama",
+      "install_target": "gemma3:4b",
+      "recommended_vram_gb": 6,
+      "category": "chat"
+    },
+    {
+      "id": "qwen3-8b",
+      "title": "Qwen 3 8B",
+      "provider": "ollama",
+      "install_target": "qwen3:8b",
+      "recommended_vram_gb": 8,
+      "category": "chat"
+    },
+    {
+      "id": "qwen25-coder-7b",
+      "title": "Qwen 2.5 Coder 7B",
+      "provider": "ollama",
+      "install_target": "qwen2.5-coder:7b",
+      "recommended_vram_gb": 8,
+      "category": "code"
+    },
+    {
+      "id": "nomic-embed-text",
+      "title": "Nomic Embed Text",
+      "provider": "ollama",
+      "install_target": "nomic-embed-text",
+      "recommended_vram_gb": 0,
+      "category": "embedding"
+    }
+  ],
+  "comfyui_examples": [
+    {
+      "id": "z-image-turbo-text-to-image",
+      "title": "Z-Image-Turbo Text to Image",
+      "category": "text-to-image",
+      "recommended_vram_gb": 8
+    },
+    {
+      "id": "wan22-5b-video-generation",
+      "title": "Wan 2.2 5B Video Generation",
+      "category": "text-to-video",
+      "recommended_vram_gb": 8
+    },
+    {
+      "id": "flux-controlnet-canny-depth",
+      "title": "FLUX.1 ControlNet Canny and Depth",
+      "category": "controlnet",
+      "recommended_vram_gb": 16
+    }
+  ]
+}

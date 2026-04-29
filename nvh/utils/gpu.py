@@ -16,8 +16,11 @@ Install: pip install nvidia-ml-py3
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -51,31 +54,105 @@ class ModelRecommendation:
     tier: str               # "mini", "small", "full", "multi-gpu"
 
 
+def _append_gpu_issue(
+    issues: list[dict[str, Any]] | None,
+    *,
+    source: str,
+    code: str,
+    message: str,
+    severity: str = "warning",
+    detail: str = "",
+) -> None:
+    if issues is None:
+        return
+    issues.append(
+        {
+            "source": source,
+            "code": code,
+            "message": message,
+            "severity": severity,
+            "detail": detail[:300],
+        }
+    )
+
+
+def _nvidia_device_files_present() -> bool:
+    try:
+        dev = Path("/dev")
+        return (dev / "nvidiactl").exists() or any(dev.glob("nvidia[0-9]*"))
+    except Exception:
+        return False
+
+
+def detect_gpu_status() -> dict[str, Any]:
+    """Detect NVIDIA GPUs and preserve rootless failure details for nvWizard."""
+    issues: list[dict[str, Any]] = []
+    gpus = _detect_gpus_pynvml(issues=issues)
+    source = "pynvml" if gpus else ""
+    if not gpus:
+        gpus = _detect_gpus_smi(issues=issues)
+        if gpus:
+            source = "nvidia-smi"
+
+    device_files_present = _nvidia_device_files_present()
+    if gpus:
+        status = "ready"
+    elif device_files_present:
+        status = "blocked"
+        _append_gpu_issue(
+            issues,
+            source="linux-devices",
+            code="devices-present-no-query",
+            message="NVIDIA device files exist, but nvHive could not query the GPU.",
+            detail="The base image, driver permissions, or session policy may be blocking NVML and nvidia-smi.",
+        )
+    elif shutil.which("nvidia-smi"):
+        status = "unavailable"
+    else:
+        status = "not-detected"
+
+    return {
+        "status": status,
+        "source": source or "none",
+        "gpus": gpus,
+        "issues": issues,
+        "device_files_present": device_files_present,
+        "nvidia_smi": shutil.which("nvidia-smi") or "",
+    }
+
+
 def detect_gpus() -> list[GPUInfo]:
     """Detect NVIDIA GPUs. Tries pynvml first (fast, rich data), falls back to nvidia-smi.
 
     Returns a list of GPUInfo objects — one per GPU.  Returns an empty list if
     no NVIDIA GPU is found or accessible.
     """
-    # Try pynvml first (direct NVML library — faster and more data)
-    gpus = _detect_gpus_pynvml()
-    if gpus:
-        return gpus
+    return detect_gpu_status()["gpus"]
 
-    # Fall back to nvidia-smi subprocess
-    return _detect_gpus_smi()
-
-
-def _detect_gpus_pynvml() -> list[GPUInfo]:
+def _detect_gpus_pynvml(*, issues: list[dict[str, Any]] | None = None) -> list[GPUInfo]:
     """Detect GPUs via pynvml (NVML Python bindings)."""
     try:
         import pynvml
     except ImportError:
+        _append_gpu_issue(
+            issues,
+            source="pynvml",
+            code="module-missing",
+            message="Python NVML bindings are not installed.",
+            severity="info",
+        )
         return []  # pynvml not installed — fall back to nvidia-smi
 
     try:
         pynvml.nvmlInit()
-    except Exception:
+    except Exception as exc:
+        _append_gpu_issue(
+            issues,
+            source="pynvml",
+            code="nvml-init-failed",
+            message="NVML could not initialize in this session.",
+            detail=str(exc),
+        )
         return []
 
     try:
@@ -90,6 +167,15 @@ def _detect_gpus_pynvml() -> list[GPUInfo]:
             pass
 
         device_count = pynvml.nvmlDeviceGetCount()
+        if device_count == 0:
+            _append_gpu_issue(
+                issues,
+                source="pynvml",
+                code="no-devices",
+                message="NVML initialized but reported zero NVIDIA GPUs.",
+                severity="info",
+            )
+            return []
         gpus: list[GPUInfo] = []
 
         for i in range(device_count):
@@ -196,7 +282,14 @@ def _detect_gpus_pynvml() -> list[GPUInfo]:
             ))
 
         return gpus
-    except Exception:
+    except Exception as exc:
+        _append_gpu_issue(
+            issues,
+            source="pynvml",
+            code="nvml-query-failed",
+            message="NVML failed while reading GPU details.",
+            detail=str(exc),
+        )
         return []
     finally:
         try:
@@ -205,12 +298,22 @@ def _detect_gpus_pynvml() -> list[GPUInfo]:
             pass
 
 
-def _detect_gpus_smi() -> list[GPUInfo]:
+def _detect_gpus_smi(*, issues: list[dict[str, Any]] | None = None) -> list[GPUInfo]:
     """Fallback: detect GPUs via nvidia-smi subprocess."""
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        _append_gpu_issue(
+            issues,
+            source="nvidia-smi",
+            code="binary-missing",
+            message="nvidia-smi is not on PATH.",
+            severity="info",
+        )
+        return []
     try:
         result = subprocess.run(
             [
-                "nvidia-smi",
+                nvidia_smi,
                 "--query-gpu=index,name,memory.total,memory.used,memory.free,"
                 "utilization.gpu,driver_version",
                 "--format=csv,noheader,nounits",
@@ -219,18 +322,48 @@ def _detect_gpus_smi() -> list[GPUInfo]:
             text=True,
             timeout=10,
         )
-    except FileNotFoundError:
+    except subprocess.TimeoutExpired:
+        _append_gpu_issue(
+            issues,
+            source="nvidia-smi",
+            code="timeout",
+            message="nvidia-smi timed out while querying GPUs.",
+        )
         return []
-    except Exception:
+    except Exception as exc:
+        _append_gpu_issue(
+            issues,
+            source="nvidia-smi",
+            code="command-error",
+            message="nvidia-smi could not run.",
+            detail=str(exc),
+        )
         return []
 
-    if result.returncode != 0 or not result.stdout.strip():
+    if result.returncode != 0:
+        _append_gpu_issue(
+            issues,
+            source="nvidia-smi",
+            code="nonzero-exit",
+            message="nvidia-smi returned an error.",
+            detail=(result.stderr or result.stdout or "").strip(),
+        )
+        return []
+    if not result.stdout.strip():
+        _append_gpu_issue(
+            issues,
+            source="nvidia-smi",
+            code="empty-output",
+            message="nvidia-smi returned no GPU rows.",
+            severity="info",
+        )
         return []
 
     cuda_ver = _get_cuda_version()
+    compute_caps = _get_compute_capabilities()
 
     gpus: list[GPUInfo] = []
-    for line in result.stdout.strip().splitlines():
+    for row_index, line in enumerate(result.stdout.strip().splitlines()):
         parts = [p.strip() for p in line.split(",")]
         if len(parts) < 7:
             continue
@@ -255,12 +388,42 @@ def _detect_gpus_smi() -> list[GPUInfo]:
                     memory_used_mb=memory_used,
                     memory_free_mb=memory_free,
                     index=index,
+                    compute_capability=compute_caps[row_index] if row_index < len(compute_caps) else (0, 0),
                 )
             )
         except (ValueError, IndexError):
             continue
 
     return gpus
+
+
+def _parse_compute_capability_value(value: str) -> tuple[int, int]:
+    match = re.search(r"(\d+)(?:\.(\d+))?", value.strip())
+    if not match:
+        return (0, 0)
+    return (int(match.group(1)), int(match.group(2) or 0))
+
+
+def _get_compute_capabilities() -> list[tuple[int, int]]:
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return []
+    try:
+        result = subprocess.run(
+            [nvidia_smi, "--query-gpu=compute_cap", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    return [
+        cc
+        for cc in (_parse_compute_capability_value(line) for line in result.stdout.splitlines())
+        if cc != (0, 0)
+    ]
 
 
 def _get_cuda_version() -> str:
@@ -588,7 +751,7 @@ def _recommend_vision_model(
         return None
 
     # Compute capability for arch-aware swap. Use primary GPU.
-    cc = _parse_compute_capability(gpus[0].name) if gpus else (0, 0)
+    cc = gpu_architecture_info(gpus[0])["compute_capability"] if gpus else (0, 0)
     turing_or_older = cc < (8, 0) and cc != (0, 0)
 
     if total_vram_gb < 12:
@@ -762,6 +925,31 @@ class OllamaOptimization:
     notes: list[str]
 
 
+def architecture_from_compute_capability(cc: tuple[int, int]) -> str:
+    if cc >= (10, 0):
+        return "Blackwell"
+    if cc >= (9, 0):
+        return "Hopper"
+    if cc >= (8, 9):
+        return "Ada Lovelace"
+    if cc >= (8, 0):
+        return "Ampere"
+    if cc >= (7, 5):
+        return "Turing"
+    return "Unknown"
+
+
+def gpu_architecture_info(gpu: GPUInfo) -> dict[str, Any]:
+    observed = gpu.compute_capability != (0, 0)
+    cc = gpu.compute_capability if observed else _parse_compute_capability(gpu.name)
+    return {
+        "architecture": architecture_from_compute_capability(cc),
+        "compute_capability": cc,
+        "compute_capability_source": "nvml-or-smi" if observed else "name-heuristic",
+        "heuristic": not observed,
+    }
+
+
 def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimization:
     """Return architecture-aware Ollama settings based on detected GPU.
 
@@ -788,13 +976,18 @@ def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimiz
     # Use primary GPU for architecture decisions
     gpu = gpus[0]
     total_vram_gb = sum(g.vram_mb for g in gpus) / 1024
-    cc = _parse_compute_capability(gpu.name)
+    arch_info = gpu_architecture_info(gpu)
+    cc = arch_info["compute_capability"]
 
     notes: list[str] = []
+    if arch_info["heuristic"]:
+        notes.append("Compute capability is name-based; confirm after driver/NVML access improves.")
 
     # Flash Attention: CC >= 8.0 (Ampere+)
     flash_attention = cc >= (8, 0)
-    if cc >= (9, 0):
+    if cc == (0, 0):
+        notes.append("Compute capability unknown - using conservative attention settings")
+    elif cc >= (9, 0):
         notes.append("Flash Attention 3 available (Hopper+)")
     elif cc >= (8, 0):
         notes.append("Flash Attention 2 enabled")
@@ -802,7 +995,10 @@ def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimiz
         notes.append("Flash Attention not supported (Turing) — using standard attention")
 
     # Architecture name
-    if cc >= (10, 0):
+    if cc == (0, 0):
+        arch = "Unknown"
+        notes.append("Architecture could not be confirmed from NVML or the GPU name")
+    elif cc >= (10, 0):
         arch = "Blackwell"
         notes.append("FP4 Tensor Cores available (not yet used by Ollama)")
         notes.append("GDDR7 provides high memory bandwidth")
@@ -901,7 +1097,7 @@ def _parse_compute_capability(gpu_name: str) -> tuple[int, int]:
         return (7, 5)
 
     # Older or unrecognized — assume Ampere as safe default
-    return (8, 0)
+    return (0, 0)
 
 
 def get_gpu_summary() -> str:

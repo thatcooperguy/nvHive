@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.34.1] - 2026-04-28
+
+### Added
+- Music Producer Studio mission and `nvh studio --install music -y` bundle
+  with ACE-Step, Demucs/WhisperX/audio lab tooling, and Audacity/LMMS
+  AppImage helpers.
+- Setup wizard mission cards for AI Starter, Graphics Creator Studio, Game
+  Dev Lab, Music Producer Studio, Agent Builder, Local LLM Lab, and Power
+  User Workstation.
+- GPU detection diagnostics that distinguish CPU-only hosts from rootless
+  sessions where NVIDIA devices exist but NVML or `nvidia-smi` are blocked.
+- Boot preflight tracking for GPU architecture, compute capability, framebuffer
+  memory, Node/npm versions, storage capacity, storage write probes, and the
+  selected PyTorch CUDA profile.
+
+### Changed
+- Setup model recommendations now use the same GPU inventory path as the
+  system API, including aggregate multi-GPU framebuffer totals.
+- Persistent storage checks now perform a real write/fsync/delete probe instead
+  of relying only on `os.access`.
+- The setup wizard surfaces real software icons and shorter mission-first
+  language to reduce first-run wall-of-text fatigue.
+- Setup wizard mission cards stay mission-first while storage, GPU, catalog,
+  and compatibility scans continue in the background.
+- `nvh webui` now builds and starts the optimized production WebUI by default,
+  with `--dev` reserved for contributors editing the frontend.
+- Pip/binary WebUI bootstrap now falls back to downloading the GitHub source
+  archive when `git` is missing, so fresh rootless desktops have one less
+  prerequisite.
+- WebUI bootstrap now prefers the installed release tag before falling back to
+  `main`, keeping PyPI/binary installs aligned with their shipped version.
+- `nvh workstation --all -y` now passes the non-interactive yes flag through to
+  the rootless Node installer instead of pausing for confirmation.
+
+### Fixed
+- Sorted the generated fallback catalog import block so the Python CI lint
+  matrix can pass.
+- Model fit reports now check the total recommended model queue against
+  available persistent storage, not only one model at a time.
+- WebUI API health and storage preflight now retry during slow API startup
+  instead of leaving the setup page stuck offline until a manual reload.
+- API CORS now allows localhost, 127.0.0.1, nvhive, and IPv6 loopback WebUI
+  fallback ports so dynamic local previews can reach the API.
+
 ## [0.34.0] - 2026-04-28
 
 ### Added

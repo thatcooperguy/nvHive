@@ -316,10 +316,15 @@ export interface GPUDevice {
   vram_gb: number;
   memory_used_mb: number;
   memory_free_mb: number;
+  memory_reserved_mb?: number;
   utilization_pct: number;
   driver_version: string;
   cuda_version: string;
   index: number;
+  compute_capability?: [number, number];
+  compute_capability_source?: string;
+  architecture?: string;
+  architecture_heuristic?: boolean;
 }
 
 export interface SystemRAM {
@@ -332,6 +337,13 @@ export interface GPUInfo {
   gpus: GPUDevice[];
   summary: string;
   total_vram_gb: number;
+  detection?: {
+    status: string;
+    source: string;
+    issues: Array<{ source: string; code: string; message: string; severity: string; detail: string }>;
+    device_files_present: boolean;
+    nvidia_smi: string;
+  };
   system_ram: SystemRAM;
 }
 
@@ -398,6 +410,8 @@ export interface StorageStatus {
   configured_by: string;
   exists: boolean;
   writable: boolean;
+  write_probe_ok: boolean;
+  write_probe_error: string;
   free_gb: number | null;
   total_gb: number | null;
   min_free_gb: number;
@@ -435,6 +449,17 @@ export interface SetupAction {
   can_run_without_root: boolean;
 }
 
+export interface SetupIssue {
+  id: string;
+  title: string;
+  severity: 'required' | 'recommended' | 'optional' | string;
+  reason: string;
+  fix_action_id: string | null;
+  affected_item: string | null;
+  current_version: string | null;
+  available_version: string | null;
+}
+
 export interface SetupHelperReport {
   ready: boolean;
   summary: string;
@@ -442,6 +467,352 @@ export interface SetupHelperReport {
   runtime: RuntimeStatus;
   comfyui: Record<string, unknown>;
   model_recommendation_count: number;
+  actions: SetupAction[];
+  issues?: SetupIssue[];
+  issue_count?: number;
+  receipts?: SetupReceiptsSummary;
+  catalog?: SetupCatalogStatus;
+  compatibility?: {
+    summary?: string;
+    issue_count: number;
+    blocked_count: number;
+    rootless_fixable_count: number;
+    recommended_torch_profile?: string;
+  };
+  boot_preflight?: {
+    summary?: string;
+    checked_at?: string | null;
+    changed: boolean;
+    change_count: number;
+    agent_helper?: BootAgentHelper;
+  };
+  assistant?: {
+    mode: string;
+    can_read_jobs: boolean;
+    can_read_receipts: boolean;
+    can_refresh_catalog: boolean;
+    description: string;
+  };
+}
+
+export interface InstallReceiptHealth {
+  install_path_exists: boolean;
+  missing_launchers: string[];
+  missing_files: string[];
+  healthy: boolean;
+}
+
+export interface InstallReceipt {
+  id: string;
+  kind: string;
+  item_id: string;
+  title: string;
+  status: string;
+  installed_at: string;
+  updated_at: string;
+  install_path: string;
+  version: string | null;
+  source_urls: string[];
+  launchers: string[];
+  models: string[];
+  files: string[];
+  no_root: boolean;
+  metadata: Record<string, unknown>;
+  schema_version: number;
+  health: InstallReceiptHealth;
+}
+
+export interface SetupReceiptsSummary {
+  count: number;
+  by_kind: Record<string, number>;
+  unhealthy: number;
+  root: string | null;
+  receipts?: InstallReceipt[];
+}
+
+export interface SetupReceiptsResult {
+  receipts: InstallReceipt[];
+  count: number;
+  summary: SetupReceiptsSummary;
+}
+
+export interface SetupCatalogStatus {
+  source: string;
+  url?: string;
+  error?: string | null;
+  schema_version?: number;
+  updated_at?: string;
+  profile_count?: number;
+  pack_count?: number;
+  model_count?: number;
+  comfyui_example_count?: number;
+}
+
+export interface SetupCatalogResult {
+  source: string;
+  url: string;
+  error: string | null;
+  catalog: {
+    schema_version: number;
+    updated_at: string;
+    channel?: string;
+    profiles: Array<Record<string, unknown>>;
+    packs: Array<Record<string, unknown>>;
+    models: Array<Record<string, unknown>>;
+    comfyui_examples: Array<Record<string, unknown>>;
+  };
+}
+
+export interface CompatibilityRequirement {
+  id: string;
+  label: string;
+  status: 'ok' | 'fixable' | 'warning' | 'blocked' | string;
+  detail: string;
+  fix_action_id: string | null;
+  rootless_fix_available: boolean;
+}
+
+export interface AppCompatibility {
+  id: string;
+  title: string;
+  category: string;
+  status: 'ready' | 'fixable' | 'degraded' | 'blocked' | string;
+  severity: 'info' | 'optional' | 'recommended' | 'required' | string;
+  summary: string;
+  recommended_action_id: string | null;
+  rootless_fix_available: boolean;
+  requirements: CompatibilityRequirement[];
+  notes: string[];
+}
+
+export interface HostFact {
+  id: string;
+  label: string;
+  value: string;
+  status: string;
+  severity: string;
+  detail: string;
+}
+
+export interface CompatibilityReport {
+  summary: string;
+  ready: boolean;
+  issue_count: number;
+  blocked_count: number;
+  rootless_fixable_count: number;
+  recommended_torch_profile: string;
+  host: Record<string, unknown>;
+  facts: HostFact[];
+  apps: AppCompatibility[];
+}
+
+export interface BootPreflightChange {
+  id: string;
+  label: string;
+  before: string;
+  after: string;
+  severity: 'info' | 'optional' | 'recommended' | 'required' | string;
+  detail: string;
+}
+
+export interface BootAgentHelper {
+  offline_helper_ready: boolean;
+  local_agent_ready: boolean;
+  mode: string;
+  recommended_action_id: string | null;
+  summary: string;
+  requirements: CompatibilityRequirement[];
+}
+
+export interface BootPreflightReport {
+  schema_version: number;
+  checked_at: string | null;
+  state_file: string;
+  first_run: boolean;
+  changed: boolean;
+  needs_attention: boolean;
+  fingerprint_id: string | null;
+  previous_fingerprint_id: string | null;
+  previous_checked_at: string | null;
+  summary: string;
+  changes: BootPreflightChange[];
+  agent_helper: BootAgentHelper;
+  mount_autopilot?: MountAutopilotReport | null;
+  auto_repair?: AutoRepairPlan | AutoRepairResult | null;
+  smoke_tests?: SmokeTestReport | null;
+  model_fit?: {
+    summary?: string;
+    detected_vram_gb?: number;
+    recommended_ids?: string[];
+  } | null;
+  compatibility: CompatibilityReport | null;
+  error?: string;
+}
+
+export interface MountCandidate {
+  path: string;
+  recommended_home: string;
+  label: string;
+  source: string;
+  exists: boolean;
+  writable: boolean;
+  free_gb: number | null;
+  total_gb: number | null;
+  fs_type: string | null;
+  device: string | null;
+  mount_point: string | null;
+  read_only: boolean;
+  network_mount: boolean;
+  os_mount: boolean;
+  large_block_mount: boolean;
+  score: number;
+  warnings: string[];
+  evidence: string[];
+}
+
+export interface MountAutopilotReport {
+  summary: string;
+  confidence: string;
+  current: StorageStatus;
+  recommended: MountCandidate | null;
+  candidates: MountCandidate[];
+}
+
+export interface AutoRepairAction {
+  id: string;
+  title: string;
+  status: string;
+  summary: string;
+  safe_to_auto_run: boolean;
+  action_type: string;
+  button_action_id: string;
+}
+
+export interface AutoRepairPlan {
+  summary: string;
+  auto_count: number;
+  needs_user_count: number;
+  actions: AutoRepairAction[];
+}
+
+export interface AutoRepairResult {
+  summary: string;
+  completed: Array<AutoRepairAction & { result?: string }>;
+  skipped: Array<AutoRepairAction & { reason?: string }>;
+  errors: Array<AutoRepairAction & { error?: string }>;
+  plan: AutoRepairPlan;
+}
+
+export interface SmokeTestItem {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'fail' | 'skip' | string;
+  summary: string;
+  detail: string;
+  action_id: string | null;
+}
+
+export interface SmokeTestReport {
+  summary: string;
+  ready: boolean;
+  passed: number;
+  warnings: number;
+  failed: number;
+  tests: SmokeTestItem[];
+}
+
+export interface ModelFitReport {
+  summary: string;
+  detected_vram_gb: number;
+  free_gb: number | null;
+  recommended_queue_disk_gb?: number;
+  storage_fits_queue?: boolean;
+  recommended_ids: string[];
+  best_by_use_case: Record<string, Record<string, unknown>>;
+  models: Array<Record<string, unknown>>;
+  ollama_available: boolean;
+  ollama_running: boolean;
+}
+
+export interface ProductionReadinessGate {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'blocked' | string;
+  summary: string;
+  detail: string;
+  recommendation: string;
+  source: 'local' | 'target-vm' | string;
+}
+
+export interface ProductionReadinessReport {
+  checked_at: string;
+  status: 'production-ready' | 'pilot-ready' | 'blocked' | string;
+  summary: string;
+  pilot_ready: boolean;
+  production_ready: boolean;
+  target_vm_validated: boolean;
+  counts: {
+    passed: number;
+    warnings: number;
+    blocked: number;
+    total: number;
+  };
+  gates: ProductionReadinessGate[];
+  next_actions: string[];
+  target_vm_checklist: string[];
+  inputs: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface DiagnosticsReport {
+  report_id: string;
+  checked_at: string;
+  request_id?: string | null;
+  summary: string;
+  environment: Record<string, unknown>;
+  paths: Record<string, string>;
+  checks: Record<string, unknown>;
+  logs: {
+    included: boolean;
+    files: string[];
+    recent: Array<{
+      path: string;
+      lines: string[];
+    }>;
+  };
+}
+
+export interface MissionStage {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'fail' | string;
+  summary: string;
+  action_id: string | null;
+}
+
+export interface MissionControlReport {
+  summary: string;
+  ready: boolean;
+  stages: MissionStage[];
+  boot_preflight: BootPreflightReport;
+  mount_autopilot: MountAutopilotReport;
+  auto_repair: AutoRepairPlan;
+  smoke_tests: SmokeTestReport;
+  model_fit: ModelFitReport;
+}
+
+export interface SetupAssistantReply {
+  question: string;
+  answer: string;
+  focus: string;
+  commands: string[];
+  observations: {
+    ready: boolean;
+    issue_count?: number;
+    receipt_count: number;
+    unhealthy_receipts: number;
+    catalog_source?: string;
+    recent_problem?: InstallJob | null;
+  };
   actions: SetupAction[];
 }
 

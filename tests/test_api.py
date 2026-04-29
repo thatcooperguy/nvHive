@@ -465,6 +465,26 @@ class TestAPIEndpointCoverage:
         body = resp.json()
         assert body["status"] == "success"
 
+    def test_setup_production_readiness(self, test_client: TestClient) -> None:
+        """GET /v1/setup/production-readiness returns release gates."""
+        resp = test_client.get("/v1/setup/production-readiness")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        assert "production_ready" in body["data"]
+        assert isinstance(body["data"]["gates"], list)
+
+    def test_setup_diagnostics(self, test_client: TestClient) -> None:
+        """GET /v1/setup/diagnostics returns a redacted support report."""
+        resp = test_client.get("/v1/setup/diagnostics", headers={"x-request-id": "test-req"})
+        assert resp.status_code == 200
+        assert resp.headers["x-request-id"] == "test-req"
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["data"]["request_id"] == "test-req"
+        assert body["data"]["report_id"].startswith("diag-")
+        assert "logs" in body["data"]
+
     def test_conversations_list(self, test_client: TestClient) -> None:
         """GET /v1/conversations returns the conversation list."""
         resp = test_client.get("/v1/conversations")

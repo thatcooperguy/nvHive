@@ -76,6 +76,8 @@ class StorageStatus:
     configured_by: str
     exists: bool
     writable: bool
+    write_probe_ok: bool
+    write_probe_error: str
     free_gb: float | None
     total_gb: float | None
     min_free_gb: float
@@ -178,6 +180,23 @@ def _disk_usage_gb(path: Path) -> tuple[float | None, float | None]:
     return round(usage.free / gb, 1), round(usage.total / gb, 1)
 
 
+def _write_probe(path: Path) -> tuple[bool, str]:
+    probe_file = path / f".nvh-write-probe-{os.getpid()}"
+    try:
+        with probe_file.open("wb") as handle:
+            handle.write(b"nvhive storage probe\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        probe_file.unlink(missing_ok=True)
+        return True, ""
+    except Exception as exc:
+        try:
+            probe_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False, str(exc)
+
+
 def _looks_ephemeral(path: Path) -> bool:
     parts = {part.lower() for part in path.parts}
     return bool(parts.intersection({"tmp", "temp", "run", "var", "cache"}))
@@ -255,6 +274,8 @@ def storage_status(
     probe = home if exists else _nearest_existing_parent(home)
     free_gb, total_gb = _disk_usage_gb(probe)
     writable = False
+    write_probe_ok = False
+    write_probe_error = ""
     warnings: list[str] = []
 
     try:
@@ -262,17 +283,19 @@ def storage_status(
         writable = os.access(parent, os.W_OK)
     except Exception:
         writable = False
+    write_probe_ok, write_probe_error = _write_probe(home if exists else probe)
+    writable = write_probe_ok
 
     if configured_by == "default":
         warnings.append(
-            "NVH_HOME is not set. On ephemeral cloud desktops, point it at the mounted persistent volume."
+            "NVH_HOME is not set. On ephemeral cloud desktops, use the persistent block-backed home/data volume; ~/.nvh is only safe when $HOME itself is that volume."
         )
     if _looks_ephemeral(home):
         warnings.append("Selected storage path looks ephemeral; use a mounted persistent directory instead.")
     if free_gb is not None and free_gb < min_free_gb:
         warnings.append(f"Only {free_gb} GB free; recommended minimum is {min_free_gb:.0f} GB.")
     if not writable:
-        warnings.append("Selected storage path is not writable by this user.")
+        warnings.append("Selected storage path failed a real write/fsync/delete probe.")
 
     ok = writable and (free_gb is None or free_gb >= min_free_gb)
     return StorageStatus(
@@ -280,6 +303,8 @@ def storage_status(
         configured_by=configured_by,
         exists=exists,
         writable=writable,
+        write_probe_ok=write_probe_ok,
+        write_probe_error=write_probe_error,
         free_gb=free_gb,
         total_gb=total_gb,
         min_free_gb=min_free_gb,

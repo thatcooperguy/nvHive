@@ -36,7 +36,17 @@ import type {
   StorageConfigureRequest,
   StorageStatus,
   RuntimeStatus,
+  SetupAssistantReply,
+  SetupCatalogResult,
   SetupHelperReport,
+  SetupReceiptsResult,
+  CompatibilityReport,
+  BootPreflightReport,
+  MissionControlReport,
+  ProductionReadinessReport,
+  DiagnosticsReport,
+  AutoRepairResult,
+  MountAutopilotReport,
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
@@ -79,13 +89,28 @@ async function apiFetch<T>(
 
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
+    const requestId = res.headers.get('x-request-id') ?? undefined;
+    const errorId = res.headers.get('x-error-id') ?? undefined;
     try {
       const body = await res.json();
-      detail = body?.detail ?? detail;
+      const bodyDetail = body?.error?.message ?? body?.detail ?? detail;
+      detail = typeof bodyDetail === 'string' ? bodyDetail : JSON.stringify(bodyDetail);
     } catch {
       // ignore
     }
-    throw new Error(detail);
+    const suffix = [
+      requestId ? `request ${requestId}` : null,
+      errorId ? `error ${errorId}` : null,
+    ].filter(Boolean).join(', ');
+    const error = new Error(suffix ? `${detail} (${suffix})` : detail) as Error & {
+      statusCode?: number;
+      requestId?: string;
+      errorId?: string;
+    };
+    error.statusCode = res.status;
+    error.requestId = requestId;
+    error.errorId = errorId;
+    throw error;
   }
 
   return res.json() as Promise<T>;
@@ -133,6 +158,21 @@ export async function configureStorage(request: StorageConfigureRequest): Promis
   return apiPost<StorageStatus>('/v1/system/storage', request);
 }
 
+export async function getMountAutopilot(minFreeGb = 20): Promise<MountAutopilotReport> {
+  return apiGet<MountAutopilotReport>(`/v1/system/mount-autopilot?min_free_gb=${encodeURIComponent(String(minFreeGb))}`);
+}
+
+export async function activateMountAutopilot(homeDir?: string, minFreeGb = 20): Promise<{
+  summary: string;
+  storage: StorageStatus;
+  mount_autopilot: MountAutopilotReport;
+}> {
+  return apiPost('/v1/system/mount-autopilot/activate', {
+    home_dir: homeDir,
+    min_free_gb: minFreeGb,
+  });
+}
+
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return apiGet<RuntimeStatus>('/v1/system/runtime');
 }
@@ -145,6 +185,81 @@ export async function getSetupHelper(homeDir?: string): Promise<SetupHelperRepor
 // ─── Analytics ──────────────────────────────────────────────────────────────
 
 // ComfyUI visual workflow setup
+
+export async function askSetupAssistant(
+  question: string,
+  homeDir?: string
+): Promise<SetupAssistantReply> {
+  return apiPost<SetupAssistantReply>('/v1/setup/assistant', {
+    question,
+    home_dir: homeDir,
+  });
+}
+
+export async function getSetupCatalog(refresh = false): Promise<SetupCatalogResult> {
+  return apiGet<SetupCatalogResult>(`/v1/setup/catalog${refresh ? '?refresh=true' : ''}`);
+}
+
+export async function getSetupCompatibility(homeDir?: string): Promise<CompatibilityReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<CompatibilityReport>(`/v1/setup/compatibility${qs}`);
+}
+
+export async function getSetupBootPreflight(homeDir?: string, recheck = false): Promise<BootPreflightReport> {
+  const params = new URLSearchParams();
+  if (homeDir) params.set('home_dir', homeDir);
+  if (recheck) params.set('recheck', 'true');
+  const qs = params.toString();
+  return apiGet<BootPreflightReport>(`/v1/setup/boot-preflight${qs ? `?${qs}` : ''}`);
+}
+
+export async function getSetupMissionControl(homeDir?: string): Promise<MissionControlReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<MissionControlReport>(`/v1/setup/mission-control${qs}`);
+}
+
+export async function getSetupProductionReadiness(
+  homeDir?: string,
+  targetVmValidated?: boolean
+): Promise<ProductionReadinessReport> {
+  const params = new URLSearchParams();
+  if (homeDir) params.set('home_dir', homeDir);
+  if (typeof targetVmValidated === 'boolean') {
+    params.set('target_vm_validated', targetVmValidated ? 'true' : 'false');
+  }
+  const qs = params.toString();
+  return apiGet<ProductionReadinessReport>(`/v1/setup/production-readiness${qs ? `?${qs}` : ''}`);
+}
+
+export async function getSetupDiagnostics(
+  homeDir?: string,
+  includeLogs = true
+): Promise<DiagnosticsReport> {
+  const params = new URLSearchParams();
+  if (homeDir) params.set('home_dir', homeDir);
+  params.set('include_logs', includeLogs ? 'true' : 'false');
+  const qs = params.toString();
+  return apiGet<DiagnosticsReport>(`/v1/setup/diagnostics${qs ? `?${qs}` : ''}`);
+}
+
+export async function repairSetupWorkspace(homeDir?: string): Promise<AutoRepairResult> {
+  return apiPost<AutoRepairResult>('/v1/setup/repair-workspace', {
+    home_dir: homeDir,
+  });
+}
+
+export async function getSetupReceipts(options: {
+  kind?: string;
+  status?: string;
+  limit?: number;
+} = {}): Promise<SetupReceiptsResult> {
+  const params = new URLSearchParams();
+  if (options.kind) params.set('kind', options.kind);
+  if (options.status) params.set('status_filter', options.status);
+  if (options.limit) params.set('limit', String(options.limit));
+  const qs = params.toString();
+  return apiGet<SetupReceiptsResult>(`/v1/setup/receipts${qs ? `?${qs}` : ''}`);
+}
 
 const TERMINAL_JOB_STATUSES = new Set(['complete', 'failed', 'canceled', 'interrupted']);
 

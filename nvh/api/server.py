@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from collections import defaultdict
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -33,7 +34,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
@@ -45,10 +46,12 @@ from nvh.providers.base import (
 )
 from nvh.utils.gpu import (
     check_oom_risk,
+    detect_gpu_status,
     detect_gpus,
     detect_system_memory,
     get_gpu_summary,
     get_ollama_optimizations,
+    gpu_architecture_info,
     recommend_models,
 )
 
@@ -273,6 +276,33 @@ def get_engine() -> Engine:
     return _engine
 
 
+async def _run_boot_preflight_on_startup(app: FastAPI) -> None:
+    if os.environ.get("NVH_BOOT_PREFLIGHT", "1").lower() in {"0", "false", "off", "no"}:
+        logger.info("Hive API: boot preflight disabled by NVH_BOOT_PREFLIGHT.")
+        return
+    try:
+        from nvh.integrations.boot_preflight import run_boot_preflight
+
+        result = await asyncio.to_thread(run_boot_preflight)
+        app.state.boot_preflight = result
+        logger.info("Hive API: boot preflight complete. %s", result.get("summary"))
+    except Exception as exc:
+        app.state.boot_preflight = {
+            "summary": "Boot preflight failed",
+            "error": str(exc),
+            "changes": [],
+            "agent_helper": {
+                "offline_helper_ready": True,
+                "local_agent_ready": False,
+                "mode": "offline-deterministic",
+                "recommended_action_id": "agent-lab",
+                "summary": "Offline setup helper is still available.",
+                "requirements": [],
+            },
+        }
+        logger.warning("Hive API: boot preflight failed: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -280,6 +310,7 @@ def get_engine() -> Engine:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine
+    boot_task: asyncio.Task[None] | None = None
     from nvh.utils.logging import setup_logging
     json_mode = os.environ.get("HIVE_LOG_FORMAT", "text") == "json"
     setup_logging(level=os.environ.get("HIVE_LOG_LEVEL", "INFO"), json_format=json_mode)
@@ -288,12 +319,16 @@ async def lifespan(app: FastAPI):
         _engine = Engine()
         enabled = await _engine.initialize()
         logger.info("Hive API: engine ready. Advisors: %s", ", ".join(enabled) or "none")
+        boot_task = asyncio.create_task(_run_boot_preflight_on_startup(app))
         yield
     except Exception as exc:
         logger.error("Hive API: engine initialization error: %s", exc)
+        boot_task = asyncio.create_task(_run_boot_preflight_on_startup(app))
         # Don't crash — partial init is fine; requests will fail gracefully.
         yield
     finally:
+        if boot_task and not boot_task.done():
+            boot_task.cancel()
         logger.info("Hive API: shutting down.")
         if _engine:
             if hasattr(_engine, 'webhooks') and _engine.webhooks:
@@ -331,14 +366,79 @@ ALLOWED_ORIGINS = (
     if _cors_env
     else _DEFAULT_CORS_ORIGINS
 )
+LOCAL_WEBUI_ORIGIN_REGEX = os.environ.get(
+    "HIVE_CORS_ORIGIN_REGEX",
+    r"^http://(localhost|127\.0\.0\.1|nvhive|\[::1\])(:\d+)?$",
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=LOCAL_WEBUI_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """Attach a request id, log latency, and return safe unexpected errors."""
+    from nvh.utils.logging import reset_request_id, set_request_id
+
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
+    token = set_request_id(request_id)
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        level = logging.WARNING if response.status_code >= 500 else logging.INFO
+        logger.log(
+            level,
+            "HTTP request complete",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+                "client": request.client.host if request.client else "",
+            },
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
+    except Exception:
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        error_id = uuid.uuid4().hex[:12]
+        logger.exception(
+            "Unhandled API request error",
+            extra={
+                "request_id": request_id,
+                "error_id": error_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": 500,
+                "duration_ms": duration_ms,
+                "client": request.client.host if request.client else "",
+            },
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            headers={"X-Request-ID": request_id, "X-Error-ID": error_id},
+            content={
+                "status": "error",
+                "error": {
+                    "type": "internal_server_error",
+                    "message": "Internal server error",
+                    "request_id": request_id,
+                    "error_id": error_id,
+                },
+                "detail": "Internal server error",
+                "request_id": request_id,
+            },
+        )
+    finally:
+        reset_request_id(token)
 
 
 # ---------------------------------------------------------------------------
@@ -744,30 +844,45 @@ async def prometheus_metrics_v1() -> Response:
 def _serialize_gpu_data() -> dict[str, Any]:
     """Detect GPUs and return serialisable dict. Never raises — returns empty on error."""
     try:
-        gpus = detect_gpus()
+        gpu_status = detect_gpu_status()
+        gpus = gpu_status["gpus"]
         sys_mem = detect_system_memory()
         summary = get_gpu_summary()
         total_vram_gb = round(sum(g.vram_mb for g in gpus) / 1024, 1) if gpus else 0.0
 
-        gpu_list = [
-            {
-                "name": g.name,
-                "vram_mb": g.vram_mb,
-                "vram_gb": g.vram_gb,
-                "memory_used_mb": g.memory_used_mb,
-                "memory_free_mb": g.memory_free_mb,
-                "utilization_pct": g.utilization_pct,
-                "driver_version": g.driver_version,
-                "cuda_version": g.cuda_version,
-                "index": g.index,
-            }
-            for g in gpus
-        ]
+        gpu_list = []
+        for g in gpus:
+            arch = gpu_architecture_info(g)
+            gpu_list.append(
+                {
+                    "name": g.name,
+                    "vram_mb": g.vram_mb,
+                    "vram_gb": g.vram_gb,
+                    "memory_used_mb": g.memory_used_mb,
+                    "memory_free_mb": g.memory_free_mb,
+                    "memory_reserved_mb": max(g.vram_mb - g.memory_used_mb - g.memory_free_mb, 0),
+                    "utilization_pct": g.utilization_pct,
+                    "driver_version": g.driver_version,
+                    "cuda_version": g.cuda_version,
+                    "index": g.index,
+                    "compute_capability": list(arch["compute_capability"]),
+                    "compute_capability_source": arch["compute_capability_source"],
+                    "architecture": arch["architecture"],
+                    "architecture_heuristic": arch["heuristic"],
+                }
+            )
 
         return {
             "gpus": gpu_list,
             "summary": summary,
             "total_vram_gb": total_vram_gb,
+            "detection": {
+                "status": gpu_status.get("status"),
+                "source": gpu_status.get("source"),
+                "issues": gpu_status.get("issues", []),
+                "device_files_present": gpu_status.get("device_files_present", False),
+                "nvidia_smi": gpu_status.get("nvidia_smi", ""),
+            },
             "system_ram": {
                 "total_gb": sys_mem.total_ram_gb,
                 "available_gb": sys_mem.available_ram_gb,
@@ -780,6 +895,13 @@ def _serialize_gpu_data() -> dict[str, Any]:
             "gpus": [],
             "summary": "GPU detection unavailable",
             "total_vram_gb": 0.0,
+            "detection": {
+                "status": "error",
+                "source": "exception",
+                "issues": [{"source": "api", "code": "exception", "message": str(exc), "severity": "warning", "detail": ""}],
+                "device_files_present": False,
+                "nvidia_smi": "",
+            },
             "system_ram": {"total_gb": 0.0, "available_gb": 0.0, "effective_for_llm_gb": 0.0},
         }
 
@@ -871,6 +993,22 @@ class StorageConfigureRequest(BaseModel):
         return cleaned or None
 
 
+class SetupAssistantRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=2000)
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME candidate to use while answering setup questions",
+    )
+
+
+class SetupHomeRequest(BaseModel):
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+    min_free_gb: float = Field(default=20.0, ge=0)
+
+
 @app.get("/v1/system/storage", summary="Inspect rootless persistent storage")
 async def system_storage(
     home_dir: str | None = None,
@@ -902,6 +1040,33 @@ async def configure_system_storage(
     )
 
 
+@app.get("/v1/system/mount-autopilot", summary="Detect likely persistent mounts")
+async def system_mount_autopilot(
+    min_free_gb: float = 20.0,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Recommend a persistent NVH_HOME without requiring root access."""
+    from nvh.integrations.mount_autopilot import mount_autopilot_report
+
+    return _response_envelope(mount_autopilot_report(min_free_gb=min_free_gb))
+
+
+@app.post("/v1/system/mount-autopilot/activate", summary="Activate the best persistent mount")
+async def system_mount_autopilot_activate(
+    request: SetupHomeRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Create and activate the highest-scoring discovered NVH_HOME."""
+    from nvh.integrations.mount_autopilot import activate_recommended_mount
+
+    return _response_envelope(
+        activate_recommended_mount(
+            min_free_gb=request.min_free_gb,
+            extra_roots=[request.home_dir] if request.home_dir else None,
+        )
+    )
+
+
 @app.get("/v1/system/runtime", summary="Inspect rootless runtime fallback status")
 async def system_runtime(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return whether nvHive can use Python venv/pip or needs micromamba fallback."""
@@ -919,6 +1084,233 @@ async def setup_helper(
     from nvh.integrations.setup_agent import setup_helper_report
 
     return _response_envelope(setup_helper_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/mission-control", summary="Return nvWizard setup mission timeline")
+async def setup_mission_control(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the combined boot, repair, model-fit, and smoke-test timeline."""
+    from nvh.integrations.mission_control import mission_control_report
+
+    return _response_envelope(mission_control_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/auto-repair", summary="Preview safe rootless auto-repairs")
+async def setup_auto_repair(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the safe repair queue without running installers or downloads."""
+    from nvh.integrations.auto_repair import auto_repair_plan
+
+    return _response_envelope(auto_repair_plan(home_dir=home_dir))
+
+
+@app.post("/v1/setup/repair-workspace", summary="Run safe rootless workspace repairs")
+async def setup_repair_workspace(
+    request: SetupHomeRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Run idempotent repairs that leave user files, models, and app data intact."""
+    from nvh.integrations.auto_repair import run_safe_repairs
+
+    return _response_envelope(run_safe_repairs(home_dir=request.home_dir))
+
+
+@app.get("/v1/setup/smoke-tests", summary="Run lightweight app smoke checks")
+async def setup_smoke_tests(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Check installed apps without running destructive actions."""
+    from nvh.integrations.smoke_tests import smoke_test_report
+
+    return _response_envelope(smoke_test_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/model-fit", summary="Recommend models by VRAM and disk fit")
+async def setup_model_fit(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the simplified student model queue and fit scores."""
+    from nvh.integrations.model_fit import model_fit_report
+
+    return _response_envelope(model_fit_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/production-readiness", summary="Return conservative production readiness gates")
+async def setup_production_readiness(
+    home_dir: str | None = None,
+    target_vm_validated: bool | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Aggregate rootless, storage, model, smoke, and target-VM release gates."""
+    from nvh.integrations.production_readiness import production_readiness_report
+
+    return _response_envelope(
+        production_readiness_report(
+            home_dir=home_dir,
+            target_vm_validated=target_vm_validated,
+        )
+    )
+
+
+@app.get("/v1/setup/diagnostics", summary="Return a redacted setup diagnostics report")
+async def setup_diagnostics(
+    request: Request,
+    home_dir: str | None = None,
+    include_logs: bool = True,
+    log_lines: int = 80,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Package rootless setup state, recent jobs, and redacted log warnings."""
+    from nvh.integrations.diagnostics import diagnostics_report
+
+    report = diagnostics_report(
+        home_dir=home_dir,
+        request_id=request.headers.get("x-request-id"),
+        include_logs=include_logs,
+        log_lines=log_lines,
+    )
+    logger.info(
+        "Setup diagnostics report generated",
+        extra={
+            "request_id": report.get("request_id") or "",
+            "path": request.url.path,
+        },
+    )
+    return _response_envelope(report)
+
+
+@app.post("/v1/setup/assistant", summary="Ask the local setup helper")
+async def setup_assistant(
+    request: SetupAssistantRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Answer setup questions with local state, receipts, and deterministic rules."""
+    from nvh.integrations.setup_agent import setup_assistant_reply
+
+    return _response_envelope(
+        setup_assistant_reply(request.question, home_dir=request.home_dir)
+    )
+
+
+@app.get("/v1/setup/catalog", summary="Load the setup catalog")
+async def setup_catalog(
+    refresh: bool = False,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return remote/cache/bundled setup catalog data for the wizard."""
+    from nvh.integrations.catalog import load_setup_catalog
+
+    return _response_envelope(load_setup_catalog(refresh=refresh))
+
+
+@app.get("/v1/setup/compatibility", summary="Inspect host/app compatibility")
+async def setup_compatibility(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return host facts and per-app compatibility checks for nvWizard."""
+    from nvh.integrations.compatibility import compatibility_report
+
+    return _response_envelope(compatibility_report(home_dir=home_dir))
+
+
+@app.get("/v1/setup/boot-preflight", summary="Return boot-time VM image preflight")
+async def setup_boot_preflight(
+    home_dir: str | None = None,
+    recheck: bool = False,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the persisted boot preflight, running it if needed."""
+    from nvh.integrations.boot_preflight import boot_preflight_status, run_boot_preflight
+
+    if recheck:
+        result = await asyncio.to_thread(run_boot_preflight, home_dir=home_dir)
+        app.state.boot_preflight = result
+        return _response_envelope(result)
+
+    cached = getattr(app.state, "boot_preflight", None)
+    if cached and not home_dir:
+        return _response_envelope(cached)
+    result = await asyncio.to_thread(boot_preflight_status, home_dir=home_dir, run_if_missing=True)
+    return _response_envelope(result)
+
+
+@app.post("/v1/setup/boot-preflight/recheck", summary="Run boot-time VM image preflight now")
+async def setup_boot_preflight_recheck(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Force a boot preflight refresh after the user repairs something."""
+    from nvh.integrations.boot_preflight import run_boot_preflight
+
+    result = await asyncio.to_thread(run_boot_preflight, home_dir=home_dir)
+    app.state.boot_preflight = result
+    return _response_envelope(result)
+
+
+@app.get("/v1/setup/receipts", summary="List rootless install receipts")
+async def setup_receipts(
+    kind: str | None = None,
+    status_filter: str | None = None,
+    limit: int = 100,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return install receipts written under NVH_HOME."""
+    from nvh.integrations.receipts import list_receipts, receipt_summary
+
+    safe_limit = max(1, min(limit, 500))
+    receipts = list_receipts(kind=kind, status=status_filter, limit=safe_limit)
+    summary = receipt_summary()
+    return _response_envelope({
+        "receipts": receipts,
+        "count": len(receipts),
+        "summary": {key: value for key, value in summary.items() if key != "receipts"},
+    })
+
+
+def _receipt_or_404(receipt_id: str) -> dict[str, Any]:
+    from nvh.integrations.receipts import load_receipt
+
+    try:
+        return load_receipt(receipt_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@app.get("/v1/setup/receipts/{receipt_id}", summary="Get one install receipt")
+async def setup_receipt(
+    receipt_id: str,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    return _response_envelope(_receipt_or_404(receipt_id))
+
+
+@app.get("/v1/setup/receipts/{receipt_id}/repair-plan", summary="Preview receipt repair")
+async def setup_receipt_repair_plan(
+    receipt_id: str,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    from nvh.integrations.receipts import repair_plan
+
+    _receipt_or_404(receipt_id)
+    return _response_envelope(repair_plan(receipt_id))
+
+
+@app.get("/v1/setup/receipts/{receipt_id}/uninstall-plan", summary="Preview receipt uninstall")
+async def setup_receipt_uninstall_plan(
+    receipt_id: str,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    from nvh.integrations.receipts import uninstall_plan
+
+    _receipt_or_404(receipt_id)
+    return _response_envelope(uninstall_plan(receipt_id))
 
 
 # -- /v1/system/info ----------------------------------------------------------
@@ -2422,7 +2814,7 @@ async def comfyui_start(
 class StudioPackInstallRequest(BaseModel):
     pack_ids: list[str] = Field(
         default_factory=lambda: ["starter"],
-        description="Studio pack ids or bundle names: starter, all, llms, agents, comfy, game",
+        description="Studio pack ids or bundle names: starter, all, llms, agents, comfy, game, creative, music",
     )
     force_update: bool = False
 
@@ -2498,7 +2890,7 @@ async def studio_pack_install(
     request: StudioPackInstallRequest,
     _auth: None = Depends(require_auth),
 ) -> StreamingResponse:
-    """Install LLM, agent, ComfyUI, and game-dev packs without root access."""
+    """Install LLM, agent, ComfyUI, game-dev, creative, and music packs without root access."""
     return StreamingResponse(
         _studio_pack_install_stream(request),
         media_type="text/event-stream",

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nvhive"
-version = "0.34.0"
+version = "0.34.1"
 description = "NVHive — Multi-LLM orchestration platform with intelligent routing, hive consensus, and auto-agent generation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -101,7 +101,7 @@ nvhive-mcp = "nvh.mcp_server:main"
 include = ["nvh*"]
 
 [tool.setuptools.package-data]
-nvh = ["config/*.yaml", "workflows/*.yaml"]
+nvh = ["catalog/*.json", "config/*.yaml", "workflows/*.yaml"]
 
 [tool.ruff]
 target-version = "py311"
