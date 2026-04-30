@@ -72,6 +72,41 @@ function getApiBase(): string {
 
 const BASE_URL = getApiBase();
 
+function getApiAuthHeaders(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const runtimeKey = (window as any).__HIVE_API_KEY__;
+    if (typeof runtimeKey === 'string' && runtimeKey.trim()) {
+      const key = runtimeKey.trim();
+      return { Authorization: `Bearer ${key}`, 'X-Hive-API-Key': key };
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const queryKey = params.get('hive_api_key') ?? params.get('api_key') ?? params.get('token');
+    if (queryKey?.trim()) {
+      const key = queryKey.trim();
+      window.sessionStorage.setItem('nvh_api_key', key);
+      return { Authorization: `Bearer ${key}`, 'X-Hive-API-Key': key };
+    }
+
+    const storedKey =
+      window.sessionStorage.getItem('nvh_api_key') ??
+      window.localStorage.getItem('nvh_api_key') ??
+      window.localStorage.getItem('HIVE_API_KEY') ??
+      window.localStorage.getItem('hive_api_key');
+
+    if (storedKey?.trim()) {
+      const key = storedKey.trim();
+      return { Authorization: `Bearer ${key}`, 'X-Hive-API-Key': key };
+    }
+  } catch {
+    // Storage can be blocked in hardened browser profiles; open/local mode still works.
+  }
+
+  return {};
+}
+
 // ─── Low-level fetch helper ──────────────────────────────────────────────────
 
 async function apiFetch<T>(
@@ -82,6 +117,7 @@ async function apiFetch<T>(
   const res = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
+      ...getApiAuthHeaders(),
       ...options?.headers,
     },
     ...options,
@@ -158,11 +194,11 @@ export async function configureStorage(request: StorageConfigureRequest): Promis
   return apiPost<StorageStatus>('/v1/system/storage', request);
 }
 
-export async function getMountAutopilot(minFreeGb = 20): Promise<MountAutopilotReport> {
+export async function getMountAutopilot(minFreeGb = 200): Promise<MountAutopilotReport> {
   return apiGet<MountAutopilotReport>(`/v1/system/mount-autopilot?min_free_gb=${encodeURIComponent(String(minFreeGb))}`);
 }
 
-export async function activateMountAutopilot(homeDir?: string, minFreeGb = 20): Promise<{
+export async function activateMountAutopilot(homeDir?: string, minFreeGb = 200): Promise<{
   summary: string;
   storage: StorageStatus;
   mount_autopilot: MountAutopilotReport;
@@ -329,6 +365,7 @@ export function watchInstallJob<TEvent extends { event: string; status: string; 
   let stopped = false;
   let after = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let pollFailures = 0;
 
   const poll = async () => {
     if (stopped) return;
@@ -337,6 +374,7 @@ export function watchInstallJob<TEvent extends { event: string; status: string; 
         getInstallJob(jobId),
         getInstallJobEvents(jobId, after),
       ]);
+      pollFailures = 0;
       callbacks.onStatus?.(job);
 
       let lastPayload: TEvent | null = null;
@@ -362,6 +400,11 @@ export function watchInstallJob<TEvent extends { event: string; status: string; 
       timer = setTimeout(poll, 1200);
     } catch (err) {
       if (!stopped) {
+        pollFailures += 1;
+        if (pollFailures <= 6) {
+          timer = setTimeout(poll, Math.min(6000, 1000 * pollFailures));
+          return;
+        }
         callbacks.onError?.(err instanceof Error ? err.message : 'Install job polling failed');
       }
     }

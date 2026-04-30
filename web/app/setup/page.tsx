@@ -88,6 +88,16 @@ const STEPS: { id: Step; label: string; num: number }[] = [
   { id: 'done', label: 'Done', num: 10 },
 ];
 
+const PERSISTENT_STORAGE_MIN_GB = 200;
+
+const ADVANCED_GROUPS: { id: string; label: string; steps: Step[] }[] = [
+  { id: 'overview', label: 'Overview', steps: ['welcome'] },
+  { id: 'hardware', label: 'Hardware', steps: ['storage', 'gpu', 'models'] },
+  { id: 'apps', label: 'Apps', steps: ['local-ai', 'studio', 'comfyui'] },
+  { id: 'accounts', label: 'Accounts', steps: ['cloud'] },
+  { id: 'verify', label: 'Verify', steps: ['test', 'done'] },
+];
+
 const CLOUD_PROVIDERS = [
   { id: 'openai', name: 'OpenAI', description: 'GPT-4o, GPT-4o-mini', envKey: 'OPENAI_API_KEY', placeholder: 'sk-...', signupUrl: 'https://platform.openai.com/api-keys' },
   { id: 'anthropic', name: 'Anthropic', description: 'Claude Sonnet, Haiku, Opus', envKey: 'ANTHROPIC_API_KEY', placeholder: 'sk-ant-...', signupUrl: 'https://console.anthropic.com/settings/keys' },
@@ -567,7 +577,7 @@ export default function SetupPage() {
 
         if (!status.ok || status.configured_by === 'default') {
           try {
-            const report = await getMountAutopilot(20);
+            const report = await getMountAutopilot(PERSISTENT_STORAGE_MIN_GB);
             if (cancelled) return;
             setMountAutopilot(report);
             if (report.recommended) {
@@ -576,7 +586,7 @@ export default function SetupPage() {
             if (shouldAutoActivateStorage(status, report)) {
               setMountActivating(true);
               try {
-                const activated = await activateMountAutopilot(report.recommended?.recommended_home, 20);
+                const activated = await activateMountAutopilot(report.recommended?.recommended_home, PERSISTENT_STORAGE_MIN_GB);
                 if (cancelled) return;
                 setStorageStatus(activated.storage);
                 setStorageHomeInput(activated.storage.layout.home);
@@ -714,7 +724,7 @@ export default function SetupPage() {
     try {
       const status = await configureStorage({
         home_dir: home,
-        min_free_gb: 20,
+        min_free_gb: PERSISTENT_STORAGE_MIN_GB,
         activate: true,
       });
       setStorageStatus(status);
@@ -949,7 +959,7 @@ export default function SetupPage() {
     setStorageSaving(true);
     setStorageError(null);
     try {
-      const activated = await activateMountAutopilot(recommendedHome, 20);
+      const activated = await activateMountAutopilot(recommendedHome, PERSISTENT_STORAGE_MIN_GB);
       setStorageStatus(activated.storage);
       setStorageHomeInput(activated.storage.layout.home);
       setMountAutopilot(activated.mount_autopilot);
@@ -1328,7 +1338,7 @@ export default function SetupPage() {
         setWizardBuildMessage('nvWizard is finding the persistent block storage first, then it will build the mission there.');
         const detectedStorage = await handleUseRecommendedStorage();
         if (!detectedStorage?.ok || detectedStorage.configured_by === 'default') {
-          setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. Advanced Details has the manual override if the host is unusual.');
+          setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. Troubleshooting has the manual override if the host is unusual.');
           setAdvancedSetupOpen(true);
           return;
         }
@@ -1378,6 +1388,8 @@ export default function SetupPage() {
   };
 
   const currentStepIdx = STEPS.findIndex(s => s.id === step);
+  const currentStep = STEPS[currentStepIdx] ?? STEPS[0];
+  const currentAdvancedGroup = ADVANCED_GROUPS.find(group => group.steps.includes(step)) ?? ADVANCED_GROUPS[0];
   const apiDisconnected = apiStatus === 'disconnected';
   const storageReady = Boolean(storageStatus?.ok && storageStatus.configured_by !== 'default');
   const storageFreeGb = storageStatus?.free_gb ?? null;
@@ -1470,8 +1482,8 @@ export default function SetupPage() {
     unhealthyReceiptCount +
     compatibilityIssueCount +
     bootChangeCount;
-  const showAdvancedSetup = advancedSetupOpen;
-  const showInstallJobs = activeInstallJobs.length > 0 || (advancedSetupOpen && (visibleInstallJobs.length > 0 || jobsError));
+  const showAdvancedSetup = advancedSetupOpen && step !== 'welcome';
+  const showInstallJobs = activeInstallJobs.length > 0 || (showAdvancedSetup && (visibleInstallJobs.length > 0 || jobsError));
   const anyInstallRunning = Boolean(activeWizardBuild) || studioInstalling || modelsInstalling || comfyInstalling;
   const topHelperAction = helperActions[0] ?? null;
   const catalogProfiles = setupCatalog?.catalog.profiles ?? [];
@@ -1489,39 +1501,9 @@ export default function SetupPage() {
     .filter(model => modelIds.includes(model.id))
     .reduce((total, model) => total + model.estimated_disk_gb, 0);
   const hasCatalogSizing = studioPacks.length > 0 || studioModels.length > 0;
-  const recommendedHardwareModels = studioModels
-    .filter(model => model.recommended)
-    .sort((a, b) => a.priority - b.priority)
-    .slice(0, 4);
-  const visibleHardwareModels = (
-    recommendedHardwareModels.length > 0
-      ? recommendedHardwareModels
-      : studioModels
-          .filter(model => model.fits_vram)
-          .sort((a, b) => a.priority - b.priority)
-          .slice(0, 4)
-  );
-  const hardwareName = gpuInfo?.gpus?.[0]?.name ?? 'GPU scan pending';
-  const hardwareVramLabel = detectedModelVram ? `${detectedModelVram} GB VRAM` : 'VRAM scan pending';
   const gpuDetectionStatus = gpuInfo?.detection?.status ?? 'checking';
   const gpuDetectionIssue = gpuInfo?.detection?.issues?.[0]?.message ?? '';
-  const visibleHardwareModelIds = visibleHardwareModels.map(model => model.id);
   const githubPack = studioPacks.find(pack => pack.id === 'github-login-helper') ?? null;
-  const gameEnginePacks = studioPacks.filter(pack => ['godot-engine', 'unity-hub-helper', 'unreal-engine-helper'].includes(pack.id));
-  const modelPickPreview = visibleHardwareModels.slice(0, 3);
-  const softwareHighlights: Array<{ id: string; label: string; logo: BrandLogoId; sub: string; tone: string }> = [
-    { id: 'openclaw', label: 'OpenClaw', logo: 'openclaw', sub: studioPacks.find(pack => pack.id === 'openclaw-agent')?.status.installed ? 'Ready' : 'Agent', tone: 'bg-white border-[#e5e5e5]' },
-    { id: 'nemoclaw', label: 'NemoClaw', logo: 'nvidia', sub: studioPacks.find(pack => pack.id === 'nemoclaw-sandbox')?.status.installed ? 'Ready' : 'Guarded', tone: 'bg-white border-[#76B900]/40' },
-    { id: 'comfyui', label: 'ComfyUI', logo: 'comfyui', sub: comfyStatus?.installed ? 'Ready' : 'Images', tone: 'bg-white border-[#e5e5e5]' },
-    { id: 'blender', label: 'Blender', logo: 'blender', sub: studioPacks.find(pack => pack.id === 'blender-creative')?.status.installed ? 'Ready' : '3D', tone: 'bg-white border-[#e5e5e5]' },
-    { id: 'audacity', label: 'Audacity', logo: 'audacity', sub: studioPacks.find(pack => pack.id === 'music-daw-helper')?.status.installed ? 'Ready' : 'Audio', tone: 'bg-white border-[#e5e5e5]' },
-    { id: 'lmms', label: 'LMMS', logo: 'lmms', sub: studioPacks.find(pack => pack.id === 'music-daw-helper')?.status.installed ? 'Ready' : 'Beats', tone: 'bg-white border-[#e5e5e5]' },
-    { id: 'godot', label: 'Godot', logo: 'godot', sub: studioPacks.find(pack => pack.id === 'godot-engine')?.status.installed ? 'Ready' : 'Games', tone: 'bg-white border-[#e5e5e5]' },
-    { id: 'github', label: 'GitHub', logo: 'github', sub: githubPack?.status.installed ? 'Ready' : 'Repos', tone: 'bg-white border-[#e5e5e5]' },
-    { id: 'unity', label: 'Unity', logo: 'unity', sub: 'Helper', tone: 'bg-white border-[#e5e5e5]' },
-    { id: 'unreal', label: 'Unreal', logo: 'unreal', sub: 'Helper', tone: 'bg-white border-[#e5e5e5]' },
-  ];
-  const repoAndGameHighlights = softwareHighlights.filter(item => ['github', 'godot', 'unity', 'unreal'].includes(item.id));
   const missionProfiles: Array<{
     id: WizardProfile;
     title: string;
@@ -1610,12 +1592,6 @@ export default function SetupPage() {
     game: 'Game engine helpers, Blender assets, GitHub repos, and mod workspace tools.',
     music: 'AI music generation, stem separation, transcription, and audio editor helpers.',
   };
-  const selectedProfile = missionProfiles.find(profile => profile.id === selectedWizardProfile) ?? missionProfiles[0];
-  const selectedProfilePackIds = wizardProfilePackIds(selectedProfile.id);
-  const selectedProfileModelIds = wizardProfileModelIds(selectedProfile.id);
-  const selectedProfileDiskGb = diskForPackIds(selectedProfilePackIds) + diskForModelIds(selectedProfileModelIds);
-  const selectedProfilePacks = studioPacks.filter(pack => selectedProfilePackIds.includes(pack.id));
-  const selectedProfileModels = studioModels.filter(model => selectedProfileModelIds.includes(model.id));
   const pythonFact = setupCompatibility?.facts.find(fact => fact.id.toLowerCase().includes('python') || fact.label.toLowerCase().includes('python'));
   const nodeFact = setupCompatibility?.facts.find(fact => fact.id.toLowerCase().includes('node') || fact.label.toLowerCase().includes('node'));
   const systemCheckItems: Array<{ label: string; value: string; state: SetupCheckState }> = [
@@ -1704,7 +1680,7 @@ export default function SetupPage() {
       const installableClawIds = selectableStudioPackIds(studioPacks, studioBundles.claw ?? ['openclaw-agent', 'nemoclaw-sandbox']);
       if (installableClawIds.length > 0) handleInstallStudioPacks(installableClawIds);
       else {
-        setStudioError('No Claw agent option is installable on this host yet. Check Node.js and Docker/OpenShell readiness in Advanced Details.');
+        setStudioError('No Claw agent option is installable on this host yet. Check Node.js and Docker/OpenShell readiness in Troubleshooting.');
         setStep('studio');
       }
       return;
@@ -1787,39 +1763,55 @@ export default function SetupPage() {
             onClick={() => setAdvancedSetupOpen(prev => !prev)}
             className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider sm:flex-shrink-0"
           >
-            {advancedSetupOpen ? 'Hide Details' : 'Advanced Details'}
+            {advancedSetupOpen ? 'Hide Troubleshooting' : 'Troubleshooting'}
           </button>
         </div>
         {advancedSetupOpen && (
-          <div className="mt-3 flex items-center gap-0 overflow-x-auto pt-1">
-            {STEPS.map((s, i) => (
-              <div key={s.id} className="flex items-center flex-shrink-0">
-                <button
-                  onClick={() => setStep(s.id)}
-                  className={`flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider transition-all ${
-                    s.id === step
-                      ? 'text-[#76B900]'
-                      : i < currentStepIdx
-                      ? 'text-[#a3a3a3] hover:text-[#76B900]'
-                      : 'text-[#333333]'
-                  }`}
-                >
-                  <span className={`w-5 h-5 flex items-center justify-center text-[10px] font-bold border ${
-                    s.id === step
-                      ? 'border-[#76B900] bg-[#76B900] text-black'
-                      : i < currentStepIdx
-                      ? 'border-[#76B900]/40 text-[#76B900]'
-                      : 'border-[#d4d4d4] text-[#333333]'
-                  }`}>
-                    {i < currentStepIdx ? 'OK' : s.num}
-                  </span>
-                  <span>{s.label}</span>
-                </button>
-                {i < STEPS.length - 1 && (
-                  <div className={`w-6 h-px mx-2 ${i < currentStepIdx ? 'bg-[#76B900]/40' : 'bg-[#e5e5e5]'}`} />
-                )}
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center gap-2 overflow-x-auto pt-1">
+              {ADVANCED_GROUPS.map(group => {
+                const firstStepIdx = STEPS.findIndex(s => s.id === group.steps[0]);
+                const isActive = group.id === currentAdvancedGroup.id;
+                const isComplete = firstStepIdx > -1 && firstStepIdx < currentStepIdx;
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    onClick={() => setStep(group.steps[0])}
+                    className={`flex items-center gap-1.5 border px-2.5 py-1.5 text-[10px] font-mono uppercase tracking-wider transition-all flex-shrink-0 ${
+                      isActive
+                        ? 'border-[#76B900] bg-[#76B900] text-black'
+                        : isComplete
+                          ? 'border-[#76B900]/40 text-[#76B900] bg-[#f7fdf0]'
+                          : 'border-[#d4d4d4] text-[#525252] bg-white hover:border-[#76B900]/50 hover:text-[#0a0a0a]'
+                    }`}
+                  >
+                    <span>{isComplete ? 'OK' : group.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {currentAdvancedGroup.steps.length > 1 && (
+              <div className="flex flex-wrap gap-2">
+                {currentAdvancedGroup.steps.map(groupStep => {
+                  const detail = STEPS.find(s => s.id === groupStep);
+                  return (
+                    <button
+                      key={groupStep}
+                      type="button"
+                      onClick={() => setStep(groupStep)}
+                      className={`border px-2 py-1 text-[9px] font-mono uppercase tracking-wider ${
+                        groupStep === step
+                          ? 'border-[#76B900] text-[#0a0a0a] bg-[#f7fdf0]'
+                          : 'border-[#e5e5e5] text-[#737373] bg-white hover:text-[#0a0a0a]'
+                      }`}
+                    >
+                      {detail?.label ?? groupStep}
+                    </button>
+                  );
+                })}
               </div>
-            ))}
+            )}
           </div>
         )}
       </div>
@@ -1833,7 +1825,7 @@ export default function SetupPage() {
                 {storageReady ? 'Start with the recommended lab' : 'nvWizard is finding persistent storage'}
               </div>
               <div className="text-xs font-mono text-[#525252] mt-2 leading-relaxed max-w-2xl">
-                nvWizard checks storage, GPU, CUDA, Python, ComfyUI, models, and install receipts, then recommends the next safe action. Manual commands stay available under Advanced Details.
+                nvWizard checks storage, GPU, CUDA, Python, ComfyUI, models, and install receipts, then recommends the next safe action. Manual commands stay available under Troubleshooting.
               </div>
               {topHelperAction && (
                 <div className="mt-3 border border-[#76B900]/20 bg-white p-3">
@@ -1867,17 +1859,10 @@ export default function SetupPage() {
               <button
                 type="button"
                 onClick={() => void handleRepairWorkspace()}
-                disabled={workspaceRepairing}
+                disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
                 className="btn-ghost px-4 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
               >
                 {workspaceRepairing ? 'Repairing' : 'Fix My Setup'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setAdvancedSetupOpen(prev => !prev)}
-                className="btn-ghost px-4 py-2 text-xs font-mono uppercase tracking-wider"
-              >
-                {advancedSetupOpen ? 'Hide Details' : 'Advanced Details'}
               </button>
             </div>
           </div>
@@ -2608,11 +2593,11 @@ export default function SetupPage() {
               </div>
             )}
 
-            <div className="border border-[#e5e5e5] bg-white p-3">
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                <div>
+            <div className="border border-[#e5e5e5] bg-white px-3 py-2 flex flex-col gap-2">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
                   <div className="section-label">System Check</div>
-                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">
+                  <div className="text-xs font-bold text-[#0a0a0a]">
                     {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready for rootless installs'}
                   </div>
                 </div>
@@ -2620,23 +2605,21 @@ export default function SetupPage() {
                   <button
                     type="button"
                     onClick={() => runHelperAction(topHelperAction.id)}
-                    disabled={helperActionDisabled(topHelperAction.id)}
+                    disabled={apiDisconnected || anyInstallRunning || helperActionDisabled(topHelperAction.id)}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
                     {helperActionLabel(topHelperAction.id)}
                   </button>
                 )}
               </div>
-              <div className="mt-3 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+              <div className="flex flex-wrap gap-1.5">
                 {systemCheckItems.map(item => {
                   const tone = CHECK_TONES[item.state];
                   return (
-                    <div key={item.label} className={`border ${tone.border} ${tone.bg} p-2 min-w-0`}>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[9px] font-mono text-[#737373] uppercase truncate">{item.label}</span>
-                        <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                      </div>
-                      <div className={`text-[10px] font-mono mt-1 truncate ${tone.text}`}>{item.value}</div>
+                    <div key={item.label} className={`inline-flex items-center gap-1.5 border ${tone.border} ${tone.bg} px-2 py-1 min-w-0`}>
+                      <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                      <span className="text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
+                      <span className={`text-[10px] font-mono truncate max-w-[10rem] ${tone.text}`}>{item.value}</span>
                     </div>
                   );
                 })}
@@ -2644,257 +2627,55 @@ export default function SetupPage() {
             </div>
 
             {advancedSetupOpen && (
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-              <div className={`border bg-white p-4 ${storageReady ? 'border-[#76B900]/30' : 'border-[#d97706]/30'}`}>
-                <div className="flex items-start gap-3">
-                  <span className={`w-12 h-12 flex items-center justify-center border flex-shrink-0 ${storageReady ? 'bg-white border-[#76B900]/50' : 'bg-white border-[#d97706]/30'}`}>
-                    <BrandLogo id="nvidia" className="w-8 h-8" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="section-label">Storage Autopilot</div>
-                    <div className="text-sm font-bold text-[#0a0a0a] mt-1">
-                      {storageReady ? 'Persistent home ready' : storageAutopilotBusy ? 'Scanning storage' : 'Auto-find storage'}
-                    </div>
-                    <div className="text-[10px] font-mono text-[#737373] mt-1 truncate">
-                      {storageReady
-                        ? storageFreeGb === null ? 'Space unknown' : `${storageFreeGb} GB free`
-                        : mountRecommendation?.recommended_home ?? 'Large writable block mount'}
+              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="section-label">Troubleshooting</div>
+                    <div className="text-xs text-[#525252] mt-1">
+                      Use the tabs above for storage, hardware, apps, accounts, and tests. The main install choices stay below.
                     </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleRepairWorkspace()}
+                    disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {workspaceRepairing ? 'Repairing' : 'Repair Workspace'}
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void handleUseRecommendedStorage()}
-                  disabled={storageReady || storageAutopilotBusy || apiDisconnected}
-                  className="btn-primary w-full mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                >
-                  {storageReady ? 'Storage Ready' : apiDisconnected ? 'API Offline' : storageAutopilotBusy ? 'Finding' : 'Run Auto-Detect'}
-                </button>
-                {advancedSetupOpen && (
-                  <div className="mt-3 space-y-2">
-                    {!storageReady && mountRecommendation && (
-                      <div className="text-[10px] font-mono text-[#525252] break-all border border-[#e5e5e5] bg-[#fafafa] p-2">
-                        {mountRecommendation.recommended_home}
-                      </div>
-                    )}
-                    {!storageReady && (
-                      <div className="flex flex-col gap-2">
-                        <input
-                          type="text"
-                          value={storageHomeInput}
-                          onChange={e => setStorageHomeInput(e.target.value)}
-                          placeholder="/mnt/persist/nvhive"
-                          className="input-base px-3 py-2 text-xs font-mono"
-                          spellCheck={false}
-                        />
-                        <button
-                          type="button"
-                          onClick={handleConfigureStorage}
-                          disabled={storageSaving}
-                          className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                        >
-                          {storageSaving ? 'Checking' : 'Manual Override'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {(storageError || storageStatus?.warnings?.length) && (
-                  <div className="mt-3 space-y-1">
-                    {storageError && <div className="text-[10px] font-mono text-[#dc2626]">{storageError}</div>}
-                    {storageStatus?.warnings.map(warning => (
-                      <div key={warning} className="text-[10px] font-mono text-[#d97706]">{warning}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="border border-[#e5e5e5] bg-white p-4">
-                <div className="flex items-start gap-3">
-                  <span className="w-12 h-12 flex items-center justify-center border bg-white border-[#e5e5e5] flex-shrink-0">
-                    <BrandLogo id="ollama" className="w-8 h-8" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="section-label">LLM Picks</div>
-                    <div className="text-sm font-bold text-[#0a0a0a] mt-1 truncate">{hardwareName}</div>
-                    <div className="text-[10px] font-mono text-[#737373] mt-1">{hardwareVramLabel}</div>
-                  </div>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {modelPickPreview.length > 0 ? modelPickPreview.map(model => (
-                    <div key={model.id} className="flex items-center justify-between gap-2 border border-[#e5e5e5] bg-[#fafafa] px-2 py-2">
-                      <span className="text-xs font-bold text-[#0a0a0a] truncate">{model.title}</span>
-                      <span className="text-[9px] font-mono text-[#76B900] flex-shrink-0">{model.recommended_vram_gb}GB+</span>
-                    </div>
-                  )) : (
-                    <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 text-xs text-[#737373]">
-                      Waiting for GPU scan.
-                    </div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!storageReady) {
-                      void handleUseRecommendedStorage();
-                      return;
-                    }
-                    if (visibleHardwareModelIds.length > 0) handleInstallStudioModels(visibleHardwareModelIds);
-                  }}
-                  disabled={apiDisconnected || storageAutopilotBusy || anyInstallRunning || modelsInstalling || (storageReady && visibleHardwareModelIds.length === 0)}
-                  className="btn-primary w-full mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                >
-                  {!storageReady ? storagePrimaryLabel : modelsInstalling ? 'Downloading' : 'Download Picks'}
-                </button>
-              </div>
-
-              <div className="border border-[#e5e5e5] bg-white p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="section-label">Connect & Build</div>
-                    <div className="text-sm font-bold text-[#0a0a0a] mt-1">Repos and game engines</div>
-                  </div>
-                  <span className="text-[9px] font-mono text-[#737373] uppercase">{repoAndGameHighlights.length} tools</span>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  {repoAndGameHighlights.map(item => (
-                    <div key={item.id} className="border border-[#e5e5e5] bg-[#fafafa] p-2 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-9 h-9 flex items-center justify-center border flex-shrink-0 ${item.tone}`}>
-                          <BrandLogo id={item.logo} className="w-6 h-6" />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block text-[10px] font-bold text-[#0a0a0a] truncate">{item.label}</span>
-                          <span className="block text-[9px] font-mono text-[#737373] uppercase truncate">{item.sub}</span>
-                        </span>
-                      </div>
+                <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {[
+                    ['Storage', storageReady ? 'Ready' : storageBeginnerLabel],
+                    ['Compatibility', compatibilityIssueCount ? `${compatibilityIssueCount} issues` : 'Clear'],
+                    ['Boot Changes', bootChangeCount ? `${bootChangeCount} found` : 'None'],
+                    ['Logs', diagnosticsLogLineCount ? `${diagnosticsLogLineCount} lines` : 'Quiet'],
+                  ].map(([label, value]) => (
+                    <div key={label} className="border border-[#e5e5e5] bg-white p-2 min-w-0">
+                      <div className="text-[9px] font-mono text-[#737373] uppercase">{label}</div>
+                      <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 truncate">{value}</div>
                     </div>
                   ))}
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-2 mt-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!storageReady) {
-                        void handleUseRecommendedStorage();
-                        return;
-                      }
-                      handleInstallStudioPacks(['github-login-helper']);
-                    }}
-                    disabled={apiDisconnected || storageAutopilotBusy || anyInstallRunning || studioInstalling || !githubPack}
-                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                  >
-                    {!storageReady ? storagePrimaryLabel : githubPack?.status.installed ? 'Refresh GitHub' : 'Connect GitHub'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!storageReady) {
-                        void handleUseRecommendedStorage();
-                        return;
-                      }
-                      handleInstallStudioPacks(['game']);
-                    }}
-                    disabled={apiDisconnected || storageAutopilotBusy || anyInstallRunning || studioInstalling || gameEnginePacks.length === 0}
-                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                  >
-                    {!storageReady ? 'Auto-Find Storage' : 'Game Engines'}
-                  </button>
-                </div>
               </div>
-            </div>
             )}
 
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="section-label">Install Options</div>
               </div>
-              {advancedSetupOpen && (
-              <div className="hidden sm:block border border-[#76B900]/30 bg-[#f7fdf0] p-4">
-                <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-3">
-                      <span className="w-12 h-12 flex items-center justify-center border border-[#76B900]/30 bg-white flex-shrink-0">
-                        <div className="grid grid-cols-2 gap-0.5">
-                          {selectedProfile.logos.slice(0, 4).map(logo => (
-                            <BrandLogo key={logo} id={logo} className="w-5 h-5" />
-                          ))}
-                        </div>
-                      </span>
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider">Mission Summary</div>
-                        <div className="text-base font-bold text-[#0a0a0a] leading-tight">{selectedProfile.title}</div>
-                        <div className="text-xs text-[#525252] mt-1">{selectedProfile.outcome}</div>
-                      </div>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-2">
-                      <div className="border border-[#d8e8c3] bg-white/80 p-2 min-w-0">
-                        <div className="text-[9px] font-mono text-[#737373] uppercase">Storage</div>
-                        <div className={`text-[10px] font-mono mt-1 truncate ${storageReady ? 'text-[#76B900]' : 'text-[#d97706]'}`}>
-                          {storageReady ? storageStatus?.layout.home ?? 'persistent ready' : 'auto-detect first'}
-                        </div>
-                      </div>
-                      <div className="border border-[#d8e8c3] bg-white/80 p-2 min-w-0">
-                        <div className="text-[9px] font-mono text-[#737373] uppercase">GPU</div>
-                        <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 truncate">{hardwareName}</div>
-                      </div>
-                      <div className="border border-[#d8e8c3] bg-white/80 p-2 min-w-0">
-                        <div className="text-[9px] font-mono text-[#737373] uppercase">Disk</div>
-                        <div className="text-[10px] font-mono text-[#0a0a0a] mt-1">
-                          {hasCatalogSizing ? `~${Math.max(0, selectedProfileDiskGb).toFixed(1)} GB` : 'after check'}
-                        </div>
-                      </div>
-                      <div className="border border-[#d8e8c3] bg-white/80 p-2 min-w-0">
-                        <div className="text-[9px] font-mono text-[#737373] uppercase">Selected</div>
-                        <div className="text-[10px] font-mono text-[#0a0a0a] mt-1">
-                          {selectedProfilePacks.length} apps / {selectedProfileModels.length} models
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-1">
-                      {[...selectedProfilePacks.slice(0, 4).map(pack => pack.title), ...selectedProfileModels.slice(0, 3).map(model => model.title)].map(item => (
-                        <span key={item} className="text-[9px] font-mono text-[#525252] bg-white border border-[#d8e8c3] px-1.5 py-0.5">
-                          {item}
-                        </span>
-                      ))}
+              {apiDisconnected && (
+                <div className="border border-[#d97706]/30 bg-[#fff8ed] p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-[#7c2d12]">nvHive API is not connected</div>
+                    <div className="text-[10px] font-mono text-[#9a3412] mt-0.5">
+                      Launch from NVHive AI Studio or run nvh webui so the local API starts before installing missions.
                     </div>
                   </div>
-                  <div className="flex flex-col gap-2 xl:w-44">
-                    <button
-                      type="button"
-                      onClick={() => void handleBuildWizardProfile(selectedProfile.id)}
-                      disabled={anyInstallRunning || apiDisconnected}
-                      className="btn-primary px-4 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
-                    >
-                      {apiDisconnected
-                        ? 'API Offline'
-                        : activeWizardBuild === selectedProfile.id ? 'Installing' : 'Install Mission'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!storageReady) {
-                          void handleUseRecommendedStorage().then(status => {
-                            if (status?.ok && status.configured_by !== 'default') {
-                              setAdvancedSetupOpen(true);
-                              applyWizardProfile(selectedProfile.id);
-                            } else {
-                              setAdvancedSetupOpen(true);
-                            }
-                          });
-                          return;
-                        }
-                        setAdvancedSetupOpen(true);
-                        applyWizardProfile(selectedProfile.id);
-                      }}
-                      disabled={!profilesReady || Boolean(activeWizardBuild) || storageAutopilotBusy || apiDisconnected}
-                      className="btn-ghost px-4 py-3 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
-                    >
-                      Customize
-                    </button>
-                  </div>
+                  <span className="text-[9px] font-mono uppercase text-[#9a3412] border border-[#d97706]/30 px-2 py-1 flex-shrink-0">
+                    Waiting for API
+                  </span>
                 </div>
-              </div>
               )}
               <div className={`grid grid-cols-1 gap-3 ${advancedSetupOpen ? 'lg:grid-cols-2' : 'lg:grid-cols-2 xl:grid-cols-4'}`}>
                 {(advancedSetupOpen ? missionProfiles : beginnerProfiles)
@@ -2967,7 +2748,7 @@ export default function SetupPage() {
                             disabled={!profileInstalled && (anyInstallRunning || apiDisconnected)}
                             className={`${profileInstalled ? 'btn-ghost' : 'btn-primary'} w-full mt-4 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40`}
                           >
-                            {profileInstalled ? 'Open' : apiDisconnected ? 'API Offline' : building ? 'Installing' : 'Install'}
+                            {profileInstalled ? 'Open' : building ? 'Installing' : 'Install'}
                           </button>
                         </div>
                       );
@@ -3025,7 +2806,7 @@ export default function SetupPage() {
                             disabled={anyInstallRunning || apiDisconnected}
                             className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                           >
-                            {apiDisconnected ? 'API Offline' : building ? 'Installing' : 'Install Mission'}
+                            {building ? 'Installing' : 'Install Mission'}
                           </button>
                           <button
                             type="button"
@@ -3056,24 +2837,6 @@ export default function SetupPage() {
               </div>
             </div>
 
-            {advancedSetupOpen && (
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-[10px] font-mono border-t border-[#e5e5e5] pt-4">
-              <div className="flex items-center gap-2">
-                <span className={`w-1.5 h-1.5 flex-shrink-0 ${apiStatus === 'connected' ? 'bg-[#76B900]' : apiStatus === 'disconnected' ? 'bg-[#d97706]' : 'bg-[#a3a3a3] animate-pulse'}`}
-                  style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                <span className={apiStatus === 'connected' ? 'text-[#76B900]' : 'text-[#737373]'}>
-                  {apiStatus === 'connected' ? 'nvHive API is online' : apiStatus === 'disconnected' ? 'nvHive API is not responding yet' : 'Checking nvHive API'}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAdvancedSetupOpen(prev => !prev)}
-                className="text-[#737373] hover:text-[#76B900] uppercase tracking-wider"
-              >
-                {advancedSetupOpen ? 'Hide Details' : 'Advanced Details'}
-              </button>
-            </div>
-            )}
           </div>
         )}
 
@@ -4398,7 +4161,7 @@ export default function SetupPage() {
           </button>
 
           <span className="text-[10px] font-mono text-[#333333]">
-            Advanced step {currentStepIdx + 1} / {STEPS.length}
+            {currentAdvancedGroup.label}: {currentStep.label}
           </span>
 
           {step !== 'done' ? (
