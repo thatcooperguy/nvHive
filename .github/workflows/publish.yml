@@ -1,3 +1,6 @@
+# Publishes the canonical "nvhive" PyPI distribution from
+# thatcooperguy/nvHive only. Forks must use a distinct package name.
+
 name: Publish to PyPI
 
 on:
@@ -42,7 +45,10 @@ jobs:
 
   publish-testpypi:
     needs: build
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
+    if: >
+      github.repository == 'thatcooperguy/nvHive' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.target == 'testpypi'
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
@@ -58,7 +64,10 @@ jobs:
 
   publish-pypi:
     needs: build
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi')
+    if: >
+      github.repository == 'thatcooperguy/nvHive' &&
+      (github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi'))
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

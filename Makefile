@@ -32,11 +32,15 @@ build:
 
 # Publish to TestPyPI
 publish-test:
-	python -m twine upload --repository testpypi dist/*
+	@echo "TestPyPI publishing for the canonical nvhive package is restricted."
+	@echo "Use GitHub Actions trusted publishing from thatcooperguy/nvHive; see docs/RELEASING.md."
+	@exit 1
 
 # Publish to PyPI
 publish:
-	python -m twine upload dist/*
+	@echo "PyPI publishing for the canonical nvhive package is restricted."
+	@echo "Use GitHub Actions trusted publishing from thatcooperguy/nvHive; see docs/RELEASING.md."
+	@exit 1
 
 # Build web UI
 web:

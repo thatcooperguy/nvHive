@@ -1,5 +1,8 @@
 name: Release
 
+# Creates official nvHive release artifacts from thatcooperguy/nvHive only.
+# Forks should rename the project/package/release assets before publishing.
+#
 # Creates a GitHub Release on tag push with:
 #   - sdist + wheel (also consumed by publish.yml for PyPI)
 #   - Single-file PyInstaller binaries for Linux, macOS, Windows
@@ -27,6 +30,7 @@ jobs:
   # PyPI consumes them and users can `pip install` directly from a
   # release asset URL without PyPI at all.
   build-python:
+    if: github.repository == 'thatcooperguy/nvHive'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -51,6 +55,7 @@ jobs:
   # PyInstaller's static analysis misses. Hidden imports are the known
   # offenders that still slip through (keyring backends, aiosqlite).
   build-binaries:
+    if: github.repository == 'thatcooperguy/nvHive'
     strategy:
       fail-fast: false
       matrix:
@@ -109,6 +114,7 @@ jobs:
 
   # Aggregate all artifacts into a single GitHub Release.
   release:
+    if: github.repository == 'thatcooperguy/nvHive'
     needs: [build-python, build-binaries]
     runs-on: ubuntu-latest
     permissions:

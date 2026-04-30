@@ -148,7 +148,7 @@ python -m nvh.mcp_server
 
 ## Links
 
-- [nvHive on PyPI](https://pypi.org/project/nvhive/)
-- [nvHive GitHub](https://github.com/thatcooperguy/nvhive)
+- [Canonical nvHive package on PyPI](https://pypi.org/project/nvhive/)
+- [Official nvHive GitHub repository](https://github.com/thatcooperguy/nvHive)
 - [MCP Protocol Spec](https://modelcontextprotocol.io)
 - [Claude Code MCP Docs](https://code.claude.com/docs/en/mcp)

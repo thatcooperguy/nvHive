@@ -4,6 +4,15 @@
 
 ![version](https://img.shields.io/badge/version-0.35.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
+**Official project:** https://github.com/thatcooperguy/nvHive
+
+**Official PyPI package:** https://pypi.org/project/nvhive/
+
+Forks and third-party builds are welcome under the MIT License, but independent
+redistributions should use distinct project names, package names, release
+channels, and branding. See [NOTICE](NOTICE.md) and
+[TRADEMARKS](TRADEMARKS.md).
+
 nvHive turns a fresh cloud Linux GPU desktop into a ready-to-use AI workstation
 without `sudo`: it finds persistent storage, installs into user-owned paths,
 opens a setup wizard, recommends models for the detected GPU, and gives students
@@ -110,6 +119,11 @@ Full asset list (wheel, sdist, checksums) lives on the
 [Releases page](https://github.com/thatcooperguy/nvHive/releases/latest).
 
 ### pip from PyPI (for existing Python environments)
+
+The canonical PyPI distribution `nvhive` is published only from
+`thatcooperguy/nvHive`. Forks and third-party builds should use a distinct PyPI
+distribution name and must not publish under `nvhive` as an official-looking
+release.
 
 ```bash
 pip install nvhive              # core
@@ -438,4 +452,10 @@ Results vary by hardware and workload — run `nvh bench` to measure on your set
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+Source code is licensed under the MIT License. See [LICENSE](LICENSE) and
+[NOTICE](NOTICE.md).
+
+The MIT License does not grant rights to use nvHive names, logos, screenshots,
+release artifacts, package publishing identities, or other branding in a way
+that causes confusion about the official project. See
+[TRADEMARKS](TRADEMARKS.md) and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).

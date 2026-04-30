@@ -15,8 +15,8 @@ the rootless workstation path for local models, ComfyUI, and Studio packs.
 
 ```bash
 # Clone the repo
-git clone https://github.com/thatcooperguy/nvhive.git
-cd nvhive
+git clone https://github.com/thatcooperguy/nvHive.git
+cd nvHive
 
 # Copy the example env file and add your API keys
 cp .env.example .env
@@ -35,7 +35,7 @@ That's it. The web UI is at **http://localhost:3000** and the API is at **http:/
 ### Option B: One-line setup (Ubuntu with NVIDIA GPU and install privileges)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvhive/main/scripts/setup.sh | bash
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/scripts/setup.sh | bash
 ```
 
 This prepares a Docker-backed local stack, starts NVHive, and pulls a local AI

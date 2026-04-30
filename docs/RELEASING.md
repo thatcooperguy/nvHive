@@ -1,9 +1,14 @@
-# Releasing nvhive
+# Releasing nvHive
 
-The nvhive release flow is mostly automated but relies on one human in
+The nvHive release flow is mostly automated but relies on one human in
 the loop: a maintainer who can push to GitHub with a `workflow`-scoped
 token and who has access to the PyPI trusted-publishing setup. This
 document is the runbook for that maintainer.
+
+The canonical project for the `nvhive` PyPI distribution is
+`thatcooperguy/nvHive`. Only maintainers of that repository should publish to
+PyPI under this name. Forks and third-party builds must use a distinct package
+name, repository metadata, and release channel.
 
 ## TL;DR
 
@@ -41,14 +46,14 @@ release tag after the GitHub Release artifacts are built.
 
 You need:
 
-- **GitHub auth** with push access to `thatcooperguy/nvhive.git` **and**
+- **GitHub auth** with push access to `thatcooperguy/nvHive.git` **and**
   the `workflow` scope if you plan to modify anything under
   `.github/workflows/`. Fine-grained tokens and classic OAuth tokens
   both work; GitHub's web UI and `gh` CLI are fine.
 - **PyPI trusted publishing** already configured for this project.
   Check at https://pypi.org/manage/project/nvhive/settings/publishing/
-  — the workflow file is `publish.yml`, environment name `pypi`,
-  repository `thatcooperguy/nvhive`. If trusted publishing breaks, the
+  - the workflow file is `publish.yml`, environment name `pypi`,
+  repository `thatcooperguy/nvHive`. If trusted publishing breaks, the
   fallback is an API token in a secret called `PYPI_API_TOKEN`.
 - **A clean working tree** on `main`. `git status` should show nothing.
 
@@ -68,7 +73,11 @@ Before tagging, verify:
 4. **CHANGELOG updated**. Every release must have a corresponding
    section in `CHANGELOG.md`. This is how users know what they're
    getting into.
-5. **CORS origins still cover `nvh webui` defaults**. If you've touched
+5. **Project identity checked**. Verify README install URLs, PyPI metadata,
+   release asset names, `NOTICE.md`, `TRADEMARKS.md`, and trusted-publisher
+   settings all point to `thatcooperguy/nvHive` and the canonical `nvhive`
+   package.
+6. **CORS origins still cover `nvh webui` defaults**. If you've touched
    `nvh/api/server.py::ALLOWED_ORIGINS`, verify that `http://nvhive`,
    `http://localhost:3000`, and port 80 are all present.
 

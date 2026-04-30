@@ -12,6 +12,8 @@
   ComfyUI, Blender, NVIDIA Omni/NeMo/Nemotron paths, and music tooling.
 - README and docs now lead with the no-root cloud GPU desktop journey and the
   target VM acceptance checklist.
+- NOTICE, trademark, third-party notice, and release-channel safeguards clarify
+  the official nvHive project identity and canonical `nvhive` PyPI package.
 
 ### Fixed
 - Persistent mount discovery ignores permission-denied probe paths such as

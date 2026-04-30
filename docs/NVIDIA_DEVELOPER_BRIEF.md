@@ -178,7 +178,7 @@ nvh bench
 
 ## Traction
 
-- **PyPI**: Published, `pip install nvhive`
+- **PyPI**: Canonical distribution, `pip install nvhive`, published by `thatcooperguy/nvHive`
 - **Testing**: 225 tests, CI clean (Python 3.11 + 3.12)
 - **Providers**: 23 integrated, 25 free tiers
 - **CLI**: 50+ commands
@@ -190,5 +190,5 @@ nvh bench
 ## Contact
 
 - **PyPI**: https://pypi.org/project/nvhive/
-- **GitHub**: https://github.com/thatcooperguy/nvhive
+- **GitHub**: https://github.com/thatcooperguy/nvHive
 - **Author**: Cooper (@thatcooperguy)

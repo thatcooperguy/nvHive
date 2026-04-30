@@ -1,108 +1,80 @@
-# NVHive — End User License Agreement (EULA)
+# nvHive Supplemental Terms
 
-**Effective Date:** 2026-03-31
-**Version:** 1.0
+**Effective Date:** 2026-04-30
+**Version:** 1.1
 
-## 1. Acceptance
+This document explains user-facing responsibilities for nvHive integrations,
+third-party services, and project branding. It does not replace the MIT License
+for the nvHive source code. Source code rights are governed by [LICENSE](LICENSE).
 
-By installing, accessing, or using NVHive ("the Software"), you agree to be bound by this EULA. If you do not agree, do not use the Software.
+## Source Code License
 
-## 2. License Grant
+The nvHive source code is licensed under the MIT License. You may use, copy,
+modify, merge, publish, distribute, sublicense, and sell copies of the software
+subject to the conditions in [LICENSE](LICENSE).
 
-NVHive is licensed under the MIT License for the software source code. This EULA covers the use of the NVHive service, including its integration with third-party AI providers and NVIDIA technologies.
+The MIT License does not grant trademark, endorsement, package publishing, or
+official release-channel rights. See [NOTICE](NOTICE.md) and
+[TRADEMARKS](TRADEMARKS.md).
 
-## 3. NVIDIA Relationship & Trademarks
+## Official Project Identity
 
-- NVHive is an **independent project**. It is NOT developed, maintained, endorsed, or officially affiliated with NVIDIA Corporation.
-- "NVIDIA", "GeForce", "Linux Desktop", "Nemotron", "DGX", "NIM", and related marks are trademarks of NVIDIA Corporation.
-- NVHive uses NVIDIA technologies (CUDA, NVML, Nemotron models via Ollama, Linux Desktop detection) under their respective licenses.
-- Use of Nemotron models is subject to [NVIDIA's model license terms](https://www.nvidia.com/en-us/ai/).
-- Use of pynvml/NVML is subject to NVIDIA's NVML license.
-- NVIDIA bears no responsibility for NVHive's functionality, data handling, or any issues arising from its use.
+The official nvHive project is maintained at:
 
-## 4. Third-Party AI Providers
+- GitHub: https://github.com/thatcooperguy/nvHive
+- PyPI: https://pypi.org/project/nvhive/
 
-NVHive connects to third-party AI services ("Advisors"). By using these services through NVHive:
+Forks and third-party builds should clearly identify themselves as unofficial
+and should use distinct project names, package names, release channels, and
+branding unless explicitly approved by the nvHive maintainers.
 
-- **You accept each provider's Terms of Service** when you add their API key.
-- Your queries are transmitted to these providers according to THEIR data policies.
-- NVHive does not modify or intercept query content beyond formatting for the provider's API.
-- API keys are stored locally on your device (OS keychain or encrypted file). NVHive does not transmit your API keys to any party other than the respective provider.
+## NVIDIA Relationship and Third-Party Marks
 
-### Provider Terms (user must accept individually):
-| Provider | Terms |
-|---|---|
-| OpenAI | https://openai.com/terms |
-| Anthropic | https://www.anthropic.com/terms |
-| Google | https://ai.google.dev/terms |
-| Groq | https://groq.com/terms-of-use |
-| xAI (Grok) | https://x.ai/legal/terms-of-service |
-| Mistral | https://mistral.ai/terms |
-| Cohere | https://cohere.com/terms-of-use |
-| DeepSeek | https://www.deepseek.com/terms |
-| GitHub Models | https://docs.github.com/en/site-policy/github-terms |
-| NVIDIA NIM | https://www.nvidia.com/en-us/ai/ |
-| Others | See each provider's website |
+nvHive is an independent project. It is not developed, maintained, endorsed, or
+officially affiliated with NVIDIA Corporation.
 
-## 5. Data Handling
+NVIDIA, GeForce, CUDA, DGX, NIM, Nemotron, NeMo, and related marks are
+trademarks or registered trademarks of NVIDIA Corporation. Other third-party
+names and marks belong to their respective owners. See
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
 
-### 5.1 What stays on your device
-- Configuration files (~/.hive/)
-- Conversation history (SQLite database)
-- API keys (OS keychain)
-- Memory and knowledge base files
-- Cached responses
-- Ollama/Nemotron model weights
+## Third-Party AI Providers
 
-### 5.2 What is transmitted to third parties
-- Query text sent to the selected AI provider's API
-- When using cloud providers, your prompts are subject to that provider's data policy
-- **Safe mode (`nvh safe`)**: No data leaves your device — all processing is local
+nvHive can connect to third-party AI providers and model hosts. When you add an
+API key, start a local runtime, download a model, or install an optional tool,
+you are responsible for that provider's terms, license, privacy policy, rate
+limits, and costs.
 
-### 5.3 What NVHive does NOT collect
-- NVHive does not operate telemetry or analytics
-- NVHive does not phone home to any NVHive server
-- NVHive does not share your data with NVIDIA or any other party
-- NVHive does not access your data for training purposes
+nvHive stores provider configuration locally. It does not operate a hosted
+backend, analytics service, or telemetry pipeline for normal local use.
 
-## 6. Free Tier Provider Accounts
+## Data Handling
 
-When using `nvh setup` to configure free-tier providers:
-- Your email address is used to create accounts on third-party platforms
-- Each provider's own privacy policy governs how they use your email
-- NVHive stores your email locally for convenience; it is NOT transmitted to NVHive servers
-- You may be subject to the provider's marketing communications (manageable via their settings)
+Data processed by local runtimes stays on the machine running nvHive unless you
+choose to share it. Data sent to cloud providers is governed by those providers'
+terms and privacy policies.
 
-## 7. Local AI (Ollama/Nemotron)
+Use `nvh safe` or local-only routing when prompts, files, or outputs should not
+leave your machine.
 
-- Local AI processing via Ollama runs entirely on your hardware
-- No query data is transmitted externally when using local models
-- Model weights are downloaded from Ollama's registry (ollama.com)
-- Nemotron models are subject to NVIDIA's model license
-- NVHive recommends local processing for sensitive data (`nvh safe`)
+## AI Output and Operational Risk
 
-## 8. Disclaimer of Warranty
+AI-generated outputs may be inaccurate, incomplete, biased, insecure, or
+inappropriate. Review outputs, generated code, dependency changes, and agent
+actions before relying on them in production.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. THE AUTHORS AND CONTRIBUTORS ARE NOT LIABLE FOR ANY DAMAGES ARISING FROM THE USE OF THIS SOFTWARE.
+Rootless installers, setup packs, and self-healing checks are best-effort tools.
+They cannot guarantee compatibility with every cloud image, GPU driver, kernel,
+CUDA runtime, Python runtime, provider API, or third-party model.
 
-AI-generated content may be inaccurate, biased, or inappropriate. Users are responsible for reviewing and verifying all AI outputs before relying on them.
+## Warranty Disclaimer
 
-## 9. Limitation of Liability
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. THE AUTHORS AND
+CONTRIBUTORS ARE NOT LIABLE FOR DAMAGES ARISING FROM USE OF THE SOFTWARE.
 
-- NVHive is not responsible for costs incurred through third-party API usage
-- NVHive is not responsible for data breaches at third-party providers
-- NVHive is not responsible for content generated by AI models
-- Budget controls are best-effort; concurrent usage may exceed stated limits
+## Contact
 
-## 10. Changes
-
-This EULA may be updated. Continued use after changes constitutes acceptance. Check the repository for the latest version.
-
-## 11. Contact
-
-For questions about this EULA, please open an issue at:
+For questions, open an issue at:
 https://github.com/thatcooperguy/nvHive/issues
-
----
-
-**NOTE: This document is a template. Consult qualified legal counsel before commercial deployment.**

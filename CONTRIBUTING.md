@@ -28,6 +28,17 @@ See `docs/plugins.md` for the full plugin API reference.
 4. Run the linter: `ruff check nvh/` and `mypy nvh/`
 5. Open a PR against `main` with a clear description of what and why.
 
+## Inbound License and Project Identity
+
+By submitting a contribution, you agree that your contribution is licensed under
+the MIT License used by this repository.
+
+The official nvHive project is maintained at
+https://github.com/thatcooperguy/nvHive and distributed on PyPI as `nvhive`.
+Forks are welcome, but independent redistributions should use distinct project
+names, package names, release channels, and branding. See `NOTICE.md` and
+`TRADEMARKS.md`.
+
 ## Code Style
 
 - Python 3.12+, type-annotated, `from __future__ import annotations`

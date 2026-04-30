@@ -18,7 +18,8 @@ The nvHive API server must be running:
 nvh serve          # default: http://localhost:8000
 ```
 
-Install nvHive from PyPI if you haven't already:
+Install the canonical nvHive package from PyPI, published by
+`thatcooperguy/nvHive`, if you haven't already:
 
 ```bash
 pip install nvhive
