@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.35.1] - 2026-05-01
+
+### Added
+- NOTICE, trademark, third-party notice, and release-channel safeguards clarify
+  the official nvHive project identity and canonical `nvhive` PyPI package.
+- Release workflow guards prevent forks from accidentally publishing
+  official-looking PyPI packages or binary release artifacts without renaming.
+
+### Changed
+- Setup wizard now starts with a calmer mission-first view and moves deeper
+  diagnostics into grouped troubleshooting tabs.
+- API client requests include supported local API key headers and retry
+  transient install-job polling failures before surfacing an error.
+- Private WebUI package metadata now uses the `nvhive-web` project identity.
+
 ## [0.35.0] - 2026-04-29
 
 ### Added
@@ -12,8 +27,6 @@
   ComfyUI, Blender, NVIDIA Omni/NeMo/Nemotron paths, and music tooling.
 - README and docs now lead with the no-root cloud GPU desktop journey and the
   target VM acceptance checklist.
-- NOTICE, trademark, third-party notice, and release-channel safeguards clarify
-  the official nvHive project identity and canonical `nvhive` PyPI package.
 
 ### Fixed
 - Persistent mount discovery ignores permission-denied probe paths such as

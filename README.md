@@ -2,7 +2,7 @@
 
 **A rootless NVIDIA AI lab for students, creators, agents, ComfyUI, and local models.**
 
-![version](https://img.shields.io/badge/version-0.35.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
+![version](https://img.shields.io/badge/version-0.35.1-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 **Official project:** https://github.com/thatcooperguy/nvHive
 
