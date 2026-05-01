@@ -19,6 +19,25 @@ opens a setup wizard, recommends models for the detected GPU, and gives students
 one-click paths for local LLMs, ComfyUI, agents, creative tools, game-dev tools,
 and music production.
 
+## At A Glance
+
+| First-time user question | nvHive answer |
+| --- | --- |
+| Where should this install? | nvWizard auto-detects the writable persistent block volume and keeps models, apps, logs, jobs, and config under `NVH_HOME`. |
+| What can I make? | Pick **AI Starter**, **Graphics Creator Studio**, **Game Dev Lab**, **Music Producer Studio**, or **Agent Builder**. |
+| What models fit this GPU? | The wizard detects GPU/VRAM/CUDA and recommends local LLMs and ComfyUI profiles that fit the machine. |
+| What if the VM image changed? | Boot health checks compare storage, drivers, CUDA, Python, Node, and receipts against the previous session. |
+| What if something breaks? | **Fix My Setup** runs safe rootless repairs, and support snapshots redact secrets and local paths. |
+| Do I need root? | No for nvHive, local models, ComfyUI, Blender, Godot helpers, music tools, and OpenClaw. NemoClaw stays blocked until Docker already works without sudo. |
+
+The ideal student journey is:
+
+1. Launch the NVIDIA Linux cloud desktop.
+2. Run the one-line install or download the Linux binary.
+3. Open **nvHive AI Studio** from the desktop icon.
+4. Pick a mission.
+5. Let nvWizard install the right rootless tools into persistent storage.
+
 What you get on the happy path:
 
 - A desktop launcher and WebUI setup wizard.
@@ -29,10 +48,11 @@ What you get on the happy path:
 - Self-healing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts.
 - Redacted error reports with request IDs when something needs debugging.
 
-Release status: CI is green across Linux, Windows, and macOS. nvHive should be
-treated as a production candidate until the
+Release status: CI is green across Linux, Windows, and macOS. nvHive is a
+release candidate and should be treated as **pilot-ready** until the
 [target NVIDIA Linux VM checklist](docs/PRODUCTION_READINESS.md) passes on the
-actual no-root GPU desktop.
+actual no-root GPU desktop. PyPI production publishing should wait for that
+target VM acceptance pass.
 
 <p align="center">
   <img src="docs/screenshots/terminal-demo-v2.gif" alt="nvHive CLI" width="640">
@@ -180,7 +200,7 @@ The setup wizard starts with one simple question: **what do you want to make?**
 Pick a mission and nvWizard handles storage, GPU checks, Python/Node runtime
 checks, model recommendations, rootless installers, and background jobs.
 
-The wizard does six things before heavy installs:
+The wizard does these checks before heavy installs:
 
 1. Finds the best user-writable persistent storage path.
 2. Checks GPU, driver, CUDA, VRAM, Python, Node, and npm health.
@@ -188,7 +208,8 @@ The wizard does six things before heavy installs:
 4. Recommends local models that fit the detected hardware and disk.
 5. Installs selected tools into `NVH_HOME` without root.
 6. Tracks long downloads as persistent jobs with logs, receipts, and retry clues.
-7. Offers **Fix My Setup** and a redacted support snapshot when something breaks.
+7. Polls `/v1/ready` so launchers know whether the workspace is ready, blocked, or only pilot-ready.
+8. Offers **Fix My Setup** and a redacted support snapshot when something breaks.
 
 | Mission | What it sets up |
 | --- | --- |
@@ -437,6 +458,7 @@ Results vary by hardware and workload — run `nvh bench` to measure on your set
 |-------|-------------|
 | [Student GPU Cloud / Linux Desktop](docs/LINUX_DESKTOP.md) | No-root NVIDIA Linux workstation and ComfyUI guide |
 | [Production Readiness](docs/PRODUCTION_READINESS.md) | Release gates and target NVIDIA Linux VM acceptance checklist |
+| [GitHub Listing Checklist](docs/GITHUB_LISTING.md) | Repository description, topics, visual assets, and release-status copy |
 | [Deploy Without Root](docs/DEPLOY_NO_ROOT.md) | No-root install on servers |
 | [Windows Troubleshooting](docs/TROUBLESHOOTING_WINDOWS.md) | Encoding, segfaults, port issues |
 | [Getting Started](docs/GETTING_STARTED.md) | General CLI/provider setup after the no-root workstation path |
