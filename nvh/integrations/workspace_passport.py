@@ -239,7 +239,7 @@ def workspace_passport(
         jobs = {"ok": True, "data": []}
         model_fit = {"ok": False, "data": None, "error": {"message": "Preview mode; model fit not loaded."}}
         compatibility = {"ok": False, "data": None, "error": {"message": "Preview mode; compatibility not loaded."}}
-    policy = rootless_policy_report(layout.home, min_free_gb=min_free_gb)
+    policy = rootless_policy_report(home_dir=home_dir, min_free_gb=min_free_gb)
 
     active_jobs = []
     if jobs.get("ok"):

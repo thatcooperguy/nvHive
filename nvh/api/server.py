@@ -1018,6 +1018,20 @@ class WizardPlanRequest(BaseModel):
     min_free_gb: float = Field(default=200.0, ge=0)
 
 
+class WizardMissionBuildRequest(BaseModel):
+    profile: str = Field(default="student", description="Mission profile to build")
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+    torch_profile: str = Field(
+        default="nvidia-cu130",
+        description="PyTorch install profile used when the mission includes ComfyUI",
+    )
+    force_update: bool = False
+    min_free_gb: float = Field(default=200.0, ge=0)
+
+
 class SupportSnapshotRequest(BaseModel):
     home_dir: str | None = Field(
         default=None,
@@ -1179,6 +1193,62 @@ async def wizard_plan(
             min_free_gb=min_free_gb,
         )
     )
+
+
+@app.get("/v1/wizard/mission-plan", summary="Return a concrete backend mission build plan")
+async def wizard_mission_plan(
+    profile: str = "student",
+    min_free_gb: float = 200.0,
+    torch_profile: str = "nvidia-cu130",
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the exact pack/model/ComfyUI stages a one-click mission will run."""
+    from nvh.integrations.mission_builder import mission_profile_plan
+
+    return _response_envelope(
+        mission_profile_plan(
+            profile,
+            torch_profile=torch_profile,
+            min_free_gb=min_free_gb,
+            home_dir=home_dir,
+        )
+    )
+
+
+@app.post("/v1/wizard/mission/job", summary="Start a backend-owned nvWizard mission build")
+async def wizard_mission_job(
+    request: WizardMissionBuildRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Build an entire mission profile as one persistent cancellable job."""
+    from nvh.integrations.jobs import start_job
+    from nvh.integrations.mission_builder import MISSION_TITLES, install_mission_profile
+    from nvh.integrations.storage import ensure_storage
+
+    profile = request.profile.strip().lower() or "student"
+    title = MISSION_TITLES.get(profile, profile.title())
+    request_data = request.model_dump()
+    if request.home_dir:
+        storage = ensure_storage(
+            request.home_dir,
+            min_free_gb=request.min_free_gb,
+            activate=True,
+        )
+        request_data["home_dir"] = str(storage.layout.home)
+    job = start_job(
+        kind="wizard-mission",
+        title=f"Build {title}",
+        request=request_data,
+        source_factory=lambda: install_mission_profile(
+            profile,
+            torch_profile=request.torch_profile,
+            force_update=request.force_update,
+            home_dir=request_data.get("home_dir"),
+            min_free_gb=request.min_free_gb,
+        ),
+    )
+    return _response_envelope(job)
 
 
 @app.post("/v1/wizard/support-snapshot", summary="Write a redacted support snapshot")

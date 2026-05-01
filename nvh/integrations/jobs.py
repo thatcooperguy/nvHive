@@ -160,7 +160,9 @@ def _progress_for_event(job: dict[str, Any], payload: dict[str, Any]) -> int:
         return max(int(job.get("progress", 0)), 5)
     if payload.get("event") in {"pack", "model"}:
         return min(90, max(int(job.get("progress", 0)), 15 + int(job.get("event_count", 0)) * 3))
-    if payload.get("event") == "step" and payload.get("status") == "complete":
+    if payload.get("event") == "stage-complete" or (
+        payload.get("event") == "step" and payload.get("status") == "complete"
+    ):
         return min(92, max(int(job.get("progress", 0)), 20 + int(job.get("event_count", 0)) * 2))
     if payload.get("event") == "log":
         return min(90, max(int(job.get("progress", 0)), 10 + int(job.get("event_count", 0))))

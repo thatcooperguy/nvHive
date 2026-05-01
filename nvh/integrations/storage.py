@@ -306,9 +306,10 @@ def ensure_storage(
     for value in layout.env().values():
         Path(value).mkdir(parents=True, exist_ok=True)
     env_file = write_env_file(layout)
-    if activate:
+    status = storage_status(home_dir=home_dir, min_free_gb=min_free_gb)
+    if activate and status.configured_by != "default":
         activate_storage(layout)
-    return storage_status(home_dir=layout.home, min_free_gb=min_free_gb)
+    return status
 
 
 def storage_status(

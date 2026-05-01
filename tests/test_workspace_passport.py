@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import shutil
 import uuid
+import os
 from pathlib import Path
 
 import pytest
 
+from nvh.integrations import storage as storage_module
 from nvh.integrations.storage import nvh_home, storage_layout
 from nvh.integrations.workspace_passport import (
     rootless_policy_report,
@@ -64,6 +66,19 @@ def test_workspace_passport_preview_does_not_create_workspace(workspace_tmp, mon
     assert passport["storage_home"] == str(home.resolve())
     assert passport["passport_path"] == str(home.resolve() / "config" / "workspace-passport.json")
     assert not home.exists()
+
+
+def test_workspace_passport_does_not_promote_implicit_default_home(workspace_tmp, monkeypatch):
+    monkeypatch.delenv("NVH_HOME", raising=False)
+    monkeypatch.delenv("NVHIVE_HOME", raising=False)
+    monkeypatch.setattr(storage_module.Path, "home", lambda: workspace_tmp)
+
+    passport = workspace_passport(min_free_gb=0)
+
+    assert passport["storage"]["configured_by"] == "default"
+    assert passport["policy"]["status"] == "warn"
+    assert passport["policy"]["gates"][0]["status"] == "warn"
+    assert "NVH_HOME" not in os.environ
 
 
 def test_rootless_policy_blocks_admin_operations(workspace_tmp, monkeypatch):

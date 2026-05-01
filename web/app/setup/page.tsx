@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import {
@@ -31,6 +31,7 @@ import {
   getComfyUIStatus,
   getComfyUIExamples,
   getInstallJobs,
+  installWizardMissionStream,
   installComfyUIStream,
   startComfyUI,
   saveComfyUIModelPlan,
@@ -66,6 +67,7 @@ import type {
   StudioPackInstallEvent,
   StudioModel,
   StudioModelInstallEvent,
+  WizardMissionInstallEvent,
   WorkspacePassport,
   WizardPlanResult,
 } from '@/lib/types';
@@ -300,7 +302,6 @@ const shouldAutoActivateStorage = (status: StorageStatus, report: MountAutopilot
 
 export default function SetupPage() {
   const [step, setStep] = useState<Step>('welcome');
-  const [apiKeys, setApiKeys] = useState<Record<string, string>>({});
   const [ollamaStatus, setOllamaStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [apiStatus, setApiStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
   const [testPrompt] = useState('Hello! Respond with exactly: "Hive is operational. NVIDIA Nemotron ready."');
@@ -379,6 +380,7 @@ export default function SetupPage() {
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
   const [selectedWizardProfile, setSelectedWizardProfile] = useState<WizardProfile>('student');
+  const handledMissionJobsRef = useRef<Set<string>>(new Set());
 
   // Live-polled provider health drives Ollama status and the
   // configured-providers list so the setup screen reflects newly
@@ -515,9 +517,18 @@ export default function SetupPage() {
   }, [refreshWorkspacePassport, selectedWizardProfile, storageStatus?.layout.home]);
 
   useEffect(() => {
-    setComfyInstalling(installJobs.some(job => job.kind === 'comfyui-install' && isActiveInstallJob(job)));
-    setStudioInstalling(installJobs.some(job => job.kind === 'studio-pack-install' && isActiveInstallJob(job)));
-    setModelsInstalling(installJobs.some(job => job.kind === 'studio-model-install' && isActiveInstallJob(job)));
+    const activeMission = installJobs.find(job => job.kind === 'wizard-mission' && isActiveInstallJob(job));
+    const missionProfile = activeMission?.request?.profile;
+    const missionProfileId = typeof missionProfile === 'string' ? missionProfile as WizardProfile : null;
+    const missionRunning = Boolean(activeMission);
+    const missionNeedsComfy = missionProfileId === 'creator' || missionProfileId === 'game' || missionProfileId === 'full';
+    setActiveWizardBuild(missionProfileId);
+    setComfyInstalling(
+      installJobs.some(job => job.kind === 'comfyui-install' && isActiveInstallJob(job)) ||
+      (missionRunning && missionNeedsComfy)
+    );
+    setStudioInstalling(missionRunning || installJobs.some(job => job.kind === 'studio-pack-install' && isActiveInstallJob(job)));
+    setModelsInstalling(missionRunning || installJobs.some(job => job.kind === 'studio-model-install' && isActiveInstallJob(job)));
   }, [installJobs]);
 
   const handleCancelInstallJob = async (jobId: string) => {
@@ -1247,127 +1258,6 @@ export default function SetupPage() {
     }
   };
 
-  const buildStudioPacks = (packIds: string[]) => new Promise<void>((resolve, reject) => {
-    if (packIds.length === 0) {
-      resolve();
-      return;
-    }
-
-    setStudioInstalling(true);
-    setStudioError(null);
-    setStudioEvents([]);
-
-    installStudioPacksStream(
-      { pack_ids: packIds, force_update: false },
-      {
-        onJob: job => mergeInstallJob(job),
-        onStatus: job => mergeInstallJob(job),
-        onEvent: event => {
-          setStudioEvents(prev => [...prev.slice(-10), event]);
-          if (event.status_snapshot) {
-            setStudioPacks(event.status_snapshot.packs);
-            setStudioBundles(event.status_snapshot.bundles);
-            setStudioRoot(event.status_snapshot.root);
-          }
-        },
-        onComplete: event => {
-          setStudioEvents(prev => [...prev.slice(-10), event]);
-          setStudioInstalling(false);
-          void refreshStudioPacks();
-          void refreshInstallJobs();
-          void refreshSetupInventory(false);
-          void refreshSetupHelper(storageStatus?.layout.home);
-          resolve();
-        },
-        onError: error => {
-          setStudioError(error);
-          setStudioInstalling(false);
-          void refreshInstallJobs();
-          void refreshSetupHelper(storageStatus?.layout.home);
-          reject(new Error(error));
-        },
-      }
-    );
-  });
-
-  const buildStudioModels = (modelIds: string[]) => new Promise<void>((resolve, reject) => {
-    if (modelIds.length === 0) {
-      resolve();
-      return;
-    }
-
-    setModelsInstalling(true);
-    setModelError(null);
-    setModelEvents([]);
-
-    installStudioModelsStream(
-      { model_ids: modelIds, force_update: false },
-      {
-        onJob: job => mergeInstallJob(job),
-        onStatus: job => mergeInstallJob(job),
-        onEvent: event => {
-          setModelEvents(prev => [...prev.slice(-10), event]);
-          if (event.status_snapshot) {
-            setStudioModels(event.status_snapshot.models);
-            setDetectedModelVram(event.status_snapshot.detected_vram_gb);
-          }
-        },
-        onComplete: event => {
-          setModelEvents(prev => [...prev.slice(-10), event]);
-          setModelsInstalling(false);
-          void refreshStudioModels();
-          void refreshInstallJobs();
-          void refreshSetupInventory(false);
-          void refreshSetupHelper(storageStatus?.layout.home);
-          resolve();
-        },
-        onError: error => {
-          setModelError(error);
-          setModelsInstalling(false);
-          void refreshInstallJobs();
-          void refreshSetupHelper(storageStatus?.layout.home);
-          reject(new Error(error));
-        },
-      }
-    );
-  });
-
-  const buildComfyUI = () => new Promise<void>((resolve, reject) => {
-    setComfyInstalling(true);
-    setComfyError(null);
-    setComfyEvents([]);
-
-    installComfyUIStream(
-      { torch_profile: recommendedTorchProfile, force_update: false },
-      {
-        onJob: job => mergeInstallJob(job),
-        onStatus: job => mergeInstallJob(job),
-        onEvent: event => {
-          setComfyEvents(prev => [...prev.slice(-8), event]);
-          if (event.status_snapshot) {
-            setComfyStatus(event.status_snapshot);
-          }
-        },
-        onComplete: event => {
-          setComfyEvents(prev => [...prev.slice(-8), event]);
-          setComfyInstalling(false);
-          void refreshComfyUI();
-          void refreshInstallJobs();
-          void refreshSetupInventory(false);
-          void refreshSetupHelper(storageStatus?.layout.home);
-          resolve();
-        },
-        onError: error => {
-          setComfyError(error);
-          setComfyInstalling(false);
-          void refreshInstallJobs();
-          void refreshSetupHelper(storageStatus?.layout.home);
-          reject(new Error(error));
-        },
-      }
-    );
-  });
-
   const handleBuildWizardProfile = async (profile: WizardProfile) => {
     if (activeWizardBuild || studioInstalling || modelsInstalling || comfyInstalling || apiDisconnected) return;
 
@@ -1379,67 +1269,140 @@ export default function SetupPage() {
       const modelIds = wizardProfileModelIds(profile, catalog.models);
       const packIds = wizardProfilePackIds(profile, catalog.packs, catalog.bundles);
       const exampleIds = wizardProfileExampleIds(catalog.examples, catalog.vramGb);
-      const comfyNodePackIds = packIds.filter(packId => packId === 'comfyui-power-nodes');
-      const firstPackIds = wizardProfileNeedsComfy(profile)
-        ? packIds.filter(packId => packId !== 'comfyui-power-nodes')
-        : packIds;
 
       setSelectedStudioModels(new Set(modelIds));
       setSelectedStudioPacks(new Set(packIds));
       setSelectedComfyExamples(new Set(exampleIds));
 
+      let missionHomeDir = storageStatus?.layout.home;
       if (!storageReady) {
         setWizardBuildMessage('nvWizard is finding the persistent block storage first, then it will build the mission there.');
         const detectedStorage = await handleUseRecommendedStorage();
         if (!detectedStorage?.ok || detectedStorage.configured_by === 'default') {
-          setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. Troubleshooting has the manual override if the host is unusual.');
+          setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. Advanced Details has the manual override if the host is unusual.');
           setAdvancedSetupOpen(true);
           return;
         }
+        missionHomeDir = detectedStorage.layout.home;
       }
 
-      setWizardBuildMessage('nvWizard picked the beginner-safe defaults and is building the mission in dependency order.');
+      setWizardBuildMessage('nvWizard picked the beginner-safe defaults and handed the mission to the backend job runner.');
       setStep(wizardProfileNeedsComfy(profile) ? 'comfyui' : 'studio');
+      setStudioEvents([]);
+      setModelEvents([]);
+      setComfyEvents([]);
+      setStudioInstalling(packIds.length > 0);
+      setModelsInstalling(modelIds.length > 0);
+      setComfyInstalling(wizardProfileNeedsComfy(profile));
 
-      if (firstPackIds.length > 0) {
-        setWizardBuildMessage('Installing rootless runtimes and mission tools on the persistent drive.');
-        await buildStudioPacks(firstPackIds);
-      }
-
-      if (wizardProfileNeedsComfy(profile)) {
-        setWizardBuildMessage('Installing ComfyUI with the NVIDIA-ready PyTorch profile.');
-        await buildComfyUI();
-        if (comfyNodePackIds.length > 0) {
-          setWizardBuildMessage('Installing ComfyUI power nodes after the base app is ready.');
-          await buildStudioPacks(comfyNodePackIds);
+      installWizardMissionStream(
+        {
+          profile,
+          home_dir: missionHomeDir,
+          torch_profile: recommendedTorchProfile,
+          force_update: false,
+          min_free_gb: PERSISTENT_STORAGE_MIN_GB,
+        },
+        {
+          onJob: job => {
+            mergeInstallJob(job);
+            setWizardBuildMessage('Mission job started. Downloads and setup are tracked under the persistent workspace.');
+          },
+          onStatus: job => {
+            mergeInstallJob(job);
+            if (job.message) setWizardBuildMessage(job.message);
+          },
+          onEvent: (event: WizardMissionInstallEvent) => {
+            setWizardBuildMessage(event.message || 'Mission build is running.');
+            if (event.stage === 'models') {
+              setModelEvents(prev => [...prev.slice(-10), event as StudioModelInstallEvent]);
+            } else if (event.stage === 'comfyui' || event.stage === 'comfyui-plan' || event.stage === 'comfyui-nodes') {
+              setComfyEvents(prev => [...prev.slice(-8), event as ComfyUIInstallEvent]);
+              if ((event as ComfyUIInstallEvent).status_snapshot) {
+                setComfyStatus((event as ComfyUIInstallEvent).status_snapshot as ComfyUIStatus);
+              }
+            } else {
+              setStudioEvents(prev => [...prev.slice(-10), event as StudioPackInstallEvent]);
+            }
+          },
+          onComplete: event => {
+            setWizardBuildMessage(event.message || 'Mission build complete. Try the smoke test, then launch the tools.');
+            setActiveWizardBuild(null);
+            setStudioInstalling(false);
+            setModelsInstalling(false);
+            setComfyInstalling(false);
+            setStep('test');
+            void refreshInstallJobs();
+            void refreshStudioPacks();
+            void refreshStudioModels();
+            void refreshComfyUI();
+            void refreshSetupInventory(false);
+            void refreshSetupHelper(missionHomeDir);
+          },
+          onError: error => {
+            setWizardBuildMessage(`nvWizard paused: ${error}`);
+            setActiveWizardBuild(null);
+            setStudioInstalling(false);
+            setModelsInstalling(false);
+            setComfyInstalling(false);
+            setAdvancedSetupOpen(true);
+            void refreshInstallJobs();
+            void refreshSetupInventory(false);
+            void refreshSetupHelper(missionHomeDir);
+          },
         }
-        if (exampleIds.length > 0) {
-          setWizardBuildMessage('Saving the starter workflow model plan beside ComfyUI.');
-          try {
-            await saveComfyUIModelPlan(exampleIds);
-          } catch {
-            // The mission can still run; the user can save the plan again from the ComfyUI step.
-          }
-        }
-      }
-
-      if (modelIds.length > 0) {
-        setWizardBuildMessage('Downloading the local model queue that fits this GPU profile.');
-        await buildStudioModels(modelIds);
-      }
-
-      setWizardBuildMessage('Mission build complete. Try the smoke test, then launch the tools.');
-      setStep('test');
+      );
     } catch (err) {
       setWizardBuildMessage(err instanceof Error ? `nvWizard paused: ${err.message}` : 'nvWizard paused: setup needs attention.');
       setAdvancedSetupOpen(true);
-    } finally {
       setActiveWizardBuild(null);
       void refreshInstallJobs();
       void refreshSetupInventory(false);
       void refreshSetupHelper(storageStatus?.layout.home);
     }
   };
+
+  useEffect(() => {
+    const finishedMission = installJobs.find(job =>
+      job.kind === 'wizard-mission' &&
+      !isActiveInstallJob(job) &&
+      !handledMissionJobsRef.current.has(job.id)
+    );
+    if (!finishedMission) return;
+
+    handledMissionJobsRef.current.add(finishedMission.id);
+    setActiveWizardBuild(null);
+    setStudioInstalling(false);
+    setModelsInstalling(false);
+    setComfyInstalling(false);
+
+    const missionHomeDir = typeof finishedMission.request?.home_dir === 'string'
+      ? finishedMission.request.home_dir
+      : storageStatus?.layout.home;
+
+    if (finishedMission.status === 'complete') {
+      setWizardBuildMessage(finishedMission.message || 'Mission build complete. Try the smoke test, then launch the tools.');
+      if (!advancedSetupOpen) setStep('test');
+      void refreshStudioPacks();
+      void refreshStudioModels();
+      void refreshComfyUI();
+      void refreshSetupInventory(false, missionHomeDir);
+      void refreshWorkspacePassport(missionHomeDir);
+      void refreshSetupHelper(missionHomeDir);
+    } else if (['failed', 'interrupted', 'canceled'].includes(finishedMission.status)) {
+      setWizardBuildMessage(finishedMission.message || `Mission build ${finishedMission.status}. Advanced Details has the job log and repair steps.`);
+      setAdvancedSetupOpen(true);
+      void refreshSetupInventory(false, missionHomeDir);
+      void refreshSetupHelper(missionHomeDir);
+    }
+  }, [
+    advancedSetupOpen,
+    installJobs,
+    refreshSetupHelper,
+    refreshSetupInventory,
+    refreshWorkspacePassport,
+    storageStatus?.layout.home,
+  ]);
 
   const currentStepIdx = STEPS.findIndex(s => s.id === step);
   const currentStep = STEPS[currentStepIdx] ?? STEPS[0];
@@ -1749,7 +1712,7 @@ export default function SetupPage() {
       const installableClawIds = selectableStudioPackIds(studioPacks, studioBundles.claw ?? ['openclaw-agent', 'nemoclaw-sandbox']);
       if (installableClawIds.length > 0) handleInstallStudioPacks(installableClawIds);
       else {
-        setStudioError('No Claw agent option is installable on this host yet. Check Node.js and Docker/OpenShell readiness in Troubleshooting.');
+        setStudioError('No Claw agent option is installable on this host yet. Check Node.js and Docker/OpenShell readiness in Advanced Details.');
         setStep('studio');
       }
       return;
@@ -1839,7 +1802,7 @@ export default function SetupPage() {
               onClick={() => setAdvancedSetupOpen(prev => !prev)}
               className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider sm:flex-shrink-0"
             >
-              {advancedSetupOpen ? 'Hide Troubleshooting' : 'Troubleshooting'}
+              {advancedSetupOpen ? 'Hide Advanced Details' : 'Advanced Details'}
             </button>
           </div>
         </div>
@@ -2431,7 +2394,7 @@ export default function SetupPage() {
         <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
-              <div className="section-label">nvWizard Troubleshooting</div>
+              <div className="section-label">nvWizard Advanced Details</div>
               <div className="text-[10px] font-mono text-[#737373] mt-1">
                 {setupHelper?.summary ?? 'Offline setup recommendations'}
               </div>
@@ -2688,7 +2651,7 @@ export default function SetupPage() {
               <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
                 <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="section-label">Troubleshooting</div>
+                    <div className="section-label">Advanced Details</div>
                     <div className="text-xs text-[#525252] mt-1">
                       Use the tabs above for storage, hardware, apps, accounts, and tests. The main install choices stay below.
                     </div>
@@ -3046,6 +3009,28 @@ export default function SetupPage() {
                 </details>
               )}
             </div>
+
+            {!advancedSetupOpen && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setStep('done')}
+                  className="btn-primary py-3 text-xs font-mono uppercase tracking-widest"
+                >
+                  Finish Setup
+                </button>
+                <Link href="/query" className="btn-secondary py-3 text-xs font-mono uppercase tracking-widest text-center">
+                  Open Chat
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setStep('welcome')}
+                  className="btn-ghost py-3 text-xs font-mono uppercase tracking-widest"
+                >
+                  Back To Missions
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -3973,7 +3958,7 @@ export default function SetupPage() {
                         <div className="text-[10px] font-mono text-[#a3a3a3]">{provider.description}</div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {apiKeys[provider.id] && (
+                        {savedKeys.has(provider.id) && (
                           <span className="text-[10px] font-mono text-[#76B900] bg-[#76B900]/10 px-1.5 py-0.5">CONFIGURED</span>
                         )}
                         {provider.signupUrl && (
@@ -3991,12 +3976,12 @@ export default function SetupPage() {
                     <div className="flex gap-2">
                       <input
                         type="text"
-                        value={apiKeys[provider.id] || ''}
-                        onChange={e => setApiKeys(prev => ({ ...prev, [provider.id]: e.target.value }))}
+                        value={keyInputs[provider.id] || ''}
+                        onChange={e => setKeyInputs(prev => ({ ...prev, [provider.id]: e.target.value }))}
                         onPaste={e => {
                           const pasted = e.clipboardData.getData('text').trim();
                           if (pasted) {
-                            setApiKeys(prev => ({ ...prev, [provider.id]: pasted }));
+                            setKeyInputs(prev => ({ ...prev, [provider.id]: pasted }));
                           }
                         }}
                         placeholder={`Paste ${provider.envKey} here...`}
@@ -4005,9 +3990,25 @@ export default function SetupPage() {
                         autoComplete="off"
                       />
                     </div>
-                    <div className="text-[10px] font-mono text-[#333333] mt-1">
-                      Or set as env var: <span className="text-[#a3a3a3]">{provider.envKey}=your-key</span>
+                    <div className="mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="text-[10px] font-mono text-[#333333]">
+                        Or set as env var: <span className="text-[#a3a3a3]">{provider.envKey}=your-key</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveKey(provider.id)}
+                        disabled={savingKey === provider.id || !(keyInputs[provider.id] || '').trim()}
+                        className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                      >
+                        {savingKey === provider.id ? 'Saving' : 'Save Key'}
+                      </button>
                     </div>
+                    {keyErrors[provider.id] && (
+                      <div className="text-[10px] font-mono text-[#dc2626] mt-1">{keyErrors[provider.id]}</div>
+                    )}
+                    {savedKeys.has(provider.id) && (
+                      <div className="text-[10px] font-mono text-[#76B900] mt-1">Saved through the local Hive API.</div>
+                    )}
                   </div>
                 ))}
               </div>

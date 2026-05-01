@@ -526,6 +526,46 @@ export interface WizardPlanResult {
   steps: WizardPlanStep[];
 }
 
+export interface WizardMissionBuildRequest {
+  profile: string;
+  home_dir?: string;
+  torch_profile?: string;
+  force_update?: boolean;
+  min_free_gb?: number;
+}
+
+export interface WizardMissionPlanResult {
+  schema_version: number;
+  profile: string;
+  title: string;
+  storage: StorageStatus;
+  rootless_safe: boolean;
+  needs_comfyui: boolean;
+  torch_profile: string;
+  pack_ids: string[];
+  first_pack_ids: string[];
+  comfy_node_pack_ids: string[];
+  model_ids: string[];
+  example_ids: string[];
+  estimated_disk_gb: number;
+  stages: Array<Record<string, unknown>>;
+}
+
+export interface WizardMissionInstallEvent {
+  event: 'plan' | 'pack' | 'model' | 'step' | 'stage-complete' | 'log' | 'complete' | 'error' | string;
+  status: 'running' | 'complete' | 'failed' | string;
+  message: string;
+  profile?: string;
+  stage?: string;
+  child_event?: string;
+  child_status?: string;
+  plan?: WizardMissionPlanResult;
+  path?: string;
+  pack_id?: string;
+  model_id?: string;
+  command?: string[];
+}
+
 export interface SupportSnapshotResult {
   schema_version: number;
   created_at: string;
@@ -927,7 +967,7 @@ export type InstallJobStatus =
 
 export interface InstallJob {
   id: string;
-  kind: 'comfyui-install' | 'studio-pack-install' | 'studio-model-install' | string;
+  kind: 'wizard-mission' | 'comfyui-install' | 'studio-pack-install' | 'studio-model-install' | string;
   title: string;
   status: InstallJobStatus;
   message: string;
