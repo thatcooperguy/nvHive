@@ -671,7 +671,7 @@ export default function SetupPage() {
         }
       } catch {
         if (!cancelled) {
-          setStorageError('Storage preflight is unavailable. Start the API with nvh serve.');
+          setStorageError('Storage preflight is unavailable. Launch nvHive from the desktop icon, or use the terminal fallback: nvh webui.');
           storageRetryTimer = setTimeout(() => void loadStorage(), 5000);
         }
       }
@@ -1502,6 +1502,9 @@ export default function SetupPage() {
       ? detectedTorchProfile
       : 'nvidia-cu121'
   ) as ComfyUITorchProfile;
+  const selectedComfyTorchProfile = [...comfyEvents].reverse()
+    .find(event => typeof event.torch_profile === 'string')?.torch_profile
+    ?? recommendedTorchProfile;
   const setupConcernCount =
     (setupInventoryError ? 1 : 0) +
     (setupHelperError ? 1 : 0) +
@@ -1544,10 +1547,10 @@ export default function SetupPage() {
     {
       id: 'student',
       title: catalogText('student', 'title', 'AI Starter'),
-      description: catalogText('student', 'description', 'Chat, research, homework, coding help, starter local models, and optional NVIDIA Omni Agent guidance.'),
+      description: catalogText('student', 'description', 'Local chat, coding help, research support, starter models, and optional NVIDIA agent tools.'),
       label: 'Recommended',
-      outcome: 'A practical local AI desk for classes, projects, notes, and first model experiments.',
-      includes: ['Rootless Ollama', 'Starter models', 'Omni option', 'Agent lab'],
+      outcome: 'A practical AI desk for classes, projects, notes, and first local model experiments.',
+      includes: ['Local chat', 'Recommended models', 'NVIDIA option', 'Agent helper'],
       logos: ['ollama', 'github', 'openclaw', 'nvidia'],
       primary: true,
     },
@@ -1613,28 +1616,28 @@ export default function SetupPage() {
   const beginnerProfileIds = new Set<WizardProfile>(['student', 'creator', 'game', 'music']);
   const beginnerProfiles = missionProfiles.filter(profile => beginnerProfileIds.has(profile.id));
   const beginnerProfileCopy: Partial<Record<WizardProfile, string>> = {
-    student: 'Local AI for classwork, coding, research, plus optional NVIDIA Omni Agent guidance.',
+    student: 'Local AI for classwork, coding, research, and optional NVIDIA agent guidance.',
     creator: 'ComfyUI, Blender, and creative helpers for images, 3D, and video workflows.',
     game: 'Game engine helpers, Blender assets, GitHub repos, and mod workspace tools.',
     music: 'AI music generation, stem separation, transcription, and audio editor helpers.',
   };
   const profileActionLabels: Record<WizardProfile, string> = {
-    student: 'Set Up My AI Lab',
-    llm: 'Set Up Local Chat',
-    creator: 'Set Up Creator Studio',
-    agent: 'Set Up Agent Tools',
-    game: 'Set Up Game Lab',
-    music: 'Set Up Music Studio',
-    full: 'Set Up Full Workstation',
+    student: 'Install AI Starter',
+    llm: 'Install Local Chat',
+    creator: 'Install Creator Studio',
+    agent: 'Install Agent Tools',
+    game: 'Install Game Lab',
+    music: 'Install Music Studio',
+    full: 'Install Workstation',
   };
   const profileBusyLabels: Record<WizardProfile, string> = {
-    student: 'Building AI Lab',
-    llm: 'Building Local Chat',
-    creator: 'Building Creator Studio',
-    agent: 'Building Agent Tools',
-    game: 'Building Game Lab',
-    music: 'Building Music Studio',
-    full: 'Building Workstation',
+    student: 'Installing AI Starter',
+    llm: 'Installing Local Chat',
+    creator: 'Installing Creator Studio',
+    agent: 'Installing Agent Tools',
+    game: 'Installing Game Lab',
+    music: 'Installing Music Studio',
+    full: 'Installing Workstation',
   };
   const systemCheckItems: Array<{ label: string; value: string; state: SetupCheckState }> = [
     {
@@ -2706,7 +2709,7 @@ export default function SetupPage() {
                   <div className="min-w-0">
                     <div className="text-xs font-bold text-[#7c2d12]">nvHive API is not connected</div>
                     <div className="text-[10px] font-mono text-[#9a3412] mt-0.5">
-                      Launch from NVHive AI Studio or run nvh webui so the local API starts before installing missions.
+                      Launch from nvHive AI Studio. Terminal fallback: nvh webui.
                     </div>
                   </div>
                   <span className="text-[9px] font-mono uppercase text-[#9a3412] border border-[#d97706]/30 px-2 py-1 flex-shrink-0">
@@ -3517,7 +3520,7 @@ export default function SetupPage() {
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 6</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">AI Studio Packs</h2>
               <p className="text-xs font-mono text-[#a3a3a3] mt-1">
-                One-click rootless packs for LLMs, OpenClaw/NemoClaw agents, ComfyUI sub software, Blender, runtime fallback, and Linux game projects.
+                One-click rootless packs for LLMs, OpenClaw/NemoClaw agents, ComfyUI nodes, Blender, runtime fallback, and Linux game projects.
               </p>
             </div>
 
@@ -3748,14 +3751,24 @@ export default function SetupPage() {
                   >
                     {comfyStarting ? 'Starting...' : comfyStatus?.running ? 'Restart Check' : 'Start'}
                   </button>
-                  <a
-                    href={comfyStatus?.url ?? 'http://127.0.0.1:8188'}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
-                  >
-                    Open
-                  </a>
+                  {comfyStatus?.running ? (
+                    <a
+                      href={comfyStatus.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                    >
+                      Open ComfyUI
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider opacity-40"
+                    >
+                      Open When Running
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -3772,18 +3785,25 @@ export default function SetupPage() {
                 <div className="flex items-center justify-between">
                   <div className="section-label">Install Stream</div>
                   <div className="text-[10px] font-mono text-[#a3a3a3]">
-                    PyTorch profile: NVIDIA CUDA 13.0
+                    PyTorch profile: {selectedComfyTorchProfile}
                   </div>
                 </div>
                 <div className="max-h-44 overflow-y-auto space-y-1">
-                  {comfyEvents.map((event, index) => (
-                    <div key={`${event.event}-${index}`} className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
-                      <span className={event.event === 'error' ? 'text-[#dc2626]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#a3a3a3]'}>
-                        {event.event.toUpperCase()}
-                      </span>
-                      <span className="text-[#525252] break-words">{event.message}</span>
+                  {comfyEvents.length === 0 ? (
+                    <div className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
+                      <span className="text-[#a3a3a3]">START</span>
+                      <span className="text-[#525252] break-words">Preparing ComfyUI inside the persistent workspace.</span>
                     </div>
-                  ))}
+                  ) : (
+                    comfyEvents.map((event, index) => (
+                      <div key={`${event.event}-${index}`} className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
+                        <span className={event.event === 'error' ? 'text-[#dc2626]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#a3a3a3]'}>
+                          {event.event.toUpperCase()}
+                        </span>
+                        <span className="text-[#525252] break-words">{event.message}</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -4042,7 +4062,7 @@ export default function SetupPage() {
                   </div>
                     {apiStatus === 'disconnected' && (
                       <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">
-                        Start the server: <span className="text-[#76B900]">nvh serve</span>
+                        Launch nvHive, or use terminal fallback: <span className="text-[#76B900]">nvh webui</span>
                       </div>
                     )}
                 </div>
@@ -4090,7 +4110,7 @@ export default function SetupPage() {
               {apiStatus !== 'connected' && (
                 <div className="bg-[#d97706]/5 border border-[#d97706]/20 p-3">
                   <div className="text-xs font-mono text-[#d97706]">
-                    API server not connected. Start it with: nvh serve
+                    API server not connected. Launch nvHive, or use terminal fallback: nvh webui
                   </div>
                 </div>
               )}

@@ -23,18 +23,18 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def jobs_root() -> Path:
-    root = storage_layout().home / "jobs"
+def jobs_root(home_dir: str | Path | None = None) -> Path:
+    root = storage_layout(home_dir).home / "jobs"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
 
-def _job_path(job_id: str) -> Path:
-    return jobs_root() / f"{job_id}.json"
+def _job_path(job_id: str, home_dir: str | Path | None = None) -> Path:
+    return jobs_root(home_dir) / f"{job_id}.json"
 
 
-def _events_path(job_id: str) -> Path:
-    return jobs_root() / f"{job_id}.jsonl"
+def _events_path(job_id: str, home_dir: str | Path | None = None) -> Path:
+    return jobs_root(home_dir) / f"{job_id}.jsonl"
 
 
 def _safe_job_id(job_id: str) -> str:
@@ -44,8 +44,8 @@ def _safe_job_id(job_id: str) -> str:
     return cleaned
 
 
-def _write_job(job: dict[str, Any]) -> dict[str, Any]:
-    path = _job_path(job["id"])
+def _write_job(job: dict[str, Any], home_dir: str | Path | None = None) -> dict[str, Any]:
+    path = _job_path(job["id"], home_dir)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(job, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     tmp.replace(path)
@@ -90,15 +90,20 @@ def create_job(
     return _write_job(job)
 
 
-def load_job(job_id: str, *, reconcile: bool = True) -> dict[str, Any]:
+def load_job(
+    job_id: str,
+    *,
+    reconcile: bool = True,
+    home_dir: str | Path | None = None,
+) -> dict[str, Any]:
     """Load one job record by id."""
     safe_id = _safe_job_id(job_id)
-    path = _job_path(safe_id)
+    path = _job_path(safe_id, home_dir)
     if not path.exists():
         raise KeyError(f"Unknown job: {job_id}")
     job = _read_job(path)
     if reconcile:
-        job = reconcile_job(job)
+        job = reconcile_job(job, home_dir=home_dir)
     return job
 
 
@@ -107,12 +112,13 @@ def list_jobs(
     kind: str | None = None,
     status: str | None = None,
     limit: int = 20,
+    home_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Return recent jobs, newest first."""
     jobs: list[dict[str, Any]] = []
-    for path in sorted(jobs_root().glob("*.json"), reverse=True):
+    for path in sorted(jobs_root(home_dir).glob("*.json"), reverse=True):
         try:
-            job = reconcile_job(_read_job(path))
+            job = reconcile_job(_read_job(path), home_dir=home_dir)
         except Exception:
             continue
         if kind and job.get("kind") != kind:
@@ -130,10 +136,11 @@ def read_events(
     *,
     after: int = 0,
     limit: int = 200,
+    home_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Read persisted events after a sequence number."""
     safe_id = _safe_job_id(job_id)
-    events_path = _events_path(safe_id)
+    events_path = _events_path(safe_id, home_dir)
     if not events_path.exists():
         raise KeyError(f"Unknown job: {job_id}")
 
@@ -222,7 +229,11 @@ def append_event(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     return event
 
 
-def reconcile_job(job: dict[str, Any]) -> dict[str, Any]:
+def reconcile_job(
+    job: dict[str, Any],
+    *,
+    home_dir: str | Path | None = None,
+) -> dict[str, Any]:
     """Mark orphaned running jobs from previous server sessions as interrupted."""
     if job.get("status") not in RUNNING_STATUSES:
         return job
@@ -239,7 +250,7 @@ def reconcile_job(job: dict[str, Any]) -> dict[str, Any]:
         "Setup job marked interrupted after server restart",
         extra={"job_id": job.get("id", ""), "kind": job.get("kind", "")},
     )
-    return _write_job(job)
+    return _write_job(job, home_dir)
 
 
 async def _consume_job_events(

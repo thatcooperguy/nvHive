@@ -443,12 +443,16 @@ def mount_autopilot_report(
     *,
     min_free_gb: float = DEFAULT_MIN_FREE_GB,
     extra_roots: list[str | Path] | None = None,
+    home_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Rank likely persistent mounts and recommend an NVH_HOME."""
-    current = storage_status(min_free_gb=min_free_gb).as_dict()
+    roots = list(extra_roots or [])
+    if home_dir is not None:
+        roots.append(home_dir)
+    current = storage_status(home_dir=home_dir, min_free_gb=min_free_gb).as_dict()
     candidates = [
         _score_candidate(path, source=source, min_free_gb=min_free_gb)
-        for source, path in _candidate_paths(extra_roots)
+        for source, path in _candidate_paths(roots)
     ]
     candidates.sort(key=lambda item: item.score, reverse=True)
     recommended = candidates[0] if candidates else None

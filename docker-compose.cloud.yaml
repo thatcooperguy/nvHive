@@ -29,7 +29,13 @@ services:
       # Cloud: expose on all interfaces (sit behind nginx/caddy or security group)
       - "0.0.0.0:8000:8000"
     environment:
+      HIVE_API_KEY: "${HIVE_API_KEY:?Set HIVE_API_KEY before exposing the cloud API}"
       HIVE_DATA_DIR: /data
+      NVH_HOME: /data
+      HIVE_CONFIG_HOME: /data/config
+      NVH_LOGS: /data/logs
+      NVH_STATE: /data/state
+      NVH_SUPPORT: /data/support
       PYTHONUNBUFFERED: "1"
       OLLAMA_HOST: "${OLLAMA_HOST:-http://ollama:11434}"
       # Raise the API worker count for multi-core cloud VMs
@@ -169,7 +175,7 @@ services:
       - ./nginx/certs:/etc/nginx/certs:ro
 
     networks:
-      - council-net
+      - hive-net
 
     depends_on:
       hive-api:
@@ -211,7 +217,7 @@ services:
       - caddy-config:/config
 
     networks:
-      - council-net
+      - hive-net
 
     depends_on:
       hive-api:

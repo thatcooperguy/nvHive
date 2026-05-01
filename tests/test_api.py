@@ -187,6 +187,62 @@ class TestAPIEndpoints:
         assert body["data"]["status"] == "ok"
         assert body["data"]["engine_initialized"] is True
 
+    def test_ready_success_maps_production_readiness(
+        self,
+        test_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GET /v1/ready returns the compact launcher readiness shape."""
+        from nvh.integrations import production_readiness
+
+        monkeypatch.setattr(
+            production_readiness,
+            "production_readiness_report",
+            lambda home_dir=None: {
+                "status": "pilot-ready",
+                "pilot_ready": True,
+                "production_ready": False,
+                "summary": "Ready for beta",
+                "counts": {"passed": 8, "warnings": 1, "blocked": 0, "total": 9},
+                "next_actions": ["one", "two", "three", "four"],
+                "inputs": {"storage_home": str(home_dir)},
+            },
+        )
+
+        resp = test_client.get("/v1/ready", params={"home_dir": "/persist/nvhive"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["data"]["ready"] is True
+        assert body["data"]["production_ready"] is False
+        assert body["data"]["next_actions"] == ["one", "two", "three"]
+        assert body["data"]["storage_home"] == "/persist/nvhive"
+
+    def test_ready_failure_does_not_leak_exception_or_home_dir(
+        self,
+        test_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GET /v1/ready returns a sanitized failure payload."""
+        from nvh.integrations import production_readiness
+
+        def _raise(home_dir=None):
+            raise RuntimeError(f"sk-testsecret1234567890 failed in {home_dir}")
+
+        monkeypatch.setattr(production_readiness, "production_readiness_report", _raise)
+
+        resp = test_client.get(
+            "/v1/ready",
+            params={"home_dir": "C:/Users/ccooper/persist/nvhive"},
+        )
+        rendered = resp.text
+
+        assert resp.status_code == 200
+        assert "sk-testsecret1234567890" not in rendered
+        assert "C:/Users/ccooper" not in rendered
+        assert resp.json()["data"]["ready"] is False
+
     def test_providers_list(self, test_client: TestClient) -> None:
         """GET /v1/advisors returns provider list."""
         resp = test_client.get("/v1/advisors")

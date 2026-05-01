@@ -635,6 +635,40 @@ async def health_check() -> dict[str, Any]:
     })
 
 
+@app.get("/v1/ready", summary="Rootless workspace readiness check")
+async def readiness_check(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return a compact readiness signal for launchers and setup clients."""
+    try:
+        from nvh.integrations.production_readiness import production_readiness_report
+
+        report = production_readiness_report(home_dir=home_dir)
+        payload = {
+            "status": report.get("status", "blocked"),
+            "ready": bool(report.get("pilot_ready")),
+            "production_ready": bool(report.get("production_ready")),
+            "summary": report.get("summary"),
+            "counts": report.get("counts", {}),
+            "next_actions": list(report.get("next_actions", []))[:3],
+            "storage_home": report.get("inputs", {}).get("storage_home"),
+        }
+    except Exception as exc:
+        logger.warning("Readiness check failed: %s", type(exc).__name__, exc_info=True)
+        payload = {
+            "status": "blocked",
+            "ready": False,
+            "production_ready": False,
+            "summary": "Readiness check failed. Open Advanced Details for the diagnostic report.",
+            "counts": {"passed": 0, "warnings": 0, "blocked": 1, "total": 1},
+            "next_actions": ["Generate a support bundle and inspect the API logs."],
+            "storage_home": None,
+            "error": {"type": type(exc).__name__, "message": "Readiness check failed."},
+        }
+    return _response_envelope(payload)
+
+
 # -- /metrics (Prometheus) ----------------------------------------------------
 
 

@@ -156,6 +156,7 @@ export TORCH_HOME="${TORCH_HOME:-$NVH_CACHE/torch}"
 export TMPDIR="${TMPDIR:-$NVH_CACHE/tmp}"
 export TEMP="$TMPDIR"
 export TMP="$TMPDIR"
+export NVH_NO_OS_MOD="${NVH_NO_OS_MOD:-0}"
 
 mkdir -p "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CACHE" "$NVH_LOGS" "$NVH_STUDIO_HOME" "$COMFYUI_HOME" "$HIVE_CONFIG_HOME" "$TMPDIR"
 cat > "$NVH_HOME/nvh-env.sh" << ENVEOF
@@ -255,17 +256,17 @@ USE_ACTIVE_ENV=false
 if [ -n "$ACTIVE_ENV_KIND" ] && [ -z "${NVH_FORCE_VENV:-}" ]; then
     echo -e "${Y}Detected active $ACTIVE_ENV_KIND env: ${G}$ACTIVE_ENV_NAME${N}"
     echo -e "${D}  ($ACTIVE_ENV_PATH)${N}"
-    # Default to Yes when we have a TTY; otherwise install into the active env
-    # (non-interactive, e.g. piped-from-curl, preserves the user's choice to
-    # activate an env before running the installer).
-    if [ -t 0 ]; then
+    if [ "${NVH_USE_ACTIVE_ENV:-0}" = "1" ]; then
+        USE_ACTIVE_ENV=true
+    elif [ -t 0 ]; then
         read -r -p "  Install into this env instead of $NVH_HOME/venv? [Y/n] " ANSWER
         case "${ANSWER:-Y}" in
             n|N|no|NO) USE_ACTIVE_ENV=false ;;
             *)         USE_ACTIVE_ENV=true ;;
         esac
     else
-        USE_ACTIVE_ENV=true
+        echo -e "${D}Non-interactive install will use $NVH_HOME/venv for persistence.${N}"
+        echo -e "${D}Set NVH_USE_ACTIVE_ENV=1 to explicitly install into the active env.${N}"
     fi
 fi
 
@@ -335,7 +336,7 @@ heal_venv() {
     source "$NVH_VENV/bin/activate"
     pip install -q --upgrade pip 2>/dev/null
     if [ -d "$NVH_REPO" ]; then
-        pip install -q -e "$NVH_REPO" 2>/dev/null
+        pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log"
     fi
 
     echo -e "${G}Venv healed.${N}"
@@ -349,7 +350,7 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
 
     # Quick git pull for updates (non-blocking)
     if [ -d "$NVH_REPO/.git" ] && command -v git &>/dev/null; then
-        (cd "$NVH_REPO" && git pull --quiet 2>/dev/null && pip install -q -e . 2>/dev/null) || true
+        (cd "$NVH_REPO" && git pull --quiet 2>/dev/null && pip install -q -e ".[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log") || true
     fi
 
     # Verify nvh command works
@@ -357,7 +358,7 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
         echo -e "${G}NVHive ready.${N}"
     else
         echo -e "${Y}Reinstalling...${N}"
-        pip install -q -e "$NVH_REPO" 2>/dev/null
+        pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log"
     fi
 
     # Ensure Ollama is running
@@ -421,13 +422,15 @@ fi
 # Install
 echo -e "${B}Installing NVHive (~60s)...${N}"
 if [ "$USE_ACTIVE_ENV" = "true" ]; then
-    "$PYTHON" -m pip install -q -e "$NVH_REPO" 2>/dev/null || {
+    "$PYTHON" -m pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log" || {
         echo -e "${R}Install failed. Check Python version (need 3.11+).${N}"
+        echo -e "${D}Log: $NVH_LOGS/pip-install.log${N}"
         exit 1
     }
 else
-    pip install -q -e "$NVH_REPO" 2>/dev/null || {
+    pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log" || {
         echo -e "${R}Install failed. Check Python version (need 3.11+).${N}"
+        echo -e "${D}Log: $NVH_LOGS/pip-install.log${N}"
         exit 1
     }
 fi
@@ -511,7 +514,9 @@ fi
 # Set up .bashrc — only when we own the venv. If the user installed into
 # their existing conda/mamba/venv, they'll activate it themselves; adding a
 # PATH export would shadow their own activation logic.
-if [ "$USE_ACTIVE_ENV" = "true" ]; then
+if [ "${NVH_NO_OS_MOD:-0}" = "1" ]; then
+    echo -e "${D}Skipping .bashrc PATH edit because NVH_NO_OS_MOD=1.${N}"
+elif [ "$USE_ACTIVE_ENV" = "true" ]; then
     echo -e "${D}Skipping .bashrc PATH edit — using existing $ACTIVE_ENV_KIND env.${N}"
     echo -e "${D}  Remember to activate '$ACTIVE_ENV_NAME' before running nvh.${N}"
 else

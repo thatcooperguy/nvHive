@@ -59,7 +59,7 @@ def _patch_common(monkeypatch, *, system: str = "Linux", storage_ok: bool = True
     monkeypatch.setattr(
         production_readiness,
         "mount_autopilot_report",
-        lambda min_free_gb=20, extra_roots=None: {
+        lambda min_free_gb=20, extra_roots=None, home_dir=None: {
             "confidence": "high",
             "current": {"ok": storage_ok, "configured_by": "argument"},
             "recommended": {
@@ -97,7 +97,7 @@ def _patch_common(monkeypatch, *, system: str = "Linux", storage_ok: bool = True
             "summary": "3 model(s) queued",
         },
     )
-    monkeypatch.setattr(production_readiness, "receipt_summary", lambda: {"count": 2, "unhealthy": 0})
+    monkeypatch.setattr(production_readiness, "receipt_summary", lambda home_dir=None: {"count": 2, "unhealthy": 0})
     monkeypatch.setattr(
         production_readiness,
         "catalog_with_status",

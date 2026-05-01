@@ -1032,6 +1032,9 @@ export interface ComfyUIStatus {
   examples: ComfyUIExample[];
   already_running?: boolean;
   started?: boolean;
+  ready?: boolean;
+  ready_timeout?: boolean;
+  ready_wait_seconds?: number;
 }
 
 export interface ComfyUIExamplesResult {

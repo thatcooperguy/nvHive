@@ -95,13 +95,13 @@ if ((Test-Path $NVH_REPO) -and (Test-Path $NVH_VENV)) {
     if (Test-Path $venvPy) {
         Write-Blue "Existing install found — updating..."
         & $venvPy -m pip install -q --upgrade pip 2>$null
-        & $venvPy -m pip install -q -e $NVH_REPO 2>$null
+        & $venvPy -m pip install -q -e "$NVH_REPO[serve,nvidia]" 2>$null
     } else {
         Write-Yellow "Recreating venv..."
         Remove-Item -Recurse -Force $NVH_VENV -ErrorAction SilentlyContinue
         & $PYTHON -m venv $NVH_VENV
         & "$NVH_VENV\Scripts\pip" install -q --upgrade pip 2>$null
-        & "$NVH_VENV\Scripts\pip" install -q -e $NVH_REPO 2>$null
+        & "$NVH_VENV\Scripts\pip" install -q -e "$NVH_REPO[serve,nvidia]" 2>$null
     }
     Write-Green "NVHive ready."
     Write-Host ""
@@ -146,7 +146,7 @@ Write-Blue "Creating Python environment..."
 
 # Install
 Write-Blue "Installing NVHive (~60s)..."
-& "$NVH_VENV\Scripts\pip" install -q -e $NVH_REPO 2>$null
+& "$NVH_VENV\Scripts\pip" install -q -e "$NVH_REPO[serve,nvidia]" 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Red "Install failed. Check Python version (need 3.11+)."
     exit 1
