@@ -2,7 +2,9 @@
 
 The target deployment is a Linux desktop session where the operating system is
 ephemeral, but a user-owned file mount persists across sessions.  ``NVH_HOME``
-is the one directory students and admins should point at that mount.
+is the canonical directory students and admins should point at that mount.
+``NVHIVE_HOME`` is accepted as a friendly alias because it is easier to guess
+from the product name.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from typing import Any
 
 DEFAULT_MIN_FREE_GB = 20.0
 NVH_HOME_ENV = "NVH_HOME"
+NVHIVE_HOME_ENV = "NVHIVE_HOME"
 
 
 @dataclass(frozen=True)
@@ -35,11 +38,18 @@ class StorageLayout:
     studio_dir: Path
     comfyui_dir: Path
     config_dir: Path
+    projects_dir: Path
+    outputs_dir: Path
+    backups_dir: Path
+    support_dir: Path
+    state_dir: Path
+    catalog_dir: Path
 
     def env(self) -> dict[str, str]:
         """Environment variables that make this layout active."""
         return {
             "NVH_HOME": str(self.home),
+            "NVHIVE_HOME": str(self.home),
             "NVH_BIN": str(self.bin_dir),
             "NVH_MODELS": str(self.models_dir),
             "NVH_CACHE": str(self.cache_dir),
@@ -51,6 +61,12 @@ class StorageLayout:
             "COMFYUI_HOME": str(self.comfyui_dir),
             "OLLAMA_MODELS": str(self.ollama_models_dir),
             "HIVE_CONFIG_HOME": str(self.config_dir),
+            "NVH_PROJECTS": str(self.projects_dir),
+            "NVH_OUTPUTS": str(self.outputs_dir),
+            "NVH_BACKUPS": str(self.backups_dir),
+            "NVH_SUPPORT": str(self.support_dir),
+            "NVH_STATE": str(self.state_dir),
+            "NVH_CATALOG": str(self.catalog_dir),
             "XDG_CACHE_HOME": str(self.cache_dir / "xdg"),
             "PIP_CACHE_DIR": str(self.cache_dir / "pip"),
             "UV_CACHE_DIR": str(self.cache_dir / "uv"),
@@ -105,6 +121,9 @@ def nvh_home(home_dir: str | Path | None = None) -> tuple[Path, str]:
     env_home = os.environ.get(NVH_HOME_ENV)
     if env_home:
         return _expand_path(env_home), "env:NVH_HOME"
+    alias_home = os.environ.get(NVHIVE_HOME_ENV)
+    if alias_home:
+        return _expand_path(alias_home), "env:NVHIVE_HOME"
     return Path.home() / ".nvh", "default"
 
 
@@ -142,6 +161,24 @@ def storage_layout(home_dir: str | Path | None = None) -> StorageLayout:
     config_dir = _expand_path(
         os.environ.get("HIVE_CONFIG_HOME", home / "config") if use_component_env else home / "config"
     )
+    projects_dir = _expand_path(
+        os.environ.get("NVH_PROJECTS", home / "projects") if use_component_env else home / "projects"
+    )
+    outputs_dir = _expand_path(
+        os.environ.get("NVH_OUTPUTS", home / "outputs") if use_component_env else home / "outputs"
+    )
+    backups_dir = _expand_path(
+        os.environ.get("NVH_BACKUPS", home / "backups") if use_component_env else home / "backups"
+    )
+    support_dir = _expand_path(
+        os.environ.get("NVH_SUPPORT", home / "support") if use_component_env else home / "support"
+    )
+    state_dir = _expand_path(
+        os.environ.get("NVH_STATE", home / "state") if use_component_env else home / "state"
+    )
+    catalog_dir = _expand_path(
+        os.environ.get("NVH_CATALOG", home / "catalog") if use_component_env else home / "catalog"
+    )
     ollama_models_dir = _expand_path(
         os.environ.get("OLLAMA_MODELS", models_dir / "ollama")
         if use_component_env
@@ -161,6 +198,12 @@ def storage_layout(home_dir: str | Path | None = None) -> StorageLayout:
         studio_dir=studio_dir,
         comfyui_dir=comfyui_dir,
         config_dir=config_dir,
+        projects_dir=projects_dir,
+        outputs_dir=outputs_dir,
+        backups_dir=backups_dir,
+        support_dir=support_dir,
+        state_dir=state_dir,
+        catalog_dir=catalog_dir,
     )
 
 
@@ -252,6 +295,12 @@ def ensure_storage(
         layout.studio_dir,
         layout.comfyui_dir,
         layout.config_dir,
+        layout.projects_dir,
+        layout.outputs_dir,
+        layout.backups_dir,
+        layout.support_dir,
+        layout.state_dir,
+        layout.catalog_dir,
     ]:
         path.mkdir(parents=True, exist_ok=True)
     for value in layout.env().values():

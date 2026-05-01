@@ -403,6 +403,12 @@ export interface StorageLayout {
   studio_dir: string;
   comfyui_dir: string;
   config_dir: string;
+  projects_dir: string;
+  outputs_dir: string;
+  backups_dir: string;
+  support_dir: string;
+  state_dir: string;
+  catalog_dir: string;
 }
 
 export interface StorageStatus {
@@ -437,6 +443,98 @@ export interface RuntimeStatus {
   micromamba_binary: string;
   micromamba_root_prefix: string;
   notes: string[];
+}
+
+export interface RootlessPolicyGate {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'blocked' | 'info' | string;
+  summary: string;
+  requires_admin: boolean;
+  action_id: string | null;
+}
+
+export interface RootlessPolicyReport {
+  schema_version: number;
+  checked_at: string;
+  status: 'ready' | 'warn' | 'blocked' | string;
+  summary: string;
+  no_root_required: boolean;
+  allowed_write_roots: string[];
+  blocked_operations: string[];
+  preferred_runtimes: string[];
+  storage: StorageStatus;
+  runtime: RuntimeStatus;
+  gates: RootlessPolicyGate[];
+}
+
+export interface WorkspacePassport {
+  schema_version: number;
+  workspace_id: string;
+  created_at: string;
+  updated_at: string;
+  product: string;
+  assistant: string;
+  nvhive_version: string;
+  storage_home: string;
+  passport_path: string;
+  legacy_passport_path?: string;
+  rootless: {
+    normal_setup_requires_admin: boolean;
+    host_driver_requires_admin_if_broken: boolean;
+    policy_status: string;
+  };
+  paths: StorageLayout & Record<string, string>;
+  host_fingerprint: Record<string, unknown>;
+  storage: StorageStatus;
+  policy: RootlessPolicyReport;
+  receipts: Record<string, unknown>;
+  jobs: {
+    ok: boolean;
+    active_count: number;
+    recent_count: number;
+    active: InstallJob[];
+    error?: unknown;
+  };
+  model_fit: Record<string, unknown>;
+  compatibility: Record<string, unknown>;
+}
+
+export interface WizardPlanStep {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'ready' | 'blocked' | string;
+  summary: string;
+  action_id: string | null;
+  requires_admin: boolean;
+  risk: 'safe' | 'moderate' | 'high' | string;
+}
+
+export interface WizardPlanResult {
+  schema_version: number;
+  checked_at: string;
+  profile: string;
+  title: string;
+  summary: string;
+  rootless_safe: boolean;
+  passport: {
+    workspace_id: string;
+    storage_home: string;
+    policy_status: string;
+    active_jobs: number;
+  };
+  steps: WizardPlanStep[];
+}
+
+export interface SupportSnapshotResult {
+  schema_version: number;
+  created_at: string;
+  summary: string;
+  path: string;
+  passport: Record<string, unknown>;
+  policy: RootlessPolicyReport;
+  diagnostics: DiagnosticsReport;
+  excludes: string[];
 }
 
 export interface SetupAction {

@@ -36,6 +36,7 @@ import type {
   StorageConfigureRequest,
   StorageStatus,
   RuntimeStatus,
+  RootlessPolicyReport,
   SetupAssistantReply,
   SetupCatalogResult,
   SetupHelperReport,
@@ -47,6 +48,9 @@ import type {
   DiagnosticsReport,
   AutoRepairResult,
   MountAutopilotReport,
+  WorkspacePassport,
+  WizardPlanResult,
+  SupportSnapshotResult,
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
@@ -211,6 +215,35 @@ export async function activateMountAutopilot(homeDir?: string, minFreeGb = 200):
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return apiGet<RuntimeStatus>('/v1/system/runtime');
+}
+
+export async function getWizardPassport(homeDir?: string, create = true): Promise<WorkspacePassport> {
+  const params = new URLSearchParams();
+  params.set('create', create ? 'true' : 'false');
+  if (homeDir) params.set('home_dir', homeDir);
+  return apiGet<WorkspacePassport>(`/v1/wizard/passport?${params.toString()}`);
+}
+
+export async function getWizardRootlessPolicy(homeDir?: string): Promise<RootlessPolicyReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<RootlessPolicyReport>(`/v1/wizard/rootless-policy${qs}`);
+}
+
+export async function getWizardPlan(profile = 'student', homeDir?: string): Promise<WizardPlanResult> {
+  const params = new URLSearchParams();
+  params.set('profile', profile);
+  if (homeDir) params.set('home_dir', homeDir);
+  return apiGet<WizardPlanResult>(`/v1/wizard/plan?${params.toString()}`);
+}
+
+export async function createSupportSnapshot(
+  homeDir?: string,
+  includeLogs = true
+): Promise<SupportSnapshotResult> {
+  return apiPost<SupportSnapshotResult>('/v1/wizard/support-snapshot', {
+    home_dir: homeDir,
+    include_logs: includeLogs,
+  });
 }
 
 export async function getSetupHelper(homeDir?: string): Promise<SetupHelperReport> {

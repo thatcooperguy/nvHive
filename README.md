@@ -22,7 +22,8 @@ and music production.
 What you get on the happy path:
 
 - A desktop launcher and WebUI setup wizard.
-- Persistent `NVH_HOME` storage for models, ComfyUI, apps, logs, jobs, and config.
+- Persistent `NVH_HOME`/`NVHIVE_HOME` storage for models, ComfyUI, apps, logs, jobs, and config.
+- A Workspace Passport for durable storage, boot drift, receipts, jobs, and the rootless policy.
 - GPU-aware model recommendations and disk estimates.
 - Mission cards for AI Starter, Graphics Creator, Game Dev, Music Producer, and Agent Builder.
 - Self-healing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts.
@@ -183,10 +184,11 @@ The wizard does six things before heavy installs:
 
 1. Finds the best user-writable persistent storage path.
 2. Checks GPU, driver, CUDA, VRAM, Python, Node, and npm health.
-3. Recommends local models that fit the detected hardware and disk.
-4. Installs selected tools into `NVH_HOME` without root.
-5. Tracks long downloads as resumable jobs with logs and receipts.
-6. Offers **Fix My Setup** and **Copy Error Report** when something breaks.
+3. Writes a Workspace Passport under `$NVH_HOME/config/workspace-passport.json`.
+4. Recommends local models that fit the detected hardware and disk.
+5. Installs selected tools into `NVH_HOME` without root.
+6. Tracks long downloads as persistent jobs with logs, receipts, and retry clues.
+7. Offers **Fix My Setup** and a redacted support snapshot when something breaks.
 
 | Mission | What it sets up |
 | --- | --- |
@@ -201,9 +203,9 @@ mission cards. Advanced Details stays available for storage, driver, CUDA,
 Python, Node, logs, receipts, boot drift, and release-readiness diagnostics.
 
 ComfyUI, AI Studio packs, and local model downloads run as persistent jobs under
-`$NVH_HOME/jobs`, so setup progress survives browser refreshes and cloud desktop
-reconnects. The model picker shows GPU-fit badges, disk estimates, installed
-status, and a selected download queue.
+`$NVH_HOME/jobs`, so setup progress survives browser refreshes and leaves a
+clear retry trail after cloud desktop reconnects. The model picker shows GPU-fit
+badges, disk estimates, installed status, and a selected download queue.
 
 When the VM image changes between sessions, nvWizard compares the new boot
 fingerprint with `$NVH_HOME/config/boot-preflight.json` and recommends rootless
@@ -216,13 +218,18 @@ If setup gets stuck:
 
 ```bash
 nvh webui                                      # reopen the wizard
+nvh wizard status --home-dir "$NVH_HOME"       # show the Workspace Passport
+nvh plan --profile student --home-dir "$NVH_HOME" # preview the no-root install plan
+nvh repair --home-dir "$NVH_HOME"              # run safe rootless repairs
+nvh wizard support --home-dir "$NVH_HOME"      # create a redacted support snapshot
 nvh doctor --storage --home-dir "$NVH_HOME"   # verify the persistent mount
 nvh doctor --fix                              # try safe local repairs
 tail -n 80 "$NVH_HOME/logs/nvhive.log"        # inspect rootless logs
 ```
 
-When the local API is running, Advanced Details can copy the same redacted report
-from the UI, or you can call `GET /v1/setup/diagnostics` directly.
+When the local API is running, Troubleshooting can create the same redacted
+support snapshot from the UI, or you can call `POST /v1/wizard/support-snapshot`
+directly.
 
 <p align="center">
   <img src="docs/screenshots/rootless-runtime.svg" alt="Rootless NVIDIA cloud desktop layout" width="900">
@@ -416,6 +423,9 @@ Results vary by hardware and workload — run `nvh bench` to measure on your set
 | `nvh bench` | GPU speed test (tokens/sec) |
 | `nvh setup` | Interactive provider setup |
 | `nvh doctor` | Full diagnostic dump |
+| `nvh plan` | Rootless mission install preview |
+| `nvh repair` | Safe rootless workspace repair |
+| `nvh wizard` | Workspace Passport, plan, repair, and support snapshot helper |
 
 [Full command reference](docs/COMMANDS.md) (50+ commands)
 

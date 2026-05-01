@@ -15,6 +15,10 @@ import {
   configureStorage,
   getMountAutopilot,
   activateMountAutopilot,
+  getWizardPassport,
+  getWizardRootlessPolicy,
+  getWizardPlan,
+  createSupportSnapshot,
   getSetupCatalog,
   getSetupBootPreflight,
   getSetupMissionControl,
@@ -56,11 +60,14 @@ import type {
   SetupHelperReport,
   SetupReceiptsResult,
   MountAutopilotReport,
+  RootlessPolicyReport,
   StorageStatus,
   StudioPack,
   StudioPackInstallEvent,
   StudioModel,
   StudioModelInstallEvent,
+  WorkspacePassport,
+  WizardPlanResult,
 } from '@/lib/types';
 
 type Step = 'welcome' | 'storage' | 'gpu' | 'models' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
@@ -317,10 +324,15 @@ export default function SetupPage() {
   const [bootPreflight, setBootPreflight] = useState<BootPreflightReport | null>(null);
   const [missionControl, setMissionControl] = useState<MissionControlReport | null>(null);
   const [productionReadiness, setProductionReadiness] = useState<ProductionReadinessReport | null>(null);
+  const [workspacePassport, setWorkspacePassport] = useState<WorkspacePassport | null>(null);
+  const [rootlessPolicy, setRootlessPolicy] = useState<RootlessPolicyReport | null>(null);
+  const [wizardPlan, setWizardPlan] = useState<WizardPlanResult | null>(null);
   const [diagnosticsReport, setDiagnosticsReport] = useState<DiagnosticsReport | null>(null);
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
   const [diagnosticsMessage, setDiagnosticsMessage] = useState<string | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [supportSnapshotMessage, setSupportSnapshotMessage] = useState<string | null>(null);
+  const [supportSnapshotLoading, setSupportSnapshotLoading] = useState(false);
   const [workspaceRepairing, setWorkspaceRepairing] = useState(false);
   const [setupInventoryError, setSetupInventoryError] = useState<string | null>(null);
   const [activeWizardBuild, setActiveWizardBuild] = useState<WizardProfile | null>(null);
@@ -408,6 +420,23 @@ export default function SetupPage() {
     }
   }, []);
 
+  const refreshWorkspacePassport = useCallback(async (homeDir?: string, profile?: WizardProfile) => {
+    const activeHome = homeDir ?? storageStatus?.layout.home;
+    const activeProfile = profile ?? selectedWizardProfile;
+    const canPersistPassport = Boolean(activeHome && storageStatus?.configured_by !== 'default');
+    const planPromise = canPersistPassport
+      ? getWizardPlan(activeProfile, activeHome)
+      : Promise.resolve(null);
+    const [passportResult, policyResult, planResult] = await Promise.allSettled([
+      getWizardPassport(activeHome, canPersistPassport),
+      getWizardRootlessPolicy(activeHome),
+      planPromise,
+    ]);
+    if (passportResult.status === 'fulfilled') setWorkspacePassport(passportResult.value);
+    if (policyResult.status === 'fulfilled') setRootlessPolicy(policyResult.value);
+    if (planResult.status === 'fulfilled') setWizardPlan(planResult.value);
+  }, [selectedWizardProfile, storageStatus?.configured_by, storageStatus?.layout.home]);
+
   const refreshSetupInventory = useCallback(async (refreshCatalog = false, homeDir?: string) => {
     try {
       const activeHome = homeDir ?? storageStatus?.layout.home;
@@ -424,11 +453,12 @@ export default function SetupPage() {
       setSetupCompatibility(boot.compatibility);
       setMissionControl(mission);
       setProductionReadiness(readiness);
+      void refreshWorkspacePassport(activeHome);
       setSetupInventoryError(null);
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Could not load setup inventory');
     }
-  }, [storageStatus?.layout.home]);
+  }, [refreshWorkspacePassport, storageStatus?.layout.home]);
 
   const handleDiagnosticsReport = async () => {
     if (diagnosticsLoading) return;
@@ -456,6 +486,21 @@ export default function SetupPage() {
     }
   };
 
+  const handleSupportSnapshot = async () => {
+    if (supportSnapshotLoading) return;
+    setSupportSnapshotLoading(true);
+    setDiagnosticsError(null);
+    setSupportSnapshotMessage(null);
+    try {
+      const snapshot = await createSupportSnapshot(storageStatus?.layout.home, true);
+      setSupportSnapshotMessage(`Support snapshot saved at ${snapshot.path}`);
+    } catch (err) {
+      setDiagnosticsError(err instanceof Error ? err.message : 'Could not create support snapshot');
+    } finally {
+      setSupportSnapshotLoading(false);
+    }
+  };
+
   useEffect(() => {
     void refreshInstallJobs();
     void refreshSetupInventory(false);
@@ -464,6 +509,10 @@ export default function SetupPage() {
     }, 3000);
     return () => window.clearInterval(timer);
   }, [refreshInstallJobs, refreshSetupInventory]);
+
+  useEffect(() => {
+    void refreshWorkspacePassport(storageStatus?.layout.home, selectedWizardProfile);
+  }, [refreshWorkspacePassport, selectedWizardProfile, storageStatus?.layout.home]);
 
   useEffect(() => {
     setComfyInstalling(installJobs.some(job => job.kind === 'comfyui-install' && isActiveInstallJob(job)));
@@ -521,6 +570,7 @@ export default function SetupPage() {
       await Promise.all([
         refreshSetupInventory(false, storageStatus?.layout.home),
         refreshSetupHelper(storageStatus?.layout.home),
+        refreshWorkspacePassport(storageStatus?.layout.home),
         refreshComfyUI(),
         refreshInstallJobs(),
       ]);
@@ -574,6 +624,7 @@ export default function SetupPage() {
         setStorageHomeInput(status.layout.home);
         setStorageError(null);
         void refreshSetupHelper(status.layout.home);
+        void refreshWorkspacePassport(status.layout.home);
 
         if (!status.ok || status.configured_by === 'default') {
           try {
@@ -594,6 +645,7 @@ export default function SetupPage() {
                 setWizardBuildMessage('nvWizard found the large writable block volume and prepared it for models, ComfyUI, Blender, and agents.');
                 void refreshSetupHelper(activated.storage.layout.home);
                 void refreshSetupInventory(false, activated.storage.layout.home);
+                void refreshWorkspacePassport(activated.storage.layout.home);
               } catch (err) {
                 setStorageError(err instanceof Error ? err.message : 'Could not activate recommended persistent storage');
               } finally {
@@ -674,7 +726,7 @@ export default function SetupPage() {
       if (healthRetryTimer) clearTimeout(healthRetryTimer);
       if (storageRetryTimer) clearTimeout(storageRetryTimer);
     };
-  }, [refreshSetupHelper, refreshSetupInventory]);
+  }, [refreshSetupHelper, refreshSetupInventory, refreshWorkspacePassport]);
 
   const handleTest = async () => {
     setTestLoading(true);
@@ -735,6 +787,7 @@ export default function SetupPage() {
         refreshComfyUI(),
         refreshSetupHelper(status.layout.home),
         refreshSetupInventory(false, status.layout.home),
+        refreshWorkspacePassport(status.layout.home),
       ]);
     } catch (err) {
       setStorageError(err instanceof Error ? err.message : 'Could not configure persistent storage');
@@ -963,13 +1016,14 @@ export default function SetupPage() {
       setStorageStatus(activated.storage);
       setStorageHomeInput(activated.storage.layout.home);
       setMountAutopilot(activated.mount_autopilot);
-      setWizardBuildMessage('nvWizard prepared the persistent block volume. The big model treasure now lives somewhere that survives reboot.');
+      setWizardBuildMessage('nvWizard prepared the persistent block volume. Models, apps, and projects will live somewhere that survives reboot.');
       await Promise.allSettled([
         refreshStudioModels(),
         refreshStudioPacks(),
         refreshComfyUI(),
         refreshSetupHelper(activated.storage.layout.home),
         refreshSetupInventory(false, activated.storage.layout.home),
+        refreshWorkspacePassport(activated.storage.layout.home),
       ]);
       return activated.storage;
     } catch (err) {
@@ -1410,7 +1464,16 @@ export default function SetupPage() {
       ? 'API Offline'
     : storageAutopilotBusy
       ? 'Finding Storage'
-      : 'Auto-Find Storage';
+      : 'Use Persistent Drive';
+  const workspaceHome = workspacePassport?.storage_home ?? storageStatus?.layout.home ?? 'finding persistent drive';
+  const workspaceFreeText = storageFreeGb === null ? 'free space checking' : `${storageFreeGb} GB free`;
+  const workspaceReceipts =
+    typeof workspacePassport?.receipts?.data === 'object' && workspacePassport.receipts.data !== null && 'count' in workspacePassport.receipts.data
+      ? Number((workspacePassport.receipts.data as { count?: number }).count ?? 0)
+      : 0;
+  const workspaceActiveJobs = workspacePassport?.jobs.active_count ?? 0;
+  const rootlessRuntimeStrategy = rootlessPolicy?.runtime.strategy ?? setupCompatibility?.recommended_torch_profile ?? 'checking';
+  const rootlessStatus = rootlessPolicy?.status ?? workspacePassport?.rootless.policy_status ?? 'checking';
   const profilesReady = !modelsLoading && !studioLoading && !comfyLoading;
   const visibleComfyExamples = comfyStatus?.examples?.length ? comfyStatus.examples : comfyExamples;
   const selectedComfyModelCount = new Set(
@@ -1592,16 +1655,32 @@ export default function SetupPage() {
     game: 'Game engine helpers, Blender assets, GitHub repos, and mod workspace tools.',
     music: 'AI music generation, stem separation, transcription, and audio editor helpers.',
   };
-  const pythonFact = setupCompatibility?.facts.find(fact => fact.id.toLowerCase().includes('python') || fact.label.toLowerCase().includes('python'));
-  const nodeFact = setupCompatibility?.facts.find(fact => fact.id.toLowerCase().includes('node') || fact.label.toLowerCase().includes('node'));
+  const profileActionLabels: Record<WizardProfile, string> = {
+    student: 'Set Up My AI Lab',
+    llm: 'Set Up Local Chat',
+    creator: 'Set Up Creator Studio',
+    agent: 'Set Up Agent Tools',
+    game: 'Set Up Game Lab',
+    music: 'Set Up Music Studio',
+    full: 'Set Up Full Workstation',
+  };
+  const profileBusyLabels: Record<WizardProfile, string> = {
+    student: 'Building AI Lab',
+    llm: 'Building Local Chat',
+    creator: 'Building Creator Studio',
+    agent: 'Building Agent Tools',
+    game: 'Building Game Lab',
+    music: 'Building Music Studio',
+    full: 'Building Workstation',
+  };
   const systemCheckItems: Array<{ label: string; value: string; state: SetupCheckState }> = [
     {
-      label: 'Storage',
+      label: 'Persistent Drive',
       value: storageReady ? (storageFreeGb === null ? 'persistent ready' : `${storageFreeGb} GB free`) : storageBeginnerLabel,
       state: storageReady ? 'ready' : storageAutopilotBusy ? 'checking' : 'fix',
     },
     {
-      label: 'GPU / CUDA',
+      label: 'GPU Fit',
       value: gpuLoading
         ? 'scanning'
         : gpuInfo?.gpus?.length
@@ -1610,22 +1689,12 @@ export default function SetupPage() {
       state: gpuLoading ? 'checking' : gpuInfo?.gpus?.length ? 'ready' : 'warn',
     },
     {
-      label: 'Python env',
-      value: pythonFact?.value ?? recommendedTorchProfile,
-      state: setupCompatibility ? compatibilityBlockedCount > 0 ? 'fix' : compatibilityIssueCount > 0 ? 'warn' : 'ready' : 'checking',
+      label: 'Rootless Runtime',
+      value: rootlessRuntimeStrategy,
+      state: rootlessStatus === 'blocked' ? 'fix' : rootlessStatus === 'warn' ? 'warn' : rootlessStatus === 'checking' ? 'checking' : 'ready',
     },
     {
-      label: 'Node',
-      value: nodeFact?.value ?? (setupCompatibility ? 'checked' : 'pending'),
-      state: nodeFact?.status === 'blocked' ? 'fix' : nodeFact?.status === 'warning' || nodeFact?.status === 'fixable' ? 'warn' : setupCompatibility ? 'ready' : 'checking',
-    },
-    {
-      label: 'GitHub',
-      value: githubPack?.status.installed ? 'helper ready' : 'optional login',
-      state: githubPack?.status.installed ? 'ready' : 'warn',
-    },
-    {
-      label: 'Health',
+      label: 'Setup Health',
       value: apiStatus === 'checking'
         ? 'checking'
         : apiDisconnected
@@ -1707,9 +1776,9 @@ export default function SetupPage() {
 
   const helperActionLabel = (actionId: string) => {
     if (apiDisconnected) return 'API Offline';
-    if (actionId.startsWith('repair-receipt:')) return !storageReady ? 'Auto Storage' : 'Repair';
-    if (actionId === 'storage') return storageAutopilotBusy ? 'Finding' : 'Auto Storage';
-    if (!storageReady) return storageAutopilotBusy ? 'Finding' : 'Auto Storage';
+    if (actionId.startsWith('repair-receipt:')) return !storageReady ? 'Use Drive' : 'Repair';
+    if (actionId === 'storage') return storageAutopilotBusy ? 'Finding' : 'Use Drive';
+    if (!storageReady) return storageAutopilotBusy ? 'Finding' : 'Use Drive';
     if (actionId === 'starter-models') return modelsInstalling ? 'Downloading' : 'Download';
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
       return comfyInstalling ? 'Installing' : 'Install';
@@ -1758,13 +1827,21 @@ export default function SetupPage() {
       <div className="border-b border-[#e5e5e5] pb-2">
         <div className="flex items-center justify-between gap-3">
           <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase">nvWizard Setup</div>
-          <button
-            type="button"
-            onClick={() => setAdvancedSetupOpen(prev => !prev)}
-            className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider sm:flex-shrink-0"
-          >
-            {advancedSetupOpen ? 'Hide Troubleshooting' : 'Troubleshooting'}
-          </button>
+          <div className="flex items-center gap-2">
+            <Link href="/" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+              Dashboard
+            </Link>
+            <Link href="/query" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+              Chat
+            </Link>
+            <button
+              type="button"
+              onClick={() => setAdvancedSetupOpen(prev => !prev)}
+              className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider sm:flex-shrink-0"
+            >
+              {advancedSetupOpen ? 'Hide Troubleshooting' : 'Troubleshooting'}
+            </button>
+          </div>
         </div>
         {advancedSetupOpen && (
           <div className="mt-3 space-y-2">
@@ -1817,80 +1894,40 @@ export default function SetupPage() {
       </div>
 
       {step !== 'welcome' && (
-        <div className="border border-[#76B900]/40 bg-[#f7fdf0] p-4 space-y-4">
-          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-            <div className="min-w-0">
-              <div className="section-label">Beginner Mode</div>
-              <div className="text-lg font-mono font-bold text-[#0a0a0a] mt-1">
-                {storageReady ? 'Start with the recommended lab' : 'nvWizard is finding persistent storage'}
-              </div>
-              <div className="text-xs font-mono text-[#525252] mt-2 leading-relaxed max-w-2xl">
-                nvWizard checks storage, GPU, CUDA, Python, ComfyUI, models, and install receipts, then recommends the next safe action. Manual commands stay available under Troubleshooting.
-              </div>
-              {topHelperAction && (
-                <div className="mt-3 border border-[#76B900]/20 bg-white p-3">
-                  <div className="text-[10px] font-mono text-[#737373] uppercase">Recommended next</div>
-                  <div className="text-xs font-mono font-bold text-[#0a0a0a] mt-1">{topHelperAction.title}</div>
-                  <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">{topHelperAction.reason}</div>
-                </div>
-              )}
-            </div>
-            <div className="flex flex-col sm:flex-row lg:flex-col gap-2 lg:min-w-[190px]">
-              <button
-                type="button"
-                onClick={() => {
-                  if (!storageReady) {
-                    void handleUseRecommendedStorage();
-                    return;
-                  }
-                  if (topHelperAction && !helperActionDisabled(topHelperAction.id)) {
-                    runHelperAction(topHelperAction.id);
-                    return;
-                  }
-                  applyWizardProfile('student');
-                }}
-                disabled={apiDisconnected || Boolean(storageReady && topHelperAction && helperActionDisabled(topHelperAction.id))}
-                className="btn-primary px-4 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
-              >
-                {apiDisconnected
-                  ? 'API Offline'
-                  : topHelperAction ? helperActionLabel(topHelperAction.id) : 'Start AI Starter'}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleRepairWorkspace()}
-                disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
-                className="btn-ghost px-4 py-2 text-xs font-mono uppercase tracking-wider disabled:opacity-40"
-              >
-                {workspaceRepairing ? 'Repairing' : 'Fix My Setup'}
-              </button>
+        <div className="border border-[#76B900]/30 bg-[#f7fdf0] p-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+          <div className="min-w-0">
+            <div className="section-label">Workspace</div>
+            <div className="text-[10px] text-[#525252] mt-1 break-all">
+              {workspaceHome} - {workspaceFreeText} - {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} to review` : 'checks clear'}
             </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <div className="border border-[#76B900]/20 bg-white p-2">
-              <div className="text-[9px] font-mono text-[#737373] uppercase">Storage</div>
-              <div className={`text-[10px] font-mono mt-1 ${storageReady ? 'text-[#76B900]' : 'text-[#d97706]'}`}>
-                {storageBeginnerLabel}
-              </div>
-            </div>
-            <div className="border border-[#76B900]/20 bg-white p-2">
-              <div className="text-[9px] font-mono text-[#737373] uppercase">Checks</div>
-              <div className={`text-[10px] font-mono mt-1 ${setupConcernCount ? 'text-[#d97706]' : 'text-[#76B900]'}`}>
-                {setupConcernCount ? `${setupConcernCount} to review` : 'clear'}
-              </div>
-            </div>
-            <div className="border border-[#76B900]/20 bg-white p-2">
-              <div className="text-[9px] font-mono text-[#737373] uppercase">Jobs</div>
-              <div className={`text-[10px] font-mono mt-1 ${activeInstallJobs.length ? 'text-[#d97706]' : 'text-[#76B900]'}`}>
-                {activeInstallJobs.length ? `${activeInstallJobs.length} running` : 'idle'}
-              </div>
-            </div>
-            <div className="border border-[#76B900]/20 bg-white p-2">
-              <div className="text-[9px] font-mono text-[#737373] uppercase">API</div>
-              <div className={`text-[10px] font-mono mt-1 ${apiStatus === 'connected' ? 'text-[#76B900]' : 'text-[#d97706]'}`}>
-                {apiStatus === 'connected' ? 'online' : 'checking'}
-              </div>
-            </div>
+          <div className="flex flex-wrap gap-1.5">
+            {systemCheckItems.slice(0, 4).map(item => {
+              const tone = CHECK_TONES[item.state];
+              return (
+                <span key={item.label} className={`inline-flex items-center gap-1.5 border ${tone.border} ${tone.bg} px-2 py-1`}>
+                  <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                  <span className="text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
+                </span>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setStep('welcome')}
+              className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+            >
+              Mission Cards
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleRepairWorkspace()}
+              disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
+              className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+            >
+              {workspaceRepairing ? 'Repairing' : 'Fix My Setup'}
+            </button>
           </div>
         </div>
       )}
@@ -1902,8 +1939,11 @@ export default function SetupPage() {
               <div className="section-label">Install Jobs</div>
               <div className="text-[10px] font-mono text-[#737373] mt-1">
                 {activeInstallJobs.length > 0
-                  ? `${activeInstallJobs.length} active job${activeInstallJobs.length === 1 ? '' : 's'} running from persistent NVH_HOME`
+                  ? `${activeInstallJobs.length} active job${activeInstallJobs.length === 1 ? '' : 's'} tracked under persistent NVH_HOME`
                   : 'Recent setup jobs are saved under NVH_HOME/jobs'}
+              </div>
+              <div className="text-[10px] text-[#737373] mt-1">
+                Job history stays in the workspace, so refreshes and retries have a trail to follow.
               </div>
             </div>
             <button
@@ -2593,24 +2633,42 @@ export default function SetupPage() {
               </div>
             )}
 
-            <div className="border border-[#e5e5e5] bg-white px-3 py-2 flex flex-col gap-2">
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
-                <div className="flex flex-wrap items-center gap-2 min-w-0">
-                  <div className="section-label">System Check</div>
-                  <div className="text-xs font-bold text-[#0a0a0a]">
-                    {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready for rootless installs'}
+            <div className="border border-[#e5e5e5] bg-white p-3 space-y-3">
+              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="section-label">Workspace Check</div>
+                    <div className="text-xs font-bold text-[#0a0a0a]">
+                      {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready for rootless installs'}
+                    </div>
                   </div>
+                  <div className="text-[10px] text-[#525252] mt-1 break-all">
+                    Work survives at {workspaceHome} - {workspaceFreeText} - {workspaceReceipts} receipt{workspaceReceipts === 1 ? '' : 's'} - {workspaceActiveJobs} active job{workspaceActiveJobs === 1 ? '' : 's'}
+                  </div>
+                  {wizardPlan?.summary && (
+                    <div className="text-[10px] text-[#737373] mt-1">{wizardPlan.summary}</div>
+                  )}
                 </div>
-                {topHelperAction && (
+                <div className="flex flex-wrap gap-2">
+                  {topHelperAction && (
+                    <button
+                      type="button"
+                      onClick={() => runHelperAction(topHelperAction.id)}
+                      disabled={apiDisconnected || anyInstallRunning || helperActionDisabled(topHelperAction.id)}
+                      className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {helperActionLabel(topHelperAction.id)}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => runHelperAction(topHelperAction.id)}
-                    disabled={apiDisconnected || anyInstallRunning || helperActionDisabled(topHelperAction.id)}
-                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    onClick={() => void refreshWorkspacePassport(storageStatus?.layout.home)}
+                    disabled={apiDisconnected}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {helperActionLabel(topHelperAction.id)}
+                    Recheck
                   </button>
-                )}
+                </div>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {systemCheckItems.map(item => {
@@ -2619,7 +2677,7 @@ export default function SetupPage() {
                     <div key={item.label} className={`inline-flex items-center gap-1.5 border ${tone.border} ${tone.bg} px-2 py-1 min-w-0`}>
                       <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
                       <span className="text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
-                      <span className={`text-[10px] font-mono truncate max-w-[10rem] ${tone.text}`}>{item.value}</span>
+                      <span className={`text-[10px] font-mono truncate max-w-[11rem] ${tone.text}`}>{item.value}</span>
                     </div>
                   );
                 })}
@@ -2635,15 +2693,28 @@ export default function SetupPage() {
                       Use the tabs above for storage, hardware, apps, accounts, and tests. The main install choices stay below.
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleRepairWorkspace()}
-                    disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
-                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                  >
-                    {workspaceRepairing ? 'Repairing' : 'Repair Workspace'}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleRepairWorkspace()}
+                      disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {workspaceRepairing ? 'Repairing' : 'Fix My Setup'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleSupportSnapshot()}
+                      disabled={supportSnapshotLoading || apiDisconnected}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {supportSnapshotLoading ? 'Saving' : 'Support Snapshot'}
+                    </button>
+                  </div>
                 </div>
+                {supportSnapshotMessage && (
+                  <div className="text-[10px] font-mono text-[#76B900] mt-2 break-all">{supportSnapshotMessage}</div>
+                )}
                 <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
                   {[
                     ['Storage', storageReady ? 'Ready' : storageBeginnerLabel],
@@ -2662,7 +2733,10 @@ export default function SetupPage() {
 
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
-                <div className="section-label">Install Options</div>
+                <div>
+                  <div className="section-label">Choose A Mission</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">What do you want to make today?</div>
+                </div>
               </div>
               {apiDisconnected && (
                 <div className="border border-[#d97706]/30 bg-[#fff8ed] p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -2748,7 +2822,7 @@ export default function SetupPage() {
                             disabled={!profileInstalled && (anyInstallRunning || apiDisconnected)}
                             className={`${profileInstalled ? 'btn-ghost' : 'btn-primary'} w-full mt-4 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40`}
                           >
-                            {profileInstalled ? 'Open' : building ? 'Installing' : 'Install'}
+                            {profileInstalled ? 'Open' : building ? profileBusyLabels[profile.id] : profileActionLabels[profile.id]}
                           </button>
                         </div>
                       );
@@ -2806,7 +2880,7 @@ export default function SetupPage() {
                             disabled={anyInstallRunning || apiDisconnected}
                             className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                           >
-                            {building ? 'Installing' : 'Install Mission'}
+                            {building ? profileBusyLabels[profile.id] : profileActionLabels[profile.id]}
                           </button>
                           <button
                             type="button"
@@ -2850,33 +2924,43 @@ export default function SetupPage() {
             </div>
 
             <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="border border-[#e5e5e5] p-3">
-                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">Models</div>
-                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.models_dir ?? 'Set NVH_HOME first'}</div>
+              <div className="border border-[#76B900]/30 bg-[#76B900]/5 p-3">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-[#0a0a0a]">Persistent home</div>
+                    <div className="text-[10px] font-mono text-[#76B900] mt-1 break-all">
+                      {storageStatus?.layout.home ?? 'nvWizard is finding the durable block volume'}
+                    </div>
+                    <div className="text-[10px] text-[#525252] mt-1">
+                      Models, apps, projects, outputs, logs, and support snapshots live under this one workspace.
+                    </div>
+                  </div>
+                  <span className={`text-[9px] font-mono uppercase px-2 py-1 border flex-shrink-0 ${storageReady ? 'border-[#76B900]/40 text-[#76B900]' : 'border-[#d97706]/40 text-[#d97706]'}`}>
+                    {storageReady ? 'ready' : storageBeginnerLabel}
+                  </span>
                 </div>
-                <div className="border border-[#e5e5e5] p-3">
-                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">ComfyUI</div>
-                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.comfyui_dir ?? 'Set NVH_HOME first'}</div>
-                </div>
-                <div className="border border-[#e5e5e5] p-3">
-                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">Cache</div>
-                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.cache_dir ?? 'Set NVH_HOME first'}</div>
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="border border-[#e5e5e5] p-3">
-                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">Runtimes</div>
-                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.runtime_dir ?? 'Set NVH_HOME first'}</div>
-                </div>
-                <div className="border border-[#e5e5e5] p-3">
-                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">Apps</div>
-                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.apps_dir ?? 'Set NVH_HOME first'}</div>
-                </div>
-                <div className="border border-[#e5e5e5] p-3">
-                  <div className="text-[10px] font-mono text-[#a3a3a3] uppercase">WebUI</div>
-                  <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{storageStatus?.layout.webui_dir ?? 'Set NVH_HOME first'}</div>
-                </div>
+                {storageStatus && (
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">
+                      Workspace paths
+                    </summary>
+                    <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                      {[
+                        ['Models', storageStatus.layout.models_dir],
+                        ['ComfyUI', storageStatus.layout.comfyui_dir],
+                        ['Apps', storageStatus.layout.apps_dir],
+                        ['Projects', storageStatus.layout.projects_dir],
+                        ['Outputs', storageStatus.layout.outputs_dir],
+                        ['Support', storageStatus.layout.support_dir],
+                      ].map(([label, value]) => (
+                        <div key={label} className="border border-[#e5e5e5] bg-white p-2 min-w-0">
+                          <div className="text-[9px] font-mono text-[#737373] uppercase">{label}</div>
+                          <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
               </div>
 
               <div>
@@ -2899,7 +2983,7 @@ export default function SetupPage() {
                       disabled={storageSaving || mountActivating || !mountRecommendation.writable || mountRecommendation.read_only}
                       className="btn-primary px-4 py-2 text-xs font-mono disabled:opacity-40 flex-shrink-0"
                     >
-                      {mountActivating ? 'Preparing...' : 'Use Recommended'}
+                      {mountActivating ? 'Preparing...' : 'Use Persistent Drive'}
                     </button>
                   </div>
                 )}
@@ -2919,7 +3003,7 @@ export default function SetupPage() {
                     disabled={storageSaving}
                     className="btn-primary px-4 py-2 text-xs font-mono disabled:opacity-40"
                   >
-                    {storageSaving ? 'Checking...' : 'Configure'}
+                    {storageSaving ? 'Checking...' : 'Use This Drive'}
                   </button>
                 </div>
               </div>
@@ -2950,11 +3034,16 @@ export default function SetupPage() {
               </div>
 
               {storageStatus && (
-                <div className="bg-[#0a0a0a] border border-[#333333] p-3 overflow-x-auto">
-                  <code className="text-[10px] font-mono text-[#76B900] whitespace-pre">
-                    {`source ${storageStatus.env_file}`}
-                  </code>
-                </div>
+                <details className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                  <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">
+                    Manual shell override
+                  </summary>
+                  <div className="mt-3 bg-[#0a0a0a] border border-[#333333] p-3 overflow-x-auto">
+                    <code className="text-[10px] font-mono text-[#76B900] whitespace-pre">
+                      {`source ${storageStatus.env_file}`}
+                    </code>
+                  </div>
+                </details>
               )}
             </div>
           </div>
@@ -3347,16 +3436,45 @@ export default function SetupPage() {
 
             {/* Install instructions */}
             {ollamaStatus !== 'online' && (
-              <div className="space-y-3">
-                <div className="section-label">Install Local AI</div>
-                <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 font-mono text-sm space-y-2">
-                  <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider"># Rootless Ollama runtime, no sudo</div>
-                  <div className="text-[#76B900]">nvh studio --install rootless-ollama -y</div>
-                  <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3"># Start the local model server</div>
-                  <div className="text-[#76B900]">nvhive-ollama-serve</div>
-                  <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3"># Pull recommended fitting models</div>
-                  <div className="text-[#76B900]">nvh studio --install-models recommended -y</div>
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-3">
+                <div>
+                  <div className="section-label">Local AI Action</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">Install the rootless runtime and the GPU-fit model queue.</div>
+                  <div className="text-xs text-[#525252] mt-1">
+                    nvWizard keeps the runtime, models, and launchers under the persistent workspace.
+                  </div>
                 </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleInstallStudioPacks(['rootless-ollama'])}
+                    disabled={!storageReady || studioInstalling}
+                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {studioInstalling ? 'Installing' : 'Install Local Runtime'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleInstallStudioModels(recommendedMissingModelIds())}
+                    disabled={!storageReady || modelsInstalling || recommendedMissingModelIds().length === 0}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {modelsInstalling ? 'Downloading' : 'Download Recommended Models'}
+                  </button>
+                </div>
+                <details className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                  <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">
+                    Manual overrides
+                  </summary>
+                  <div className="mt-3 font-mono text-sm space-y-2">
+                    <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider"># Rootless Ollama runtime, no sudo</div>
+                    <div className="text-[#76B900] break-all">nvh studio --install rootless-ollama -y</div>
+                    <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3"># Start the local model server</div>
+                    <div className="text-[#76B900] break-all">nvhive-ollama-serve</div>
+                    <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3"># Pull recommended fitting models</div>
+                    <div className="text-[#76B900] break-all">nvh studio --install-models recommended -y</div>
+                  </div>
+                </details>
               </div>
             )}
 
@@ -3395,14 +3513,15 @@ export default function SetupPage() {
               </div>
             </div>
 
-            {/* Quick setup via docker */}
-            <div className="bg-[#ffffff] border border-[#e5e5e5] p-4">
-              <div className="text-[10px] font-mono text-[#a3a3a3] mb-2 uppercase tracking-wider">Using Docker Compose?</div>
-              <code className="text-[10px] font-mono text-[#76B900]">docker compose up -d</code>
-              <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">
-                The docker-compose stack auto-pulls nemotron-mini on first start.
+            <details className="bg-[#ffffff] border border-[#e5e5e5] p-4">
+              <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">Rootless container option</summary>
+              <div className="mt-3">
+                <code className="text-[10px] font-mono text-[#76B900]">docker compose up -d</code>
+                <div className="text-[10px] text-[#737373] mt-1">
+                  Only use this when Docker/Podman is available without sudo. Otherwise nvWizard uses the workspace runtime.
+                </div>
               </div>
-            </div>
+            </details>
           </div>
         )}
 
@@ -4024,12 +4143,12 @@ export default function SetupPage() {
                   { label: 'Local AI', value: ollamaStatus === 'online' ? 'Ollama Running' : 'Not configured', ok: ollamaStatus === 'online' },
                   { label: 'Local Models', value: `${studioModels.filter(model => model.installed).length}/${studioModels.length || 0} installed`, ok: studioModels.some(model => model.installed) },
                   { label: 'AI Studio Packs', value: `${studioPacks.filter(pack => pack.status.installed).length}/${studioPacks.length || 0} installed`, ok: studioPacks.some(pack => pack.status.installed) },
-                  { label: 'ComfyUI', value: comfyStatus?.running ? 'Running' : comfyStatus?.installed ? 'Installed' : 'Optional', ok: Boolean(comfyStatus?.installed || comfyStatus?.running) },
+                  { label: 'ComfyUI', value: comfyStatus?.running ? 'Running' : comfyStatus?.installed ? 'Installed' : 'Optional', ok: Boolean(comfyStatus?.installed || comfyStatus?.running), optional: !comfyStatus?.installed && !comfyStatus?.running },
                   { label: 'Hive API', value: apiStatus === 'connected' ? 'Online' : 'Offline', ok: apiStatus === 'connected' },
-                  { label: 'Active Advisors', value: configuredProviders.length > 0 ? configuredProviders.join(', ') : 'None yet', ok: configuredProviders.length > 0 },
+                  { label: 'Active Advisors', value: configuredProviders.length > 0 ? configuredProviders.join(', ') : 'Optional', ok: configuredProviders.length > 0, optional: configuredProviders.length === 0 },
                 ].map(item => (
                   <div key={item.label} className="flex items-center gap-3 px-3 py-2 bg-[#ffffff] border border-[#e5e5e5]">
-                    <span className={`w-1.5 h-1.5 flex-shrink-0 ${item.ok ? 'bg-[#76B900]' : 'bg-[#dc2626]'}`}
+                    <span className={`w-1.5 h-1.5 flex-shrink-0 ${item.ok ? 'bg-[#76B900]' : item.optional ? 'bg-[#a3a3a3]' : 'bg-[#dc2626]'}`}
                       style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
                     <span className="text-[10px] font-mono text-[#737373] uppercase w-32">{item.label}</span>
                     <span className="text-xs font-mono text-[#0a0a0a]">{item.value}</span>
@@ -4140,7 +4259,7 @@ export default function SetupPage() {
                 GO TO DASHBOARD
               </Link>
               <Link href="/query" className="btn-secondary flex-1 py-3 text-xs font-mono uppercase tracking-widest text-center">
-                START QUERYING
+                ASK YOUR FIRST QUESTION
               </Link>
             </div>
           </div>

@@ -4,6 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import GlobalModals from '@/components/GlobalModals';
 import { UIShellProvider, useUIShell } from '@/components/UIShellProvider';
+import { NVHIVE_VERSION } from '@/lib/version';
 
 /**
  * LayoutShell wraps every page.
@@ -53,7 +54,7 @@ function InnerShell({ children }: { children: React.ReactNode }) {
           >
             Ctrl+K
           </button>
-          <span className="text-[#a3a3a3]">v0.32.0</span>
+          <span className="text-[#a3a3a3]">v{NVHIVE_VERSION}</span>
         </div>
       </div>
       {/* Offset for top bar */}

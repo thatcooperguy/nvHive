@@ -9147,7 +9147,7 @@ def doctor(
         help="Persistent NVH_HOME on a mounted volume to check",
     ),
     min_free_gb: float = typer.Option(
-        20.0,
+        200.0,
         "--min-free-gb",
         help="Minimum free space recommended for local models and ComfyUI",
     ),
@@ -9701,6 +9701,173 @@ def doctor(
 
     if failed:
         raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# nvWizard rootless planning and repair
+# ---------------------------------------------------------------------------
+
+@app.command("plan", rich_help_panel="Admin")
+def wizard_plan_command(
+    profile: str = typer.Option(
+        "student",
+        "--profile",
+        help="Mission profile to plan: student, creator, game, music, agent, llm, or full",
+    ),
+    home_dir: str | None = typer.Option(
+        None,
+        "--home-dir",
+        help="Persistent NVH_HOME on a mounted user-writable volume",
+    ),
+    min_free_gb: float = typer.Option(
+        200.0,
+        "--min-free-gb",
+        help="Minimum free space recommended for rootless AI workspaces",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON",
+    ),
+):
+    """Preview the rootless setup plan for a mission without installing anything."""
+    import json
+
+    from nvh.integrations.workspace_passport import workspace_plan
+
+    plan_data = workspace_plan(profile=profile, home_dir=home_dir, min_free_gb=min_free_gb)
+    if json_output:
+        console.print(json.dumps(plan_data, indent=2))
+        return
+
+    console.print(f"[bold]nvWizard Plan:[/bold] {plan_data['title']}")
+    console.print(f"  {plan_data['summary']}")
+    console.print(f"  Workspace: [bold]{plan_data['passport']['storage_home']}[/bold]\n")
+
+    table = Table(title="Rootless Mission Steps", show_lines=False)
+    table.add_column("Step", style="bold")
+    table.add_column("Status")
+    table.add_column("Action")
+    table.add_column("Summary")
+    for step in plan_data["steps"]:
+        status = step["status"]
+        style = "green" if status in {"pass", "ready"} else "yellow" if status == "warn" else "red"
+        table.add_row(
+            step["title"],
+            f"[{style}]{status}[/{style}]",
+            step["action_id"] or "[dim]automatic[/dim]",
+            step["summary"],
+        )
+    console.print(table)
+
+
+@app.command("repair", rich_help_panel="Admin")
+def wizard_repair_command(
+    home_dir: str | None = typer.Option(
+        None,
+        "--home-dir",
+        help="Persistent NVH_HOME on a mounted user-writable volume",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON",
+    ),
+):
+    """Run safe idempotent repairs that never use sudo or delete user assets."""
+    import json
+
+    from nvh.integrations.auto_repair import run_safe_repairs
+
+    result = run_safe_repairs(home_dir=home_dir)
+    if json_output:
+        console.print(json.dumps(result, indent=2, default=str))
+        return
+
+    console.print("[bold]nvWizard Repair[/bold]")
+    console.print(f"  {result.get('summary', 'Safe repair complete.')}")
+    for item in result.get("results", []):
+        status = item.get("status", "unknown")
+        style = "green" if status in {"fixed", "ok", "skipped"} else "yellow"
+        console.print(f"  [{style}]{status}[/{style}] {item.get('title') or item.get('id')}")
+
+
+@app.command("wizard", rich_help_panel="Admin")
+def wizard_command(
+    action: str = typer.Argument(
+        "status",
+        help="Action: status, plan, repair, or support",
+    ),
+    profile: str = typer.Option(
+        "student",
+        "--profile",
+        help="Mission profile for plan",
+    ),
+    home_dir: str | None = typer.Option(
+        None,
+        "--home-dir",
+        help="Persistent NVH_HOME on a mounted user-writable volume",
+    ),
+    include_logs: bool = typer.Option(
+        True,
+        "--include-logs/--no-logs",
+        help="Include redacted logs in support snapshots",
+    ),
+    min_free_gb: float = typer.Option(
+        200.0,
+        "--min-free-gb",
+        help="Minimum free space recommended for rootless AI workspaces",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON",
+    ),
+):
+    """Rootless nvWizard status, planning, repair, and support snapshot tools."""
+    import json
+
+    from nvh.integrations.auto_repair import run_safe_repairs
+    from nvh.integrations.workspace_passport import (
+        support_snapshot,
+        workspace_passport,
+        workspace_plan,
+    )
+
+    normalized = action.lower().strip()
+    if normalized == "status":
+        result = workspace_passport(home_dir=home_dir, create=True, min_free_gb=min_free_gb)
+    elif normalized == "plan":
+        result = workspace_plan(profile=profile, home_dir=home_dir, min_free_gb=min_free_gb)
+    elif normalized == "repair":
+        result = run_safe_repairs(home_dir=home_dir)
+    elif normalized == "support":
+        result = support_snapshot(home_dir=home_dir, include_logs=include_logs, min_free_gb=min_free_gb)
+    else:
+        console.print("[red]Unknown wizard action.[/red] Use status, plan, repair, or support.")
+        raise typer.Exit(2)
+
+    if json_output:
+        console.print(json.dumps(result, indent=2, default=str))
+        return
+
+    if normalized == "status":
+        console.print("[bold]nvWizard Workspace Passport[/bold]")
+        console.print(f"  Workspace ID: [bold]{result['workspace_id']}[/bold]")
+        console.print(f"  Home:         [bold]{result['storage_home']}[/bold]")
+        console.print(f"  Policy:       {result['rootless']['policy_status']}")
+        console.print(f"  Passport:     {result['passport_path']}")
+    elif normalized == "plan":
+        console.print(f"[bold]nvWizard Plan:[/bold] {result['title']}")
+        console.print(f"  {result['summary']}")
+        for step in result["steps"]:
+            console.print(f"  - {step['title']}: {step['status']} ({step['action_id'] or 'automatic'})")
+    elif normalized == "repair":
+        console.print("[bold]nvWizard Repair[/bold]")
+        console.print(f"  {result.get('summary', 'Safe repair complete.')}")
+    else:
+        console.print("[bold]nvWizard Support Snapshot[/bold]")
+        console.print(f"  Saved: [bold]{result['path']}[/bold]")
 
 
 # ---------------------------------------------------------------------------
@@ -12482,6 +12649,7 @@ def main():
         "advisor", "agent", "config", "conversation", "budget", "model",
         "template", "workflow", "knowledge", "schedule", "webhook", "auth",
         "git", "webui", "workstation", "studio", "keys", "tour",
+        "plan", "repair", "wizard",
     })
 
     if first in known_commands:

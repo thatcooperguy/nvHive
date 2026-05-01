@@ -1,7 +1,8 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect } from 'react';
 import { getCacheStats, clearCache, getBudgetStatus } from '@/lib/api';
+import { NVHIVE_VERSION } from '@/lib/version';
 import type { CacheStats, BudgetStatus } from '@/lib/types';
 
 const STORAGE_KEY = 'council_settings';
@@ -22,7 +23,6 @@ interface AppSettings {
   synthesizeByDefault: boolean;
   theme: 'dark' | 'light';
 }
-
 const DEFAULT_SETTINGS: AppSettings = {
   apiUrl: 'http://localhost:8000',
   defaultProvider: '',
@@ -464,8 +464,8 @@ export default function SettingsPage() {
 
       {/* Version info */}
       <div className="text-center py-4 border-t border-[#e5e5e5]">
-        <div className="text-[10px] font-mono text-[#404040]">NVHIVE · v0.32.0</div>
-        <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">NVIDIA Nemotron · Next.js 14 · Tailwind CSS</div>
+        <div className="text-[10px] font-mono text-[#404040]">NVHIVE - v{NVHIVE_VERSION}</div>
+        <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">NVIDIA Nemotron - Next.js 14 - Tailwind CSS</div>
       </div>
     </div>
   );

@@ -11,11 +11,14 @@ build-env*/
 .pytest_cache/
 .pytest_tmp/
 pytest_tmp*/
+pytest-workspaces/
+pytest_passport*/
 .tmp-pytest*/
 .pytest-*/
 .codex-pytest-tmp/
 .codex-test-tmp*/
 pytest-of-*/
+probe_py_dir/
 tmp*/
 .mypy_cache/
 .ruff_cache/
