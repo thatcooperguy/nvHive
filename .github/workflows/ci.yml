@@ -7,24 +7,17 @@ on:
     branches: [main]
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────
-  # Python test matrix: Python 3.11 + 3.12 across Linux, Windows, macOS
+  # Python test matrix: Linux launch target only.
   #
-  # Windows was added after a Python-3.11-on-Windows asyncio proactor
-  # crash (0xC0000005) hid for months because CI was Linux-only. Any
-  # platform-specific regression here is higher priority than any
-  # feature work — we'd rather fail noisily on CI than silently on a
-  # user's laptop.
-  # ─────────────────────────────────────────────────────────────────────
+  # nvHive is currently launching on rootless NVIDIA Linux cloud desktops,
+  # specifically Ubuntu 24.04-style VMs with NVIDIA GPUs. Keep macOS/Windows
+  # work paused until the Linux installer, wizard, and GPU journey are stable.
   test:
     runs-on: ${{ matrix.os }}
     strategy:
-      # Don't cancel all platforms when one fails — we want to see the
-      # full picture so we can tell platform-specific bugs from generic
-      # ones in a single run.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v5
@@ -39,35 +32,20 @@ jobs:
       - name: Test
         run: python -m pytest tests/ -v --tb=short
       - name: Coverage (gate)
-        # Coverage gate on business logic (CLI presentation excluded).
-        # History: 0.7.0=17%, 0.8.0=28%, 0.9.0=30%, 0.14.0=51%.
-        # CLI layer (main.py, repl.py, completions.py, conversations.py)
-        # is excluded via [tool.coverage.run] omit in pyproject.toml —
-        # those are smoke-tested via subprocess, not unit-tested.
+        # Coverage gate on business logic. CLI presentation is smoke-tested
+        # by subprocess and excluded via pyproject.toml coverage config.
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: python -m pytest tests/ --cov=nvh --cov-report=xml --cov-report=term-missing --cov-fail-under=49
       - name: Upload coverage to Codecov
-        # Codecov gives PR comments showing coverage delta, plus a
-        # trend graph in the project dashboard. Token-less upload
-        # works for public repos via the OIDC flow built into the
-        # action; private repos need CODECOV_TOKEN as a secret.
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml
-          fail_ci_if_error: false  # don't break CI if Codecov is down
+          fail_ci_if_error: false
           verbose: false
         continue-on-error: true
 
-  # ─────────────────────────────────────────────────────────────────────
-  # WebUI build + typecheck + lint
-  #
-  # The Next.js WebUI lives in /web and shipped several type errors to
-  # main before we started building it in CI. This job type-checks and
-  # lints on every commit so those never reach users. Runs on Linux
-  # only — cross-platform Node.js build differences are extremely rare
-  # and the matrix cost isn't worth it.
-  # ─────────────────────────────────────────────────────────────────────
+  # WebUI build, typecheck, and lint on Linux.
   webui:
     runs-on: ubuntu-latest
     defaults:
@@ -90,14 +68,7 @@ jobs:
       - name: Build
         run: npm run build
 
-  # ─────────────────────────────────────────────────────────────────────
-  # Dependency vulnerability scan
-  #
-  # Catches transitive CVEs before they ship to PyPI. Non-blocking on
-  # continue-on-error so a single bad upstream release doesn't wedge
-  # the whole pipeline, but the warnings show up in the job output and
-  # surface in PRs.
-  # ─────────────────────────────────────────────────────────────────────
+  # Dependency vulnerability scan.
   security:
     runs-on: ubuntu-latest
     steps:
@@ -112,13 +83,7 @@ jobs:
         run: pip-audit --desc --strict || echo "::warning::pip-audit found vulnerabilities"
         continue-on-error: true
 
-  # ─────────────────────────────────────────────────────────────────────
-  # Wheel build + smoke test
-  #
-  # Builds the wheel the same way the release workflow will, installs
-  # it in a clean venv, and runs a basic smoke test. If this fails on
-  # a push, the release workflow will also fail — catch it early.
-  # ─────────────────────────────────────────────────────────────────────
+  # Wheel build and smoke test.
   build:
     runs-on: ubuntu-latest
     needs: [test, webui]
