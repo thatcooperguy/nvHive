@@ -403,6 +403,12 @@ export interface StorageLayout {
   studio_dir: string;
   comfyui_dir: string;
   config_dir: string;
+  projects_dir: string;
+  outputs_dir: string;
+  backups_dir: string;
+  support_dir: string;
+  state_dir: string;
+  catalog_dir: string;
 }
 
 export interface StorageStatus {
@@ -437,6 +443,138 @@ export interface RuntimeStatus {
   micromamba_binary: string;
   micromamba_root_prefix: string;
   notes: string[];
+}
+
+export interface RootlessPolicyGate {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'blocked' | 'info' | string;
+  summary: string;
+  requires_admin: boolean;
+  action_id: string | null;
+}
+
+export interface RootlessPolicyReport {
+  schema_version: number;
+  checked_at: string;
+  status: 'ready' | 'warn' | 'blocked' | string;
+  summary: string;
+  no_root_required: boolean;
+  allowed_write_roots: string[];
+  blocked_operations: string[];
+  preferred_runtimes: string[];
+  storage: StorageStatus;
+  runtime: RuntimeStatus;
+  gates: RootlessPolicyGate[];
+}
+
+export interface WorkspacePassport {
+  schema_version: number;
+  workspace_id: string;
+  created_at: string;
+  updated_at: string;
+  product: string;
+  assistant: string;
+  nvhive_version: string;
+  storage_home: string;
+  passport_path: string;
+  legacy_passport_path?: string;
+  rootless: {
+    normal_setup_requires_admin: boolean;
+    host_driver_requires_admin_if_broken: boolean;
+    policy_status: string;
+  };
+  paths: StorageLayout & Record<string, string>;
+  host_fingerprint: Record<string, unknown>;
+  storage: StorageStatus;
+  policy: RootlessPolicyReport;
+  receipts: Record<string, unknown>;
+  jobs: {
+    ok: boolean;
+    active_count: number;
+    recent_count: number;
+    active: InstallJob[];
+    error?: unknown;
+  };
+  model_fit: Record<string, unknown>;
+  compatibility: Record<string, unknown>;
+}
+
+export interface WizardPlanStep {
+  id: string;
+  title: string;
+  status: 'pass' | 'warn' | 'ready' | 'blocked' | string;
+  summary: string;
+  action_id: string | null;
+  requires_admin: boolean;
+  risk: 'safe' | 'moderate' | 'high' | string;
+}
+
+export interface WizardPlanResult {
+  schema_version: number;
+  checked_at: string;
+  profile: string;
+  title: string;
+  summary: string;
+  rootless_safe: boolean;
+  passport: {
+    workspace_id: string;
+    storage_home: string;
+    policy_status: string;
+    active_jobs: number;
+  };
+  steps: WizardPlanStep[];
+}
+
+export interface WizardMissionBuildRequest {
+  profile: string;
+  home_dir?: string;
+  torch_profile?: string;
+  force_update?: boolean;
+  min_free_gb?: number;
+}
+
+export interface WizardMissionPlanResult {
+  schema_version: number;
+  profile: string;
+  title: string;
+  storage: StorageStatus;
+  rootless_safe: boolean;
+  needs_comfyui: boolean;
+  torch_profile: string;
+  pack_ids: string[];
+  first_pack_ids: string[];
+  comfy_node_pack_ids: string[];
+  model_ids: string[];
+  example_ids: string[];
+  estimated_disk_gb: number;
+  stages: Array<Record<string, unknown>>;
+}
+
+export interface WizardMissionInstallEvent {
+  event: 'plan' | 'pack' | 'model' | 'step' | 'stage-complete' | 'log' | 'complete' | 'error' | string;
+  status: 'running' | 'complete' | 'failed' | string;
+  message: string;
+  profile?: string;
+  stage?: string;
+  child_event?: string;
+  child_status?: string;
+  plan?: WizardMissionPlanResult;
+  path?: string;
+  pack_id?: string;
+  model_id?: string;
+  command?: string[];
+}
+
+export interface SupportSnapshotResult {
+  schema_version: number;
+  created_at: string;
+  summary: string;
+  path: string;
+  passport: Record<string, unknown>;
+  policy: RootlessPolicyReport;
+  diagnostics: DiagnosticsReport;
+  excludes: string[];
 }
 
 export interface SetupAction {
@@ -829,7 +967,7 @@ export type InstallJobStatus =
 
 export interface InstallJob {
   id: string;
-  kind: 'comfyui-install' | 'studio-pack-install' | 'studio-model-install' | string;
+  kind: 'wizard-mission' | 'comfyui-install' | 'studio-pack-install' | 'studio-model-install' | string;
   title: string;
   status: InstallJobStatus;
   message: string;
@@ -894,6 +1032,9 @@ export interface ComfyUIStatus {
   examples: ComfyUIExample[];
   already_running?: boolean;
   started?: boolean;
+  ready?: boolean;
+  ready_timeout?: boolean;
+  ready_wait_seconds?: number;
 }
 
 export interface ComfyUIExamplesResult {

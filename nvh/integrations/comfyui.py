@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -365,6 +366,36 @@ def detect_comfyui(
     }
 
 
+def wait_for_comfyui(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    *,
+    timeout_s: float = 45.0,
+    interval_s: float = 1.0,
+) -> dict[str, Any]:
+    """Poll ComfyUI after launch so callers know when it is actually usable."""
+    started = time.monotonic()
+    deadline = started + timeout_s
+    while time.monotonic() < deadline:
+        if _is_http_reachable(host, port):
+            status = detect_comfyui(host, port)
+            status.update({
+                "ready": True,
+                "ready_timeout": False,
+                "ready_wait_seconds": round(time.monotonic() - started, 1),
+            })
+            return status
+        time.sleep(interval_s)
+
+    status = detect_comfyui(host, port)
+    status.update({
+        "ready": False,
+        "ready_timeout": True,
+        "ready_wait_seconds": round(time.monotonic() - started, 1),
+    })
+    return status
+
+
 def write_example_pack(root: Path | None = None) -> Path:
     """Write nvHive's curated ComfyUI example manifest into the install."""
     app_dir = comfyui_app_dir(root)
@@ -630,13 +661,18 @@ async def install_comfyui(
                     "status": detect_comfyui(),
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            yield {
+                "event": "log",
+                "status": "running",
+                "message": f"Warning: could not write ComfyUI receipt: {exc}",
+            }
 
         yield {
             "event": "complete",
             "status": "complete",
             "message": "ComfyUI install complete",
+            "torch_profile": torch_profile,
             "status_snapshot": detect_comfyui(),
         }
     except Exception as exc:
@@ -659,6 +695,8 @@ def start_comfyui(
     if _is_http_reachable(host, port):
         status = detect_comfyui(host, port)
         status["already_running"] = True
+        status["ready"] = True
+        status["ready_timeout"] = False
         return status
 
     if not (app_dir / "main.py").exists() or not python_exe.exists():
@@ -699,7 +737,7 @@ def start_comfyui(
     log_handle.close()
     _pid_file(root).write_text(str(process.pid), encoding="utf-8")
 
-    status = detect_comfyui(host, port)
+    status = wait_for_comfyui(host, port)
     status.update(
         {
             "started": True,

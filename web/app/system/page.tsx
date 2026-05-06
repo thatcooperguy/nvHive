@@ -87,11 +87,11 @@ export default function SystemPage() {
         <div className="relative flex items-center justify-between flex-wrap gap-4">
           <div>
             <div className="text-[10px] font-mono text-[#76B900] tracking-[0.25em] uppercase mb-1">
-              System Monitor
+              Computer Check
             </div>
-            <h1 className="text-2xl font-bold text-[#0a0a0a] tracking-tight">System Status</h1>
-            <p className="text-sm text-[#a3a3a3] mt-1 font-mono">
-              Advisor health, GPU status, budget &amp; cache metrics
+            <h1 className="text-2xl font-bold text-[#0a0a0a] tracking-tight">My Computer</h1>
+            <p className="text-sm text-[#737373] mt-1 font-mono">
+              Check whether local AI is ready on this desktop.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -110,14 +110,14 @@ export default function SystemPage() {
                 }`}
                 style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }}
               />
-              {apiStatus === 'connected' ? 'API ONLINE' : apiStatus === 'disconnected' ? 'API OFFLINE' : 'CHECKING'}
+              {apiStatus === 'connected' ? 'SERVICE RUNNING' : apiStatus === 'disconnected' ? 'SERVICE OFFLINE' : 'CHECKING'}
             </div>
             <Link href="/" className="btn-primary px-4 py-2 text-sm flex items-center gap-2 font-mono tracking-wide">
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round"
                   d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
               </svg>
-              OPEN CHAT
+              ASK A QUESTION
             </Link>
           </div>
         </div>
@@ -204,7 +204,7 @@ export default function SystemPage() {
 
         <div className="col-span-2 grid grid-cols-2 sm:grid-cols-4 gap-4">
           <StatCard
-            label="Advisors"
+            label="AI Connections"
             value={`${healthyCount}/${providers.length}`}
             sub="online"
             color={healthyCount === providers.length && providers.length > 0 ? '#76B900' : '#d97706'}
@@ -225,7 +225,7 @@ export default function SystemPage() {
             icon="◈"
           />
           <StatCard
-            label="API"
+            label="Service"
             value={apiStatus === 'connected' ? 'ONLINE' : apiStatus === 'disconnected' ? 'OFFLINE' : '...'}
             color={apiStatus === 'connected' ? '#76B900' : '#dc2626'}
             icon="◎"
@@ -237,7 +237,7 @@ export default function SystemPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-3">
           <div className="flex items-center justify-between">
-            <div className="section-label">Advisor Status</div>
+            <div className="section-label">AI Connections</div>
             <button
               onClick={loadProviders}
               className="text-[10px] font-mono text-[#a3a3a3] hover:text-[#76B900] flex items-center gap-1.5 transition-colors"
@@ -266,11 +266,11 @@ export default function SystemPage() {
               <div className="text-[#737373] font-mono text-sm mb-1">NO ADVISORS AVAILABLE</div>
               <div className="text-xs text-[#a3a3a3] font-mono mb-4">
                 {apiStatus === 'disconnected'
-                  ? 'Connect the API server to see advisors'
-                  : 'Configure advisors in Settings or start the Hive API'}
+                  ? 'Start the nvHive service to see AI connections'
+                  : 'Use setup to install a local model or connect optional cloud providers'}
               </div>
               <Link href="/setup" className="btn-secondary inline-flex mt-2 px-4 py-2 text-xs font-mono gap-2 items-center">
-                RUN SETUP WIZARD
+                FIX SETUP
               </Link>
             </div>
           ) : (
@@ -294,19 +294,33 @@ export default function SystemPage() {
                 { href: '/providers', label: 'View Advisors', icon: '▲', color: '#76B900' },
                 { href: '/setup', label: 'Setup Wizard', icon: '◎', color: '#d97706' },
                 { href: '/settings', label: 'Settings', icon: '⚙', color: '#a3a3a3' },
-              ].map(({ href, label, icon, color }) => (
+              ].map(({ href, label, icon, color }) => {
+                const displayLabel =
+                  href === '/' ? 'ASK A QUESTION' :
+                  href === '/providers' ? 'AI CONNECTIONS' :
+                  href === '/setup' ? 'FIX SETUP' :
+                  href === '/settings' ? 'PREFERENCES' :
+                  label.toUpperCase();
+                const displayIcon =
+                  href === '/' ? 'CHAT' :
+                  href === '/providers' ? 'AI' :
+                  href === '/setup' ? 'SETUP' :
+                  href === '/settings' ? 'PREF' :
+                  icon;
+                return (
                 <Link
                   key={href}
                   href={href}
                   className="flex items-center gap-3 px-3 py-2 hover:bg-[#f5f5f5] border border-transparent hover:border-[#76B900]/20 text-[#737373] hover:text-[#0a0a0a] transition-all text-xs font-mono"
                 >
-                  <span style={{ color }}>{icon}</span>
-                  {label.toUpperCase()}
+                  <span style={{ color }}>{displayIcon}</span>
+                  {displayLabel}
                   <svg className="w-3 h-3 ml-auto text-[#333333]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
                   </svg>
                 </Link>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -314,8 +328,8 @@ export default function SystemPage() {
 
       {/* Footer */}
       <div className="border-t border-[#e5e5e5] pt-4 flex items-center justify-between">
-        <div className="text-[10px] font-mono text-[#333333]">COUNCIL AI — SYSTEM MONITOR</div>
-        <div className="text-[10px] font-mono text-[#333333]">POWERED BY NVIDIA · LOCAL AI</div>
+        <div className="text-[10px] font-mono text-[#333333]">NVHIVE COMPUTER CHECK</div>
+        <div className="text-[10px] font-mono text-[#333333]">POWERED BY NVIDIA LOCAL AI</div>
       </div>
     </div>
   );
@@ -336,11 +350,18 @@ function StatCard({
   color: string;
   loading?: boolean;
 }) {
+  const displayIcon =
+    label === 'AI Connections' ? 'AI' :
+    label === 'Cache Hits' ? 'CACHE' :
+    label === 'Cache Size' ? 'SIZE' :
+    label === 'Service' ? 'SVC' :
+    icon;
+
   return (
     <div className="card p-4">
       <div className="flex items-center justify-between mb-2">
         <span className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider">{label}</span>
-        <span style={{ color }} className="text-sm">{icon}</span>
+        <span style={{ color }} className="text-[10px] font-mono font-bold">{displayIcon}</span>
       </div>
       {loading ? (
         <div className="h-6 w-16 bg-[#f5f5f5] animate-pulse" />

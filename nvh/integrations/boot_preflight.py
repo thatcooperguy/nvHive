@@ -227,6 +227,17 @@ def _agent_helper_status(compatibility: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _call_home_helper(fn, home_dir: str | Path | None) -> dict[str, Any]:
+    """Call a setup helper while tolerating older no-argument implementations."""
+    try:
+        result = fn(home_dir=home_dir)
+    except TypeError as exc:
+        if "home_dir" not in str(exc):
+            raise
+        result = fn()
+    return result if isinstance(result, dict) else {}
+
+
 def run_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
     """Run and persist the boot preflight under the selected NVH_HOME."""
     previous_state = _read_state(home_dir)
@@ -245,7 +256,7 @@ def run_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
     first_run = previous_fingerprint is None
     checked_at = datetime.now(UTC).isoformat()
     agent_helper = _agent_helper_status(compatibility)
-    mount_autopilot = mount_autopilot_report()
+    mount_autopilot = _call_home_helper(mount_autopilot_report, home_dir)
     repair_plan = auto_repair_plan(home_dir=home_dir)
     repair_result = None
     if os.environ.get("NVH_BOOT_AUTO_REPAIR", "1").lower() not in {"0", "false", "off", "no"}:

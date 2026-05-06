@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -32,11 +34,33 @@ _engine = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
+def _default_db_path() -> Path:
+    """Return a rootless persistent default database path."""
+    data_dir = os.environ.get("HIVE_DATA_DIR")
+    if data_dir:
+        return Path(data_dir).expanduser() / "state" / "nvhive.db"
+    state_dir = os.environ.get("NVH_STATE")
+    if state_dir:
+        return Path(state_dir).expanduser() / "nvhive.db"
+    home_dir = os.environ.get("NVH_HOME") or os.environ.get("NVHIVE_HOME")
+    if home_dir:
+        return Path(home_dir).expanduser() / "state" / "nvhive.db"
+    return Path.home() / ".nvh" / "state" / "nvhive.db"
+
+
+def _legacy_db_path() -> Path:
+    return Path.home() / ".council" / "council.db"
+
+
 async def init_db(db_path: Path | None = None) -> None:
     """Initialize the database engine and create tables."""
     global _engine, _session_factory
     if db_path is None:
-        db_path = Path.home() / ".council" / "council.db"
+        db_path = _default_db_path()
+        legacy_path = _legacy_db_path()
+        if db_path != legacy_path and legacy_path.exists() and not db_path.exists():
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(legacy_path, db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     url = f"sqlite+aiosqlite:///{db_path}"
     _engine = create_async_engine(

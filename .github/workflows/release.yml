@@ -9,7 +9,7 @@ name: Release
 #   - Source tarball (auto-attached by gh release create)
 #
 # The tag must match v*.*.* (e.g. v0.32.0). The version in pyproject.toml
-# should match the tag; CI does not enforce this but the release notes do.
+# and nvh.__version__ must match the tag before artifacts are built.
 #
 # PyPI publishing is handled by .github/workflows/publish.yml, whose
 # workflow file is registered with PyPI trusted publishing.
@@ -34,11 +34,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install build tools
         run: pip install build twine
+      - name: Verify release version matches tag
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          tag = os.environ["RELEASE_TAG"]
+          expected = tag[1:] if tag.startswith("v") else tag
+          pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          package_version = pyproject["project"]["version"]
+          init_text = pathlib.Path("nvh/__init__.py").read_text()
+          marker = '__version__ = "'
+          runtime_version = init_text.split(marker, 1)[1].split('"', 1)[0]
+          if package_version != expected or runtime_version != expected:
+              raise SystemExit(
+                  f"Release version mismatch: tag={tag}, "
+                  f"pyproject={package_version}, nvh.__version__={runtime_version}"
+              )
+          PY
       - name: Build sdist + wheel
         run: python -m build
       - name: Verify metadata
@@ -72,6 +96,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -106,7 +132,7 @@ jobs:
       - name: Smoke test
         shell: bash
         run: |
-          "./dist/${{ matrix.asset }}" version || echo "binary smoke test failed (non-fatal)"
+          "./dist/${{ matrix.asset }}" version
       - uses: actions/upload-artifact@v5
         with:
           name: binary-${{ matrix.os }}
@@ -121,6 +147,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Resolve tag
         id: tag
         run: |

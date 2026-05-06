@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
 import ProviderCard from '@/components/ProviderCard';
 import { getModels, getGPUInfo, getRecommendations } from '@/lib/api';
 import { useProviderHealth } from '@/lib/useProviderHealth';
@@ -81,12 +82,12 @@ export default function ProvidersPage() {
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
         <div className="relative flex items-center justify-between">
           <div>
-            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">AI Advisors</div>
-            <h1 className="text-2xl font-bold text-[#0a0a0a]">Advisors</h1>
-            <p className="text-xs font-mono text-[#a3a3a3] mt-1">
+            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">AI Connections</div>
+            <h1 className="text-2xl font-bold text-[#0a0a0a]">AI Connections</h1>
+            <p className="text-xs font-mono text-[#737373] mt-1">
               {providers.length > 0
-                ? `${healthyCount} of ${providers.length} advisors healthy`
-                : 'Manage and monitor AI advisor connections'}
+                ? `${healthyCount} of ${providers.length} AI connections healthy`
+                : 'Install a local GPU model or connect optional cloud providers'}
             </p>
           </div>
           <button
@@ -98,7 +99,7 @@ export default function ProvidersPage() {
               <path strokeLinecap="round" strokeLinejoin="round"
                 d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
             </svg>
-            REFRESH ALL
+            CHECK AGAIN
           </button>
         </div>
       </div>
@@ -161,7 +162,7 @@ export default function ProvidersPage() {
                 : 'text-[#a3a3a3] hover:text-[#525252] hover:bg-[#f5f5f5]'
             }`}
           >
-            {tab === 'local-ai' ? 'Local AI' : tab === 'providers' ? 'Advisors' : tab}
+            {tab === 'local-ai' ? 'My GPU Model' : tab === 'providers' ? 'Connections' : 'Available Models'}
             {tab === 'providers' && providers.length > 0 && (
               <span className={`ml-2 text-[10px] px-1 ${activeTab === tab ? 'text-black' : 'text-[#a3a3a3]'}`}>
                 {providers.length}
@@ -208,21 +209,17 @@ export default function ProvidersPage() {
           ) : providers.length === 0 ? (
             <div className="card p-10 text-center">
               <div className="text-4xl mb-4 text-[#333333]">▣</div>
-              <div className="text-base font-mono font-bold text-[#737373] mb-2 uppercase">No Advisors Configured</div>
+              <div className="text-base font-mono font-bold text-[#737373] mb-2 uppercase">No AI Connections Yet</div>
               <div className="text-xs font-mono text-[#a3a3a3] max-w-md mx-auto mb-6">
-                The Hive API needs to be running with at least one advisor configured.
-                Add API keys to your config file or environment variables.
+                Start with the recommended local GPU model. Cloud keys can stay optional until you need them.
               </div>
               <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 text-left max-w-sm mx-auto">
-                <div className="section-label mb-2">Quick Start</div>
+                <div className="section-label mb-2">Recommended Next Step</div>
                 <div className="font-mono text-xs text-[#737373] space-y-1">
-                  <div className="text-[#a3a3a3]"># Set environment variables</div>
-                  <div className="text-[#76B900]">OPENAI_API_KEY=sk-...</div>
-                  <div className="text-[#76B900]">ANTHROPIC_API_KEY=sk-ant-...</div>
-                  <div className="mt-2 text-[#a3a3a3]"># Or use local Nemotron (free!)</div>
-                  <div className="text-[#76B900]">ollama pull nemotron-mini</div>
-                  <div className="mt-2 text-[#a3a3a3]"># Then start the server</div>
-                  <div className="text-[#0a0a0a]">nvh serve</div>
+                  <div className="text-[#a3a3a3]">Use the wizard to install without sudo.</div>
+                  <Link href="/setup" className="inline-flex bg-[#76B900] px-3 py-2 text-black font-bold mt-2">
+                    Install best model for this GPU
+                  </Link>
                 </div>
               </div>
             </div>

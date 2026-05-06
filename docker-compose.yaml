@@ -58,6 +58,11 @@ services:
       - .env
     environment:
       HIVE_DATA_DIR: /data
+      NVH_HOME: /data
+      HIVE_CONFIG_HOME: /data/config
+      NVH_LOGS: /data/logs
+      NVH_STATE: /data/state
+      NVH_SUPPORT: /data/support
       PYTHONUNBUFFERED: "1"
       # Point the Hive engine at the Ollama sidecar
       OLLAMA_HOST: "${OLLAMA_HOST:-http://ollama:11434}"
@@ -71,12 +76,6 @@ services:
 
     # Non-root uid 1000 (matches the user created in the Dockerfile)
     user: "1000:1000"
-
-    # Depend on Ollama being reachable (soft dependency — API starts even
-    # if Ollama fails to come up)
-    depends_on:
-      ollama:
-        condition: service_healthy
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health"]

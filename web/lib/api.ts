@@ -36,6 +36,7 @@ import type {
   StorageConfigureRequest,
   StorageStatus,
   RuntimeStatus,
+  RootlessPolicyReport,
   SetupAssistantReply,
   SetupCatalogResult,
   SetupHelperReport,
@@ -47,6 +48,12 @@ import type {
   DiagnosticsReport,
   AutoRepairResult,
   MountAutopilotReport,
+  WorkspacePassport,
+  WizardMissionBuildRequest,
+  WizardMissionInstallEvent,
+  WizardMissionPlanResult,
+  WizardPlanResult,
+  SupportSnapshotResult,
   ComfyUIExamplesResult,
   ComfyUIInstallEvent,
   ComfyUIInstallRequest,
@@ -213,6 +220,53 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return apiGet<RuntimeStatus>('/v1/system/runtime');
 }
 
+export async function getWizardPassport(homeDir?: string, create = true): Promise<WorkspacePassport> {
+  const params = new URLSearchParams();
+  params.set('create', create ? 'true' : 'false');
+  if (homeDir) params.set('home_dir', homeDir);
+  return apiGet<WorkspacePassport>(`/v1/wizard/passport?${params.toString()}`);
+}
+
+export async function getWizardRootlessPolicy(homeDir?: string): Promise<RootlessPolicyReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<RootlessPolicyReport>(`/v1/wizard/rootless-policy${qs}`);
+}
+
+export async function getWizardPlan(profile = 'student', homeDir?: string): Promise<WizardPlanResult> {
+  const params = new URLSearchParams();
+  params.set('profile', profile);
+  if (homeDir) params.set('home_dir', homeDir);
+  return apiGet<WizardPlanResult>(`/v1/wizard/plan?${params.toString()}`);
+}
+
+export async function getWizardMissionPlan(
+  profile = 'student',
+  torchProfile = 'nvidia-cu130',
+  minFreeGb = 200,
+  homeDir?: string
+): Promise<WizardMissionPlanResult> {
+  const params = new URLSearchParams();
+  params.set('profile', profile);
+  params.set('torch_profile', torchProfile);
+  params.set('min_free_gb', String(minFreeGb));
+  if (homeDir) params.set('home_dir', homeDir);
+  return apiGet<WizardMissionPlanResult>(`/v1/wizard/mission-plan?${params.toString()}`);
+}
+
+export async function startWizardMissionJob(request: WizardMissionBuildRequest): Promise<InstallJob> {
+  return apiPost<InstallJob>('/v1/wizard/mission/job', request);
+}
+
+export async function createSupportSnapshot(
+  homeDir?: string,
+  includeLogs = true
+): Promise<SupportSnapshotResult> {
+  return apiPost<SupportSnapshotResult>('/v1/wizard/support-snapshot', {
+    home_dir: homeDir,
+    include_logs: includeLogs,
+  });
+}
+
 export async function getSetupHelper(homeDir?: string): Promise<SetupHelperReport> {
   const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
   return apiGet<SetupHelperReport>(`/v1/setup/helper${qs}`);
@@ -340,6 +394,22 @@ export async function startStudioPackInstallJob(request: StudioPackInstallReques
 
 export async function startStudioModelInstallJob(request: StudioModelInstallRequest): Promise<InstallJob> {
   return apiPost<InstallJob>('/v1/studio/models/install/job', request);
+}
+
+export function installWizardMissionStream(
+  request: WizardMissionBuildRequest,
+  callbacks: {
+    onJob?: (job: InstallJob) => void;
+    onStatus?: (job: InstallJob) => void;
+    onEvent?: (event: WizardMissionInstallEvent) => void;
+    onComplete?: (event: WizardMissionInstallEvent) => void;
+    onError?: (error: string) => void;
+  }
+): () => void {
+  return runBackgroundInstall<WizardMissionInstallEvent>(
+    () => startWizardMissionJob(request),
+    callbacks
+  );
 }
 
 function payloadFromJobEvent<TEvent extends { event: string; status: string; message: string }>(

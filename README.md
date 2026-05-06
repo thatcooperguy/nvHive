@@ -19,19 +19,40 @@ opens a setup wizard, recommends models for the detected GPU, and gives students
 one-click paths for local LLMs, ComfyUI, agents, creative tools, game-dev tools,
 and music production.
 
+## At A Glance
+
+| First-time user question | nvHive answer |
+| --- | --- |
+| Where should this install? | nvWizard auto-detects the writable persistent block volume and keeps models, apps, logs, jobs, and config under `NVH_HOME`. |
+| What can I make? | Pick **AI Starter**, **Graphics Creator Studio**, **Game Dev Lab**, **Music Producer Studio**, or **Agent Builder**. |
+| What models fit this GPU? | The wizard detects GPU/VRAM/CUDA and recommends local LLMs and ComfyUI profiles that fit the machine. |
+| What if the VM image changed? | Boot health checks compare storage, drivers, CUDA, Python, Node, and receipts against the previous session. |
+| What if something breaks? | **Fix My Setup** runs safe rootless repairs, and support snapshots redact secrets and local paths. |
+| Do I need root? | No for nvHive, local models, ComfyUI, Blender, Godot helpers, music tools, and OpenClaw. NemoClaw stays blocked until Docker already works without sudo. |
+
+The ideal student journey is:
+
+1. Launch the NVIDIA Linux cloud desktop.
+2. Run the one-line install or download the Linux binary.
+3. Open **nvHive AI Studio** from the desktop icon.
+4. Pick a mission.
+5. Let nvWizard install the right rootless tools into persistent storage.
+
 What you get on the happy path:
 
 - A desktop launcher and WebUI setup wizard.
-- Persistent `NVH_HOME` storage for models, ComfyUI, apps, logs, jobs, and config.
+- Persistent `NVH_HOME`/`NVHIVE_HOME` storage for models, ComfyUI, apps, logs, jobs, and config.
+- A Workspace Passport for durable storage, boot drift, receipts, jobs, and the rootless policy.
 - GPU-aware model recommendations and disk estimates.
 - Mission cards for AI Starter, Graphics Creator, Game Dev, Music Producer, and Agent Builder.
 - Self-healing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts.
 - Redacted error reports with request IDs when something needs debugging.
 
-Release status: CI is green across Linux, Windows, and macOS. nvHive should be
-treated as a production candidate until the
+Release status: CI is green across Linux, Windows, and macOS. nvHive is a
+release candidate and should be treated as **pilot-ready** until the
 [target NVIDIA Linux VM checklist](docs/PRODUCTION_READINESS.md) passes on the
-actual no-root GPU desktop.
+actual no-root GPU desktop. PyPI production publishing should wait for that
+target VM acceptance pass.
 
 <p align="center">
   <img src="docs/screenshots/terminal-demo-v2.gif" alt="nvHive CLI" width="640">
@@ -79,9 +100,10 @@ curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linu
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
-Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise `~/.nvh/` for new installs, uses Python `venv` + `pip` by default, offers a rootless micromamba fallback only when the cloud image needs it, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config.
+Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise `~/.nvh/` for new installs, prefers rootless Python from Miniforge/conda when available, uses Python `venv` + `pip` by default, bootstraps pip without `apt` when Debian/Ubuntu images are missing `ensurepip`, falls back to a managed conda/mamba env under `NVH_HOME` when needed, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config.
 
 If `NVH_HOME` is not set, the installer now checks common persistent mount roots such as `/mnt`, `/media/$USER`, `/workspace`, `/data`, `/persistent`, and `/storage` before falling back to `~/.nvh`.
+If your cloud provider mounts the persistent block volume as your Linux home directory, use `/home/$USER/nvhive` or leave `NVH_HOME` unset and the launcher will keep nvHive, models, logs, and repair receipts off the read-only OS image.
 
 Windows: `iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex`
 macOS: `curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash`
@@ -179,14 +201,16 @@ The setup wizard starts with one simple question: **what do you want to make?**
 Pick a mission and nvWizard handles storage, GPU checks, Python/Node runtime
 checks, model recommendations, rootless installers, and background jobs.
 
-The wizard does six things before heavy installs:
+The wizard does these checks before heavy installs:
 
 1. Finds the best user-writable persistent storage path.
 2. Checks GPU, driver, CUDA, VRAM, Python, Node, and npm health.
-3. Recommends local models that fit the detected hardware and disk.
-4. Installs selected tools into `NVH_HOME` without root.
-5. Tracks long downloads as resumable jobs with logs and receipts.
-6. Offers **Fix My Setup** and **Copy Error Report** when something breaks.
+3. Writes a Workspace Passport under `$NVH_HOME/config/workspace-passport.json`.
+4. Recommends local models that fit the detected hardware and disk.
+5. Installs selected tools into `NVH_HOME` without root.
+6. Tracks long downloads as persistent jobs with logs, receipts, and retry clues.
+7. Polls `/v1/ready` so launchers know whether the workspace is ready, blocked, or only pilot-ready.
+8. Offers **Fix My Setup** and a redacted support snapshot when something breaks.
 
 | Mission | What it sets up |
 | --- | --- |
@@ -201,9 +225,9 @@ mission cards. Advanced Details stays available for storage, driver, CUDA,
 Python, Node, logs, receipts, boot drift, and release-readiness diagnostics.
 
 ComfyUI, AI Studio packs, and local model downloads run as persistent jobs under
-`$NVH_HOME/jobs`, so setup progress survives browser refreshes and cloud desktop
-reconnects. The model picker shows GPU-fit badges, disk estimates, installed
-status, and a selected download queue.
+`$NVH_HOME/jobs`, so setup progress survives browser refreshes and leaves a
+clear retry trail after cloud desktop reconnects. The model picker shows GPU-fit
+badges, disk estimates, installed status, and a selected download queue.
 
 When the VM image changes between sessions, nvWizard compares the new boot
 fingerprint with `$NVH_HOME/config/boot-preflight.json` and recommends rootless
@@ -216,13 +240,18 @@ If setup gets stuck:
 
 ```bash
 nvh webui                                      # reopen the wizard
+nvh wizard status --home-dir "$NVH_HOME"       # show the Workspace Passport
+nvh plan --profile student --home-dir "$NVH_HOME" # preview the no-root install plan
+nvh repair --home-dir "$NVH_HOME"              # run safe rootless repairs
+nvh wizard support --home-dir "$NVH_HOME"      # create a redacted support snapshot
 nvh doctor --storage --home-dir "$NVH_HOME"   # verify the persistent mount
 nvh doctor --fix                              # try safe local repairs
 tail -n 80 "$NVH_HOME/logs/nvhive.log"        # inspect rootless logs
 ```
 
-When the local API is running, Advanced Details can copy the same redacted report
-from the UI, or you can call `GET /v1/setup/diagnostics` directly.
+When the local API is running, Troubleshooting can create the same redacted
+support snapshot from the UI, or you can call `POST /v1/wizard/support-snapshot`
+directly.
 
 <p align="center">
   <img src="docs/screenshots/rootless-runtime.svg" alt="Rootless NVIDIA cloud desktop layout" width="900">
@@ -416,6 +445,9 @@ Results vary by hardware and workload — run `nvh bench` to measure on your set
 | `nvh bench` | GPU speed test (tokens/sec) |
 | `nvh setup` | Interactive provider setup |
 | `nvh doctor` | Full diagnostic dump |
+| `nvh plan` | Rootless mission install preview |
+| `nvh repair` | Safe rootless workspace repair |
+| `nvh wizard` | Workspace Passport, plan, repair, and support snapshot helper |
 
 [Full command reference](docs/COMMANDS.md) (50+ commands)
 
@@ -427,6 +459,7 @@ Results vary by hardware and workload — run `nvh bench` to measure on your set
 |-------|-------------|
 | [Student GPU Cloud / Linux Desktop](docs/LINUX_DESKTOP.md) | No-root NVIDIA Linux workstation and ComfyUI guide |
 | [Production Readiness](docs/PRODUCTION_READINESS.md) | Release gates and target NVIDIA Linux VM acceptance checklist |
+| [GitHub Listing Checklist](docs/GITHUB_LISTING.md) | Repository description, topics, visual assets, and release-status copy |
 | [Deploy Without Root](docs/DEPLOY_NO_ROOT.md) | No-root install on servers |
 | [Windows Troubleshooting](docs/TROUBLESHOOTING_WINDOWS.md) | Encoding, segfaults, port issues |
 | [Getting Started](docs/GETTING_STARTED.md) | General CLI/provider setup after the no-root workstation path |

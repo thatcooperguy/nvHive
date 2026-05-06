@@ -33,7 +33,20 @@ ENV_ALLOWLIST = [
 
 SECRET_KEY_RE = re.compile(r"(api[_-]?key|token|secret|password|authorization|bearer)", re.I)
 SECRET_VALUE_RE = re.compile(
-    r"(sk-[A-Za-z0-9_\-]{8,}|Bearer\s+[A-Za-z0-9._\-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})",
+    "|".join(
+        [
+            r"sk-[A-Za-z0-9_\-]{8,}",
+            r"Bearer\s+[A-Za-z0-9._\-]{8,}",
+            r"Basic\s+[A-Za-z0-9+/=._\-]{8,}",
+            r"gh[pousr]_[A-Za-z0-9_]{8,}",
+            r"hf_[A-Za-z0-9_\-]{8,}",
+            r"nvapi-[A-Za-z0-9_\-]{8,}",
+            r"ngc_[A-Za-z0-9_\-]{8,}",
+            r"(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret)=([^&\s]+)",
+            r"X-Amz-Signature=[A-Fa-f0-9]{16,}",
+            r"Signature=[A-Za-z0-9%._\-]{16,}",
+        ]
+    ),
     re.I,
 )
 
@@ -60,6 +73,34 @@ def _redact(key: str, value: Any) -> Any:
     return value
 
 
+def _path_replacements(layout: Any) -> list[tuple[str, str]]:
+    paths: list[tuple[str, str]] = []
+    for raw, replacement in (
+        (getattr(layout, "home", None), "$NVH_HOME"),
+        (Path.home(), "~"),
+    ):
+        if raw is None:
+            continue
+        path = str(raw)
+        if path:
+            paths.append((path, replacement))
+            paths.append((path.replace("\\", "/"), replacement))
+    return sorted(set(paths), key=lambda item: len(item[0]), reverse=True)
+
+
+def _redact_paths(value: Any, layout: Any) -> Any:
+    if isinstance(value, str):
+        redacted = value
+        for needle, replacement in _path_replacements(layout):
+            redacted = redacted.replace(needle, replacement)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_paths(item, layout) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_paths(item, layout) for key, item in value.items()}
+    return value
+
+
 def _safe_call(label: str, fn: Callable[[], Any]) -> dict[str, Any]:
     try:
         return {"ok": True, "data": _redact(label, fn())}
@@ -78,6 +119,17 @@ def _candidate_log_files(logs_dir: Path) -> list[Path]:
     explicit = os.environ.get("HIVE_LOG_FILE")
     if explicit:
         paths.append(Path(explicit).expanduser())
+    home = logs_dir.parent
+    paths.extend(
+        [
+            logs_dir / "api.log",
+            logs_dir / "nvhive.log",
+            home / "comfyui" / "comfyui.log",
+            home / "studio" / "ollama.log",
+            home / "studio" / "openclaw.log",
+            home / "studio" / "nemoclaw.log",
+        ]
+    )
     try:
         paths.extend(sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True))
     except Exception:
@@ -90,7 +142,8 @@ def _candidate_log_files(logs_dir: Path) -> list[Path]:
         if key in seen:
             continue
         seen.add(key)
-        unique.append(path)
+        if path.exists() or path == Path(explicit or ""):
+            unique.append(path)
         if len(unique) >= 5:
             break
     return unique
@@ -98,7 +151,12 @@ def _candidate_log_files(logs_dir: Path) -> list[Path]:
 
 def _tail_log_file(path: Path, *, max_lines: int) -> list[str]:
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - 256_000))
+            data = handle.read()
+        lines = data.decode("utf-8", errors="replace").splitlines()
     except Exception:
         return []
     interesting = [
@@ -151,20 +209,36 @@ def diagnostics_report(
         return production_readiness_report(home_dir=home_dir)
 
     def _jobs() -> dict[str, Any]:
-        from nvh.integrations.jobs import list_jobs
+        from nvh.integrations.jobs import list_jobs, read_events
 
-        jobs = list_jobs(limit=8)
+        jobs = list_jobs(limit=8, home_dir=layout.home)
         failed = [job for job in jobs if job.get("status") in {"failed", "interrupted"}]
+        failed_event_tails: list[dict[str, Any]] = []
+        for job in failed[:3]:
+            job_id = str(job.get("id", ""))
+            if not job_id:
+                continue
+            events = read_events(job_id, limit=80, home_dir=layout.home)
+            failed_event_tails.append(
+                {
+                    "job_id": job_id,
+                    "kind": job.get("kind"),
+                    "status": job.get("status"),
+                    "message": job.get("message"),
+                    "events": events[-25:],
+                }
+            )
         return {
             "count": len(jobs),
             "failed_or_interrupted": len(failed),
             "jobs": jobs,
+            "failed_event_tails": failed_event_tails,
         }
 
     def _receipts() -> dict[str, Any]:
         from nvh.integrations.receipts import receipt_summary
 
-        return receipt_summary()
+        return receipt_summary(home_dir=layout.home)
 
     diagnostics = {
         "report_id": report_id,
@@ -209,4 +283,5 @@ def diagnostics_report(
     }
 
     # Last-pass redaction catches nested messages from third-party tools.
-    return json.loads(json.dumps(_redact("diagnostics", diagnostics), default=str))
+    safe_report = _redact_paths(_redact("diagnostics", diagnostics), layout)
+    return json.loads(json.dumps(safe_report, default=str))

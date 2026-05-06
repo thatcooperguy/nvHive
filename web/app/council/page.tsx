@@ -382,10 +382,10 @@ export default function CouncilPage() {
       <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
         <div className="relative">
-          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Multi-LLM Orchestration</div>
-          <h1 className="text-2xl font-bold text-[#0a0a0a]">Convene Mode</h1>
-          <p className="text-xs font-mono text-[#a3a3a3] mt-1">
-            Orchestrate multiple AI advisors with real-time streaming and weighted synthesis
+          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Study Group</div>
+          <h1 className="text-2xl font-bold text-[#0a0a0a]">Ask a Study Group</h1>
+          <p className="text-xs font-mono text-[#737373] mt-1">
+            Ask several AI helpers, then combine their answers into one clear response.
           </p>
         </div>
       </div>
@@ -401,7 +401,7 @@ export default function CouncilPage() {
               <textarea
                 value={prompt}
                 onChange={e => setPrompt(e.target.value)}
-                placeholder="Enter your prompt for the hive..."
+                placeholder="Ask the study group..."
                 rows={5}
                 className="input-base w-full px-3 py-2.5 text-sm resize-none font-mono"
                 disabled={isRunning}
@@ -420,7 +420,7 @@ export default function CouncilPage() {
                         <path className="opacity-75" fill="currentColor"
                           d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                       </svg>
-                      {phase === 'connecting' ? 'CONNECTING…' : phase === 'synthesis' ? 'SYNTHESIZING…' : 'DELIBERATING…'}
+                      {phase === "connecting" ? "CONNECTING" : phase === "synthesis" ? "SYNTHESIZING" : "ASKING HELPERS"}
                     </>
                   ) : (
                     <>
@@ -428,7 +428,7 @@ export default function CouncilPage() {
                         <path strokeLinecap="round" strokeLinejoin="round"
                           d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
                       </svg>
-                      CONVENE COUNCIL
+                      ASK STUDY GROUP
                     </>
                   )}
                 </button>
@@ -450,12 +450,12 @@ export default function CouncilPage() {
 
             {/* Agent settings */}
             <div className="card p-4 space-y-4">
-              <div className="section-label">Agent Settings</div>
+              <div className="section-label">Helper Settings</div>
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#525252]">Auto Agents</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">AI-generated personas</div>
+                  <div className="text-xs font-mono text-[#525252]">Pick helpers automatically</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]">AI-generated perspectives</div>
                 </div>
                 <button
                   type="button"
@@ -468,7 +468,7 @@ export default function CouncilPage() {
 
               {presets.length > 0 && (
                 <div>
-                  <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Cabinet</label>
+                  <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Preset</label>
                   <select
                     value={preset}
                     onChange={e => setPreset(e.target.value)}
@@ -489,7 +489,7 @@ export default function CouncilPage() {
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Num Agents</label>
+                  <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Number of helpers</label>
                   <span className="text-xs font-mono text-[#76B900]">{numAgents}</span>
                 </div>
                 <input type="range" min="2" max="8" step="1" value={numAgents}
@@ -506,7 +506,7 @@ export default function CouncilPage() {
               >
                 {analyzing ? (
                   <><svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>Analyzing...</>
-                ) : 'Preview Agents'}
+                ) : 'Preview Helpers'}
               </button>
 
               {analyzedAgents.length > 0 && (
@@ -520,7 +520,7 @@ export default function CouncilPage() {
 
             {/* Convene options */}
             <div className="card p-4 space-y-4">
-              <div className="section-label">Convene Options</div>
+              <div className="section-label">Advanced Study Group Options</div>
 
               <div>
                 <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Strategy</label>
@@ -538,8 +538,8 @@ export default function CouncilPage() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#525252]">Synthesize</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">Combine responses</div>
+                  <div className="text-xs font-mono text-[#525252]">Combine into one answer</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]">Merge helper responses</div>
                 </div>
                 <button
                   type="button"
@@ -576,7 +576,7 @@ export default function CouncilPage() {
             {providerHealth.length > 0 && (
               <div className="card p-4 space-y-3">
                 <div className="section-label flex items-center justify-between">
-                  <span>Advisor Weights</span>
+                  <span>Helper Weights</span>
                   <span className="font-mono text-[9px] text-[#737373]">
                     <span className="text-[#16a34a]">●</span>{' '}
                     {providerHealth.filter(p => p.healthy).length} online
@@ -600,7 +600,7 @@ export default function CouncilPage() {
                           className={p.healthy ? 'text-[#16a34a]' : 'text-[#737373]'}
                           title={p.healthy ? 'Connected' : 'Offline'}
                         >
-                          {p.healthy ? '●' : '○'}
+                          {p.healthy ? 'OK' : 'OFF'}
                         </span>
                         <span className={p.healthy ? 'text-[#525252]' : 'text-[#a3a3a3]'}>
                           {p.name}
@@ -656,7 +656,7 @@ export default function CouncilPage() {
                   </svg>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-mono font-bold text-[#dc2626] text-sm">HIVE ERROR</div>
+                  <div className="font-mono font-bold text-[#dc2626] text-sm">STUDY GROUP ERROR</div>
                   <div className="text-xs text-[#525252] font-mono mt-1 break-words">{error}</div>
                 </div>
               </div>
@@ -739,8 +739,8 @@ export default function CouncilPage() {
 
               <div className="card p-5 border-[#76B900]/20">
               <div className="section-label mb-4 flex items-center gap-2 text-[#76B900]">
-                <span>◈</span>
-                <span>Convene</span>
+                <span>SG</span>
+                <span>Study Group</span>
                 {phase === 'streaming' && (
                   <span className="text-[10px] font-mono text-[#76B900] animate-pulse uppercase tracking-wider ml-1">
                     Live
@@ -789,14 +789,14 @@ export default function CouncilPage() {
                 </svg>
               </div>
               <div>
-                <div className="text-lg font-bold text-[#0a0a0a] mb-2 font-mono">THE HIVE AWAITS</div>
+                <div className="text-lg font-bold text-[#0a0a0a] mb-2 font-mono">ASK SEVERAL HELPERS</div>
                 <div className="text-xs font-mono text-[#a3a3a3] max-w-sm">
-                  Configure settings and enter a prompt to convene the hive of AI advisors.
-                  Each member streams in real-time — a synthesis is generated live.
+                  Enter a prompt and nvHive will ask several AI helpers.
+                  Each helper streams live; nvHive combines the best parts.
                 </div>
               </div>
               <div className="flex flex-wrap justify-center gap-2 mt-2">
-                {['Live Streaming', 'Agent Personas', 'Real-time Synthesis', 'Multi-Advisor'].map(tag => (
+                {['Live Answers', 'Helper Personas', 'Combined Answer', 'Second Opinions'].map(tag => (
                   <span key={tag} className="text-[10px] font-mono px-2 py-1 bg-[#76B900]/10 text-[#76B900] border border-[#76B900]/20">
                     {tag.toUpperCase()}
                   </span>

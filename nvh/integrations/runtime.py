@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.storage import storage_layout
+from nvh.integrations.storage import nvh_home, storage_layout
 
 MICROMAMBA_BASE_URL = "https://micro.mamba.pm/api/micromamba"
 
@@ -45,12 +45,14 @@ class RuntimeStatus:
 
 def micromamba_root() -> Path:
     """Return the persistent micromamba root prefix."""
-    return storage_layout().runtime_dir / "micromamba"
+    home, _ = nvh_home()
+    return storage_layout(home).runtime_dir / "micromamba"
 
 
 def micromamba_binary() -> Path:
     """Return the managed micromamba binary path."""
-    return storage_layout().bin_dir / "micromamba"
+    home, _ = nvh_home()
+    return storage_layout(home).bin_dir / "micromamba"
 
 
 def micromamba_subdir() -> str:

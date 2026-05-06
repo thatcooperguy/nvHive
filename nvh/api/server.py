@@ -635,6 +635,40 @@ async def health_check() -> dict[str, Any]:
     })
 
 
+@app.get("/v1/ready", summary="Rootless workspace readiness check")
+async def readiness_check(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return a compact readiness signal for launchers and setup clients."""
+    try:
+        from nvh.integrations.production_readiness import production_readiness_report
+
+        report = production_readiness_report(home_dir=home_dir)
+        payload = {
+            "status": report.get("status", "blocked"),
+            "ready": bool(report.get("pilot_ready")),
+            "production_ready": bool(report.get("production_ready")),
+            "summary": report.get("summary"),
+            "counts": report.get("counts", {}),
+            "next_actions": list(report.get("next_actions", []))[:3],
+            "storage_home": report.get("inputs", {}).get("storage_home"),
+        }
+    except Exception as exc:
+        logger.warning("Readiness check failed: %s", type(exc).__name__, exc_info=True)
+        payload = {
+            "status": "blocked",
+            "ready": False,
+            "production_ready": False,
+            "summary": "Readiness check failed. Open Advanced Details for the diagnostic report.",
+            "counts": {"passed": 0, "warnings": 0, "blocked": 1, "total": 1},
+            "next_actions": ["Generate a support bundle and inspect the API logs."],
+            "storage_home": None,
+            "error": {"type": type(exc).__name__, "message": "Readiness check failed."},
+        }
+    return _response_envelope(payload)
+
+
 # -- /metrics (Prometheus) ----------------------------------------------------
 
 
@@ -981,7 +1015,7 @@ class StorageConfigureRequest(BaseModel):
         default=None,
         description="Persistent NVH_HOME on a mounted user-writable volume",
     )
-    min_free_gb: float = Field(default=20.0, ge=0)
+    min_free_gb: float = Field(default=200.0, ge=0)
     activate: bool = True
 
     @field_validator("home_dir")
@@ -1006,13 +1040,45 @@ class SetupHomeRequest(BaseModel):
         default=None,
         description="Optional NVH_HOME on the persistent mounted volume",
     )
-    min_free_gb: float = Field(default=20.0, ge=0)
+    min_free_gb: float = Field(default=200.0, ge=0)
+
+
+class WizardPlanRequest(BaseModel):
+    profile: str = Field(default="student", description="Mission profile to plan")
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+    min_free_gb: float = Field(default=200.0, ge=0)
+
+
+class WizardMissionBuildRequest(BaseModel):
+    profile: str = Field(default="student", description="Mission profile to build")
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+    torch_profile: str = Field(
+        default="nvidia-cu130",
+        description="PyTorch install profile used when the mission includes ComfyUI",
+    )
+    force_update: bool = False
+    min_free_gb: float = Field(default=200.0, ge=0)
+
+
+class SupportSnapshotRequest(BaseModel):
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+    include_logs: bool = True
+    min_free_gb: float = Field(default=200.0, ge=0)
 
 
 @app.get("/v1/system/storage", summary="Inspect rootless persistent storage")
 async def system_storage(
     home_dir: str | None = None,
-    min_free_gb: float = 20.0,
+    min_free_gb: float = 200.0,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the active rootless storage layout and preflight warnings."""
@@ -1042,7 +1108,7 @@ async def configure_system_storage(
 
 @app.get("/v1/system/mount-autopilot", summary="Detect likely persistent mounts")
 async def system_mount_autopilot(
-    min_free_gb: float = 20.0,
+    min_free_gb: float = 200.0,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Recommend a persistent NVH_HOME without requiring root access."""
@@ -1073,6 +1139,167 @@ async def system_runtime(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     from nvh.integrations.runtime import runtime_status
 
     return _response_envelope(runtime_status().as_dict())
+
+
+@app.get("/v1/wizard/passport", summary="Return the rootless Workspace Passport")
+async def wizard_passport(
+    home_dir: str | None = None,
+    create: bool = True,
+    min_free_gb: float = 200.0,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the canonical rootless workspace identity and durability state."""
+    from nvh.integrations.workspace_passport import workspace_passport
+
+    return _response_envelope(
+        workspace_passport(
+            home_dir=home_dir,
+            create=create,
+            min_free_gb=min_free_gb,
+        )
+    )
+
+
+@app.get("/v1/system/passport", summary="Return the rootless Workspace Passport")
+async def system_passport(
+    home_dir: str | None = None,
+    create: bool = True,
+    min_free_gb: float = 200.0,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Alias for clients that group Workspace Passport under system state."""
+    from nvh.integrations.workspace_passport import workspace_passport
+
+    return _response_envelope(
+        workspace_passport(
+            home_dir=home_dir,
+            create=create,
+            min_free_gb=min_free_gb,
+        )
+    )
+
+
+@app.post("/v1/system/passport/refresh", summary="Refresh the Workspace Passport")
+async def system_passport_refresh(
+    request: SetupHomeRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Refresh and persist the Workspace Passport under NVH_HOME/config."""
+    from nvh.integrations.workspace_passport import workspace_passport
+
+    return _response_envelope(
+        workspace_passport(
+            home_dir=request.home_dir,
+            create=True,
+            min_free_gb=request.min_free_gb,
+        )
+    )
+
+
+@app.get("/v1/wizard/rootless-policy", summary="Return no-root policy gates")
+async def wizard_rootless_policy(
+    home_dir: str | None = None,
+    min_free_gb: float = 200.0,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the shared rootless gate used by setup/install decisions."""
+    from nvh.integrations.workspace_passport import rootless_policy_report
+
+    return _response_envelope(
+        rootless_policy_report(home_dir=home_dir, min_free_gb=min_free_gb)
+    )
+
+
+@app.get("/v1/wizard/plan", summary="Return a rootless wizard mission plan")
+async def wizard_plan(
+    profile: str = "student",
+    home_dir: str | None = None,
+    min_free_gb: float = 200.0,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Plan a no-root mission using action IDs the WebUI can run safely."""
+    from nvh.integrations.workspace_passport import workspace_plan
+
+    return _response_envelope(
+        workspace_plan(
+            profile=profile,
+            home_dir=home_dir,
+            min_free_gb=min_free_gb,
+        )
+    )
+
+
+@app.get("/v1/wizard/mission-plan", summary="Return a concrete backend mission build plan")
+async def wizard_mission_plan(
+    profile: str = "student",
+    min_free_gb: float = 200.0,
+    torch_profile: str = "nvidia-cu130",
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the exact pack/model/ComfyUI stages a one-click mission will run."""
+    from nvh.integrations.mission_builder import mission_profile_plan
+
+    return _response_envelope(
+        mission_profile_plan(
+            profile,
+            torch_profile=torch_profile,
+            min_free_gb=min_free_gb,
+            home_dir=home_dir,
+        )
+    )
+
+
+@app.post("/v1/wizard/mission/job", summary="Start a backend-owned nvWizard mission build")
+async def wizard_mission_job(
+    request: WizardMissionBuildRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Build an entire mission profile as one persistent cancellable job."""
+    from nvh.integrations.jobs import start_job
+    from nvh.integrations.mission_builder import MISSION_TITLES, install_mission_profile
+    from nvh.integrations.storage import ensure_storage
+
+    profile = request.profile.strip().lower() or "student"
+    title = MISSION_TITLES.get(profile, profile.title())
+    request_data = request.model_dump()
+    if request.home_dir:
+        storage = ensure_storage(
+            request.home_dir,
+            min_free_gb=request.min_free_gb,
+            activate=True,
+        )
+        request_data["home_dir"] = str(storage.layout.home)
+    job = start_job(
+        kind="wizard-mission",
+        title=f"Build {title}",
+        request=request_data,
+        source_factory=lambda: install_mission_profile(
+            profile,
+            torch_profile=request.torch_profile,
+            force_update=request.force_update,
+            home_dir=request_data.get("home_dir"),
+            min_free_gb=request.min_free_gb,
+        ),
+    )
+    return _response_envelope(job)
+
+
+@app.post("/v1/wizard/support-snapshot", summary="Write a redacted support snapshot")
+async def wizard_support_snapshot(
+    request: SupportSnapshotRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Write a redacted support bundle under NVH_HOME/support."""
+    from nvh.integrations.workspace_passport import support_snapshot
+
+    return _response_envelope(
+        support_snapshot(
+            home_dir=request.home_dir,
+            include_logs=request.include_logs,
+            min_free_gb=request.min_free_gb,
+        )
+    )
 
 
 @app.get("/v1/setup/helper", summary="Local setup helper recommendations")

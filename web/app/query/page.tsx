@@ -198,9 +198,9 @@ function QueryPageInner() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Query Interface</div>
-          <h1 className="text-2xl font-bold text-[#0a0a0a]">Query</h1>
-          <p className="text-xs font-mono text-[#a3a3a3] mt-1">Send queries to one or multiple AI providers</p>
+          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Ask AI</div>
+          <h1 className="text-2xl font-bold text-[#0a0a0a]">Ask AI</h1>
+          <p className="text-xs font-mono text-[#737373] mt-1">Ask your local model, or compare answers when you need a second opinion.</p>
         </div>
       </div>
 
@@ -221,12 +221,12 @@ function QueryPageInner() {
           {/* Convene extras */}
           {currentMode === 'council' && (
             <div className="card p-4 space-y-4 animate-fade-in">
-              <div className="section-label">Convene Settings</div>
+              <div className="section-label">Study Group Settings</div>
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#525252]">Auto Agents</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">Generate personas from prompt</div>
+                  <div className="text-xs font-mono text-[#525252]">Pick helpers automatically</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]">Choose useful perspectives from the prompt</div>
                 </div>
                 <button
                   onClick={() => setAutoAgents(!autoAgents)}
@@ -255,7 +255,7 @@ function QueryPageInner() {
               {autoAgents && (
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Agents</label>
+                    <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Helpers</label>
                     <span className="text-xs font-mono text-[#76B900]">{numAgents}</span>
                   </div>
                   <input
@@ -282,8 +282,8 @@ function QueryPageInner() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#525252]">Synthesize</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">Generate combined answer</div>
+                  <div className="text-xs font-mono text-[#525252]">Combine into one answer</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3]">Summarize the group into one response</div>
                 </div>
                 <button
                   onClick={() => setSynthesize(!synthesize)}

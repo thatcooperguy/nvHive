@@ -404,14 +404,18 @@ def production_readiness_report(
     target_vm_validated: bool | None = None,
 ) -> dict[str, Any]:
     """Return a conservative production readiness report for nvWizard."""
-    storage = storage_status(home_dir=home_dir, min_free_gb=20).as_dict()
-    mount = mount_autopilot_report(min_free_gb=20, extra_roots=[home_dir] if home_dir else None)
+    storage = storage_status(home_dir=home_dir, min_free_gb=200).as_dict()
+    mount = mount_autopilot_report(
+        min_free_gb=200,
+        extra_roots=[home_dir] if home_dir else None,
+        home_dir=home_dir,
+    )
     runtime = runtime_status().as_dict()
     compatibility = compatibility_report(home_dir=home_dir)
     boot = boot_preflight_status(home_dir=home_dir, run_if_missing=False)
     smoke = smoke_test_report(home_dir=home_dir)
     model_fit = model_fit_report(home_dir=home_dir)
-    receipts = receipt_summary()
+    receipts = receipt_summary(home_dir=home_dir)
     catalog = catalog_with_status()
     validated = _target_vm_validated(target_vm_validated)
 

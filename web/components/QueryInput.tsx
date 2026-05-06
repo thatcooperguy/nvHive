@@ -100,9 +100,9 @@ export default function QueryInput({
   };
 
   const MODES: { id: QueryMode; label: string; desc: string; color: string }[] = [
-    { id: 'simple', label: 'Simple', desc: 'Single provider', color: '#2563eb' },
-    { id: 'council', label: 'Convene', desc: 'Multi-LLM orchestration', color: '#7c3aed' },
-    { id: 'compare', label: 'Poll', desc: 'Side-by-side advisors', color: '#16a34a' },
+    { id: 'simple', label: 'Ask', desc: 'One AI', color: '#2563eb' },
+    { id: 'council', label: 'Study Group', desc: 'Several helpers', color: '#7c3aed' },
+    { id: 'compare', label: 'Compare', desc: 'Side by side', color: '#16a34a' },
   ];
 
   return (
@@ -115,7 +115,7 @@ export default function QueryInput({
               key={m.id}
               type="button"
               onClick={() => setMode(m.id)}
-              className={`flex-1 py-2.5 px-3 rounded-xl border text-sm font-medium transition-all duration-150 ${
+              className={`flex-1 py-2.5 px-3 rounded-[4px] border text-sm font-medium transition-all duration-150 ${
                 mode === m.id
                   ? 'border-opacity-50 text-[#0a0a0a]'
                   : 'border-[#e5e5e5] text-[#737373] hover:text-[#737373] hover:border-[#d4d4d4]'
@@ -140,7 +140,7 @@ export default function QueryInput({
           value={prompt}
           onChange={e => setPrompt(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask anything... (⌘+Enter to submit)"
+          placeholder="Ask anything... (Ctrl+Enter to submit)"
           rows={3}
           className="input-base w-full px-4 py-3 resize-none text-sm leading-relaxed"
           style={{ minHeight: '80px' }}
@@ -151,14 +151,14 @@ export default function QueryInput({
         </div>
       </div>
 
-      {/* Provider / Model row */}
+      {/* AI source / model row */}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block text-xs text-[#737373] mb-1.5 flex items-center justify-between">
-            <span>Advisor</span>
+            <span>AI Source</span>
             {sortedProviders.length > 0 && (
               <span className="font-mono text-[10px] text-[#737373]">
-                <span className="text-[#16a34a]">●</span> {healthyCount} online
+                <span className="text-[#16a34a]">OK</span> {healthyCount} online
                 {healthyCount < sortedProviders.length && (
                   <> / <span className="text-[#737373]">{sortedProviders.length - healthyCount} offline</span></>
                 )}
@@ -171,21 +171,21 @@ export default function QueryInput({
             className="input-base w-full px-3 py-2 text-sm font-mono"
             disabled={loading}
           >
-            <option value="">Auto (best available)</option>
+            <option value="">Auto-pick best available</option>
             {healthyCount > 0 && (
-              <optgroup label="● Connected">
+              <optgroup label="Connected">
                 {sortedProviders.filter(p => p.healthy).map(p => (
                   <option key={p.name} value={p.name}>
-                    {p.name}{p.latency_ms != null ? `  ·  ${p.latency_ms}ms` : ''}
+                    {p.name}{p.latency_ms != null ? ` - ${p.latency_ms}ms` : ''}
                   </option>
                 ))}
               </optgroup>
             )}
             {healthyCount < sortedProviders.length && (
-              <optgroup label="○ Offline">
+              <optgroup label="Offline">
                 {sortedProviders.filter(p => !p.healthy).map(p => (
                   <option key={p.name} value={p.name}>
-                    {p.name}  ·  offline
+                    {p.name} - offline
                   </option>
                 ))}
               </optgroup>
@@ -200,7 +200,7 @@ export default function QueryInput({
             className="input-base w-full px-3 py-2 text-sm"
             disabled={loading}
           >
-            <option value="">Default</option>
+            <option value="">Recommended model</option>
             {filteredModels.map(m => (
               <option key={m.model_id} value={m.model_id}>{m.display_name || m.model_id}</option>
             ))}
@@ -220,11 +220,11 @@ export default function QueryInput({
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
         </svg>
-        Advanced settings
+        Tuning and advanced settings
       </button>
 
       {showAdvanced && (
-        <div className="space-y-4 bg-[#eff6ff] border border-[#e5e5e5] rounded-xl p-4 animate-fade-in">
+        <div className="space-y-4 bg-[#eff6ff] border border-[#e5e5e5] rounded-[4px] p-4 animate-fade-in">
           {/* Temperature */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -315,7 +315,7 @@ export default function QueryInput({
               <path strokeLinecap="round" strokeLinejoin="round"
                 d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
             </svg>
-            {mode === 'council' ? 'Convene' : mode === 'compare' ? 'Poll' : 'Send'}
+            {mode === 'council' ? 'Ask Study Group' : mode === 'compare' ? 'Compare Answers' : 'Ask AI'}
           </>
         )}
       </button>

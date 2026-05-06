@@ -59,6 +59,11 @@ student can pick a mission, then click through storage, models, ComfyUI, Claw
 agents, creative tools, game engines, and music packs without typing manual
 commands.
 
+The desktop launcher path is intentionally conservative for managed cloud
+desktops: it does not need `sudo`, does not need OS package installs, and keeps
+large assets under the selected persistent `NVH_HOME`. Manual commands remain
+available as overrides, but the first-run experience should be click-first.
+
 ## What `nvh workstation` Does
 
 - Detects NVIDIA GPU availability with NVML/`nvidia-smi` and reports when a
@@ -69,6 +74,7 @@ commands.
 - Creates a Linux desktop launcher named `NVHive AI Studio`
 - Shows a student-friendly setup checklist
 - Runs nvWizard boot checks for storage, Python, CUDA/PyTorch, ComfyUI, models, and install receipts
+- Checks `/v1/ready` so the launcher and WebUI can show whether the workspace is ready, pilot-ready, or blocked
 - With `--all`, ensures local AI, installs ComfyUI, installs the rootless starter pack, and launches WebUI
 - Uses user-space paths only under `NVH_HOME` for durable models, ComfyUI, packs, runtime fallback tools, apps, WebUI assets, cache, logs, and config
 
@@ -173,7 +179,9 @@ accepting upstream terms.
 - No root required for nvHive itself
 - AI Studio packs are rootless and install to user-owned directories
 - Local data path: `$NVH_HOME` on the mounted persistent file volume
+- Noninteractive installs use `$NVH_HOME/venv` by default; set `NVH_USE_ACTIVE_ENV=1` only when you intentionally want an already active conda/mamba/venv
 - API binds to localhost by default
+- Cloud compose exposure requires `HIVE_API_KEY`
 - WebUI source, npm cache, auto-installed Node, and the local API process inherit `NVH_HOME`
 - WebUI starts a local API automatically unless `--no-api` is used
 - ComfyUI auto-start binds to `127.0.0.1:8188`

@@ -76,10 +76,10 @@ export default function AnalyticsPage() {
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
         <div className="relative flex items-center justify-between">
           <div>
-            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Usage Insights</div>
-            <h1 className="text-2xl font-bold text-[#0a0a0a]">Analytics</h1>
-            <p className="text-xs font-mono text-[#a3a3a3] mt-1">
-              Query volume, cost breakdown, and provider performance
+            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Usage</div>
+            <h1 className="text-2xl font-bold text-[#0a0a0a]">Usage</h1>
+            <p className="text-xs font-mono text-[#737373] mt-1">
+              See local-vs-cloud use, money saved by your GPU, and model performance.
             </p>
           </div>
           <button
@@ -213,7 +213,7 @@ export default function AnalyticsPage() {
             {/* Savings from local models */}
             <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden">
               <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/40 to-transparent" />
-              <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Savings from Local Models</div>
+              <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Money Saved by Using Your GPU</div>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -247,7 +247,7 @@ export default function AnalyticsPage() {
 
                 {/* Savings bar */}
                 <div>
-                  <div className="text-[9px] font-mono text-[#a3a3a3] mb-1">Local vs Cloud Usage</div>
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mb-1">Local vs Cloud Use</div>
                   <div className="w-full h-4 bg-[#f5f5f5] flex overflow-hidden">
                     {totalQueries > 0 && (
                       <>

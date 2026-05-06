@@ -53,6 +53,17 @@ const PLATFORM_META: Record<
   },
 };
 
+function platformInitials(platform: PlatformInfo): string {
+  const known: Record<string, string> = {
+    nemoclaw: "NC",
+    openclaw: "OC",
+    claude_code: "CC",
+    cursor: "CU",
+    claude_desktop: "CD",
+  };
+  return known[platform.name] ?? platform.display_name.slice(0, 2).toUpperCase();
+}
+
 /* ---------- API helpers ---------- */
 
 function apiUrl(path: string): string {
@@ -149,8 +160,8 @@ function PlatformRow({
       aria-label={`${platform.display_name}, status: ${status}`}
     >
       {/* Icon */}
-      <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-[#f5f5f5] text-lg">
-        {meta.icon}
+      <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-[#f5f5f5] text-[10px] font-mono font-bold text-[#525252]">
+        {platformInitials(platform)}
       </div>
 
       {/* Info */}
@@ -323,20 +334,19 @@ export default function IntegrationsPage() {
       <div className="mb-10">
         <div className="h-[2px] bg-gradient-to-r from-[#76B900] to-transparent mb-6" />
         <p className="section-label text-[#76B900] font-mono text-xs uppercase tracking-[0.2em] mb-2">
-          Integrations
+          Developer Tools
         </p>
         <h1 className="text-2xl font-semibold text-[--text-primary] mb-2">
-          Connect your tools to nvHive
+          Connect developer tools to nvHive
         </h1>
         <p className="text-sm text-[--text-secondary]">
-          Route any AI tool through nvHive for smart model selection, council
-          consensus, and cost optimization.
+          Use nvHive inside coding tools after the core local AI setup is working.
         </p>
       </div>
 
       {/* --- Scan & Connect All --- */}
       {!loading && (
-        <div className="mb-8 p-6 border border-[--border] bg-[#111]">
+        <div className="mb-8 p-6 border border-[--border] bg-white">
           {connectAllResults ? (
             /* Results view */
             <div>
@@ -415,7 +425,7 @@ export default function IntegrationsPage() {
                 >
                   {connectAllRunning
                     ? "Scanning..."
-                    : "Scan & Connect All"}
+                    : "Find Installed Tools"}
                 </button>
               )}
               {!hasUnconfigured && connectedCount > 0 && (
@@ -453,16 +463,22 @@ export default function IntegrationsPage() {
         </div>
       ) : (
         <div role="list" className="space-y-1">
-          {sorted.map((p) => (
-            <PlatformRow
-              key={p.name}
-              platform={p}
-              onConnect={connectPlatform}
-              onDisconnect={disconnectPlatform}
-              connecting={!!connecting[p.name]}
-              error={errors[p.name] || null}
-            />
-          ))}
+          {sorted.length === 0 ? (
+            <div className="border border-[--border] bg-white p-6 text-sm text-[--text-secondary]">
+              No developer tools were detected yet. Install Cursor, Claude Code, OpenClaw, or NemoClaw, then check again.
+            </div>
+          ) : (
+            sorted.map((p) => (
+              <PlatformRow
+                key={p.name}
+                platform={p}
+                onConnect={connectPlatform}
+                onDisconnect={disconnectPlatform}
+                connecting={!!connecting[p.name]}
+                error={errors[p.name] || null}
+              />
+            ))
+          )}
         </div>
       )}
 
@@ -491,7 +507,7 @@ export default function IntegrationsPage() {
             <h3 className="font-mono text-xs text-[#76B900] uppercase tracking-wider mb-3">
               NemoClaw (Inference Provider)
             </h3>
-            <pre className="text-xs font-mono text-[--text-secondary] whitespace-pre-wrap leading-relaxed">
+            <pre className="text-xs font-mono text-[#d4d4d4] whitespace-pre-wrap leading-relaxed">
 {`# Start nvHive proxy
 nvh nemoclaw --start
 
@@ -510,7 +526,7 @@ openshell inference set --provider nvhive --model auto`}
             <h3 className="font-mono text-xs text-[#76B900] uppercase tracking-wider mb-3">
               Claude Code (MCP Tools)
             </h3>
-            <pre className="text-xs font-mono text-[--text-secondary] whitespace-pre-wrap leading-relaxed">
+            <pre className="text-xs font-mono text-[#d4d4d4] whitespace-pre-wrap leading-relaxed">
 {`# Register nvHive as MCP server
 claude mcp add nvhive nvhive-mcp`}
             </pre>
@@ -520,7 +536,7 @@ claude mcp add nvhive nvhive-mcp`}
             <h3 className="font-mono text-xs text-[#76B900] uppercase tracking-wider mb-3">
               OpenClaw / Cursor (MCP Config)
             </h3>
-            <pre className="text-xs font-mono text-[--text-secondary] whitespace-pre-wrap leading-relaxed">
+            <pre className="text-xs font-mono text-[#d4d4d4] whitespace-pre-wrap leading-relaxed">
 {`# Add to openclaw.json or ~/.cursor/mcp.json:
 {
   "mcpServers": {

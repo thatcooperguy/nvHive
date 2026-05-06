@@ -156,10 +156,12 @@ export TORCH_HOME="${TORCH_HOME:-$NVH_CACHE/torch}"
 export TMPDIR="${TMPDIR:-$NVH_CACHE/tmp}"
 export TEMP="$TMPDIR"
 export TMP="$TMPDIR"
+export NVH_NO_OS_MOD="${NVH_NO_OS_MOD:-0}"
 
-mkdir -p "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CACHE" "$NVH_LOGS" "$NVH_STUDIO_HOME" "$COMFYUI_HOME" "$HIVE_CONFIG_HOME" "$TMPDIR"
+write_nvh_env() {
 cat > "$NVH_HOME/nvh-env.sh" << ENVEOF
 export NVH_HOME="$NVH_HOME"
+export NVH_VENV="$NVH_VENV"
 export NVH_BIN="$NVH_BIN"
 export NVH_MODELS="$NVH_MODELS"
 export NVH_CACHE="$NVH_CACHE"
@@ -177,10 +179,14 @@ export TORCH_HOME="$TORCH_HOME"
 export TMPDIR="$TMPDIR"
 export TEMP="$TMPDIR"
 export TMP="$TMPDIR"
-export PATH="$NVH_BIN:\$PATH"
+export PATH="$NVH_VENV/bin:$NVH_BIN:\$PATH"
 ENVEOF
 chmod 600 "$NVH_HOME/nvh-env.sh" 2>/dev/null || true
-export PATH="$NVH_BIN:$PATH"
+}
+
+mkdir -p "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CACHE" "$NVH_LOGS" "$NVH_STUDIO_HOME" "$COMFYUI_HOME" "$HIVE_CONFIG_HOME" "$TMPDIR"
+write_nvh_env
+export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
 
 echo ""
 echo -e "${G}╔══════════════════════════════════════╗${N}"
@@ -208,14 +214,34 @@ echo -e "${D}Activate later:  source $NVH_HOME/nvh-env.sh${N}"
 echo ""
 
 find_python() {
-    for py in python3.12 python3.11 python3.10 python3; do
+    for py in python3.12 python3.11 python3.10; do
         if command -v "$py" &>/dev/null; then
             echo "$py"
             return 0
         fi
     done
-    # Check common non-PATH locations
-    for loc in /usr/bin/python3 /usr/local/bin/python3 /opt/conda/bin/python3; do
+    # Prefer rootless Python distributions before generic system python3.
+    for loc in \
+        "$HOME/miniforge3/bin/python" \
+        "$HOME/miniconda3/bin/python" \
+        "$HOME/mambaforge/bin/python" \
+        "$HOME/.conda/bin/python" \
+        "$HOME/.local/share/mamba/bin/python" \
+        /opt/conda/bin/python3 \
+        /opt/conda/bin/python; do
+        if [ -x "$loc" ]; then
+            echo "$loc"
+            return 0
+        fi
+    done
+    for py in python3; do
+        if command -v "$py" &>/dev/null; then
+            echo "$py"
+            return 0
+        fi
+    done
+    # Check common non-PATH system locations last; these often lack ensurepip.
+    for loc in /usr/bin/python3 /usr/local/bin/python3; do
         if [ -x "$loc" ]; then
             echo "$loc"
             return 0
@@ -255,17 +281,17 @@ USE_ACTIVE_ENV=false
 if [ -n "$ACTIVE_ENV_KIND" ] && [ -z "${NVH_FORCE_VENV:-}" ]; then
     echo -e "${Y}Detected active $ACTIVE_ENV_KIND env: ${G}$ACTIVE_ENV_NAME${N}"
     echo -e "${D}  ($ACTIVE_ENV_PATH)${N}"
-    # Default to Yes when we have a TTY; otherwise install into the active env
-    # (non-interactive, e.g. piped-from-curl, preserves the user's choice to
-    # activate an env before running the installer).
-    if [ -t 0 ]; then
+    if [ "${NVH_USE_ACTIVE_ENV:-0}" = "1" ]; then
+        USE_ACTIVE_ENV=true
+    elif [ -t 0 ]; then
         read -r -p "  Install into this env instead of $NVH_HOME/venv? [Y/n] " ANSWER
         case "${ANSWER:-Y}" in
             n|N|no|NO) USE_ACTIVE_ENV=false ;;
             *)         USE_ACTIVE_ENV=true ;;
         esac
     else
-        USE_ACTIVE_ENV=true
+        echo -e "${D}Non-interactive install will use $NVH_HOME/venv for persistence.${N}"
+        echo -e "${D}Set NVH_USE_ACTIVE_ENV=1 to explicitly install into the active env.${N}"
     fi
 fi
 
@@ -273,6 +299,7 @@ if [ "$USE_ACTIVE_ENV" = "true" ]; then
     NVH_VENV="$ACTIVE_ENV_PATH"
     PYTHON="$ACTIVE_ENV_PATH/bin/python"
     [ -x "$PYTHON" ] || PYTHON="$ACTIVE_ENV_PATH/bin/python3"
+    write_nvh_env
     echo -e "${G}Installing into $ACTIVE_ENV_KIND env '$ACTIVE_ENV_NAME'${N}"
 fi
 
@@ -303,16 +330,167 @@ if [ "$CLOUD_DETECTED" = "true" ]; then
     echo -e "${G}  Optimizing for cloud environment...${N}"
 fi
 
+download_to_file() {
+    local url="$1"
+    local target="$2"
+    mkdir -p "$(dirname "$target")"
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$url" -o "$target"
+    elif command -v wget &>/dev/null; then
+        wget -qO "$target" "$url"
+    else
+        return 1
+    fi
+}
+
+env_python_path() {
+    for py in "$NVH_VENV/bin/python" "$NVH_VENV/bin/python3"; do
+        if [ -x "$py" ]; then
+            echo "$py"
+            return 0
+        fi
+    done
+    return 1
+}
+
+activate_nvh_python_env() {
+    if [ -f "$NVH_VENV/bin/activate" ]; then
+        # shellcheck disable=SC1091
+        source "$NVH_VENV/bin/activate"
+    else
+        export PATH="$NVH_VENV/bin:$PATH"
+    fi
+}
+
+safe_remove_python_env() {
+    local home="${NVH_HOME%/}"
+    case "$NVH_VENV" in
+        "$home"/venv|"$home"/runtimes/conda/nvhive)
+            rm -rf "$NVH_VENV"
+            ;;
+        *)
+            echo -e "${R}Refusing to remove unexpected Python env path: $NVH_VENV${N}"
+            return 1
+            ;;
+    esac
+}
+
+find_conda_manager() {
+    for exe in \
+        "${MAMBA_EXE:-}" \
+        "${CONDA_EXE:-}" \
+        "$HOME/miniforge3/bin/mamba" \
+        "$HOME/miniforge3/bin/conda" \
+        "$HOME/miniconda3/bin/conda" \
+        "$HOME/mambaforge/bin/mamba" \
+        "$HOME/mambaforge/bin/conda" \
+        "$HOME/.local/bin/micromamba"; do
+        if [ -n "$exe" ] && [ -x "$exe" ]; then
+            echo "$exe"
+            return 0
+        fi
+    done
+    for cmd in micromamba mamba conda; do
+        if command -v "$cmd" &>/dev/null; then
+            command -v "$cmd"
+            return 0
+        fi
+    done
+    return 1
+}
+
+create_managed_python_env() {
+    local manager prefix
+    manager="$(find_conda_manager)" || return 1
+    prefix="$NVH_HOME/runtimes/conda/nvhive"
+    mkdir -p "$(dirname "$prefix")"
+
+    if [ ! -x "$prefix/bin/python" ]; then
+        echo -e "${Y}System venv is unavailable; creating rootless Python 3.12 env with $(basename "$manager")...${N}"
+        "$manager" create -y -p "$prefix" python=3.12 pip >>"$NVH_LOGS/conda-create.log" 2>&1 || {
+            echo -e "${Y}Managed Python env creation failed. Log: $NVH_LOGS/conda-create.log${N}"
+            return 1
+        }
+    else
+        echo -e "${G}Using existing rootless managed Python env: $prefix${N}"
+    fi
+
+    NVH_VENV="$prefix"
+    PYTHON="$prefix/bin/python"
+    export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
+    write_nvh_env
+    "$PYTHON" -m pip --version >/dev/null 2>&1
+}
+
+bootstrap_pip_in_env() {
+    local env_python get_pip
+    env_python="$(env_python_path)" || return 1
+    if "$env_python" -m pip --version >/dev/null 2>&1; then
+        return 0
+    fi
+
+    get_pip="$NVH_CACHE/bootstrap/get-pip.py"
+    if [ ! -s "$get_pip" ]; then
+        echo -e "${Y}Python venv has no pip; bootstrapping pip rootlessly...${N}"
+        download_to_file "https://bootstrap.pypa.io/get-pip.py" "$get_pip" || return 1
+    fi
+    "$env_python" "$get_pip" --no-warn-script-location pip setuptools wheel >>"$NVH_LOGS/pip-bootstrap.log" 2>&1 || return 1
+    "$env_python" -m pip --version >/dev/null 2>&1
+}
+
+create_rootless_venv() {
+    local mode="${1:-}"
+    local env_python
+    mkdir -p "$NVH_LOGS" "$NVH_CACHE/bootstrap"
+
+    if [ "$mode" = "--clear" ]; then
+        safe_remove_python_env || return 1
+    fi
+
+    if "$PYTHON" -m venv "$NVH_VENV" >"$NVH_LOGS/venv-create.log" 2>&1; then
+        if bootstrap_pip_in_env; then
+            env_python="$(env_python_path)"
+            "$env_python" -m pip install -q --upgrade pip 2>/dev/null || true
+            activate_nvh_python_env
+            write_nvh_env
+            return 0
+        fi
+    fi
+
+    echo -e "${Y}System Python could not create a pip-ready venv without OS packages.${N}"
+    safe_remove_python_env || return 1
+    if "$PYTHON" -m venv --without-pip "$NVH_VENV" >>"$NVH_LOGS/venv-create.log" 2>&1; then
+        if bootstrap_pip_in_env; then
+            env_python="$(env_python_path)"
+            "$env_python" -m pip install -q --upgrade pip 2>/dev/null || true
+            activate_nvh_python_env
+            write_nvh_env
+            return 0
+        fi
+    fi
+
+    safe_remove_python_env || true
+    if create_managed_python_env; then
+        activate_nvh_python_env
+        return 0
+    fi
+
+    echo -e "${R}Could not create a rootless Python environment.${N}"
+    echo -e "${D}Tried: python venv, venv without pip + get-pip, and conda/mamba fallback.${N}"
+    echo -e "${D}Logs: $NVH_LOGS/venv-create.log $NVH_LOGS/pip-bootstrap.log $NVH_LOGS/conda-create.log${N}"
+    return 1
+}
+
 # ---------------------------------------------------------------------------
 # Fast path: already installed — just heal the venv if needed
 # ---------------------------------------------------------------------------
 heal_venv() {
     # Venvs break when the system Python moves (new VM, different path).
     # Fix: recreate the venv using the current Python, then reinstall.
-    local venv_python="$NVH_VENV/bin/python3"
+    local venv_python
 
     # Test if the existing venv works
-    if [ -f "$venv_python" ] && "$venv_python" -c "import sys" 2>/dev/null; then
+    if venv_python="$(env_python_path)" && "$venv_python" -c "import sys" 2>/dev/null; then
         return 0  # venv is healthy
     fi
 
@@ -324,18 +502,14 @@ heal_venv() {
         pkg_list=$("$NVH_VENV/bin/pip" freeze 2>/dev/null || true)
     fi
 
-    # Recreate venv with current Python (preserves site-packages if possible)
-    $PYTHON -m venv --clear "$NVH_VENV" 2>/dev/null || {
-        # --clear failed, nuke and recreate
-        rm -rf "$NVH_VENV"
-        $PYTHON -m venv "$NVH_VENV"
-    }
+    # Recreate without root. Handles Debian/Ubuntu Python builds missing ensurepip.
+    create_rootless_venv --clear || return 1
 
     # Reinstall nvhive
-    source "$NVH_VENV/bin/activate"
+    activate_nvh_python_env
     pip install -q --upgrade pip 2>/dev/null
     if [ -d "$NVH_REPO" ]; then
-        pip install -q -e "$NVH_REPO" 2>/dev/null
+        pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log"
     fi
 
     echo -e "${G}Venv healed.${N}"
@@ -345,11 +519,11 @@ heal_venv() {
 if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
     # Existing install found — heal if needed, then activate
     heal_venv
-    source "$NVH_VENV/bin/activate"
+    activate_nvh_python_env
 
     # Quick git pull for updates (non-blocking)
     if [ -d "$NVH_REPO/.git" ] && command -v git &>/dev/null; then
-        (cd "$NVH_REPO" && git pull --quiet 2>/dev/null && pip install -q -e . 2>/dev/null) || true
+        (cd "$NVH_REPO" && git pull --quiet 2>/dev/null && pip install -q -e ".[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log") || true
     fi
 
     # Verify nvh command works
@@ -357,7 +531,7 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
         echo -e "${G}NVHive ready.${N}"
     else
         echo -e "${Y}Reinstalling...${N}"
-        pip install -q -e "$NVH_REPO" 2>/dev/null
+        pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log"
     fi
 
     # Ensure Ollama is running
@@ -413,21 +587,21 @@ if [ "$USE_ACTIVE_ENV" = "true" ]; then
     "$PYTHON" -m pip install -q --upgrade pip 2>/dev/null || true
 else
     echo -e "${B}Creating Python environment...${N}"
-    $PYTHON -m venv "$NVH_VENV"
-    source "$NVH_VENV/bin/activate"
-    pip install -q --upgrade pip 2>/dev/null
+    create_rootless_venv || exit 1
 fi
 
 # Install
 echo -e "${B}Installing NVHive (~60s)...${N}"
 if [ "$USE_ACTIVE_ENV" = "true" ]; then
-    "$PYTHON" -m pip install -q -e "$NVH_REPO" 2>/dev/null || {
+    "$PYTHON" -m pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log" || {
         echo -e "${R}Install failed. Check Python version (need 3.11+).${N}"
+        echo -e "${D}Log: $NVH_LOGS/pip-install.log${N}"
         exit 1
     }
 else
-    pip install -q -e "$NVH_REPO" 2>/dev/null || {
+    pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log" || {
         echo -e "${R}Install failed. Check Python version (need 3.11+).${N}"
+        echo -e "${D}Log: $NVH_LOGS/pip-install.log${N}"
         exit 1
     }
 fi
@@ -511,7 +685,9 @@ fi
 # Set up .bashrc — only when we own the venv. If the user installed into
 # their existing conda/mamba/venv, they'll activate it themselves; adding a
 # PATH export would shadow their own activation logic.
-if [ "$USE_ACTIVE_ENV" = "true" ]; then
+if [ "${NVH_NO_OS_MOD:-0}" = "1" ]; then
+    echo -e "${D}Skipping .bashrc PATH edit because NVH_NO_OS_MOD=1.${N}"
+elif [ "$USE_ACTIVE_ENV" = "true" ]; then
     echo -e "${D}Skipping .bashrc PATH edit — using existing $ACTIVE_ENV_KIND env.${N}"
     echo -e "${D}  Remember to activate '$ACTIVE_ENV_NAME' before running nvh.${N}"
 else

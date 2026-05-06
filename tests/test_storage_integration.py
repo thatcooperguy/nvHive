@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from nvh.integrations import storage
 
 
@@ -34,10 +36,24 @@ def test_ensure_storage_creates_canonical_layout(tmp_path, monkeypatch) -> None:
 
 def test_storage_status_warns_when_home_is_implicit(monkeypatch) -> None:
     monkeypatch.delenv("NVH_HOME", raising=False)
+    monkeypatch.delenv("NVHIVE_HOME", raising=False)
 
     status = storage.storage_status(min_free_gb=0)
 
     assert status.configured_by == "default"
+    assert any("NVH_HOME is not set" in warning for warning in status.warnings)
+
+
+def test_ensure_storage_preserves_implicit_default_source(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("NVH_HOME", raising=False)
+    monkeypatch.delenv("NVHIVE_HOME", raising=False)
+    monkeypatch.setattr(storage.Path, "home", lambda: tmp_path)
+
+    status = storage.ensure_storage(min_free_gb=0)
+
+    assert status.configured_by == "default"
+    assert status.layout.home == tmp_path / ".nvh"
+    assert "NVH_HOME" not in os.environ
     assert any("NVH_HOME is not set" in warning for warning in status.warnings)
 
 

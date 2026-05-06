@@ -127,6 +127,7 @@ if [ -z "${NVH_HOME:-}" ]; then
 fi
 export NVH_HOME
 export NVH_BIN="$NVH_HOME/bin"
+export NVH_NO_OS_MOD="${NVH_NO_OS_MOD:-1}"
 export PATH="$NVH_BIN:$PATH"
 
 echo ""

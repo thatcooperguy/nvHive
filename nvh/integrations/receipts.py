@@ -47,8 +47,12 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def receipts_root(*, create: bool = True) -> Path:
-    root = storage_layout().home / "receipts"
+def receipts_root(
+    *,
+    create: bool = True,
+    home_dir: str | Path | None = None,
+) -> Path:
+    root = storage_layout(home_dir).home / "receipts"
     if create:
         root.mkdir(parents=True, exist_ok=True)
     return root
@@ -66,8 +70,8 @@ def _safe_slug(value: str) -> str:
     return slug
 
 
-def _receipt_path(identifier: str) -> Path:
-    return receipts_root() / f"{_safe_slug(identifier)}.json"
+def _receipt_path(identifier: str, home_dir: str | Path | None = None) -> Path:
+    return receipts_root(home_dir=home_dir) / f"{_safe_slug(identifier)}.json"
 
 
 def write_receipt(
@@ -132,10 +136,11 @@ def list_receipts(
     kind: str | None = None,
     status: str | None = None,
     limit: int = 100,
+    home_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Return recent receipts sorted by updated time descending."""
     receipts: list[dict[str, Any]] = []
-    root = receipts_root(create=False)
+    root = receipts_root(create=False, home_dir=home_dir)
     if not root.exists():
         return []
     for path in root.glob("*.json"):
@@ -168,8 +173,8 @@ def enrich_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     return {**receipt, "health": health}
 
 
-def receipt_summary() -> dict[str, Any]:
-    receipts = list_receipts()
+def receipt_summary(home_dir: str | Path | None = None) -> dict[str, Any]:
+    receipts = list_receipts(home_dir=home_dir)
     by_kind: dict[str, int] = {}
     unhealthy = 0
     for receipt in receipts:
@@ -180,7 +185,7 @@ def receipt_summary() -> dict[str, Any]:
         "count": len(receipts),
         "by_kind": by_kind,
         "unhealthy": unhealthy,
-        "root": str(receipts_root(create=False)),
+        "root": str(receipts_root(create=False, home_dir=home_dir)),
         "receipts": receipts[:10],
     }
 
