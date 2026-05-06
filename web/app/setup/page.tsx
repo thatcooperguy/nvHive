@@ -381,6 +381,7 @@ export default function SetupPage() {
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
   const [selectedWizardProfile, setSelectedWizardProfile] = useState<WizardProfile>('student');
   const handledMissionJobsRef = useRef<Set<string>>(new Set());
+  const autoDebugJobsRef = useRef<Set<string>>(new Set());
 
   // Live-polled provider health drives Ollama status and the
   // configured-providers list so the setup screen reflects newly
@@ -545,9 +546,10 @@ export default function SetupPage() {
     }
   };
 
-  const handleAskAssistant = async () => {
-    const question = assistantQuestion.trim();
+  const askSetupQuestion = useCallback(async (rawQuestion: string, reflectQuestion = false) => {
+    const question = rawQuestion.trim();
     if (!question) return;
+    if (reflectQuestion) setAssistantQuestion(question);
     setAssistantLoading(true);
     setAssistantError(null);
     try {
@@ -558,6 +560,17 @@ export default function SetupPage() {
     } finally {
       setAssistantLoading(false);
     }
+  }, [storageStatus?.layout.home]);
+
+  const handleAskAssistant = async () => {
+    await askSetupQuestion(assistantQuestion);
+  };
+
+  const handleQuickDiagnosis = () => {
+    void askSetupQuestion(
+      'Check this Linux GPU desktop for rootless install blockers. Focus on persistent storage, GPU/VRAM, Python/runtime, Ollama, local models, ComfyUI, and any failed install jobs. Recommend the safest next button to press.',
+      true,
+    );
   };
 
   const handleBootRecheck = async () => {
@@ -1404,6 +1417,19 @@ export default function SetupPage() {
     storageStatus?.layout.home,
   ]);
 
+  useEffect(() => {
+    const failedJob = installJobs.find(job =>
+      ['failed', 'interrupted', 'canceled'].includes(job.status) &&
+      !autoDebugJobsRef.current.has(job.id)
+    );
+    if (!failedJob) return;
+
+    autoDebugJobsRef.current.add(failedJob.id);
+    void askSetupQuestion(
+      `A setup install job needs debugging. Job: ${failedJob.title}. Status: ${failedJob.status}. Message: ${failedJob.message || 'no message'}. Explain what likely broke and what rootless repair button should run next.`,
+    );
+  }, [askSetupQuestion, installJobs]);
+
   const currentStepIdx = STEPS.findIndex(s => s.id === step);
   const currentStep = STEPS[currentStepIdx] ?? STEPS[0];
   const currentAdvancedGroup = ADVANCED_GROUPS.find(group => group.steps.includes(step)) ?? ADVANCED_GROUPS[0];
@@ -1639,36 +1665,74 @@ export default function SetupPage() {
     music: 'Installing Music Studio',
     full: 'Installing Workstation',
   };
+  const modelFitRecommendedIds = modelFit?.recommended_ids ?? [];
+  const modelFitStorageFits = modelFit && 'storage_fits_queue' in modelFit
+    ? modelFit.storage_fits_queue
+    : undefined;
+  const modelFitOllamaRunning = Boolean(modelFit && 'ollama_running' in modelFit && modelFit.ollama_running);
+  const recommendedModelLabel = modelFitRecommendedIds.length
+    ? modelFitRecommendedIds.slice(0, 2).join(', ')
+    : detectedModelVram
+      ? `${detectedModelVram} GB VRAM`
+      : 'checking';
+  const modelFitState: SetupCheckState = modelFitStorageFits === false
+    ? 'fix'
+    : modelFitRecommendedIds.length || selectedStudioModels.size > 0
+      ? 'ready'
+      : modelsLoading
+        ? 'checking'
+        : 'warn';
+  const localAiReady = ollamaStatus === 'online' || modelFitOllamaRunning;
   const systemCheckItems: Array<{ label: string; value: string; state: SetupCheckState }> = [
     {
-      label: 'Persistent Drive',
+      label: 'Storage',
       value: storageReady ? (storageFreeGb === null ? 'persistent ready' : `${storageFreeGb} GB free`) : storageBeginnerLabel,
       state: storageReady ? 'ready' : storageAutopilotBusy ? 'checking' : 'fix',
     },
     {
-      label: 'GPU Fit',
+      label: 'GPU',
       value: gpuLoading
         ? 'scanning'
         : gpuInfo?.gpus?.length
-          ? `${gpuInfo.gpus[0].name} / CUDA ${gpuInfo.gpus[0].cuda_version}`
+          ? `${gpuInfo.gpus[0].name} / ${gpuInfo.gpus[0].vram_gb} GB`
           : 'CPU fallback',
       state: gpuLoading ? 'checking' : gpuInfo?.gpus?.length ? 'ready' : 'warn',
     },
     {
-      label: 'Rootless Runtime',
+      label: 'Models',
+      value: recommendedModelLabel,
+      state: modelFitState,
+    },
+    {
+      label: 'Local AI',
+      value: ollamaStatus === 'checking' ? 'checking' : localAiReady ? 'Ollama online' : 'install on click',
+      state: ollamaStatus === 'checking' ? 'checking' : localAiReady ? 'ready' : 'warn',
+    },
+    {
+      label: 'Runtime',
       value: rootlessRuntimeStrategy,
       state: rootlessStatus === 'blocked' ? 'fix' : rootlessStatus === 'warn' ? 'warn' : rootlessStatus === 'checking' ? 'checking' : 'ready',
     },
     {
-      label: 'Setup Health',
+      label: 'Boot',
       value: apiStatus === 'checking'
         ? 'checking'
         : apiDisconnected
           ? 'API offline'
-          : setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'}` : 'clear',
-      state: apiStatus === 'checking' ? 'checking' : apiDisconnected ? 'fix' : setupConcernCount ? 'fix' : 'ready',
+          : bootChangeCount ? `${bootChangeCount} change${bootChangeCount === 1 ? '' : 's'}` : 'clean',
+      state: apiStatus === 'checking' ? 'checking' : apiDisconnected ? 'fix' : bootChangeCount ? 'warn' : setupConcernCount ? 'fix' : 'ready',
     },
   ];
+  const advisorModeLabel = bootAgentHelper?.local_agent_ready
+    ? 'local agent ready'
+    : setupHelper?.assistant?.mode === 'offline-deterministic'
+      ? 'offline helper'
+      : setupHelper?.assistant?.mode ?? 'offline helper';
+  const advisorSummary = assistantReply?.answer
+    ?? setupHelper?.issues?.[0]?.title
+    ?? setupHelper?.summary
+    ?? missionControl?.summary
+    ?? 'Ready to inspect installs, logs, and rootless repair options.';
 
   const runHelperAction = (actionId: string) => {
     if (actionId.startsWith('repair-receipt:')) {
@@ -2603,17 +2667,14 @@ export default function SetupPage() {
               <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className="section-label">Desktop Readiness</div>
+                    <div className="section-label">System Check</div>
                     <div className="text-xs font-bold text-[#0a0a0a]">
                       {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready to install without sudo'}
                     </div>
                   </div>
-                  <div className="text-[10px] text-[#525252] mt-1 break-all">
-                    Work survives at {workspaceHome} - {workspaceFreeText} - {workspaceReceipts} receipt{workspaceReceipts === 1 ? '' : 's'} - {workspaceActiveJobs} active job{workspaceActiveJobs === 1 ? '' : 's'}
+                  <div className="text-[10px] text-[#525252] mt-1">
+                    {workspaceFreeText} on persistent storage; {workspaceReceipts} receipt{workspaceReceipts === 1 ? '' : 's'}; {workspaceActiveJobs} active job{workspaceActiveJobs === 1 ? '' : 's'}.
                   </div>
-                  {wizardPlan?.summary && (
-                    <div className="text-[10px] text-[#737373] mt-1">{wizardPlan.summary}</div>
-                  )}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {topHelperAction && (
@@ -2628,11 +2689,19 @@ export default function SetupPage() {
                   )}
                   <button
                     type="button"
-                    onClick={() => void refreshWorkspacePassport(storageStatus?.layout.home)}
+                    onClick={() => void handleBootRecheck()}
                     disabled={apiDisconnected}
                     className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
                     Recheck
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleQuickDiagnosis}
+                    disabled={assistantLoading || apiDisconnected}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {assistantLoading ? 'Thinking' : 'Ask nvWizard'}
                   </button>
                 </div>
               </div>
@@ -2647,6 +2716,35 @@ export default function SetupPage() {
                     </div>
                   );
                 })}
+              </div>
+              <div className="border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] font-mono font-bold text-[#0a0a0a]">nvWizard Advisor</span>
+                    <span className="text-[9px] font-mono text-[#76B900] uppercase border border-[#76B900]/40 px-1.5 py-0.5">
+                      {advisorModeLabel}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-[#525252] mt-1 leading-relaxed">
+                    {advisorSummary}
+                  </div>
+                  <details className="mt-1">
+                    <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                      Storage path
+                    </summary>
+                    <div className="text-[9px] font-mono text-[#737373] mt-1 break-all">{workspaceHome}</div>
+                  </details>
+                </div>
+                {setupConcernCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void handleRepairWorkspace()}
+                    disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
+                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40 flex-shrink-0"
+                  >
+                    {workspaceRepairing ? 'Repairing' : 'Fix Issues'}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -2700,8 +2798,8 @@ export default function SetupPage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <div className="section-label">Pick What You Want To Build</div>
-                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">What do you want to make today?</div>
+                  <div className="section-label">Install Options</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">Choose a workload; nvWizard picks GPU-fit dependencies.</div>
                 </div>
               </div>
               {apiDisconnected && (
