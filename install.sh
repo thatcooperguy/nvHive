@@ -525,6 +525,40 @@ download_to_file() {
     fi
 }
 
+download_source_archive() {
+    local target="$1"
+    local archive="$NVH_CACHE/bootstrap/nvhive-main.tar.gz"
+    rm -rf "$target"
+    mkdir -p "$target" "$(dirname "$archive")"
+    download_to_file "https://github.com/thatcooperguy/nvHive/archive/refs/heads/main.tar.gz" "$archive" || return 1
+    tar xz -C "$target" --strip-components=1 < "$archive"
+}
+
+refresh_nvh_repo() {
+    local tmp_repo
+    [ -d "$NVH_REPO" ] || return 1
+    echo -e "${B}Updating NVHive source...${N}"
+    if [ -d "$NVH_REPO/.git" ] && command -v git &>/dev/null; then
+        if (
+            cd "$NVH_REPO" || exit 1
+            git remote set-url origin https://github.com/thatcooperguy/nvHive.git >/dev/null 2>&1 || true
+            git fetch --depth 1 origin main --quiet
+            git checkout -q -B main FETCH_HEAD
+        ); then
+            return 0
+        fi
+    fi
+
+    tmp_repo="$NVH_HOME/repo.refresh.$$"
+    if download_source_archive "$tmp_repo"; then
+        rm -rf "$NVH_REPO"
+        mv "$tmp_repo" "$NVH_REPO"
+        return 0
+    fi
+    rm -rf "$tmp_repo"
+    return 1
+}
+
 env_python_path() {
     for py in "$NVH_VENV/bin/python" "$NVH_VENV/bin/python3"; do
         if [ -x "$py" ]; then
@@ -533,6 +567,12 @@ env_python_path() {
         fi
     done
     return 1
+}
+
+install_nvhive_package() {
+    local env_python
+    env_python="$(env_python_path)" || env_python="$PYTHON"
+    "$env_python" -m pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log"
 }
 
 activate_nvh_python_env() {
@@ -699,21 +739,24 @@ heal_venv() {
 }
 
 if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
-    # Existing install found — heal if needed, then activate
+    refresh_nvh_repo || echo -e "${Y}Could not refresh source; continuing with local repo.${N}"
+
+    # Existing install found - heal if needed, then activate
     heal_venv
     activate_nvh_python_env
 
-    # Quick git pull for updates (non-blocking)
-    if [ -d "$NVH_REPO/.git" ] && command -v git &>/dev/null; then
-        (cd "$NVH_REPO" && git pull --quiet 2>/dev/null && pip install -q -e ".[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log") || true
-    fi
+    # Reinstall after source refresh so existing tarball-based installs do not stay stale.
+    install_nvhive_package || echo -e "${Y}Package reinstall warning. Log: $NVH_LOGS/pip-install.log${N}"
 
     # Verify nvh command works
     if command -v nvh &>/dev/null; then
         echo -e "${G}NVHive ready.${N}"
     else
         echo -e "${Y}Reinstalling...${N}"
-        pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log"
+        install_nvhive_package || {
+            echo -e "${R}Reinstall failed. Log: $NVH_LOGS/pip-install.log${N}"
+            exit 1
+        }
     fi
 
     # Ensure Ollama is running
@@ -752,12 +795,10 @@ echo -e "${B}Downloading NVHive...${N}"
 if command -v git &>/dev/null; then
     git clone --depth 1 -q https://github.com/thatcooperguy/nvHive.git "$NVH_REPO" 2>/dev/null || {
         echo -e "${R}Git clone failed. Trying tarball...${N}"
-        mkdir -p "$NVH_REPO"
-        curl -sSL https://github.com/thatcooperguy/nvHive/archive/refs/heads/main.tar.gz | tar xz -C "$NVH_REPO" --strip-components=1
+        download_source_archive "$NVH_REPO"
     }
 else
-    mkdir -p "$NVH_REPO"
-    curl -sSL https://github.com/thatcooperguy/nvHive/archive/refs/heads/main.tar.gz | tar xz -C "$NVH_REPO" --strip-components=1
+    download_source_archive "$NVH_REPO"
 fi
 install_uninstall_script
 install_command_shims
