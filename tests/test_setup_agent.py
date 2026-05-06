@@ -40,6 +40,7 @@ def test_setup_helper_prioritizes_storage(tmp_path, monkeypatch) -> None:
 
 def test_setup_helper_flags_default_storage(monkeypatch) -> None:
     monkeypatch.delenv("NVH_HOME", raising=False)
+    monkeypatch.delenv("NVHIVE_HOME", raising=False)
 
     report = setup_agent.setup_helper_report()
 
