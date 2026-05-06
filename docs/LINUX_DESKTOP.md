@@ -24,7 +24,9 @@ block-backed home/data volume that survives reconnects, ideally 200GB or
 larger for local LLMs and ComfyUI assets. Avoid read-only CIFS/SMB mounts and
 the ephemeral OS disk. If the block volume is mounted as the Linux home
 directory, the installer selects `/home/$USER/nvhive` automatically and prints
-the exact `source .../nvh-env.sh` command to use in the current terminal.
+the exact install path. In desktop sessions it also creates `~/.local/bin/nvh`
+and auto-launches the WebUI so first-time users do not have to source an env
+file or remember a command. Set `NVH_INSTALL_LAUNCH=0` for install-only mode.
 To force the no-Python binary path:
 
 ```bash

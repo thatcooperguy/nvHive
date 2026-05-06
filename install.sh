@@ -272,6 +272,61 @@ UNINSTALLEOF
     ln -sf "$target" "$NVH_BIN/nvh-uninstall" 2>/dev/null || true
 }
 
+install_command_shims() {
+    local local_bin shim
+    local_bin="$HOME/.local/bin"
+    mkdir -p "$local_bin"
+    export PATH="$local_bin:$PATH"
+
+    for shim in nvh nvhive; do
+        local target="$local_bin/$shim"
+        if [ -e "$target" ] && ! grep -q "nvHive rootless wrapper" "$target" 2>/dev/null; then
+            echo -e "${Y}Keeping existing $target; use $NVH_VENV/bin/nvh directly if needed.${N}"
+            continue
+        fi
+        cat > "$target" << SHIMEOF
+#!/bin/bash
+# nvHive rootless wrapper
+NVH_ENV="$NVH_HOME/nvh-env.sh"
+if [ -f "\$NVH_ENV" ]; then
+    # shellcheck disable=SC1090
+    source "\$NVH_ENV"
+fi
+if [ -x "$NVH_VENV/bin/nvh" ]; then
+    exec "$NVH_VENV/bin/nvh" "\$@"
+fi
+exec python -m nvh.cli.main "\$@"
+SHIMEOF
+        chmod +x "$target" 2>/dev/null || true
+    done
+}
+
+should_launch_webui() {
+    case "${NVH_INSTALL_LAUNCH:-auto}" in
+        0|false|False|no|No|off|Off) return 1 ;;
+        1|true|True|yes|Yes|on|On) return 0 ;;
+    esac
+    [ -n "${CI:-}" ] && return 1
+    [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}${XDG_CURRENT_DESKTOP:-}" ] || return 1
+    return 0
+}
+
+launch_webui_after_install() {
+    should_launch_webui || return 0
+    local nvh_cmd="$NVH_VENV/bin/nvh"
+    [ -x "$nvh_cmd" ] || nvh_cmd="$(command -v nvh || true)"
+    [ -n "$nvh_cmd" ] || return 0
+
+    echo ""
+    echo -e "${G}Launching nvHive AI Studio WebUI...${N}"
+    echo -e "${D}Set NVH_INSTALL_LAUNCH=0 before install to skip auto-launch.${N}"
+    echo -e "${D}The terminal will keep the WebUI running; press Ctrl+C to stop it.${N}"
+    echo ""
+    "$nvh_cmd" workstation --home-dir "$NVH_HOME" --launch -y || {
+        echo -e "${Y}WebUI auto-launch did not complete. You can retry with: $nvh_cmd webui${N}"
+    }
+}
+
 mkdir -p "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CACHE" "$NVH_LOGS" "$NVH_STUDIO_HOME" "$COMFYUI_HOME" "$HIVE_CONFIG_HOME" "$TMPDIR"
 write_nvh_env
 export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
@@ -401,7 +456,25 @@ if command -v nvidia-smi &>/dev/null; then
     VRAM_GB=$(( ${VRAM_MB:-0} / 1024 ))
     [ -n "$GPU_NAME" ] && echo -e "${G}GPU: $GPU_NAME (${VRAM_GB}GB VRAM)${N}"
 fi
-[ -z "$GPU_NAME" ] && echo -e "${Y}No NVIDIA GPU detected — CPU mode${N}"
+[ -z "$GPU_NAME" ] && echo -e "${Y}No NVIDIA GPU detected - CPU mode${N}"
+if [ -n "$GPU_NAME" ]; then
+    if [ "$VRAM_GB" -ge 24 ]; then DEFAULT_OLLAMA_MODEL="nemotron"
+    elif [ "$VRAM_GB" -ge 8 ]; then DEFAULT_OLLAMA_MODEL="llama3.1:8b"
+    else DEFAULT_OLLAMA_MODEL="nemotron-mini"; fi
+else
+    DEFAULT_OLLAMA_MODEL="nemotron-mini"
+fi
+echo -e "${D}Recommended local model: $DEFAULT_OLLAMA_MODEL${N}"
+
+sync_ollama_default_model_config() {
+    local cfg="$HIVE_CONFIG_HOME/config.yaml"
+    [ -n "$GPU_NAME" ] || return 0
+    [ -f "$cfg" ] || return 0
+    if grep -Eq 'default_model:[[:space:]]*"?ollama/(nemotron-mini|llama3\.1:8b|nemotron)"?' "$cfg"; then
+        sed -i.bak -E "s|default_model:[[:space:]]*\"?ollama/(nemotron-mini|llama3\\.1:8b|nemotron)\"?|default_model: \"ollama/$DEFAULT_OLLAMA_MODEL\"|" "$cfg" && rm -f "$cfg.bak"
+        echo -e "${G}Ollama config aligned to GPU recommendation: $DEFAULT_OLLAMA_MODEL${N}"
+    fi
+}
 
 # --- Detect Linux Desktop ---
 CLOUD_DETECTED=false
@@ -634,6 +707,8 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
     export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
 
     install_uninstall_script
+    install_command_shims
+    sync_ollama_default_model_config
     install_shell_hook
 
     echo ""
@@ -641,6 +716,7 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
     echo -e "  Activate manually: ${G}source \"$NVH_HOME/nvh-env.sh\"${N}"
     echo -e "  Uninstall/reset:   ${G}bash \"$NVH_HOME/uninstall.sh\" --help${N}"
     echo ""
+    launch_webui_after_install
     exit 0
 fi
 
@@ -663,6 +739,7 @@ else
     curl -sSL https://github.com/thatcooperguy/nvHive/archive/refs/heads/main.tar.gz | tar xz -C "$NVH_REPO" --strip-components=1
 fi
 install_uninstall_script
+install_command_shims
 
 # Create venv (skip when installing into an already-active env)
 if [ "$USE_ACTIVE_ENV" = "true" ]; then
@@ -719,7 +796,7 @@ defaults:
 advisors:
   ollama:
     base_url: http://localhost:11434
-    default_model: ollama/nemotron-mini
+    default_model: "ollama/__NVH_DEFAULT_OLLAMA_MODEL__"
     type: ollama
     enabled: true
 
@@ -763,7 +840,10 @@ cache:
   ttl_seconds: 86400
   max_size: 1000
 CFGEOF
+    sed -i.bak "s|__NVH_DEFAULT_OLLAMA_MODEL__|$DEFAULT_OLLAMA_MODEL|g" "$HIVE_DIR/config.yaml" && rm -f "$HIVE_DIR/config.yaml.bak"
     echo -e "${G}Config created: $HIVE_DIR/config.yaml${N}"
+else
+    sync_ollama_default_model_config
 fi
 
 # Set up .bashrc — only when we own the venv. If the user installed into
@@ -797,12 +877,10 @@ if [ -n "$GPU_NAME" ]; then
         sleep 3
     fi
 
-    # Pick model based on VRAM. Only real Ollama registry tags — earlier
-    # tiers referenced nemotron:120b / nemotron-small which return 404.
+    # Pull the same model written into config so first launch does not ask for
+    # a second, smaller default.
     if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        if [ "$VRAM_GB" -ge 24 ]; then MODEL="nemotron"
-        elif [ "$VRAM_GB" -ge 8 ]; then MODEL="llama3.1:8b"
-        else MODEL="nemotron-mini"; fi
+        MODEL="$DEFAULT_OLLAMA_MODEL"
 
         if ! "$OLLAMA_BIN" list 2>/dev/null | grep -q "$MODEL"; then
             echo -e "${B}Pulling $MODEL in background (you can start using nvh now)...${N}"
@@ -845,10 +923,7 @@ echo -e "  ${D}On reconnect: just type 'nvh'${N}"
 echo -e "  ${D}Uninstall: bash $NVH_HOME/uninstall.sh${N}"
 echo -e "  ${D}Fresh reset: bash $NVH_HOME/uninstall.sh --purge -y${N}"
 echo ""
-echo -e "  ${G}Start now:${N}"
-echo -e "  ${G}  source \"$NVH_HOME/nvh-env.sh\"${N}"
-echo -e "  ${G}  nvh${N}"
+echo -e "  ${G}Start now:${N} ${G}nvh${N} or ${G}$NVH_VENV/bin/nvh${N}"
+echo -e "  ${D}The installer also created ~/.local/bin/nvh for future terminals.${N}"
 echo ""
-# Make nvh available in the CURRENT shell (not just future ones)
-echo -e "${D}(If 'nvh' is not found, run the source command shown above.)${N}"
-echo ""
+launch_webui_after_install

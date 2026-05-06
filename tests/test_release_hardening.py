@@ -73,9 +73,23 @@ def test_linux_installer_autodetects_persistent_home_and_installs_reset_helper()
     assert 'roots+=("$HOME"' in install
     assert 'home="$base/nvhive"' in install
     assert "install_uninstall_script" in install
+    assert "install_command_shims" in install
+    assert "~/.local/bin/nvh" in install
     assert "$NVH_HOME/uninstall.sh" in install
     assert "nvh-uninstall" in install
     assert "# >>> nvhive rootless env >>>" in install
+
+
+def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert 'DEFAULT_OLLAMA_MODEL="nemotron"' in install
+    assert "sync_ollama_default_model_config" in install
+    assert 'default_model: "ollama/__NVH_DEFAULT_OLLAMA_MODEL__"' in install
+    assert 'MODEL="$DEFAULT_OLLAMA_MODEL"' in install
+    assert "launch_webui_after_install" in install
+    assert "NVH_INSTALL_LAUNCH" in install
+    assert "workstation --home-dir" in install
 
 
 def test_linux_uninstaller_is_rootless_and_supports_purge_reset() -> None:
