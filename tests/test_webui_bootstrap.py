@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from types import SimpleNamespace
 
 import nvh.cli.main as cli_main
@@ -68,3 +70,63 @@ def test_rootless_node_discovery_supports_fnm_and_direct_layouts(tmp_path, monke
     (direct_bin / npm_name).write_text("", encoding="utf-8")
 
     assert node_runtime.find_rootless_node_bin(tmp_path / "runtimes") == direct_bin
+
+
+def test_webui_npm_env_includes_bootstrapped_node_path(tmp_path, monkeypatch):
+    import shutil
+
+    import nvh.integrations.storage as storage_mod
+
+    home = tmp_path / "nvhive"
+    node_bin = home / "runtimes" / "node" / "current" / "bin"
+    web_dir = tmp_path / "pkg" / "web"
+    web_dir.mkdir(parents=True)
+    (web_dir / "package.json").write_text('{"scripts":{"start":"next start"}}', encoding="utf-8")
+    (web_dir / "package-lock.json").write_text("{}", encoding="utf-8")
+    (web_dir / ".next").mkdir()
+    (web_dir / ".next" / "BUILD_ID").write_text("test", encoding="utf-8")
+
+    layout = SimpleNamespace(
+        home=home,
+        webui_dir=home / "webui",
+        cache_dir=home / "cache",
+        logs_dir=home / "logs",
+        runtime_dir=home / "runtimes",
+        env=lambda: {"NVH_HOME": str(home)},
+    )
+    captured_envs: list[dict[str, str]] = []
+
+    def fake_which(name: str, path: str | None = None) -> str | None:
+        if path and str(node_bin) in path.split(os.pathsep) and name in {"node", "npm"}:
+            return str(node_bin / name)
+        return None
+
+    def fake_run(*_args, **kwargs):
+        captured_envs.append(kwargs["env"])
+        return subprocess.CompletedProcess(_args[0], 0, "", "")
+
+    monkeypatch.setattr(storage_mod, "storage_layout", lambda: layout)
+    monkeypatch.setattr(cli_main, "__file__", str(tmp_path / "pkg" / "nvh" / "cli" / "main.py"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(shutil, "which", fake_which)
+    monkeypatch.setattr(
+        cli_main,
+        "_try_install_node_no_root",
+        lambda *_args, **_kwargs: (str(node_bin / "node"), str(node_bin / "npm")),
+    )
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    cli_main.webui(
+        install_only=True,
+        port=3000,
+        uninstall=False,
+        clean=False,
+        yes=True,
+        no_api=True,
+        api_port=8000,
+        dev=False,
+        verbose=False,
+    )
+
+    assert captured_envs
+    assert str(node_bin) in captured_envs[0]["PATH"].split(os.pathsep)

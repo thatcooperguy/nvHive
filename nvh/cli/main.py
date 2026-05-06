@@ -8035,6 +8035,10 @@ def webui(
         False, "--dev",
         help="Run the Next.js development server instead of the production server",
     ),
+    verbose: bool = typer.Option(
+        False, "--verbose",
+        help="Print detailed WebUI bootstrap diagnostics",
+    ),
 ):
     """Install and launch the nvHive web UI.
 
@@ -8056,7 +8060,9 @@ def webui(
     """
     import shutil
     import subprocess
+    from datetime import UTC, datetime
 
+    from nvh.integrations import node_runtime
     from nvh.integrations.storage import storage_layout
 
     layout = storage_layout()
@@ -8066,7 +8072,56 @@ def webui(
     webui_env["npm_config_cache"] = str(layout.cache_dir / "npm")
     webui_env["NEXT_TELEMETRY_DISABLED"] = "1"
     layout.webui_dir.parent.mkdir(parents=True, exist_ok=True)
+    layout.logs_dir.mkdir(parents=True, exist_ok=True)
     (layout.cache_dir / "npm").mkdir(parents=True, exist_ok=True)
+    webui_log_path = layout.logs_dir / "webui-bootstrap.log"
+
+    def _webui_log(message: str) -> None:
+        try:
+            with webui_log_path.open("a", encoding="utf-8") as fh:
+                fh.write(f"{datetime.now(UTC).isoformat(timespec='seconds')} {message}\n")
+        except Exception:
+            pass
+
+    def _webui_debug(message: str) -> None:
+        _webui_log(message)
+        if verbose or os.environ.get("NVH_VERBOSE") in {"1", "true", "True", "yes", "YES"}:
+            console.print(f"[dim]{message}[/dim]")
+
+    def _prepend_env_path(path: str | Path | None) -> None:
+        if not path:
+            return
+        entry = str(path)
+        current = webui_env.get("PATH", os.environ.get("PATH", ""))
+        parts = [p for p in current.split(os.pathsep) if p]
+        if entry not in parts:
+            webui_env["PATH"] = f"{entry}{os.pathsep}{current}" if current else entry
+        process_path = os.environ.get("PATH", "")
+        process_parts = [p for p in process_path.split(os.pathsep) if p]
+        if entry not in process_parts:
+            os.environ["PATH"] = f"{entry}{os.pathsep}{process_path}" if process_path else entry
+        _webui_debug(f"PATH includes Node candidate: {entry}")
+
+    def _which_webui(binary: str) -> str | None:
+        return shutil.which(binary, path=webui_env.get("PATH"))
+
+    def _log_completed_process(label: str, result: subprocess.CompletedProcess[str]) -> None:
+        _webui_log(f"{label} exit={result.returncode}")
+        if result.stdout:
+            _webui_log(f"{label} stdout tail:\n" + "\n".join(result.stdout.splitlines()[-30:]))
+        if result.stderr:
+            _webui_log(f"{label} stderr tail:\n" + "\n".join(result.stderr.splitlines()[-30:]))
+
+    _webui_log("=" * 72)
+    _webui_log("nvh webui bootstrap start")
+    _webui_log(f"NVH_HOME={layout.home}")
+    _webui_log(f"webui_dir={layout.webui_dir}")
+    _webui_log(f"runtime_dir={layout.runtime_dir}")
+    _webui_log(f"python={sys.executable}")
+
+    rootless_node_bin = node_runtime.find_rootless_node_bin(layout.runtime_dir)
+    if rootless_node_bin:
+        _prepend_env_path(rootless_node_bin)
 
     # --- Safe uninstall / clean paths ---------------------------------
     # These intentionally only ever touch NVH_WEB_HOME (the cache dir
@@ -8320,25 +8375,38 @@ def webui(
     # On Windows, npm ships as npm.cmd; Python's subprocess cannot launch
     # .cmd files by bare name (fails with WinError 2), so resolve the
     # absolute path via shutil.which and use it for all subprocess calls.
-    node = shutil.which("node")
-    npm = shutil.which("npm")
+    node = _which_webui("node")
+    npm = _which_webui("npm")
     if sys.platform == "win32" and not npm:
         # shutil.which should find npm.cmd, but some installers only add
         # npm to PATHEXT via CMD shims — try a few fallbacks.
         for ext in ("npm.cmd", "npm.exe", "npm.bat"):
-            candidate = shutil.which(ext)
+            candidate = _which_webui(ext)
             if candidate:
                 npm = candidate
                 break
+    _webui_debug(f"Initial node={node or '<missing>'}")
+    _webui_debug(f"Initial npm={npm or '<missing>'}")
     if not node or not npm:
         console.print("[yellow]Node.js not found.[/yellow]")
+        _webui_log("Node.js not found before rootless bootstrap")
         # Offer to install automatically. On Linux/macOS without root we
         # use fnm (Fast Node Manager): single-binary installer, drops Node
         # under ~/.local/share/fnm and adds to PATH for this process.
         # Windows stays with winget guidance (requires user action).
         node, npm = _try_install_node_no_root(console, assume_yes=yes)
+        if node:
+            _prepend_env_path(Path(node).parent)
+        rootless_node_bin = node_runtime.find_rootless_node_bin(layout.runtime_dir)
+        if rootless_node_bin:
+            _prepend_env_path(rootless_node_bin)
+        node = _which_webui("node") or node
+        npm = _which_webui("npm") or npm
+        _webui_debug(f"Post-bootstrap node={node or '<missing>'}")
+        _webui_debug(f"Post-bootstrap npm={npm or '<missing>'}")
         if not node or not npm:
             console.print("[red]Auto-install failed or declined.[/red]")
+            console.print(f"[dim]WebUI bootstrap log: {webui_log_path}[/dim]")
             console.print("Install Node.js 22+ in your rootless nvHive workspace:")
             if sys.platform == "darwin":
                 console.print("  brew install node")
@@ -8350,11 +8418,16 @@ def webui(
                 )
                 console.print("  If that still fails, send the nvHive support snapshot to your VM admin.")
             raise typer.Exit(1)
+    elif node:
+        _prepend_env_path(Path(node).parent)
 
     # Install dependencies if needed
     node_modules = os.path.join(web_dir, "node_modules")
     if not os.path.isdir(node_modules):
         console.print("[bold]Installing web UI dependencies...[/bold]")
+        _webui_debug(f"Installing dependencies in {web_dir}")
+        _webui_debug(f"Using node={node}")
+        _webui_debug(f"Using npm={npm}")
         result = subprocess.run(
             [npm, "ci"],
             cwd=web_dir,
@@ -8362,11 +8435,23 @@ def webui(
             text=True,
             env=webui_env,
         )
+        _log_completed_process("npm ci", result)
         if result.returncode != 0:
             # Try npm install as fallback
-            result = subprocess.run([npm, "install"], cwd=web_dir, env=webui_env)
+            result = subprocess.run(
+                [npm, "install"],
+                cwd=web_dir,
+                capture_output=True,
+                text=True,
+                env=webui_env,
+            )
+            _log_completed_process("npm install", result)
         if result.returncode != 0:
             console.print("[red]npm install failed.[/red]")
+            tail = "\n".join((result.stderr or result.stdout or "").splitlines()[-8:])
+            if tail:
+                console.print(f"[dim]{tail}[/dim]")
+            console.print(f"[dim]WebUI bootstrap log: {webui_log_path}[/dim]")
             raise typer.Exit(1)
         console.print("[green]Dependencies installed.[/green]")
 
@@ -8375,6 +8460,7 @@ def webui(
 
     if not dev and not _web_build_ready(web_dir):
         console.print("[bold]Building optimized Web UI (first run)...[/bold]")
+        _webui_debug("Building optimized Web UI")
         result = subprocess.run(
             [npm, "run", "build"],
             cwd=web_dir,
@@ -8382,6 +8468,7 @@ def webui(
         )
         if result.returncode != 0:
             console.print("[red]Web UI build failed.[/red]")
+            console.print(f"[dim]WebUI bootstrap log: {webui_log_path}[/dim]")
             console.print(
                 "Run [bold]nvh webui --clean[/bold] and try again, "
                 "or use [bold]nvh webui --dev[/bold] while developing."
@@ -8525,6 +8612,7 @@ def webui(
 
     console.print("[bold]Starting nvHive Web UI...[/bold]")
     console.print(f"  WebUI: {access_url}")
+    _webui_log(f"Starting WebUI at {access_url}")
     if api_proc is not None:
         console.print(
             f"  [dim]API: http://localhost:{api_port} "
