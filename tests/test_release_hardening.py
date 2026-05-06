@@ -64,3 +64,27 @@ def test_linux_installer_handles_missing_ensurepip_without_root() -> None:
     assert "create_managed_python_env" in install
     assert "$HOME/miniforge3/bin/python" in install
     assert "apt install" not in install
+
+
+def test_linux_installer_autodetects_persistent_home_and_installs_reset_helper() -> None:
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert "home_is_persistent_candidate" in install
+    assert 'roots+=("$HOME"' in install
+    assert 'home="$base/nvhive"' in install
+    assert "install_uninstall_script" in install
+    assert "$NVH_HOME/uninstall.sh" in install
+    assert "nvh-uninstall" in install
+    assert "# >>> nvhive rootless env >>>" in install
+
+
+def test_linux_uninstaller_is_rootless_and_supports_purge_reset() -> None:
+    uninstall = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
+
+    assert "--purge" in uninstall
+    assert "--dry-run" in uninstall
+    assert "sudo" not in uninstall
+    assert "apt " not in uninstall
+    assert "safe_to_remove_home" in uninstall
+    assert 'remove_path "$NVH_HOME"' in uninstall
+    assert "keep models/config/projects" in uninstall

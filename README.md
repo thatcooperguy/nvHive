@@ -100,10 +100,14 @@ curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linu
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
-Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise `~/.nvh/` for new installs, prefers rootless Python from Miniforge/conda when available, uses Python `venv` + `pip` by default, bootstraps pip without `apt` when Debian/Ubuntu images are missing `ensurepip`, falls back to a managed conda/mamba env under `NVH_HOME` when needed, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config.
+Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise it looks for writable persistent storage and prints the exact activation path. On Ubuntu cloud desktops where the 200GB+ block volume is mounted as your Linux home directory, the installer chooses `/home/$USER/nvhive` automatically. It prefers rootless Python from Miniforge/conda when available, uses Python `venv` + `pip` by default, bootstraps pip without `apt` when Debian/Ubuntu images are missing `ensurepip`, falls back to a managed conda/mamba env under `NVH_HOME` when needed, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config.
 
-If `NVH_HOME` is not set, the installer now checks common persistent mount roots such as `/mnt`, `/media/$USER`, `/workspace`, `/data`, `/persistent`, and `/storage` before falling back to `~/.nvh`.
-If your cloud provider mounts the persistent block volume as your Linux home directory, use `/home/$USER/nvhive` or leave `NVH_HOME` unset and the launcher will keep nvHive, models, logs, and repair receipts off the read-only OS image.
+If `NVH_HOME` is not set, the installer checks `$HOME`, `/mnt`, `/media/$USER`, `/workspace`, `/data`, `/persistent`, and `/storage`. It also installs a rootless reset helper:
+
+```bash
+bash "$NVH_HOME/uninstall.sh"          # remove app runtime, keep models/config/projects
+bash "$NVH_HOME/uninstall.sh" --purge  # clean from-scratch reset
+```
 
 Windows: `iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex`
 macOS: `curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash`

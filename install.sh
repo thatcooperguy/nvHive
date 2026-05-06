@@ -31,6 +31,35 @@ free_gb_for_path() {
     df -Pk "$1" 2>/dev/null | awk 'NR==2 {printf "%d", $4 / 1048576}'
 }
 
+mount_point_for_path() {
+    df -Pk "$1" 2>/dev/null | awk 'NR==2 {print $6}'
+}
+
+fs_type_for_path() {
+    df -PT "$1" 2>/dev/null | awk 'NR==2 {print $2}'
+}
+
+home_is_persistent_candidate() {
+    local base="${1%/}"
+    local free_gb="${2:-0}"
+    local mount_point fs_type
+
+    [ "$base" = "${HOME%/}" ] || return 1
+    [ "$free_gb" -ge 100 ] || return 1
+
+    mount_point="$(mount_point_for_path "$base")"
+    fs_type="$(fs_type_for_path "$base")"
+    [ -n "$mount_point" ] || return 1
+    [ "$mount_point" != "/" ] || return 1
+
+    case "$fs_type" in
+        cifs|smb3|nfs|nfs4|sshfs|fuse.sshfs|tmpfs|overlay|squashfs)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 score_nvh_home_candidate() {
     local base="${1%/}"
     [ -n "$base" ] || return 1
@@ -45,8 +74,16 @@ score_nvh_home_candidate() {
     esac
 
     score=0
+    free_gb="$(free_gb_for_path "$base")"
+    free_gb="${free_gb:-0}"
     case "$base" in
-        "$HOME"|"$HOME/"*) score=$((score - 15)) ;;
+        "$HOME"|"$HOME/"*)
+            if home_is_persistent_candidate "$base" "${free_gb:-0}"; then
+                score=$((score + 70))
+            else
+                score=$((score - 15))
+            fi
+            ;;
         /mnt/*|/media/*|/workspace*|/data*|/persistent*|/storage*) score=$((score + 45)) ;;
     esac
     case "$base" in
@@ -57,8 +94,6 @@ score_nvh_home_candidate() {
             score=$((score - 40))
             ;;
     esac
-    free_gb="$(free_gb_for_path "$base")"
-    free_gb="${free_gb:-0}"
     if [ "$free_gb" -ge 100 ]; then
         score=$((score + 35))
     elif [ "$free_gb" -ge 50 ]; then
@@ -89,7 +124,7 @@ detect_nvh_home() {
         env_value="${!env_name:-}"
         [ -n "$env_value" ] && roots+=("$env_value")
     done
-    roots+=("/mnt" "/media/${USER:-}" "/workspace" "/data" "/persistent" "/storage")
+    roots+=("$HOME" "/mnt" "/media/${USER:-}" "/workspace" "/data" "/persistent" "/storage")
 
     best_score=-999
     best_home=""
@@ -182,6 +217,59 @@ export TMP="$TMPDIR"
 export PATH="$NVH_VENV/bin:$NVH_BIN:\$PATH"
 ENVEOF
 chmod 600 "$NVH_HOME/nvh-env.sh" 2>/dev/null || true
+}
+
+shell_rc_path() {
+    if [ -f "$HOME/.zshrc" ]; then
+        printf '%s\n' "$HOME/.zshrc"
+    else
+        printf '%s\n' "$HOME/.bashrc"
+    fi
+}
+
+install_shell_hook() {
+    [ "${NVH_NO_OS_MOD:-0}" = "1" ] && return 0
+    [ "$USE_ACTIVE_ENV" = "true" ] && return 0
+
+    local rc tmp
+    rc="$(shell_rc_path)"
+    mkdir -p "$(dirname "$rc")"
+    touch "$rc"
+    tmp="$rc.nvhive.tmp"
+
+    awk '
+        $0 == "# >>> nvhive rootless env >>>" { skip=1; next }
+        $0 == "# <<< nvhive rootless env <<<" { skip=0; next }
+        skip { next }
+        { print }
+    ' "$rc" \
+        | grep -vF "source \"$NVH_HOME/nvh-env.sh\"" \
+        | grep -vF "export PATH=\"$NVH_VENV/bin:\$PATH\"" \
+        | grep -vF "$NVH_BIN/ollama" > "$tmp" || true
+
+    cat >> "$tmp" << RCEOF
+
+# >>> nvhive rootless env >>>
+source "$NVH_HOME/nvh-env.sh"
+[ -x "$NVH_BIN/ollama" ] && ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && OLLAMA_MODELS="$OLLAMA_MODELS" "$NVH_BIN/ollama" serve >/dev/null 2>&1 &
+# <<< nvhive rootless env <<<
+RCEOF
+    mv "$tmp" "$rc"
+}
+
+install_uninstall_script() {
+    local target="$NVH_HOME/uninstall.sh"
+    if [ -f "$NVH_REPO/uninstall.sh" ]; then
+        cp "$NVH_REPO/uninstall.sh" "$target"
+    else
+        cat > "$target" <<'UNINSTALLEOF'
+#!/bin/bash
+echo "nvHive uninstall helper is missing from the local repo."
+echo "Run: curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/uninstall.sh | bash"
+UNINSTALLEOF
+    fi
+    chmod +x "$target" 2>/dev/null || true
+    ln -sf "$target" "$NVH_BIN/nvh-uninstall" 2>/dev/null || true
 }
 
 mkdir -p "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CACHE" "$NVH_LOGS" "$NVH_STUDIO_HOME" "$COMFYUI_HOME" "$HIVE_CONFIG_HOME" "$TMPDIR"
@@ -545,18 +633,13 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
 
     export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
 
-    # Ensure .bashrc has our PATH
-    RC="$HOME/.bashrc"; [ -f "$HOME/.zshrc" ] && RC="$HOME/.zshrc"
-    grep -q "nvh-env.sh" "$RC" 2>/dev/null || {
-        echo "" >> "$RC"
-        echo "# NVHive" >> "$RC"
-        echo "source \"$NVH_HOME/nvh-env.sh\"" >> "$RC"
-        echo "export PATH=\"$NVH_VENV/bin:\$PATH\"" >> "$RC"
-        echo "[ -x \"$NVH_BIN/ollama\" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null && OLLAMA_MODELS=\"$OLLAMA_MODELS\" \"$NVH_BIN/ollama\" serve &>/dev/null &" >> "$RC"
-    }
+    install_uninstall_script
+    install_shell_hook
 
     echo ""
     echo -e "  Type ${G}nvh${N} to start chatting"
+    echo -e "  Activate manually: ${G}source \"$NVH_HOME/nvh-env.sh\"${N}"
+    echo -e "  Uninstall/reset:   ${G}bash \"$NVH_HOME/uninstall.sh\" --help${N}"
     echo ""
     exit 0
 fi
@@ -579,6 +662,7 @@ else
     mkdir -p "$NVH_REPO"
     curl -sSL https://github.com/thatcooperguy/nvHive/archive/refs/heads/main.tar.gz | tar xz -C "$NVH_REPO" --strip-components=1
 fi
+install_uninstall_script
 
 # Create venv (skip when installing into an already-active env)
 if [ "$USE_ACTIVE_ENV" = "true" ]; then
@@ -691,15 +775,7 @@ elif [ "$USE_ACTIVE_ENV" = "true" ]; then
     echo -e "${D}Skipping .bashrc PATH edit — using existing $ACTIVE_ENV_KIND env.${N}"
     echo -e "${D}  Remember to activate '$ACTIVE_ENV_NAME' before running nvh.${N}"
 else
-    RC="$HOME/.bashrc"; [ -f "$HOME/.zshrc" ] && RC="$HOME/.zshrc"
-    grep -q "nvh-env.sh" "$RC" 2>/dev/null || {
-        echo "" >> "$RC"
-        echo "# NVHive — Multi-LLM Orchestration" >> "$RC"
-        echo "source \"$NVH_HOME/nvh-env.sh\"" >> "$RC"
-        echo "export PATH=\"$NVH_VENV/bin:\$PATH\"" >> "$RC"
-        echo "# Auto-start Ollama on login if installed" >> "$RC"
-        echo "[ -x \"$NVH_BIN/ollama\" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null 2>&1 && OLLAMA_MODELS=\"$OLLAMA_MODELS\" \"$NVH_BIN/ollama\" serve &>/dev/null &" >> "$RC"
-    }
+    install_shell_hook
 fi
 
 # ---------------------------------------------------------------------------
@@ -766,10 +842,13 @@ echo -e "  ${D}Install dir: $NVH_HOME/${N}"
 echo -e "  ${D}Config: $HIVE_CONFIG_HOME/config.yaml${N}"
 echo -e "  ${D}Activate: source $NVH_HOME/nvh-env.sh${N}"
 echo -e "  ${D}On reconnect: just type 'nvh'${N}"
+echo -e "  ${D}Uninstall: bash $NVH_HOME/uninstall.sh${N}"
+echo -e "  ${D}Fresh reset: bash $NVH_HOME/uninstall.sh --purge -y${N}"
 echo ""
 echo -e "  ${G}Start now:${N}"
+echo -e "  ${G}  source \"$NVH_HOME/nvh-env.sh\"${N}"
 echo -e "  ${G}  nvh${N}"
 echo ""
 # Make nvh available in the CURRENT shell (not just future ones)
-echo -e "${D}(If 'nvh' is not found, run: source ~/.bashrc)${N}"
+echo -e "${D}(If 'nvh' is not found, run the source command shown above.)${N}"
 echo ""

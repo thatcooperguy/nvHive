@@ -22,7 +22,9 @@ without root, creates the desktop launcher, and starts the WebUI setup wizard.
 For the target cloud desktop shape, `NVH_HOME` should land on the writable
 block-backed home/data volume that survives reconnects, ideally 200GB or
 larger for local LLMs and ComfyUI assets. Avoid read-only CIFS/SMB mounts and
-the ephemeral OS disk.
+the ephemeral OS disk. If the block volume is mounted as the Linux home
+directory, the installer selects `/home/$USER/nvhive` automatically and prints
+the exact `source .../nvh-env.sh` command to use in the current terminal.
 To force the no-Python binary path:
 
 ```bash
@@ -36,6 +38,13 @@ export NVH_HOME=/mnt/persist/nvhive
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 source "$NVH_HOME/nvh-env.sh"
 nvh workstation --home-dir "$NVH_HOME" --all -y
+```
+
+Clean reset path:
+
+```bash
+bash "$NVH_HOME/uninstall.sh" --purge -y
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
 For a pip install path:
