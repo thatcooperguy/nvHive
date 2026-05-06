@@ -8,6 +8,7 @@ installed first.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,20 @@ from nvh.integrations.receipts import receipt_summary, repair_plan
 from nvh.integrations.runtime import runtime_status
 from nvh.integrations.storage import storage_status
 from nvh.integrations.studio_packs import catalog_with_status, model_catalog_with_status
+
+OFFICIAL_REPO_URL = "https://github.com/thatcooperguy/nvHive"
+OFFICIAL_README_URL = "https://github.com/thatcooperguy/nvHive/blob/main/README.md"
+OFFICIAL_PYPI_URL = "https://pypi.org/project/nvhive/"
+DEFAULT_SETUP_MIN_FREE_GB = 200
+
+PRODUCT_CONTEXT_FALLBACK = """You are nvWizard, the local setup and repair guide inside nvHive.
+
+nvHive is a rootless NVIDIA AI lab for students, creators, agents, ComfyUI, and
+local models. It turns a fresh Linux cloud GPU desktop into an AI workstation
+without sudo by finding persistent storage, recommending GPU-fit models,
+installing workload missions, tracking jobs/receipts, and running safe rootless
+repairs. Official repo: https://github.com/thatcooperguy/nvHive
+"""
 
 
 @dataclass(frozen=True)
@@ -53,13 +68,54 @@ class SetupIssue:
         return asdict(self)
 
 
+def nvwizard_system_prompt() -> str:
+    """Return packaged product grounding for deterministic and LLM-backed helpers."""
+    try:
+        return resources.files("nvh.prompts").joinpath("nvwizard_system.md").read_text(
+            encoding="utf-8",
+        ).strip()
+    except Exception:
+        return PRODUCT_CONTEXT_FALLBACK.strip()
+
+
+def _assistant_metadata(agent_helper: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": agent_helper.get("mode", "offline-deterministic"),
+        "product": "nvHive / nvWizard",
+        "can_read_jobs": True,
+        "can_read_receipts": True,
+        "can_refresh_catalog": True,
+        "can_use_local_state": True,
+        "can_use_internet_when_available": True,
+        "official_repo_url": OFFICIAL_REPO_URL,
+        "readme_url": OFFICIAL_README_URL,
+        "pypi_url": OFFICIAL_PYPI_URL,
+        "grounding_sources": [
+            "packaged nvWizard product brief",
+            "local setup helper report",
+            "boot preflight state",
+            "install job logs",
+            "install receipts",
+            "setup catalog",
+            "Workspace Passport",
+            OFFICIAL_README_URL,
+        ],
+        "system_prompt": nvwizard_system_prompt(),
+        "description": (
+            "nvWizard is the rootless setup guide for nvHive: it understands the "
+            "product, checks the Linux GPU workstation, watches VM image drift, "
+            "and suggests safe repairs without requiring a cloud model."
+        ),
+    }
+
+
 def _pack_by_id(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {pack["id"]: pack for pack in catalog.get("packs", [])}
 
 
-def _safe_receipt_summary() -> dict[str, Any]:
+def _safe_receipt_summary(home_dir: str | Path | None = None) -> dict[str, Any]:
     try:
-        return receipt_summary()
+        return receipt_summary(home_dir=home_dir)
     except Exception as exc:
         return {"count": 0, "by_kind": {}, "unhealthy": 0, "root": None, "receipts": [], "error": str(exc)}
 
@@ -98,9 +154,9 @@ def _safe_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
         return {"summary": "Boot preflight unavailable", "changes": [], "agent_helper": {}, "error": str(exc)}
 
 
-def _recent_failed_job() -> dict[str, Any] | None:
+def _recent_failed_job(home_dir: str | Path | None = None) -> dict[str, Any] | None:
     try:
-        jobs = list_jobs(limit=10)
+        jobs = list_jobs(limit=10, home_dir=home_dir)
     except Exception:
         return None
     for job in jobs:
@@ -150,11 +206,11 @@ def _looks_older(current: str | None, latest: str | None) -> bool:
 
 def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     """Return a local setup diagnosis and ranked action list."""
-    storage = storage_status(home_dir=home_dir, min_free_gb=20)
+    storage = storage_status(home_dir=home_dir, min_free_gb=DEFAULT_SETUP_MIN_FREE_GB)
     runtime = runtime_status()
     packs = catalog_with_status()
     models = model_catalog_with_status()
-    comfy = detect_comfyui()
+    comfy = detect_comfyui(home_dir=home_dir)
     by_pack = _pack_by_id(packs)
     actions: list[SetupAction] = []
     issues: list[SetupIssue] = []
@@ -330,7 +386,7 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             reason=f"Adds ACE-Step music generation, audio AI tools, and a rootless DAW workspace. Missing: {', '.join(music_missing)}.",
         ))
 
-    receipts = _safe_receipt_summary()
+    receipts = _safe_receipt_summary(home_dir=home_dir)
     for receipt in receipts.get("receipts", []):
         health = receipt.get("health", {})
         if not health.get("healthy", True):
@@ -345,7 +401,7 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
                 affected_item=receipt["id"],
             ))
             try:
-                command = repair_plan(receipt["id"])["commands"][0]
+                command = repair_plan(receipt["id"], home_dir=home_dir)["commands"][0]
             except Exception:
                 command = f"nvh setup repair {receipt['id']}"
             actions.append(SetupAction(
@@ -375,7 +431,7 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
                 available_version=str(latest_version),
             ))
 
-    failed_job = _recent_failed_job()
+    failed_job = _recent_failed_job(home_dir=home_dir)
     if failed_job:
         action_id = _action_for_job(failed_job)
         issues.append(SetupIssue(
@@ -448,16 +504,7 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             "change_count": len(boot_changes),
             "agent_helper": agent_helper,
         },
-        "assistant": {
-            "mode": agent_helper.get("mode", "offline-deterministic"),
-            "can_read_jobs": True,
-            "can_read_receipts": True,
-            "can_refresh_catalog": True,
-            "description": (
-                "nvWizard is the rootless setup questmaster: it checks the GPU forge, "
-                "watches VM image drift, and suggests repairs without requiring a cloud model."
-            ),
-        },
+        "assistant": _assistant_metadata(agent_helper),
     }
 
 
@@ -471,7 +518,7 @@ def _commands_for_actions(actions: list[dict[str, Any]], *action_ids: str) -> li
 
 
 def _persona_wrap(answer: str) -> str:
-    return f"nvWizard says: {answer}"
+    return answer
 
 
 def setup_assistant_reply(
@@ -483,12 +530,56 @@ def setup_assistant_reply(
     actions = report["actions"]
     q = question.strip().lower()
     receipts = report.get("receipts", {})
-    failed_job = _recent_failed_job()
+    failed_job = _recent_failed_job(home_dir=home_dir)
     commands: list[str] = []
     focus = "next-step"
+    suppress_command_fallback = False
 
     if not q:
-        answer = "Ask about storage, ComfyUI, models, Blender, repair, or the next setup step."
+        answer = (
+            "Ask about what you want to build, storage, ComfyUI, models, Blender, "
+            "music, game tools, agents, repair, or the next setup step."
+        )
+    elif any(phrase in q for phrase in ["which mission", "what mission", "what should i pick", "what should i build", "start with"]):
+        focus = "mission-choice"
+        suppress_command_fallback = True
+        answer = (
+            "Pick AI Starter first if you want the safest first win: local chat, "
+            "starter models, coding help, and a path into agents. Pick Graphics "
+            "Creator Studio for ComfyUI and Blender, Game Dev Lab for Godot and "
+            "engine helpers, or Music Producer Studio for audio generation, stems, "
+            "and transcription. The wizard will still check storage, GPU, Python, "
+            "and model fit before heavy downloads."
+        )
+    elif any(
+        phrase in q
+        for phrase in [
+            "what is nv",
+            "what are you",
+            "what can you do",
+            "product",
+            "readme",
+            "github",
+            "repo",
+            "repository",
+            "internet",
+            "deep dive",
+            "source code",
+        ]
+    ):
+        focus = "product"
+        suppress_command_fallback = True
+        answer = (
+            "nvHive is a rootless NVIDIA AI lab for students and creators. "
+            "nvWizard is its setup guide: it finds persistent storage, checks the "
+            "Linux GPU stack, recommends models that fit VRAM and disk, installs "
+            "AI Starter, Graphics Creator, Game Dev, Music Producer, Agent Builder, "
+            "ComfyUI, Blender, local LLMs, and safe helper tools under NVH_HOME, "
+            "then tracks jobs, receipts, boot drift, and repairs. For deep code or "
+            f"product questions, use the official repo {OFFICIAL_REPO_URL} and README "
+            f"{OFFICIAL_README_URL} when internet access is available; offline I use "
+            "the packaged product brief and local setup state."
+        )
     elif any(word in q for word in ["storage", "mount", "persistent", "home", "nvh_home"]):
         focus = "storage"
         commands = _commands_for_actions(actions, "storage") or [
@@ -500,6 +591,37 @@ def setup_assistant_reply(
             f"{report['storage']['layout']['home']}. The wizard should guide this with a folder picker; "
             "the CLI command is only an advanced override."
         )
+    elif any(word in q for word in ["privacy", "data leave", "leave this vm", "send data", "cost", "money", "free", "quota"]):
+        focus = "privacy-cost"
+        suppress_command_fallback = True
+        answer = (
+            "Local AI runs inside this VM when you use Ollama and local models, so "
+            "prompts stay on the machine unless you choose a cloud provider. Cloud "
+            "API keys can add stronger advisors, but those requests may leave the VM "
+            "and may have quotas or costs. nvHive itself installs rootlessly; the big "
+            "cost to watch is disk space and download time for models and apps."
+        )
+    elif any(word in q for word in ["root", "sudo", "admin", "apt", "driver", "kernel", "cuda broken", "nvidia-smi"]):
+        focus = "admin-boundary"
+        suppress_command_fallback = True
+        answer = (
+            "nvHive is designed to work without admin access: it installs apps, "
+            "models, ComfyUI, logs, and configs under NVH_HOME. It can repair "
+            "rootless env files, launchers, catalogs, examples, and receipts. If "
+            "the base VM does not expose the NVIDIA driver, CUDA, kernel modules, "
+            "or nvidia-smi correctly, nvHive can explain the problem but the VM "
+            "provider or admin must fix the host image."
+        )
+    elif any(word in q for word in ["survive", "reconnect", "restart", "reboot", "where are files", "where do files", "outputs", "projects"]):
+        focus = "persistence"
+        suppress_command_fallback = True
+        storage_home = report["storage"]["layout"]["home"]
+        answer = (
+            f"Files should survive when they live under NVH_HOME: {storage_home}. "
+            "That workspace holds models, ComfyUI, apps, projects, outputs, logs, "
+            "jobs, receipts, config, and support snapshots. The OS image can refresh; "
+            "the persistent block-backed workspace is the part nvHive protects."
+        )
     elif any(word in q for word in ["comfy", "image", "video", "workflow"]):
         focus = "comfyui"
         commands = _commands_for_actions(actions, "comfyui", "comfyui-examples") or [
@@ -510,7 +632,7 @@ def setup_assistant_reply(
             "Use the install button from the wizard; model weights stay explicit "
             "because many upstream downloads require license acceptance."
         )
-    elif any(word in q for word in ["model", "llm", "ollama", "local ai"]):
+    elif any(word in q for word in ["model", "models", "llm", "ollama", "local ai", "license"]):
         focus = "models"
         commands = _commands_for_actions(actions, "rootless-ollama", "starter-models") or [
             "nvh studio --install rootless-ollama -y",
@@ -518,7 +640,9 @@ def setup_assistant_reply(
         ]
         answer = (
             "Start with the rootless Ollama runtime, then download the recommended models "
-            "that fit the detected GPU. The wizard can run both steps and keeps files under NVH_HOME/models."
+            "that fit the detected GPU. The wizard can run both steps and keeps files under "
+            "NVH_HOME/models. Some model weights or ComfyUI checkpoints may require upstream "
+            "license acceptance, so nvHive should keep those explicit instead of hiding them."
         )
     elif any(word in q for word in ["claw", "openclaw", "nemo", "nemoclaw", "desktop agent", "sandbox agent"]):
         focus = "claw-agents"
@@ -530,6 +654,16 @@ def setup_assistant_reply(
             "path and only lights up when Docker works without sudo. In the wizard, use the Claw Agents "
             "pack; manual commands are just the advanced override."
         )
+    elif any(word in q for word in ["route", "routing", "multi llm", "providers", "cloud", "convene"]):
+        focus = "routing"
+        suppress_command_fallback = True
+        answer = (
+            "nvHive is still the multi-LLM router underneath the wizard. Once local "
+            "Ollama or cloud keys are configured, chat and Convene mode can route "
+            "between local models and providers such as OpenAI, Anthropic, Gemini, "
+            "Groq, xAI, and Mistral. The setup wizard's job is to make the local "
+            "GPU workspace reliable first, then those advisors become available."
+        )
     elif any(word in q for word in ["blender", "creative", "game", "asset"]):
         focus = "creative"
         commands = _commands_for_actions(actions, "creative-tools") or [
@@ -538,6 +672,17 @@ def setup_assistant_reply(
         answer = (
             "Creative tools are installed without sudo under NVH_HOME/apps and NVH_HOME/studio. "
             "Use the creative profile or repair button; manual commands are just overrides."
+        )
+    elif any(word in q for word in ["music", "audio", "song", "stem", "whisper", "demucs", "ace-step", "daw"]):
+        focus = "music"
+        commands = _commands_for_actions(actions, "music-tools") or [
+            "nvh studio --install music -y",
+        ]
+        answer = (
+            "Music Producer Studio installs rootless audio and AI music helpers under "
+            "NVH_HOME. It is meant for ACE-Step style music generation, Demucs stem "
+            "separation, WhisperX transcription, and Audacity/LMMS helper launchers "
+            "when the host supports the needed runtime."
         )
     elif any(word in q for word in ["repair", "fix", "failed", "error", "broken"]):
         focus = "repair"
@@ -550,7 +695,7 @@ def setup_assistant_reply(
         elif receipts.get("unhealthy"):
             first = receipts.get("receipts", [{}])[0]
             try:
-                commands = repair_plan(first["id"])["commands"]
+                commands = repair_plan(first["id"], home_dir=home_dir)["commands"]
             except Exception:
                 commands = []
             answer = (
@@ -570,14 +715,19 @@ def setup_assistant_reply(
             f"{report['summary']}. Receipts tracked: {receipts.get('count', 0)}."
         )
 
-    if not commands and actions:
+    if not commands and actions and not suppress_command_fallback:
         commands = [actions[0]["command"]]
 
+    assistant_info = report.get("assistant", {})
     return {
         "question": question,
         "answer": _persona_wrap(answer),
         "focus": focus,
         "commands": commands,
+        "product": assistant_info.get("product", "nvHive / nvWizard"),
+        "official_repo_url": OFFICIAL_REPO_URL,
+        "readme_url": OFFICIAL_README_URL,
+        "grounding_sources": assistant_info.get("grounding_sources", []),
         "observations": {
             "ready": report["ready"],
             "issue_count": report.get("issue_count", 0),

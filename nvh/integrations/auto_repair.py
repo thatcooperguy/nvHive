@@ -37,8 +37,8 @@ def auto_repair_plan(home_dir: str | Path | None = None) -> dict[str, Any]:
     """Return a queue of safe repairs plus explicit user actions."""
     storage = storage_status(home_dir=home_dir)
     layout = storage.layout
-    comfy = detect_comfyui()
-    receipts = receipt_summary()
+    comfy = detect_comfyui(home_dir=home_dir)
+    receipts = receipt_summary(home_dir=home_dir)
     packs = catalog_with_status().get("packs", [])
     pack_by_id = {pack.get("id"): pack for pack in packs}
     agent_installed = bool(pack_by_id.get("agent-lab", {}).get("status", {}).get("installed"))
@@ -120,7 +120,7 @@ def run_safe_repairs(home_dir: str | Path | None = None) -> dict[str, Any]:
                 loaded = load_setup_catalog(refresh=False)
                 completed.append({**action, "result": loaded.get("source")})
             elif action["id"] == "comfyui-examples":
-                examples_dir = write_example_pack()
+                examples_dir = write_example_pack(storage.layout.comfyui_dir)
                 completed.append({**action, "result": str(examples_dir)})
             else:
                 skipped.append({**action, "reason": "No safe repair handler."})

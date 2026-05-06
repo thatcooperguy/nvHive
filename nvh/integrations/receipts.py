@@ -88,10 +88,11 @@ def write_receipt(
     files: list[str] | tuple[str, ...] | None = None,
     metadata: dict[str, Any] | None = None,
     no_root: bool = True,
+    home_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Create or update one install receipt."""
     identifier = receipt_id(kind, item_id)
-    path = _receipt_path(identifier)
+    path = _receipt_path(identifier, home_dir=home_dir)
     previous: dict[str, Any] = {}
     if path.exists():
         try:
@@ -124,8 +125,8 @@ def write_receipt(
     return enrich_receipt(data)
 
 
-def load_receipt(identifier: str) -> dict[str, Any]:
-    path = _receipt_path(identifier)
+def load_receipt(identifier: str, home_dir: str | Path | None = None) -> dict[str, Any]:
+    path = _receipt_path(identifier, home_dir=home_dir)
     if not path.exists():
         raise KeyError(f"Unknown receipt: {identifier}")
     return enrich_receipt(json.loads(path.read_text(encoding="utf-8")))
@@ -190,8 +191,8 @@ def receipt_summary(home_dir: str | Path | None = None) -> dict[str, Any]:
     }
 
 
-def repair_plan(identifier: str) -> dict[str, Any]:
-    receipt = load_receipt(identifier)
+def repair_plan(identifier: str, home_dir: str | Path | None = None) -> dict[str, Any]:
+    receipt = load_receipt(identifier, home_dir=home_dir)
     kind = receipt["kind"]
     item_id = receipt["item_id"]
     commands: list[str]
@@ -212,8 +213,8 @@ def repair_plan(identifier: str) -> dict[str, Any]:
     }
 
 
-def uninstall_plan(identifier: str) -> dict[str, Any]:
-    receipt = load_receipt(identifier)
+def uninstall_plan(identifier: str, home_dir: str | Path | None = None) -> dict[str, Any]:
+    receipt = load_receipt(identifier, home_dir=home_dir)
     paths = [receipt["install_path"], *receipt.get("launchers", []), *receipt.get("files", [])]
     unique_paths = []
     for path in paths:

@@ -27,7 +27,7 @@ def test_setup_helper_prioritizes_storage(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         setup_agent,
         "detect_comfyui",
-        lambda: {"installed": False, "examples_installed": False},
+        lambda **_: {"installed": False, "examples_installed": False},
     )
 
     report = setup_agent.setup_helper_report(home_dir=tmp_path / "nvh")
@@ -47,6 +47,9 @@ def test_setup_helper_flags_default_storage(monkeypatch) -> None:
     assert report["ready"] is False
     assert report["actions"][0]["id"] == "storage"
     assert report["assistant"]["mode"] == "offline-deterministic"
+    assert report["assistant"]["product"] == "nvHive / nvWizard"
+    assert report["assistant"]["official_repo_url"].endswith("/thatcooperguy/nvHive")
+    assert "rootless NVIDIA AI lab" in report["assistant"]["system_prompt"]
 
 
 def test_setup_assistant_answers_comfyui_question(tmp_path, monkeypatch) -> None:
@@ -54,7 +57,7 @@ def test_setup_assistant_answers_comfyui_question(tmp_path, monkeypatch) -> None
     monkeypatch.setattr(
         setup_agent,
         "detect_comfyui",
-        lambda: {"installed": False, "examples_installed": False},
+        lambda **_: {"installed": False, "examples_installed": False},
     )
 
     reply = setup_agent.setup_assistant_reply("How do I install ComfyUI?", tmp_path / "nvh")
@@ -62,6 +65,37 @@ def test_setup_assistant_answers_comfyui_question(tmp_path, monkeypatch) -> None
     assert reply["focus"] == "comfyui"
     assert "ComfyUI" in reply["answer"]
     assert reply["commands"]
+
+
+def test_setup_assistant_explains_product_and_repo(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+
+    reply = setup_agent.setup_assistant_reply("What is nvHive and where is the README?", tmp_path / "nvh")
+
+    assert reply["focus"] == "product"
+    assert "rootless NVIDIA AI lab" in reply["answer"]
+    assert reply["official_repo_url"].endswith("/thatcooperguy/nvHive")
+    assert "README.md" in reply["readme_url"]
+    assert reply["commands"] == []
+    assert any("product brief" in source for source in reply["grounding_sources"])
+
+
+def test_setup_assistant_answers_student_boundary_questions(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+
+    mission = setup_agent.setup_assistant_reply("Which mission should I pick?", tmp_path / "nvh")
+    privacy = setup_agent.setup_assistant_reply("Will my data leave this VM or cost money?", tmp_path / "nvh")
+    admin = setup_agent.setup_assistant_reply("Can you fix nvidia-smi without sudo?", tmp_path / "nvh")
+    persistence = setup_agent.setup_assistant_reply("What survives after reconnect?", tmp_path / "nvh")
+
+    assert mission["focus"] == "mission-choice"
+    assert "AI Starter" in mission["answer"]
+    assert privacy["focus"] == "privacy-cost"
+    assert "Cloud API keys" in privacy["answer"]
+    assert admin["focus"] == "admin-boundary"
+    assert "provider or admin" in admin["answer"]
+    assert persistence["focus"] == "persistence"
+    assert str(tmp_path / "nvh") in persistence["answer"]
 
 
 def test_setup_helper_surfaces_unhealthy_receipt(tmp_path, monkeypatch) -> None:
@@ -95,7 +129,7 @@ def test_setup_helper_surfaces_unhealthy_receipt(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         setup_agent,
         "detect_comfyui",
-        lambda: {"installed": True, "examples_installed": True},
+        lambda **_: {"installed": True, "examples_installed": True},
     )
     receipts.write_receipt(
         kind="studio-pack",

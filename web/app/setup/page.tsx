@@ -1733,6 +1733,13 @@ export default function SetupPage() {
     ?? setupHelper?.summary
     ?? missionControl?.summary
     ?? 'Ready to inspect installs, logs, and rootless repair options.';
+  const suggestedSetupQuestions = [
+    'Which mission should I pick?',
+    'Where are my files saved?',
+    'Will my data leave this VM?',
+    'Can you fix this without sudo?',
+    'Which models fit this GPU?',
+  ];
 
   const runHelperAction = (actionId: string) => {
     if (actionId.startsWith('repair-receipt:')) {
@@ -2578,7 +2585,7 @@ export default function SetupPage() {
                   <div>
                     <div className="text-xs font-mono font-bold text-[#0a0a0a]">Ask nvWizard</div>
                     <div className="text-[10px] font-mono text-[#737373] mt-0.5">
-                      Setup guidance from jobs, receipts, storage, and catalog state
+                      Product-aware guidance from local state, jobs, receipts, and the nvHive brief
                     </div>
                   </div>
                   <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/40 px-1.5 py-0.5 uppercase">
@@ -2590,7 +2597,7 @@ export default function SetupPage() {
                     value={assistantQuestion}
                     onChange={event => setAssistantQuestion(event.target.value)}
                     onKeyDown={event => { if (event.key === 'Enter') void handleAskAssistant(); }}
-                    placeholder="What is blocked? Why did ComfyUI fail?"
+                    placeholder="Which mission should I pick? Where are files? Why is GPU blocked?"
                     className="input-base flex-1 px-3 py-2 text-xs font-mono"
                   />
                   <button
@@ -2602,6 +2609,19 @@ export default function SetupPage() {
                     {assistantLoading ? 'Thinking' : 'Ask'}
                   </button>
                 </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {suggestedSetupQuestions.map(question => (
+                    <button
+                      key={question}
+                      type="button"
+                      onClick={() => void askSetupQuestion(question, true)}
+                      disabled={assistantLoading}
+                      className="border border-[#e5e5e5] bg-white px-2 py-1 text-[9px] font-mono text-[#525252] hover:border-[#76B900]/50 disabled:opacity-40"
+                    >
+                      {question}
+                    </button>
+                  ))}
+                </div>
                 {assistantError && (
                   <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
                     {assistantError}
@@ -2612,6 +2632,38 @@ export default function SetupPage() {
                     <div className="text-xs font-mono text-[#0a0a0a] leading-relaxed">
                       {assistantReply.answer}
                     </div>
+                    {(assistantReply.official_repo_url || assistantReply.readme_url || assistantReply.grounding_sources?.length) && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {assistantReply.official_repo_url && (
+                          <a
+                            href={assistantReply.official_repo_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/30 px-1.5 py-0.5 uppercase"
+                          >
+                            Official Repo
+                          </a>
+                        )}
+                        {assistantReply.readme_url && (
+                          <a
+                            href={assistantReply.readme_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/30 px-1.5 py-0.5 uppercase"
+                          >
+                            README
+                          </a>
+                        )}
+                        {assistantReply.grounding_sources?.slice(0, 3).map(source => (
+                          <span
+                            key={source}
+                            className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-[#fafafa] px-1.5 py-0.5 uppercase"
+                          >
+                            {source}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     {assistantReply.actions.length > 0 && (
                       <div className="flex flex-wrap gap-2">
                         {assistantReply.actions.slice(0, 3).map(action => (

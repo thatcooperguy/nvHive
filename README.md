@@ -46,6 +46,7 @@ What you get on the happy path:
 - GPU-aware model recommendations and disk estimates.
 - Mission cards for AI Starter, Graphics Creator, Game Dev, Music Producer, and Agent Builder.
 - Self-healing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts.
+- A product-aware nvWizard helper grounded in the official repo/README, local setup state, jobs, receipts, and rootless safety rules.
 - Redacted error reports with request IDs when something needs debugging.
 
 Release status: CI is green across Linux, Windows, and macOS. nvHive is a

@@ -161,8 +161,10 @@ TRENDING_COMFYUI_EXAMPLES: list[ComfyUIExample] = [
 ]
 
 
-def comfyui_root() -> Path:
+def comfyui_root(home_dir: str | Path | None = None) -> Path:
     """Return the ComfyUI workspace root."""
+    if home_dir is not None:
+        return storage_layout(home_dir).comfyui_dir
     configured = os.environ.get("COMFYUI_HOME")
     if configured:
         return Path(configured).expanduser()
@@ -341,9 +343,10 @@ def _is_http_reachable(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bo
 def detect_comfyui(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
+    home_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return local ComfyUI installation and runtime status."""
-    root = comfyui_root()
+    root = comfyui_root(home_dir=home_dir)
     app_dir = comfyui_app_dir(root)
     venv_python = comfyui_venv_python(root)
     examples_dir = app_dir / "nvhive_examples"

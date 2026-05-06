@@ -626,9 +626,17 @@ export interface SetupHelperReport {
   };
   assistant?: {
     mode: string;
+    product?: string;
     can_read_jobs: boolean;
     can_read_receipts: boolean;
     can_refresh_catalog: boolean;
+    can_use_local_state?: boolean;
+    can_use_internet_when_available?: boolean;
+    official_repo_url?: string;
+    readme_url?: string;
+    pypi_url?: string;
+    grounding_sources?: string[];
+    system_prompt?: string;
     description: string;
   };
 }
@@ -943,6 +951,10 @@ export interface SetupAssistantReply {
   answer: string;
   focus: string;
   commands: string[];
+  product?: string;
+  official_repo_url?: string;
+  readme_url?: string;
+  grounding_sources?: string[];
   observations: {
     ready: boolean;
     issue_count?: number;

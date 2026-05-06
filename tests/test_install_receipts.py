@@ -51,3 +51,25 @@ def test_uninstall_plan_is_preview_only(tmp_path, monkeypatch) -> None:
     assert plan["destructive"] is True
     assert str(target) in plan["target_paths"]
     assert target.exists()
+
+
+def test_receipts_honor_explicit_home_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "wrong-home"))
+    selected_home = tmp_path / "selected-home"
+    install_path = selected_home / "studio" / "packs" / "music-producer-lab"
+    install_path.mkdir(parents=True)
+
+    receipts.write_receipt(
+        kind="studio-pack",
+        item_id="music-producer-lab",
+        title="Music Producer Lab",
+        install_path=install_path,
+        home_dir=selected_home,
+    )
+
+    assert receipts.receipt_summary()["count"] == 0
+    scoped = receipts.receipt_summary(home_dir=selected_home)
+    assert scoped["count"] == 1
+    assert scoped["receipts"][0]["id"] == "studio-pack:music-producer-lab"
+    plan = receipts.repair_plan("studio-pack:music-producer-lab", home_dir=selected_home)
+    assert plan["commands"] == ["nvh studio --install music-producer-lab -y"]

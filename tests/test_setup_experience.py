@@ -22,8 +22,8 @@ def test_mount_autopilot_prefers_existing_nvh_home(tmp_path, monkeypatch) -> Non
 
 def test_auto_repair_writes_env_file_without_downloads(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
-    monkeypatch.setattr(auto_repair, "detect_comfyui", lambda: {"installed": False})
-    monkeypatch.setattr(auto_repair, "receipt_summary", lambda: {"unhealthy": 0})
+    monkeypatch.setattr(auto_repair, "detect_comfyui", lambda **_: {"installed": False})
+    monkeypatch.setattr(auto_repair, "receipt_summary", lambda **_: {"unhealthy": 0})
     monkeypatch.setattr(auto_repair, "catalog_with_status", lambda: {"packs": [{"id": "agent-lab", "status": {"installed": True}}]})
     monkeypatch.setattr(auto_repair, "load_setup_catalog", lambda refresh=False: {"source": "bundled"})
     monkeypatch.setattr(
