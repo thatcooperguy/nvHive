@@ -170,6 +170,92 @@ exec nvh workstation --home-dir "{storage.layout.home}" --launch --port {port} -
     return script
 
 
+def write_desktop_launch_script(
+    *,
+    port: int = 3000,
+    api_port: int = 8000,
+    storage: StorageStatus | None = None,
+) -> Path:
+    """Create a GUI-friendly launcher that opens the WebUI without a terminal."""
+    storage = storage or ensure_storage()
+    bin_dir = storage.layout.bin_dir
+    script = bin_dir / "nvhive-ai-studio-desktop"
+    exports = "\n".join(storage.layout.export_lines())
+    content = f"""#!/usr/bin/env bash
+set -u
+
+{exports}
+
+PORT="{port}"
+API_PORT="{api_port}"
+URL="http://localhost:${{PORT}}/setup"
+LOG_DIR="${{NVH_LOGS:-{storage.layout.logs_dir}}}"
+LOG="$LOG_DIR/desktop-launcher.log"
+mkdir -p "$LOG_DIR"
+
+log() {{
+  printf '%s %s\\n' "$(date -Is 2>/dev/null || date)" "$*" >> "$LOG"
+}}
+
+server_ready() {{
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS "http://localhost:${{PORT}}/setup" >/dev/null 2>&1 \
+      || curl -fsS "http://localhost:${{PORT}}/" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO- "http://localhost:${{PORT}}/setup" >/dev/null 2>&1 \
+      || wget -qO- "http://localhost:${{PORT}}/" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}}
+
+open_url() {{
+  log "opening $URL"
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$URL" >/dev/null 2>&1 &
+  elif command -v gio >/dev/null 2>&1; then
+    gio open "$URL" >/dev/null 2>&1 &
+  elif command -v sensible-browser >/dev/null 2>&1; then
+    sensible-browser "$URL" >/dev/null 2>&1 &
+  else
+    log "no browser opener found; open $URL manually"
+  fi
+}}
+
+if ! command -v nvh >/dev/null 2>&1; then
+  log "nvh is not on PATH. Run: source {storage.env_file}"
+  exit 1
+fi
+
+if server_ready; then
+  open_url
+  exit 0
+fi
+
+log "starting nvHive WebUI on port $PORT"
+nohup nvh webui --port "$PORT" --api-port "$API_PORT" -y >> "$LOG" 2>&1 &
+
+attempts=0
+while [ "$attempts" -lt 90 ]; do
+  if server_ready; then
+    open_url
+    exit 0
+  fi
+  attempts=$((attempts + 1))
+  sleep 1
+done
+
+log "WebUI did not become ready after 90 seconds; opening URL anyway"
+open_url
+exit 0
+"""
+    script.write_text(content, encoding="utf-8")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return script
+
+
 def write_desktop_launcher(
     *,
     port: int = 3000,
@@ -179,10 +265,15 @@ def write_desktop_launcher(
 ) -> Path:
     """Create a Linux desktop launcher for the nvHive AI Studio."""
     storage = storage or ensure_storage()
-    script = write_launch_script(
+    write_launch_script(
         port=port,
         api_port=api_port,
         install_comfyui=install_comfyui,
+        storage=storage,
+    )
+    desktop_script = write_desktop_launch_script(
+        port=port,
+        api_port=api_port,
         storage=storage,
     )
     desktop_dir = Path.home() / ".local" / "share" / "applications"
@@ -192,8 +283,9 @@ def write_desktop_launcher(
 Type=Application
 Name=NVHive AI Studio
 Comment=Launch nvHive, local models, and ComfyUI setup
-Exec={script}
-Terminal=true
+Exec={desktop_script}
+Terminal=false
+Icon=applications-development
 Categories=Development;Education;Science;
 StartupNotify=true
 """
