@@ -7,7 +7,6 @@ from pathlib import Path
 
 from nvh.storage import repository
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -54,3 +53,14 @@ def test_cloud_compose_requires_api_key_before_public_bind() -> None:
     cloud = (ROOT / "docker-compose.cloud.yaml").read_text(encoding="utf-8")
 
     assert "HIVE_API_KEY: \"${HIVE_API_KEY:?" in cloud
+
+
+def test_linux_installer_handles_missing_ensurepip_without_root() -> None:
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert "create_rootless_venv" in install
+    assert "--without-pip" in install
+    assert "bootstrap.pypa.io/get-pip.py" in install
+    assert "create_managed_python_env" in install
+    assert "$HOME/miniforge3/bin/python" in install
+    assert "apt install" not in install

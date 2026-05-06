@@ -4,6 +4,7 @@ __pycache__/
 *.egg-info/
 *.egg
 dist/
+dist_ci_*/
 build/
 build-env*/
 .eggs/
@@ -18,6 +19,9 @@ pytest_passport*/
 .codex-pytest-tmp/
 .codex-test-tmp*/
 pytest-of-*/
+nvh_test_home*/
+.nvh-test-home/
+py_probe_*/
 probe_py_dir/
 tmp*/
 .mypy_cache/
@@ -45,3 +49,4 @@ docs/DEVTO_FINAL.md
 benchmark_results.md
 .coverage
 /setup-*.png
+docs/screenshots/layout-review/

@@ -1622,7 +1622,7 @@ export default function SetupPage() {
     music: 'AI music generation, stem separation, transcription, and audio editor helpers.',
   };
   const profileActionLabels: Record<WizardProfile, string> = {
-    student: 'Install AI Starter',
+    student: 'Install Local AI',
     llm: 'Install Local Chat',
     creator: 'Install Creator Studio',
     agent: 'Install Agent Tools',
@@ -1795,10 +1795,10 @@ export default function SetupPage() {
           <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase">nvWizard Setup</div>
           <div className="flex items-center gap-2">
             <Link href="/" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
-              Dashboard
+              Chat
             </Link>
             <Link href="/query" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
-              Chat
+              Ask AI
             </Link>
             <button
               type="button"
@@ -1884,7 +1884,7 @@ export default function SetupPage() {
               onClick={() => setStep('welcome')}
               className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
             >
-              Mission Cards
+              Change Mission
             </button>
             <button
               type="button"
@@ -2603,9 +2603,9 @@ export default function SetupPage() {
               <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className="section-label">Workspace Check</div>
+                    <div className="section-label">Desktop Readiness</div>
                     <div className="text-xs font-bold text-[#0a0a0a]">
-                      {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready for rootless installs'}
+                      {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready to install without sudo'}
                     </div>
                   </div>
                   <div className="text-[10px] text-[#525252] mt-1 break-all">
@@ -2700,7 +2700,7 @@ export default function SetupPage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <div className="section-label">Choose A Mission</div>
+                  <div className="section-label">Pick What You Want To Build</div>
                   <div className="text-sm font-bold text-[#0a0a0a] mt-1">What do you want to make today?</div>
                 </div>
               </div>

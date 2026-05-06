@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
 import ChatMessage, { exportConversationMarkdown } from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
@@ -240,19 +241,19 @@ function EmptyState({
   selectedModel: string;
 }) {
   const suggestions = [
-    'Analyze my CUDA error log and recommend a fix',
-    'Design a local Nemotron workflow for this project',
-    'Compare these model responses for correctness',
-    'Turn this repo issue into a testable patch plan',
+    'Help me debug this Python error',
+    'Explain this calculus problem step by step',
+    'Make a study guide from my notes',
+    'Summarize this paper in plain English',
   ];
   const healthyProviders = providerHealth.filter(p => p.healthy);
   const localModelCount = models.filter(m => m.is_local || m.provider === 'ollama').length;
   const selected = models.find(m => m.model_id === selectedModel);
   const defaultModel = selected?.display_name || selectedModel || 'Select model';
   const readiness = [
-    { label: 'Advisors Online', value: providerHealth.length > 0 ? `${healthyProviders.length}/${providerHealth.length}` : 'checking' },
-    { label: 'Local Models', value: `${localModelCount}` },
-    { label: 'Default Model', value: defaultModel },
+    { label: 'AI Connections', value: providerHealth.length > 0 ? `${healthyProviders.length}/${providerHealth.length}` : 'checking' },
+    { label: 'Installed Local Models', value: `${localModelCount}` },
+    { label: 'Current Model', value: defaultModel },
   ];
 
   return (
@@ -270,9 +271,17 @@ function EmptyState({
               <h2 className="text-3xl font-semibold tracking-tight text-[#0a0a0a] sm:text-4xl">
                 NVHive
               </h2>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-[#9ca3af]">
-                A focused command surface for local GPU inference, cloud advisors, and council synthesis.
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-[#525252]">
+                Run a private AI assistant on your NVIDIA GPU, then add cloud models or a study group when you need a second opinion.
               </p>
+              {localModelCount === 0 && (
+                <Link
+                  href="/setup"
+                  className="mt-4 inline-flex items-center gap-2 bg-[#76B900] px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider text-black hover:bg-[#5a9100]"
+                >
+                  Install recommended local model
+                </Link>
+              )}
             </div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:min-w-[420px]">
               {readiness.map(item => (
@@ -294,11 +303,11 @@ function EmptyState({
             >
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-[10px] font-mono uppercase tracking-[0.16em] text-[#737373]">
-                  Prompt {i + 1}
+                  Try this
                 </span>
                 <span className="h-px w-8 bg-[#333333] transition-colors group-hover:bg-[#76B900]" />
               </div>
-              <div className="text-sm leading-snug text-[#c8c8c8] group-hover:text-[#0a0a0a]">
+              <div className="text-sm leading-snug text-[#404040] group-hover:text-[#0a0a0a]">
                 {s}
               </div>
             </button>

@@ -147,13 +147,13 @@ export default function SettingsPage() {
         <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
         <div className="relative flex items-center justify-between">
           <div>
-            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Configuration</div>
-            <h1 className="text-2xl font-bold text-[#0a0a0a]">Settings</h1>
-            <p className="text-xs font-mono text-[#a3a3a3] mt-1">Configure Hive platform preferences</p>
+            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Preferences</div>
+            <h1 className="text-2xl font-bold text-[#0a0a0a]">Preferences</h1>
+            <p className="text-xs font-mono text-[#737373] mt-1">Choose simple defaults first. Advanced routing and cache controls stay below.</p>
           </div>
           <div className="flex gap-2">
             <button onClick={handleReset} className="btn-ghost px-4 py-2 text-xs font-mono uppercase tracking-wider">
-              Reset
+              Reset Defaults
             </button>
             <button
               onClick={handleSave}
@@ -170,14 +170,26 @@ export default function SettingsPage() {
                   </svg>
                   SAVED
                 </span>
-              ) : 'SAVE SETTINGS'}
+              ) : 'SAVE PREFERENCES'}
             </button>
           </div>
         </div>
       </div>
 
+      <SectionCard title="Simple Defaults">
+        <SettingRow label="Use my GPU first" description="Prefer local models before cloud providers">
+          <Toggle value={settings.defaultProvider === 'ollama'} onChange={v => update('defaultProvider', v ? 'ollama' : '')} />
+        </SettingRow>
+        <SettingRow label="Never spend money by accident" description="Set cloud daily budget to zero until you opt in">
+          <Toggle value={settings.dailyBudgetLimit === '0.00'} onChange={v => update('dailyBudgetLimit', v ? '0.00' : DEFAULT_SETTINGS.dailyBudgetLimit)} />
+        </SettingRow>
+        <SettingRow label="Study group answers" description="Combine multiple helper answers into one response by default">
+          <Toggle value={settings.synthesizeByDefault} onChange={v => update('synthesizeByDefault', v)} />
+        </SettingRow>
+      </SectionCard>
+
       {/* General */}
-      <SectionCard title="General">
+      <SectionCard title="Advanced Defaults">
         <div>
           <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">API Server URL</label>
           <input
@@ -194,7 +206,7 @@ export default function SettingsPage() {
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Default Advisor</label>
+            <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Default AI Source</label>
             <input
               type="text"
               value={settings.defaultProvider}
@@ -229,7 +241,7 @@ export default function SettingsPage() {
         </div>
 
         <div>
-          <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Default Max Tokens</label>
+          <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Answer Length Limit</label>
           <input
             type="number" min="1" max="32000"
             value={settings.defaultMaxTokens}

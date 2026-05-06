@@ -100,9 +100,10 @@ curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linu
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
-Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise `~/.nvh/` for new installs, uses Python `venv` + `pip` by default, offers a rootless micromamba fallback only when the cloud image needs it, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config.
+Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise `~/.nvh/` for new installs, prefers rootless Python from Miniforge/conda when available, uses Python `venv` + `pip` by default, bootstraps pip without `apt` when Debian/Ubuntu images are missing `ensurepip`, falls back to a managed conda/mamba env under `NVH_HOME` when needed, pulls Ollama if you have an NVIDIA GPU, and writes a sensible default config.
 
 If `NVH_HOME` is not set, the installer now checks common persistent mount roots such as `/mnt`, `/media/$USER`, `/workspace`, `/data`, `/persistent`, and `/storage` before falling back to `~/.nvh`.
+If your cloud provider mounts the persistent block volume as your Linux home directory, use `/home/$USER/nvhive` or leave `NVH_HOME` unset and the launcher will keep nvHive, models, logs, and repair receipts off the read-only OS image.
 
 Windows: `iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex`
 macOS: `curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash`

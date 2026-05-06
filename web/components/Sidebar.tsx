@@ -212,12 +212,12 @@ interface SidebarProps {
 }
 
 const BOTTOM_NAV = [
-  { href: '/system', label: 'System', icon: <IconSystem /> },
-  { href: '/providers', label: 'Advisors', icon: <IconProviders /> },
-  { href: '/analytics', label: 'Analytics', icon: <IconAnalytics /> },
-  { href: '/integrations', label: 'Integrations', icon: <IconIntegrations /> },
-  { href: '/settings', label: 'Settings', icon: <IconSettings /> },
   { href: '/setup', label: 'Setup', icon: <IconSetup /> },
+  { href: '/system', label: 'My Computer', icon: <IconSystem /> },
+  { href: '/providers', label: 'AI Connections', icon: <IconProviders /> },
+  { href: '/analytics', label: 'Usage', icon: <IconAnalytics /> },
+  { href: '/settings', label: 'Preferences', icon: <IconSettings /> },
+  { href: '/integrations', label: 'Developer Tools', icon: <IconIntegrations /> },
 ];
 
 export default function Sidebar({
@@ -359,7 +359,7 @@ export default function Sidebar({
           {!collapsed && (
             <div className="flex-1 min-w-0">
               <div className="font-bold text-[#0a0a0a] text-sm leading-none tracking-wide">NVHIVE</div>
-              <div className="text-[9px] text-[#5a9100] font-mono uppercase tracking-[0.2em] mt-0.5">NVIDIA AI Workspace</div>
+              <div className="text-[9px] text-[#5a9100] font-mono uppercase tracking-[0.2em] mt-0.5">Local GPU Workspace</div>
             </div>
           )}
         </div>
@@ -467,7 +467,7 @@ export default function Sidebar({
                   style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }}
                 />
                 <span className="text-[9px] font-mono text-[#737373]">
-                  {connected === null ? 'CHECKING...' : connected ? 'API ONLINE' : 'API OFFLINE'}
+                  {connected === null ? 'CHECKING...' : connected ? 'SERVICE ONLINE' : 'SERVICE OFFLINE'}
                 </span>
                 <span className="ml-auto text-[9px] font-mono text-[#a3a3a3]">Ctrl+B</span>
               </div>

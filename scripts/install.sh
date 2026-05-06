@@ -44,6 +44,18 @@ warn()    { printf "${YELLOW}[nvhive]${RESET} %s\n" "$*"; }
 error()   { printf "${RED}[nvhive]${RESET} %s\n" "$*" >&2; }
 die()     { error "$*"; exit 1; }
 
+download_to_file() {
+    url="$1"
+    target="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$target"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$target" "$url"
+    else
+        return 1
+    fi
+}
+
 banner() {
     printf "\n"
     printf "${BOLD}${GREEN}"
@@ -93,8 +105,8 @@ detect_os() {
 # ---------------------------------------------------------------------------
 detect_python() {
     PYTHON=""
-    for cmd in python3 python; do
-        if command -v "$cmd" >/dev/null 2>&1; then
+    for cmd in "$HOME/miniforge3/bin/python" "$HOME/miniconda3/bin/python" "$HOME/mambaforge/bin/python" "$HOME/.local/share/mamba/bin/python" python3 python; do
+        if [ -x "$cmd" ] || command -v "$cmd" >/dev/null 2>&1; then
             ver=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
             major=$(echo "$ver" | cut -d. -f1)
             minor=$(echo "$ver" | cut -d. -f2)
@@ -109,14 +121,9 @@ detect_python() {
     if [ -z "$PYTHON" ]; then
         error "Python 3.${NVH_MIN_PYTHON_MINOR}+ is required but not found."
         printf "\n"
-        if [ "$OS_NAME" = "macOS" ]; then
-            printf "  Install Python via Homebrew:\n"
-            printf "    ${BOLD}brew install python@3.12${RESET}\n"
-        else
-            printf "  Install Python:\n"
-            printf "    ${BOLD}sudo apt install python3.12 python3.12-venv${RESET}  (Debian/Ubuntu)\n"
-            printf "    ${BOLD}sudo dnf install python3.12${RESET}                  (Fedora)\n"
-        fi
+        printf "  Rootless options:\n"
+        printf "    ${BOLD}Install Miniforge in \$HOME${RESET}, or\n"
+        printf "    ${BOLD}NVH_USE_BINARY=1 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | bash${RESET}\n"
         exit 1
     fi
 
@@ -148,8 +155,11 @@ detect_installer() {
         if "$PYTHON" -m ensurepip --user >/dev/null 2>&1; then
             PIP_CMD="$PYTHON -m pip"
             success "pip bootstrapped"
+        elif download_to_file "https://bootstrap.pypa.io/get-pip.py" "${TMPDIR:-/tmp}/nvhive-get-pip.py" && "$PYTHON" "${TMPDIR:-/tmp}/nvhive-get-pip.py" --user --no-warn-script-location pip setuptools wheel >/dev/null 2>&1; then
+            PIP_CMD="$PYTHON -m pip"
+            success "pip bootstrapped without root"
         else
-            die "Could not find or install pip. Install it manually and retry."
+            die "Could not find or install pip without root. Try the main Linux installer or the single-file binary."
         fi
     fi
 

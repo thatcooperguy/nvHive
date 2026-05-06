@@ -42,9 +42,9 @@ function InnerShell({ children }: { children: React.ReactNode }) {
       <div className="fixed top-0 left-0 right-0 z-50 h-8 bg-white border-b border-[#e5e5e5] flex items-center px-4 gap-6 text-[10px] font-mono text-[#737373]">
         <span className="text-[#76B900] font-bold tracking-widest uppercase">NVHIVE</span>
         <span className="text-[#d4d4d4]">|</span>
-        <span>NVIDIA AI Workspace</span>
+        <span>Rootless NVIDIA AI Workspace</span>
         <span className="text-[#d4d4d4]">|</span>
-        <span className="text-[#5a9100]">Nemotron Ready</span>
+        <span className="text-[#5a9100]">Local-first mode</span>
         <div className="ml-auto flex items-center gap-4">
           {/* Command palette trigger */}
           <button
