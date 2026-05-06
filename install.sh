@@ -214,7 +214,7 @@ export TORCH_HOME="$TORCH_HOME"
 export TMPDIR="$TMPDIR"
 export TEMP="$TMPDIR"
 export TMP="$TMPDIR"
-export PATH="$NVH_VENV/bin:$NVH_BIN:\$PATH"
+export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:\$PATH"
 ENVEOF
 chmod 600 "$NVH_HOME/nvh-env.sh" 2>/dev/null || true
 }
@@ -329,7 +329,7 @@ launch_webui_after_install() {
 
 mkdir -p "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CACHE" "$NVH_LOGS" "$NVH_STUDIO_HOME" "$COMFYUI_HOME" "$HIVE_CONFIG_HOME" "$TMPDIR"
 write_nvh_env
-export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
+export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:$PATH"
 
 echo ""
 echo -e "${G}╔══════════════════════════════════════╗${N}"
@@ -466,12 +466,33 @@ else
 fi
 echo -e "${D}Recommended local model: $DEFAULT_OLLAMA_MODEL${N}"
 
+set_config_ollama_model() {
+    local cfg="$1"
+    local model="$2"
+    CFG="$cfg" MODEL="$model" "$PYTHON" - <<'PY'
+import os
+import re
+from pathlib import Path
+
+path = Path(os.environ["CFG"])
+model = os.environ["MODEL"]
+text = path.read_text(encoding="utf-8")
+updated = text.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model)
+updated = re.sub(
+    r'default_model:\s*"?ollama/(?:nemotron-mini|llama3\.1:8b|nemotron)"?',
+    f'default_model: "ollama/{model}"',
+    updated,
+)
+path.write_text(updated, encoding="utf-8")
+PY
+}
+
 sync_ollama_default_model_config() {
     local cfg="$HIVE_CONFIG_HOME/config.yaml"
     [ -n "$GPU_NAME" ] || return 0
     [ -f "$cfg" ] || return 0
     if grep -Eq 'default_model:[[:space:]]*"?ollama/(nemotron-mini|llama3\.1:8b|nemotron)"?' "$cfg"; then
-        sed -i.bak -E "s|default_model:[[:space:]]*\"?ollama/(nemotron-mini|llama3\\.1:8b|nemotron)\"?|default_model: \"ollama/$DEFAULT_OLLAMA_MODEL\"|" "$cfg" && rm -f "$cfg.bak"
+        set_config_ollama_model "$cfg" "$DEFAULT_OLLAMA_MODEL"
         echo -e "${G}Ollama config aligned to GPU recommendation: $DEFAULT_OLLAMA_MODEL${N}"
     fi
 }
@@ -519,7 +540,7 @@ activate_nvh_python_env() {
         # shellcheck disable=SC1091
         source "$NVH_VENV/bin/activate"
     else
-        export PATH="$NVH_VENV/bin:$PATH"
+        export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$PATH"
     fi
 }
 
@@ -578,7 +599,7 @@ create_managed_python_env() {
 
     NVH_VENV="$prefix"
     PYTHON="$prefix/bin/python"
-    export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
+    export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:$PATH"
     write_nvh_env
     "$PYTHON" -m pip --version >/dev/null 2>&1
 }
@@ -704,7 +725,7 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
         sleep 2
     fi
 
-    export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
+    export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:$PATH"
 
     install_uninstall_script
     install_command_shims
@@ -773,7 +794,7 @@ command -v nvh &>/dev/null || {
     exit 1
 }
 
-export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"
+export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:$PATH"
 
 # ---------------------------------------------------------------------------
 # Auto-create config with zero-signup providers enabled
@@ -840,7 +861,7 @@ cache:
   ttl_seconds: 86400
   max_size: 1000
 CFGEOF
-    sed -i.bak "s|__NVH_DEFAULT_OLLAMA_MODEL__|$DEFAULT_OLLAMA_MODEL|g" "$HIVE_DIR/config.yaml" && rm -f "$HIVE_DIR/config.yaml.bak"
+    set_config_ollama_model "$HIVE_DIR/config.yaml" "$DEFAULT_OLLAMA_MODEL"
     echo -e "${G}Config created: $HIVE_DIR/config.yaml${N}"
 else
     sync_ollama_default_model_config

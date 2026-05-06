@@ -27,6 +27,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from nvh.integrations.node_runtime import (
+    find_fnm_binary,
+    find_rootless_node_bin,
+    install_node_tarball,
+)
 from nvh.integrations.storage import storage_layout
 from nvh.utils.gpu import detect_gpus
 
@@ -957,14 +962,7 @@ def _run_capture(cmd: list[str], *, env: dict[str, str] | None = None, timeout: 
 
 
 def _find_rootless_node_bin() -> Path | None:
-    root = _fnm_root() / "node-versions"
-    if not root.exists():
-        return None
-    installs = sorted(root.glob(f"v{NODE_MAJOR_VERSION}.*/installation/bin"), reverse=True)
-    for install in installs:
-        if (install / "node").exists() and (install / "npm").exists():
-            return install
-    return None
+    return find_rootless_node_bin(storage_layout().runtime_dir, major=NODE_MAJOR_VERSION)
 
 
 def _node_env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -1074,24 +1072,29 @@ def _prepare_node_runtime() -> tuple[dict[str, str], dict[str, Any]]:
     install_env.update(storage_layout().env())
     install_env["FNM_DIR"] = str(fnm_dir)
     install_env["NODE_VERSION"] = NODE_MAJOR_VERSION
-    subprocess.run(
-        ["bash", "-lc", "curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell"],
-        check=True,
-        timeout=180,
-        env=install_env,
-    )
+    try:
+        subprocess.run(
+            ["bash", "-lc", "curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell"],
+            check=True,
+            timeout=180,
+            env=install_env,
+        )
+    except Exception:
+        install_node_tarball(storage_layout().runtime_dir, major=NODE_MAJOR_VERSION)
 
-    fnm = fnm_dir / "fnm"
-    if not fnm.exists():
-        fnm = fnm_dir / "fnm.exe"
-    if not fnm.exists():
-        raise RuntimeError("Rootless Node install finished, but fnm was not found.")
-    subprocess.run(
-        [str(fnm), "install", NODE_MAJOR_VERSION],
-        check=True,
-        timeout=300,
-        env=install_env,
-    )
+    fnm_value = find_fnm_binary(fnm_dir)
+    if not fnm_value:
+        install_node_tarball(storage_layout().runtime_dir, major=NODE_MAJOR_VERSION)
+    else:
+        try:
+            subprocess.run(
+                [fnm_value, "install", NODE_MAJOR_VERSION],
+                check=True,
+                timeout=300,
+                env=install_env,
+            )
+        except Exception:
+            install_node_tarball(storage_layout().runtime_dir, major=NODE_MAJOR_VERSION)
 
     env = _node_env()
     status = _node_runtime_status(env)

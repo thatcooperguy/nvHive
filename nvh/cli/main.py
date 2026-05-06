@@ -7149,6 +7149,7 @@ def _try_install_node_no_root(
     import shutil as _shutil
     import subprocess as _sp
 
+    from nvh.integrations import node_runtime
     from nvh.integrations.storage import storage_layout
 
     if sys.platform == "win32":
@@ -7160,6 +7161,14 @@ def _try_install_node_no_root(
     env = _os.environ.copy()
     env.update(layout.env())
     env["FNM_DIR"] = str(fnm_root)
+
+    existing_bin = node_runtime.find_rootless_node_bin(layout.runtime_dir)
+    if existing_bin:
+        _os.environ["PATH"] = f"{existing_bin}{_os.pathsep}{_os.environ.get('PATH', '')}"
+        node = _shutil.which("node")
+        npm = _shutil.which("npm")
+        if node and npm:
+            return node, npm
 
     if not assume_yes:
         try:
@@ -7174,11 +7183,7 @@ def _try_install_node_no_root(
     # Step 1: install fnm if missing. The official installer writes to
     # FNM_DIR and optionally edits shell rc; we bypass the rc
     # edit (--skip-shell) since we'll just prepend to this process's PATH.
-    fnm = _shutil.which("fnm")
-    if fnm is None:
-        candidate = fnm_root / "fnm"
-        if candidate.is_file():
-            fnm = str(candidate)
+    fnm = node_runtime.find_fnm_binary(fnm_root)
     if fnm is None:
         console.print("  Installing fnm...")
         try:
@@ -7189,22 +7194,16 @@ def _try_install_node_no_root(
                 capture_output=True, text=True, timeout=120, env=env,
             )
             if res.returncode != 0:
-                console.print(
-                    f"  [red]fnm install failed:[/red]"
-                    f" {res.stderr.strip().splitlines()[-1:]}"
-                )
-                return None, None
+                console.print("  [yellow]fnm install failed; trying direct Node.js archive.[/yellow]")
+                return _try_install_node_tarball_no_root(console, layout)
         except Exception as e:
-            console.print(f"  [red]fnm install failed:[/red] {e}")
-            return None, None
+            console.print(f"  [yellow]fnm install failed; trying direct Node.js archive:[/yellow] {e}")
+            return _try_install_node_tarball_no_root(console, layout)
 
-        candidate = fnm_root / "fnm"
-        if not candidate.is_file():
-            console.print(
-                "  [red]fnm binary not found after install.[/red]"
-            )
-            return None, None
-        fnm = str(candidate)
+        fnm = node_runtime.find_fnm_binary(fnm_root)
+        if not fnm:
+            console.print("  [yellow]fnm installed outside NVH_HOME or was not found; trying direct Node.js archive.[/yellow]")
+            return _try_install_node_tarball_no_root(console, layout)
 
     # Step 2: install Node 22 (current LTS). fnm caches under NVH_HOME/runtimes.
     console.print("  Installing Node.js 22 (LTS) via fnm...")
@@ -7218,30 +7217,18 @@ def _try_install_node_no_root(
                 f"  [red]Node install failed:[/red]"
                 f" {res.stderr.strip().splitlines()[-1:]}"
             )
-            return None, None
+            return _try_install_node_tarball_no_root(console, layout)
     except Exception as e:
-        console.print(f"  [red]Node install failed:[/red] {e}")
-        return None, None
+        console.print(f"  [yellow]Node install failed; trying direct Node.js archive:[/yellow] {e}")
+        return _try_install_node_tarball_no_root(console, layout)
 
     # Step 3: find the newly-installed node + npm and put them on PATH
-    # for THIS process so the existing webui flow finds them. fnm stores
-    # versions under NVH_HOME/runtimes/fnm/node-versions/vX.Y.Z/installation/bin
-    versions_dir = fnm_root / "node-versions"
-    if not versions_dir.is_dir():
-        console.print(
-            "  [red]fnm node-versions directory not found.[/red]"
-        )
-        return None, None
-    # Pick the highest v22 install (there should be exactly one after
-    # a fresh install, but be defensive).
-    node_bins = sorted(
-        versions_dir.glob("v22.*/installation/bin"),
-        reverse=True,
-    )
-    if not node_bins:
-        console.print("  [red]No Node 22 install found.[/red]")
-        return None, None
-    bin_dir = node_bins[0]
+    # for THIS process so the existing webui flow finds them. Prefer NVH_HOME,
+    # but also tolerate fnm's default ~/.local/share/fnm path.
+    bin_dir = node_runtime.find_rootless_node_bin(layout.runtime_dir)
+    if not bin_dir:
+        console.print("  [yellow]No Node 22 install found via fnm; trying direct Node.js archive.[/yellow]")
+        return _try_install_node_tarball_no_root(console, layout)
     _os.environ["PATH"] = f"{bin_dir}{_os.pathsep}{_os.environ.get('PATH', '')}"
 
     node = _shutil.which("node")
@@ -7257,6 +7244,33 @@ def _try_install_node_no_root(
         f"  [dim]For new shells, add to your rc file:"
         f"  export PATH=\"{bin_dir}:$PATH\"[/dim]"
     )
+    return node, npm
+
+
+def _try_install_node_tarball_no_root(
+    console: Console,
+    layout: Any,
+) -> tuple[str | None, str | None]:
+    """Install Node.js from the official Linux tarball under NVH_HOME."""
+    import os as _os
+    import shutil as _shutil
+
+    from nvh.integrations import node_runtime
+
+    try:
+        console.print("  Installing Node.js 22 directly into NVH_HOME/runtimes/node...")
+        bin_dir = node_runtime.install_node_tarball(layout.runtime_dir)
+    except Exception as exc:
+        console.print(f"  [red]Direct Node.js install failed:[/red] {exc}")
+        return None, None
+
+    _os.environ["PATH"] = f"{bin_dir}{_os.pathsep}{_os.environ.get('PATH', '')}"
+    node = _shutil.which("node")
+    npm = _shutil.which("npm")
+    if not node or not npm:
+        console.print(f"  [red]Node binaries missing from {bin_dir}[/red]")
+        return None, None
+    console.print(f"  [green]Node.js ready:[/green] {node}")
     return node, npm
 
 
@@ -8325,23 +8339,16 @@ def webui(
         node, npm = _try_install_node_no_root(console, assume_yes=yes)
         if not node or not npm:
             console.print("[red]Auto-install failed or declined.[/red]")
-            console.print("Install Node.js 18+:")
+            console.print("Install Node.js 22+ in your rootless nvHive workspace:")
             if sys.platform == "darwin":
                 console.print("  brew install node")
             elif sys.platform == "win32":
                 console.print("  winget install OpenJS.NodeJS")
             else:
                 console.print(
-                    "  # fnm (no root): "
-                    "curl -fsSL https://fnm.vercel.app/install | bash"
+                    "  nvh webui --clean --port 3000 -y"
                 )
-                console.print("  # then: fnm install 22 && fnm use 22")
-                console.print(
-                    "  # system install (requires sudo):"
-                    " curl -fsSL"
-                    " https://deb.nodesource.com/setup_22.x | sudo -E bash -"
-                )
-                console.print("  sudo apt install -y nodejs")
+                console.print("  If that still fails, send the nvHive support snapshot to your VM admin.")
             raise typer.Exit(1)
 
     # Install dependencies if needed
