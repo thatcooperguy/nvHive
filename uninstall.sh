@@ -171,6 +171,66 @@ remove_owned_file() {
     fi
 }
 
+desktop_dir_candidates() {
+    local xdg_dir line
+    printf '%s\n' "$HOME/Desktop" "$HOME/desktop" "$HOME/.local/share/applications"
+    if [ -f "$HOME/.config/user-dirs.dirs" ]; then
+        line="$(grep -E '^XDG_DESKTOP_DIR=' "$HOME/.config/user-dirs.dirs" 2>/dev/null | tail -1 || true)"
+        if [ -n "$line" ]; then
+            xdg_dir="${line#XDG_DESKTOP_DIR=}"
+            xdg_dir="${xdg_dir%\"}"
+            xdg_dir="${xdg_dir#\"}"
+            xdg_dir="${xdg_dir//\$HOME/$HOME}"
+            [ -n "$xdg_dir" ] && printf '%s\n' "$xdg_dir"
+        fi
+    fi
+}
+
+desktop_file_owned_by_nvhive() {
+    local path="$1"
+    [ -f "$path" ] || [ -L "$path" ] || return 1
+    if [ -L "$path" ]; then
+        local target
+        target="$(readlink "$path" 2>/dev/null || true)"
+        case "$target" in
+            "$NVH_HOME"/*|"$NVH_BIN"/*) return 0 ;;
+        esac
+    fi
+    grep -qF "$NVH_HOME" "$path" 2>/dev/null && return 0
+    grep -Eiq '^(Name|Comment)=.*(nvhive|nvhive ai studio|nvhive|nvHive|NVHive)' "$path" 2>/dev/null && return 0
+    grep -Eiq '^(Exec|TryExec)=.*(nvhive-ai-studio|/nvh |/nvhive |/nvh$|/nvhive$)' "$path" 2>/dev/null && return 0
+    return 1
+}
+
+clean_desktop_launchers() {
+    local dir file seen=":"
+    while IFS= read -r dir; do
+        [ -n "$dir" ] || continue
+        case "$seen" in *":$dir:"*) continue ;; esac
+        seen="$seen$dir:"
+        [ -d "$dir" ] || continue
+        for file in "$dir"/*.desktop; do
+            [ -e "$file" ] || [ -L "$file" ] || continue
+            if desktop_file_owned_by_nvhive "$file"; then
+                remove_path "$file"
+            fi
+        done
+    done <<EOF
+$(desktop_dir_candidates)
+EOF
+}
+
+refresh_desktop_launchers() {
+    if command -v update-desktop-database >/dev/null 2>&1 && [ -d "$HOME/.local/share/applications" ]; then
+        run_or_print update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+    fi
+    if command -v kbuildsycoca6 >/dev/null 2>&1; then
+        run_or_print kbuildsycoca6 >/dev/null 2>&1 || true
+    elif command -v kbuildsycoca5 >/dev/null 2>&1; then
+        run_or_print kbuildsycoca5 >/dev/null 2>&1 || true
+    fi
+}
+
 clean_shell_rc() {
     local rc tmp
     for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
@@ -233,6 +293,8 @@ remove_owned_file "$HOME/Desktop/NVHive AI Studio.desktop"
 remove_owned_file "$HOME/Desktop/nvHive.desktop"
 remove_owned_file "$HOME/.local/share/applications/nvhive-ai-studio.desktop"
 remove_owned_file "$HOME/.local/share/applications/nvHive.desktop"
+clean_desktop_launchers
+refresh_desktop_launchers
 
 if [ "$PURGE" = "true" ]; then
     remove_path "$NVH_HOME"
