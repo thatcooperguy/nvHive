@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import inspect
 import ipaddress
 import json
 import logging
@@ -473,6 +474,31 @@ def _serialize_completion(resp: CompletionResponse) -> dict[str, Any]:
 # Request / Response Schemas
 # ---------------------------------------------------------------------------
 
+_AUTO_SELECTION_VALUES = {
+    "auto",
+    "auto-pick",
+    "auto pick",
+    "auto-pick best available",
+    "recommended",
+    "recommended model",
+    "best available",
+    "default",
+    "none",
+}
+
+
+def _normalize_optional_selection(value: Any) -> str | None:
+    """Treat UI placeholder choices as an omitted provider/model."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.lower() in _AUTO_SELECTION_VALUES:
+        return None
+    return text
+
+
 class QueryRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=500_000)
     provider: str | None = None
@@ -481,6 +507,11 @@ class QueryRequest(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
     stream: bool = False
+
+    @field_validator("provider", "model", mode="before")
+    @classmethod
+    def _normalize_provider_model(cls, value: Any) -> str | None:
+        return _normalize_optional_selection(value)
 
 
 class CouncilRequest(BaseModel):
@@ -529,17 +560,33 @@ async def _sse_query_stream(
 
     # Budget and routing (reuse engine internals via a lightweight path)
     try:
+        await engine.initialize()
         await engine._check_budget()
     except BudgetExceededError as exc:
         payload = json.dumps({"error": str(exc)})
         yield f"event: error\ndata: {payload}\n\n".encode()
         return
+    except Exception as exc:
+        logger.exception("Streaming query preflight failed")
+        payload = json.dumps({
+            "error": f"Local query preflight failed: {type(exc).__name__}: {exc}",
+        })
+        yield f"event: error\ndata: {payload}\n\n".encode()
+        return
 
-    decision = engine.router.route(
-        query=request.prompt,
-        provider_override=request.provider,
-        model_override=request.model,
-    )
+    try:
+        decision = engine.router.route(
+            query=request.prompt,
+            provider_override=request.provider,
+            model_override=request.model,
+        )
+    except Exception as exc:
+        logger.exception("Streaming query routing failed")
+        payload = json.dumps({
+            "error": f"Could not choose an AI advisor: {type(exc).__name__}: {exc}",
+        })
+        yield f"event: error\ndata: {payload}\n\n".encode()
+        return
 
     if not engine.registry.has(decision.provider):
         payload = json.dumps({"error": f"Provider '{decision.provider}' not available."})
@@ -563,13 +610,16 @@ async def _sse_query_stream(
     CHUNK_STALL_TIMEOUT = 45.0  # noqa: N806 — local constant, intentional uppercase
 
     try:
-        aiter = provider.stream(
+        stream_result = provider.stream(
             messages=messages,
             model=decision.model or None,
             temperature=temp,
             max_tokens=max_tok,
             system_prompt=sys_prompt,
-        ).__aiter__()
+        )
+        if inspect.isawaitable(stream_result):
+            stream_result = await stream_result
+        aiter = stream_result.__aiter__()
 
         while True:
             try:
@@ -1643,9 +1693,10 @@ async def query(request: QueryRequest, _auth: None = Depends(require_auth)) -> A
         raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc))
     except ProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
-    except Exception:
+    except Exception as exc:
         logger.exception("Unexpected error in /v1/query")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+        detail = f"{type(exc).__name__}: {str(exc)[:500]}"
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
 
     return _response_envelope(_serialize_completion(response))
 
@@ -1901,20 +1952,32 @@ async def list_models(provider: str | None = None, _auth: None = Depends(require
 async def budget_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     engine = get_engine()
     try:
+        await engine.initialize()
         data = await engine.get_budget_status()
-    except Exception:
-        logger.exception("Error fetching budget status")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
+    except Exception as exc:
+        logger.exception("Error fetching budget status; returning local fallback")
+        data = {
+            "daily_spend": Decimal("0"),
+            "daily_limit": getattr(engine.config.budget, "daily_limit_usd", Decimal("0")),
+            "monthly_spend": Decimal("0"),
+            "monthly_limit": getattr(engine.config.budget, "monthly_limit_usd", Decimal("0")),
+            "daily_queries": 0,
+            "monthly_queries": 0,
+            "by_provider": {},
+            "unavailable": True,
+            "error": str(exc)[:200],
+        }
 
     # Serialize Decimal values
     serialized = {
-        "daily_spend": str(data["daily_spend"]),
-        "daily_limit": str(data["daily_limit"]),
-        "monthly_spend": str(data["monthly_spend"]),
-        "monthly_limit": str(data["monthly_limit"]),
-        "daily_queries": data["daily_queries"],
-        "monthly_queries": data["monthly_queries"],
+        "daily_spend": str(data.get("daily_spend", "0")),
+        "daily_limit": str(data.get("daily_limit", "0")),
+        "monthly_spend": str(data.get("monthly_spend", "0")),
+        "monthly_limit": str(data.get("monthly_limit", "0")),
+        "daily_queries": data.get("daily_queries", 0),
+        "monthly_queries": data.get("monthly_queries", 0),
         "by_provider": {k: str(v) for k, v in (data.get("by_provider") or {}).items()},
+        "unavailable": bool(data.get("unavailable", False)),
     }
     return _response_envelope(serialized)
 
@@ -1924,6 +1987,10 @@ async def budget_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
 @app.get("/v1/cache/stats", summary="In-memory response cache statistics")
 async def cache_stats(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     engine = get_engine()
+    try:
+        await engine.initialize()
+    except Exception:
+        logger.debug("Cache stats served before full engine initialization", exc_info=True)
     return _response_envelope(engine.cache.stats)
 
 
@@ -2099,24 +2166,42 @@ async def ws_query(websocket: WebSocket) -> None:
     from nvh.providers.base import Message, StreamChunk
 
     prompt = raw.get("prompt", "")
-    provider_name = raw.get("provider")
-    model_name = raw.get("model")
+    provider_name = _normalize_optional_selection(raw.get("provider"))
+    model_name = _normalize_optional_selection(raw.get("model"))
     sys_prompt = raw.get("system_prompt") or engine.config.defaults.system_prompt or None
     temperature = raw.get("temperature") or engine.config.defaults.temperature
     max_tokens = raw.get("max_tokens") or engine.config.defaults.max_tokens
 
     try:
+        await engine.initialize()
         await engine._check_budget()
     except BudgetExceededError as exc:
         await websocket.send_json({"type": "error", "error": str(exc)})
         await websocket.close()
         return
+    except Exception as exc:
+        logger.exception("WebSocket query preflight failed")
+        await websocket.send_json({
+            "type": "error",
+            "error": f"Local query preflight failed: {type(exc).__name__}: {exc}",
+        })
+        await websocket.close()
+        return
 
-    decision = engine.router.route(
-        query=prompt,
-        provider_override=provider_name,
-        model_override=model_name,
-    )
+    try:
+        decision = engine.router.route(
+            query=prompt,
+            provider_override=provider_name,
+            model_override=model_name,
+        )
+    except Exception as exc:
+        logger.exception("WebSocket query routing failed")
+        await websocket.send_json({
+            "type": "error",
+            "error": f"Could not choose an AI advisor: {type(exc).__name__}: {exc}",
+        })
+        await websocket.close()
+        return
 
     if not engine.registry.has(decision.provider):
         await websocket.send_json({"type": "error", "error": f"Provider '{decision.provider}' not available."})
@@ -2134,13 +2219,16 @@ async def ws_query(websocket: WebSocket) -> None:
     stream_succeeded = False
 
     try:
-        async for chunk in provider.stream(
+        stream_result = provider.stream(
             messages=messages,
             model=decision.model or None,
             temperature=temperature,
             max_tokens=max_tokens,
             system_prompt=sys_prompt,
-        ):
+        )
+        if inspect.isawaitable(stream_result):
+            stream_result = await stream_result
+        async for chunk in stream_result:
             last_chunk = chunk
             if chunk.delta:
                 accumulated += chunk.delta
@@ -2214,7 +2302,10 @@ async def ws_query(websocket: WebSocket) -> None:
         except Exception as rec_exc:
             logger.debug("rate_manager.record_failure failed: %s", rec_exc)
         try:
-            await websocket.send_json({"type": "error", "error": "Internal server error"})
+            await websocket.send_json({
+                "type": "error",
+                "error": f"{type(exc).__name__}: {str(exc)[:500]}",
+            })
         except Exception as send_exc:
             logger.debug("error-send failed in ws_query: %s", send_exc)
     finally:

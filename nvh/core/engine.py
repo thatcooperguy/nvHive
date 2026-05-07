@@ -59,6 +59,8 @@ class ResponseCache:
         self.ttl = ttl_seconds
         self._store: OrderedDict[str, CacheEntry] = OrderedDict()
         self._lock = asyncio.Lock()
+        self._hits = 0
+        self._misses = 0
 
     def _make_key(
         self,
@@ -89,13 +91,16 @@ class ResponseCache:
             key = self._make_key(provider, model, messages, temperature, max_tokens)
             entry = self._store.get(key)
             if entry is None:
+                self._misses += 1
                 return None
             # Check TTL
             if time.time() - entry.timestamp > self.ttl:
                 del self._store[key]
+                self._misses += 1
                 return None
             # Move to end (most recently used)
             self._store.move_to_end(key)
+            self._hits += 1
             # Return a copy with cache_hit flag
             resp = entry.response.model_copy()
             resp.cache_hit = True
@@ -124,6 +129,8 @@ class ResponseCache:
             if provider is None:
                 count = len(self._store)
                 self._store.clear()
+                self._hits = 0
+                self._misses = 0
                 return count
             keys_to_remove = [
                 k for k, v in self._store.items()
@@ -135,10 +142,16 @@ class ResponseCache:
 
     @property
     def stats(self) -> dict[str, Any]:
+        total = self._hits + self._misses
+        hit_rate = (self._hits / total) if total else 0.0
         return {
             "entries": len(self._store),
+            "size": len(self._store),
             "max_size": self.max_size,
             "ttl_seconds": self.ttl,
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate": hit_rate,
         }
 
 
@@ -1259,8 +1272,19 @@ class Engine:
         daily_spend = Decimal("0")
         monthly_spend = Decimal("0")
 
+        async def _safe_spend(period: str) -> Decimal:
+            try:
+                return await repo.get_spend(period)
+            except Exception as exc:
+                logger.warning(
+                    "Budget spend lookup failed for %s; allowing local query: %s",
+                    period,
+                    exc,
+                )
+                return Decimal("0")
+
         if budget.daily_limit_usd > 0:
-            daily_spend = await repo.get_spend("daily")
+            daily_spend = await _safe_spend("daily")
             if daily_spend >= budget.daily_limit_usd:
                 if budget.hard_stop:
                     raise BudgetExceededError(
@@ -1289,7 +1313,7 @@ class Engine:
                 )
 
         if budget.monthly_limit_usd > 0:
-            monthly_spend = await repo.get_spend("monthly")
+            monthly_spend = await _safe_spend("monthly")
             if monthly_spend >= budget.monthly_limit_usd:
                 if budget.hard_stop:
                     raise BudgetExceededError(
@@ -1308,7 +1332,7 @@ class Engine:
             ):
                 if budget.daily_limit_usd <= 0:
                     # Only emit monthly alert if we haven't already emitted daily above
-                    daily_spend = await repo.get_spend("daily")
+                    daily_spend = await _safe_spend("daily")
                 await self.webhooks.emit(
                     WebhookEvent.BUDGET_THRESHOLD,
                     format_budget_alert(
@@ -1347,11 +1371,21 @@ class Engine:
 
     async def get_budget_status(self) -> dict[str, Any]:
         """Get current budget status."""
-        daily = await repo.get_spend("daily")
-        monthly = await repo.get_spend("monthly")
-        daily_by_provider = await repo.get_spend_by_provider("daily")
-        daily_queries = await repo.get_query_count("daily")
-        monthly_queries = await repo.get_query_count("monthly")
+        try:
+            daily = await repo.get_spend("daily")
+            monthly = await repo.get_spend("monthly")
+            daily_by_provider = await repo.get_spend_by_provider("daily")
+            daily_queries = await repo.get_query_count("daily")
+            monthly_queries = await repo.get_query_count("monthly")
+            unavailable = False
+        except Exception as exc:
+            logger.warning("Budget status unavailable; returning local fallback: %s", exc)
+            daily = Decimal("0")
+            monthly = Decimal("0")
+            daily_by_provider = {}
+            daily_queries = 0
+            monthly_queries = 0
+            unavailable = True
 
         return {
             "daily_spend": daily,
@@ -1361,6 +1395,7 @@ class Engine:
             "daily_queries": daily_queries,
             "monthly_queries": monthly_queries,
             "by_provider": daily_by_provider,
+            "unavailable": unavailable,
         }
 
 

@@ -131,14 +131,14 @@ export default function BudgetWidget({ className = '' }: Props) {
             </div>
           </div>
 
-          {Object.keys(budget.by_provider).length > 0 && (
+          {Object.keys(budget.by_provider ?? {}).length > 0 && (
             <div>
               <div className="section-label mb-2">By Provider</div>
               <div className="space-y-1">
-                {Object.entries(budget.by_provider).map(([provider, cost]) => (
+                {Object.entries(budget.by_provider ?? {}).map(([provider, cost]) => (
                   <div key={provider} className="flex items-center justify-between">
                     <span className="text-xs text-[#737373] capitalize">{provider}</span>
-                    <span className="text-xs font-mono text-[#0a0a0a]">{formatUSD(cost)}</span>
+                    <span className="text-xs font-mono text-[#0a0a0a]">{formatUSD(String(cost))}</span>
                   </div>
                 ))}
               </div>

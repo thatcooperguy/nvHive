@@ -117,6 +117,8 @@ function QueryPageInner() {
       max_tokens: params.maxTokens,
     };
 
+    let streamingStarted = false;
+
     try {
       if (params.mode === 'simple') {
         if (params.stream) {
@@ -154,6 +156,7 @@ function QueryPageInner() {
             }
           );
           stopStreamRef.current = stop;
+          streamingStarted = true;
           return;
         } else {
           const resp = await query(params.prompt, {
@@ -183,7 +186,9 @@ function QueryPageInner() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Request failed');
     } finally {
-      setLoading(false);
+      if (!streamingStarted) {
+        setLoading(false);
+      }
     }
   };
 

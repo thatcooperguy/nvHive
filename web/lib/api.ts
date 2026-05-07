@@ -653,7 +653,7 @@ export function queryStream(
     try {
       const res = await fetch(`${BASE_URL}/v1/query`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getApiAuthHeaders() },
         body: JSON.stringify({ ...request, stream: true }),
         signal: controller.signal,
       });
@@ -754,13 +754,50 @@ export async function getModels(provider?: string): Promise<ModelsListResult> {
 // ─── Budget ──────────────────────────────────────────────────────────────────
 
 export async function getBudgetStatus(): Promise<BudgetStatus> {
-  return apiGet<BudgetStatus>('/v1/budget/status');
+  try {
+    const raw = await apiGet<any>('/v1/budget/status');
+    return {
+      daily_spend: String(raw?.daily_spend ?? '0'),
+      daily_limit: String(raw?.daily_limit ?? '0'),
+      monthly_spend: String(raw?.monthly_spend ?? '0'),
+      monthly_limit: String(raw?.monthly_limit ?? '0'),
+      daily_queries: Number(raw?.daily_queries ?? 0),
+      monthly_queries: Number(raw?.monthly_queries ?? 0),
+      by_provider: raw?.by_provider ?? {},
+    };
+  } catch {
+    return {
+      daily_spend: '0',
+      daily_limit: '0',
+      monthly_spend: '0',
+      monthly_limit: '0',
+      daily_queries: 0,
+      monthly_queries: 0,
+      by_provider: {},
+    };
+  }
 }
 
 // ─── Cache ───────────────────────────────────────────────────────────────────
 
 export async function getCacheStats(): Promise<CacheStats> {
-  return apiGet<CacheStats>('/v1/cache/stats');
+  const raw = await apiGet<any>('/v1/cache/stats');
+  const source = raw?.stats ?? raw?.cache ?? raw ?? {};
+  const hits = Number(source.hits ?? source.cache_hits ?? 0);
+  const misses = Number(source.misses ?? source.cache_misses ?? 0);
+  const entries = Number(source.entries ?? source.size ?? source.count ?? 0);
+  const maxSize = Number(source.max_size ?? source.max_entries ?? source.capacity ?? 1000);
+  const attempts = hits + misses;
+  const hitRate = Number.isFinite(Number(source.hit_rate))
+    ? Number(source.hit_rate)
+    : (attempts > 0 ? hits / attempts : 0);
+  return {
+    hits,
+    misses,
+    size: Number(source.size ?? entries),
+    max_size: maxSize,
+    hit_rate: hitRate,
+  };
 }
 
 export async function clearCache(provider?: string): Promise<{ cleared: number; provider: string | null }> {

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 import nvh.api.server as server_module
 import nvh.storage.repository as repo
-from nvh.api.server import app
+from nvh.api.server import QueryRequest, app
 from nvh.config.settings import (
     BudgetConfig,
     CacheConfig,
@@ -295,7 +295,21 @@ class TestAPIEndpoints:
         assert "entries" in data
         assert "max_size" in data
         assert "ttl_seconds" in data
+        assert "hits" in data
+        assert "misses" in data
+        assert "size" in data
+        assert "hit_rate" in data
         assert data["entries"] >= 0
+
+    def test_query_request_normalizes_auto_choices(self) -> None:
+        """UI placeholder labels must not be routed as literal model IDs."""
+        req = QueryRequest(
+            prompt="hello",
+            provider="Auto-pick best available",
+            model="Recommended model",
+        )
+        assert req.provider is None
+        assert req.model is None
 
     def test_budget_status(self, test_client: TestClient) -> None:
         """GET /v1/budget/status returns budget info."""

@@ -108,6 +108,8 @@ class TestOllamaProvider:
         assert provider._get_model("llama3.1") == "ollama/llama3.1"
         assert provider._get_model("ollama/mistral") == "ollama/mistral"
         assert provider._get_model(None) == "ollama/llama3.1"  # default
+        assert provider._get_model("recommended") == "ollama/llama3.1"
+        assert provider._get_model("auto-pick best available") == "ollama/llama3.1"
 
     @pytest.mark.asyncio
     async def test_list_models_parses_tags_response(self):
@@ -189,6 +191,37 @@ class TestOllamaProvider:
                 await provider.complete(
                     messages=[Message(role="user", content="hi")],
                 )
+
+    @pytest.mark.asyncio
+    async def test_complete_retries_installed_fallback_model(self):
+        """If the configured model is stale, retry with an installed model."""
+        provider = OllamaProvider(default_model="ollama/missing-default")
+        calls: list[str] = []
+
+        async def fake_completion(**kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"] == "ollama/missing-default":
+                raise Exception("404 model not found")
+            return _fake_completion_response("fallback works")
+
+        mock_client = _mock_httpx_get_models([
+            {"name": "gemma3:4b"},
+        ])
+
+        with patch(
+            "nvh.providers.ollama_provider.litellm.acompletion",
+            new=AsyncMock(side_effect=fake_completion),
+        ), patch(
+            "nvh.providers.ollama_provider.httpx.AsyncClient",
+            return_value=mock_client,
+        ):
+            resp = await provider.complete(
+                messages=[Message(role="user", content="hi")],
+            )
+
+        assert calls == ["ollama/missing-default", "ollama/gemma3:4b"]
+        assert resp.content == "fallback works"
+        assert resp.metadata["fallback_model"] == "ollama/gemma3:4b"
 
     @pytest.mark.asyncio
     async def test_stream_yields_chunks(self):
