@@ -628,6 +628,75 @@ install_rootless_ollama_binary() {
     return 0
 }
 
+ollama_model_installed() {
+    local model="$1"
+    [ -n "${OLLAMA_BIN:-}" ] || return 1
+    [ -x "$OLLAMA_BIN" ] || return 1
+    "$OLLAMA_BIN" list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq "$model"
+}
+
+nvwizard_model_download_countdown() {
+    local model="$1"
+    local delay="${NVH_MODEL_DOWNLOAD_DELAY:-10}"
+    local key=""
+
+    case "${NVH_INSTALL_MODEL_DOWNLOAD:-auto}" in
+        0|false|False|no|No|off|Off)
+            echo -e "${D}Skipping nvWizard model download because NVH_INSTALL_MODEL_DOWNLOAD=0.${N}"
+            return 1
+            ;;
+    esac
+
+    if [ -r /dev/tty ] && [ -w /dev/tty ] && [ "${NVH_INSTALL_MODEL_DOWNLOAD:-auto}" = "auto" ]; then
+        while [ "$delay" -gt 0 ]; do
+            printf "\rDownloading %s for nvWizard in %s... press s to skip " "$model" "$delay" >/dev/tty
+            if IFS= read -r -s -n 1 -t 1 key </dev/tty; then
+                case "$key" in
+                    s|S|c|C|q|Q)
+                        printf "\n" >/dev/tty
+                        echo -e "${Y}Skipped nvWizard model download. You can download it from the WebUI later.${N}"
+                        return 1
+                        ;;
+                esac
+            fi
+            delay=$((delay - 1))
+        done
+        printf "\n" >/dev/tty
+    else
+        echo -e "${B}Downloading $model for nvWizard.${N}"
+    fi
+
+    return 0
+}
+
+pull_nvwizard_model_cli() {
+    local model="$1"
+    local pull_rc=0
+
+    [ -n "${OLLAMA_BIN:-}" ] || return 1
+    [ -x "$OLLAMA_BIN" ] || return 1
+    mkdir -p "$OLLAMA_MODELS" "$NVH_LOGS"
+
+    if ollama_model_installed "$model"; then
+        echo -e "${G}Model $model ready.${N}"
+        return 0
+    fi
+
+    nvwizard_model_download_countdown "$model" || return 0
+    echo -e "${B}Downloading $model for nvWizard. This can take a few minutes on first run.${N}"
+    : >"$NVH_LOGS/model-pull.log"
+    set +e
+    OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" pull "$model" 2>&1 | tee -a "$NVH_LOGS/model-pull.log"
+    pull_rc=${PIPESTATUS[0]}
+    set -e
+    if [ "$pull_rc" -eq 0 ]; then
+        echo -e "${G}Model $model ready for nvWizard.${N}"
+        return 0
+    fi
+    echo -e "${Y}Model download did not complete. Log: $NVH_LOGS/model-pull.log${N}"
+    return "$pull_rc"
+}
+
 # --- Detect Linux Desktop ---
 CLOUD_DETECTED=false
 if [ -f "/etc/nvidia/cloud.conf" ] || [ -f "/etc/nvidia/grid.conf" ] || \
@@ -1069,16 +1138,17 @@ if [ -n "$GPU_NAME" ]; then
         sleep 3
     fi
 
-    # Pull the same model written into config so first launch does not ask for
-    # a second, smaller default.
+    # Keep first-run model prep visible. If the WebUI is launching, it shows the
+    # countdown, cancel button, job progress, and final health state. Terminal
+    # installs without a browser get the same countdown here.
     if [ -n "$OLLAMA_BIN" ] && curl -sf http://localhost:11434/api/tags &>/dev/null; then
         MODEL="$DEFAULT_OLLAMA_MODEL"
-
-        if ! "$OLLAMA_BIN" list 2>/dev/null | grep -q "$MODEL"; then
-            echo -e "${B}Pulling $MODEL in background (you can start using nvh now)...${N}"
-            OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" pull "$MODEL" &>/dev/null &
-        else
+        if ollama_model_installed "$MODEL"; then
             echo -e "${G}Model $MODEL ready.${N}"
+        elif should_launch_webui; then
+            echo -e "${B}WebUI will show nvWizard model download, cancel, and health checks for $MODEL.${N}"
+        else
+            pull_nvwizard_model_cli "$MODEL" || true
         fi
     fi
 fi

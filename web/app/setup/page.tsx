@@ -381,8 +381,13 @@ export default function SetupPage() {
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
   const [selectedWizardProfile, setSelectedWizardProfile] = useState<WizardProfile>('student');
+  const [startupCountdown, setStartupCountdown] = useState<number | null>(null);
+  const [startupAutopilotSkipped, setStartupAutopilotSkipped] = useState(false);
+  const [startupAutopilotMessage, setStartupAutopilotMessage] = useState<string | null>(null);
   const handledMissionJobsRef = useRef<Set<string>>(new Set());
   const autoDebugJobsRef = useRef<Set<string>>(new Set());
+  const startupAutopilotTriggeredRef = useRef(false);
+  const installStudioModelsRef = useRef<(modelIds?: string[]) => void>(() => undefined);
 
   // Live-polled provider health drives Ollama status and the
   // configured-providers list so the setup screen reflects newly
@@ -1144,11 +1149,22 @@ export default function SetupPage() {
     );
   };
 
-  const recommendedMissingModelIds = () => (
+  const recommendedMissingModelIds = useCallback(() => (
     studioModels
       .filter(model => model.recommended && !model.installed)
       .map(model => model.id)
-  );
+  ), [studioModels]);
+
+  useEffect(() => {
+    installStudioModelsRef.current = handleInstallStudioModels;
+  });
+
+  const skipStartupAutopilot = () => {
+    startupAutopilotTriggeredRef.current = true;
+    setStartupAutopilotSkipped(true);
+    setStartupCountdown(null);
+    setStartupAutopilotMessage('Model download skipped. You can still download recommended models when you are ready.');
+  };
 
   const handleInstallStudioPacks = (packIds?: string[]) => {
     if (studioInstalling) return;
@@ -1550,7 +1566,12 @@ export default function SetupPage() {
     compatibilityIssueCount +
     bootChangeCount;
   const showAdvancedSetup = advancedSetupOpen && step !== 'welcome';
-  const showInstallJobs = activeInstallJobs.length > 0 || (showAdvancedSetup && (visibleInstallJobs.length > 0 || jobsError));
+  const showInstallJobs =
+    activeInstallJobs.length > 0 ||
+    modelEvents.length > 0 ||
+    studioEvents.length > 0 ||
+    comfyEvents.length > 0 ||
+    (showAdvancedSetup && (visibleInstallJobs.length > 0 || jobsError));
   const anyInstallRunning = Boolean(activeWizardBuild) || studioInstalling || modelsInstalling || comfyInstalling;
   const topHelperAction = helperActions[0] ?? null;
   const catalogProfiles = setupCatalog?.catalog.profiles ?? [];
@@ -1695,6 +1716,122 @@ export default function SetupPage() {
         ? 'checking'
         : 'warn';
   const localAiReady = ollamaStatus === 'online' || modelFitOllamaRunning;
+  const recommendedMissingIds = recommendedMissingModelIds();
+  const recommendedMissingModels = studioModels.filter(model => recommendedMissingIds.includes(model.id));
+  const startupModelNames = recommendedMissingModels
+    .map(model => model.title || model.install_target || model.id)
+    .slice(0, 2);
+  const startupDownloadLabel = startupModelNames.length
+    ? startupModelNames.join(', ')
+    : recommendedModelLabel;
+  const activeModelJob = activeInstallJobs.find(job => job.kind === 'studio-model-install') ?? null;
+  const activeRuntimeJob = activeInstallJobs.find(job => job.kind === 'studio-pack-install') ?? null;
+  const startupAutopilotReady =
+    apiStatus === 'connected' &&
+    storageReady &&
+    localAiReady &&
+    recommendedMissingIds.length === 0 &&
+    !activeInstallJobs.length &&
+    !modelsInstalling &&
+    !studioInstalling &&
+    !comfyInstalling;
+  const startupAutopilotPhase = startupAutopilotReady
+    ? 'Ready'
+    : activeModelJob
+      ? 'Downloading model'
+      : activeRuntimeJob
+        ? 'Installing runtime'
+        : startupCountdown !== null
+          ? 'Preparing download'
+          : setupConcernCount > 0
+            ? 'Needs attention'
+            : 'Checking';
+  const startupChecklist: Array<{ label: string; value: string; state: SetupCheckState }> = [
+    {
+      label: 'Workspace',
+      value: storageReady ? workspaceHome : storageBeginnerLabel,
+      state: storageReady ? 'ready' : storageAutopilotBusy ? 'checking' : 'fix',
+    },
+    {
+      label: 'API',
+      value: apiStatus === 'connected' ? 'online' : apiStatus,
+      state: apiStatus === 'connected' ? 'ready' : apiStatus === 'checking' ? 'checking' : 'fix',
+    },
+    {
+      label: 'Runtime',
+      value: localAiReady ? 'Ollama ready' : 'install needed',
+      state: localAiReady ? 'ready' : ollamaStatus === 'checking' ? 'checking' : 'warn',
+    },
+    {
+      label: 'Model',
+      value: recommendedMissingIds.length > 0 ? startupDownloadLabel : 'ready',
+      state: activeModelJob || modelsInstalling || startupCountdown !== null
+        ? 'checking'
+        : recommendedMissingIds.length > 0
+          ? 'warn'
+          : 'ready',
+    },
+    {
+      label: 'Jobs',
+      value: activeInstallJobs.length > 0 ? `${activeInstallJobs.length} running` : 'idle',
+      state: activeInstallJobs.length > 0 ? 'checking' : 'ready',
+    },
+  ];
+
+  useEffect(() => {
+    if (startupAutopilotTriggeredRef.current) return;
+    if (startupAutopilotSkipped || step !== 'welcome') return;
+    if (apiStatus !== 'connected' || !storageReady || !localAiReady || modelsLoading || studioModels.length === 0) return;
+    if (anyInstallRunning || activeInstallJobs.length > 0) return;
+    const missing = recommendedMissingModelIds();
+    if (missing.length === 0) return;
+
+    startupAutopilotTriggeredRef.current = true;
+    setStartupCountdown(10);
+    setStartupAutopilotMessage(
+      `nvWizard will download ${startupDownloadLabel} so local Ask AI works. You can cancel before it starts.`
+    );
+  }, [
+    activeInstallJobs.length,
+    anyInstallRunning,
+    apiStatus,
+    localAiReady,
+    modelsLoading,
+    recommendedMissingModelIds,
+    startupAutopilotSkipped,
+    startupDownloadLabel,
+    step,
+    storageReady,
+    studioModels,
+  ]);
+
+  useEffect(() => {
+    if (startupCountdown === null || startupAutopilotSkipped) return;
+    if (startupCountdown <= 0) {
+      const missing = recommendedMissingModelIds();
+      setStartupCountdown(null);
+      if (missing.length > 0 && !modelsInstalling && storageReady && !apiDisconnected) {
+        setStartupAutopilotMessage(`Downloading ${startupDownloadLabel}. Progress is shown in Setup Jobs.`);
+        installStudioModelsRef.current(missing);
+      }
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setStartupCountdown(prev => (prev === null ? null : Math.max(0, prev - 1)));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [
+    apiDisconnected,
+    modelsInstalling,
+    recommendedMissingModelIds,
+    startupAutopilotSkipped,
+    startupCountdown,
+    startupDownloadLabel,
+    storageReady,
+    studioModels,
+  ]);
+
   const systemCheckItems: Array<{ label: string; value: string; state: SetupCheckState }> = [
     {
       label: 'Storage',
@@ -2796,6 +2933,122 @@ export default function SetupPage() {
                 {wizardBuildMessage}
               </div>
             )}
+
+            <div className="border border-[#76B900]/30 bg-[#f8fff0] p-3 space-y-3">
+              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="section-label">nvWizard Launch Check</div>
+                    <span className={`text-[10px] font-mono font-bold uppercase ${
+                      startupAutopilotReady ? 'text-[#76B900]' : activeInstallJobs.length > 0 ? 'text-[#d97706]' : 'text-[#0a0a0a]'
+                    }`}>
+                      {startupAutopilotPhase}
+                    </span>
+                    {startupCountdown !== null && (
+                      <span className="text-[10px] font-mono text-[#d97706] uppercase border border-[#d97706]/40 bg-[#fff7ed] px-2 py-1">
+                        Download starts in {startupCountdown}s
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-[#525252] mt-1 leading-relaxed">
+                    {startupAutopilotMessage
+                      ?? (startupAutopilotReady
+                        ? 'All core checks passed. You can start chatting or install a workload.'
+                        : 'Watching storage, runtime, model downloads, API health, and setup jobs so you know when the workspace is ready.')}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {!localAiReady && (
+                    <button
+                      type="button"
+                      onClick={() => handleInstallStudioPacks(['rootless-ollama'])}
+                      disabled={!storageReady || apiDisconnected || studioInstalling}
+                      className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {studioInstalling ? 'Installing Runtime' : 'Install Runtime'}
+                    </button>
+                  )}
+                  {recommendedMissingIds.length > 0 && !activeModelJob && startupCountdown === null && (
+                    <button
+                      type="button"
+                      onClick={() => handleInstallStudioModels(recommendedMissingIds)}
+                      disabled={!storageReady || apiDisconnected || modelsInstalling}
+                      className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      Download Models
+                    </button>
+                  )}
+                  {activeModelJob && (
+                    <button
+                      type="button"
+                      onClick={() => void handleCancelInstallJob(activeModelJob.id)}
+                      disabled={cancelingJobId === activeModelJob.id}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {cancelingJobId === activeModelJob.id ? 'Canceling' : 'Cancel Download'}
+                    </button>
+                  )}
+                  {startupCountdown !== null && (
+                    <button
+                      type="button"
+                      onClick={skipStartupAutopilot}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                    >
+                      Skip Model Download
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleRepairWorkspace()}
+                    disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {workspaceRepairing ? 'Fixing' : 'Fix Setup'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+                {startupChecklist.map(item => {
+                  const tone = CHECK_TONES[item.state];
+                  return (
+                    <div key={item.label} className={`border ${tone.border} ${tone.bg} px-2 py-2 min-w-0`}>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                        <span className="text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
+                      </div>
+                      <div className={`text-[10px] font-mono truncate mt-1 ${tone.text}`} title={item.value}>
+                        {item.value}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {(activeModelJob || activeRuntimeJob || modelsInstalling) && (
+                <div className="border border-[#e5e5e5] bg-white px-3 py-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-mono font-bold text-[#0a0a0a] uppercase">
+                        {activeModelJob?.title ?? activeRuntimeJob?.title ?? 'Preparing local AI'}
+                      </div>
+                      <div className="text-[10px] font-mono text-[#525252] mt-1 truncate">
+                        {activeModelJob?.message ?? activeRuntimeJob?.message ?? modelEvents[modelEvents.length - 1]?.message ?? 'Working in the background'}
+                      </div>
+                    </div>
+                    <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                      {activeModelJob?.status ?? activeRuntimeJob?.status ?? 'running'}
+                    </span>
+                  </div>
+                  <div className="mt-2 h-1.5 bg-[#e5e5e5] overflow-hidden">
+                    <div
+                      className="h-full bg-[#76B900] transition-all"
+                      style={{ width: `${Math.max(8, Math.min(100, activeModelJob?.progress ?? activeRuntimeJob?.progress ?? 20))}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
 
             <div className="border border-[#e5e5e5] bg-white p-3 space-y-3">
               <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
