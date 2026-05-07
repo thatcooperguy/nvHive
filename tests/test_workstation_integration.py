@@ -60,6 +60,8 @@ def test_desktop_launcher_opens_browser_without_terminal(tmp_path, monkeypatch) 
     desktop_script = storage.layout.bin_dir / "nvhive-ai-studio-desktop"
     script_content = desktop_script.read_text(encoding="utf-8")
     assert "server_ready" in script_content
+    assert "ROOTLESS_FIREFOX" in script_content
+    assert "firefox --new-window" in script_content
     assert "xdg-open" in script_content
     assert "nohup nvh webui" in script_content
     assert "--port \"$PORT\"" in script_content

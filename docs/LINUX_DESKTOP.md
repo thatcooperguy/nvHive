@@ -219,4 +219,6 @@ nvh webui                    # launch browser dashboard
 nvh safe "summarize this"    # local-only prompt path
 ```
 
+Browser launch is also rootless-first. `nvh webui` honors `NVH_BROWSER`, then prefers `$NVH_HOME/apps/firefox/firefox`, then system Firefox, then Chromium/Chrome and desktop openers. On Linux x86_64 it can install Firefox under `NVH_HOME` without sudo; set `NVH_FIREFOX_AUTO_INSTALL=0` to disable that fallback.
+
 Back to [README](../README.md)

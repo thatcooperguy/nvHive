@@ -188,6 +188,103 @@ def test_webui_launch_opens_setup_in_browser(tmp_path, monkeypatch):
         def __init__(self, cmd, **_kwargs):
             popen_calls.append(list(cmd))
 
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(storage_mod, "storage_layout", lambda: layout)
+    monkeypatch.setattr(cli_main, "__file__", str(tmp_path / "pkg" / "nvh" / "cli" / "main.py"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("NVH_FIREFOX_AUTO_INSTALL", "0")
+    monkeypatch.setattr(shutil, "which", fake_which)
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(_args[0], 0, "", ""),
+    )
+
+    cli_main.webui(
+        install_only=False,
+        port=3000,
+        uninstall=False,
+        clean=False,
+        yes=True,
+        no_api=True,
+        api_port=8000,
+        dev=False,
+        open_browser=True,
+        verbose=False,
+    )
+
+    for _ in range(20):
+        if popen_calls:
+            break
+        time.sleep(0.05)
+
+    assert any(call[0] == "/usr/bin/xdg-open" and call[1].endswith("/setup") for call in popen_calls)
+
+
+def test_webui_launch_prefers_rootless_firefox(tmp_path, monkeypatch):
+    import shutil
+    import socket
+
+    import nvh.integrations.storage as storage_mod
+
+    home = tmp_path / "nvhive"
+    node_bin = home / "runtimes" / "node" / "current" / "bin"
+    node_bin.mkdir(parents=True)
+    (node_bin / "node").write_text("", encoding="utf-8")
+    npm_name = "npm.cmd" if os.name == "nt" else "npm"
+    (node_bin / npm_name).write_text("", encoding="utf-8")
+    firefox_bin = home / "apps" / "firefox" / "firefox"
+    firefox_bin.parent.mkdir(parents=True)
+    firefox_bin.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    firefox_bin.chmod(0o755)
+    web_dir = tmp_path / "pkg" / "web"
+    web_dir.mkdir(parents=True)
+    (web_dir / "package.json").write_text('{"scripts":{"start":"next start"}}', encoding="utf-8")
+    (web_dir / "node_modules").mkdir()
+    (web_dir / ".next").mkdir()
+    (web_dir / ".next" / "BUILD_ID").write_text("test", encoding="utf-8")
+
+    layout = SimpleNamespace(
+        home=home,
+        webui_dir=home / "webui",
+        cache_dir=home / "cache",
+        logs_dir=home / "logs",
+        runtime_dir=home / "runtimes",
+        apps_dir=home / "apps",
+        tmp_dir=home / "cache" / "tmp",
+        env=lambda: {"NVH_HOME": str(home)},
+    )
+    popen_calls: list[list[str]] = []
+
+    def fake_which(name: str, path: str | None = None) -> str | None:
+        if path and str(node_bin) in path.split(os.pathsep) and name in {"node", "npm", "npm.cmd"}:
+            return str(node_bin / name)
+        if name == "xdg-open":
+            return "/usr/bin/xdg-open"
+        return None
+
+    class _FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_create_connection(*_args, **_kwargs):
+        return _FakeConnection()
+
+    class _FakePopen:
+        def __init__(self, cmd, **_kwargs):
+            popen_calls.append(list(cmd))
+
+        def poll(self):
+            return None
+
     monkeypatch.setattr(storage_mod, "storage_layout", lambda: layout)
     monkeypatch.setattr(cli_main, "__file__", str(tmp_path / "pkg" / "nvh" / "cli" / "main.py"))
     monkeypatch.chdir(tmp_path)
@@ -219,4 +316,5 @@ def test_webui_launch_opens_setup_in_browser(tmp_path, monkeypatch):
             break
         time.sleep(0.05)
 
-    assert any(call[0] == "/usr/bin/xdg-open" and call[1].endswith("/setup") for call in popen_calls)
+    assert any(call[0] == str(firefox_bin) and call[1] == "--new-window" and call[2].endswith("/setup") for call in popen_calls)
+    assert not any(call[0] == "/usr/bin/xdg-open" for call in popen_calls)

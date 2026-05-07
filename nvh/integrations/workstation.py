@@ -213,7 +213,20 @@ server_ready() {{
 
 open_url() {{
   log "opening $URL"
-  if command -v xdg-open >/dev/null 2>&1; then
+  ROOTLESS_FIREFOX="${{NVH_APPS_HOME:-{storage.layout.apps_dir}}}/firefox/firefox"
+  if [ -x "$ROOTLESS_FIREFOX" ]; then
+    "$ROOTLESS_FIREFOX" --new-window "$URL" >/dev/null 2>&1 &
+  elif command -v firefox >/dev/null 2>&1; then
+    firefox --new-window "$URL" >/dev/null 2>&1 &
+  elif command -v firefox-esr >/dev/null 2>&1; then
+    firefox-esr --new-window "$URL" >/dev/null 2>&1 &
+  elif command -v chromium >/dev/null 2>&1; then
+    chromium --new-window "$URL" >/dev/null 2>&1 &
+  elif command -v chromium-browser >/dev/null 2>&1; then
+    chromium-browser --new-window "$URL" >/dev/null 2>&1 &
+  elif command -v google-chrome-stable >/dev/null 2>&1; then
+    google-chrome-stable --new-window "$URL" >/dev/null 2>&1 &
+  elif command -v xdg-open >/dev/null 2>&1; then
     xdg-open "$URL" >/dev/null 2>&1 &
   elif command -v gio >/dev/null 2>&1; then
     gio open "$URL" >/dev/null 2>&1 &

@@ -103,6 +103,8 @@ curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh
 
 Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise it looks for writable persistent storage and prints the exact activation path. On Ubuntu cloud desktops where the 200GB+ block volume is mounted as your Linux home directory, the installer chooses `/home/$USER/nvhive` automatically. It prefers rootless Python from Miniforge/conda when available, uses Python `venv` + `pip` by default, bootstraps pip without `apt` when Debian/Ubuntu images are missing `ensurepip`, falls back to a managed conda/mamba env under `NVH_HOME` when needed, pulls the GPU-recommended Ollama model, writes a matching default config, creates `~/.local/bin/nvh`, and auto-launches the WebUI when a desktop session is detected.
 
+The WebUI opener is rootless-first: it honors `NVH_BROWSER` when set, then tries Firefox installed under `$NVH_HOME/apps/firefox`, then system Firefox, then Chromium/Chrome/open desktop handlers. On Linux x86_64, if no usable Firefox is found, nvHive can download Firefox into `NVH_HOME` without sudo. Set `NVH_FIREFOX_AUTO_INSTALL=0` to skip that browser bootstrap.
+
 If `NVH_HOME` is not set, the installer checks `$HOME`, `/mnt`, `/media/$USER`, `/workspace`, `/data`, `/persistent`, and `/storage`. It also installs a rootless reset helper:
 
 ```bash

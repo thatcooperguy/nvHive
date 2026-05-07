@@ -8132,6 +8132,103 @@ def webui(
         if result.stderr:
             _webui_log(f"{label} stderr tail:\n" + "\n".join(result.stderr.splitlines()[-30:]))
 
+    def _rootless_firefox_binary() -> str | None:
+        apps_dir = Path(getattr(layout, "apps_dir", layout.home / "apps"))
+        candidate = apps_dir / "firefox" / "firefox"
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+        return None
+
+    def _safe_extract_tar(archive: Path, target: Path) -> None:
+        import tarfile
+
+        target_resolved = target.resolve()
+
+        def _inside_target(path: Path) -> bool:
+            resolved = path.resolve()
+            return resolved == target_resolved or str(resolved).startswith(f"{target_resolved}{os.sep}")
+
+        with tarfile.open(archive, "r:bz2") as tar:
+            for member in tar.getmembers():
+                destination = target / member.name
+                if not _inside_target(destination):
+                    raise RuntimeError(f"Unsafe archive member: {member.name}")
+                if member.issym() or member.islnk():
+                    link_target = Path(member.linkname)
+                    linked = link_target if link_target.is_absolute() else destination.parent / link_target
+                    if not _inside_target(linked):
+                        raise RuntimeError(f"Unsafe archive link: {member.name} -> {member.linkname}")
+            tar.extractall(target)
+
+    def _install_rootless_firefox() -> str | None:
+        if os.environ.get("NVH_FIREFOX_AUTO_INSTALL", "1").lower() in {"0", "false", "no", "off"}:
+            _webui_log("rootless Firefox auto-install disabled")
+            return None
+        if not sys.platform.startswith("linux"):
+            return None
+        import platform
+        import urllib.request
+
+        if platform.machine().lower() not in {"x86_64", "amd64"}:
+            _webui_log(f"rootless Firefox skipped for unsupported arch: {platform.machine()}")
+            return None
+        existing = _rootless_firefox_binary()
+        if existing:
+            return existing
+
+        apps_dir = Path(getattr(layout, "apps_dir", layout.home / "apps"))
+        tmp_dir = Path(getattr(layout, "tmp_dir", layout.cache_dir / "tmp"))
+        firefox_dir = apps_dir / "firefox"
+        archive = layout.cache_dir / "firefox-latest-linux64.tar.bz2"
+        extract_dir = tmp_dir / "firefox-extract"
+        url = os.environ.get(
+            "NVH_FIREFOX_URL",
+            "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US",
+        )
+        try:
+            apps_dir.mkdir(parents=True, exist_ok=True)
+            layout.cache_dir.mkdir(parents=True, exist_ok=True)
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            _webui_log(f"downloading rootless Firefox from {url}")
+            urllib.request.urlretrieve(url, archive)
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            _safe_extract_tar(archive, extract_dir)
+            extracted = extract_dir / "firefox"
+            binary = extracted / "firefox"
+            if not binary.exists():
+                raise RuntimeError("Firefox archive did not contain firefox/firefox")
+            if firefox_dir.exists():
+                shutil.rmtree(firefox_dir, ignore_errors=True)
+            shutil.move(str(extracted), str(firefox_dir))
+            installed = firefox_dir / "firefox"
+            installed.chmod(installed.stat().st_mode | 0o111)
+            _webui_log(f"rootless Firefox installed at {installed}")
+            return str(installed)
+        except Exception as exc:
+            _webui_log(f"rootless Firefox install failed: {exc}")
+            return None
+
+    def _launch_browser_command(label: str, cmd: list[str], url: str) -> bool:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=webui_env,
+            )
+            time.sleep(0.75)
+            code = proc.poll()
+            if code not in {None, 0}:
+                _webui_log(f"browser {label} exited early with code {code}: {cmd}")
+                return False
+            _webui_log(f"browser opened with {label}: {url}")
+            return True
+        except Exception as exc:
+            _webui_log(f"browser {label} failed: {exc}")
+            return False
+
     def _open_browser_url(url: str) -> bool:
         linux_gui = bool(
             os.environ.get("DISPLAY")
@@ -8142,22 +8239,45 @@ def webui(
             _webui_log(f"browser auto-open skipped; no Linux GUI session for {url}")
             return False
 
+        explicit_browser = os.environ.get("NVH_BROWSER")
+        if explicit_browser:
+            import shlex
+
+            parts = shlex.split(explicit_browser)
+            if parts:
+                cmd = [part.replace("{url}", url) for part in parts]
+                if not any("{url}" in part for part in parts):
+                    cmd.append(url)
+                if _launch_browser_command("NVH_BROWSER", cmd, url):
+                    return True
+
+        rootless_firefox = _rootless_firefox_binary()
+        if rootless_firefox and _launch_browser_command("rootless-firefox", [rootless_firefox, "--new-window", url], url):
+            return True
+
+        for browser in ("firefox", "firefox-esr"):
+            found = shutil.which(browser, path=webui_env.get("PATH"))
+            if not found:
+                continue
+            if _launch_browser_command(browser, [found, "--new-window", url], url):
+                return True
+
+        installed_firefox = _install_rootless_firefox()
+        if installed_firefox and _launch_browser_command("rootless-firefox", [installed_firefox, "--new-window", url], url):
+            return True
+
+        for browser in ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave-browser", "microsoft-edge"):
+            found = shutil.which(browser, path=webui_env.get("PATH"))
+            if found and _launch_browser_command(browser, [found, "--new-window", url], url):
+                return True
+
         for opener in ("xdg-open", "gio", "sensible-browser"):
             found = shutil.which(opener, path=webui_env.get("PATH"))
             if not found:
                 continue
             cmd = [found, "open", url] if opener == "gio" else [found, url]
-            try:
-                subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    env=webui_env,
-                )
-                _webui_log(f"browser opened with {opener}: {url}")
+            if _launch_browser_command(opener, cmd, url):
                 return True
-            except Exception as exc:
-                _webui_log(f"browser opener {opener} failed: {exc}")
 
         try:
             opened = webbrowser.open(url)
