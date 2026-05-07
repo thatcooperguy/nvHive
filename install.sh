@@ -511,8 +511,55 @@ ollama_arch() {
     esac
 }
 
+ollama_download_candidates() {
+    local arch="$1"
+    local custom_url base version version_param
+    custom_url="${NVH_OLLAMA_URL:-}"
+    if [ -n "$custom_url" ]; then
+        case "${custom_url%%\?*}" in
+            *.tar.zst) printf 'tar.zst|%s\n' "$custom_url" ;;
+            *) printf 'tgz|%s\n' "$custom_url" ;;
+        esac
+        return 0
+    fi
+
+    base="${NVH_OLLAMA_DOWNLOAD_BASE:-https://ollama.com/download}"
+    base="${base%/}"
+    version="${NVH_OLLAMA_VERSION:-${OLLAMA_VERSION:-}}"
+    version_param=""
+    [ -n "$version" ] && version_param="?version=$version"
+
+    printf 'tar.zst|%s/ollama-linux-%s.tar.zst%s\n' "$base" "$arch" "$version_param"
+    printf 'tgz|%s/ollama-linux-%s.tgz%s\n' "$base" "$arch" "$version_param"
+}
+
+extract_rootless_ollama_archive() {
+    local archive="$1"
+    local archive_type="$2"
+    local env_python
+    env_python="$(env_python_path)" || env_python="$PYTHON"
+
+    if [ "$archive_type" = "tar.zst" ] && ! "$env_python" -c "import zstandard" >/dev/null 2>&1; then
+        echo "Installing Python zstandard extractor..." >>"$NVH_LOGS/ollama-install.log"
+        "$env_python" -m pip install -q "zstandard>=0.20" >>"$NVH_LOGS/ollama-install.log" 2>&1 || true
+    fi
+
+    ARCHIVE="$archive" ARCHIVE_TYPE="$archive_type" TARGET="$NVH_HOME" "$env_python" - <<'PY' >>"$NVH_LOGS/ollama-install.log" 2>&1
+import os
+from pathlib import Path
+
+from nvh.integrations.studio_packs import _extract_ollama_archive
+
+_extract_ollama_archive(
+    Path(os.environ["ARCHIVE"]),
+    os.environ["ARCHIVE_TYPE"],
+    Path(os.environ["TARGET"]),
+)
+PY
+}
+
 install_rootless_ollama_binary() {
-    local arch url stage archive
+    local arch stage archive archive_type candidate_type candidate_url downloaded
     OLLAMA_BIN="$NVH_BIN/ollama"
     if ollama_binary_valid "$OLLAMA_BIN"; then
         return 0
@@ -524,8 +571,8 @@ install_rootless_ollama_binary() {
         echo -e "${B}Installing Ollama (local AI)...${N}"
     fi
 
-    if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
-        echo -e "${R}curl and tar are required to install Ollama without root.${N}"
+    if ! command -v curl >/dev/null 2>&1; then
+        echo -e "${R}curl is required to install Ollama without root.${N}"
         return 1
     fi
     if ! arch="$(ollama_arch)"; then
@@ -533,16 +580,29 @@ install_rootless_ollama_binary() {
         return 1
     fi
 
-    url="https://ollama.com/download/ollama-linux-${arch}.tgz"
     stage="$NVH_CACHE/bootstrap/ollama-${arch}"
-    archive="$stage/ollama-linux-${arch}.tgz"
     rm -rf "$stage"
     mkdir -p "$stage" "$NVH_BIN" "$NVH_HOME/lib"
-    if ! curl -fL "$url" -o "$archive" >>"$NVH_LOGS/ollama-install.log" 2>&1; then
+    : >"$NVH_LOGS/ollama-install.log"
+
+    downloaded=false
+    while IFS='|' read -r candidate_type candidate_url; do
+        [ -n "$candidate_type" ] || continue
+        archive="$stage/ollama-linux-${arch}.${candidate_type}"
+        echo "Downloading Ollama ${candidate_type}: $candidate_url" >>"$NVH_LOGS/ollama-install.log"
+        if curl -fL --retry 2 --connect-timeout 20 --show-error "$candidate_url" -o "$archive" >>"$NVH_LOGS/ollama-install.log" 2>&1 && [ -s "$archive" ]; then
+            archive_type="$candidate_type"
+            downloaded=true
+            break
+        fi
+        echo "Ollama candidate unavailable (${candidate_type}); trying fallback." >>"$NVH_LOGS/ollama-install.log"
+    done < <(ollama_download_candidates "$arch")
+
+    if [ "$downloaded" != "true" ]; then
         echo -e "${R}Ollama download failed.${N} ${D}Log: $NVH_LOGS/ollama-install.log${N}"
         return 1
     fi
-    if ! tar -xzf "$archive" -C "$NVH_HOME" >>"$NVH_LOGS/ollama-install.log" 2>&1; then
+    if ! extract_rootless_ollama_archive "$archive" "$archive_type"; then
         echo -e "${R}Ollama extraction failed.${N} ${D}Log: $NVH_LOGS/ollama-install.log${N}"
         return 1
     fi
@@ -819,13 +879,16 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
         }
     fi
 
-    # Ensure Ollama is running
-    OLLAMA_BIN="$NVH_BIN/ollama"
-    [ -x "$NVH_HOME/ollama" ] && [ ! -x "$OLLAMA_BIN" ] && OLLAMA_BIN="$NVH_HOME/ollama"
-    if ollama_binary_valid "$OLLAMA_BIN" && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        echo -e "${D}Starting Ollama...${N}"
-        OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" serve &>/dev/null &
-        sleep 2
+    # Ensure the rootless local runtime is present and runnable before the UI opens.
+    if [ -n "$GPU_NAME" ]; then
+        OLLAMA_BIN="$NVH_BIN/ollama"
+        install_rootless_ollama_binary || OLLAMA_BIN=""
+        if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+            echo -e "${D}Starting Ollama...${N}"
+            mkdir -p "$OLLAMA_MODELS"
+            OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" serve &>/dev/null &
+            sleep 2
+        fi
     fi
 
     export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:$PATH"
