@@ -7906,34 +7906,47 @@ def workstation(
 
     if with_local_ai:
         console.print("\n[bold]Local AI setup[/bold]")
-        try:
-            from nvh.cli.setup import _ensure_ollama, _find_ollama_binary, _pull_model
 
-            running, installed_models = _ensure_ollama(console)
-            installed_bases = {
-                m.split(":")[0]
-                for m in installed_models
-                if m
-            } | set(installed_models)
-            if running:
-                console.print("  [green]ok[/green] Ollama is running")
-                missing = [
-                    model
-                    for model in profile.recommended_chat_models
-                    if model not in installed_bases
-                    and model.split(":")[0] not in installed_bases
-                ]
-                if missing:
-                    console.print(f"  Recommended model pull: [bold]{', '.join(missing)}[/bold]")
-                    should_pull = yes or typer.confirm("  Pull now?", default=True)
-                    if should_pull:
-                        ollama_bin = _find_ollama_binary() or "ollama"
-                        for model in missing:
-                            _pull_model(console, model, ollama_bin)
-                else:
-                    console.print("  [green]ok[/green] Recommended local models are present")
+        async def _install_local_ai_runtime() -> None:
+            from nvh.integrations.studio_packs import install_studio_packs
+
+            last_log = 0.0
+            async for event in install_studio_packs(["rootless-ollama"], force_update=False):
+                kind = event.get("event", "")
+                message = event.get("message", "")
+                now = _time.monotonic()
+                if kind in {"plan", "pack", "step", "complete", "error"}:
+                    color = "green" if kind == "complete" else "red" if kind == "error" else "cyan"
+                    console.print(f"  [{color}]{kind}[/] {message}")
+                elif kind == "log" and now - last_log > 1.5:
+                    console.print(f"  [dim]{message[:140]}[/dim]")
+                    last_log = now
+
+        async def _install_local_ai_starter_model() -> None:
+            from nvh.integrations.studio_packs import install_studio_models
+
+            last_log = 0.0
+            async for event in install_studio_models(["gemma3-4b"], force_update=False):
+                kind = event.get("event", "")
+                message = event.get("message", "")
+                now = _time.monotonic()
+                if kind in {"plan", "model", "step", "complete", "error"}:
+                    color = "green" if kind == "complete" else "red" if kind == "error" else "cyan"
+                    console.print(f"  [{color}]{kind}[/] {message}")
+                elif kind == "log" and now - last_log > 1.5:
+                    console.print(f"  [dim]{message[:140]}[/dim]")
+                    last_log = now
+
+        try:
+            _run(_install_local_ai_runtime())
+            should_pull = yes or typer.confirm(
+                "  Pull the safe starter model Gemma 3 4B now? Larger NVIDIA/Nemotron options remain optional.",
+                default=True,
+            )
+            if should_pull:
+                _run(_install_local_ai_starter_model())
             else:
-                console.print("  [yellow]![/yellow] Ollama is not running yet")
+                console.print("  [dim]Skipped model pull. Use the WebUI model picker when ready.[/dim]")
         except Exception as exc:
             console.print(f"  [yellow]![/yellow] Local AI setup skipped: {exc}")
 

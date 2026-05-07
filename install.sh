@@ -458,11 +458,10 @@ if command -v nvidia-smi &>/dev/null; then
 fi
 [ -z "$GPU_NAME" ] && echo -e "${Y}No NVIDIA GPU detected - CPU mode${N}"
 if [ -n "$GPU_NAME" ]; then
-    if [ "$VRAM_GB" -ge 24 ]; then DEFAULT_OLLAMA_MODEL="nemotron"
-    elif [ "$VRAM_GB" -ge 8 ]; then DEFAULT_OLLAMA_MODEL="llama3.1:8b"
-    else DEFAULT_OLLAMA_MODEL="nemotron-mini"; fi
+    if [ "$VRAM_GB" -ge 8 ]; then DEFAULT_OLLAMA_MODEL="gemma3:4b"
+    else DEFAULT_OLLAMA_MODEL="gemma3:4b"; fi
 else
-    DEFAULT_OLLAMA_MODEL="nemotron-mini"
+    DEFAULT_OLLAMA_MODEL="gemma3:4b"
 fi
 echo -e "${D}Recommended local model: $DEFAULT_OLLAMA_MODEL${N}"
 
@@ -479,7 +478,7 @@ model = os.environ["MODEL"]
 text = path.read_text(encoding="utf-8")
 updated = text.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model)
 updated = re.sub(
-    r'default_model:\s*"?ollama/(?:nemotron-mini|llama3\.1:8b|nemotron)"?',
+    r'default_model:\s*"?ollama/(?:gemma3:4b|nemotron-mini|llama3\.1:8b|nemotron)"?',
     f'default_model: "ollama/{model}"',
     updated,
 )
@@ -491,7 +490,7 @@ sync_ollama_default_model_config() {
     local cfg="$HIVE_CONFIG_HOME/config.yaml"
     [ -n "$GPU_NAME" ] || return 0
     [ -f "$cfg" ] || return 0
-    if grep -Eq 'default_model:[[:space:]]*"?ollama/(nemotron-mini|llama3\.1:8b|nemotron)"?' "$cfg"; then
+    if grep -Eq 'default_model:[[:space:]]*"?ollama/(gemma3:4b|nemotron-mini|llama3\.1:8b|nemotron)"?' "$cfg"; then
         set_config_ollama_model "$cfg" "$DEFAULT_OLLAMA_MODEL"
         echo -e "${G}Ollama config aligned to GPU recommendation: $DEFAULT_OLLAMA_MODEL${N}"
     fi

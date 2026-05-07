@@ -50,10 +50,22 @@ score_candidate() {
 
 detect_home() {
     local roots=()
-    local env_name env_value root child scored score home best_score best_home
+    local env_name env_value root child scored score home best_score best_home home_free
     if [ -d "$HOME/nvh/repo" ] && [ ! -d "$HOME/.nvh/repo" ]; then
         printf '%s\n' "$HOME/nvh"
         return 0
+    fi
+    if [ -f "$HOME/nvhive/nvh-env.sh" ] || [ -d "$HOME/nvhive/repo" ] || [ -d "$HOME/nvhive/models" ]; then
+        printf '%s\n' "$HOME/nvhive"
+        return 0
+    fi
+    if [ -n "${HOME:-}" ] && [ -d "$HOME" ] && [ -w "$HOME" ]; then
+        home_free="$(free_gb_for_path "$HOME")"
+        home_free="${home_free:-0}"
+        if [ "$home_free" -ge 100 ]; then
+            printf '%s\n' "$HOME/nvhive"
+            return 0
+        fi
     fi
     for env_name in NVH_MOUNT PERSISTENT_HOME PERSISTENT_DIR PERSISTENT_STORAGE WORKSPACE PROJECTS PROJECT_HOME DATA_DIR; do
         env_value="${!env_name:-}"

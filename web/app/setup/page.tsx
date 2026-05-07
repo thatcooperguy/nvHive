@@ -2886,6 +2886,84 @@ export default function SetupPage() {
                   </button>
                 )}
               </div>
+              {(assistantError || assistantReply) && (
+                <div className="border border-[#d4d4d4] bg-white p-3 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">nvWizard Debugger</div>
+                      <div className="text-[10px] text-[#737373] mt-0.5">
+                        Reads jobs, receipts, boot checks, and redacted logs without opening Advanced Details.
+                      </div>
+                    </div>
+                    {assistantReply?.diagnostics_report_id && (
+                      <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/40 px-1.5 py-0.5 uppercase">
+                        {assistantReply.diagnostics_report_id}
+                      </span>
+                    )}
+                  </div>
+                  {assistantError && (
+                    <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
+                      {assistantError}
+                    </div>
+                  )}
+                  {assistantReply && (
+                    <>
+                      <div className="text-xs text-[#0a0a0a] leading-relaxed">
+                        {assistantReply.answer}
+                      </div>
+                      {((assistantReply.debug_findings?.length ?? 0) > 0 || (assistantReply.log_highlights?.length ?? 0) > 0) && (
+                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2">
+                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                            Debug evidence
+                          </summary>
+                          <div className="mt-2 space-y-1">
+                            {assistantReply.debug_findings?.slice(0, 3).map(finding => (
+                              <div key={finding} className="text-[10px] font-mono text-[#525252] leading-relaxed">
+                                {finding}
+                              </div>
+                            ))}
+                            {assistantReply.log_highlights?.slice(0, 4).map(line => (
+                              <div key={line} className="text-[10px] font-mono text-[#525252] leading-relaxed break-all">
+                                {line}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                      {assistantReply.actions.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {assistantReply.actions.slice(0, 3).map(action => (
+                            <button
+                              key={action.id}
+                              type="button"
+                              onClick={() => runHelperAction(action.id)}
+                              disabled={helperActionDisabled(action.id)}
+                              title={action.title}
+                              className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                            >
+                              {helperActionLabel(action.id)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {assistantReply.commands.length > 0 && (
+                        <details>
+                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                            Manual overrides
+                          </summary>
+                          <div className="space-y-1 mt-2">
+                            {assistantReply.commands.map(command => (
+                              <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all">
+                                {command}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
 
             {advancedSetupOpen && (
@@ -3017,8 +3095,8 @@ export default function SetupPage() {
                             type="button"
                             onClick={() => {
                               if (profileInstalled) {
-                                setAdvancedSetupOpen(true);
                                 applyWizardProfile(profile.id);
+                                setWizardBuildMessage(`${profile.title} is installed. The relevant setup controls are open below; Advanced Details stays hidden unless you show it.`);
                                 return;
                               }
                               void handleBuildWizardProfile(profile.id);
@@ -3092,16 +3170,16 @@ export default function SetupPage() {
                               if (!storageReady) {
                                 void handleUseRecommendedStorage().then(status => {
                                   if (status?.ok && status.configured_by !== 'default') {
-                                    setAdvancedSetupOpen(true);
                                     applyWizardProfile(profile.id);
+                                    setWizardBuildMessage(`${profile.title} customization controls are open below. Advanced Details stays hidden unless you show it.`);
                                   } else {
-                                    setAdvancedSetupOpen(true);
+                                    setWizardBuildMessage('nvWizard could not prove persistent storage yet. It will stay in the simple view; show Advanced Details only if you want manual overrides.');
                                   }
                                 });
                                 return;
                               }
-                              setAdvancedSetupOpen(true);
                               applyWizardProfile(profile.id);
+                              setWizardBuildMessage(`${profile.title} customization controls are open below. Advanced Details stays hidden unless you show it.`);
                             }}
                             disabled={!profilesReady || Boolean(activeWizardBuild) || storageAutopilotBusy || apiDisconnected}
                             className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"

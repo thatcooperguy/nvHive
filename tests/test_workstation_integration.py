@@ -8,9 +8,10 @@ from nvh.integrations.storage import ensure_storage
 
 def test_model_recommendations_scale_with_vram() -> None:
     assert workstation._recommend_chat_models(0) == []
-    assert workstation._recommend_chat_models(6) == ["nemotron-mini"]
+    assert workstation._recommend_chat_models(6) == ["gemma3:4b"]
+    assert "gemma3:4b" in workstation._recommend_chat_models(8)
     assert "llama3.1:8b" in workstation._recommend_chat_models(8)
-    assert "nemotron" in workstation._recommend_chat_models(24)
+    assert workstation._recommend_chat_models(24)[0] == "gemma3:4b"
 
 
 def test_comfy_profiles_scale_with_vram() -> None:
