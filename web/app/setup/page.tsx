@@ -19,6 +19,7 @@ import {
   getWizardRootlessPolicy,
   getWizardPlan,
   createSupportSnapshot,
+  getWorkspaceState,
   getSetupCatalog,
   getSetupBootPreflight,
   getSetupMissionControl,
@@ -70,6 +71,7 @@ import type {
   StudioModelInstallEvent,
   WizardMissionInstallEvent,
   WorkspacePassport,
+  WorkspaceStateReport,
   WizardPlanResult,
 } from '@/lib/types';
 
@@ -84,6 +86,13 @@ const CHECK_TONES: Record<SetupCheckState, { dot: string; text: string; border: 
   fix: { dot: 'bg-[#d97706]', text: 'text-[#d97706]', border: 'border-[#d97706]/30', bg: 'bg-[#fff7ed]', label: 'Fix queued' },
   checking: { dot: 'bg-[#a3a3a3]', text: 'text-[#737373]', border: 'border-[#e5e5e5]', bg: 'bg-[#fafafa]', label: 'Checking' },
 };
+
+function setupStateFromWorkspaceStatus(status?: string): SetupCheckState {
+  if (status === 'pass') return 'ready';
+  if (status === 'fail' || status === 'blocked') return 'fix';
+  if (status === 'checking' || status === 'running') return 'checking';
+  return 'warn';
+}
 
 const STEPS: { id: Step; label: string; num: number }[] = [
   { id: 'welcome', label: 'Welcome', num: 1 },
@@ -326,6 +335,7 @@ export default function SetupPage() {
   const [bootPreflight, setBootPreflight] = useState<BootPreflightReport | null>(null);
   const [missionControl, setMissionControl] = useState<MissionControlReport | null>(null);
   const [productionReadiness, setProductionReadiness] = useState<ProductionReadinessReport | null>(null);
+  const [workspaceState, setWorkspaceState] = useState<WorkspaceStateReport | null>(null);
   const [workspacePassport, setWorkspacePassport] = useState<WorkspacePassport | null>(null);
   const [rootlessPolicy, setRootlessPolicy] = useState<RootlessPolicyReport | null>(null);
   const [wizardPlan, setWizardPlan] = useState<WizardPlanResult | null>(null);
@@ -449,12 +459,13 @@ export default function SetupPage() {
   const refreshSetupInventory = useCallback(async (refreshCatalog = false, homeDir?: string) => {
     try {
       const activeHome = homeDir ?? storageStatus?.layout.home;
-      const [receipts, catalog, boot, mission, readiness] = await Promise.all([
+      const [receipts, catalog, boot, mission, readiness, workspace] = await Promise.all([
         getSetupReceipts({ limit: 8 }),
         getSetupCatalog(refreshCatalog),
         getSetupBootPreflight(activeHome),
         getSetupMissionControl(activeHome),
         getSetupProductionReadiness(activeHome),
+        getWorkspaceState(activeHome),
       ]);
       setSetupReceipts(receipts);
       setSetupCatalog(catalog);
@@ -462,6 +473,7 @@ export default function SetupPage() {
       setSetupCompatibility(boot.compatibility);
       setMissionControl(mission);
       setProductionReadiness(readiness);
+      setWorkspaceState(workspace);
       void refreshWorkspacePassport(activeHome);
       setSetupInventoryError(null);
     } catch (err) {
@@ -516,7 +528,13 @@ export default function SetupPage() {
     const timer = window.setInterval(() => {
       void refreshInstallJobs();
     }, 3000);
-    return () => window.clearInterval(timer);
+    const inventoryTimer = window.setInterval(() => {
+      void refreshSetupInventory(false);
+    }, 10000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearInterval(inventoryTimer);
+    };
   }, [refreshInstallJobs, refreshSetupInventory]);
 
   useEffect(() => {
@@ -1726,16 +1744,22 @@ export default function SetupPage() {
     : recommendedModelLabel;
   const activeModelJob = activeInstallJobs.find(job => job.kind === 'studio-model-install') ?? null;
   const activeRuntimeJob = activeInstallJobs.find(job => job.kind === 'studio-pack-install') ?? null;
+  const workspaceStateChecks = workspaceState?.checks ?? [];
+  const workspaceStateReady = workspaceState?.ready === true;
   const startupAutopilotReady =
-    apiStatus === 'connected' &&
-    storageReady &&
-    localAiReady &&
-    recommendedMissingIds.length === 0 &&
-    !activeInstallJobs.length &&
-    !modelsInstalling &&
-    !studioInstalling &&
-    !comfyInstalling;
-  const startupAutopilotPhase = startupAutopilotReady
+    workspaceStateReady || (
+      apiStatus === 'connected' &&
+      storageReady &&
+      localAiReady &&
+      recommendedMissingIds.length === 0 &&
+      !activeInstallJobs.length &&
+      !modelsInstalling &&
+      !studioInstalling &&
+      !comfyInstalling
+    );
+  const startupAutopilotPhase = workspaceState?.phase === 'working'
+    ? 'Working'
+    : startupAutopilotReady
     ? 'Ready'
     : activeModelJob
       ? 'Downloading model'
@@ -1746,7 +1770,7 @@ export default function SetupPage() {
           : setupConcernCount > 0
             ? 'Needs attention'
             : 'Checking';
-  const startupChecklist: Array<{ label: string; value: string; state: SetupCheckState }> = [
+  const fallbackStartupChecklist: Array<{ label: string; value: string; state: SetupCheckState }> = [
     {
       label: 'Workspace',
       value: storageReady ? workspaceHome : storageBeginnerLabel,
@@ -1777,6 +1801,18 @@ export default function SetupPage() {
       state: activeInstallJobs.length > 0 ? 'checking' : 'ready',
     },
   ];
+  const startupChecklist: Array<{ label: string; value: string; state: SetupCheckState }> = workspaceStateChecks.length
+    ? workspaceStateChecks.slice(0, 5).map(check => ({
+        label: check.label,
+        value: check.summary,
+        state: setupStateFromWorkspaceStatus(check.status),
+      }))
+    : fallbackStartupChecklist;
+  const workspaceStateSummary = startupAutopilotMessage
+    ?? workspaceState?.summary
+    ?? (startupAutopilotReady
+      ? 'Workspace is ready. Local AI can answer once the selected model is installed.'
+      : 'nvWizard is checking storage, runtime, local AI, models, and setup jobs.');
 
   useEffect(() => {
     if (startupAutopilotTriggeredRef.current) return;
@@ -1910,6 +1946,19 @@ export default function SetupPage() {
       const missing = recommendedMissingModelIds();
       if (missing.length > 0) handleInstallStudioModels(missing);
       else setStep('models');
+      return;
+    }
+    if (actionId === 'support-snapshot') {
+      void handleSupportSnapshot();
+      return;
+    }
+    if (actionId === 'watch-jobs') {
+      setWizardBuildMessage('nvWizard is watching the running setup job. Progress appears in the Launch Check and Install Jobs panels.');
+      void refreshInstallJobs();
+      return;
+    }
+    if (actionId === 'boot-preflight') {
+      void handleBootRecheck();
       return;
     }
     if (actionId === 'rootless-ollama') {
@@ -2951,10 +3000,7 @@ export default function SetupPage() {
                     )}
                   </div>
                   <div className="text-[10px] text-[#525252] mt-1 leading-relaxed">
-                    {startupAutopilotMessage
-                      ?? (startupAutopilotReady
-                        ? 'All core checks passed. You can start chatting or install a workload.'
-                        : 'Watching storage, runtime, model downloads, API health, and setup jobs so you know when the workspace is ready.')}
+                    {workspaceStateSummary}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -3005,8 +3051,22 @@ export default function SetupPage() {
                   >
                     {workspaceRepairing ? 'Fixing' : 'Fix Setup'}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSupportSnapshot()}
+                    disabled={supportSnapshotLoading || apiDisconnected}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {supportSnapshotLoading ? 'Saving Report' : 'Copy Support Report'}
+                  </button>
                 </div>
               </div>
+
+              {supportSnapshotMessage && (
+                <div className="border border-[#76B900]/30 bg-white px-3 py-2 text-[10px] font-mono text-[#315f00] break-all">
+                  {supportSnapshotMessage}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
                 {startupChecklist.map(item => {

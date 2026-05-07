@@ -356,6 +356,12 @@ function StatCard({
     label === 'Cache Size' ? 'SIZE' :
     label === 'Service' ? 'SVC' :
     icon;
+  const safeValue = value.includes('undefined') || value.includes('NaN') || value.includes('ƒ')
+    ? '-'
+    : value;
+  const safeSub = sub && (sub.includes('undefined') || sub.includes('NaN') || sub.includes('ƒ'))
+    ? undefined
+    : sub;
 
   return (
     <div className="card p-4">
@@ -367,10 +373,10 @@ function StatCard({
         <div className="h-6 w-16 bg-[#f5f5f5] animate-pulse" />
       ) : (
         <div className="font-mono font-bold text-lg leading-none" style={{ color }}>
-          {value}
+          {safeValue}
         </div>
       )}
-      {sub && <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">{sub}</div>}
+      {safeSub && <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">{safeSub}</div>}
     </div>
   );
 }

@@ -445,6 +445,74 @@ export interface RuntimeStatus {
   notes: string[];
 }
 
+export interface RuntimeDoctorAction {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface RuntimeDoctorReport {
+  checked_at: string;
+  status: 'ready' | 'missing-runtime' | 'server-offline' | 'missing-models' | string;
+  ready: boolean;
+  summary: string;
+  binary: string;
+  binary_valid: boolean;
+  binary_error: string;
+  local_candidate: string;
+  server_running: boolean;
+  installed_targets: string[];
+  recommended_ids: string[];
+  missing_recommended_ids: string[];
+  missing_recommended_models: StudioModel[];
+  detected_vram_gb: number;
+  next_action: RuntimeDoctorAction | null;
+  rootless: boolean;
+}
+
+export interface WorkspaceStateCheck {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail' | 'checking' | string;
+  summary: string;
+  detail: string;
+  action_id: string | null;
+}
+
+export interface WorkspaceStateReport {
+  schema_version: number;
+  checked_at: string;
+  phase: 'ready' | 'working' | 'needs-action' | 'blocked' | 'checking' | string;
+  ready: boolean;
+  summary: string;
+  health_score: number;
+  next_action: RuntimeDoctorAction | null;
+  checks: WorkspaceStateCheck[];
+  storage_home: string | null;
+  free_gb: number | null;
+  active_jobs: InstallJob[];
+  recent_failures: InstallJob[];
+  runtime: RuntimeStatus;
+  local_ai: RuntimeDoctorReport;
+  model_fit: {
+    summary?: string;
+    recommended_ids: string[];
+    detected_vram_gb: number;
+    storage_fits_queue?: boolean;
+  };
+  boot: {
+    summary?: string;
+    changed: boolean;
+    needs_attention: boolean;
+  };
+  production: {
+    status?: string;
+    counts: Record<string, number>;
+    next_actions: string[];
+  };
+  rootless: boolean;
+}
+
 export interface RootlessPolicyGate {
   id: string;
   title: string;

@@ -107,6 +107,23 @@ def test_setup_page_surfaces_startup_autopilot_status() -> None:
     assert "Progress is shown in Setup Jobs" in setup_page
 
 
+def test_setup_has_canonical_workspace_state_and_runtime_doctor() -> None:
+    server = (ROOT / "nvh" / "api" / "server.py").read_text(encoding="utf-8")
+    workspace_state = (ROOT / "nvh" / "integrations" / "workspace_state.py").read_text(encoding="utf-8")
+    studio_packs = (ROOT / "nvh" / "integrations" / "studio_packs.py").read_text(encoding="utf-8")
+    setup_page = (ROOT / "web" / "app" / "setup" / "page.tsx").read_text(encoding="utf-8")
+    api = (ROOT / "web" / "lib" / "api.ts").read_text(encoding="utf-8")
+
+    assert "/v1/setup/workspace-state" in server
+    assert "/v1/setup/runtime-doctor" in server
+    assert "def workspace_state" in workspace_state
+    assert "def ollama_runtime_doctor" in studio_packs
+    assert "health_score" in workspace_state
+    assert "getWorkspaceState" in api
+    assert "WorkspaceStateReport" in setup_page
+    assert "Copy Support Report" in setup_page
+
+
 def test_linux_start_launcher_prefers_block_backed_home_over_dot_nvh() -> None:
     launch = (ROOT / "start-linux.sh").read_text(encoding="utf-8")
 

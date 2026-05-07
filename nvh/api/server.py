@@ -1418,6 +1418,28 @@ async def setup_model_fit(
     return _response_envelope(model_fit_report(home_dir=home_dir))
 
 
+@app.get("/v1/setup/runtime-doctor", summary="Diagnose the rootless local AI runtime")
+async def setup_runtime_doctor(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return a non-mutating Ollama/runtime diagnosis for nvWizard."""
+    from nvh.integrations.studio_packs import ollama_runtime_doctor
+
+    return _response_envelope(ollama_runtime_doctor(home_dir=home_dir))
+
+
+@app.get("/v1/setup/workspace-state", summary="Return canonical setup readiness state")
+async def setup_workspace_state(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return one compact readiness state for the setup wizard."""
+    from nvh.integrations.workspace_state import workspace_state
+
+    return _response_envelope(workspace_state(home_dir=home_dir))
+
+
 @app.get("/v1/setup/production-readiness", summary="Return conservative production readiness gates")
 async def setup_production_readiness(
     home_dir: str | None = None,

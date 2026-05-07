@@ -91,7 +91,9 @@ export default function BudgetWidget({ className = '' }: Props) {
       </div>
 
       {error ? (
-        <div className="text-xs text-[#dc2626] font-mono">{error}</div>
+        <div className="text-xs text-[#737373] font-mono">
+          Budget tracking is not configured for this local workspace yet.
+        </div>
       ) : loading ? (
         <div className="space-y-4">
           {[1, 2].map(i => (

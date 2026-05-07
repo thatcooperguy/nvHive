@@ -36,6 +36,8 @@ import type {
   StorageConfigureRequest,
   StorageStatus,
   RuntimeStatus,
+  RuntimeDoctorReport,
+  WorkspaceStateReport,
   RootlessPolicyReport,
   SetupAssistantReply,
   SetupCatalogResult,
@@ -218,6 +220,16 @@ export async function activateMountAutopilot(homeDir?: string, minFreeGb = 200):
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return apiGet<RuntimeStatus>('/v1/system/runtime');
+}
+
+export async function getRuntimeDoctor(homeDir?: string): Promise<RuntimeDoctorReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<RuntimeDoctorReport>(`/v1/setup/runtime-doctor${qs}`);
+}
+
+export async function getWorkspaceState(homeDir?: string): Promise<WorkspaceStateReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<WorkspaceStateReport>(`/v1/setup/workspace-state${qs}`);
 }
 
 export async function getWizardPassport(homeDir?: string, create = true): Promise<WorkspacePassport> {

@@ -38,6 +38,26 @@ function saveRecent(q: RecentQuery) {
   }
 }
 
+function friendlyQueryError(message: string): string {
+  const raw = message || 'Request failed';
+  const lower = raw.toLowerCase();
+  if (
+    lower.includes('internal server error') ||
+    lower.includes('ollama') ||
+    lower.includes('model') ||
+    lower.includes('provider') ||
+    lower.includes('connection refused') ||
+    lower.includes('timed out')
+  ) {
+    return [
+      'Local AI is not ready yet.',
+      'Open Setup, run Fix Setup, then use Download Models or Install Runtime if nvWizard recommends it.',
+      `Last error: ${raw}`,
+    ].join(' ');
+  }
+  return raw;
+}
+
 function QueryPageInner() {
   const searchParams = useSearchParams();
   const initialPrompt = searchParams.get('prompt') ?? '';
@@ -152,7 +172,7 @@ function QueryPageInner() {
             },
             (err) => {
               setLoading(false);
-              setError(err);
+              setError(friendlyQueryError(err));
             }
           );
           stopStreamRef.current = stop;
@@ -184,7 +204,7 @@ function QueryPageInner() {
         saveRecent({ id: `${Date.now()}`, prompt: params.prompt, mode: 'compare', timestamp: Date.now() });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Request failed');
+      setError(friendlyQueryError(err instanceof Error ? err.message : 'Request failed'));
     } finally {
       if (!streamingStarted) {
         setLoading(false);

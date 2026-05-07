@@ -24,6 +24,7 @@ import time
 import zipfile
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -1213,17 +1214,17 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _ollama_binary() -> str:
-    local = storage_layout().bin_dir / "ollama"
-    if _ollama_binary_usable(local):
+def _ollama_binary(home_dir: str | Path | None = None) -> str:
+    local = storage_layout(home_dir).bin_dir / "ollama"
+    if _ollama_binary_usable(local, home_dir=home_dir):
         return str(local)
     found = shutil.which("ollama")
-    if found and _ollama_binary_usable(Path(found)):
+    if found and _ollama_binary_usable(Path(found), home_dir=home_dir):
         return found
     return ""
 
 
-def _ollama_validation_error(binary: str | Path) -> str:
+def _ollama_validation_error(binary: str | Path, home_dir: str | Path | None = None) -> str:
     """Return an error string when an Ollama binary is unusable."""
     path = Path(binary)
     if not path.exists():
@@ -1238,7 +1239,7 @@ def _ollama_validation_error(binary: str | Path) -> str:
             capture_output=True,
             text=True,
             timeout=8,
-            env=_ollama_env(),
+            env=_ollama_env(home_dir),
         )
     except OSError as exc:
         return str(exc)
@@ -1250,12 +1251,12 @@ def _ollama_validation_error(binary: str | Path) -> str:
     return ""
 
 
-def _ollama_binary_usable(binary: str | Path) -> bool:
-    return _ollama_validation_error(binary) == ""
+def _ollama_binary_usable(binary: str | Path, home_dir: str | Path | None = None) -> bool:
+    return _ollama_validation_error(binary, home_dir=home_dir) == ""
 
 
-def _ollama_env() -> dict[str, str]:
-    layout = storage_layout()
+def _ollama_env(home_dir: str | Path | None = None) -> dict[str, str]:
+    layout = storage_layout(home_dir)
     env = os.environ.copy()
     env.update(layout.env())
     local_lib = layout.home / "lib" / "ollama"
@@ -1266,8 +1267,8 @@ def _ollama_env() -> dict[str, str]:
     return env
 
 
-def _ollama_models() -> set[str]:
-    ollama = _ollama_binary()
+def _ollama_models(home_dir: str | Path | None = None) -> set[str]:
+    ollama = _ollama_binary(home_dir)
     if not ollama:
         return set()
     try:
@@ -1276,7 +1277,7 @@ def _ollama_models() -> set[str]:
             capture_output=True,
             text=True,
             timeout=10,
-            env=_ollama_env(),
+            env=_ollama_env(home_dir),
         )
         if result.returncode != 0:
             return set()
@@ -1292,9 +1293,12 @@ def _ollama_models() -> set[str]:
     return installed
 
 
-def model_catalog_with_status() -> dict[str, Any]:
+def model_catalog_with_status(home_dir: str | Path | None = None) -> dict[str, Any]:
     vram_gb = _detect_vram_gb()
-    installed = _ollama_models()
+    try:
+        installed = _ollama_models(home_dir)
+    except TypeError:
+        installed = _ollama_models()
     recommended = _recommended_model_ids(vram_gb)
     models: list[dict[str, Any]] = []
 
@@ -1310,12 +1314,17 @@ def model_catalog_with_status() -> dict[str, Any]:
         data["install_command"] = f"ollama pull {model.install_target}"
         models.append(data)
 
+    try:
+        ollama_available = bool(_ollama_binary(home_dir))
+    except TypeError:
+        ollama_available = bool(_ollama_binary())
+
     return {
         "models": models,
         "recommended_ids": [model["id"] for model in models if model["recommended"]],
         "installed_targets": sorted(installed),
         "detected_vram_gb": vram_gb,
-        "ollama_available": bool(_ollama_binary()),
+        "ollama_available": ollama_available,
         "ollama_running": _ollama_reachable(),
         "count": len(models),
     }
@@ -1334,6 +1343,87 @@ def _ollama_reachable() -> bool:
             return True
     except OSError:
         return False
+
+
+def ollama_runtime_doctor(home_dir: str | Path | None = None) -> dict[str, Any]:
+    """Return a rootless, non-mutating diagnosis of the local Ollama path.
+
+    This intentionally does not download, start, or repair anything. It gives
+    the WebUI one clear state to explain why local Ask AI is or is not ready.
+    """
+    layout = storage_layout(home_dir)
+    local_candidate = layout.bin_dir / "ollama"
+    binary = _ollama_binary(home_dir)
+    binary_error = ""
+    if not binary and local_candidate.exists():
+        binary_error = _ollama_validation_error(local_candidate, home_dir=home_dir)
+
+    catalog = model_catalog_with_status(home_dir)
+    installed_targets = list(catalog.get("installed_targets", []))
+    recommended_models = [
+        model for model in catalog.get("models", [])
+        if model.get("recommended")
+    ]
+    missing_recommended = [
+        model for model in recommended_models
+        if not model.get("installed")
+    ]
+    running = bool(catalog.get("ollama_running"))
+
+    if not binary:
+        status = "missing-runtime"
+        ready = False
+        summary = "Local AI runtime is not installed yet."
+        next_action = {
+            "id": "rootless-ollama",
+            "label": "Install runtime",
+            "description": "Install the rootless Ollama runtime under NVH_HOME.",
+        }
+    elif not running:
+        status = "server-offline"
+        ready = False
+        summary = "Local AI runtime is installed but the model server is not responding."
+        next_action = {
+            "id": "rootless-ollama",
+            "label": "Repair runtime",
+            "description": "Reinstall or restart the rootless Ollama runtime.",
+        }
+    elif missing_recommended:
+        status = "missing-models"
+        ready = False
+        summary = (
+            f"Local AI is running; {len(missing_recommended)} recommended model(s) "
+            "still need to download."
+        )
+        next_action = {
+            "id": "starter-models",
+            "label": "Download models",
+            "description": "Download GPU-fit starter models for nvWizard and Ask AI.",
+        }
+    else:
+        status = "ready"
+        ready = True
+        summary = f"Local AI is ready with {len(installed_targets)} installed model target(s)."
+        next_action = None
+
+    return {
+        "checked_at": datetime.now(UTC).isoformat(),
+        "status": status,
+        "ready": ready,
+        "summary": summary,
+        "binary": binary,
+        "binary_valid": bool(binary),
+        "binary_error": binary_error,
+        "local_candidate": str(local_candidate),
+        "server_running": running,
+        "installed_targets": installed_targets,
+        "recommended_ids": catalog.get("recommended_ids", []),
+        "missing_recommended_ids": [model.get("id", "") for model in missing_recommended],
+        "missing_recommended_models": missing_recommended,
+        "detected_vram_gb": catalog.get("detected_vram_gb", 0),
+        "next_action": next_action,
+        "rootless": True,
+    }
 
 
 def pack_status(pack: StudioPack) -> dict[str, Any]:
