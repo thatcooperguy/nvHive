@@ -1829,12 +1829,12 @@ export default function SetupPage() {
     if (actionId.startsWith('repair-receipt:')) return !storageReady ? 'Use Drive' : 'Repair';
     if (actionId === 'storage') return storageAutopilotBusy ? 'Finding' : 'Use Drive';
     if (!storageReady) return storageAutopilotBusy ? 'Finding' : 'Use Drive';
-    if (actionId === 'starter-models') return modelsInstalling ? 'Downloading' : 'Download';
+    if (actionId === 'starter-models') return modelsInstalling ? 'Downloading Models' : 'Download Models';
     if (actionId === 'rootless-ollama') return studioInstalling ? 'Installing' : 'Install Runtime';
     if (actionId === 'agent-lab') return studioInstalling ? 'Installing' : 'Install Agent Lab';
-    if (studioPacks.some(pack => pack.id === actionId)) return studioInstalling ? 'Installing' : 'Install';
+    if (studioPacks.some(pack => pack.id === actionId)) return studioInstalling ? 'Installing' : 'Install Pack';
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
-      return comfyInstalling ? 'Installing' : 'Install';
+      return comfyInstalling ? 'Installing' : 'Install ComfyUI';
     }
     if (actionId === 'repair-workspace') return workspaceRepairing ? 'Repairing' : 'Repair';
     if (actionId === 'smoke-tests') return 'Open';

@@ -105,6 +105,8 @@ Works on any Linux box with no root. Installs to `NVH_HOME` when set, otherwise 
 
 The WebUI opener is rootless-first: it honors `NVH_BROWSER` when set, then tries Firefox installed under `$NVH_HOME/apps/firefox`, then system Firefox, then Chromium/Chrome/open desktop handlers. On Linux x86_64, if no usable Firefox is found, nvHive can download Firefox into `NVH_HOME` without sudo. Set `NVH_FIREFOX_AUTO_INSTALL=0` to skip that browser bootstrap.
 
+Runtime downloads use latest compatible stable builds by default. For reproducible labs, pin Ollama with `NVH_OLLAMA_VERSION=vX.Y.Z` or override the exact rootless bundle with `NVH_OLLAMA_URL=...`.
+
 If `NVH_HOME` is not set, the installer checks `$HOME`, `/mnt`, `/media/$USER`, `/workspace`, `/data`, `/persistent`, and `/storage`. It also installs a rootless reset helper:
 
 ```bash

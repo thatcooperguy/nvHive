@@ -221,4 +221,6 @@ nvh safe "summarize this"    # local-only prompt path
 
 Browser launch is also rootless-first. `nvh webui` honors `NVH_BROWSER`, then prefers `$NVH_HOME/apps/firefox/firefox`, then system Firefox, then Chromium/Chrome and desktop openers. On Linux x86_64 it can install Firefox under `NVH_HOME` without sudo; set `NVH_FIREFOX_AUTO_INSTALL=0` to disable that fallback.
 
+Rootless runtimes use latest compatible stable downloads by default. Pin Ollama only when you need a reproducible lab image: `NVH_OLLAMA_VERSION=vX.Y.Z`. Use `NVH_OLLAMA_URL=...` for an exact preapproved bundle.
+
 Back to [README](../README.md)

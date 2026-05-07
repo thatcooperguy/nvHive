@@ -26,6 +26,7 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from nvh.integrations.node_runtime import (
     find_fnm_binary,
@@ -1591,6 +1592,148 @@ def _platform_arch() -> str:
     raise RuntimeError(f"Unsupported Ollama Linux architecture: {platform.machine()}")
 
 
+def _ollama_download_candidates(arch: str) -> list[tuple[str, str]]:
+    """Return latest-compatible Ollama archive candidates.
+
+    The official Linux installer probes the current ``.tar.zst`` package first
+    and falls back to legacy ``.tgz`` packages for older pinned versions. nvHive
+    follows the same policy, but extracts into NVH_HOME instead of /usr.
+    """
+    custom_url = os.environ.get("NVH_OLLAMA_URL", "").strip()
+    if custom_url:
+        archive_type = "tar.zst" if custom_url.split("?", 1)[0].endswith(".tar.zst") else "tgz"
+        return [(custom_url, archive_type)]
+
+    version = (os.environ.get("NVH_OLLAMA_VERSION") or os.environ.get("OLLAMA_VERSION") or "").strip()
+    version_param = f"?version={quote(version)}" if version else ""
+    base = os.environ.get("NVH_OLLAMA_DOWNLOAD_BASE", "https://ollama.com/download").rstrip("/")
+    name = f"ollama-linux-{arch}"
+    return [
+        (f"{base}/{name}.tar.zst{version_param}", "tar.zst"),
+        (f"{base}/{name}.tgz{version_param}", "tgz"),
+    ]
+
+
+async def _download_ollama_archive(
+    curl: str,
+    arch: str,
+    stage: Path,
+) -> AsyncIterator[dict[str, Any]]:
+    """Download the best Ollama archive without marking fallback attempts failed."""
+    last_error = ""
+    for url, archive_type in _ollama_download_candidates(arch):
+        archive = stage / f"ollama-linux-{arch}.{archive_type}"
+        yield {
+            "event": "step",
+            "status": "running",
+            "message": f"Downloading latest compatible Ollama Linux {arch} bundle",
+            "url": url,
+        }
+        process = await asyncio.create_subprocess_exec(
+            curl,
+            "-fL",
+            "--retry",
+            "2",
+            "--connect-timeout",
+            "20",
+            "--show-error",
+            "-o",
+            str(archive),
+            url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        output = ""
+        assert process.stdout is not None
+        async for raw_line in process.stdout:
+            line = raw_line.decode("utf-8", errors="replace").rstrip()
+            if line:
+                output = line
+                yield {"event": "log", "status": "running", "message": line}
+        code = await process.wait()
+        if code == 0 and archive.exists() and archive.stat().st_size > 0:
+            yield {
+                "event": "step",
+                "status": "complete",
+                "message": f"Ollama {archive_type} bundle downloaded",
+                "url": url,
+                "archive": str(archive),
+                "archive_type": archive_type,
+            }
+            yield {
+                "event": "archive",
+                "status": "complete",
+                "message": str(archive),
+                "archive": str(archive),
+                "archive_type": archive_type,
+            }
+            return
+        last_error = output or f"curl exited {code}"
+        yield {
+            "event": "log",
+            "status": "running",
+            "message": f"Ollama candidate unavailable ({archive_type}); trying fallback. Detail: {last_error}",
+            "url": url,
+            "return_code": code,
+        }
+
+    yield {
+        "event": "error",
+        "status": "failed",
+        "message": f"Could not download Ollama Linux {arch} bundle. Last error: {last_error}",
+    }
+    raise RuntimeError(f"Could not download Ollama Linux {arch} bundle")
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _safe_extract_member(tar: tarfile.TarFile, member: tarfile.TarInfo, target: Path) -> None:
+    target_resolved = target.resolve()
+    destination = (target / member.name).resolve()
+    if not _is_relative_to(destination, target_resolved):
+        raise RuntimeError(f"Unsafe Ollama archive member: {member.name}")
+    if member.issym() or member.islnk():
+        link_target = Path(member.linkname)
+        linked = link_target if link_target.is_absolute() else destination.parent / link_target
+        if not _is_relative_to(linked.resolve(), target_resolved):
+            raise RuntimeError(f"Unsafe Ollama archive link: {member.name} -> {member.linkname}")
+    try:
+        tar.extract(member, target, filter="data")
+    except TypeError:
+        tar.extract(member, target)
+
+
+def _extract_ollama_archive(archive: Path, archive_type: str, target: Path) -> None:
+    target.mkdir(parents=True, exist_ok=True)
+    if archive_type == "tar.zst":
+        try:
+            import zstandard as zstd
+        except Exception as exc:
+            raise RuntimeError(
+                "Ollama now publishes Linux bundles as .tar.zst; nvHive needs the "
+                "Python zstandard package to extract them without sudo."
+            ) from exc
+        with archive.open("rb") as fh:
+            reader = zstd.ZstdDecompressor().stream_reader(fh)
+            try:
+                with tarfile.open(fileobj=reader, mode="r|") as tar:
+                    for member in tar:
+                        _safe_extract_member(tar, member, target)
+            finally:
+                reader.close()
+        return
+
+    with tarfile.open(archive, "r:gz") as tar:
+        for member in tar.getmembers():
+            _safe_extract_member(tar, member, target)
+
+
 async def _install_rootless_ollama(pack: StudioPack, force_update: bool) -> AsyncIterator[dict[str, Any]]:
     if _ollama_binary() and not force_update:
         yield {"event": "step", "status": "complete", "message": "Ollama already available"}
@@ -1603,13 +1746,11 @@ async def _install_rootless_ollama(pack: StudioPack, force_update: bool) -> Asyn
         return
 
     curl = shutil.which("curl")
-    tar = shutil.which("tar")
-    if not curl or not tar:
-        yield {"event": "error", "status": "failed", "message": "curl and tar are required for rootless Ollama."}
+    if not curl:
+        yield {"event": "error", "status": "failed", "message": "curl is required for rootless Ollama."}
         return
 
     arch = _platform_arch()
-    url = f"https://ollama.com/download/ollama-linux-{arch}.tgz"
     layout = storage_layout()
     local_binary = layout.bin_dir / "ollama"
     existing_error = _ollama_validation_error(local_binary) if local_binary.exists() else ""
@@ -1623,18 +1764,34 @@ async def _install_rootless_ollama(pack: StudioPack, force_update: bool) -> Asyn
     target = layout.home
     target.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix="ollama-", dir=str(studio_root())))
-    archive = stage / f"ollama-linux-{arch}.tgz"
+    archive: Path | None = None
+    archive_type = ""
 
-    async for event in _run_command(
-        [curl, "-fL", url, "-o", str(archive)],
-        label=f"Download Ollama Linux {arch} bundle",
-    ):
+    async for event in _download_ollama_archive(curl, arch, stage):
+        if event.get("event") == "archive":
+            archive = Path(str(event["archive"]))
+            archive_type = str(event["archive_type"])
+            continue
         yield event
-    async for event in _run_command(
-        [tar, "-xzf", str(archive), "-C", str(target)],
-        label=f"Extract Ollama into {target}",
-    ):
-        yield event
+
+    if archive is None:
+        yield {"event": "error", "status": "failed", "message": "Ollama archive download did not complete."}
+        return
+
+    yield {"event": "step", "status": "running", "message": f"Extracting Ollama into {target}"}
+    try:
+        if (target / "lib" / "ollama").exists():
+            shutil.rmtree(target / "lib" / "ollama", ignore_errors=True)
+        _extract_ollama_archive(archive, archive_type, target)
+    except Exception as exc:
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": f"Ollama archive extraction failed: {exc}",
+            "archive": str(archive),
+        }
+        return
+    yield {"event": "step", "status": "complete", "message": f"Extract Ollama into {target} complete"}
 
     verified = _ollama_binary()
     if not verified:

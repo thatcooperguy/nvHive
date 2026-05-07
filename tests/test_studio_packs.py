@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import inspect
+import io
 import subprocess
 import sys
+import tarfile
 
 import pytest
 
@@ -135,6 +137,51 @@ def test_run_command_supports_long_install_timeout() -> None:
     signature = inspect.signature(studio_packs._run_command)
 
     assert "timeout" in signature.parameters
+
+
+def test_ollama_download_candidates_prefer_latest_tar_zst(monkeypatch) -> None:
+    monkeypatch.delenv("NVH_OLLAMA_URL", raising=False)
+    monkeypatch.delenv("NVH_OLLAMA_VERSION", raising=False)
+    monkeypatch.delenv("OLLAMA_VERSION", raising=False)
+
+    candidates = studio_packs._ollama_download_candidates("amd64")
+
+    assert candidates[0] == ("https://ollama.com/download/ollama-linux-amd64.tar.zst", "tar.zst")
+    assert candidates[1] == ("https://ollama.com/download/ollama-linux-amd64.tgz", "tgz")
+
+
+def test_ollama_download_candidates_support_version_pin(monkeypatch) -> None:
+    monkeypatch.delenv("NVH_OLLAMA_URL", raising=False)
+    monkeypatch.setenv("NVH_OLLAMA_VERSION", "v1.2.3")
+
+    candidates = studio_packs._ollama_download_candidates("amd64")
+
+    assert candidates[0][0].endswith("ollama-linux-amd64.tar.zst?version=v1.2.3")
+    assert candidates[1][0].endswith("ollama-linux-amd64.tgz?version=v1.2.3")
+
+
+def test_extract_ollama_tar_zst_into_rootless_home(tmp_path) -> None:
+    zstd = pytest.importorskip("zstandard")
+    home = tmp_path / "nvhive"
+    archive = tmp_path / "ollama-linux-amd64.tar.zst"
+    raw_tar = io.BytesIO()
+    with tarfile.open(fileobj=raw_tar, mode="w") as tar:
+        data = b"#!/usr/bin/env bash\n"
+        info = tarfile.TarInfo("bin/ollama")
+        info.size = len(data)
+        info.mode = 0o755
+        tar.addfile(info, io.BytesIO(data))
+        lib = b"runtime"
+        lib_info = tarfile.TarInfo("lib/ollama/runner")
+        lib_info.size = len(lib)
+        lib_info.mode = 0o644
+        tar.addfile(lib_info, io.BytesIO(lib))
+    archive.write_bytes(zstd.ZstdCompressor().compress(raw_tar.getvalue()))
+
+    studio_packs._extract_ollama_archive(archive, "tar.zst", home)
+
+    assert (home / "bin" / "ollama").exists()
+    assert (home / "lib" / "ollama" / "runner").read_text(encoding="utf-8") == "runtime"
 
 
 @pytest.mark.asyncio
