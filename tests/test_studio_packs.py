@@ -142,12 +142,20 @@ def test_run_command_supports_long_install_timeout() -> None:
 def test_ollama_download_candidates_prefer_latest_tar_zst(monkeypatch) -> None:
     monkeypatch.delenv("NVH_OLLAMA_URL", raising=False)
     monkeypatch.delenv("NVH_OLLAMA_VERSION", raising=False)
-    monkeypatch.delenv("OLLAMA_VERSION", raising=False)
+    monkeypatch.setenv("OLLAMA_VERSION", "not-an-nvhive-runtime-pin")
 
     candidates = studio_packs._ollama_download_candidates("amd64")
 
     assert candidates[0] == ("https://ollama.com/download/ollama-linux-amd64.tar.zst", "tar.zst")
-    assert candidates[1] == ("https://ollama.com/download/ollama-linux-amd64.tgz", "tgz")
+    assert candidates[1] == (
+        "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst",
+        "tar.zst",
+    )
+    assert candidates[2] == ("https://ollama.com/download/ollama-linux-amd64.tgz", "tgz")
+    assert candidates[3] == (
+        "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz",
+        "tgz",
+    )
 
 
 def test_ollama_download_candidates_support_version_pin(monkeypatch) -> None:
@@ -157,7 +165,9 @@ def test_ollama_download_candidates_support_version_pin(monkeypatch) -> None:
     candidates = studio_packs._ollama_download_candidates("amd64")
 
     assert candidates[0][0].endswith("ollama-linux-amd64.tar.zst?version=v1.2.3")
-    assert candidates[1][0].endswith("ollama-linux-amd64.tgz?version=v1.2.3")
+    assert candidates[1][0].endswith("/releases/download/v1.2.3/ollama-linux-amd64.tar.zst")
+    assert candidates[2][0].endswith("ollama-linux-amd64.tgz?version=v1.2.3")
+    assert candidates[3][0].endswith("/releases/download/v1.2.3/ollama-linux-amd64.tgz")
 
 
 def test_extract_ollama_tar_zst_into_rootless_home(tmp_path) -> None:

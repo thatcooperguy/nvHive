@@ -513,7 +513,7 @@ ollama_arch() {
 
 ollama_download_candidates() {
     local arch="$1"
-    local custom_url base version version_param
+    local custom_url base version version_param github_tag github_base
     custom_url="${NVH_OLLAMA_URL:-}"
     if [ -n "$custom_url" ]; then
         case "${custom_url%%\?*}" in
@@ -525,12 +525,23 @@ ollama_download_candidates() {
 
     base="${NVH_OLLAMA_DOWNLOAD_BASE:-https://ollama.com/download}"
     base="${base%/}"
-    version="${NVH_OLLAMA_VERSION:-${OLLAMA_VERSION:-}}"
+    version="${NVH_OLLAMA_VERSION:-}"
     version_param=""
     [ -n "$version" ] && version_param="?version=$version"
+    if [ -n "$version" ]; then
+        case "$version" in
+            v*) github_tag="$version" ;;
+            *) github_tag="v$version" ;;
+        esac
+        github_base="https://github.com/ollama/ollama/releases/download/$github_tag"
+    else
+        github_base="https://github.com/ollama/ollama/releases/latest/download"
+    fi
 
     printf 'tar.zst|%s/ollama-linux-%s.tar.zst%s\n' "$base" "$arch" "$version_param"
+    printf 'tar.zst|%s/ollama-linux-%s.tar.zst\n' "$github_base" "$arch"
     printf 'tgz|%s/ollama-linux-%s.tgz%s\n' "$base" "$arch" "$version_param"
+    printf 'tgz|%s/ollama-linux-%s.tgz\n' "$github_base" "$arch"
 }
 
 extract_rootless_ollama_archive() {

@@ -1597,20 +1597,29 @@ def _ollama_download_candidates(arch: str) -> list[tuple[str, str]]:
 
     The official Linux installer probes the current ``.tar.zst`` package first
     and falls back to legacy ``.tgz`` packages for older pinned versions. nvHive
-    follows the same policy, but extracts into NVH_HOME instead of /usr.
+    follows the same policy, adds a direct GitHub release-asset fallback, and
+    extracts into NVH_HOME instead of /usr.
     """
     custom_url = os.environ.get("NVH_OLLAMA_URL", "").strip()
     if custom_url:
         archive_type = "tar.zst" if custom_url.split("?", 1)[0].endswith(".tar.zst") else "tgz"
         return [(custom_url, archive_type)]
 
-    version = (os.environ.get("NVH_OLLAMA_VERSION") or os.environ.get("OLLAMA_VERSION") or "").strip()
+    version = os.environ.get("NVH_OLLAMA_VERSION", "").strip()
     version_param = f"?version={quote(version)}" if version else ""
+    github_tag = version if version.startswith("v") else f"v{version}" if version else "latest"
+    github_base = (
+        f"https://github.com/ollama/ollama/releases/download/{github_tag}"
+        if version
+        else "https://github.com/ollama/ollama/releases/latest/download"
+    )
     base = os.environ.get("NVH_OLLAMA_DOWNLOAD_BASE", "https://ollama.com/download").rstrip("/")
     name = f"ollama-linux-{arch}"
     return [
         (f"{base}/{name}.tar.zst{version_param}", "tar.zst"),
+        (f"{github_base}/{name}.tar.zst", "tar.zst"),
         (f"{base}/{name}.tgz{version_param}", "tgz"),
+        (f"{github_base}/{name}.tgz", "tgz"),
     ]
 
 

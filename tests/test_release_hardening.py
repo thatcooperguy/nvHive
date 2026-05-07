@@ -120,6 +120,7 @@ def test_linux_installer_verifies_rootless_ollama_binary() -> None:
     assert "ollama-linux-%s.tgz" in install
     assert "NVH_OLLAMA_VERSION" in install
     assert "NVH_OLLAMA_URL" in install
+    assert "github.com/ollama/ollama/releases" in install
     assert "_extract_ollama_archive" in install
     assert "tar -xzf" not in install
     assert '"$bin" --version' in install
