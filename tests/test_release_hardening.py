@@ -92,6 +92,17 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     assert "workstation --home-dir" in install
 
 
+def test_linux_installer_verifies_rootless_ollama_binary() -> None:
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    assert "install_rootless_ollama_binary" in install
+    assert "ollama_binary_valid" in install
+    assert "ollama-linux-${arch}.tgz" in install
+    assert 'curl -fL "$url"' in install
+    assert '"$bin" --version' in install
+    assert "ollama-linux-amd64 -o \"$OLLAMA_BIN\"" not in install
+
+
 def test_linux_uninstaller_is_rootless_and_supports_purge_reset() -> None:
     uninstall = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
 

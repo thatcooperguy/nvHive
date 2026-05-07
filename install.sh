@@ -251,7 +251,7 @@ install_shell_hook() {
 
 # >>> nvhive rootless env >>>
 source "$NVH_HOME/nvh-env.sh"
-[ -x "$NVH_BIN/ollama" ] && ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && OLLAMA_MODELS="$OLLAMA_MODELS" "$NVH_BIN/ollama" serve >/dev/null 2>&1 &
+[ -x "$NVH_BIN/ollama" ] && "$NVH_BIN/ollama" --version >/dev/null 2>&1 && ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && OLLAMA_MODELS="$OLLAMA_MODELS" "$NVH_BIN/ollama" serve >/dev/null 2>&1 &
 # <<< nvhive rootless env <<<
 RCEOF
     mv "$tmp" "$rc"
@@ -495,6 +495,67 @@ sync_ollama_default_model_config() {
         set_config_ollama_model "$cfg" "$DEFAULT_OLLAMA_MODEL"
         echo -e "${G}Ollama config aligned to GPU recommendation: $DEFAULT_OLLAMA_MODEL${N}"
     fi
+}
+
+ollama_binary_valid() {
+    local bin="${1:-}"
+    [ -n "$bin" ] || return 1
+    [ -x "$bin" ] || return 1
+    "$bin" --version >/dev/null 2>&1
+}
+
+ollama_arch() {
+    case "$(uname -m 2>/dev/null || printf unknown)" in
+        x86_64|amd64) printf 'amd64' ;;
+        aarch64|arm64) printf 'arm64' ;;
+        *) return 1 ;;
+    esac
+}
+
+install_rootless_ollama_binary() {
+    local arch url stage archive
+    OLLAMA_BIN="$NVH_BIN/ollama"
+    if ollama_binary_valid "$OLLAMA_BIN"; then
+        return 0
+    fi
+
+    if [ -e "$OLLAMA_BIN" ]; then
+        echo -e "${Y}Existing Ollama binary is not runnable; replacing it rootlessly.${N}"
+    else
+        echo -e "${B}Installing Ollama (local AI)...${N}"
+    fi
+
+    if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
+        echo -e "${R}curl and tar are required to install Ollama without root.${N}"
+        return 1
+    fi
+    if ! arch="$(ollama_arch)"; then
+        echo -e "${R}Unsupported Ollama Linux architecture: $(uname -m 2>/dev/null || printf unknown)${N}"
+        return 1
+    fi
+
+    url="https://ollama.com/download/ollama-linux-${arch}.tgz"
+    stage="$NVH_CACHE/bootstrap/ollama-${arch}"
+    archive="$stage/ollama-linux-${arch}.tgz"
+    rm -rf "$stage"
+    mkdir -p "$stage" "$NVH_BIN" "$NVH_HOME/lib"
+    if ! curl -fL "$url" -o "$archive" >>"$NVH_LOGS/ollama-install.log" 2>&1; then
+        echo -e "${R}Ollama download failed.${N} ${D}Log: $NVH_LOGS/ollama-install.log${N}"
+        return 1
+    fi
+    if ! tar -xzf "$archive" -C "$NVH_HOME" >>"$NVH_LOGS/ollama-install.log" 2>&1; then
+        echo -e "${R}Ollama extraction failed.${N} ${D}Log: $NVH_LOGS/ollama-install.log${N}"
+        return 1
+    fi
+    chmod +x "$OLLAMA_BIN" 2>/dev/null || true
+    if ! ollama_binary_valid "$OLLAMA_BIN"; then
+        echo -e "${R}Ollama installed but did not pass its Linux binary check.${N}"
+        echo -e "${D}Binary: $OLLAMA_BIN${N}"
+        echo -e "${D}Log: $NVH_LOGS/ollama-install.log${N}"
+        return 1
+    fi
+    echo -e "${G}Ollama runtime ready: $OLLAMA_BIN${N}"
+    return 0
 }
 
 # --- Detect Linux Desktop ---
@@ -762,7 +823,7 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
     # Ensure Ollama is running
     OLLAMA_BIN="$NVH_BIN/ollama"
     [ -x "$NVH_HOME/ollama" ] && [ ! -x "$OLLAMA_BIN" ] && OLLAMA_BIN="$NVH_HOME/ollama"
-    if [ -x "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    if ollama_binary_valid "$OLLAMA_BIN" && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
         echo -e "${D}Starting Ollama...${N}"
         OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" serve &>/dev/null &
         sleep 2
@@ -925,14 +986,10 @@ fi
 # ---------------------------------------------------------------------------
 if [ -n "$GPU_NAME" ]; then
     OLLAMA_BIN="$NVH_BIN/ollama"
-    if [ ! -f "$OLLAMA_BIN" ]; then
-        echo -e "${B}Installing Ollama (local AI)...${N}"
-        curl -sSL https://ollama.com/download/ollama-linux-amd64 -o "$OLLAMA_BIN" 2>/dev/null
-        chmod +x "$OLLAMA_BIN"
-    fi
+    install_rootless_ollama_binary || OLLAMA_BIN=""
 
     # Start Ollama
-    if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
         echo -e "${B}Starting Ollama...${N}"
         mkdir -p "$OLLAMA_MODELS"
         OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" serve &>/dev/null &
@@ -941,7 +998,7 @@ if [ -n "$GPU_NAME" ]; then
 
     # Pull the same model written into config so first launch does not ask for
     # a second, smaller default.
-    if curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    if [ -n "$OLLAMA_BIN" ] && curl -sf http://localhost:11434/api/tags &>/dev/null; then
         MODEL="$DEFAULT_OLLAMA_MODEL"
 
         if ! "$OLLAMA_BIN" list 2>/dev/null | grep -q "$MODEL"; then

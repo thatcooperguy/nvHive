@@ -57,6 +57,7 @@ import type {
   ProductionReadinessReport,
   DiagnosticsReport,
   SetupAssistantReply,
+  AutoRepairResult,
   SetupCatalogResult,
   SetupHelperReport,
   SetupReceiptsResult,
@@ -555,6 +556,10 @@ export default function SetupPage() {
     try {
       const reply = await askSetupAssistant(question, storageStatus?.layout.home);
       setAssistantReply(reply);
+      if (reply.focus === 'debugger' || reply.focus === 'repair') {
+        const concise = reply.answer.length > 320 ? `${reply.answer.slice(0, 320)}...` : reply.answer;
+        setWizardBuildMessage(concise);
+      }
     } catch (err) {
       setAssistantError(err instanceof Error ? err.message : 'Setup helper could not answer');
     } finally {
@@ -567,8 +572,9 @@ export default function SetupPage() {
   };
 
   const handleQuickDiagnosis = () => {
+    setWizardBuildMessage('nvWizard is checking local state, jobs, receipts, logs, and rootless repair options.');
     void askSetupQuestion(
-      'Check this Linux GPU desktop for rootless install blockers. Focus on persistent storage, GPU/VRAM, Python/runtime, Ollama, local models, ComfyUI, and any failed install jobs. Recommend the safest next button to press.',
+      'Debug this Linux GPU desktop setup. Read local jobs, receipts, logs, diagnostics, persistent storage, GPU/VRAM, Python/runtime, Ollama, local models, ComfyUI, and any failed install jobs. Explain what likely broke and recommend the safest next button to press.',
       true,
     );
   };
@@ -589,8 +595,15 @@ export default function SetupPage() {
   const handleRepairWorkspace = async () => {
     if (workspaceRepairing) return;
     setWorkspaceRepairing(true);
+    setWizardBuildMessage('nvWizard is running safe rootless repairs. No sudo, no system changes.');
     try {
-      await repairSetupWorkspace(storageStatus?.layout.home);
+      const result: AutoRepairResult = await repairSetupWorkspace(storageStatus?.layout.home);
+      setWizardBuildMessage(result.summary);
+      if (result.errors.length > 0) {
+        setSetupInventoryError(result.errors.map(error => error.error ?? error.summary).join(' | '));
+      } else {
+        setSetupInventoryError(null);
+      }
       await Promise.all([
         refreshSetupInventory(false, storageStatus?.layout.home),
         refreshSetupHelper(storageStatus?.layout.home),
@@ -598,9 +611,9 @@ export default function SetupPage() {
         refreshComfyUI(),
         refreshInstallJobs(),
       ]);
-      setSetupInventoryError(null);
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Workspace repair failed');
+      setWizardBuildMessage(err instanceof Error ? `nvWizard repair failed: ${err.message}` : 'nvWizard repair failed.');
     } finally {
       setWorkspaceRepairing(false);
     }
@@ -1292,8 +1305,7 @@ export default function SetupPage() {
         setWizardBuildMessage('nvWizard is finding the persistent block storage first, then it will build the mission there.');
         const detectedStorage = await handleUseRecommendedStorage();
         if (!detectedStorage?.ok || detectedStorage.configured_by === 'default') {
-          setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. Advanced Details has the manual override if the host is unusual.');
-          setAdvancedSetupOpen(true);
+          setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. It will stay on the simple view; open Advanced Details only if you want the manual override.');
           return;
         }
         missionHomeDir = detectedStorage.layout.home;
@@ -1353,12 +1365,11 @@ export default function SetupPage() {
             void refreshSetupHelper(missionHomeDir);
           },
           onError: error => {
-            setWizardBuildMessage(`nvWizard paused: ${error}`);
+            setWizardBuildMessage(`nvWizard paused: ${error}. Ask nvWizard to read the logs, or open Advanced Details if you want the full job trail.`);
             setActiveWizardBuild(null);
             setStudioInstalling(false);
             setModelsInstalling(false);
             setComfyInstalling(false);
-            setAdvancedSetupOpen(true);
             void refreshInstallJobs();
             void refreshSetupInventory(false);
             void refreshSetupHelper(missionHomeDir);
@@ -1366,8 +1377,10 @@ export default function SetupPage() {
         }
       );
     } catch (err) {
-      setWizardBuildMessage(err instanceof Error ? `nvWizard paused: ${err.message}` : 'nvWizard paused: setup needs attention.');
-      setAdvancedSetupOpen(true);
+      setWizardBuildMessage(err instanceof Error
+        ? `nvWizard paused: ${err.message}. Ask nvWizard to read logs, jobs, and receipts before opening Advanced Details.`
+        : 'nvWizard paused: setup needs attention. Ask nvWizard to read logs, jobs, and receipts before opening Advanced Details.'
+      );
       setActiveWizardBuild(null);
       void refreshInstallJobs();
       void refreshSetupInventory(false);
@@ -1403,8 +1416,7 @@ export default function SetupPage() {
       void refreshWorkspacePassport(missionHomeDir);
       void refreshSetupHelper(missionHomeDir);
     } else if (['failed', 'interrupted', 'canceled'].includes(finishedMission.status)) {
-      setWizardBuildMessage(finishedMission.message || `Mission build ${finishedMission.status}. Advanced Details has the job log and repair steps.`);
-      setAdvancedSetupOpen(true);
+      setWizardBuildMessage(finishedMission.message || `Mission build ${finishedMission.status}. Ask nvWizard to explain the logs, or open Advanced Details for the full job trail.`);
       void refreshSetupInventory(false, missionHomeDir);
       void refreshSetupHelper(missionHomeDir);
     }
@@ -1726,8 +1738,8 @@ export default function SetupPage() {
   const advisorModeLabel = bootAgentHelper?.local_agent_ready
     ? 'local agent ready'
     : setupHelper?.assistant?.mode === 'offline-deterministic'
-      ? 'offline helper'
-      : setupHelper?.assistant?.mode ?? 'offline helper';
+      ? 'offline guide ready'
+      : setupHelper?.assistant?.mode ?? 'offline guide ready';
   const advisorSummary = assistantReply?.answer
     ?? setupHelper?.issues?.[0]?.title
     ?? setupHelper?.summary
@@ -1738,6 +1750,7 @@ export default function SetupPage() {
     'Where are my files saved?',
     'Will my data leave this VM?',
     'Can you fix this without sudo?',
+    'What broke in the logs?',
     'Which models fit this GPU?',
   ];
 
@@ -1817,6 +1830,9 @@ export default function SetupPage() {
     if (actionId === 'storage') return storageAutopilotBusy ? 'Finding' : 'Use Drive';
     if (!storageReady) return storageAutopilotBusy ? 'Finding' : 'Use Drive';
     if (actionId === 'starter-models') return modelsInstalling ? 'Downloading' : 'Download';
+    if (actionId === 'rootless-ollama') return studioInstalling ? 'Installing' : 'Install Runtime';
+    if (actionId === 'agent-lab') return studioInstalling ? 'Installing' : 'Install Agent Lab';
+    if (studioPacks.some(pack => pack.id === actionId)) return studioInstalling ? 'Installing' : 'Install';
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
       return comfyInstalling ? 'Installing' : 'Install';
     }
@@ -1837,6 +1853,47 @@ export default function SetupPage() {
     if (actionId === 'repair-workspace') return workspaceRepairing;
     if (actionId === 'smoke-tests' || actionId === 'repair-receipts') return false;
     return studioInstalling || !storageReady;
+  };
+
+  const handleSystemCheckClick = (label: string) => {
+    if (apiDisconnected || apiStatus === 'checking') return;
+    if (label === 'Storage') {
+      if (!storageReady) void handleUseRecommendedStorage();
+      else setWizardBuildMessage(`Storage looks ready at ${workspaceHome}. Large apps, models, jobs, logs, and outputs should stay on this persistent volume.`);
+      return;
+    }
+    if (label === 'GPU') {
+      const gpu = gpuInfo?.gpus?.[0];
+      setWizardBuildMessage(
+        gpu
+          ? `GPU detected: ${gpu.name} with ${gpu.vram_gb} GB VRAM. nvWizard will use that to recommend model sizes and GPU-fit installs.`
+          : 'No NVIDIA GPU was detected from the WebUI yet. nvWizard can still explain the host state, but the VM image may need provider/admin attention if nvidia-smi is unavailable.'
+      );
+      return;
+    }
+    if (label === 'Models') {
+      const missing = recommendedMissingModelIds();
+      if (missing.length > 0 && storageReady) handleInstallStudioModels(missing);
+      else setWizardBuildMessage(`Model fit looks aligned with this GPU profile: ${recommendedModelLabel}.`);
+      return;
+    }
+    if (label === 'Local AI') {
+      if (!localAiReady && storageReady) handleInstallStudioPacks(['rootless-ollama']);
+      else setWizardBuildMessage(localAiReady ? 'Local AI runtime is online. Chat can use local models when they are installed.' : 'Local AI can be installed rootlessly under the persistent workspace.');
+      return;
+    }
+    if (label === 'Runtime') {
+      if ((rootlessStatus === 'blocked' || rootlessStatus === 'warn') && storageReady) {
+        handleInstallStudioPacks(['python-runtime-fallback']);
+      } else {
+        setWizardBuildMessage(`Runtime strategy: ${rootlessRuntimeStrategy}. nvHive will stay rootless and avoid OS-level package changes.`);
+      }
+      return;
+    }
+    if (label === 'Boot') {
+      setWizardBuildMessage('nvWizard is rechecking the VM image, runtime, storage, and app drift without opening the advanced panel.');
+      void handleBootRecheck();
+    }
   };
 
   const handleRepairReceipt = (receipt: InstallReceipt) => {
@@ -1876,7 +1933,7 @@ export default function SetupPage() {
               onClick={() => setAdvancedSetupOpen(prev => !prev)}
               className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider sm:flex-shrink-0"
             >
-              {advancedSetupOpen ? 'Hide Advanced Details' : 'Advanced Details'}
+              {advancedSetupOpen ? 'Hide Advanced Details' : 'Show Advanced Details'}
             </button>
           </div>
         </div>
@@ -1942,10 +1999,16 @@ export default function SetupPage() {
             {systemCheckItems.slice(0, 4).map(item => {
               const tone = CHECK_TONES[item.state];
               return (
-                <span key={item.label} className={`inline-flex items-center gap-1.5 border ${tone.border} ${tone.bg} px-2 py-1`}>
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => handleSystemCheckClick(item.label)}
+                  className={`inline-flex items-center gap-1.5 border ${tone.border} ${tone.bg} px-2 py-1 transition-colors hover:border-[#76B900]`}
+                  title={`${item.label}: ${item.value}`}
+                >
                   <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
                   <span className="text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
-                </span>
+                </button>
               );
             })}
           </div>
@@ -2632,6 +2695,25 @@ export default function SetupPage() {
                     <div className="text-xs font-mono text-[#0a0a0a] leading-relaxed">
                       {assistantReply.answer}
                     </div>
+                    {((assistantReply.debug_findings?.length ?? 0) > 0 || (assistantReply.log_highlights?.length ?? 0) > 0) && (
+                      <details className="border border-[#e5e5e5] bg-[#fafafa] p-2">
+                        <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                          Debug evidence{assistantReply.diagnostics_report_id ? ` / ${assistantReply.diagnostics_report_id}` : ''}
+                        </summary>
+                        <div className="mt-2 space-y-1">
+                          {assistantReply.debug_findings?.slice(0, 3).map(finding => (
+                            <div key={finding} className="text-[10px] font-mono text-[#525252] leading-relaxed">
+                              {finding}
+                            </div>
+                          ))}
+                          {assistantReply.log_highlights?.slice(0, 4).map(line => (
+                            <div key={line} className="text-[10px] font-mono text-[#525252] leading-relaxed break-all">
+                              {line}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
                     {(assistantReply.official_repo_url || assistantReply.readme_url || assistantReply.grounding_sources?.length) && (
                       <div className="flex flex-wrap gap-1.5">
                         {assistantReply.official_repo_url && (
@@ -2761,11 +2843,17 @@ export default function SetupPage() {
                 {systemCheckItems.map(item => {
                   const tone = CHECK_TONES[item.state];
                   return (
-                    <div key={item.label} className={`inline-flex items-center gap-1.5 border ${tone.border} ${tone.bg} px-2 py-1 min-w-0`}>
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => handleSystemCheckClick(item.label)}
+                      className={`inline-flex items-center gap-1.5 border ${tone.border} ${tone.bg} px-2 py-1 min-w-0 transition-colors hover:border-[#76B900]`}
+                      title={`${item.label}: ${item.value}`}
+                    >
                       <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
                       <span className="text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
                       <span className={`text-[10px] font-mono truncate max-w-[11rem] ${tone.text}`}>{item.value}</span>
-                    </div>
+                    </button>
                   );
                 })}
               </div>

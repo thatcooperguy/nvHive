@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import subprocess
 import sys
 
 import pytest
@@ -76,6 +77,25 @@ def test_model_catalog_marks_vram_recommendations(monkeypatch) -> None:
     assert by_id["gemma3-4b"]["installed"] is True
     assert by_id["qwen3-8b"]["recommended"] is True
     assert by_id["deepseek-r1-8b"]["fits_vram"] is False
+
+
+def test_ollama_binary_ignores_unusable_local_file(tmp_path, monkeypatch) -> None:
+    home = tmp_path / "nvhive"
+    local = home / "bin" / "ollama"
+    local.parent.mkdir(parents=True)
+    local.write_text("not a linux binary", encoding="utf-8")
+    local.chmod(local.stat().st_mode | 0o755)
+
+    monkeypatch.setenv("NVH_HOME", str(home))
+    monkeypatch.setattr(studio_packs.shutil, "which", lambda _name: None)
+
+    def raise_exec_format(*_args, **_kwargs):
+        raise OSError(8, "Exec format error", str(local))
+
+    monkeypatch.setattr(subprocess, "run", raise_exec_format)
+
+    assert studio_packs._ollama_binary() == ""
+    assert "Exec format error" in studio_packs._ollama_validation_error(local)
 
 
 def test_godot_asset_selector_prefers_standard_linux_zip() -> None:

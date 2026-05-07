@@ -955,6 +955,9 @@ export interface SetupAssistantReply {
   official_repo_url?: string;
   readme_url?: string;
   grounding_sources?: string[];
+  diagnostics_report_id?: string | null;
+  debug_findings?: string[];
+  log_highlights?: string[];
   observations: {
     ready: boolean;
     issue_count?: number;

@@ -98,6 +98,83 @@ def test_setup_assistant_answers_student_boundary_questions(tmp_path, monkeypatc
     assert str(tmp_path / "nvh") in persistence["answer"]
 
 
+def test_setup_assistant_debugs_failed_jobs_and_logs(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    monkeypatch.setattr(
+        setup_agent,
+        "setup_helper_report",
+        lambda home_dir=None: {
+            "ready": False,
+            "summary": "1 setup item needs attention",
+            "actions": [
+                {
+                    "id": "rootless-ollama",
+                    "title": "Install rootless Ollama",
+                    "priority": 10,
+                    "status": "recommended",
+                    "command": "nvh studio --install rootless-ollama -y",
+                    "reason": "Local model runtime is missing.",
+                    "can_run_without_root": True,
+                },
+            ],
+            "receipts": {"count": 0, "unhealthy": 0, "receipts": []},
+            "assistant": {
+                "product": "nvHive / nvWizard",
+                "grounding_sources": ["local setup helper report", "install job logs"],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        setup_agent,
+        "_recent_failed_job",
+        lambda home_dir=None: {
+            "kind": "studio-pack-install",
+            "title": "Build AI Starter",
+            "status": "failed",
+            "message": "Exec format error: /home/kiosk/nvhive/bin/ollama",
+        },
+    )
+    monkeypatch.setattr(
+        setup_agent,
+        "_safe_diagnostics_report",
+        lambda home_dir=None: {
+            "report_id": "diag-test",
+            "checks": {
+                "jobs": {
+                    "ok": True,
+                    "data": {
+                        "failed_event_tails": [
+                            {
+                                "kind": "studio-pack-install",
+                                "status": "failed",
+                                "message": "Exec format error: /home/kiosk/nvhive/bin/ollama",
+                                "events": [{"message": "Exec format error: /home/kiosk/nvhive/bin/ollama"}],
+                            },
+                        ],
+                    },
+                },
+            },
+            "logs": {
+                "recent": [
+                    {
+                        "path": "/tmp/api.log",
+                        "lines": ["ERROR Exec format error: /home/kiosk/nvhive/bin/ollama"],
+                    },
+                ],
+            },
+        },
+    )
+
+    reply = setup_agent.setup_assistant_reply("What broke in the logs?", tmp_path / "nvh")
+
+    assert reply["focus"] == "debugger"
+    assert reply["diagnostics_report_id"] == "diag-test"
+    assert "bad or wrong-architecture Ollama binary" in reply["answer"]
+    assert reply["debug_findings"]
+    assert reply["log_highlights"]
+    assert reply["commands"] == ["nvh studio --install rootless-ollama -y"]
+
+
 def test_setup_helper_surfaces_unhealthy_receipt(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
     storage = SimpleNamespace(

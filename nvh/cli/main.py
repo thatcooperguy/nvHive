@@ -8004,6 +8004,8 @@ def workstation(
             no_api=False,
             api_port=api_port,
             dev=False,
+            open_browser=True,
+            verbose=False,
         )
 
 
@@ -8035,6 +8037,10 @@ def webui(
         False, "--dev",
         help="Run the Next.js development server instead of the production server",
     ),
+    open_browser: bool = typer.Option(
+        True, "--open/--no-open",
+        help="Open the WebUI in your browser when the server is ready",
+    ),
     verbose: bool = typer.Option(
         False, "--verbose",
         help="Print detailed WebUI bootstrap diagnostics",
@@ -8060,6 +8066,7 @@ def webui(
     """
     import shutil
     import subprocess
+    import threading
     from datetime import UTC, datetime
 
     from nvh.integrations import node_runtime
@@ -8111,6 +8118,57 @@ def webui(
             _webui_log(f"{label} stdout tail:\n" + "\n".join(result.stdout.splitlines()[-30:]))
         if result.stderr:
             _webui_log(f"{label} stderr tail:\n" + "\n".join(result.stderr.splitlines()[-30:]))
+
+    def _open_browser_url(url: str) -> bool:
+        linux_gui = bool(
+            os.environ.get("DISPLAY")
+            or os.environ.get("WAYLAND_DISPLAY")
+            or os.environ.get("XDG_CURRENT_DESKTOP")
+        )
+        if sys.platform.startswith("linux") and not linux_gui:
+            _webui_log(f"browser auto-open skipped; no Linux GUI session for {url}")
+            return False
+
+        for opener in ("xdg-open", "gio", "sensible-browser"):
+            found = shutil.which(opener, path=webui_env.get("PATH"))
+            if not found:
+                continue
+            cmd = [found, "open", url] if opener == "gio" else [found, url]
+            try:
+                subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=webui_env,
+                )
+                _webui_log(f"browser opened with {opener}: {url}")
+                return True
+            except Exception as exc:
+                _webui_log(f"browser opener {opener} failed: {exc}")
+
+        try:
+            opened = webbrowser.open(url)
+            _webui_log(f"browser opened with webbrowser={opened}: {url}")
+            return bool(opened)
+        except Exception as exc:
+            _webui_log(f"browser auto-open failed: {exc}")
+            return False
+
+    def _schedule_browser_open(url: str, port_to_wait_for: int) -> None:
+        if not open_browser:
+            _webui_log(f"browser auto-open disabled for {url}")
+            return
+
+        def _worker() -> None:
+            for _ in range(120):
+                try:
+                    with socket.create_connection(("127.0.0.1", port_to_wait_for), timeout=0.25):
+                        break
+                except OSError:
+                    time.sleep(0.25)
+            _open_browser_url(url)
+
+        threading.Thread(target=_worker, name="nvh-webui-browser-open", daemon=True).start()
 
     _webui_log("=" * 72)
     _webui_log("nvh webui bootstrap start")
@@ -8613,6 +8671,9 @@ def webui(
     console.print("[bold]Starting nvHive Web UI...[/bold]")
     console.print(f"  WebUI: {access_url}")
     _webui_log(f"Starting WebUI at {access_url}")
+    browser_url = f"{access_url}/setup"
+    console.print(f"  Browser: {browser_url}")
+    _schedule_browser_open(browser_url, chosen_port)
     if api_proc is not None:
         console.print(
             f"  [dim]API: http://localhost:{api_port} "

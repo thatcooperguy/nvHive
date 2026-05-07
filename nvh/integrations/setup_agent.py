@@ -165,6 +165,123 @@ def _recent_failed_job(home_dir: str | Path | None = None) -> dict[str, Any] | N
     return None
 
 
+def _short_text(value: Any, *, limit: int = 220) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit - 3]}..."
+
+
+def _question_wants_debug(q: str) -> bool:
+    if ("nvidia-smi" in q or "without sudo" in q) and not any(
+        word in q for word in ["log", "logs", "traceback", "failed job", "exec format"]
+    ):
+        return False
+    return any(
+        phrase in q
+        for phrase in [
+            "debug",
+            "diagnose",
+            "diagnosis",
+            "what broke",
+            "why did",
+            "nothing happens",
+            "error",
+            "failed",
+            "failure",
+            "broken",
+            "issue",
+            "issues",
+            "log",
+            "logs",
+            "traceback",
+            "exec format",
+            "read local",
+        ]
+    )
+
+
+def _safe_diagnostics_report(home_dir: str | Path | None = None) -> dict[str, Any]:
+    try:
+        from nvh.integrations.diagnostics import diagnostics_report
+
+        return diagnostics_report(home_dir=home_dir, include_logs=True, log_lines=80)
+    except Exception as exc:
+        return {"report_id": None, "checks": {}, "logs": {"recent": []}, "error": str(exc)}
+
+
+def _event_text(event: Any) -> str:
+    if isinstance(event, dict):
+        for key in ("message", "error", "summary", "command", "stage"):
+            if event.get(key):
+                return str(event[key])
+    return str(event)
+
+
+def _diagnostic_job_findings(
+    diagnostics: dict[str, Any],
+    failed_job: dict[str, Any] | None,
+) -> list[str]:
+    findings: list[str] = []
+    jobs_check = diagnostics.get("checks", {}).get("jobs", {})
+    jobs_data = jobs_check.get("data") if jobs_check.get("ok") else {}
+    for tail in (jobs_data or {}).get("failed_event_tails", [])[:3]:
+        title = tail.get("kind") or tail.get("job_id") or "setup job"
+        status = tail.get("status") or "failed"
+        message = tail.get("message") or "no message"
+        events = tail.get("events") or []
+        event_hint = ""
+        for event in reversed(events):
+            text = _short_text(_event_text(event), limit=180)
+            if text:
+                event_hint = f" Last event: {text}"
+                break
+        findings.append(_short_text(f"{title} {status}: {message}.{event_hint}", limit=260))
+
+    if not findings and failed_job:
+        findings.append(
+            _short_text(
+                f"{failed_job.get('title', 'setup job')} {failed_job.get('status', 'failed')}: "
+                f"{failed_job.get('message', 'no message')}",
+                limit=260,
+            )
+        )
+    return findings
+
+
+def _diagnostic_log_highlights(diagnostics: dict[str, Any]) -> list[str]:
+    highlights: list[str] = []
+    for entry in diagnostics.get("logs", {}).get("recent", []):
+        path = Path(str(entry.get("path", "log"))).name
+        for line in entry.get("lines", []):
+            text = _short_text(line, limit=220)
+            if text:
+                highlights.append(f"{path}: {text}")
+            if len(highlights) >= 4:
+                return highlights
+    return highlights
+
+
+def _debug_repair_note(findings: list[str], log_highlights: list[str]) -> str:
+    joined = " ".join([*findings, *log_highlights]).lower()
+    if "exec format" in joined and "ollama" in joined:
+        return (
+            "This points at a bad or wrong-architecture Ollama binary. Use Install Runtime "
+            "or Fix Issues so nvHive replaces the rootless Ollama binary under NVH_HOME."
+        )
+    if "node" in joined or "npm" in joined or "fnm" in joined:
+        return (
+            "This points at the WebUI Node/npm bootstrap. Retry WebUI launch after the "
+            "rootless Node install finishes; nvHive keeps Node under the user workspace."
+        )
+    if "storage" in joined or "nvh_home" in joined or "volume" in joined:
+        return (
+            "This points at persistent storage or NVH_HOME. Use the storage repair action "
+            "so installs stay on the block-backed home volume, not the read-only OS image."
+        )
+    return "Use the next recommended repair/install button; no sudo or OS package change should be needed."
+
+
 def _action_for_job(job: dict[str, Any]) -> str:
     kind = job.get("kind")
     if kind == "comfyui-install":
@@ -534,6 +651,9 @@ def setup_assistant_reply(
     commands: list[str] = []
     focus = "next-step"
     suppress_command_fallback = False
+    diagnostics_report_id: str | None = None
+    debug_findings: list[str] = []
+    log_highlights: list[str] = []
 
     if not q:
         answer = (
@@ -580,6 +700,34 @@ def setup_assistant_reply(
             f"{OFFICIAL_README_URL} when internet access is available; offline I use "
             "the packaged product brief and local setup state."
         )
+    elif _question_wants_debug(q):
+        focus = "debugger"
+        diagnostics = _safe_diagnostics_report(home_dir=home_dir)
+        diagnostics_report_id = diagnostics.get("report_id")
+        debug_findings = _diagnostic_job_findings(diagnostics, failed_job)
+        log_highlights = _diagnostic_log_highlights(diagnostics)
+        if failed_job:
+            commands = _commands_for_actions(actions, _action_for_job(failed_job))
+        repair_note = _debug_repair_note(debug_findings, log_highlights)
+        if debug_findings or log_highlights:
+            evidence = []
+            if debug_findings:
+                evidence.append(f"Latest job clue: {debug_findings[0]}")
+            if log_highlights:
+                evidence.append(f"Log clue: {log_highlights[0]}")
+            answer = (
+                "I checked local jobs, receipts, the boot/setup report, and redacted log tails"
+                f"{f' ({diagnostics_report_id})' if diagnostics_report_id else ''}. "
+                + " ".join(evidence)
+                + f" {repair_note} Advanced Details can stay closed unless you want the full trail."
+            )
+        else:
+            answer = (
+                "I checked local jobs, receipts, the boot/setup report, and redacted log tails"
+                f"{f' ({diagnostics_report_id})' if diagnostics_report_id else ''}. "
+                "I do not see a recent failed job or high-signal error line yet. Try the action again, "
+                "then press Ask nvWizard so I can read the fresh log trail."
+            )
     elif any(word in q for word in ["storage", "mount", "persistent", "home", "nvh_home"]):
         focus = "storage"
         commands = _commands_for_actions(actions, "storage") or [
@@ -728,6 +876,9 @@ def setup_assistant_reply(
         "official_repo_url": OFFICIAL_REPO_URL,
         "readme_url": OFFICIAL_README_URL,
         "grounding_sources": assistant_info.get("grounding_sources", []),
+        "diagnostics_report_id": diagnostics_report_id,
+        "debug_findings": debug_findings,
+        "log_highlights": log_highlights,
         "observations": {
             "ready": report["ready"],
             "issue_count": report.get("issue_count", 0),

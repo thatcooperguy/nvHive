@@ -1214,12 +1214,43 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 def _ollama_binary() -> str:
     local = storage_layout().bin_dir / "ollama"
-    if local.exists():
+    if _ollama_binary_usable(local):
         return str(local)
     found = shutil.which("ollama")
-    if found:
+    if found and _ollama_binary_usable(Path(found)):
         return found
     return ""
+
+
+def _ollama_validation_error(binary: str | Path) -> str:
+    """Return an error string when an Ollama binary is unusable."""
+    path = Path(binary)
+    if not path.exists():
+        return "not found"
+    if not path.is_file():
+        return "not a file"
+    if not os.access(path, os.X_OK):
+        return "not executable"
+    try:
+        result = subprocess.run(
+            [str(path), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            env=_ollama_env(),
+        )
+    except OSError as exc:
+        return str(exc)
+    except subprocess.TimeoutExpired:
+        return "version check timed out"
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return detail or f"version check exited {result.returncode}"
+    return ""
+
+
+def _ollama_binary_usable(binary: str | Path) -> bool:
+    return _ollama_validation_error(binary) == ""
 
 
 def _ollama_env() -> dict[str, str]:
@@ -1459,13 +1490,21 @@ async def _run_command(
     timeout: float | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     yield {"event": "step", "status": "running", "message": label, "command": cmd}
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=str(cwd) if cwd else None,
-        env=env,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except OSError as exc:
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": f"{label} could not start: {exc}",
+        }
+        raise RuntimeError(f"{label} could not start: {exc}") from exc
     try:
         assert process.stdout is not None
         async for raw_line in process.stdout:
@@ -1572,6 +1611,15 @@ async def _install_rootless_ollama(pack: StudioPack, force_update: bool) -> Asyn
     arch = _platform_arch()
     url = f"https://ollama.com/download/ollama-linux-{arch}.tgz"
     layout = storage_layout()
+    local_binary = layout.bin_dir / "ollama"
+    existing_error = _ollama_validation_error(local_binary) if local_binary.exists() else ""
+    if existing_error:
+        yield {
+            "event": "step",
+            "status": "running",
+            "message": f"Replacing unusable Ollama binary: {existing_error}",
+            "binary": str(local_binary),
+        }
     target = layout.home
     target.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix="ollama-", dir=str(studio_root())))
@@ -1588,12 +1636,24 @@ async def _install_rootless_ollama(pack: StudioPack, force_update: bool) -> Asyn
     ):
         yield event
 
+    verified = _ollama_binary()
+    if not verified:
+        error = _ollama_validation_error(local_binary) if local_binary.exists() else "binary missing after extract"
+        yield {
+            "event": "error",
+            "status": "failed",
+            "message": f"Ollama install did not produce a runnable Linux {arch} binary: {error}",
+            "binary": str(local_binary),
+        }
+        return
+
     _write_ollama_launcher()
-    _write_marker(pack, {"binary": _ollama_binary()})
+    _write_marker(pack, {"binary": verified})
     yield {
         "event": "step",
         "status": "complete",
         "message": "Rootless Ollama installed. Use nvhive-ollama-serve to start it.",
+        "binary": verified,
     }
 
 
