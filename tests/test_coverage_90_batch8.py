@@ -131,11 +131,16 @@ class TestSetup:
         r = test_client.post("/v1/setup/save-key", json={"provider": "bogus", "api_key": "sk-1234567890"})
         assert r.status_code == 422
 
-    def test_save_key_keyring_error(self, test_client):
+    def test_save_key_keyring_error_uses_rootless_fallback(self, test_client, tmp_path):
         mk = MagicMock(); mk.set_password.side_effect = Exception("no backend")
-        with patch.dict("sys.modules", {"keyring": mk}):
+        with patch.dict("sys.modules", {"keyring": mk}), \
+             patch.object(server_module, "_provider_env_file", return_value=tmp_path / ".env"), \
+             patch.object(server_module, "_provider_config_file", return_value=tmp_path / "config.yaml"):
             r = test_client.post("/v1/setup/save-key", json={"provider": "groq", "api_key": "gsk_1234567890t"})
-        assert r.status_code == 200 and r.json()["status"] == "error"
+        body = r.json()
+        assert r.status_code == 200 and body["status"] == "success"
+        assert body["data"]["ok"] is True
+        assert body["data"]["env_key"] == "GROQ_API_KEY"
 
 class TestConversations:
     def test_delete_not_found(self, test_client):

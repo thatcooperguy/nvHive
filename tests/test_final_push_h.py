@@ -137,10 +137,12 @@ class TestWebhookSSRF:
 
 
 class TestSaveKeyValid:
-    def test_save_key_success(self, cli):
+    def test_save_key_success(self, cli, tmp_path):
         mock_kr = MagicMock()
         mock_engine = server_module._engine
         with patch.dict("sys.modules", {"keyring": mock_kr}), \
+             patch.object(server_module, "_provider_env_file", return_value=tmp_path / ".env"), \
+             patch.object(server_module, "_provider_config_file", return_value=tmp_path / "config.yaml"), \
              patch.object(mock_engine, "initialize", new_callable=AsyncMock, return_value=["alpha"]):
             r = cli.post("/v1/setup/save-key", json={"provider": "groq", "api_key": "gsk_1234567890t"})
         assert r.status_code == 200

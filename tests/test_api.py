@@ -527,6 +527,10 @@ class TestAPIEndpointCoverage:
         body = resp.json()
         assert body["status"] == "success"
         assert "providers" in body["data"]
+        providers = {p["id"]: p for p in body["data"]["providers"]}
+        assert providers["openai"]["key_url"] == "https://platform.openai.com/api-keys"
+        assert providers["anthropic"]["docs_url"].startswith("https://docs.anthropic.com")
+        assert providers["google"]["key_url"] == "https://aistudio.google.com/apikey"
 
     def test_setup_status(self, test_client: TestClient) -> None:
         """GET /v1/setup/status returns first-run setup state."""

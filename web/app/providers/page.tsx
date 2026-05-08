@@ -3,15 +3,108 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import ProviderCard from '@/components/ProviderCard';
-import { getModels, getGPUInfo, getRecommendations } from '@/lib/api';
+import { getModels, getGPUInfo, getRecommendations, getFreeProviders, saveProviderKey } from '@/lib/api';
 import { useProviderHealth } from '@/lib/useProviderHealth';
-import type { ModelInfo, GPUInfo, RecommendationsResult } from '@/lib/types';
+import type { ModelInfo, GPUInfo, RecommendationsResult, FreeProvider } from '@/lib/types';
 
 const MODEL_STATUS_COLORS: Record<string, string> = {
   available: '#76B900',
   deprecated: '#d97706',
   unavailable: '#dc2626',
 };
+
+function CloudKeyCard({
+  provider,
+  expanded,
+  saved,
+  saving,
+  keyValue,
+  error,
+  onExpand,
+  onChange,
+  onSave,
+}: {
+  provider: FreeProvider;
+  expanded: boolean;
+  saved: boolean;
+  saving: boolean;
+  keyValue: string;
+  error?: string;
+  onExpand: () => void;
+  onChange: (value: string) => void;
+  onSave: () => void;
+}) {
+  const configured = provider.configured || saved;
+  const keyUrl = provider.key_url || provider.signup_url;
+
+  return (
+    <div className={`border p-4 bg-white ${configured ? 'border-[#76B900]/40' : 'border-[#e5e5e5]'}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-mono font-bold text-[#0a0a0a]">{provider.display_name || provider.name}</span>
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 border ${configured ? 'border-[#76B900]/30 text-[#76B900] bg-[#76B900]/10' : 'border-[#d97706]/30 text-[#d97706] bg-[#d97706]/5'}`}>
+              {configured ? 'CONNECTED' : provider.signup_tier.toUpperCase()}
+            </span>
+          </div>
+          <div className="text-[10px] font-mono text-[#737373] mt-1">
+            {provider.free_tier_limits || provider.daily_limit || 'Optional cloud provider'}
+          </div>
+          {provider.env_key && (
+            <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">{provider.env_key}</div>
+          )}
+        </div>
+        <div className="flex gap-2 flex-shrink-0">
+          {keyUrl && (
+            <a href={keyUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost px-2 py-1 text-[10px] font-mono uppercase">
+              Key
+            </a>
+          )}
+          <button type="button" onClick={onExpand} disabled={configured} className="btn-secondary px-2 py-1 text-[10px] font-mono uppercase disabled:opacity-40">
+            {expanded ? 'Close' : configured ? 'Saved' : 'Add Key'}
+          </button>
+        </div>
+      </div>
+
+      {provider.strengths && provider.strengths.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-3">
+          {provider.strengths.slice(0, 3).map(strength => (
+            <span key={strength} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+              {strength}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {expanded && !configured && (
+        <div className="border-t border-[#e5e5e5] mt-3 pt-3 space-y-2">
+          <div className="text-[10px] font-mono text-[#737373]">
+            Open the key link, paste the key here, and nvHive saves it under the rootless workspace config.
+          </div>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={keyValue}
+              onChange={event => onChange(event.target.value)}
+              placeholder={provider.placeholder || 'Paste API key...'}
+              className="input-base flex-1 px-3 py-2 text-xs font-mono"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button type="button" onClick={onSave} disabled={saving || !keyValue.trim()} className="btn-primary px-3 py-2 text-xs font-mono disabled:opacity-40">
+              {saving ? 'Saving' : 'Save'}
+            </button>
+          </div>
+          <div className="flex gap-3 text-[10px] font-mono">
+            {keyUrl && <a href={keyUrl} target="_blank" rel="noopener noreferrer" className="text-[#76B900] hover:underline">Get API key</a>}
+            {provider.docs_url && <a href={provider.docs_url} target="_blank" rel="noopener noreferrer" className="text-[#737373] hover:text-[#76B900]">Docs</a>}
+          </div>
+          {error && <div className="text-[10px] font-mono text-[#dc2626]">{error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function ProvidersPage() {
   // Live-polled provider health with a manual refresh escape hatch.
@@ -25,6 +118,13 @@ export default function ProvidersPage() {
   const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
   const [gpuRecs, setGpuRecs] = useState<RecommendationsResult | null>(null);
   const [gpuLoading, setGpuLoading] = useState(true);
+  const [freeProviders, setFreeProviders] = useState<FreeProvider[]>([]);
+  const [freeProvidersLoading, setFreeProvidersLoading] = useState(true);
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
+  const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [savedKeys, setSavedKeys] = useState<Set<string>>(new Set());
+  const [keyErrors, setKeyErrors] = useState<Record<string, string>>({});
 
   const loadModels = useCallback(async (provider?: string) => {
     setModelsLoading(true);
@@ -38,8 +138,21 @@ export default function ProvidersPage() {
     }
   }, []);
 
+  const loadCloudKeys = useCallback(async () => {
+    setFreeProvidersLoading(true);
+    try {
+      const data = await getFreeProviders();
+      setFreeProviders(data.providers);
+    } catch {
+      setFreeProviders([]);
+    } finally {
+      setFreeProvidersLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadModels();
+    loadCloudKeys();
     // GPU info for Local AI tab
     setGpuLoading(true);
     Promise.all([getGPUInfo(), getRecommendations()])
@@ -49,7 +162,32 @@ export default function ProvidersPage() {
       })
       .catch(() => {})
       .finally(() => setGpuLoading(false));
-  }, [loadModels]);
+  }, [loadModels, loadCloudKeys]);
+
+  const handleSaveProviderKey = async (providerId: string) => {
+    const apiKey = keyInputs[providerId]?.trim();
+    if (!apiKey) return;
+    setSavingKey(providerId);
+    setKeyErrors(prev => ({ ...prev, [providerId]: '' }));
+    try {
+      await saveProviderKey(providerId, apiKey);
+      setSavedKeys(prev => {
+        const next = new Set(prev);
+        next.add(providerId);
+        return next;
+      });
+      setExpandedProvider(null);
+      setKeyInputs(prev => ({ ...prev, [providerId]: '' }));
+      await Promise.all([loadCloudKeys(), loadProviders()]);
+    } catch (err) {
+      setKeyErrors(prev => ({
+        ...prev,
+        [providerId]: err instanceof Error ? err.message : 'Could not save this key',
+      }));
+    } finally {
+      setSavingKey(null);
+    }
+  };
 
   const handleProviderFilter = (p: string) => {
     setSelectedProvider(p);
@@ -74,6 +212,7 @@ export default function ProvidersPage() {
   );
 
   const healthyCount = providers.filter(p => p.healthy).length;
+  const cloudKeyProviders = freeProviders.filter(p => p.requires_key !== false);
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -179,7 +318,49 @@ export default function ProvidersPage() {
 
       {/* Providers tab */}
       {activeTab === 'providers' && (
-        <div>
+        <div className="space-y-6">
+          <div className="border border-[#d4d4d4] bg-[#ffffff] p-5">
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-4">
+              <div>
+                <div className="section-label">Connect Cloud API Keys</div>
+                <p className="text-xs font-mono text-[#737373] mt-1">
+                  Optional cloud providers. nvHive keeps keys in the rootless workspace and refreshes routing after save.
+                </p>
+              </div>
+              <Link href="/setup" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider w-fit">
+                Setup Wizard
+              </Link>
+            </div>
+            {freeProvidersLoading ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {[1, 2, 3].map(i => (
+                  <div key={i} className="h-32 border border-[#e5e5e5] bg-[#fafafa] animate-pulse" />
+                ))}
+              </div>
+            ) : cloudKeyProviders.length === 0 ? (
+              <div className="text-xs font-mono text-[#a3a3a3] border border-[#e5e5e5] p-4">
+                Cloud key catalog is unavailable. Make sure the Hive API is online, then check again.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {cloudKeyProviders.map(provider => (
+                  <CloudKeyCard
+                    key={provider.id}
+                    provider={provider}
+                    expanded={expandedProvider === provider.id}
+                    saved={savedKeys.has(provider.id)}
+                    saving={savingKey === provider.id}
+                    keyValue={keyInputs[provider.id] ?? ''}
+                    error={keyErrors[provider.id]}
+                    onExpand={() => setExpandedProvider(expandedProvider === provider.id ? null : provider.id)}
+                    onChange={value => setKeyInputs(prev => ({ ...prev, [provider.id]: value }))}
+                    onSave={() => void handleSaveProviderKey(provider.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
           {error ? (
             <div className="card p-6 text-center border-[#dc2626]/30">
               <div className="text-[#dc2626] font-mono text-sm mb-2">{error}</div>

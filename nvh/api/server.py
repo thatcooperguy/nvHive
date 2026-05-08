@@ -21,6 +21,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path as FilePath
 from typing import Any
 from urllib.parse import urlparse
 
@@ -3669,6 +3670,109 @@ async def reload_context(_auth: None = Depends(require_auth)):
 # Free Tier Setup API (for web UI setup wizard)
 # ---------------------------------------------------------------------------
 
+_PROVIDER_ENV_VAR_MAP = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "github": "GITHUB_TOKEN",
+    "nvidia": "NVIDIA_API_KEY",
+    "fireworks": "FIREWORKS_API_KEY",
+    "cerebras": "CEREBRAS_API_KEY",
+    "sambanova": "SAMBANOVA_API_KEY",
+    "huggingface": "HUGGINGFACE_API_KEY",
+    "ai21": "AI21_API_KEY",
+    "siliconflow": "SILICONFLOW_API_KEY",
+    "grok": "XAI_API_KEY",
+    "perplexity": "PERPLEXITY_API_KEY",
+    "together": "TOGETHER_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "llm7": "LLM7_API_KEY",
+}
+
+_PROVIDER_KEY_URLS = {
+    "openai": "https://platform.openai.com/api-keys",
+    "anthropic": "https://console.anthropic.com/settings/keys",
+    "google": "https://aistudio.google.com/apikey",
+    "groq": "https://console.groq.com/keys",
+    "mistral": "https://console.mistral.ai/api-keys",
+    "cohere": "https://dashboard.cohere.com/api-keys",
+    "deepseek": "https://platform.deepseek.com/api_keys",
+    "github": "https://github.com/settings/tokens",
+    "nvidia": "https://build.nvidia.com/explore/discover",
+    "fireworks": "https://fireworks.ai/account/api-keys",
+    "cerebras": "https://cloud.cerebras.ai/",
+    "sambanova": "https://cloud.sambanova.ai/",
+    "huggingface": "https://huggingface.co/settings/tokens",
+    "ai21": "https://studio.ai21.com/",
+    "siliconflow": "https://cloud.siliconflow.cn/",
+    "grok": "https://console.x.ai/",
+    "perplexity": "https://www.perplexity.ai/settings/api",
+    "together": "https://api.together.ai/settings/api-keys",
+    "openrouter": "https://openrouter.ai/settings/keys",
+}
+
+_PROVIDER_DOC_URLS = {
+    "openai": "https://platform.openai.com/docs/overview",
+    "anthropic": "https://docs.anthropic.com/",
+    "google": "https://ai.google.dev/gemini-api/docs",
+    "groq": "https://console.groq.com/docs/quickstart",
+    "mistral": "https://docs.mistral.ai/",
+    "cohere": "https://docs.cohere.com/",
+    "deepseek": "https://api-docs.deepseek.com/",
+    "github": "https://docs.github.com/en/github-models",
+    "nvidia": "https://docs.nvidia.com/nim/",
+    "fireworks": "https://docs.fireworks.ai/",
+    "cerebras": "https://inference-docs.cerebras.ai/",
+    "sambanova": "https://docs.sambanova.ai/",
+    "huggingface": "https://huggingface.co/docs/api-inference/index",
+    "ai21": "https://docs.ai21.com/",
+    "siliconflow": "https://docs.siliconflow.cn/",
+    "grok": "https://docs.x.ai/docs",
+    "perplexity": "https://docs.perplexity.ai/",
+    "together": "https://docs.together.ai/",
+    "openrouter": "https://openrouter.ai/docs/quickstart",
+}
+
+_PROVIDER_DEFAULT_CONFIG = {
+    "openai": {"default_model": "gpt-4o", "fallback_model": "gpt-4o-mini"},
+    "anthropic": {"default_model": "claude-sonnet-4-6", "fallback_model": "claude-haiku-4-5-20251001"},
+    "google": {"default_model": "gemini/gemini-2.0-flash", "fallback_model": "gemini/gemini-2.0-flash"},
+    "groq": {"default_model": "groq/llama-3.3-70b-versatile", "fallback_model": "groq/llama-3.1-8b-instant"},
+    "mistral": {"default_model": "mistral/mistral-large-latest", "fallback_model": "mistral/mistral-small-latest"},
+    "cohere": {"default_model": "command-r-plus", "fallback_model": "command-r"},
+    "deepseek": {"default_model": "deepseek/deepseek-chat", "fallback_model": "deepseek/deepseek-chat", "base_url": "https://api.deepseek.com"},
+    "github": {"default_model": "gpt-4o-mini", "fallback_model": "meta-llama-3.1-8b-instruct", "base_url": "https://models.inference.ai.azure.com"},
+    "nvidia": {"default_model": "meta/llama-3.1-70b-instruct", "fallback_model": "meta/llama-3.1-8b-instruct", "base_url": "https://integrate.api.nvidia.com/v1"},
+    "fireworks": {"default_model": "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct", "fallback_model": "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"},
+    "cerebras": {"default_model": "cerebras/llama3.1-70b", "fallback_model": "cerebras/llama3.1-8b"},
+    "sambanova": {"default_model": "sambanova/Meta-Llama-3.1-70B-Instruct", "fallback_model": "sambanova/Meta-Llama-3.1-8B-Instruct"},
+    "huggingface": {"default_model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct", "fallback_model": "huggingface/mistralai/Mistral-7B-Instruct-v0.3"},
+    "ai21": {"default_model": "jamba-1.5-large", "fallback_model": "jamba-1.5-mini"},
+    "siliconflow": {"default_model": "Qwen/Qwen2.5-7B-Instruct", "base_url": "https://api.siliconflow.cn/v1"},
+    "grok": {"default_model": "xai/grok-2", "fallback_model": "xai/grok-2", "base_url": "https://api.x.ai/v1"},
+    "perplexity": {"default_model": "perplexity/llama-3.1-sonar-large-128k-online", "fallback_model": "perplexity/llama-3.1-sonar-small-128k-online"},
+    "together": {"default_model": "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", "fallback_model": "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"},
+    "openrouter": {"default_model": "openrouter/meta-llama/llama-3.1-70b-instruct", "fallback_model": "openrouter/meta-llama/llama-3.1-8b-instruct"},
+}
+
+
+def _provider_env_var(provider_name: str) -> str:
+    return _PROVIDER_ENV_VAR_MAP.get(provider_name, f"{provider_name.upper()}_API_KEY")
+
+
+def _provider_docs_url(provider_name: str) -> str:
+    return _PROVIDER_DOC_URLS.get(provider_name, "")
+
+
+def _provider_key_is_configured(provider_name: str, env_var: str | None = None) -> bool:
+    env_key = env_var or _provider_env_var(provider_name)
+    return bool(env_key and os.environ.get(env_key))
+
+
 @app.get("/v1/setup/free-providers")
 async def get_free_providers(_auth: None = Depends(require_auth)):
     """List all free-tier providers and their setup status."""
@@ -3705,11 +3809,13 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "display_name": profile.display_name if profile else advisor.name,
             "daily_limit": advisor.daily_limit,
             "priority": advisor.priority,
-            "configured": advisor.name in available_names,
+            "configured": advisor.name in available_names or _provider_key_is_configured(advisor.name, advisor.env_var),
             "requires_signup": requires_key,
             "requires_key": requires_key,
             "signup_tier": signup_tier,
             "signup_url": _get_signup_url(advisor.name),
+            "key_url": _get_signup_url(advisor.name),
+            "docs_url": _provider_docs_url(advisor.name),
             "env_var": advisor.env_var,
             "env_key": advisor.env_var,
             "placeholder": key_placeholders.get(advisor.name, "your-key..."),
@@ -3730,6 +3836,8 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "requires_key": False,
             "signup_tier": "none",
             "signup_url": "",
+            "key_url": "",
+            "docs_url": "https://ollama.com/library",
             "env_var": "",
             "env_key": "",
             "placeholder": "",
@@ -3747,6 +3855,8 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "requires_key": False,
             "signup_tier": "none",
             "signup_url": "",
+            "key_url": "",
+            "docs_url": "https://api.llm7.io/",
             "env_var": "",
             "env_key": "",
             "placeholder": "",
@@ -3756,7 +3866,6 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
     ]
 
     # Add paid providers (not free-tier but users want to configure them)
-    import os
     paid_providers = [
         {
             "id": "openai", "name": "OpenAI", "display_name": "OpenAI",
@@ -3764,6 +3873,7 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "configured": bool(os.environ.get("OPENAI_API_KEY")),
             "requires_signup": True, "requires_key": True,
             "signup_tier": "account", "signup_url": "https://platform.openai.com/api-keys",
+            "key_url": "https://platform.openai.com/api-keys", "docs_url": "https://platform.openai.com/docs/overview",
             "env_var": "OPENAI_API_KEY", "env_key": "OPENAI_API_KEY",
             "placeholder": "sk-...",
             "strengths": ["GPT-4o", "Best all-around", "Function calling"],
@@ -3775,6 +3885,7 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
             "requires_signup": True, "requires_key": True,
             "signup_tier": "account", "signup_url": "https://console.anthropic.com/settings/keys",
+            "key_url": "https://console.anthropic.com/settings/keys", "docs_url": "https://docs.anthropic.com/",
             "env_var": "ANTHROPIC_API_KEY", "env_key": "ANTHROPIC_API_KEY",
             "placeholder": "sk-ant-...",
             "strengths": ["Claude Sonnet", "Best for code", "200K context"],
@@ -3785,10 +3896,47 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "daily_limit": "Pay-as-you-go (very cheap)", "priority": 0,
             "configured": bool(os.environ.get("DEEPSEEK_API_KEY")),
             "requires_signup": True, "requires_key": True,
-            "signup_tier": "account", "signup_url": "https://platform.deepseek.com",
+            "signup_tier": "account", "signup_url": "https://platform.deepseek.com/api_keys",
+            "key_url": "https://platform.deepseek.com/api_keys", "docs_url": "https://api-docs.deepseek.com/",
             "env_var": "DEEPSEEK_API_KEY", "env_key": "DEEPSEEK_API_KEY",
             "placeholder": "sk-...",
             "strengths": ["DeepSeek R1", "$0.07/M tokens", "Top reasoning"],
+            "free_tier_limits": "",
+        },
+        {
+            "id": "openrouter", "name": "OpenRouter", "display_name": "OpenRouter",
+            "daily_limit": "Account required", "priority": 15,
+            "configured": bool(os.environ.get("OPENROUTER_API_KEY")),
+            "requires_signup": True, "requires_key": True,
+            "signup_tier": "account", "signup_url": _get_signup_url("openrouter"),
+            "key_url": _get_signup_url("openrouter"), "docs_url": _provider_docs_url("openrouter"),
+            "env_var": "OPENROUTER_API_KEY", "env_key": "OPENROUTER_API_KEY",
+            "placeholder": "sk-or-...",
+            "strengths": ["Many models", "Fallback", "BYO credits"],
+            "free_tier_limits": "",
+        },
+        {
+            "id": "together", "name": "Together AI", "display_name": "Together AI",
+            "daily_limit": "Account required", "priority": 16,
+            "configured": bool(os.environ.get("TOGETHER_API_KEY")),
+            "requires_signup": True, "requires_key": True,
+            "signup_tier": "account", "signup_url": _get_signup_url("together"),
+            "key_url": _get_signup_url("together"), "docs_url": _provider_docs_url("together"),
+            "env_var": "TOGETHER_API_KEY", "env_key": "TOGETHER_API_KEY",
+            "placeholder": "your-key...",
+            "strengths": ["Open models", "Fast APIs", "Research friendly"],
+            "free_tier_limits": "",
+        },
+        {
+            "id": "perplexity", "name": "Perplexity", "display_name": "Perplexity",
+            "daily_limit": "Account required", "priority": 17,
+            "configured": bool(os.environ.get("PERPLEXITY_API_KEY")),
+            "requires_signup": True, "requires_key": True,
+            "signup_tier": "account", "signup_url": _get_signup_url("perplexity"),
+            "key_url": _get_signup_url("perplexity"), "docs_url": _provider_docs_url("perplexity"),
+            "env_var": "PERPLEXITY_API_KEY", "env_key": "PERPLEXITY_API_KEY",
+            "placeholder": "pplx-...",
+            "strengths": ["Search answers", "Citations", "Research"],
             "free_tier_limits": "",
         },
     ]
@@ -3836,65 +3984,137 @@ class SaveKeyRequest(BaseModel):
         return v
 
 
+def _provider_env_file() -> FilePath:
+    try:
+        from nvh.integrations.storage import storage_layout
+        layout = storage_layout()
+        return FilePath(layout.config_dir) / ".env"
+    except Exception:
+        from nvh.config.settings import DEFAULT_CONFIG_DIR
+        return FilePath(DEFAULT_CONFIG_DIR) / ".env"
+
+
+def _provider_config_file() -> FilePath:
+    try:
+        from nvh.integrations.storage import storage_layout
+        layout = storage_layout()
+        return FilePath(layout.config_dir) / "config.yaml"
+    except Exception:
+        from nvh.config.settings import DEFAULT_CONFIG_PATH
+        return FilePath(DEFAULT_CONFIG_PATH)
+
+
+def _write_provider_env_key(env_key: str, api_key: str) -> FilePath:
+    env_file = _provider_env_file()
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
+    updated = False
+    next_lines: list[str] = []
+    for line in lines:
+        if line.strip().startswith(f"{env_key}="):
+            next_lines.append(f"{env_key}={api_key}")
+            updated = True
+        else:
+            next_lines.append(line)
+    if not updated:
+        if next_lines and next_lines[-1].strip():
+            next_lines.append("")
+        next_lines.append(f"{env_key}={api_key}")
+    env_file.write_text("\n".join(next_lines) + "\n", encoding="utf-8")
+    try:
+        env_file.chmod(0o600)
+    except Exception:
+        pass
+    return env_file
+
+
+def _enable_provider_in_config(provider: str, env_key: str) -> FilePath:
+    import yaml
+
+    config_file = _provider_config_file()
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    if config_file.exists():
+        data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict):
+            data = {}
+    else:
+        data = {}
+
+    data.setdefault("version", "1")
+    data.setdefault("defaults", {})
+    section_name = "providers" if "providers" in data and "advisors" not in data else "advisors"
+    providers_section = data.setdefault(section_name, {})
+    if not isinstance(providers_section, dict):
+        providers_section = {}
+        data[section_name] = providers_section
+
+    entry = providers_section.get(provider)
+    if not isinstance(entry, dict):
+        entry = {}
+    defaults = _PROVIDER_DEFAULT_CONFIG.get(provider, {})
+    entry["api_key"] = f"${{{env_key}}}"
+    for key, value in defaults.items():
+        entry.setdefault(key, value)
+    entry["enabled"] = True
+    providers_section[provider] = entry
+
+    config_file.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return config_file
+
+
 @app.post("/v1/setup/save-key")
 async def save_provider_key(
     request: SaveKeyRequest,
     _auth: None = Depends(require_auth),
 ):
-    """Save an API key for a provider (stores in OS keychain + env var).
+    """Save an API key for a provider using rootless storage first.
 
     Also reinitializes the engine so the new provider is available
     immediately without restarting the server.
     """
+    env_key = _provider_env_var(request.provider)
+    stored_in: list[str] = []
+    warnings: list[str] = []
     try:
-        import keyring
-        keyring.set_password("nvhive", f"{request.provider}_api_key", request.api_key)
+        os.environ[env_key] = request.api_key
+        env_file = _write_provider_env_key(env_key, request.api_key)
+        stored_in.append(str(env_file))
 
-        # Set the env var so the provider picks it up on reinit
-        env_var_map = {
-            "openai": "OPENAI_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "google": "GOOGLE_API_KEY",
-            "groq": "GROQ_API_KEY",
-            "mistral": "MISTRAL_API_KEY",
-            "cohere": "COHERE_API_KEY",
-            "deepseek": "DEEPSEEK_API_KEY",
-            "github": "GITHUB_TOKEN",
-            "nvidia": "NVIDIA_API_KEY",
-            "fireworks": "FIREWORKS_API_KEY",
-            "cerebras": "CEREBRAS_API_KEY",
-            "sambanova": "SAMBANOVA_API_KEY",
-            "huggingface": "HUGGINGFACE_API_KEY",
-            "ai21": "AI21_API_KEY",
-            "siliconflow": "SILICONFLOW_API_KEY",
-            "grok": "XAI_API_KEY",
-            "perplexity": "PERPLEXITY_API_KEY",
-            "together": "TOGETHER_API_KEY",
-            "openrouter": "OPENROUTER_API_KEY",
-        }
-        env_key = env_var_map.get(request.provider)
-        if env_key:
-            os.environ[env_key] = request.api_key
+        config_file = _enable_provider_in_config(request.provider, env_key)
+        stored_in.append(str(config_file))
 
-        # Reinitialize engine to register the new provider
+        try:
+            import keyring
+            keyring.set_password("nvhive", f"{request.provider}_api_key", request.api_key)
+            stored_in.append("system keyring")
+        except Exception as exc:
+            warnings.append(f"Keyring skipped: {exc}")
+
         global _engine
         if _engine is not None:
-            _engine._initialized = False
-            await _engine.initialize()
+            try:
+                _engine._initialized = False
+                await _engine.initialize()
+            except Exception as exc:
+                warnings.append(f"Provider saved, but engine refresh needs a retry: {exc}")
 
         return {
             "status": "success",
             "data": {
+                "ok": True,
                 "provider": request.provider,
-                "message": f"API key saved for {request.provider}. Provider is now active.",
+                "env_key": env_key,
+                "stored_in": stored_in,
+                "warnings": warnings,
+                "message": f"API key saved for {request.provider} under the rootless nvHive config.",
             },
         }
     except Exception as exc:
         logger.warning(f"Failed to save key for {request.provider}: {exc}")
-        return {
-            "status": "error",
-            "data": {"message": f"Keychain unavailable. Set {request.provider.upper()}_API_KEY environment variable."},
-        }
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not save {request.provider} key under NVH_HOME config: {exc}",
+        )
 
 
 @app.get("/v1/setup/status")
@@ -3921,21 +4141,7 @@ async def get_setup_status(_auth: None = Depends(require_auth)):
 
 def _get_signup_url(provider_name: str) -> str:
     """Get the signup URL for a provider."""
-    urls = {
-        "groq": "https://console.groq.com/keys",
-        "cerebras": "https://cloud.cerebras.ai/",
-        "fireworks": "https://fireworks.ai/",
-        "siliconflow": "https://cloud.siliconflow.cn/",
-        "cohere": "https://dashboard.cohere.com/api-keys",
-        "ai21": "https://studio.ai21.com/",
-        "sambanova": "https://cloud.sambanova.ai/",
-        "huggingface": "https://huggingface.co/settings/tokens",
-        "google": "https://aistudio.google.com/apikey",
-        "github": "https://github.com/settings/tokens",
-        "nvidia": "https://build.nvidia.com/",
-        "mistral": "https://console.mistral.ai/api-keys",
-    }
-    return urls.get(provider_name, "")
+    return _PROVIDER_KEY_URLS.get(provider_name, "")
 
 
 # ---------------------------------------------------------------------------

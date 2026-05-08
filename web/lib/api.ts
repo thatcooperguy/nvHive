@@ -69,17 +69,51 @@ import type {
   StudioModelsResult,
 } from './types';
 
-function getApiBase(): string {
-  // Runtime: check window for injected config (set by layout script tag)
-  if (typeof window !== 'undefined') {
-    const runtimeUrl = (window as any).__HIVE_API_URL__;
-    if (runtimeUrl) return runtimeUrl;
-  }
-  // Fallback to build-time env var, then localhost
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+function normalizeApiBase(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\/+$/, '');
 }
 
-const BASE_URL = getApiBase();
+function getSameHostApiBase(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const current = new URL(window.location.href);
+    return `${current.protocol}//${current.hostname}:8000`;
+  } catch {
+    return null;
+  }
+}
+
+function rememberApiBase(base: string): void {
+  if (typeof window === 'undefined') return;
+  (window as any).__HIVE_API_URL__ = base;
+}
+
+function getApiBases(): string[] {
+  const runtimeUrl = typeof window !== 'undefined'
+    ? normalizeApiBase((window as any).__HIVE_API_URL__)
+    : null;
+  const envUrl = normalizeApiBase(process.env.NEXT_PUBLIC_API_URL);
+  const sameHostUrl = normalizeApiBase(getSameHostApiBase());
+  const candidates = [
+    runtimeUrl,
+    envUrl,
+    sameHostUrl,
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((candidate): candidate is string => {
+    if (!candidate || seen.has(candidate)) return false;
+    seen.add(candidate);
+    return true;
+  });
+}
+
+function getApiBase(): string {
+  return getApiBases()[0] ?? 'http://localhost:8000';
+}
 
 function getApiAuthHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};
@@ -122,43 +156,60 @@ async function apiFetch<T>(
   path: string,
   options?: RequestInit
 ): Promise<T> {
-  const url = `${BASE_URL}${path}`;
-  const res = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...getApiAuthHeaders(),
-      ...options?.headers,
-    },
-    ...options,
-  });
+  const bases = getApiBases();
+  let lastNetworkError: unknown;
 
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    const requestId = res.headers.get('x-request-id') ?? undefined;
-    const errorId = res.headers.get('x-error-id') ?? undefined;
+  for (const base of bases) {
+    const url = `${base}${path}`;
+    let res: Response;
     try {
-      const body = await res.json();
-      const bodyDetail = body?.error?.message ?? body?.detail ?? detail;
-      detail = typeof bodyDetail === 'string' ? bodyDetail : JSON.stringify(bodyDetail);
-    } catch {
-      // ignore
+      res = await fetch(url, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          ...getApiAuthHeaders(),
+          ...options?.headers,
+        },
+      });
+    } catch (err) {
+      lastNetworkError = err;
+      continue;
     }
-    const suffix = [
-      requestId ? `request ${requestId}` : null,
-      errorId ? `error ${errorId}` : null,
-    ].filter(Boolean).join(', ');
-    const error = new Error(suffix ? `${detail} (${suffix})` : detail) as Error & {
-      statusCode?: number;
-      requestId?: string;
-      errorId?: string;
-    };
-    error.statusCode = res.status;
-    error.requestId = requestId;
-    error.errorId = errorId;
-    throw error;
+
+    rememberApiBase(base);
+
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      const requestId = res.headers.get('x-request-id') ?? undefined;
+      const errorId = res.headers.get('x-error-id') ?? undefined;
+      try {
+        const body = await res.json();
+        const bodyDetail = body?.error?.message ?? body?.detail ?? detail;
+        detail = typeof bodyDetail === 'string' ? bodyDetail : JSON.stringify(bodyDetail);
+      } catch {
+        // ignore
+      }
+      const suffix = [
+        requestId ? `request ${requestId}` : null,
+        errorId ? `error ${errorId}` : null,
+      ].filter(Boolean).join(', ');
+      const error = new Error(suffix ? `${detail} (${suffix})` : detail) as Error & {
+        statusCode?: number;
+        requestId?: string;
+        errorId?: string;
+      };
+      error.statusCode = res.status;
+      error.requestId = requestId;
+      error.errorId = errorId;
+      throw error;
+    }
+
+    return res.json() as Promise<T>;
   }
 
-  return res.json() as Promise<T>;
+  throw lastNetworkError instanceof Error
+    ? lastNetworkError
+    : new Error(`Hive API is offline. Tried ${bases.join(', ')}`);
 }
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -663,7 +714,7 @@ export function queryStream(
 
   (async () => {
     try {
-      const res = await fetch(`${BASE_URL}/v1/query`, {
+      const res = await fetch(`${getApiBase()}/v1/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getApiAuthHeaders() },
         body: JSON.stringify({ ...request, stream: true }),
@@ -942,13 +993,20 @@ export async function sendMessage(
 export interface FreeProvider {
   id: string;
   name: string;
+  display_name?: string;
   signup_tier: 'none' | 'email' | 'account';
+  daily_limit?: string;
   free_tier_limits?: string;
   strengths?: string[];
   configured: boolean;
+  requires_signup?: boolean;
+  requires_key?: boolean;
+  env_var?: string;
   env_key?: string;
   placeholder?: string;
   signup_url?: string;
+  key_url?: string;
+  docs_url?: string;
 }
 
 export interface FreeProvidersResult {
@@ -972,7 +1030,7 @@ export async function saveProviderKey(provider_id: string, api_key: string): Pro
 
 /** Derive the WebSocket base URL from the HTTP base URL. */
 function wsBaseUrl(): string {
-  const http = BASE_URL.replace(/^http/, 'ws');
+  const http = getApiBase().replace(/^http/, 'ws');
   return http;
 }
 

@@ -182,6 +182,8 @@ interface ProviderCardProps {
 function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, setKeyInputs, savingKey, savedKeys, keyErrors, handleSaveKey }: ProviderCardProps) {
   const isConfigured = p.configured || savedKeys.has(p.id);
   const isExpanded = expandedProvider === p.id;
+  const keyUrl = p.key_url || p.signup_url;
+  const docsUrl = p.docs_url;
 
   return (
     <div className={`border bg-[#ffffff] transition-colors ${isConfigured ? 'border-[#76B900]/40' : 'border-[#e5e5e5]'}`}>
@@ -218,37 +220,64 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
 
         {/* Add Key / collapse button */}
         {!isConfigured && (
-          <button
-            type="button"
-            onClick={() => setExpandedProvider(isExpanded ? null : p.id)}
-            className={`text-[10px] font-mono px-2 py-1 border transition-colors flex-shrink-0 ${
-              isExpanded
-                ? 'border-[#76B900]/40 bg-[#76B900]/10 text-[#76B900]'
-                : 'border-[#d4d4d4] text-[#a3a3a3] hover:border-[#76B900]/30 hover:text-[#76B900]'
-            }`}
-          >
-            {isExpanded ? 'Cancel' : 'Add Key'}
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {keyUrl && (
+              <a
+                href={keyUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10px] font-mono px-2 py-1 border border-[#76B900]/30 text-[#76B900] hover:bg-[#76B900]/10"
+              >
+                Key Page
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={() => setExpandedProvider(isExpanded ? null : p.id)}
+              className={`text-[10px] font-mono px-2 py-1 border transition-colors ${
+                isExpanded
+                  ? 'border-[#76B900]/40 bg-[#76B900]/10 text-[#76B900]'
+                  : 'border-[#d4d4d4] text-[#a3a3a3] hover:border-[#76B900]/30 hover:text-[#76B900]'
+              }`}
+            >
+              {isExpanded ? 'Cancel' : 'Add Key'}
+            </button>
+          </div>
         )}
       </div>
 
       {/* Inline key form */}
       {isExpanded && !isConfigured && (
         <div className="border-t border-[#e5e5e5] p-3 space-y-2">
+          <div className="text-[10px] font-mono text-[#737373] leading-relaxed">
+            Open the provider key page, create or copy an API key, then paste it here. nvHive stores it under the rootless workspace config, not the OS.
+          </div>
           <div className="flex items-center justify-between">
             <div className="text-[10px] font-mono text-[#a3a3a3]">
               {p.env_key ? `Environment variable: ${p.env_key}` : 'Paste your API key below'}
             </div>
-            {p.signup_url && (
-              <a
-                href={p.signup_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[10px] font-mono text-[#76B900] hover:underline"
-              >
-                Get Key &rarr;
-              </a>
-            )}
+            <div className="flex items-center gap-3">
+              {docsUrl && (
+                <a
+                  href={docsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10px] font-mono text-[#737373] hover:text-[#76B900]"
+                >
+                  Docs
+                </a>
+              )}
+              {keyUrl && (
+                <a
+                  href={keyUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10px] font-mono text-[#76B900] hover:underline"
+                >
+                  Get Key &rarr;
+                </a>
+              )}
+            </div>
           </div>
           <div className="flex gap-2">
             <input
@@ -380,6 +409,7 @@ export default function SetupPage() {
   const [selectedComfyExamples, setSelectedComfyExamples] = useState<Set<string>>(new Set());
   const [comfyPlanSaving, setComfyPlanSaving] = useState(false);
   const [comfyPlanMessage, setComfyPlanMessage] = useState<string | null>(null);
+  const [comfyAutoLaunch, setComfyAutoLaunch] = useState(true);
   const [studioPacks, setStudioPacks] = useState<StudioPack[]>([]);
   const [studioBundles, setStudioBundles] = useState<Record<string, string[]>>({});
   const [studioRoot, setStudioRoot] = useState<string>('');
@@ -1318,6 +1348,11 @@ export default function SetupPage() {
     }
     setComfyInstalling(true);
     setComfyError(null);
+    setComfyPlanMessage(
+      comfyAutoLaunch
+        ? 'Installing ComfyUI under the rootless workspace. nvWizard will launch it when the install finishes.'
+        : 'Installing ComfyUI under the rootless workspace. Launch is disabled for this run.'
+    );
     setComfyEvents([]);
 
     installComfyUIStream(
@@ -1338,13 +1373,46 @@ export default function SetupPage() {
         onComplete: event => {
           setComfyEvents(prev => [...prev.slice(-8), event]);
           setComfyInstalling(false);
-          refreshComfyUI();
+          if (event.status_snapshot) {
+            setComfyStatus(event.status_snapshot);
+          }
+          setComfyPlanMessage(
+            comfyAutoLaunch
+              ? 'ComfyUI installed. Starting it now on localhost:8188...'
+              : 'ComfyUI installed. Use Start when you are ready.'
+          );
+          if (comfyAutoLaunch) {
+            void (async () => {
+              setComfyStarting(true);
+              try {
+                const status = await startComfyUI();
+                setComfyStatus(status);
+                setComfyPlanMessage(
+                  status.running || status.ready
+                    ? `ComfyUI is running at ${status.url}`
+                    : `ComfyUI was started and is still warming up. Check ${status.log_path || 'the ComfyUI log'} if it does not open.`
+                );
+                if (status.url && typeof window !== 'undefined') {
+                  window.open(status.url, '_blank', 'noopener,noreferrer');
+                }
+              } catch (err) {
+                setComfyError(err instanceof Error ? err.message : 'ComfyUI installed, but auto-launch failed');
+                setComfyPlanMessage('ComfyUI installed, but auto-launch needs attention. Use Start or Copy Support Report.');
+              } finally {
+                setComfyStarting(false);
+                void refreshComfyUI();
+              }
+            })();
+          } else {
+            refreshComfyUI();
+          }
           void refreshInstallJobs();
           void refreshSetupInventory(false);
           void refreshSetupHelper(storageStatus?.layout.home);
         },
         onError: error => {
           setComfyError(error);
+          setComfyPlanMessage('ComfyUI install stopped before launch. nvWizard captured the error for the support report.');
           setComfyInstalling(false);
           void refreshInstallJobs();
           void refreshSetupHelper(storageStatus?.layout.home);
@@ -1359,6 +1427,11 @@ export default function SetupPage() {
     try {
       const status = await startComfyUI();
       setComfyStatus(status);
+      setComfyPlanMessage(
+        status.running || status.ready
+          ? `ComfyUI is running at ${status.url}`
+          : `ComfyUI start was requested and is still warming up. Check ${status.log_path || 'the ComfyUI log'} if it does not open.`
+      );
     } catch (err) {
       setComfyError(err instanceof Error ? err.message : 'Failed to start ComfyUI');
     } finally {
@@ -4550,13 +4623,22 @@ export default function SetupPage() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex items-center gap-2 px-3 py-2 border border-[#e5e5e5] bg-[#fafafa] text-[10px] font-mono uppercase tracking-wider text-[#737373]">
+                    <input
+                      type="checkbox"
+                      checked={comfyAutoLaunch}
+                      onChange={event => setComfyAutoLaunch(event.target.checked)}
+                      className="accent-[#76B900]"
+                    />
+                    Launch after install
+                  </label>
                   <button
                     type="button"
                     onClick={handleInstallComfyUI}
                     disabled={comfyInstalling || !storageReady}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {!storageReady ? storagePrimaryLabel : comfyInstalling ? 'Installing...' : comfyStatus?.installed ? 'Refresh Install' : 'Install ComfyUI'}
+                    {!storageReady ? storagePrimaryLabel : comfyInstalling ? 'Installing...' : comfyStatus?.installed ? 'Refresh Install' : comfyAutoLaunch ? 'Install & Launch ComfyUI' : 'Install ComfyUI'}
                   </button>
                   <button
                     type="button"
@@ -4587,6 +4669,13 @@ export default function SetupPage() {
                 </div>
               </div>
             </div>
+
+            {comfyPlanMessage && (
+              <div className="bg-[#76B900]/5 border border-[#76B900]/20 p-3">
+                <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">ComfyUI Status</div>
+                <div className="text-xs font-mono text-[#2a2a2a]">{comfyPlanMessage}</div>
+              </div>
+            )}
 
             {comfyError && (
               <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-3">
@@ -5034,7 +5123,7 @@ export default function SetupPage() {
                       disabled={comfyStarting || comfyInstalling || !storageReady}
                       className="btn-primary w-full mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                     >
-                      {comfyStatus?.installed ? comfyStarting ? 'Starting' : 'Start ComfyUI' : comfyInstalling ? 'Installing' : 'Install ComfyUI'}
+                      {comfyStatus?.installed ? comfyStarting ? 'Starting' : 'Start ComfyUI' : comfyInstalling ? 'Installing' : comfyAutoLaunch ? 'Install & Launch' : 'Install ComfyUI'}
                     </button>
                   )}
                 </div>

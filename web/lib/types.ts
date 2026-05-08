@@ -1343,11 +1343,18 @@ export interface ConversationSummary {
 export interface FreeProvider {
   id: string;
   name: string;
+  display_name?: string;
   signup_tier: 'none' | 'email' | 'account';
+  daily_limit?: string;
   free_tier_limits?: string;
   strengths?: string[];
   configured: boolean;
+  requires_signup?: boolean;
+  requires_key?: boolean;
+  env_var?: string;
   env_key?: string;
   placeholder?: string;
   signup_url?: string;
+  key_url?: string;
+  docs_url?: string;
 }
