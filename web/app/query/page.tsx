@@ -13,6 +13,7 @@ import {
   compare,
   getModels,
   getAgentPresets,
+  askSetupAssistant,
 } from '@/lib/api';
 import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
@@ -131,6 +132,33 @@ function QueryPageInner() {
 
     let streamingStarted = false;
 
+    const showWizardFallback = async (rawError: string) => {
+      const wizard = await askSetupAssistant(
+        [
+          `The user asked the AI chat: "${params.prompt}".`,
+          `The selected AI source failed with: ${rawError}.`,
+          'Explain what is happening in nvHive, what button to press next, and what local AI needs before general questions can be answered.',
+        ].join(' '),
+      );
+      setResponse({
+        content: wizard.answer,
+        model: wizard.mode ?? 'offline-helper',
+        provider: 'nvwizard',
+        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        cost_usd: '0',
+        latency_ms: 0,
+        finish_reason: 'fallback',
+        cache_hit: false,
+        fallback_from: 'local-ai',
+        metadata: {
+          focus: wizard.focus,
+          available_immediately: wizard.available_immediately ?? true,
+          actions: wizard.actions?.slice(0, 3).map(action => action.id) ?? [],
+        },
+      });
+      setError(null);
+    };
+
     try {
       if (params.mode === 'simple') {
         if (params.stream) {
@@ -164,7 +192,7 @@ function QueryPageInner() {
             },
             (err) => {
               setLoading(false);
-              setError(friendlyQueryError(err));
+              void showWizardFallback(err).catch(() => setError(friendlyQueryError(err)));
             }
           );
           stopStreamRef.current = stop;
@@ -196,7 +224,16 @@ function QueryPageInner() {
         saveRecent({ id: `${Date.now()}`, prompt: params.prompt, mode: 'compare', timestamp: Date.now() });
       }
     } catch (err) {
-      setError(friendlyQueryError(err instanceof Error ? err.message : 'Request failed'));
+      const message = err instanceof Error ? err.message : 'Request failed';
+      if (params.mode === 'simple') {
+        try {
+          await showWizardFallback(message);
+        } catch {
+          setError(friendlyQueryError(message));
+        }
+      } else {
+        setError(friendlyQueryError(message));
+      }
     } finally {
       if (!streamingStarted) {
         setLoading(false);

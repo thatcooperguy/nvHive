@@ -1021,6 +1021,9 @@ export interface SetupAssistantReply {
   focus: string;
   commands: string[];
   product?: string;
+  mode?: string;
+  available_immediately?: boolean;
+  requires_local_model?: boolean;
   official_repo_url?: string;
   readme_url?: string;
   grounding_sources?: string[];

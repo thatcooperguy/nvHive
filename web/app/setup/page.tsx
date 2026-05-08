@@ -3390,6 +3390,9 @@ export default function SetupPage() {
                     <span className="text-[9px] font-mono text-[#76B900] uppercase border border-[#76B900]/40 px-1.5 py-0.5">
                       {advisorModeLabel}
                     </span>
+                    <span className="text-[9px] font-mono text-[#76B900] uppercase border border-[#76B900]/40 px-1.5 py-0.5">
+                      ready now
+                    </span>
                   </div>
                   <div className="text-[10px] text-[#525252] mt-1 leading-relaxed">
                     {advisorSummary}
@@ -3406,13 +3409,30 @@ export default function SetupPage() {
                   </button>
                 )}
               </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  value={assistantQuestion}
+                  onChange={event => setAssistantQuestion(event.target.value)}
+                  onKeyDown={event => { if (event.key === 'Enter') void handleAskAssistant(); }}
+                  placeholder="Ask nvWizard what to fix, why something failed, or what to install next"
+                  className="input-base flex-1 px-3 py-2 text-xs font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleAskAssistant()}
+                  disabled={assistantLoading || !assistantQuestion.trim() || apiDisconnected}
+                  className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                >
+                  {assistantLoading ? 'Thinking' : 'Ask nvWizard'}
+                </button>
+              </div>
               {(assistantLoading || assistantError || assistantReply) && (
                 <div className="border border-[#d4d4d4] bg-white p-3 space-y-2">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div>
-                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">nvWizard Debugger</div>
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">nvWizard Chat</div>
                       <div className="text-[10px] text-[#737373] mt-0.5">
-                        Reads jobs, receipts, boot checks, and redacted logs without opening Advanced Details.
+                        Works immediately from local setup state, jobs, receipts, and redacted logs. The local model takes over when it is healthy.
                       </div>
                     </div>
                     {assistantReply?.diagnostics_report_id && (

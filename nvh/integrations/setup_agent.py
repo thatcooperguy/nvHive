@@ -90,6 +90,8 @@ def _assistant_metadata(agent_helper: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": agent_helper.get("mode", "offline-deterministic"),
         "product": "nvHive / nvWizard",
+        "available_immediately": True,
+        "requires_local_model": False,
         "can_read_jobs": True,
         "can_read_receipts": True,
         "can_refresh_catalog": True,
@@ -682,8 +684,9 @@ def setup_assistant_reply(
 
     if not q:
         answer = (
+            "I can help right now, even while the local model is still downloading. "
             "Ask about what you want to build, storage, ComfyUI, models, Blender, "
-            "music, game tools, agents, repair, or the next setup step."
+            "music, game tools, agents, repair, the latest log clue, or the next setup step."
         )
     elif any(phrase in q for phrase in ["which mission", "what mission", "what should i pick", "what should i build", "start with"]):
         focus = "mission-choice"
@@ -893,8 +896,10 @@ def setup_assistant_reply(
         commands = [action["command"] for action in actions[:3]]
         next_title = actions[0]["title"] if actions else "Open the setup wizard"
         answer = (
-            f"Best next step: {next_title}. "
-            f"{report['summary']}. Receipts tracked: {receipts.get('count', 0)}."
+            f"Best next step: {next_title}. {report['summary']}. "
+            f"Receipts tracked: {receipts.get('count', 0)}. I can answer setup and "
+            "repair questions immediately; general homework or coding questions use "
+            "the local model after the runtime and selected model are ready."
         )
 
     if not commands and actions and not suppress_command_fallback:
@@ -907,6 +912,9 @@ def setup_assistant_reply(
         "focus": focus,
         "commands": commands,
         "product": assistant_info.get("product", "nvHive / nvWizard"),
+        "mode": assistant_info.get("mode", "offline-deterministic"),
+        "available_immediately": bool(assistant_info.get("available_immediately", True)),
+        "requires_local_model": bool(assistant_info.get("requires_local_model", False)),
         "official_repo_url": OFFICIAL_REPO_URL,
         "readme_url": OFFICIAL_README_URL,
         "grounding_sources": assistant_info.get("grounding_sources", []),

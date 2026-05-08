@@ -48,6 +48,8 @@ def test_setup_helper_flags_default_storage(monkeypatch) -> None:
     assert report["actions"][0]["id"] == "storage"
     assert report["assistant"]["mode"] == "offline-deterministic"
     assert report["assistant"]["product"] == "nvHive / nvWizard"
+    assert report["assistant"]["available_immediately"] is True
+    assert report["assistant"]["requires_local_model"] is False
     assert report["assistant"]["official_repo_url"].endswith("/thatcooperguy/nvHive")
     assert "rootless NVIDIA AI lab" in report["assistant"]["system_prompt"]
 
@@ -64,6 +66,8 @@ def test_setup_assistant_answers_comfyui_question(tmp_path, monkeypatch) -> None
 
     assert reply["focus"] == "comfyui"
     assert "ComfyUI" in reply["answer"]
+    assert reply["available_immediately"] is True
+    assert reply["requires_local_model"] is False
     assert reply["commands"]
 
 

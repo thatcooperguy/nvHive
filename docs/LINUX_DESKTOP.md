@@ -70,6 +70,11 @@ student can pick a mission, then click through storage, models, ComfyUI, Claw
 agents, creative tools, game engines, and music packs without typing manual
 commands.
 
+nvWizard chat is available before the first local model finishes downloading.
+It answers setup and repair questions from local jobs, receipts, redacted logs,
+boot checks, and the packaged product brief, then uses the local Ollama model
+for broader AI questions once runtime and model health checks pass.
+
 The desktop launcher path is intentionally conservative for managed cloud
 desktops: it does not need `sudo`, does not need OS package installs, and keeps
 large assets under the selected persistent `NVH_HOME`. Manual commands remain

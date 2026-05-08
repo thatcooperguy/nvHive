@@ -154,6 +154,81 @@ class OllamaProvider:
         msgs = _build_messages(messages, system_prompt)
         start = time.monotonic()
 
+        # Prefer Ollama's native API for local desktop installs. It avoids a
+        # class of LiteLLM edge cases where a freshly loaded local model reports
+        # usage but returns no text, which made first-run quick tests feel broken.
+        try:
+            content = await self._direct_complete(
+                msgs, model_name, temperature, max_tokens,
+            )
+            if content.strip():
+                elapsed = int((time.monotonic() - start) * 1000)
+                output_tokens = max(1, self.estimate_tokens(content))
+                prompt_tokens = sum(
+                    self.estimate_tokens(str(message.get("content", "")))
+                    for message in msgs
+                )
+                return CompletionResponse(
+                    content=content,
+                    model=model_name,
+                    provider=self._provider_name,
+                    usage=Usage(
+                        input_tokens=prompt_tokens,
+                        output_tokens=output_tokens,
+                        total_tokens=prompt_tokens + output_tokens,
+                    ),
+                    cost_usd=Decimal("0"),
+                    latency_ms=elapsed,
+                    finish_reason=FinishReason.STOP,
+                    metadata={"transport": "ollama-api"},
+                )
+        except Exception as direct_error:
+            if self._looks_like_missing_model(direct_error):
+                fallback_model = await self._installed_model_fallback(model_name)
+                if fallback_model:
+                    try:
+                        content = await self._direct_complete(
+                            msgs, fallback_model, temperature, max_tokens,
+                        )
+                        if content.strip():
+                            elapsed = int((time.monotonic() - start) * 1000)
+                            output_tokens = max(1, self.estimate_tokens(content))
+                            prompt_tokens = sum(
+                                self.estimate_tokens(str(message.get("content", "")))
+                                for message in msgs
+                            )
+                            return CompletionResponse(
+                                content=content,
+                                model=fallback_model,
+                                provider=self._provider_name,
+                                usage=Usage(
+                                    input_tokens=prompt_tokens,
+                                    output_tokens=output_tokens,
+                                    total_tokens=prompt_tokens + output_tokens,
+                                ),
+                                cost_usd=Decimal("0"),
+                                latency_ms=elapsed,
+                                finish_reason=FinishReason.STOP,
+                                metadata={
+                                    "transport": "ollama-api",
+                                    "fallback_model": fallback_model,
+                                },
+                            )
+                    except Exception as retry_error:
+                        direct_error = retry_error
+            err_str = str(direct_error).lower()
+            looks_like_conn = (
+                "connection" in err_str
+                or "refused" in err_str
+                or "connect" in err_str
+            )
+            if looks_like_conn and not _ollama_daemon_reachable(self._base_url):
+                raise ProviderUnavailableError(
+                    _rootless_ollama_unavailable_message(self._base_url),
+                    provider=self._provider_name,
+                    original_error=direct_error,
+                ) from direct_error
+
         try:
             response = await litellm.acompletion(
                 messages=msgs,
