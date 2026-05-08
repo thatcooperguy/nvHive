@@ -28,6 +28,7 @@ and music production.
 | What models fit this GPU? | The wizard detects GPU/VRAM/CUDA and recommends local LLMs and ComfyUI profiles that fit the machine. |
 | What if the VM image changed? | Boot health checks compare storage, drivers, CUDA, Python, Node, and receipts against the previous session. |
 | What if something breaks? | **Fix My Setup** runs safe rootless repairs, and support snapshots redact secrets and local paths. |
+| What should nvWizard remember? | **nvHive Vault** keeps product memory, pilot notes, decisions, conflicts, and support playbooks as plain Markdown under `NVH_HOME`. Obsidian is optional. |
 | Do I need root? | No for nvHive, local models, ComfyUI, Blender, Godot helpers, music tools, and OpenClaw. NemoClaw stays blocked until Docker already works without sudo. |
 
 The ideal student journey is:
@@ -47,6 +48,7 @@ What you get on the happy path:
 - Mission cards for AI Starter, Graphics Creator, Game Dev, Music Producer, and Agent Builder.
 - Self-healing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts.
 - A product-aware nvWizard helper grounded in the official repo/README, local setup state, jobs, receipts, and rootless safety rules.
+- A rootless Markdown vault for durable memory, known product conflicts, pilot test notes, and optional Obsidian viewing.
 - Redacted error reports with request IDs when something needs debugging.
 
 Release status: CI is green across Linux, Windows, and macOS. nvHive is a
@@ -276,6 +278,18 @@ with local models when available. Every advanced step is skippable. Run
 <p align="center">
   <img src="docs/screenshots/setup-flow.svg" alt="nvHive 3-Step Setup Flow" width="900">
 </p>
+
+### Memory Vault
+
+The WebUI includes **Memory Vault**, a plain Markdown workspace at
+`$NVH_HOME/vault`. It keeps nvWizard product memory, pilot notes, support
+playbooks, troubleshooting, decisions, and known product conflicts without
+requiring root, a database, or a specific editor.
+
+Obsidian support is optional. On Linux x86_64, nvHive can install the Obsidian
+AppImage under `$NVH_HOME/apps/obsidian` and create a rootless `nvhive-vault`
+launcher. If a VM image cannot run AppImages, the same vault can still be
+opened in any Markdown editor.
 
 ### WebUI
 

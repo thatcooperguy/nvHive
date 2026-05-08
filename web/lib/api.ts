@@ -67,6 +67,9 @@ import type {
   StudioModelInstallEvent,
   StudioModelInstallRequest,
   StudioModelsResult,
+  VaultMemoryRequest,
+  VaultMemoryResult,
+  VaultStatus,
 } from './types';
 
 function normalizeApiBase(value?: string | null): string | null {
@@ -664,6 +667,26 @@ export function installStudioModelsStream(
     () => startStudioModelInstallJob(request),
     callbacks
   );
+}
+
+export async function getVaultStatus(homeDir?: string): Promise<VaultStatus> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<VaultStatus>(`/v1/vault/status${qs}`);
+}
+
+export async function initVault(homeDir?: string): Promise<VaultStatus> {
+  return apiPost<VaultStatus>('/v1/vault/init', { home_dir: homeDir });
+}
+
+export async function saveVaultMemory(request: VaultMemoryRequest): Promise<VaultMemoryResult> {
+  return apiPost<VaultMemoryResult>('/v1/vault/memory', request);
+}
+
+export async function installObsidian(homeDir?: string, forceUpdate = false): Promise<VaultStatus['obsidian']> {
+  return apiPost<VaultStatus['obsidian']>('/v1/vault/obsidian/install', {
+    home_dir: homeDir,
+    force_update: forceUpdate,
+  });
 }
 
 export interface AnalyticsData {

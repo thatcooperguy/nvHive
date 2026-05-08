@@ -1125,6 +1125,32 @@ class SupportSnapshotRequest(BaseModel):
     min_free_gb: float = Field(default=200.0, ge=0)
 
 
+class VaultInitRequest(BaseModel):
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+
+
+class VaultMemoryRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+    body: str = Field(..., min_length=1, max_length=20000)
+    category: str = Field(default="Wizard Memory", max_length=80)
+    tags: list[str] = Field(default_factory=list)
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+
+
+class ObsidianInstallRequest(BaseModel):
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+    force_update: bool = False
+
+
 @app.get("/v1/system/storage", summary="Inspect rootless persistent storage")
 async def system_storage(
     home_dir: str | None = None,
@@ -1153,6 +1179,63 @@ async def configure_system_storage(
             min_free_gb=request.min_free_gb,
             activate=request.activate,
         ).as_dict()
+    )
+
+
+@app.get("/v1/vault/status", summary="Inspect rootless nvHive Vault memory")
+async def vault_status_endpoint(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the Markdown vault and optional Obsidian status."""
+    from nvh.integrations.vault import vault_status
+
+    return _response_envelope(vault_status(home_dir=home_dir))
+
+
+@app.post("/v1/vault/init", summary="Create rootless nvHive Vault memory")
+async def vault_init_endpoint(
+    request: VaultInitRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Seed a durable Markdown vault under NVH_HOME."""
+    from nvh.integrations.vault import init_vault
+
+    return _response_envelope(init_vault(home_dir=request.home_dir))
+
+
+@app.post("/v1/vault/memory", summary="Save a note into nvHive Vault")
+async def vault_memory_endpoint(
+    request: VaultMemoryRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Write a Markdown memory note without using a database or root path."""
+    from nvh.integrations.vault import append_vault_memory
+
+    return _response_envelope(
+        append_vault_memory(
+            request.title,
+            request.body,
+            category=request.category,
+            tags=request.tags,
+            home_dir=request.home_dir,
+        )
+    )
+
+
+@app.post("/v1/vault/obsidian/install", summary="Install Obsidian rootlessly")
+async def vault_obsidian_install_endpoint(
+    request: ObsidianInstallRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Install the Obsidian AppImage under NVH_HOME/apps when supported."""
+    from nvh.integrations.vault import install_obsidian
+
+    return _response_envelope(
+        install_obsidian(
+            home_dir=request.home_dir,
+            force_update=request.force_update,
+        )
     )
 
 

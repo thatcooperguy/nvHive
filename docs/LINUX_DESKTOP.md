@@ -87,7 +87,31 @@ available as overrides, but the first-run experience should be click-first.
 - Runs nvWizard boot checks for storage, Python, CUDA/PyTorch, ComfyUI, models, and install receipts
 - Checks `/v1/ready` so the launcher and WebUI can show whether the workspace is ready, pilot-ready, or blocked
 - With `--all`, ensures local AI, installs ComfyUI, installs the rootless starter pack, and launches WebUI
-- Uses user-space paths only under `NVH_HOME` for durable models, ComfyUI, packs, runtime fallback tools, apps, WebUI assets, cache, logs, and config
+- Uses user-space paths only under `NVH_HOME` for durable models, ComfyUI, packs, runtime fallback tools, apps, WebUI assets, cache, logs, vault memory, and config
+
+## nvHive Vault and Obsidian
+
+The WebUI includes **Memory Vault** for durable workspace memory. It creates
+plain Markdown notes under `$NVH_HOME/vault`, including:
+
+- nvWizard product memory and rootless safety rules
+- pilot test checklists
+- support-report playbooks
+- product decisions
+- known conflicts and tradeoffs
+- troubleshooting notes from the student VM
+
+The vault is the source of truth. Obsidian is optional and installs rootlessly
+under `$NVH_HOME/apps/obsidian` on Linux x86_64 when the AppImage path is
+usable. If Obsidian cannot run because the VM image lacks FUSE or a GUI helper,
+the Markdown vault still works and can be opened by any editor.
+
+Use the vault to improve process without increasing first-run complexity:
+
+```bash
+nvh webui
+# Open Memory Vault from the sidebar.
+```
 
 ## Rootless AI Studio Packs
 

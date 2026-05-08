@@ -1274,6 +1274,51 @@ export interface StudioModelInstallEvent {
   status_snapshot?: StudioModelsResult;
 }
 
+export interface VaultConflict {
+  title: string;
+  summary: string;
+}
+
+export interface ObsidianStatus {
+  installed: boolean;
+  rootless_app: boolean;
+  app_path: string | null;
+  launcher_path: string;
+  open_command: string;
+  installable: boolean;
+  reason: string;
+  download_url: string;
+  vault_dir: string;
+  message?: string;
+}
+
+export interface VaultStatus {
+  initialized: boolean;
+  vault_dir: string;
+  home_dir: string;
+  markdown_files: number;
+  directories?: Record<string, string>;
+  seeded_files?: Record<string, string>;
+  conflicts: VaultConflict[];
+  obsidian: ObsidianStatus;
+}
+
+export interface VaultMemoryRequest {
+  title: string;
+  body: string;
+  category?: string;
+  tags?: string[];
+  home_dir?: string;
+}
+
+export interface VaultMemoryResult {
+  saved: boolean;
+  path: string;
+  category: string;
+  title: string;
+  vault_dir: string;
+}
+
 export type QueryMode = 'simple' | 'council' | 'compare';
 export type ConnectionStatus = 'connected' | 'disconnected' | 'checking';
 
