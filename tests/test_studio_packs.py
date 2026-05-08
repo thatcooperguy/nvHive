@@ -97,7 +97,35 @@ def test_ollama_binary_ignores_unusable_local_file(tmp_path, monkeypatch) -> Non
     monkeypatch.setattr(subprocess, "run", raise_exec_format)
 
     assert studio_packs._ollama_binary() == ""
-    assert "Exec format error" in studio_packs._ollama_validation_error(local)
+    assert "not a Linux ELF binary" in studio_packs._ollama_validation_error(local)
+
+
+def test_ollama_validation_reports_html_download(tmp_path) -> None:
+    binary = tmp_path / "ollama"
+    binary.write_bytes(b"<!doctype html><title>404</title>")
+    binary.chmod(binary.stat().st_mode | 0o755)
+
+    error = studio_packs._ollama_validation_error(binary)
+
+    assert "HTML/error page" in error
+    assert studio_packs._binary_file_probe(binary)["format"] == "html"
+
+
+def test_ollama_validation_reports_wrong_elf_arch(tmp_path, monkeypatch) -> None:
+    binary = tmp_path / "ollama"
+    header = bytearray(64)
+    header[:4] = b"\x7fELF"
+    header[18:20] = (0xB7).to_bytes(2, "little")
+    binary.write_bytes(bytes(header))
+    binary.chmod(binary.stat().st_mode | 0o755)
+    monkeypatch.setattr(studio_packs, "_platform_arch", lambda: "amd64")
+
+    error = studio_packs._ollama_validation_error(binary)
+    probe = studio_packs._binary_file_probe(binary)
+
+    assert "wrong CPU architecture" in error
+    assert probe["elf_machine"] == "arm64"
+    assert probe["arch_match"] is False
 
 
 def test_godot_asset_selector_prefers_standard_linux_zip() -> None:

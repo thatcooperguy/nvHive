@@ -214,12 +214,14 @@ server_ready() {{
 open_url() {{
   log "opening $URL"
   ROOTLESS_FIREFOX="${{NVH_APPS_HOME:-{storage.layout.apps_dir}}}/firefox/firefox"
+  FIREFOX_PROFILE="${{NVH_FIREFOX_PROFILE:-${{NVH_STATE:-{storage.layout.state_dir}}}/browser-profiles/desktop}}"
+  mkdir -p "$FIREFOX_PROFILE"
   if [ -x "$ROOTLESS_FIREFOX" ]; then
-    "$ROOTLESS_FIREFOX" --new-window "$URL" >/dev/null 2>&1 &
+    "$ROOTLESS_FIREFOX" --new-instance --no-remote --profile "$FIREFOX_PROFILE" --new-window "$URL" >/dev/null 2>&1 &
   elif command -v firefox >/dev/null 2>&1; then
-    firefox --new-window "$URL" >/dev/null 2>&1 &
+    firefox --new-instance --no-remote --profile "$FIREFOX_PROFILE" --new-window "$URL" >/dev/null 2>&1 &
   elif command -v firefox-esr >/dev/null 2>&1; then
-    firefox-esr --new-window "$URL" >/dev/null 2>&1 &
+    firefox-esr --new-instance --no-remote --profile "$FIREFOX_PROFILE" --new-window "$URL" >/dev/null 2>&1 &
   elif command -v chromium >/dev/null 2>&1; then
     chromium --new-window "$URL" >/dev/null 2>&1 &
   elif command -v chromium-browser >/dev/null 2>&1; then

@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState, useRef, Suspense } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import QueryInput from '@/components/QueryInput';
 import ResponsePanel from '@/components/ResponsePanel';
 import CouncilPanel from '@/components/CouncilPanel';
-import AgentBadge from '@/components/AgentBadge';
 import {
   query,
   queryStream,
@@ -13,7 +13,6 @@ import {
   compare,
   getModels,
   getAgentPresets,
-  analyzeAgents,
 } from '@/lib/api';
 import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
@@ -23,7 +22,6 @@ import type {
   QueryMode,
   RecentQuery,
   AgentPreset,
-  AgentPersona,
 } from '@/lib/types';
 
 const STORAGE_KEY = 'council_recent_queries';
@@ -41,6 +39,14 @@ function saveRecent(q: RecentQuery) {
 function friendlyQueryError(message: string): string {
   const raw = message || 'Request failed';
   const lower = raw.toLowerCase();
+  if (lower.includes('stalled') || lower.includes('no tokens')) {
+    return [
+      'Local AI is still warming up.',
+      'The model is installed, but Ollama did not emit a token before the safety timer.',
+      'Wait a moment and retry, or open Setup to run Fix Setup and verify the selected model.',
+      `Last error: ${raw}`,
+    ].join(' ');
+  }
   if (
     lower.includes('internal server error') ||
     lower.includes('ollama') ||
@@ -66,6 +72,7 @@ function QueryPageInner() {
   // Live-polled provider health (30s interval) so connected/offline
   // stays accurate throughout the session.
   const { providers } = useProviderHealth();
+  const healthyProviderCount = providers.filter(p => p.healthy).length;
   const [models, setModels] = useState<Array<{ model_id: string; provider: string; display_name: string }>>([]);
   const [presets, setPresets] = useState<AgentPreset[]>([]);
 
@@ -80,8 +87,6 @@ function QueryPageInner() {
   const [councilPreset, setCouncilPreset] = useState('');
   const [autoAgents, setAutoAgents] = useState(false);
   const [numAgents, setNumAgents] = useState(3);
-  const [analyzedAgents, setAnalyzedAgents] = useState<AgentPersona[]>([]);
-  const [analyzing, setAnalyzing] = useState(false);
   const [councilStrategy, setCouncilStrategy] = useState('');
   const [synthesize, setSynthesize] = useState(true);
 
@@ -96,19 +101,6 @@ function QueryPageInner() {
     }).catch(() => {});
     return () => { mounted = false; };
   }, []);
-
-  const handleAnalyzeAgents = async (prompt: string) => {
-    if (!prompt.trim()) return;
-    setAnalyzing(true);
-    try {
-      const result = await analyzeAgents(prompt, numAgents, councilPreset || undefined);
-      setAnalyzedAgents(result.agents);
-    } catch {
-      // ignore
-    } finally {
-      setAnalyzing(false);
-    }
-  };
 
   const handleSubmit = async (params: {
     prompt: string;
@@ -227,7 +219,21 @@ function QueryPageInner() {
           <h1 className="text-2xl font-bold text-[#0a0a0a]">Ask AI</h1>
           <p className="text-xs font-mono text-[#737373] mt-1">Ask your local model, or compare answers when you need a second opinion.</p>
         </div>
+        <div className="flex flex-wrap gap-2 justify-end">
+          <Link href="/setup" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+            Setup Local AI
+          </Link>
+          <Link href="/providers" className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+            AI Connections
+          </Link>
+        </div>
       </div>
+
+      {healthyProviderCount === 0 && (
+        <div className="border border-[#d97706]/30 bg-[#fff7ed] px-4 py-3 text-xs text-[#7c2d12]">
+          No AI source is answering yet. Connect an API key or install the local runtime from Setup, then retry this page.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Input panel */}
@@ -318,26 +324,9 @@ function QueryPageInner() {
                 </button>
               </div>
 
-              <button
-                onClick={() => handleAnalyzeAgents('')}
-                disabled={analyzing}
-                className="btn-secondary w-full py-2 text-xs font-mono flex items-center justify-center gap-2"
-              >
-                {analyzing ? (
-                  <><svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>ANALYZING...</>
-                ) : (
-                  'PREVIEW AGENTS'
-                )}
-              </button>
-
-              {analyzedAgents.length > 0 && (
-                <div className="space-y-2">
-                  <div className="section-label">Generated Agents</div>
-                  {analyzedAgents.map((a, i) => (
-                    <AgentBadge key={i} agent={a} index={i} />
-                  ))}
-                </div>
-              )}
+              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 text-[10px] font-mono text-[#737373] leading-relaxed">
+                Agent perspectives are selected when you run the query, using the current question and settings.
+              </div>
             </div>
           )}
         </div>

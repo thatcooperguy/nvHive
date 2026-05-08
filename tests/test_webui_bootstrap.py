@@ -316,5 +316,10 @@ def test_webui_launch_prefers_rootless_firefox(tmp_path, monkeypatch):
             break
         time.sleep(0.05)
 
-    assert any(call[0] == str(firefox_bin) and call[1] == "--new-window" and call[2].endswith("/setup") for call in popen_calls)
+    firefox_calls = [call for call in popen_calls if call[0] == str(firefox_bin)]
+    assert firefox_calls
+    assert firefox_calls[0][1:4] == ["--new-instance", "--no-remote", "--profile"]
+    assert firefox_calls[0][4] == str(home / "state" / "browser-profiles" / "rootless-firefox")
+    assert firefox_calls[0][-2] == "--new-window"
+    assert firefox_calls[0][-1].endswith("/setup")
     assert not any(call[0] == "/usr/bin/xdg-open" for call in popen_calls)

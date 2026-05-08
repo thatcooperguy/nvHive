@@ -209,7 +209,10 @@ class KnowledgeBase:
         try:
             return path.read_text(errors="replace")
         except Exception:
-            return f"[Could not extract text from {path.name}. Install pdftotext: apt install poppler-utils]"
+            return (
+                f"[Could not extract text from {path.name}. Add pdftotext to PATH "
+                "inside NVH_HOME, or use a text-based PDF export.]"
+            )
 
 
 # Singleton

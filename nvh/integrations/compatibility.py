@@ -80,6 +80,15 @@ class AppCompatibility:
         return data
 
 
+OPTIONAL_PROFILE_IDS = {
+    "agent-lab",
+    "claw-agents",
+    "blender-creative",
+    "game-dev-lab",
+    "music-producer-lab",
+}
+
+
 def _parse_version(value: str | None) -> tuple[int, ...]:
     if not value:
         return ()
@@ -243,9 +252,16 @@ def _host_facts() -> dict[str, Any]:
     }
 
 
-def _fact_list(host: dict[str, Any]) -> list[HostFact]:
+def _fact_list(
+    host: dict[str, Any],
+    *,
+    node_status: dict[str, Any] | None = None,
+    docker_status: dict[str, Any] | None = None,
+) -> list[HostFact]:
     commands = host["commands"]
     gpu = host["gpu"]
+    node_status = node_status if node_status is not None else _node_runtime_status()
+    docker_status = docker_status if docker_status is not None else _docker_status()
     gpu_ready = bool(gpu.get("name"))
     display_ready = bool(host["display"].get("DISPLAY") or host["display"].get("WAYLAND_DISPLAY"))
     return [
@@ -256,8 +272,8 @@ def _fact_list(host: dict[str, Any]) -> list[HostFact]:
         HostFact("venv", "Python venv", "available" if host["python"]["venv_available"] else "missing", "ok" if host["python"]["venv_available"] else "fixable", "recommended"),
         HostFact("git", "Git", commands.get("git") or "missing", "ok" if commands.get("git") else "blocked", "required"),
         HostFact("curl", "curl", commands.get("curl") or "missing", "ok" if commands.get("curl") else "blocked", "required"),
-        HostFact("node", "Node.js", host["command_versions"].get("node") or "rootless install available", "ok" if _node_runtime_status().get("ready") else "fixable", "recommended"),
-        HostFact("docker", "Docker runtime", host["command_versions"].get("docker") or "missing", "ok" if _docker_status().get("ready") else "degraded", "optional", "Required only for NemoClaw/OpenShell sandboxes."),
+        HostFact("node", "Node.js", host["command_versions"].get("node") or "rootless install available", "ok" if node_status.get("ready") else "fixable", "recommended"),
+        HostFact("docker", "Docker runtime", host["command_versions"].get("docker") or "missing", "ok" if docker_status.get("ready") else "degraded", "optional", "Required only for NemoClaw/OpenShell sandboxes."),
         HostFact("nvidia-smi", "NVIDIA driver", gpu.get("driver_version") or gpu.get("detection_status", "not detected"), "ok" if gpu_ready else "degraded", "recommended"),
         HostFact("cuda", "CUDA driver API", gpu.get("cuda_version", "unknown"), "ok" if gpu.get("cuda_version") else "degraded", "recommended"),
         HostFact("display", "Linux desktop display", "available" if display_ready else "not detected", "ok" if display_ready else "degraded", "optional"),
@@ -341,7 +357,14 @@ def recommended_torch_profile(cuda_version: str | None) -> str:
     return "cpu"
 
 
-def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
+def compatibility_report(
+    home_dir: str | Path | None = None,
+    *,
+    model_status: dict[str, Any] | None = None,
+    pack_status: dict[str, Any] | None = None,
+    node_status: dict[str, Any] | None = None,
+    docker_status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return host facts and app compatibility recommendations."""
     host = _host_facts()
     if home_dir:
@@ -355,11 +378,11 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     arch = str(host["machine"]).lower()
     display_ready = bool(host["display"].get("DISPLAY") or host["display"].get("WAYLAND_DISPLAY"))
     cuda_profile = recommended_torch_profile(gpu.get("cuda_version"))
-    model_status = model_catalog_with_status()
-    pack_status = catalog_with_status()
+    model_status = model_status if model_status is not None else model_catalog_with_status(home_dir=home_dir)
+    pack_status = pack_status if pack_status is not None else catalog_with_status()
     pack_by_id = {pack.get("id"): pack for pack in pack_status.get("packs", [])}
-    node_status = _node_runtime_status()
-    docker_status = _docker_status()
+    node_status = node_status if node_status is not None else _node_runtime_status()
+    docker_status = docker_status if docker_status is not None else _docker_status()
     recommended_models = model_status.get("recommended_ids", [])
     missing_recommended_models = [
         model["id"] for model in model_status.get("models", [])
@@ -477,7 +500,7 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
                 _req("display", "Desktop display", display_ready, "Interactive samples need a display; headless asset generation can still work."),
                 _req("storage", "Persistent workspace", bool(storage["ok"]), "Game projects install under NVH_HOME/studio.", fix_action_id="storage", rootless_fix_available=True),
             ],
-            recommended_action_id="creative-tools",
+            recommended_action_id="game-tools",
         ),
         _overall(
             "music-producer-lab",
@@ -498,9 +521,22 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
         ),
     ]
 
-    issue_count = sum(1 for app in apps if app.status != "ready")
+    issue_count = sum(
+        1
+        for app in apps
+        if app.status != "ready" and app.severity != "optional" and app.id not in OPTIONAL_PROFILE_IDS
+    )
     blocked_count = sum(1 for app in apps if app.status == "blocked")
-    fixable_count = sum(1 for app in apps if app.rootless_fix_available and app.status != "ready")
+    fixable_count = sum(
+        1
+        for app in apps
+        if (
+            app.rootless_fix_available
+            and app.status != "ready"
+            and app.severity != "optional"
+            and app.id not in OPTIONAL_PROFILE_IDS
+        )
+    )
     return {
         "summary": (
             "Host is ready"
@@ -513,6 +549,6 @@ def compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
         "rootless_fixable_count": fixable_count,
         "recommended_torch_profile": cuda_profile,
         "host": host,
-        "facts": [fact.as_dict() for fact in _fact_list(host)],
+        "facts": [fact.as_dict() for fact in _fact_list(host, node_status=node_status, docker_status=docker_status)],
         "apps": [app.as_dict() for app in apps],
     }

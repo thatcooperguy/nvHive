@@ -19,11 +19,19 @@ from nvh.integrations.receipts import receipt_summary, repair_plan
 from nvh.integrations.runtime import runtime_status
 from nvh.integrations.storage import storage_status
 from nvh.integrations.studio_packs import catalog_with_status, model_catalog_with_status
+from nvh.integrations.troubleshooter import analyze_setup_failure
 
 OFFICIAL_REPO_URL = "https://github.com/thatcooperguy/nvHive"
 OFFICIAL_README_URL = "https://github.com/thatcooperguy/nvHive/blob/main/README.md"
 OFFICIAL_PYPI_URL = "https://pypi.org/project/nvhive/"
 DEFAULT_SETUP_MIN_FREE_GB = 200
+OPTIONAL_COMPATIBILITY_IDS = {
+    "agent-lab",
+    "claw-agents",
+    "blender-creative",
+    "game-dev-lab",
+    "music-producer-lab",
+}
 
 PRODUCT_CONTEXT_FALLBACK = """You are nvWizard, the local setup and repair guide inside nvHive.
 
@@ -136,11 +144,20 @@ def _safe_catalog_data() -> dict[str, Any]:
         return {}
 
 
-def _safe_compatibility_report(home_dir: str | Path | None = None) -> dict[str, Any]:
+def _safe_compatibility_report(
+    home_dir: str | Path | None = None,
+    *,
+    model_status: dict[str, Any] | None = None,
+    pack_status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     try:
         from nvh.integrations.compatibility import compatibility_report
 
-        return compatibility_report(home_dir=home_dir)
+        return compatibility_report(
+            home_dir=home_dir,
+            model_status=model_status,
+            pack_status=pack_status,
+        )
     except Exception as exc:
         return {"summary": "Compatibility unavailable", "issue_count": 0, "apps": [], "error": str(exc)}
 
@@ -327,7 +344,7 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     runtime = runtime_status()
     packs = catalog_with_status()
     models = model_catalog_with_status()
-    comfy = detect_comfyui(home_dir=home_dir)
+    comfy = detect_comfyui(home_dir=home_dir, check_http=False)
     by_pack = _pack_by_id(packs)
     actions: list[SetupAction] = []
     issues: list[SetupIssue] = []
@@ -560,20 +577,27 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             affected_item=failed_job.get("kind"),
         ))
 
-    compatibility = _safe_compatibility_report(home_dir=home_dir)
+    compatibility = _safe_compatibility_report(
+        home_dir=home_dir,
+        model_status=models,
+        pack_status=packs,
+    )
     boot_preflight = _safe_boot_preflight(home_dir=home_dir)
     for app in compatibility.get("apps", []):
         if app.get("status") == "ready":
             continue
-        action_id = app.get("recommended_action_id")
+        app_id = str(app.get("id", ""))
         severity = "required" if app.get("status") == "blocked" else app.get("severity", "recommended")
+        if app_id in OPTIONAL_COMPATIBILITY_IDS and severity != "required":
+            continue
+        action_id = app.get("recommended_action_id")
         issues.append(SetupIssue(
-            id=f"compat:{app['id']}",
-            title=f"{app.get('title', app['id'])} compatibility needs attention",
+            id=f"compat:{app_id}",
+            title=f"{app.get('title', app_id)} compatibility needs attention",
             severity=severity,
             reason=app.get("summary", "Compatibility check needs attention."),
             fix_action_id=action_id,
-            affected_item=app["id"],
+            affected_item=app_id,
         ))
 
     boot_changes = boot_preflight.get("changes") or []
@@ -654,6 +678,7 @@ def setup_assistant_reply(
     diagnostics_report_id: str | None = None
     debug_findings: list[str] = []
     log_highlights: list[str] = []
+    troubleshooting: dict[str, Any] | None = None
 
     if not q:
         answer = (
@@ -706,20 +731,29 @@ def setup_assistant_reply(
         diagnostics_report_id = diagnostics.get("report_id")
         debug_findings = _diagnostic_job_findings(diagnostics, failed_job)
         log_highlights = _diagnostic_log_highlights(diagnostics)
+        troubleshooting = analyze_setup_failure(diagnostics, failed_job, home_dir=home_dir)
+        primary_finding = troubleshooting.get("primary_finding") or {}
+        primary_action_id = primary_finding.get("action_id")
         if failed_job:
-            commands = _commands_for_actions(actions, _action_for_job(failed_job))
-        repair_note = _debug_repair_note(debug_findings, log_highlights)
+            commands = _commands_for_actions(actions, str(primary_action_id or _action_for_job(failed_job)))
+        elif primary_action_id:
+            commands = _commands_for_actions(actions, str(primary_action_id))
+        repair_note = primary_finding.get("summary") or _debug_repair_note(debug_findings, log_highlights)
         if debug_findings or log_highlights:
             evidence = []
             if debug_findings:
                 evidence.append(f"Latest job clue: {debug_findings[0]}")
             if log_highlights:
                 evidence.append(f"Log clue: {log_highlights[0]}")
+            button = primary_finding.get("button_label") or "Fix My Setup"
+            rootless_note = primary_finding.get("rootless_note") or "No sudo or OS package change should be needed."
             answer = (
                 "I checked local jobs, receipts, the boot/setup report, and redacted log tails"
                 f"{f' ({diagnostics_report_id})' if diagnostics_report_id else ''}. "
                 + " ".join(evidence)
-                + f" {repair_note} Advanced Details can stay closed unless you want the full trail."
+                + f" Likely issue: {primary_finding.get('title', 'setup needs attention')}. "
+                + f"{repair_note} Next button: {button}. {rootless_note} "
+                + "Advanced Details can stay closed unless you want the full trail."
             )
         else:
             answer = (
@@ -879,6 +913,9 @@ def setup_assistant_reply(
         "diagnostics_report_id": diagnostics_report_id,
         "debug_findings": debug_findings,
         "log_highlights": log_highlights,
+        "troubleshooting": troubleshooting,
+        "official_urls": troubleshooting.get("official_urls", []) if troubleshooting else [],
+        "web_search_queries": troubleshooting.get("web_search_queries", []) if troubleshooting else [],
         "observations": {
             "ready": report["ready"],
             "issue_count": report.get("issue_count", 0),

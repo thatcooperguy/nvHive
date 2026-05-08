@@ -38,7 +38,7 @@ export default function QueryInput({
   const [model, setModel] = useState('');
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(1024);
-  const [stream, setStream] = useState(true);
+  const [stream, setStream] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -276,7 +276,12 @@ export default function QueryInput({
 
           {/* Streaming toggle */}
           <div className="flex items-center justify-between">
-            <label className="text-xs text-[#737373]">Streaming</label>
+            <div>
+              <label className="text-xs text-[#737373]">Streaming</label>
+              <div className="text-[10px] text-[#a3a3a3] mt-0.5">
+                Leave off for first local model tests; enable after Ollama is warmed up.
+              </div>
+            </div>
             <button
               type="button"
               onClick={() => setStream(!stream)}

@@ -9,7 +9,6 @@ from nvh.integrations.catalog import load_setup_catalog
 from nvh.integrations.comfyui import detect_comfyui, write_example_pack
 from nvh.integrations.receipts import receipt_summary
 from nvh.integrations.storage import ensure_storage, storage_layout, storage_status, write_env_file
-from nvh.integrations.studio_packs import catalog_with_status
 
 
 def _action(
@@ -39,9 +38,6 @@ def auto_repair_plan(home_dir: str | Path | None = None) -> dict[str, Any]:
     layout = storage.layout
     comfy = detect_comfyui(home_dir=home_dir)
     receipts = receipt_summary(home_dir=home_dir)
-    packs = catalog_with_status().get("packs", [])
-    pack_by_id = {pack.get("id"): pack for pack in packs}
-    agent_installed = bool(pack_by_id.get("agent-lab", {}).get("status", {}).get("installed"))
     actions: list[dict[str, Any]] = []
     storage_auto_safe = storage.ok and storage.configured_by != "default"
 
@@ -79,17 +75,6 @@ def auto_repair_plan(home_dir: str | Path | None = None) -> dict[str, Any]:
             safe_to_auto_run=False,
             button_action_id="repair-receipts",
         ))
-    if not agent_installed:
-        actions.append(_action(
-            "agent-lab",
-            "Install Local Agent Lab",
-            status="needs-user",
-            summary="Install the fuller local AI helper. This may download Python packages, so it asks first.",
-            safe_to_auto_run=False,
-            action_type="install",
-            button_action_id="agent-lab",
-        ))
-
     auto_count = sum(1 for action in actions if action["safe_to_auto_run"] and action["status"] == "queued")
     return {
         "summary": f"{auto_count} safe repair(s) can run automatically; downloads stay explicit.",

@@ -31,6 +31,7 @@ from nvh.providers.base import (
     ProviderError,
     ProviderUnavailableError,
     StreamChunk,
+    Usage,
 )
 from nvh.providers.ollama_provider import OllamaProvider
 from nvh.providers.triton_provider import TritonProvider
@@ -227,10 +228,25 @@ class TestOllamaProvider:
     async def test_stream_yields_chunks(self):
         provider = OllamaProvider()
 
-        with patch(
-            "nvh.providers.ollama_provider.litellm.acompletion",
-            new=AsyncMock(return_value=_fake_stream()),
-        ):
+        async def fake_direct_stream(messages, model, temperature, max_tokens):
+            yield StreamChunk(
+                delta="streamed",
+                accumulated_content="streamed",
+                model=model,
+                provider=provider.name,
+            )
+            yield StreamChunk(
+                delta="",
+                is_final=True,
+                accumulated_content="streamed",
+                model=model,
+                provider=provider.name,
+                usage=Usage(input_tokens=3, output_tokens=8, total_tokens=11),
+                cost_usd=Decimal("0"),
+                finish_reason=FinishReason.STOP,
+            )
+
+        with patch.object(provider, "_direct_stream", side_effect=fake_direct_stream):
             chunks: list[StreamChunk] = []
             async for chunk in provider.stream(
                 messages=[Message(role="user", content="hi")],

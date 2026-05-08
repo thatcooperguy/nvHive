@@ -77,6 +77,20 @@ def test_diagnostics_report_survives_missing_logs(monkeypatch) -> None:
     assert isinstance(report["checks"]["storage"], dict)
 
 
+def test_candidate_logs_include_installer_specific_files(tmp_path) -> None:
+    home = tmp_path / "nvhive"
+    logs = home / "logs"
+    logs.mkdir(parents=True)
+    for name in ("api.log", "ollama-install.log", "model-pull.log", "webui-bootstrap.log"):
+        (logs / name).write_text("ERROR sample\n", encoding="utf-8")
+
+    paths = [path.name for path in diagnostics._candidate_log_files(logs)]
+
+    assert "ollama-install.log" in paths
+    assert "model-pull.log" in paths
+    assert "webui-bootstrap.log" in paths
+
+
 def test_diagnostics_report_uses_requested_home_for_jobs_receipts_and_logs(tmp_path, monkeypatch) -> None:
     home = tmp_path / "student-volume" / "nvhive"
     logs = home / "logs"

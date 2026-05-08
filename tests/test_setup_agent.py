@@ -169,9 +169,12 @@ def test_setup_assistant_debugs_failed_jobs_and_logs(tmp_path, monkeypatch) -> N
 
     assert reply["focus"] == "debugger"
     assert reply["diagnostics_report_id"] == "diag-test"
-    assert "bad or wrong-architecture Ollama binary" in reply["answer"]
+    assert "Ollama binary is not runnable" in reply["answer"]
+    assert "Install Runtime" in reply["answer"]
     assert reply["debug_findings"]
     assert reply["log_highlights"]
+    assert reply["troubleshooting"]["primary_id"] == "ollama-wrong-binary"
+    assert reply["official_urls"]
     assert reply["commands"] == ["nvh studio --install rootless-ollama -y"]
 
 

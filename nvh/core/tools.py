@@ -508,8 +508,8 @@ class ToolRegistry:
 
             if not os.path.exists(path):
                 return (
-                    "Screenshot failed — no screenshot tool found. "
-                    "Install: sudo apt install scrot"
+                    "Screenshot failed - no screenshot tool found. "
+                    "Expose scrot, gnome-screenshot, or spectacle in PATH; nvHive will not call apt."
                 )
 
             # Read and base64 encode

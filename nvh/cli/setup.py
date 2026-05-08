@@ -202,17 +202,18 @@ def _find_ollama_binary() -> str | None:
     return None
 
 
-def _install_ollama(console: Console) -> str | None:
-    """Download and install Ollama to NVH_HOME. Returns binary path or None.
-
-    Ollama ships as a .tar.zst archive containing bin/ollama plus CUDA libs.
-    We stream-download with a Rich progress bar, then decompress and extract
-    using the ``zstandard`` Python package — no root or system tools needed.
-    """
+def _install_ollama_rootless_bundle(console: Console) -> str | None:
+    """Install Ollama into NVH_HOME using the shared rootless download policy."""
     import platform
     import subprocess
 
     from nvh.integrations.storage import storage_layout
+    from nvh.integrations.studio_packs import (
+        _extract_ollama_archive,
+        _ollama_download_candidates,
+        _ollama_validation_error,
+        _platform_arch,
+    )
 
     if platform.system() != "Linux":
         console.print(
@@ -221,8 +222,11 @@ def _install_ollama(console: Console) -> str | None:
         )
         return None
 
-    # Detect architecture
-    arch = "arm64" if platform.machine() in ("aarch64", "arm64") else "amd64"
+    try:
+        arch = _platform_arch()
+    except RuntimeError as exc:
+        console.print(f"  [red]{exc}[/red]")
+        return None
 
     layout = storage_layout()
     nvh_home = layout.home
@@ -231,122 +235,97 @@ def _install_ollama(console: Console) -> str | None:
     layout.cache_dir.mkdir(parents=True, exist_ok=True)
     ollama_bin = layout.bin_dir / "ollama"
 
-    url = f"https://ollama.com/download/ollama-linux-{arch}.tar.zst"
-    archive_path = layout.cache_dir / f"ollama-linux-{arch}.tar.zst"
+    console.print("  Downloading latest compatible Ollama bundle (this can be large)...")
+    archive_path: Path | None = None
+    archive_type = ""
+    last_error = ""
 
-    # --- Download with Rich progress bar ---
-    console.print("  Downloading Ollama (this is ~2 GB — includes CUDA libraries)...")
-    downloaded = False
+    for url, candidate_type in _ollama_download_candidates(arch):
+        candidate_path = layout.cache_dir / f"ollama-linux-{arch}.{candidate_type}"
+        candidate_path.unlink(missing_ok=True)
+        downloaded = False
 
-    try:
-        import httpx
-        from rich.progress import (
-            BarColumn,
-            DownloadColumn,
-            Progress,
-            TextColumn,
-            TimeRemainingColumn,
-            TransferSpeedColumn,
-        )
-
-        with httpx.stream("GET", url, follow_redirects=True, timeout=600) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
-
-            with Progress(
-                TextColumn("  "),
-                TextColumn("[bold blue]{task.description}"),
-                BarColumn(),
-                DownloadColumn(),
-                TransferSpeedColumn(),
-                TimeRemainingColumn(),
-                console=console,
-            ) as progress:
-                task = progress.add_task("Ollama", total=total or None)
-                with open(archive_path, "wb") as f:
-                    for chunk in resp.iter_bytes(chunk_size=131072):
-                        f.write(chunk)
-                        progress.update(task, advance=len(chunk))
-
-        if archive_path.exists() and archive_path.stat().st_size > 1_000_000:
-            downloaded = True
-    except Exception:
-        pass
-
-    # Fallback: try curl with progress bar
-    if not downloaded:
         try:
-            result = subprocess.run(
-                ["curl", "-fSL", "--progress-bar", url, "-o", str(archive_path)],
-                timeout=600,
+            import httpx
+            from rich.progress import (
+                BarColumn,
+                DownloadColumn,
+                Progress,
+                TextColumn,
+                TimeRemainingColumn,
+                TransferSpeedColumn,
             )
-            if result.returncode == 0 and archive_path.exists() and archive_path.stat().st_size > 1_000_000:
-                downloaded = True
-        except Exception:
-            pass
 
-    if not downloaded:
-        archive_path.unlink(missing_ok=True)
+            with httpx.stream("GET", url, follow_redirects=True, timeout=600) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("content-length", 0))
+                with Progress(
+                    TextColumn("  "),
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(),
+                    DownloadColumn(),
+                    TransferSpeedColumn(),
+                    TimeRemainingColumn(),
+                    console=console,
+                ) as progress:
+                    task = progress.add_task("Ollama", total=total or None)
+                    with candidate_path.open("wb") as output:
+                        for chunk in resp.iter_bytes(chunk_size=131072):
+                            output.write(chunk)
+                            progress.update(task, advance=len(chunk))
+            downloaded = candidate_path.exists() and candidate_path.stat().st_size > 1_000_000
+        except Exception as exc:
+            last_error = str(exc)
+
+        if not downloaded:
+            try:
+                result = subprocess.run(
+                    ["curl", "-fSL", "--progress-bar", url, "-o", str(candidate_path)],
+                    timeout=600,
+                )
+                downloaded = result.returncode == 0 and candidate_path.exists() and candidate_path.stat().st_size > 1_000_000
+                if result.returncode != 0:
+                    last_error = f"curl exited {result.returncode}"
+            except Exception as exc:
+                last_error = str(exc)
+
+        if downloaded:
+            archive_path = candidate_path
+            archive_type = candidate_type
+            break
+        candidate_path.unlink(missing_ok=True)
+
+    if archive_path is None:
         console.print(
-            "  [red]Download failed.[/red] Install manually:\n"
-            "    curl -fsSL https://ollama.com/install.sh | sh"
+            "  [red]Download failed.[/red] Use Setup > Install Runtime or rerun "
+            "`nvh studio --install rootless-ollama -y`.\n"
+            f"  [dim]Last error: {last_error or 'no candidate completed'}[/dim]"
         )
         return None
 
-    # --- Extract tar.zst using Python (no system zstd needed) ---
-    console.print("  Extracting Ollama (this may take a moment)...")
+    console.print("  Extracting Ollama into NVH_HOME...")
     try:
-        import shutil
-        import tarfile
-
-        import zstandard
-
-        dctx = zstandard.ZstdDecompressor()
-        with open(archive_path, "rb") as compressed:
-            with dctx.stream_reader(compressed) as reader:
-                with tarfile.open(fileobj=reader, mode="r|") as tar:
-                    # Extract only bin/ and lib/ — skip anything unexpected
-                    for member in tar:
-                        # Security: prevent path traversal
-                        if member.name.startswith("/") or ".." in member.name:
-                            continue
-                        tar.extract(member, path=str(nvh_home))
-
-        console.print("  [green]Extraction complete.[/green]")
+        _extract_ollama_archive(archive_path, archive_type, nvh_home)
     except Exception as exc:
+        archive_path.unlink(missing_ok=True)
         console.print(f"  [red]Extraction failed: {exc}[/red]")
+        return None
+    finally:
+        archive_path.unlink(missing_ok=True)
 
-        # Fallback: try system zstd + tar if Python extraction failed
-        if shutil.which("zstd"):
-            console.print("  Retrying with system zstd...")
-            try:
-                result = subprocess.run(
-                    ["bash", "-c", f"zstd -d < '{archive_path}' | tar xf - -C '{nvh_home}'"],
-                    capture_output=True,
-                    timeout=120,
-                )
-                if result.returncode == 0:
-                    console.print("  [green]Extraction complete.[/green]")
-                else:
-                    archive_path.unlink(missing_ok=True)
-                    return None
-            except Exception:
-                archive_path.unlink(missing_ok=True)
-                return None
-        else:
-            archive_path.unlink(missing_ok=True)
-            return None
+    validation_error = _ollama_validation_error(ollama_bin) if ollama_bin.exists() else "binary missing after extraction"
+    if validation_error:
+        console.print(f"  [red]Ollama binary is not usable: {validation_error}[/red]")
+        return None
 
-    # Clean up archive to free disk space
-    archive_path.unlink(missing_ok=True)
+    ollama_bin.chmod(0o755)
+    console.print(f"  [green]Installed Ollama to {ollama_bin}[/green]")
+    return str(ollama_bin)
 
-    if ollama_bin.exists():
-        ollama_bin.chmod(0o755)
-        console.print(f"  [green]Installed Ollama to {ollama_bin}[/green]")
-        return str(ollama_bin)
 
-    console.print("  [red]Binary not found after extraction.[/red]")
-    return None
+def _install_ollama(console: Console) -> str | None:
+    """Download and install Ollama to NVH_HOME. Returns binary path or None."""
+    return _install_ollama_rootless_bundle(console)
 
 
 def _start_ollama(console: Console, ollama_bin: str) -> bool:

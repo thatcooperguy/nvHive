@@ -459,6 +459,7 @@ export interface RuntimeDoctorReport {
   binary: string;
   binary_valid: boolean;
   binary_error: string;
+  binary_probe?: Record<string, unknown>;
   local_candidate: string;
   server_running: boolean;
   installed_targets: string[];
@@ -1026,6 +1027,9 @@ export interface SetupAssistantReply {
   diagnostics_report_id?: string | null;
   debug_findings?: string[];
   log_highlights?: string[];
+  troubleshooting?: Record<string, unknown> | null;
+  official_urls?: string[];
+  web_search_queries?: string[];
   observations: {
     ready: boolean;
     issue_count?: number;

@@ -1224,6 +1224,73 @@ def _ollama_binary(home_dir: str | Path | None = None) -> str:
     return ""
 
 
+def _binary_file_probe(path: str | Path) -> dict[str, Any]:
+    """Return a tiny, non-executing binary inspection for support reports."""
+    file_path = Path(path)
+    probe: dict[str, Any] = {
+        "path": str(file_path),
+        "exists": file_path.exists(),
+        "is_file": file_path.is_file() if file_path.exists() else False,
+        "executable": os.access(file_path, os.X_OK) if file_path.exists() else False,
+        "size": None,
+        "format": "missing",
+        "elf_machine": None,
+        "expected_arch": None,
+        "arch_match": None,
+    }
+    if not file_path.exists() or not file_path.is_file():
+        return probe
+
+    try:
+        stat_result = file_path.stat()
+        probe["size"] = stat_result.st_size
+        with file_path.open("rb") as handle:
+            head = handle.read(64)
+    except Exception as exc:
+        probe["format"] = f"unreadable: {type(exc).__name__}"
+        return probe
+
+    stripped = head.lstrip()
+    if stripped.startswith(b"#!"):
+        probe["format"] = "script"
+        return probe
+    if stripped[:16].lower().startswith(b"<!doctype html") or stripped[:5].lower().startswith(b"<html"):
+        probe["format"] = "html"
+        return probe
+    if head.startswith(b"\x7fELF"):
+        machine = int.from_bytes(head[18:20], byteorder="little", signed=False) if len(head) >= 20 else 0
+        arch_by_machine = {
+            0x3E: "amd64",
+            0xB7: "arm64",
+        }
+        expected = ""
+        try:
+            expected = _platform_arch()
+        except Exception:
+            pass
+        probe["format"] = "elf"
+        probe["elf_machine"] = arch_by_machine.get(machine, f"unknown-0x{machine:02x}")
+        probe["expected_arch"] = expected or None
+        probe["arch_match"] = bool(expected and probe["elf_machine"] == expected)
+        return probe
+
+    probe["format"] = "unknown"
+    return probe
+
+
+def _ollama_probe_problem(probe: dict[str, Any]) -> str:
+    if probe.get("format") == "html":
+        return "downloaded HTML/error page instead of a Linux Ollama binary"
+    if probe.get("format") == "unknown":
+        return "not a Linux ELF binary or shell launcher"
+    if probe.get("format") == "elf" and probe.get("arch_match") is False:
+        return (
+            f"wrong CPU architecture: binary is {probe.get('elf_machine')}, "
+            f"VM needs {probe.get('expected_arch')}"
+        )
+    return ""
+
+
 def _ollama_validation_error(binary: str | Path, home_dir: str | Path | None = None) -> str:
     """Return an error string when an Ollama binary is unusable."""
     path = Path(binary)
@@ -1233,6 +1300,9 @@ def _ollama_validation_error(binary: str | Path, home_dir: str | Path | None = N
         return "not a file"
     if not os.access(path, os.X_OK):
         return "not executable"
+    probe_problem = _ollama_probe_problem(_binary_file_probe(path))
+    if probe_problem:
+        return probe_problem
     try:
         result = subprocess.run(
             [str(path), "--version"],
@@ -1339,7 +1409,7 @@ def _find_model(model_id: str) -> StudioModel:
 
 def _ollama_reachable() -> bool:
     try:
-        with socket.create_connection(("127.0.0.1", OLLAMA_PORT), timeout=1.0):
+        with socket.create_connection(("127.0.0.1", OLLAMA_PORT), timeout=0.25):
             return True
     except OSError:
         return False
@@ -1357,6 +1427,7 @@ def ollama_runtime_doctor(home_dir: str | Path | None = None) -> dict[str, Any]:
     binary_error = ""
     if not binary and local_candidate.exists():
         binary_error = _ollama_validation_error(local_candidate, home_dir=home_dir)
+    binary_probe = _binary_file_probe(local_candidate)
 
     catalog = model_catalog_with_status(home_dir)
     installed_targets = list(catalog.get("installed_targets", []))
@@ -1414,6 +1485,7 @@ def ollama_runtime_doctor(home_dir: str | Path | None = None) -> dict[str, Any]:
         "binary": binary,
         "binary_valid": bool(binary),
         "binary_error": binary_error,
+        "binary_probe": binary_probe,
         "local_candidate": str(local_candidate),
         "server_running": running,
         "installed_targets": installed_targets,
@@ -1426,14 +1498,27 @@ def ollama_runtime_doctor(home_dir: str | Path | None = None) -> dict[str, Any]:
     }
 
 
-def pack_status(pack: StudioPack) -> dict[str, Any]:
+def pack_status(pack: StudioPack, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = context or {}
     marker = _read_json(_marker_path(pack.id))
     installed = marker is not None
     details: dict[str, Any] = {}
 
     if pack.install_kind == "rootless_ollama":
-        installed = bool(_ollama_binary())
-        details["binary"] = _ollama_binary()
+        local_candidate = storage_layout().bin_dir / "ollama"
+        probe = _binary_file_probe(local_candidate)
+        local_looks_runnable = bool(
+            probe.get("exists")
+            and probe.get("is_file")
+            and probe.get("executable")
+            and probe.get("format") in {"elf", "script"}
+            and probe.get("arch_match") is not False
+        )
+        system_binary = shutil.which("ollama") or ""
+        binary = str(local_candidate) if local_looks_runnable else system_binary
+        installed = bool(binary)
+        details["binary"] = binary
+        details["binary_probe"] = probe
         details["running"] = _ollama_reachable()
     elif pack.install_kind == "micromamba_runtime":
         from nvh.integrations.runtime import runtime_status
@@ -1465,7 +1550,7 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
         elif not details["installable"]:
             details["blocked_reason"] = "ACE-Step needs git to clone the official repository into persistent storage."
     elif pack.install_kind == "openclaw_agent":
-        node = _node_runtime_status()
+        node = context.get("node_status") or _node_runtime_status()
         binary = _openclaw_binary()
         installed = binary.exists() or marker is not None
         installable = bool(node["ready"] or node["can_auto_install"])
@@ -1476,8 +1561,8 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
         if not installable:
             details["blocked_reason"] = "OpenClaw needs Node.js 22.16+ and npm 10+, or a Linux host where nvHive can install Node rootlessly."
     elif pack.install_kind == "nemoclaw_sandbox":
-        node = _node_runtime_status()
-        docker = _docker_status()
+        node = context.get("node_status") or _node_runtime_status()
+        docker = context.get("docker_status") or _docker_status()
         binary = _nemoclaw_binary_from_env(_node_env())
         installed = bool(binary) or marker is not None
         installable = bool(docker["ready"] and (node["ready"] or node["can_auto_install"]))
@@ -1559,10 +1644,14 @@ def pack_status(pack: StudioPack) -> dict[str, Any]:
 
 
 def catalog_with_status() -> dict[str, Any]:
+    context = {
+        "node_status": _node_runtime_status(),
+        "docker_status": _docker_status(),
+    }
     packs = []
     for pack in STUDIO_PACKS:
         data = asdict(pack)
-        data["status"] = pack_status(pack)
+        data["status"] = pack_status(pack, context=context)
         packs.append(data)
     return {
         "packs": packs,
@@ -1720,6 +1809,7 @@ async def _download_ollama_archive(
 ) -> AsyncIterator[dict[str, Any]]:
     """Download the best Ollama archive without marking fallback attempts failed."""
     last_error = ""
+    attempts: list[dict[str, Any]] = []
     for url, archive_type in _ollama_download_candidates(arch):
         archive = stage / f"ollama-linux-{arch}.{archive_type}"
         yield {
@@ -1768,6 +1858,12 @@ async def _download_ollama_archive(
             }
             return
         last_error = output or f"curl exited {code}"
+        attempts.append({
+            "url": url,
+            "archive_type": archive_type,
+            "return_code": code,
+            "error": last_error,
+        })
         yield {
             "event": "log",
             "status": "running",
@@ -1780,8 +1876,9 @@ async def _download_ollama_archive(
         "event": "error",
         "status": "failed",
         "message": f"Could not download Ollama Linux {arch} bundle. Last error: {last_error}",
+        "attempts": attempts,
     }
-    raise RuntimeError(f"Could not download Ollama Linux {arch} bundle")
+    raise RuntimeError(f"Could not download Ollama Linux {arch} bundle. Last error: {last_error}")
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

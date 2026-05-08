@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import json
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from typing import Any
@@ -42,6 +43,15 @@ _FALLBACK_MODEL_PREFERENCE = (
     "qwen3-8b",
     "nemotron-mini",
 )
+
+
+def _rootless_ollama_unavailable_message(base_url: str) -> str:
+    return (
+        f"Ollama is not responding at {base_url}. "
+        "Open nvWizard Setup and press Install Runtime or Fix My Setup. "
+        "nvHive repairs the rootless Ollama runtime under NVH_HOME; no sudo, apt, "
+        "or system install should be needed. Advanced override: nvh studio --install rootless-ollama -y"
+    )
 
 
 def _ollama_daemon_reachable(base_url: str) -> bool:
@@ -200,10 +210,7 @@ class OllamaProvider:
             # the underlying error, not a misleading "start Ollama" hint.
             if looks_like_conn and not _ollama_daemon_reachable(self._base_url):
                 raise ProviderUnavailableError(
-                    f"Ollama is not running at {self._base_url}.\n"
-                    f"Start with:   ollama serve\n"
-                    f"Install:      curl -fsSL https://ollama.com/install.sh | sh\n"
-                    f"Pull a model: ollama pull llama3.1",
+                    _rootless_ollama_unavailable_message(self._base_url),
                     provider=self._provider_name,
                     original_error=e,
                 ) from e
@@ -284,33 +291,19 @@ class OllamaProvider:
     ) -> AsyncIterator[StreamChunk]:
         model_name = self._get_model(model)
         msgs = _build_messages(messages, system_prompt)
-        accumulated = ""
 
         try:
-            response = await litellm.acompletion(
-                messages=msgs,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stream=True,
-                timeout=self._timeout,
-                **self._kwargs(model_name),
-                **kwargs,
-            )
+            async for chunk in self._direct_stream(msgs, model_name, temperature, max_tokens):
+                yield chunk
+            return
         except Exception as e:
             recovered = False
             if self._looks_like_missing_model(e):
                 fallback_model = await self._installed_model_fallback(model_name)
                 if fallback_model:
                     try:
-                        response = await litellm.acompletion(
-                            messages=msgs,
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                            stream=True,
-                            timeout=self._timeout,
-                            **self._kwargs(fallback_model),
-                            **kwargs,
-                        )
+                        async for chunk in self._direct_stream(msgs, fallback_model, temperature, max_tokens):
+                            yield chunk
                         model_name = fallback_model
                         recovered = True
                     except Exception as retry_error:
@@ -324,45 +317,74 @@ class OllamaProvider:
                 )
                 if looks_like_conn and not _ollama_daemon_reachable(self._base_url):
                     raise ProviderUnavailableError(
-                        f"Ollama is not running at {self._base_url}.\n"
-                        f"Start with:   ollama serve\n"
-                        f"Install:      curl -fsSL https://ollama.com/install.sh | sh\n"
-                        f"Pull a model: ollama pull llama3.1",
+                        _rootless_ollama_unavailable_message(self._base_url),
                         provider=self._provider_name,
                         original_error=e,
                     ) from e
                 raise _map_error(e, self._provider_name) from e
 
-        try:
-            async for chunk in response:
-                delta = ""
-                finish_reason = None
+    async def _direct_stream(
+        self,
+        messages: list[dict],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> AsyncIterator[StreamChunk]:
+        """Stream directly from Ollama's native API.
 
-                if chunk.choices and chunk.choices[0].delta:
-                    delta = chunk.choices[0].delta.content or ""
-                if chunk.choices and chunk.choices[0].finish_reason:
-                    finish_reason = FinishReason.STOP
-
-                accumulated += delta
-                is_final = finish_reason is not None
-
-                usage = None
-                if is_final:
-                    est = self.estimate_tokens(accumulated)
-                    usage = Usage(output_tokens=est, total_tokens=est)
-
-                yield StreamChunk(
-                    delta=delta,
-                    is_final=is_final,
-                    accumulated_content=accumulated,
-                    model=model_name,
-                    provider=self._provider_name,
-                    usage=usage,
-                    cost_usd=Decimal("0") if is_final else None,
-                    finish_reason=finish_reason,
-                )
-        except Exception as e:
-            raise _map_error(e, self._provider_name) from e
+        LiteLLM is useful for cloud providers, but local Ollama is more reliable
+        when we keep the chat stream close to the daemon. This also makes the
+        first local-model test less fragile on fresh VMs where the model is
+        still loading into VRAM.
+        """
+        raw_model = model.removeprefix("ollama/")
+        accumulated = ""
+        timeout = httpx.Timeout(self._timeout, connect=5.0, read=self._timeout, write=30.0, pool=30.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(
+                "POST",
+                f"{self._base_url.rstrip('/')}/api/chat",
+                json={
+                    "model": raw_model,
+                    "messages": messages,
+                    "stream": True,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                },
+            ) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if data.get("error"):
+                        raise RuntimeError(str(data["error"]))
+                    delta = str((data.get("message") or {}).get("content") or "")
+                    accumulated += delta
+                    is_final = bool(data.get("done"))
+                    usage = None
+                    if is_final:
+                        prompt_tokens = int(data.get("prompt_eval_count") or 0)
+                        output_tokens = int(data.get("eval_count") or self.estimate_tokens(accumulated))
+                        usage = Usage(
+                            input_tokens=prompt_tokens,
+                            output_tokens=output_tokens,
+                            total_tokens=prompt_tokens + output_tokens,
+                        )
+                    yield StreamChunk(
+                        delta=delta,
+                        is_final=is_final,
+                        accumulated_content=accumulated,
+                        model=model,
+                        provider=self._provider_name,
+                        usage=usage,
+                        cost_usd=Decimal("0") if is_final else None,
+                        finish_reason=FinishReason.STOP if is_final else None,
+                    )
+                    if is_final:
+                        return
 
     async def list_models(self) -> list[ModelInfo]:
         """Discover models from the Ollama API."""

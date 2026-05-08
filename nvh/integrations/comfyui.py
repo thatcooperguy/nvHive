@@ -344,6 +344,8 @@ def detect_comfyui(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     home_dir: str | Path | None = None,
+    *,
+    check_http: bool = True,
 ) -> dict[str, Any]:
     """Return local ComfyUI installation and runtime status."""
     root = comfyui_root(home_dir=home_dir)
@@ -355,7 +357,7 @@ def detect_comfyui(
 
     return {
         "installed": installed,
-        "running": _is_http_reachable(host, port),
+        "running": _is_http_reachable(host, port) if check_http else False,
         "url": _status_url(host, port),
         "install_root": str(root),
         "app_dir": str(app_dir),

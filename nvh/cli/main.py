@@ -814,7 +814,7 @@ def _make_advisor_cmd(advisor_name: str):
                         console.print("[yellow]Ollama returned an error.[/yellow]")
                 except Exception:
                     console.print("[red]Ollama not reachable at localhost:11434[/red]")
-                    console.print("Install: curl -fsSL https://ollama.com/install.sh | sh")
+                    console.print("Install rootlessly: nvh studio --install rootless-ollama -y")
                 return
 
             console.print(f"[bold]{info['name']}[/bold] — Setup")
@@ -3411,7 +3411,7 @@ def setup(
                     )
             except Exception:
                 console.print(f"  [yellow]![/yellow] {display} — not detected at {_ollama_url}")
-                console.print("    Install: curl -fsSL https://ollama.com/install.sh | sh")
+                console.print("    Install rootlessly: nvh studio --install rootless-ollama -y")
                 console.print("    Custom URL: export OLLAMA_BASE_URL=http://host:port")
         else:
             console.print(f"  [green]✓[/green] {display} — {desc}")
@@ -8229,6 +8229,28 @@ def webui(
             _webui_log(f"browser {label} failed: {exc}")
             return False
 
+    def _firefox_profile_dir(label: str) -> Path:
+        configured_profile = os.environ.get("NVH_FIREFOX_PROFILE")
+        if configured_profile:
+            base = Path(configured_profile).expanduser()
+        else:
+            state_dir = Path(getattr(layout, "state_dir", layout.home / "state"))
+            base = state_dir / "browser-profiles" / label
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+
+    def _firefox_command(binary: str, label: str, url: str) -> list[str]:
+        profile = _firefox_profile_dir(label)
+        return [
+            binary,
+            "--new-instance",
+            "--no-remote",
+            "--profile",
+            str(profile),
+            "--new-window",
+            url,
+        ]
+
     def _open_browser_url(url: str) -> bool:
         linux_gui = bool(
             os.environ.get("DISPLAY")
@@ -8252,18 +8274,26 @@ def webui(
                     return True
 
         rootless_firefox = _rootless_firefox_binary()
-        if rootless_firefox and _launch_browser_command("rootless-firefox", [rootless_firefox, "--new-window", url], url):
+        if rootless_firefox and _launch_browser_command(
+            "rootless-firefox",
+            _firefox_command(rootless_firefox, "rootless-firefox", url),
+            url,
+        ):
             return True
 
         for browser in ("firefox", "firefox-esr"):
             found = shutil.which(browser, path=webui_env.get("PATH"))
             if not found:
                 continue
-            if _launch_browser_command(browser, [found, "--new-window", url], url):
+            if _launch_browser_command(browser, _firefox_command(found, browser, url), url):
                 return True
 
         installed_firefox = _install_rootless_firefox()
-        if installed_firefox and _launch_browser_command("rootless-firefox", [installed_firefox, "--new-window", url], url):
+        if installed_firefox and _launch_browser_command(
+            "rootless-firefox",
+            _firefox_command(installed_firefox, "rootless-firefox", url),
+            url,
+        ):
             return True
 
         for browser in ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave-browser", "microsoft-edge"):
@@ -10832,7 +10862,7 @@ def agent(
         if not ollama_exe:
             console.print(
                 "[red]Ollama not found in PATH.[/red]\n"
-                "Install: [bold]curl -fsSL https://ollama.com/install.sh | sh[/bold]"
+                "Install rootlessly: [bold]nvh studio --install rootless-ollama -y[/bold]"
             )
             raise typer.Exit(1)
 
@@ -11562,7 +11592,7 @@ def screenshot(
             console.print(
                 "[red]Screenshot failed — no screenshot tool found.[/red]\n"
                 "[dim]macOS: screencapture (built-in)\n"
-                "Linux: sudo apt install scrot[/dim]"
+                "Linux: expose scrot, gnome-screenshot, or spectacle in PATH; nvHive will not call apt[/dim]"
             )
             raise typer.Exit(1)
 

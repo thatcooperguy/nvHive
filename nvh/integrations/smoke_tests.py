@@ -9,7 +9,7 @@ from typing import Any
 
 from nvh.integrations.comfyui import detect_comfyui
 from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import catalog_with_status
+from nvh.integrations.studio_packs import _node_runtime_status, catalog_with_status, ollama_runtime_doctor
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,10 @@ def smoke_test_report(home_dir: str | None = None) -> dict[str, Any]:
     """Return non-destructive app health checks."""
     storage = storage_status(home_dir=home_dir)
     packs = catalog_with_status().get("packs", [])
-    comfy = detect_comfyui()
+    comfy = detect_comfyui(home_dir=home_dir)
+    local_ai = ollama_runtime_doctor(home_dir=home_dir)
+    node = _node_runtime_status()
+    ollama_port_open = _port_open(11434)
     tests = [
         SmokeTest(
             id="storage",
@@ -72,26 +75,42 @@ def smoke_test_report(home_dir: str | None = None) -> dict[str, Any]:
         SmokeTest(
             id="ollama",
             title="Ollama local model server",
-            status="pass" if _port_open(11434) else "warn",
-            summary="Ollama is responding" if _port_open(11434) else "Ollama is not responding yet",
-            detail="http://127.0.0.1:11434",
+            status="pass" if local_ai.get("ready") else "warn",
+            summary=str(local_ai.get("summary") or "Local AI runtime needs attention"),
+            detail=str(local_ai.get("binary_error") or "http://127.0.0.1:11434"),
             action_id="rootless-ollama",
+        ),
+        SmokeTest(
+            id="ollama-port",
+            title="Ollama API port",
+            status="pass" if ollama_port_open else "warn",
+            summary="Ollama API is reachable" if ollama_port_open else "Ollama API is not reachable yet",
+            detail="http://127.0.0.1:11434/api/tags",
+            action_id="rootless-ollama",
+        ),
+        SmokeTest(
+            id="node-runtime",
+            title="Rootless WebUI runtime",
+            status="pass" if node.get("ready") else "warn",
+            summary="Node/npm runtime is ready" if node.get("ready") else "Node/npm runtime can be repaired rootlessly",
+            detail=str(node.get("node_version") or node.get("node") or ""),
+            action_id="repair-workspace",
         ),
         SmokeTest(
             id="agent-lab",
             title="Local Agent Lab",
-            status="pass" if _pack_installed("agent-lab", packs) else "warn",
-            summary="Local agent helper pack is installed" if _pack_installed("agent-lab", packs) else "Local Agent Lab is not installed",
+            status="pass" if _pack_installed("agent-lab", packs) else "skip",
+            summary="Local agent helper pack is installed" if _pack_installed("agent-lab", packs) else "Optional Local Agent Lab can be installed later",
             action_id="agent-lab",
         ),
         SmokeTest(
             id="claw-agents",
             title="Claw agent options",
-            status="pass" if _pack_installed("openclaw-agent", packs) else "warn",
+            status="pass" if _pack_installed("openclaw-agent", packs) else "skip",
             summary=(
                 "OpenClaw is installed"
                 if _pack_installed("openclaw-agent", packs)
-                else "OpenClaw can be installed; NemoClaw requires Docker/OpenShell access"
+                else "Optional OpenClaw can be installed later; NemoClaw requires Docker/OpenShell access"
             ),
             detail=str(_pack_details("nemoclaw-sandbox", packs).get("blocked_reason", "")),
             action_id="claw-agents",
@@ -118,6 +137,13 @@ def smoke_test_report(home_dir: str | None = None) -> dict[str, Any]:
             status="pass" if _pack_installed("blender-creative", packs) else "skip",
             summary="Blender pack is installed" if _pack_installed("blender-creative", packs) else "Blender is optional and not installed",
             action_id="creative-tools",
+        ),
+        SmokeTest(
+            id="godot",
+            title="Godot game engine",
+            status="pass" if _pack_installed("godot-engine", packs) else "skip",
+            summary="Godot pack is installed" if _pack_installed("godot-engine", packs) else "Godot is optional and not installed",
+            action_id="game-tools",
         ),
     ]
     failed = sum(1 for test in tests if test.status == "fail")

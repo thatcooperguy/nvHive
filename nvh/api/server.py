@@ -604,10 +604,9 @@ async def _sse_query_stream(
     accumulated = ""
     last_chunk: StreamChunk | None = None
 
-    # Per-chunk stall timeout — a silent provider is worse than a failed one
-    # because it freezes the UI. 45s is generous enough for slow cloud
-    # providers but short enough to surface errors before users give up.
-    CHUNK_STALL_TIMEOUT = 45.0  # noqa: N806 — local constant, intentional uppercase
+    # Per-chunk stall timeout — local Ollama can spend a while loading a fresh
+    # model into VRAM on first use, so give it more warmup room than cloud APIs.
+    CHUNK_STALL_TIMEOUT = 180.0 if decision.provider == "ollama" else 45.0  # noqa: N806
 
     try:
         stream_result = provider.stream(

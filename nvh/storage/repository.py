@@ -63,11 +63,12 @@ async def init_db(db_path: Path | None = None) -> None:
             shutil.copy2(legacy_path, db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     url = f"sqlite+aiosqlite:///{db_path}"
+    db_timeout = float(os.environ.get("NVH_DB_TIMEOUT", "5"))
     _engine = create_async_engine(
         url,
         echo=False,
-        connect_args={"timeout": 30},
-        pool_pre_ping=True,
+        connect_args={"timeout": db_timeout},
+        pool_pre_ping=False,
     )
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     async with _engine.begin() as conn:

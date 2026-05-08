@@ -31,38 +31,33 @@ export default function SystemPage() {
   useEffect(() => {
     let mounted = true;
 
-    const init = async () => {
-      try {
-        await checkHealth();
-        if (mounted) setApiStatus('connected');
-      } catch {
-        if (mounted) setApiStatus('disconnected');
-      }
+    checkHealth()
+      .then(() => mounted && setApiStatus('connected'))
+      .catch(() => mounted && setApiStatus('disconnected'));
 
-      await loadProviders();
+    void loadProviders();
 
-      try {
-        const stats = await getCacheStats();
-        if (mounted) setCacheStats(stats);
-      } catch {
-        // ignore
-      }
+    getCacheStats()
+      .then(stats => mounted && setCacheStats(stats))
+      .catch(() => mounted && setCacheStats(null));
 
-      setGpuLoading(true);
-      try {
-        const [gpu, recs] = await Promise.all([getGPUInfo(), getRecommendations()]);
-        if (mounted) {
-          setGpuInfo(gpu);
-          setTopRec(recs.recommendations[0] ?? null);
+    setGpuLoading(true);
+    Promise.all([getGPUInfo(), getRecommendations()])
+      .then(([gpu, recs]) => {
+        if (!mounted) return;
+        setGpuInfo(gpu);
+        setTopRec(recs.recommendations[0] ?? null);
+      })
+      .catch(() => {
+        if (!mounted) {
+          return;
         }
-      } catch {
-        // GPU endpoints unavailable
-      } finally {
+        setGpuInfo(null);
+        setTopRec(null);
+      })
+      .finally(() => {
         if (mounted) setGpuLoading(false);
-      }
-    };
-
-    init();
+      });
 
     const interval = setInterval(() => {
       checkHealth()
@@ -77,6 +72,7 @@ export default function SystemPage() {
   }, [loadProviders]);
 
   const healthyCount = providers.filter(p => p.healthy).length;
+  const cacheHitRate = cacheStats && Number.isFinite(cacheStats.hit_rate) ? cacheStats.hit_rate : 0;
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
@@ -209,26 +205,26 @@ export default function SystemPage() {
             sub="online"
             color={healthyCount === providers.length && providers.length > 0 ? '#76B900' : '#d97706'}
             loading={providersLoading}
-            icon="▣"
+            icon="AI"
           />
           <StatCard
             label="Cache Hits"
-            value={cacheStats ? `${cacheStats.hits}` : '—'}
-            sub={cacheStats ? `${(cacheStats.hit_rate * 100).toFixed(0)}% rate` : undefined}
+            value={cacheStats ? `${cacheStats.hits ?? 0}` : '-'}
+            sub={cacheStats ? `${(cacheHitRate * 100).toFixed(0)}% rate` : undefined}
             color="#76B900"
-            icon="⚡"
+            icon="CACHE"
           />
           <StatCard
             label="Cache Size"
-            value={cacheStats ? `${cacheStats.size}/${cacheStats.max_size}` : '—'}
+            value={cacheStats ? `${cacheStats.size ?? 0}/${cacheStats.max_size ?? 0}` : '-'}
             color="#525252"
-            icon="◈"
+            icon="SIZE"
           />
           <StatCard
             label="Service"
             value={apiStatus === 'connected' ? 'ONLINE' : apiStatus === 'disconnected' ? 'OFFLINE' : '...'}
             color={apiStatus === 'connected' ? '#76B900' : '#dc2626'}
-            icon="◎"
+            icon="SVC"
           />
         </div>
       </div>
@@ -262,7 +258,7 @@ export default function SystemPage() {
             </div>
           ) : providers.length === 0 ? (
             <div className="card p-8 text-center">
-              <div className="text-3xl mb-3 text-[#333333]">▣</div>
+              <div className="text-3xl mb-3 text-[#333333] font-mono">AI</div>
               <div className="text-[#737373] font-mono text-sm mb-1">NO ADVISORS AVAILABLE</div>
               <div className="text-xs text-[#a3a3a3] font-mono mb-4">
                 {apiStatus === 'disconnected'
@@ -290,10 +286,10 @@ export default function SystemPage() {
             <div className="section-label mb-3">Quick Links</div>
             <div className="space-y-1">
               {[
-                { href: '/', label: 'Chat Interface', icon: '▶', color: '#76B900' },
-                { href: '/providers', label: 'View Advisors', icon: '▲', color: '#76B900' },
-                { href: '/setup', label: 'Setup Wizard', icon: '◎', color: '#d97706' },
-                { href: '/settings', label: 'Settings', icon: '⚙', color: '#a3a3a3' },
+                { href: '/', label: 'Chat Interface', icon: 'CHAT', color: '#76B900' },
+                { href: '/providers', label: 'View Advisors', icon: 'AI', color: '#76B900' },
+                { href: '/setup', label: 'Setup Wizard', icon: 'SETUP', color: '#d97706' },
+                { href: '/settings', label: 'Settings', icon: 'PREF', color: '#a3a3a3' },
               ].map(({ href, label, icon, color }) => {
                 const displayLabel =
                   href === '/' ? 'ASK A QUESTION' :
@@ -356,10 +352,10 @@ function StatCard({
     label === 'Cache Size' ? 'SIZE' :
     label === 'Service' ? 'SVC' :
     icon;
-  const safeValue = value.includes('undefined') || value.includes('NaN') || value.includes('ƒ')
+  const safeValue = value.includes('undefined') || value.includes('NaN')
     ? '-'
     : value;
-  const safeSub = sub && (sub.includes('undefined') || sub.includes('NaN') || sub.includes('ƒ'))
+  const safeSub = sub && (sub.includes('undefined') || sub.includes('NaN'))
     ? undefined
     : sub;
 

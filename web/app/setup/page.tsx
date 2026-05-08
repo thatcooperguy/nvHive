@@ -51,6 +51,7 @@ import type {
   ComfyUIStatus,
   ComfyUITorchProfile,
   BootPreflightReport,
+  AppCompatibility,
   CompatibilityReport,
   InstallJob,
   InstallReceipt,
@@ -77,6 +78,13 @@ import type {
 
 type Step = 'welcome' | 'storage' | 'gpu' | 'models' | 'local-ai' | 'studio' | 'comfyui' | 'cloud' | 'test' | 'done';
 type WizardProfile = 'student' | 'llm' | 'creator' | 'agent' | 'game' | 'music' | 'full';
+type RepairTrailState = 'queued' | 'running' | 'done' | 'skip' | 'error';
+type RepairTrailItem = {
+  id: string;
+  label: string;
+  detail: string;
+  state: RepairTrailState;
+};
 
 type SetupCheckState = 'ready' | 'warn' | 'fix' | 'checking';
 
@@ -346,6 +354,7 @@ export default function SetupPage() {
   const [supportSnapshotMessage, setSupportSnapshotMessage] = useState<string | null>(null);
   const [supportSnapshotLoading, setSupportSnapshotLoading] = useState(false);
   const [workspaceRepairing, setWorkspaceRepairing] = useState(false);
+  const [repairTrail, setRepairTrail] = useState<RepairTrailItem[]>([]);
   const [setupInventoryError, setSetupInventoryError] = useState<string | null>(null);
   const [activeWizardBuild, setActiveWizardBuild] = useState<WizardProfile | null>(null);
   const [wizardBuildMessage, setWizardBuildMessage] = useState<string | null>(null);
@@ -576,6 +585,7 @@ export default function SetupPage() {
     if (reflectQuestion) setAssistantQuestion(question);
     setAssistantLoading(true);
     setAssistantError(null);
+    setAssistantReply(null);
     try {
       const reply = await askSetupAssistant(question, storageStatus?.layout.home);
       setAssistantReply(reply);
@@ -619,9 +629,58 @@ export default function SetupPage() {
     if (workspaceRepairing) return;
     setWorkspaceRepairing(true);
     setWizardBuildMessage('nvWizard is running safe rootless repairs. No sudo, no system changes.');
+    setRepairTrail([
+      {
+        id: 'inspect',
+        label: 'Inspect workspace',
+        detail: 'Reading setup jobs, receipts, launchers, runtime state, and boot drift.',
+        state: 'running',
+      },
+      {
+        id: 'repair',
+        label: 'Run safe repairs',
+        detail: 'Queued: rebuild env file, refresh catalog fallback, and repair starter examples when present.',
+        state: 'queued',
+      },
+      {
+        id: 'refresh',
+        label: 'Refresh checks',
+        detail: 'Queued: recheck nvWizard, jobs, ComfyUI, and local AI status.',
+        state: 'queued',
+      },
+    ]);
     try {
       const result: AutoRepairResult = await repairSetupWorkspace(storageStatus?.layout.home);
       setWizardBuildMessage(result.summary);
+      const completedTrail: RepairTrailItem[] = result.completed.map(action => ({
+        id: `done-${action.id}`,
+        label: action.title,
+        detail: action.result || action.summary,
+        state: 'done',
+      }));
+      const skippedTrail: RepairTrailItem[] = result.skipped.map(action => ({
+        id: `skip-${action.id}`,
+        label: action.title,
+        detail: action.reason || action.summary || 'Needs a button press before nvHive downloads anything large.',
+        state: 'skip',
+      }));
+      const errorTrail: RepairTrailItem[] = result.errors.map(action => ({
+        id: `error-${action.id}`,
+        label: action.title,
+        detail: action.error || action.summary,
+        state: 'error',
+      }));
+      setRepairTrail([
+        ...completedTrail,
+        ...skippedTrail,
+        ...errorTrail,
+        {
+          id: 'refresh',
+          label: 'Refresh checks',
+          detail: 'Updating WebUI health cards and setup recommendations.',
+          state: 'running',
+        },
+      ]);
       if (result.errors.length > 0) {
         setSetupInventoryError(result.errors.map(error => error.error ?? error.summary).join(' | '));
       } else {
@@ -634,9 +693,23 @@ export default function SetupPage() {
         refreshComfyUI(),
         refreshInstallJobs(),
       ]);
+      setRepairTrail(prev => prev.map(item => (
+        item.id === 'refresh'
+          ? { ...item, detail: 'Health cards and setup recommendations are refreshed.', state: 'done' }
+          : item
+      )));
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Workspace repair failed');
       setWizardBuildMessage(err instanceof Error ? `nvWizard repair failed: ${err.message}` : 'nvWizard repair failed.');
+      setRepairTrail(prev => [
+        ...prev.filter(item => item.state !== 'queued'),
+        {
+          id: 'repair-error',
+          label: 'Repair failed',
+          detail: err instanceof Error ? err.message : 'Workspace repair failed.',
+          state: 'error',
+        },
+      ]);
     } finally {
       setWorkspaceRepairing(false);
     }
@@ -1537,10 +1610,16 @@ export default function SetupPage() {
   const unhealthyReceiptCount = setupReceipts?.summary.unhealthy ?? setupHelper?.receipts?.unhealthy ?? 0;
   const receiptCount = setupReceipts?.count ?? setupHelper?.receipts?.count ?? 0;
   const catalogSource = setupCatalog?.source ?? setupHelper?.catalog?.source ?? 'bundled';
+  const optionalCompatibilityIds = new Set(['agent-lab', 'claw-agents', 'blender-creative', 'game-dev-lab', 'music-producer-lab']);
+  const isBlockingCompatibilityApp = (app: AppCompatibility) => (
+    app.status !== 'ready' && app.severity !== 'optional' && !optionalCompatibilityIds.has(app.id)
+  );
   const visibleCompatibilityApps = setupCompatibility?.apps
-    .filter(app => app.status !== 'ready')
+    .filter(isBlockingCompatibilityApp)
     .slice(0, 5) ?? [];
-  const compatibilityIssueCount = setupCompatibility?.issue_count ?? setupHelper?.compatibility?.issue_count ?? 0;
+  const compatibilityIssueCount = setupCompatibility
+    ? setupCompatibility.apps.filter(isBlockingCompatibilityApp).length
+    : setupHelper?.compatibility?.issue_count ?? 0;
   const compatibilityBlockedCount = setupCompatibility?.blocked_count ?? setupHelper?.compatibility?.blocked_count ?? 0;
   const compatibilityFixableCount = setupCompatibility?.rootless_fixable_count ?? setupHelper?.compatibility?.rootless_fixable_count ?? 0;
   const bootChangeCount = bootPreflight?.changes.length ?? setupHelper?.boot_preflight?.change_count ?? 0;
@@ -1773,7 +1852,7 @@ export default function SetupPage() {
   const fallbackStartupChecklist: Array<{ label: string; value: string; state: SetupCheckState }> = [
     {
       label: 'Workspace',
-      value: storageReady ? workspaceHome : storageBeginnerLabel,
+      value: storageReady ? 'ready' : storageBeginnerLabel,
       state: storageReady ? 'ready' : storageAutopilotBusy ? 'checking' : 'fix',
     },
     {
@@ -1913,8 +1992,18 @@ export default function SetupPage() {
     : setupHelper?.assistant?.mode === 'offline-deterministic'
       ? 'offline guide ready'
       : setupHelper?.assistant?.mode ?? 'offline guide ready';
-  const advisorSummary = assistantReply?.answer
-    ?? setupHelper?.issues?.[0]?.title
+  const primarySetupIssue = setupHelper?.issues?.find(issue => (
+    issue.severity !== 'optional' &&
+    issue.affected_item !== 'agent-lab' &&
+    issue.affected_item !== 'openclaw-agent'
+  ));
+  const assistantActions = Array.from(
+    new Map((assistantReply?.actions ?? []).map(action => [action.id, action])).values()
+  );
+  const advisorSummary = assistantLoading
+    ? 'nvWizard is checking jobs, receipts, boot drift, logs, runtime, models, and safe rootless repairs.'
+    : assistantReply?.answer
+    ?? primarySetupIssue?.title
     ?? setupHelper?.summary
     ?? missionControl?.summary
     ?? 'Ready to inspect installs, logs, and rootless repair options.';
@@ -1965,6 +2054,10 @@ export default function SetupPage() {
       handleInstallStudioPacks(['rootless-ollama']);
       return;
     }
+    if (actionId === 'agent-lab') {
+      handleInstallStudioPacks(['agent-lab']);
+      return;
+    }
     if (actionId === 'runtime-fallback') {
       handleInstallStudioPacks(['python-runtime-fallback']);
       return;
@@ -1975,6 +2068,10 @@ export default function SetupPage() {
     }
     if (actionId === 'creative-tools') {
       handleInstallStudioPacks(['creative']);
+      return;
+    }
+    if (actionId === 'game-tools') {
+      handleInstallStudioPacks(['game']);
       return;
     }
     if (actionId === 'music-tools') {
@@ -2017,7 +2114,15 @@ export default function SetupPage() {
     if (!storageReady) return storageAutopilotBusy ? 'Finding' : 'Use Drive';
     if (actionId === 'starter-models') return modelsInstalling ? 'Downloading Models' : 'Download Models';
     if (actionId === 'rootless-ollama') return studioInstalling ? 'Installing' : 'Install Runtime';
+    if (actionId === 'runtime-fallback') return studioInstalling ? 'Installing Runtime' : 'Install Runtime';
     if (actionId === 'agent-lab') return studioInstalling ? 'Installing' : 'Install Agent Lab';
+    if (actionId === 'boot-preflight') return 'Recheck';
+    if (actionId === 'watch-jobs') return 'Watch Jobs';
+    if (actionId === 'support-snapshot') return 'Copy Report';
+    if (actionId === 'creative-tools') return studioInstalling ? 'Installing' : 'Install Creator Studio';
+    if (actionId === 'game-tools') return studioInstalling ? 'Installing' : 'Install Game Lab';
+    if (actionId === 'music-tools') return studioInstalling ? 'Installing' : 'Install Music Studio';
+    if (actionId === 'claw-agents') return studioInstalling ? 'Installing' : 'Install Agent Tools';
     if (studioPacks.some(pack => pack.id === actionId)) return studioInstalling ? 'Installing' : 'Install Pack';
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
       return comfyInstalling ? 'Installing' : 'Install ComfyUI';
@@ -2108,11 +2213,11 @@ export default function SetupPage() {
         <div className="flex items-center justify-between gap-3">
           <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase">nvWizard Setup</div>
           <div className="flex items-center gap-2">
-            <Link href="/" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
-              Chat
-            </Link>
             <Link href="/query" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
               Ask AI
+            </Link>
+            <Link href="/providers" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+              AI Connections
             </Link>
             <button
               type="button"
@@ -2178,7 +2283,7 @@ export default function SetupPage() {
           <div className="min-w-0">
             <div className="section-label">Workspace</div>
             <div className="text-[10px] text-[#525252] mt-1 break-all">
-              {workspaceHome} - {workspaceFreeText} - {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} to review` : 'checks clear'}
+              {storageReady ? 'Persistent workspace ready' : storageBeginnerLabel} - {workspaceFreeText} - {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} to review` : 'checks clear'}
             </div>
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -2225,8 +2330,8 @@ export default function SetupPage() {
               <div className="section-label">Install Jobs</div>
               <div className="text-[10px] font-mono text-[#737373] mt-1">
                 {activeInstallJobs.length > 0
-                  ? `${activeInstallJobs.length} active job${activeInstallJobs.length === 1 ? '' : 's'} tracked under persistent NVH_HOME`
-                  : 'Recent setup jobs are saved under NVH_HOME/jobs'}
+                  ? `${activeInstallJobs.length} active job${activeInstallJobs.length === 1 ? '' : 's'} tracked in your workspace`
+                  : 'Recent setup jobs are saved in your workspace'}
               </div>
               <div className="text-[10px] text-[#737373] mt-1">
                 Job history stays in the workspace, so refreshes and retries have a trail to follow.
@@ -2270,7 +2375,7 @@ export default function SetupPage() {
                         {job.message || job.kind}
                       </div>
                       <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all">
-                        {job.id} / {job.storage_home}
+                        {job.id}
                       </div>
                     </div>
                     {active && (
@@ -2932,9 +3037,9 @@ export default function SetupPage() {
                         ))}
                       </div>
                     )}
-                    {assistantReply.actions.length > 0 && (
+                    {assistantActions.length > 0 && (
                       <div className="flex flex-wrap gap-2">
-                        {assistantReply.actions.slice(0, 3).map(action => (
+                        {assistantActions.slice(0, 3).map(action => (
                           <button
                             key={action.id}
                             type="button"
@@ -3068,6 +3173,41 @@ export default function SetupPage() {
                 </div>
               )}
 
+              {repairTrail.length > 0 && (
+                <div className="border border-[#e5e5e5] bg-white p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="section-label">Repair Status</div>
+                    <span className="text-[9px] font-mono uppercase text-[#737373]">
+                      {workspaceRepairing ? 'working' : 'latest run'}
+                    </span>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-3">
+                    {repairTrail.slice(0, 6).map(item => {
+                      const tone =
+                        item.state === 'done' ? CHECK_TONES.ready :
+                        item.state === 'error' ? CHECK_TONES.fix :
+                        item.state === 'skip' ? CHECK_TONES.warn :
+                        item.state === 'running' ? CHECK_TONES.checking :
+                        CHECK_TONES.warn;
+                      return (
+                        <div key={item.id} className={`border ${tone.border} ${tone.bg} px-2 py-2 min-w-0`}>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                            <span className="text-[9px] font-mono text-[#737373] uppercase">{item.state}</span>
+                          </div>
+                          <div className={`text-[10px] font-mono mt-1 truncate ${tone.text}`} title={item.label}>
+                            {item.label}
+                          </div>
+                          <div className="text-[10px] text-[#737373] mt-1 line-clamp-2" title={item.detail}>
+                            {item.detail}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
                 {startupChecklist.map(item => {
                   const tone = CHECK_TONES[item.state];
@@ -3181,12 +3321,6 @@ export default function SetupPage() {
                   <div className="text-[10px] text-[#525252] mt-1 leading-relaxed">
                     {advisorSummary}
                   </div>
-                  <details className="mt-1">
-                    <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
-                      Storage path
-                    </summary>
-                    <div className="text-[9px] font-mono text-[#737373] mt-1 break-all">{workspaceHome}</div>
-                  </details>
                 </div>
                 {setupConcernCount > 0 && (
                   <button
@@ -3199,7 +3333,7 @@ export default function SetupPage() {
                   </button>
                 )}
               </div>
-              {(assistantError || assistantReply) && (
+              {(assistantLoading || assistantError || assistantReply) && (
                 <div className="border border-[#d4d4d4] bg-white p-3 space-y-2">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div>
@@ -3217,6 +3351,23 @@ export default function SetupPage() {
                   {assistantError && (
                     <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
                       {assistantError}
+                    </div>
+                  )}
+                  {assistantLoading && !assistantReply && (
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {[
+                        ['Checking jobs', 'Reading active and recent setup jobs.'],
+                        ['Reading logs', 'Scanning redacted installer and runtime clues.'],
+                        ['Finding repairs', 'Matching issues to rootless buttons.'],
+                      ].map(([label, detail]) => (
+                        <div key={label} className="border border-[#d97706]/30 bg-[#fff7ed] px-2 py-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 bg-[#d97706] animate-pulse" style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                            <span className="text-[9px] font-mono text-[#7c2d12] uppercase">{label}</span>
+                          </div>
+                          <div className="text-[10px] text-[#7c2d12] mt-1">{detail}</div>
+                        </div>
+                      ))}
                     </div>
                   )}
                   {assistantReply && (
@@ -3243,9 +3394,44 @@ export default function SetupPage() {
                           </div>
                         </details>
                       )}
-                      {assistantReply.actions.length > 0 && (
+                      {((assistantReply.official_urls?.length ?? 0) > 0 || (assistantReply.web_search_queries?.length ?? 0) > 0) && (
+                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2">
+                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                            Research hints
+                          </summary>
+                          <div className="mt-2 space-y-2">
+                            {(assistantReply.official_urls?.length ?? 0) > 0 && (
+                              <div className="space-y-1">
+                                <div className="text-[9px] font-mono uppercase text-[#737373]">Official sources</div>
+                                {assistantReply.official_urls?.slice(0, 4).map(url => (
+                                  <a
+                                    key={url}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="block text-[10px] font-mono text-[#166534] break-all hover:underline"
+                                  >
+                                    {url}
+                                  </a>
+                                ))}
+                              </div>
+                            )}
+                            {(assistantReply.web_search_queries?.length ?? 0) > 0 && (
+                              <div className="space-y-1">
+                                <div className="text-[9px] font-mono uppercase text-[#737373]">Search if internet is available</div>
+                                {assistantReply.web_search_queries?.slice(0, 3).map(query => (
+                                  <div key={query} className="text-[10px] font-mono text-[#525252] break-all">
+                                    {query}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      )}
+                      {assistantActions.length > 0 && (
                         <div className="flex flex-wrap gap-2">
-                          {assistantReply.actions.slice(0, 3).map(action => (
+                          {assistantActions.slice(0, 3).map(action => (
                             <button
                               key={action.id}
                               type="button"

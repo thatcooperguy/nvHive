@@ -124,6 +124,10 @@ def _candidate_log_files(logs_dir: Path) -> list[Path]:
         [
             logs_dir / "api.log",
             logs_dir / "nvhive.log",
+            logs_dir / "install.log",
+            logs_dir / "ollama-install.log",
+            logs_dir / "model-pull.log",
+            logs_dir / "webui-bootstrap.log",
             home / "comfyui" / "comfyui.log",
             home / "studio" / "ollama.log",
             home / "studio" / "openclaw.log",
@@ -144,7 +148,7 @@ def _candidate_log_files(logs_dir: Path) -> list[Path]:
         seen.add(key)
         if path.exists() or path == Path(explicit or ""):
             unique.append(path)
-        if len(unique) >= 5:
+        if len(unique) >= 10:
             break
     return unique
 
@@ -240,6 +244,52 @@ def diagnostics_report(
 
         return receipt_summary(home_dir=layout.home)
 
+    def _local_ai_runtime() -> dict[str, Any]:
+        from nvh.integrations.studio_packs import ollama_runtime_doctor
+
+        return ollama_runtime_doctor(home_dir=layout.home)
+
+    def _workspace_state() -> dict[str, Any]:
+        from nvh.integrations.workspace_state import workspace_state_report
+
+        report = workspace_state_report(home_dir=layout.home)
+        return {
+            "phase": report.get("phase"),
+            "ready": report.get("ready"),
+            "summary": report.get("summary"),
+            "health_score": report.get("health_score"),
+            "next_action": report.get("next_action"),
+            "checks": report.get("checks", []),
+        }
+
+    def _compatibility() -> dict[str, Any]:
+        from nvh.integrations.compatibility import compatibility_report
+
+        report = compatibility_report(home_dir=layout.home)
+        return {
+            "summary": report.get("summary"),
+            "ready": report.get("ready"),
+            "issue_count": report.get("issue_count"),
+            "blocked_count": report.get("blocked_count"),
+            "rootless_fixable_count": report.get("rootless_fixable_count"),
+            "recommended_torch_profile": report.get("recommended_torch_profile"),
+            "apps": [
+                {
+                    "id": app.get("id"),
+                    "title": app.get("title"),
+                    "status": app.get("status"),
+                    "summary": app.get("summary"),
+                    "recommended_action_id": app.get("recommended_action_id"),
+                }
+                for app in report.get("apps", [])
+            ],
+        }
+
+    def _smoke_tests() -> dict[str, Any]:
+        from nvh.integrations.smoke_tests import smoke_test_report
+
+        return smoke_test_report(home_dir=str(layout.home))
+
     diagnostics = {
         "report_id": report_id,
         "checked_at": checked_at,
@@ -269,6 +319,10 @@ def diagnostics_report(
         },
         "checks": {
             "storage": storage,
+            "local_ai_runtime": _safe_call("local_ai_runtime", _local_ai_runtime),
+            "workspace_state": _safe_call("workspace_state", _workspace_state),
+            "compatibility": _safe_call("compatibility", _compatibility),
+            "smoke_tests": _safe_call("smoke_tests", _smoke_tests),
             "production_readiness": _safe_call("production_readiness", _readiness),
             "jobs": _safe_call("jobs", _jobs),
             "receipts": _safe_call("receipts", _receipts),

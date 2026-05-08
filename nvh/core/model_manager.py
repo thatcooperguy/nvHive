@@ -304,7 +304,7 @@ class ModelManager:
             logger.error("Timeout loading %s (120s)", plan.target_model)
             return False
         except FileNotFoundError:
-            logger.error("Ollama not found — install: curl -fsSL https://ollama.com/install.sh | sh")
+            logger.error("Ollama not found - install rootlessly: nvh studio --install rootless-ollama -y")
             return False
 
     def format_status(self) -> str:

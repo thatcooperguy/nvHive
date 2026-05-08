@@ -196,4 +196,4 @@ async def record_audio(duration: float = 10.0, output_path: str | None = None) -
     except (TimeoutError, FileNotFoundError):
         pass
 
-    raise RuntimeError("No audio recording tool found. Install: sudo apt install alsa-utils")
+    raise RuntimeError("No audio recording tool found. Add arecord or ffmpeg to PATH; nvHive will not call apt.")

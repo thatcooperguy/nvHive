@@ -61,7 +61,8 @@ def test_desktop_launcher_opens_browser_without_terminal(tmp_path, monkeypatch) 
     script_content = desktop_script.read_text(encoding="utf-8")
     assert "server_ready" in script_content
     assert "ROOTLESS_FIREFOX" in script_content
-    assert "firefox --new-window" in script_content
+    assert "FIREFOX_PROFILE" in script_content
+    assert "--profile \"$FIREFOX_PROFILE\" --new-window" in script_content
     assert "xdg-open" in script_content
     assert "nohup nvh webui" in script_content
     assert "--port \"$PORT\"" in script_content

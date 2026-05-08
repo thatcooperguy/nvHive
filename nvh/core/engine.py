@@ -258,14 +258,26 @@ class Engine:
             try:
                 from nvh.core.learning import LearningEngine
                 self.learning = LearningEngine()
-                await self.learning.load_scores()
-                self.router.set_learned_scores(
-                    self.learning.get_score_map(),
-                )
-                logger.info(
-                    "Learning engine initialized (%d learned scores)",
-                    len(self.learning.get_score_map()),
-                )
+                sync_learning = os.environ.get("NVH_SYNC_LEARNING_LOAD", "0").lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                }
+                if sync_learning:
+                    learning_timeout = float(os.environ.get("NVH_LEARNING_LOAD_TIMEOUT", "3"))
+                    await asyncio.wait_for(self.learning.load_scores(), timeout=learning_timeout)
+                    self.router.set_learned_scores(
+                        self.learning.get_score_map(),
+                    )
+                    logger.info(
+                        "Learning engine initialized (%d learned scores)",
+                        len(self.learning.get_score_map()),
+                    )
+                else:
+                    logger.info(
+                        "Learning engine initialized in fast-start mode; "
+                        "set NVH_SYNC_LEARNING_LOAD=1 to pre-load learned routing scores."
+                    )
             except Exception as e:
                 logger.warning("Learning engine init failed: %s", e)
                 self.learning = None
@@ -284,27 +296,28 @@ class Engine:
 
         # LLM7 — always available (anonymous API, no signup)
         try:
-            from nvh.providers.llm7_provider import LLM7Provider
-            provider = LLM7Provider()
+            from nvh.providers.lazy_provider import LazyProvider
+            provider = LazyProvider("llm7", "nvh.providers.llm7_provider", "LLM7Provider")
             self.registry.register("llm7", provider)
             detected.append("llm7")
-            logger.info("Auto-detected: LLM7 (anonymous, no signup needed)")
+            logger.info("Auto-detected: LLM7 lazy fallback (anonymous, no signup needed)")
         except Exception:
             pass
 
         # Ollama — try to start if installed, then check if running
         ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        ollama_http_timeout = float(os.environ.get("NVH_OLLAMA_HTTP_TIMEOUT", "0.5"))
         ollama_running = False
         try:
             import httpx
-            resp = httpx.get(f"{ollama_url}/api/tags", timeout=2)
+            resp = httpx.get(f"{ollama_url}/api/tags", timeout=ollama_http_timeout)
             if resp.status_code == 200:
                 ollama_running = True
         except Exception:
             # Not running — try to auto-start
             self._try_start_ollama()
             try:
-                resp = httpx.get(f"{ollama_url}/api/tags", timeout=2)
+                resp = httpx.get(f"{ollama_url}/api/tags", timeout=ollama_http_timeout)
                 if resp.status_code == 200:
                     ollama_running = True
             except Exception:
@@ -339,6 +352,19 @@ class Engine:
         ollama_bin = _find_ollama_binary()
         if not ollama_bin:
             return
+        try:
+            from nvh.integrations.studio_packs import _ollama_validation_error
+
+            validation_error = _ollama_validation_error(ollama_bin)
+            if validation_error:
+                logger.warning(
+                    "Skipping Ollama auto-start because %s is not runnable: %s",
+                    ollama_bin,
+                    validation_error,
+                )
+                return
+        except Exception:
+            pass
 
         layout = storage_layout()
         models_dir = layout.ollama_models_dir
@@ -369,19 +395,22 @@ class Engine:
             log_file.close()  # child inherited the fd, parent can close
             logger.info("Auto-starting Ollama from %s", ollama_bin)
 
-            # Wait up to 10 seconds
+            # Keep startup detection snappy; nvWizard surfaces deeper repair
+            # guidance if the local runtime does not respond.
             import httpx as _httpx
             ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-            for _ in range(10):
-                time.sleep(1)
+            wait_seconds = max(0.0, float(os.environ.get("NVH_OLLAMA_START_WAIT", "2")))
+            deadline = time.monotonic() + wait_seconds
+            while time.monotonic() < deadline:
+                time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
                 try:
-                    resp = _httpx.get(f"{ollama_url}/api/tags", timeout=2)
+                    resp = _httpx.get(f"{ollama_url}/api/tags", timeout=0.5)
                     if resp.status_code == 200:
                         logger.info("Ollama auto-started successfully")
                         return
                 except Exception:
                     pass
-            logger.warning("Ollama started but not responding after 10s — check %s", log_path)
+            logger.warning("Ollama started but not responding after %.1fs; check %s", wait_seconds, log_path)
         except Exception as exc:
             logger.debug("Could not auto-start Ollama: %s", exc)
 
@@ -401,12 +430,16 @@ class Engine:
         }
 
         # Also check keyring for keys saved by nvh setup
+        use_keyring = os.environ.get("NVH_USE_KEYRING", "0").lower() in {"1", "true", "yes"}
+
         def _get_key(env_var: str, provider_name: str) -> str:
             # 1. Environment variable (highest priority)
             key = os.environ.get(env_var, "")
             if key:
                 return key
             # 2. Keyring (saved by nvh setup)
+            if not use_keyring:
+                return ""
             try:
                 import keyring
                 key = keyring.get_password(
@@ -424,13 +457,12 @@ class Engine:
             key = _get_key(env_var, name)
             if key and name not in detected:
                 try:
-                    import importlib
-                    mod = importlib.import_module(module_path)
-                    cls = getattr(mod, class_name)
-                    provider = cls(api_key=key)
+                    from nvh.providers.lazy_provider import LazyProvider
+
+                    provider = LazyProvider(name, module_path, class_name, api_key=key)
                     self.registry.register(name, provider)
                     detected.append(name)
-                    logger.info("Auto-detected: %s (API key found)", name)
+                    logger.info("Auto-detected: %s lazy provider (API key found)", name)
                 except Exception:
                     pass
 
@@ -570,7 +602,7 @@ class Engine:
                         "You appear to be offline and no local providers are available.\n"
                         "Options:\n"
                         "  Start Ollama:   ollama serve\n"
-                        "  Install Ollama: curl -fsSL https://ollama.com/install.sh | sh\n"
+                        "  Install local runtime: nvh studio --install rootless-ollama -y\n"
                         "  Check network:  ping api.groq.com"
                     )
 

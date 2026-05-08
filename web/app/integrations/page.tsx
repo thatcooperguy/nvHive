@@ -28,28 +28,23 @@ interface ConnectResult {
 
 const PLATFORM_META: Record<
   string,
-  { subtitle: string; icon: string; badge?: string }
+  { subtitle: string; badge?: string }
 > = {
   nemoclaw: {
     subtitle: "AI agents on NVIDIA GPUs",
-    icon: "🟢",
     badge: "NVIDIA",
   },
   openclaw: {
     subtitle: "Open-source AI coding assistant",
-    icon: "🦞",
   },
   claude_code: {
     subtitle: "Anthropic\u2019s CLI coding agent",
-    icon: "⌨️",
   },
   cursor: {
     subtitle: "AI-powered code editor",
-    icon: "▸",
   },
   claude_desktop: {
     subtitle: "Anthropic\u2019s desktop app",
-    icon: "🖥",
   },
 };
 
@@ -123,19 +118,16 @@ function StatusDot({ status }: { status: "connected" | "available" | "missing" |
 function PlatformRow({
   platform,
   onConnect,
-  onDisconnect,
   connecting,
   error,
 }: {
   platform: PlatformInfo;
   onConnect: (name: string) => void;
-  onDisconnect: (name: string) => void;
   connecting: boolean;
   error: string | null;
 }) {
   const meta = PLATFORM_META[platform.name] || {
     subtitle: platform.integration_type === "mcp" ? "Tool connection" : "Inference provider",
-    icon: "🔌",
   };
 
   const status: "connected" | "available" | "missing" | "connecting" | "error" = connecting
@@ -200,12 +192,12 @@ function PlatformRow({
       {/* Action */}
       <div className="flex-shrink-0 w-28 text-right">
         {status === "connected" && (
-          <button
-            onClick={() => onDisconnect(platform.name)}
-            className="text-xs font-mono text-[--text-muted] hover:text-[#dc2626] transition-colors px-3 py-1.5 border border-transparent hover:border-[#dc2626]/20"
+          <span
+            className="inline-flex px-3 py-1.5 text-xs font-mono text-[#76B900] border border-[#76B900]/20 bg-[#76B900]/5"
+            title="nvHive found this tool's configuration. Disconnect is managed inside the tool itself."
           >
-            Disconnect
-          </button>
+            Connected
+          </span>
         )}
         {status === "available" && (
           <button
@@ -310,11 +302,6 @@ export default function IntegrationsPage() {
     }
   };
 
-  // --- Disconnect (placeholder) ---
-  const disconnectPlatform = (name: string) => {
-    // TODO: implement disconnect API
-    alert(`Disconnect ${name} — coming soon`);
-  };
 
   // --- Derived state ---
   const sorted = [...platforms].sort((a, b) => {
@@ -473,7 +460,6 @@ export default function IntegrationsPage() {
                 key={p.name}
                 platform={p}
                 onConnect={connectPlatform}
-                onDisconnect={disconnectPlatform}
                 connecting={!!connecting[p.name]}
                 error={errors[p.name] || null}
               />

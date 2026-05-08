@@ -691,7 +691,7 @@ def register_system_tools(registry: ToolRegistry) -> None:
                     return content
             except (TimeoutError, FileNotFoundError):
                 continue
-        return "Clipboard tools not available (install xclip: apt install xclip)"
+        return "Clipboard tools not available. Add xclip, wl-paste, or a desktop clipboard helper to PATH inside NVH_HOME."
 
     registry.register(Tool(
         name="get_clipboard",

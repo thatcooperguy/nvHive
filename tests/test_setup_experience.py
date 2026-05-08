@@ -24,7 +24,6 @@ def test_auto_repair_writes_env_file_without_downloads(tmp_path, monkeypatch) ->
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
     monkeypatch.setattr(auto_repair, "detect_comfyui", lambda **_: {"installed": False})
     monkeypatch.setattr(auto_repair, "receipt_summary", lambda **_: {"unhealthy": 0})
-    monkeypatch.setattr(auto_repair, "catalog_with_status", lambda: {"packs": [{"id": "agent-lab", "status": {"installed": True}}]})
     monkeypatch.setattr(auto_repair, "load_setup_catalog", lambda refresh=False: {"source": "bundled"})
     monkeypatch.setattr(
         auto_repair,
@@ -97,7 +96,7 @@ def test_smoke_tests_surface_comfyui_example_repair(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(
         smoke_tests,
         "detect_comfyui",
-        lambda: {"installed": True, "running": False, "examples_installed": False, "app_dir": str(tmp_path), "examples_dir": str(tmp_path / "examples")},
+        lambda **_: {"installed": True, "running": False, "examples_installed": False, "app_dir": str(tmp_path), "examples_dir": str(tmp_path / "examples")},
     )
 
     report = smoke_tests.smoke_test_report(home_dir=str(tmp_path))
