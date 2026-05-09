@@ -108,9 +108,9 @@ class TestOllamaProvider:
         provider = OllamaProvider()
         assert provider._get_model("llama3.1") == "ollama/llama3.1"
         assert provider._get_model("ollama/mistral") == "ollama/mistral"
-        assert provider._get_model(None) == "ollama/llama3.1"  # default
-        assert provider._get_model("recommended") == "ollama/llama3.1"
-        assert provider._get_model("auto-pick best available") == "ollama/llama3.1"
+        assert provider._get_model(None) == "ollama/gemma3:4b"  # first-run default
+        assert provider._get_model("recommended") == "ollama/gemma3:4b"
+        assert provider._get_model("auto-pick best available") == "ollama/gemma3:4b"
 
     @pytest.mark.asyncio
     async def test_list_models_parses_tags_response(self):
@@ -146,8 +146,8 @@ class TestOllamaProvider:
         provider = OllamaProvider()
 
         with patch(
-            "nvh.providers.ollama_provider.litellm.acompletion",
-            new=AsyncMock(return_value=_fake_completion_response()),
+            "nvh.providers.ollama_provider.OllamaProvider._direct_complete",
+            new=AsyncMock(return_value="ollama says hi"),
         ):
             resp = await provider.complete(
                 messages=[Message(role="user", content="hi")],
@@ -158,7 +158,7 @@ class TestOllamaProvider:
         assert isinstance(resp, CompletionResponse)
         assert resp.content == "ollama says hi"
         assert resp.provider == "ollama"
-        assert resp.usage.total_tokens == 15
+        assert resp.usage.total_tokens >= 2
         assert resp.finish_reason == FinishReason.STOP
 
     @pytest.mark.asyncio

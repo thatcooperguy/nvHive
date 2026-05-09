@@ -188,10 +188,10 @@ nvh studio --install-models gemma3-4b,qwen25-coder-7b -y
 | GPU VRAM | Local Chat Models | ComfyUI Profiles |
 | --- | --- | --- |
 | CPU only | Cloud/free providers | starter |
-| 4-8 GB | `nemotron-mini` | starter |
-| 8-12 GB | `llama3.1:8b`, `nemotron-mini` | starter, video |
-| 12-24 GB | `llama3.1:8b`, `nemotron-mini` | starter, edit, control, video |
-| 24+ GB | `nemotron`, `llama3.1:8b`, `nemotron-mini` | starter, edit, control, video, video-pro |
+| 4-8 GB | `gemma3:4b` | starter |
+| 8-12 GB | `gemma3:4b`, `llama3.1:8b` | starter, video |
+| 12-24 GB | `gemma3:4b`, `llama3.1:8b` | starter, edit, control, video |
+| 24+ GB | `gemma3:4b`, `nemotron`, `llama3.1:8b` | starter, edit, control, video, video-pro |
 
 The ComfyUI installer uses an isolated environment under `$NVH_HOME/comfyui`, installs current NVIDIA PyTorch support, enables ComfyUI Manager when available, and writes nvHive starter examples.
 

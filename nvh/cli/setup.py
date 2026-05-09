@@ -601,7 +601,12 @@ def _get_recommended_models(total_vram: float) -> list[str]:
         from nvh.utils.gpu import detect_gpus, recommend_models
         gpus = detect_gpus()
         recs = recommend_models(gpus) if gpus else []
-        return [r.model for r in recs]
+        models = [r.model for r in recs]
+        if total_vram >= 4 and "gemma3:4b" not in models:
+            models.insert(0, "gemma3:4b")
+        elif "gemma3:4b" in models:
+            models = ["gemma3:4b"] + [m for m in models if m != "gemma3:4b"]
+        return models
     except Exception:
         pass
 
@@ -613,21 +618,21 @@ def _get_recommended_models(total_vram: float) -> list[str]:
     #   minicpm-v (~5GB) — good vision, smaller footprint
     #   moondream (~2GB) — basic vision for very tight VRAM
     if total_vram >= 128:
-        return ["nemotron:70b", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision"]
+        return ["gemma3:4b", "nemotron:70b", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision"]
     if total_vram >= 96:
-        return ["llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision"]
+        return ["gemma3:4b", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision"]
     if total_vram >= 48:
-        return ["llama3.3:70b", "llama3.2-vision"]
+        return ["gemma3:4b", "llama3.3:70b", "llama3.2-vision"]
     if total_vram >= 24:
-        return ["gemma4:26b", "llama3.2-vision"]
+        return ["gemma3:4b", "gemma4:26b", "llama3.2-vision"]
     if total_vram >= 16:
-        return ["qwen2.5-coder:7b", "minicpm-v"]
+        return ["gemma3:4b", "qwen2.5-coder:7b", "minicpm-v"]
     if total_vram >= 12:
-        return ["qwen2.5-coder:7b", "minicpm-v"]  # 5GB + 5GB = 10GB, fits in 12
+        return ["gemma3:4b", "qwen2.5-coder:7b", "minicpm-v"]
     if total_vram >= 8:
-        return ["nemotron-mini", "moondream"]  # 4GB + 2GB = 6GB, fits in 8
+        return ["gemma3:4b", "moondream"]
     if total_vram >= 4:
-        return ["moondream"]  # 2GB vision-only, cloud fallback for text
+        return ["gemma3:4b", "moondream"]
     return []
 
 
@@ -824,11 +829,10 @@ def _write_config(
         pass
 
     # Sensible default if the recommender fails or returns nothing — use
-    # nemotron-mini since it's the smallest real Nemotron and exists on all
-    # Ollama installs where nemotron is pulled at all.
+    # the first-run bootstrap model that install.sh pulls by default.
     if not advisor_defs["ollama"]["model"]:
-        advisor_defs["ollama"]["model"] = "ollama/nemotron-mini"
-        advisor_defs["ollama"]["fallback"] = "ollama/nemotron-mini"
+        advisor_defs["ollama"]["model"] = "ollama/gemma3:4b"
+        advisor_defs["ollama"]["fallback"] = "ollama/gemma3:4b"
 
     for name, info in advisor_defs.items():
         if name == "ollama":

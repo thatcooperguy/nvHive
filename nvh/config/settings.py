@@ -352,7 +352,7 @@ advisors:
 
   ollama:
     base_url: http://localhost:11434
-    default_model: ollama/nemotron-mini
+    default_model: ollama/gemma3:4b
     type: ollama
     enabled: false
 

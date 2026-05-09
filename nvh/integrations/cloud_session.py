@@ -183,16 +183,16 @@ def get_cloud_recommended_config(session: CLOUDSession) -> dict[str, Any]:
     # earlier versions listed nemotron-small which 404s on pull.
     tier_models = {
         "priority": {
-            "default_model": "ollama/nemotron-mini",
-            "recommended_models": ["nemotron-mini"],
+            "default_model": "ollama/gemma3:4b",
+            "recommended_models": ["gemma3:4b"],
         },
         "performance": {
-            "default_model": "ollama/llama3.1:8b",
-            "recommended_models": ["nemotron-mini", "llama3.1:8b"],
+            "default_model": "ollama/gemma3:4b",
+            "recommended_models": ["gemma3:4b", "llama3.1:8b"],
         },
         "ultimate": {
-            "default_model": "ollama/nemotron",
-            "recommended_models": ["nemotron-mini", "llama3.1:8b", "nemotron"],
+            "default_model": "ollama/gemma3:4b",
+            "recommended_models": ["gemma3:4b", "llama3.1:8b", "nemotron"],
         },
     }
 

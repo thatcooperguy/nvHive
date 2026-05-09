@@ -36,9 +36,9 @@ _AUTO_MODEL_CHOICES = {
 }
 
 _FALLBACK_MODEL_PREFERENCE = (
+    "gemma3:4b",
     "llama3.1:8b",
     "llama3.1",
-    "gemma3:4b",
     "qwen3:8b",
     "qwen3-8b",
     "nemotron-mini",
@@ -77,7 +77,7 @@ class OllamaProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "ollama/llama3.1",
+        default_model: str = "ollama/gemma3:4b",
         fallback_model: str = "",
         base_url: str | None = None,
         provider_name: str = "ollama",

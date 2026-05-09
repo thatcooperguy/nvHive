@@ -308,7 +308,7 @@ editing the frontend.
 | VRAM | Text Model | Vision Model | Behavior |
 |------|-----------|-------------|----------|
 | 0 GB (no GPU) | Cloud only | Cloud fallback | Free tiers first (Groq, LLM7, GitHub) |
-| 4-8 GB | `nemotron-mini` | `moondream` | Basic local + desktop agent |
+| 4-8 GB | `gemma3:4b` | `moondream` | First-run local chat + desktop agent |
 | 12-16 GB | `qwen2.5-coder:7b` | `minicpm-v` | Coding + vision local |
 | 24 GB | `gemma2:27b` | `llama3.2-vision` | Strong text + best vision |
 | 48 GB | `llama3.3:70b` | `llama3.2-vision` | Full power local |
