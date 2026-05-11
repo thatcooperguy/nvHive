@@ -388,6 +388,20 @@ def compatibility_report(
         model["id"] for model in model_status.get("models", [])
         if model.get("recommended") and not model.get("installed")
     ]
+    try:
+        from nvh.integrations.comfyui import detect_comfyui
+
+        comfy_status = detect_comfyui(home_dir=home_dir)
+    except Exception:
+        comfy_status = {
+            "installed": False,
+            "running": False,
+            "examples_installed": False,
+            "port_conflict": False,
+            "service_status": "unknown",
+            "runtime_python": "",
+            "url": "http://127.0.0.1:8188",
+        }
 
     def _pack_installed(pack_id: str) -> bool:
         status = pack_by_id.get(pack_id, {}).get("status", {})
@@ -441,13 +455,27 @@ def compatibility_report(
             "creative",
             [
                 _req("git", "Git", bool(commands.get("git")), "Required to clone/update ComfyUI.", blocked=not commands.get("git")),
-                _req("python", "Python 3.11+", _version_at_least(py["version"], "3.11"), f"Detected Python {py['version']}.", blocked=not _version_at_least(py["version"], "3.11")),
-                _req("venv", "Python venv/pip", bool(py["venv_available"] and py["pip_available"]), f"Runtime strategy: {py['strategy']}.", fix_action_id="runtime-fallback", rootless_fix_available=True),
-                _req("torch", "PyTorch CUDA profile", cuda_profile != "cpu", f"Recommended profile: {cuda_profile}. CPU fallback is available."),
+                _req("source", "ComfyUI source", bool(comfy_status.get("installed")), f"Install path: {comfy_status.get('app_dir', 'NVH_HOME/comfyui/ComfyUI')}.", fix_action_id="comfyui", rootless_fix_available=True),
+                _req("python", "ComfyUI Python runtime", _version_at_least(py["version"], "3.11") or bool(comfy_status.get("runtime_python")), f"Runtime: {comfy_status.get('runtime_python') or py['version']}.", fix_action_id="runtime-fallback", rootless_fix_available=True),
+                _req("venv", "Python venv/pip", bool(comfy_status.get("installed") or (py["venv_available"] and py["pip_available"])), f"Runtime strategy: {py['strategy']}.", fix_action_id="runtime-fallback", rootless_fix_available=True),
+                _req("torch", "PyTorch CUDA profile", bool(comfy_status.get("installed") or cuda_profile != "cpu"), f"Recommended profile: {cuda_profile}. CPU fallback is available."),
                 _req("storage", "Persistent storage", bool(storage["ok"]), "ComfyUI and model caches are large.", fix_action_id="storage", rootless_fix_available=True),
+                _req("examples", "nvHive examples", bool(comfy_status.get("examples_installed")) or not comfy_status.get("installed"), "Starter workflow manifest is installed with ComfyUI.", fix_action_id="comfyui-examples", rootless_fix_available=True),
+                _req("service", "ComfyUI service", not comfy_status.get("port_conflict"), f"Service status: {comfy_status.get('service_status')}; URL: {comfy_status.get('url')}.", fix_action_id="start-comfyui", rootless_fix_available=True),
             ],
-            recommended_action_id="comfyui",
-            notes=[f"Recommended torch profile for this host: {cuda_profile}."],
+            recommended_action_id=(
+                "start-comfyui"
+                if comfy_status.get("installed") and not comfy_status.get("running")
+                else "comfyui"
+            ),
+            notes=[
+                f"Recommended torch profile for this host: {cuda_profile}.",
+                (
+                    "ComfyUI is optional for local chat; install/start it only for visual image or video workflows."
+                    if not comfy_status.get("installed")
+                    else f"ComfyUI status: {comfy_status.get('service_status')}."
+                ),
+            ],
         ),
         _overall(
             "blender-creative",

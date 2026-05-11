@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -182,6 +183,26 @@ def comfyui_venv_python(root: Path | None = None) -> Path:
     return venv / "bin" / "python"
 
 
+def comfyui_micromamba_env(root: Path | None = None) -> Path:
+    """Return the rootless managed ComfyUI runtime prefix."""
+    return (root or comfyui_root()) / "runtime" / "micromamba-env"
+
+
+def comfyui_micromamba_python(root: Path | None = None) -> Path:
+    env_prefix = comfyui_micromamba_env(root)
+    if os.name == "nt":
+        return env_prefix / "python.exe"
+    return env_prefix / "bin" / "python"
+
+
+def comfyui_python(root: Path | None = None) -> Path:
+    """Return the Python executable ComfyUI should use."""
+    mamba_python = comfyui_micromamba_python(root)
+    if mamba_python.exists():
+        return mamba_python
+    return comfyui_venv_python(root)
+
+
 def examples_as_dicts() -> list[dict[str, Any]]:
     """Return the curated example manifest as JSON-serialisable dicts."""
     return [asdict(example) for example in TRENDING_COMFYUI_EXAMPLES]
@@ -322,12 +343,51 @@ def _log_file(root: Path) -> Path:
     return root / "comfyui.log"
 
 
+def _runtime_file(root: Path) -> Path:
+    return root / "comfyui-service.json"
+
+
+def _tail_file(path: Path, lines: int = 40) -> list[str]:
+    try:
+        raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return raw_lines[-lines:]
+    except Exception:
+        return []
+
+
+def _read_runtime_metadata(root: Path) -> dict[str, Any]:
+    try:
+        return json.loads(_runtime_file(root).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_runtime_metadata(root: Path, data: dict[str, Any]) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    _runtime_file(root).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
 def _read_pid(root: Path) -> int | None:
     try:
         raw = _pid_file(root).read_text(encoding="utf-8").strip()
         return int(raw) if raw else None
     except Exception:
         return None
+
+
+def _port_open(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.35):
+            return True
+    except OSError:
+        return False
+
+
+def _find_available_port(host: str, preferred: int, *, limit: int = 20) -> int:
+    for candidate in range(preferred, preferred + limit):
+        if not _port_open(host, candidate):
+            return candidate
+    raise RuntimeError(f"No free localhost port found from {preferred} to {preferred + limit - 1}")
 
 
 def _is_http_reachable(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
@@ -349,24 +409,54 @@ def detect_comfyui(
 ) -> dict[str, Any]:
     """Return local ComfyUI installation and runtime status."""
     root = comfyui_root(home_dir=home_dir)
+    runtime = _read_runtime_metadata(root)
+    if port == DEFAULT_PORT and isinstance(runtime.get("port"), int):
+        port = int(runtime["port"])
+    if host == DEFAULT_HOST and isinstance(runtime.get("host"), str):
+        host = str(runtime["host"])
     app_dir = comfyui_app_dir(root)
     venv_python = comfyui_venv_python(root)
+    runtime_python = comfyui_python(root)
     examples_dir = app_dir / "nvhive_examples"
     manifest_path = examples_dir / "examples.json"
     installed = (app_dir / "main.py").exists()
+    running = _is_http_reachable(host, port) if check_http else False
+    occupied = _port_open(host, port) if check_http else False
+    service_status = (
+        "running" if running
+        else "port-conflict" if installed and occupied
+        else "installed-stopped" if installed
+        else "not-installed"
+    )
+    next_action = (
+        "open" if running
+        else "start" if installed
+        else "install"
+    )
 
     return {
         "installed": installed,
-        "running": _is_http_reachable(host, port) if check_http else False,
+        "running": running,
+        "ready": running,
+        "service_status": service_status,
+        "next_action": next_action,
+        "host": host,
+        "port": port,
+        "port_open": occupied,
+        "port_conflict": bool(installed and occupied and not running),
         "url": _status_url(host, port),
         "install_root": str(root),
         "app_dir": str(app_dir),
         "venv_python": str(venv_python),
+        "runtime_python": str(runtime_python),
+        "runtime_strategy": "micromamba" if comfyui_micromamba_python(root).exists() else "venv",
         "examples_dir": str(examples_dir),
         "examples_installed": manifest_path.exists(),
         "manager_available": (app_dir / "manager_requirements.txt").exists(),
         "log_path": str(_log_file(root)),
+        "log_tail": _tail_file(_log_file(root), lines=20),
         "pid": _read_pid(root),
+        "runtime": runtime,
         "examples": examples_as_dicts(),
     }
 
@@ -464,6 +554,7 @@ async def _run_command(
 ) -> AsyncIterator[dict[str, Any]]:
     """Run a subprocess and stream merged stdout/stderr lines as events."""
     yield {"event": "step", "status": "running", "message": label, "command": cmd}
+    log_tail: list[str] = []
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -478,6 +569,8 @@ async def _run_command(
         async for raw_line in process.stdout:
             line = raw_line.decode("utf-8", errors="replace").rstrip()
             if line:
+                log_tail.append(line)
+                log_tail = log_tail[-20:]
                 yield {"event": "log", "status": "running", "message": line}
     except asyncio.CancelledError:
         if process.returncode is None:
@@ -491,11 +584,18 @@ async def _run_command(
 
     return_code = await process.wait()
     if return_code != 0:
+        tail = "\n".join(log_tail[-8:])
+        message = f"{label} failed with exit code {return_code}"
+        if tail:
+            message = f"{message}. Last output: {tail}"
         yield {
             "event": "error",
             "status": "failed",
-            "message": f"{label} failed with exit code {return_code}",
+            "message": message,
             "return_code": return_code,
+            "command": cmd,
+            "cwd": str(cwd) if cwd else None,
+            "log_tail": log_tail,
         }
         return
 
@@ -511,12 +611,74 @@ async def _run_checked(
 ) -> AsyncIterator[dict[str, Any]]:
     """Run a command and stop the caller when it fails."""
     failed = False
+    failure_message = f"{label} failed"
     async for event in _run_command(cmd, cwd=cwd, env=env, label=label):
         if event.get("event") == "error":
             failed = True
+            failure_message = str(event.get("message") or failure_message)
         yield event
     if failed:
-        raise RuntimeError(f"{label} failed")
+        raise RuntimeError(failure_message)
+
+
+def _current_python_needs_managed_runtime() -> bool:
+    """ComfyUI/PyTorch are safer on Python 3.11/3.12 than a fresh 3.13 image."""
+    return sys.version_info >= (3, 13)
+
+
+async def _ensure_comfyui_python(root: Path, env: dict[str, str]) -> AsyncIterator[dict[str, Any]]:
+    """Create a rootless Python runtime for ComfyUI and yield progress."""
+    if _current_python_needs_managed_runtime():
+        from nvh.integrations.runtime import install_micromamba, micromamba_binary, micromamba_root
+
+        yield {
+            "event": "step",
+            "status": "running",
+            "message": "Python 3.13 detected; preparing rootless Python 3.12 runtime for ComfyUI.",
+        }
+        async for event in install_micromamba():
+            if event.get("event") == "complete":
+                yield {
+                    **event,
+                    "event": "step",
+                    "status": "complete",
+                    "message": event.get("message", "Rootless micromamba ready"),
+                }
+            else:
+                yield event
+
+        env_prefix = comfyui_micromamba_env(root)
+        python_exe = comfyui_micromamba_python(root)
+        if not python_exe.exists():
+            mamba_env = env.copy()
+            mamba_env["MAMBA_ROOT_PREFIX"] = str(micromamba_root())
+            async for event in _run_checked(
+                [str(micromamba_binary()), "create", "-y", "-p", str(env_prefix), "python=3.12", "pip"],
+                env=mamba_env,
+                label="Create ComfyUI managed Python 3.12 runtime",
+            ):
+                yield event
+        else:
+            yield {
+                "event": "step",
+                "status": "complete",
+                "message": "ComfyUI managed Python runtime already present",
+            }
+        return
+
+    venv_python = comfyui_venv_python(root)
+    if not venv_python.exists():
+        async for event in _run_checked(
+            [sys.executable, "-m", "venv", str(root / "venv")],
+            label="Create ComfyUI Python environment",
+        ):
+            yield event
+    else:
+        yield {
+            "event": "step",
+            "status": "complete",
+            "message": "Python environment already present",
+        }
 
 
 def _torch_install_command(python_exe: Path, torch_profile: str) -> list[str] | None:
@@ -540,7 +702,6 @@ async def install_comfyui(
     """Install or update ComfyUI and write the nvHive examples pack."""
     root = comfyui_root()
     app_dir = comfyui_app_dir(root)
-    venv_python = comfyui_venv_python(root)
     root.mkdir(parents=True, exist_ok=True)
 
     if shutil.which("git") is None:
@@ -583,22 +744,14 @@ async def install_comfyui(
                 "message": "ComfyUI source already present",
             }
 
-        if not venv_python.exists():
-            async for event in _run_checked(
-                [sys.executable, "-m", "venv", str(root / "venv")],
-                label="Create ComfyUI Python environment",
-            ):
-                yield event
-        else:
-            yield {
-                "event": "step",
-                "status": "complete",
-                "message": "Python environment already present",
-            }
+        async for event in _ensure_comfyui_python(root, env):
+            yield event
+
+        python_exe = comfyui_python(root)
 
         async for event in _run_checked(
             [
-                str(venv_python),
+                str(python_exe),
                 "-m",
                 "pip",
                 "install",
@@ -612,7 +765,7 @@ async def install_comfyui(
         ):
             yield event
 
-        torch_cmd = _torch_install_command(venv_python, torch_profile)
+        torch_cmd = _torch_install_command(python_exe, torch_profile)
         if torch_cmd:
             async for event in _run_checked(
                 torch_cmd,
@@ -622,7 +775,7 @@ async def install_comfyui(
                 yield event
 
         async for event in _run_checked(
-            [str(venv_python), "-m", "pip", "install", "-r", str(app_dir / "requirements.txt")],
+            [str(python_exe), "-m", "pip", "install", "-r", str(app_dir / "requirements.txt")],
             cwd=app_dir,
             env=env,
             label="Install ComfyUI requirements",
@@ -632,7 +785,7 @@ async def install_comfyui(
         manager_requirements = app_dir / "manager_requirements.txt"
         if manager_requirements.exists():
             async for event in _run_checked(
-                [str(venv_python), "-m", "pip", "install", "-r", str(manager_requirements)],
+                [str(python_exe), "-m", "pip", "install", "-r", str(manager_requirements)],
                 cwd=app_dir,
                 env=env,
                 label="Install ComfyUI Manager requirements",
@@ -661,7 +814,8 @@ async def install_comfyui(
                 ],
                 metadata={
                     "torch_profile": torch_profile,
-                    "venv_python": str(venv_python),
+                    "venv_python": str(comfyui_venv_python(root)),
+                    "runtime_python": str(python_exe),
                     "examples_dir": str(examples_dir),
                     "status": detect_comfyui(),
                 },
@@ -695,7 +849,7 @@ def start_comfyui(
 
     root = comfyui_root()
     app_dir = comfyui_app_dir(root)
-    python_exe = comfyui_venv_python(root)
+    python_exe = comfyui_python(root)
 
     if _is_http_reachable(host, port):
         status = detect_comfyui(host, port)
@@ -706,6 +860,11 @@ def start_comfyui(
 
     if not (app_dir / "main.py").exists() or not python_exe.exists():
         raise FileNotFoundError("ComfyUI is not installed yet.")
+
+    preferred_port = port
+    port_conflict = _port_open(host, preferred_port)
+    if port_conflict:
+        port = _find_available_port(host, preferred_port + 1)
 
     root.mkdir(parents=True, exist_ok=True)
     log_path = _log_file(root)
@@ -743,12 +902,34 @@ def start_comfyui(
     _pid_file(root).write_text(str(process.pid), encoding="utf-8")
 
     status = wait_for_comfyui(host, port)
+    if not status.get("ready"):
+        poll = getattr(process, "poll", lambda: None)
+        exit_code = poll()
+        if exit_code is not None:
+            status["process_exit_code"] = exit_code
+            status["log_tail"] = _tail_file(log_path)
     status.update(
         {
             "started": True,
             "pid": process.pid,
             "command": cmd,
             "log_path": str(log_path),
+            "port_conflict": port_conflict,
+            "requested_port": preferred_port,
         }
+    )
+    _write_runtime_metadata(
+        root,
+        {
+            "host": host,
+            "port": port,
+            "url": _status_url(host, port),
+            "pid": process.pid,
+            "log_path": str(log_path),
+            "runtime_python": str(python_exe),
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "requested_port": preferred_port,
+            "port_conflict": port_conflict,
+        },
     )
     return status

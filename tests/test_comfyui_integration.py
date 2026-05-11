@@ -130,3 +130,62 @@ def test_start_comfyui_returns_readiness_poll_result(tmp_path, monkeypatch) -> N
     assert status["pid"] == 1234
     assert status["ready"] is True
     assert Path(status["log_path"]).name == "comfyui.log"
+
+
+def test_detect_comfyui_reports_installed_stopped_and_runtime(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("COMFYUI_HOME", str(tmp_path))
+    app_dir = tmp_path / "ComfyUI"
+    python_path = comfyui.comfyui_venv_python(tmp_path)
+    examples = app_dir / "nvhive_examples"
+    app_dir.mkdir(parents=True)
+    python_path.parent.mkdir(parents=True)
+    examples.mkdir(parents=True)
+    (app_dir / "main.py").write_text("print('comfy')\n", encoding="utf-8")
+    python_path.write_text("", encoding="utf-8")
+    (examples / "examples.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(comfyui, "_is_http_reachable", lambda host="127.0.0.1", port=8188: False)
+    monkeypatch.setattr(comfyui, "_port_open", lambda host="127.0.0.1", port=8188: False)
+
+    status = comfyui.detect_comfyui()
+
+    assert status["installed"] is True
+    assert status["examples_installed"] is True
+    assert status["service_status"] == "installed-stopped"
+    assert status["next_action"] == "start"
+    assert status["runtime_strategy"] == "venv"
+
+
+def test_start_comfyui_uses_next_free_port_on_conflict(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("COMFYUI_HOME", str(tmp_path))
+    app_dir = tmp_path / "ComfyUI"
+    python_path = comfyui.comfyui_venv_python(tmp_path)
+    app_dir.mkdir(parents=True)
+    python_path.parent.mkdir(parents=True)
+    (app_dir / "main.py").write_text("print('comfy')\n", encoding="utf-8")
+    python_path.write_text("", encoding="utf-8")
+
+    class FakeProcess:
+        pid = 5678
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(comfyui, "_is_http_reachable", lambda host="127.0.0.1", port=8188: False)
+    monkeypatch.setattr(comfyui, "_port_open", lambda host="127.0.0.1", port=8188: port == 8188)
+    monkeypatch.setattr(comfyui.subprocess, "Popen", lambda cmd, **kwargs: FakeProcess())
+    monkeypatch.setattr(
+        comfyui,
+        "wait_for_comfyui",
+        lambda host="127.0.0.1", port=8189: {
+            "running": True,
+            "ready": True,
+            "ready_timeout": False,
+            "url": f"http://{host}:{port}",
+        },
+    )
+
+    status = comfyui.start_comfyui()
+
+    assert status["url"] == "http://127.0.0.1:8189"
+    assert status["requested_port"] == 8188
+    assert status["port_conflict"] is True

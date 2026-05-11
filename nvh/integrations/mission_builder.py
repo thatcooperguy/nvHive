@@ -8,6 +8,7 @@ the existing persistent job runner.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -217,7 +218,7 @@ async def install_mission_profile(
     min_free_gb: float = 200.0,
 ) -> AsyncIterator[dict[str, Any]]:
     """Install one mission as a single persistent background job."""
-    from nvh.integrations.comfyui import install_comfyui, write_model_plan
+    from nvh.integrations.comfyui import install_comfyui, start_comfyui, write_model_plan
     from nvh.integrations.studio_packs import install_studio_models, install_studio_packs
 
     normalized = _validate_profile(profile)
@@ -296,6 +297,34 @@ async def install_mission_profile(
                 "message": "Saved ComfyUI starter workflow model plan.",
                 "path": str(plan_path),
                 "example_ids": plan["example_ids"],
+            }
+
+        yield {
+            "event": "step",
+            "status": "running",
+            "stage": "comfyui-start",
+            "message": "Starting ComfyUI on a free localhost port.",
+        }
+        try:
+            status = await asyncio.to_thread(start_comfyui)
+            yield {
+                "event": "stage-complete",
+                "status": "running",
+                "stage": "comfyui-start",
+                "message": (
+                    f"ComfyUI is running at {status.get('url')}"
+                    if status.get("ready") or status.get("running")
+                    else "ComfyUI was started but is still warming up; check the ComfyUI log."
+                ),
+                "status_snapshot": status,
+                "url": status.get("url"),
+            }
+        except Exception as exc:
+            yield {
+                "event": "service-warning",
+                "status": "running",
+                "stage": "comfyui-start",
+                "message": f"ComfyUI installed, but auto-start needs attention: {exc}",
             }
 
     if plan["model_ids"]:

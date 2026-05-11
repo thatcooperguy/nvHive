@@ -184,7 +184,7 @@ def with_recent_events(
 def _progress_for_event(job: dict[str, Any], payload: dict[str, Any]) -> int:
     if isinstance(payload.get("progress"), (int, float)):
         return max(0, min(100, int(payload["progress"])))
-    if payload.get("event") == "complete" or payload.get("status") == "complete":
+    if payload.get("event") == "complete":
         return 100
     if payload.get("event") == "error" or payload.get("status") == "failed":
         return int(job.get("progress", 0))
@@ -225,7 +225,7 @@ def append_event(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     if job.get("status") == "queued":
         job["status"] = "running"
         job["started_at"] = job.get("started_at") or now
-    if payload.get("event") == "complete" or payload.get("status") == "complete":
+    if payload.get("event") == "complete":
         job["status"] = "complete"
         job["progress"] = 100
         job["completed_at"] = now

@@ -1137,21 +1137,33 @@ export interface ComfyUIExample {
 export interface ComfyUIStatus {
   installed: boolean;
   running: boolean;
+  ready?: boolean;
+  service_status?: string;
+  next_action?: 'install' | 'start' | 'open' | string;
+  host?: string;
+  port?: number;
+  port_open?: boolean;
+  port_conflict?: boolean;
   url: string;
   install_root: string;
   app_dir: string;
   venv_python: string;
+  runtime_python?: string;
+  runtime_strategy?: string;
   examples_dir: string;
   examples_installed: boolean;
   manager_available: boolean;
   log_path: string;
+  log_tail?: string[];
   pid: number | null;
+  runtime?: Record<string, unknown>;
   examples: ComfyUIExample[];
   already_running?: boolean;
   started?: boolean;
-  ready?: boolean;
   ready_timeout?: boolean;
   ready_wait_seconds?: number;
+  requested_port?: number;
+  process_exit_code?: number;
 }
 
 export interface ComfyUIExamplesResult {

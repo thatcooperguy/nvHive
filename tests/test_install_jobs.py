@@ -93,3 +93,18 @@ def test_job_progress_accepts_numeric_payload(tmp_path, monkeypatch) -> None:
     loaded = jobs.load_job(job["id"])
     assert loaded["progress"] == 38
     assert loaded["recent_events"][-1]["message"] == "Downloaded 164.0 MB"
+
+
+def test_step_complete_does_not_finish_parent_job(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    jobs._TASKS.clear()
+
+    job = jobs.create_job(kind="comfyui-install", title="Install ComfyUI")
+    jobs.append_event(
+        job["id"],
+        {"event": "step", "status": "complete", "message": "Clone ComfyUI complete"},
+    )
+
+    loaded = jobs.load_job(job["id"], reconcile=False)
+    assert loaded["status"] == "running"
+    assert loaded["progress"] < 100

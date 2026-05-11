@@ -1490,6 +1490,9 @@ export default function SetupPage() {
           ? `ComfyUI is running at ${status.url}`
           : `ComfyUI start was requested and is still warming up. Check ${status.log_path || 'the ComfyUI log'} if it does not open.`
       );
+      if ((status.running || status.ready) && status.url && typeof window !== 'undefined') {
+        window.open(status.url, '_blank', 'noopener,noreferrer');
+      }
     } catch (err) {
       setComfyError(err instanceof Error ? err.message : 'Failed to start ComfyUI');
     } finally {
@@ -1579,10 +1582,14 @@ export default function SetupPage() {
             setWizardBuildMessage(event.message || 'Mission build is running.');
             if (event.stage === 'models') {
               setModelEvents(prev => [...prev.slice(-10), event as StudioModelInstallEvent]);
-            } else if (event.stage === 'comfyui' || event.stage === 'comfyui-plan' || event.stage === 'comfyui-nodes') {
+            } else if (event.stage === 'comfyui' || event.stage === 'comfyui-plan' || event.stage === 'comfyui-nodes' || event.stage === 'comfyui-start') {
               setComfyEvents(prev => [...prev.slice(-8), event as ComfyUIInstallEvent]);
               if ((event as ComfyUIInstallEvent).status_snapshot) {
-                setComfyStatus((event as ComfyUIInstallEvent).status_snapshot as ComfyUIStatus);
+                const status = (event as ComfyUIInstallEvent).status_snapshot as ComfyUIStatus;
+                setComfyStatus(status);
+                if (event.stage === 'comfyui-start' && (status.ready || status.running) && status.url && typeof window !== 'undefined') {
+                  window.open(status.url, '_blank', 'noopener,noreferrer');
+                }
               }
             } else {
               setStudioEvents(prev => [...prev.slice(-10), event as StudioPackInstallEvent]);
@@ -2262,6 +2269,10 @@ export default function SetupPage() {
       handleInstallComfyUI();
       return;
     }
+    if (actionId === 'start-comfyui') {
+      void handleStartComfyUI();
+      return;
+    }
     if (actionId === 'creative-tools') {
       handleInstallStudioPacks(['creative']);
       return;
@@ -2323,6 +2334,7 @@ export default function SetupPage() {
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
       return comfyInstalling ? 'Installing' : 'Install ComfyUI';
     }
+    if (actionId === 'start-comfyui') return comfyStarting ? 'Starting' : comfyStatus?.running ? 'Open ComfyUI' : 'Start ComfyUI';
     if (actionId === 'repair-workspace') return workspaceRepairing ? 'Repairing' : 'Repair';
     if (actionId === 'smoke-tests') return 'Open';
     if (actionId === 'repair-receipts') return 'Review';
@@ -2337,6 +2349,7 @@ export default function SetupPage() {
     if (actionId === 'comfyui' || actionId === 'comfyui-examples') {
       return comfyInstalling || !storageReady;
     }
+    if (actionId === 'start-comfyui') return comfyStarting || !storageReady || !comfyStatus?.installed;
     if (actionId === 'repair-workspace') return workspaceRepairing;
     if (actionId === 'smoke-tests' || actionId === 'repair-receipts') return false;
     return studioInstalling || !storageReady;
@@ -4804,9 +4817,25 @@ export default function SetupPage() {
                     <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 break-all">
                       {comfyStatus?.installed ? comfyStatus.app_dir : `Install target: ${storageStatus?.layout.comfyui_dir ?? 'NVH_HOME/comfyui'}/ComfyUI`}
                     </div>
-                    <div className="text-[10px] font-mono text-[#737373] mt-1">
-                      Persistent free: {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5">
+                        Status: {comfyStatus?.service_status ?? (comfyStatus?.running ? 'running' : comfyStatus?.installed ? 'installed-stopped' : 'not-installed')}
+                      </span>
+                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5">
+                        Port: {comfyStatus?.port ?? 8188}
+                      </span>
+                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5">
+                        Runtime: {comfyStatus?.runtime_strategy ?? 'venv'}
+                      </span>
+                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5">
+                        Free: {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
+                      </span>
                     </div>
+                    {comfyStatus?.port_conflict && (
+                      <div className="text-[10px] font-mono text-[#d97706] mt-2">
+                        Port {comfyStatus.requested_port ?? 8188} was busy; nvHive will choose a free localhost port when starting ComfyUI.
+                      </div>
+                    )}
                     {comfyStatus?.examples_installed && (
                       <div className="text-[10px] font-mono text-[#76B900] mt-1 break-all">
                         nvHive examples installed at {comfyStatus.examples_dir}
@@ -4831,7 +4860,7 @@ export default function SetupPage() {
                     disabled={comfyInstalling || !storageReady}
                     className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {!storageReady ? storagePrimaryLabel : comfyInstalling ? 'Installing...' : comfyStatus?.installed ? 'Refresh Install' : comfyAutoLaunch ? 'Install & Launch ComfyUI' : 'Install ComfyUI'}
+                    {!storageReady ? storagePrimaryLabel : comfyInstalling ? 'Installing...' : comfyStatus?.installed ? 'Repair Install' : comfyAutoLaunch ? 'Install & Launch ComfyUI' : 'Install ComfyUI'}
                   </button>
                   <button
                     type="button"
@@ -4839,7 +4868,7 @@ export default function SetupPage() {
                     disabled={comfyStarting || !comfyStatus?.installed}
                     className="btn-secondary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {comfyStarting ? 'Starting...' : comfyStatus?.running ? 'Restart Check' : 'Start'}
+                    {comfyStarting ? 'Starting...' : comfyStatus?.running ? 'Check Running' : comfyStatus?.port_conflict ? 'Start On Free Port' : 'Start'}
                   </button>
                   {comfyStatus?.running ? (
                     <a
