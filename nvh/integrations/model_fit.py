@@ -83,11 +83,19 @@ def model_fit_report(home_dir: str | None = None) -> dict[str, Any]:
     for model in ranked:
         best_by_use_case.setdefault(model["use_case"], model)
 
-    recommended_queue = [
+    recommended_models = [
         model for model in ranked
-        if model.get("recommended") and not model.get("installed")
+        if model.get("recommended")
     ]
-    if not recommended_queue:
+    installed_recommended = [
+        model for model in recommended_models
+        if model.get("installed")
+    ]
+    recommended_queue = [
+        model for model in recommended_models
+        if not model.get("installed")
+    ]
+    if not recommended_queue and not installed_recommended and not recommended_models:
         recommended_queue = [
             model for model in ranked
             if model.get("fits_vram") and not model.get("installed")
@@ -97,13 +105,20 @@ def model_fit_report(home_dir: str | None = None) -> dict[str, Any]:
         1,
     )
     storage_fits_queue = free_gb is None or queue_disk_gb <= float(free_gb)
-    if storage_fits_queue:
+    if recommended_queue and storage_fits_queue:
         summary = f"{len(recommended_queue)} model(s) queued for the detected {vram_gb or 'unknown'} GB VRAM profile."
-    else:
+    elif recommended_queue:
         summary = (
             f"{len(recommended_queue)} model(s) fit the GPU profile, but the queue needs "
             f"about {queue_disk_gb} GB and storage reports {free_gb} GB free."
         )
+    elif installed_recommended:
+        summary = (
+            f"Recommended local models are installed for the detected "
+            f"{vram_gb or 'unknown'} GB VRAM profile."
+        )
+    else:
+        summary = f"No model downloads are queued for the detected {vram_gb or 'unknown'} GB VRAM profile."
 
     return {
         "summary": summary,
@@ -112,6 +127,8 @@ def model_fit_report(home_dir: str | None = None) -> dict[str, Any]:
         "recommended_queue_disk_gb": queue_disk_gb,
         "storage_fits_queue": storage_fits_queue,
         "recommended_ids": [model["id"] for model in recommended_queue],
+        "recommended_installed_count": len(installed_recommended),
+        "installed_model_count": sum(1 for model in ranked if model.get("installed")),
         "best_by_use_case": best_by_use_case,
         "models": ranked,
         "ollama_available": catalog.get("ollama_available", False),

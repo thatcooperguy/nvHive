@@ -1255,6 +1255,7 @@ export default function SetupPage() {
         onComplete: event => {
           setModelEvents(prev => [...prev.slice(-10), event]);
           setModelsInstalling(false);
+          setStartupAutopilotMessage('Model download complete. Local AI can now use the installed recommended models.');
           refreshStudioModels();
           void refreshInstallJobs();
           void refreshSetupInventory(false);
@@ -1873,14 +1874,20 @@ export default function SetupPage() {
     ? modelFit.storage_fits_queue
     : undefined;
   const modelFitOllamaRunning = Boolean(modelFit && 'ollama_running' in modelFit && modelFit.ollama_running);
+  const modelFitRecommendedInstalledCount = modelFit?.recommended_installed_count ?? 0;
+  const modelFitInstalledCount = modelFit?.installed_model_count ?? 0;
   const recommendedModelLabel = modelFitRecommendedIds.length
     ? modelFitRecommendedIds.slice(0, 2).join(', ')
-    : detectedModelVram
-      ? `${detectedModelVram} GB VRAM`
-      : 'checking';
+    : modelFitRecommendedInstalledCount > 0
+      ? `${modelFitRecommendedInstalledCount} recommended installed`
+      : modelFitInstalledCount > 0
+        ? `${modelFitInstalledCount} installed`
+        : detectedModelVram
+          ? `${detectedModelVram} GB VRAM`
+          : 'checking';
   const modelFitState: SetupCheckState = modelFitStorageFits === false
     ? 'fix'
-    : modelFitRecommendedIds.length || selectedStudioModels.size > 0
+    : modelFitRecommendedIds.length || selectedStudioModels.size > 0 || modelFitRecommendedInstalledCount > 0 || modelFitInstalledCount > 0
       ? 'ready'
       : modelsLoading
         ? 'checking'
@@ -1898,6 +1905,16 @@ export default function SetupPage() {
   const activeRuntimeJob = activeInstallJobs.find(job => job.kind === 'studio-pack-install') ?? null;
   const workspaceStateChecks = workspaceState?.checks ?? [];
   const workspaceStateReady = workspaceState?.ready === true;
+  const modelDownloadComplete =
+    localAiReady &&
+    recommendedMissingIds.length === 0 &&
+    !activeModelJob &&
+    !modelsInstalling &&
+    startupCountdown === null;
+  const staleDownloadMessage =
+    modelDownloadComplete &&
+    Boolean(startupAutopilotMessage?.toLowerCase().startsWith('downloading '));
+  const activeStartupMessage = staleDownloadMessage ? null : startupAutopilotMessage;
   const startupAutopilotReady =
     workspaceStateReady || (
       apiStatus === 'connected' &&
@@ -1960,10 +1977,12 @@ export default function SetupPage() {
         state: setupStateFromWorkspaceStatus(check.status),
       }))
     : fallbackStartupChecklist;
-  const workspaceStateSummary = startupAutopilotMessage
+  const workspaceStateSummary = activeStartupMessage
     ?? workspaceState?.summary
     ?? (startupAutopilotReady
-      ? 'Workspace is ready. Local AI can answer once the selected model is installed.'
+      ? setupConcernCount > 0
+        ? 'Local AI and recommended models are ready. Review the remaining setup warnings below.'
+        : 'Workspace is ready. Local AI and recommended models are installed.'
       : 'nvWizard is checking storage, runtime, local AI, models, and setup jobs.');
 
   useEffect(() => {
@@ -2404,7 +2423,7 @@ export default function SetupPage() {
               <div className="text-[10px] font-mono text-[#737373] mt-1">
                 {activeInstallJobs.length > 0
                   ? `${activeInstallJobs.length} active job${activeInstallJobs.length === 1 ? '' : 's'} tracked in your workspace`
-                  : 'Recent setup jobs are saved in your workspace'}
+                  : 'Recent setup jobs are saved in your workspace; complete means the job finished, while Launch Check confirms readiness'}
               </div>
               <div className="text-[10px] text-[#737373] mt-1">
                 Job history stays in the workspace, so refreshes and retries have a trail to follow.

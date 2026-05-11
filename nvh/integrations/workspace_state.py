@@ -194,6 +194,8 @@ def workspace_state(home_dir: str | Path | None = None) -> dict[str, Any]:
         "model_fit": {
             "summary": model_fit.get("summary"),
             "recommended_ids": model_fit.get("recommended_ids", []),
+            "recommended_installed_count": model_fit.get("recommended_installed_count", 0),
+            "installed_model_count": model_fit.get("installed_model_count", 0),
             "detected_vram_gb": model_fit.get("detected_vram_gb", 0),
             "storage_fits_queue": model_fit.get("storage_fits_queue"),
         },

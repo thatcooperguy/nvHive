@@ -498,6 +498,8 @@ export interface WorkspaceStateReport {
   model_fit: {
     summary?: string;
     recommended_ids: string[];
+    recommended_installed_count?: number;
+    installed_model_count?: number;
     detected_vram_gb: number;
     storage_fits_queue?: boolean;
   };
@@ -859,6 +861,8 @@ export interface BootPreflightReport {
     summary?: string;
     detected_vram_gb?: number;
     recommended_ids?: string[];
+    recommended_installed_count?: number;
+    installed_model_count?: number;
   } | null;
   compatibility: CompatibilityReport | null;
   error?: string;
@@ -943,6 +947,8 @@ export interface ModelFitReport {
   recommended_queue_disk_gb?: number;
   storage_fits_queue?: boolean;
   recommended_ids: string[];
+  recommended_installed_count?: number;
+  installed_model_count?: number;
   best_by_use_case: Record<string, Record<string, unknown>>;
   models: Array<Record<string, unknown>>;
   ollama_available: boolean;

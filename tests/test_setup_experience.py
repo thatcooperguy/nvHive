@@ -77,6 +77,40 @@ def test_model_fit_scores_recommended_models(monkeypatch) -> None:
     assert report["models"][0]["fit_score"] > 100
 
 
+def test_model_fit_reports_installed_recommended_models(monkeypatch) -> None:
+    monkeypatch.setattr(
+        model_fit,
+        "storage_status",
+        lambda home_dir=None: SimpleNamespace(as_dict=lambda: {"free_gb": 100}),
+    )
+    monkeypatch.setattr(
+        model_fit,
+        "model_catalog_with_status",
+        lambda: {
+            "detected_vram_gb": 47,
+            "ollama_available": True,
+            "ollama_running": True,
+            "models": [
+                {
+                    "id": "gemma3-4b",
+                    "priority": 10,
+                    "recommended": True,
+                    "fits_vram": True,
+                    "installed": True,
+                    "estimated_disk_gb": 4,
+                    "capabilities": ["chat", "fast"],
+                }
+            ],
+        },
+    )
+
+    report = model_fit.model_fit_report()
+
+    assert report["recommended_ids"] == []
+    assert report["recommended_installed_count"] == 1
+    assert "installed" in report["summary"].lower()
+
+
 def test_smoke_tests_surface_comfyui_example_repair(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         smoke_tests,
