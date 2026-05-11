@@ -802,6 +802,92 @@ def _reply_actions_for_focus(
     return _core_actions(actions)[:5]
 
 
+def _live_comfyui_status(home_dir: str | Path | None, fallback: dict[str, Any] | None = None) -> dict[str, Any]:
+    try:
+        return detect_comfyui(home_dir=home_dir, check_http=True)
+    except Exception as exc:
+        status = dict(fallback or {})
+        status.setdefault("installed", False)
+        status.setdefault("running", False)
+        status.setdefault("ready", False)
+        status["error"] = str(exc)
+        status.setdefault("service_status", "unknown")
+        status.setdefault("next_action", "check_failed")
+        return status
+
+
+def _comfyui_answer_parts(comfy: dict[str, Any]) -> tuple[str, list[str], list[dict[str, Any]]]:
+    installed = bool(comfy.get("installed"))
+    running = bool(comfy.get("running") or comfy.get("ready"))
+    url = str(comfy.get("url") or "").strip()
+    port = comfy.get("port")
+    status = str(comfy.get("service_status") or comfy.get("next_action") or "unknown")
+    app_dir = str(comfy.get("app_dir") or comfy.get("install_root") or "NVH_HOME/comfyui/ComfyUI")
+    log_tail = [
+        _short_text(line, limit=220)
+        for line in (comfy.get("log_tail") or [])
+        if str(line or "").strip()
+    ][-4:]
+    action: SetupAction
+    commands: list[str] = []
+
+    if running and url:
+        answer = (
+            f"ComfyUI is installed and running at {url}. "
+            f"nvHive detected the service on localhost port {port or 'auto'} with status {status}. "
+            "Use Open ComfyUI or the ComfyUI mission page; outputs and workflows stay under NVH_HOME."
+        )
+        action = SetupAction(
+            id="start-comfyui",
+            title="Open ComfyUI",
+            priority=5,
+            status="recommended",
+            command="",
+            reason=f"ComfyUI is running at {url}.",
+        )
+    elif installed:
+        conflict = comfy.get("port_conflict")
+        port_note = (
+            f" Port {comfy.get('requested_port') or 8188} looks busy, so nvHive will pick a free localhost port."
+            if conflict
+            else f" It will normally start on localhost port {port or 8188} unless that port is busy."
+        )
+        answer = (
+            f"ComfyUI is installed at {app_dir}, but it is not running yet. "
+            f"Current service state is {status}.{port_note} Press Start ComfyUI; after it starts, "
+            "nvHive should show the exact URL and open it for you."
+        )
+        action = SetupAction(
+            id="start-comfyui",
+            title="Start ComfyUI",
+            priority=5,
+            status="recommended",
+            command="",
+            reason="ComfyUI is installed but the local service is not running.",
+        )
+    else:
+        answer = (
+            "ComfyUI is not installed in this nvHive workspace yet. Install Graphics Creator Studio "
+            "or press Install ComfyUI; nvHive will keep the app, examples, logs, and outputs under NVH_HOME."
+        )
+        commands = ["nvh workstation --with-comfyui -y"]
+        action = SetupAction(
+            id="comfyui",
+            title="Install ComfyUI",
+            priority=5,
+            status="recommended",
+            command="nvh workstation --with-comfyui -y",
+            reason="ComfyUI is missing from the persistent rootless workspace.",
+        )
+
+    if comfy.get("error"):
+        answer += f" Last detection error: {_short_text(comfy['error'], limit=180)}."
+    if log_tail:
+        answer += f" Latest ComfyUI log clue: {log_tail[-1]}"
+
+    return answer, commands, [action.as_dict()]
+
+
 def setup_assistant_reply(
     question: str,
     home_dir: str | Path | None = None,
@@ -821,6 +907,8 @@ def setup_assistant_reply(
     log_highlights: list[str] = []
     troubleshooting: dict[str, Any] | None = None
     local_chat = report.get("local_chat") or {}
+    extra_reply_actions: list[dict[str, Any]] = []
+    extra_grounding_sources: list[str] = []
 
     if not q:
         answer = (
@@ -976,14 +1064,25 @@ def setup_assistant_reply(
         )
     elif any(word in q for word in ["comfy", "image", "video", "workflow"]):
         focus = "comfyui"
-        commands = _commands_for_actions(actions, "comfyui", "comfyui-examples") or [
-            "nvh workstation --with-comfyui -y",
+        suppress_command_fallback = True
+        comfy = _live_comfyui_status(home_dir=home_dir, fallback=report.get("comfyui"))
+        answer, commands, extra_reply_actions = _comfyui_answer_parts(comfy)
+        log_highlights = [
+            f"comfyui.log: {_short_text(line, limit=220)}"
+            for line in (comfy.get("log_tail") or [])[-4:]
+            if str(line or "").strip()
         ]
-        answer = (
-            "ComfyUI is managed as a rootless workspace under NVH_HOME. "
-            "Use the install button from the wizard; model weights stay explicit "
-            "because many upstream downloads require license acceptance."
-        )
+        debug_findings = [
+            f"ComfyUI service state: {comfy.get('service_status') or comfy.get('next_action') or 'unknown'}",
+            f"ComfyUI installed: {bool(comfy.get('installed'))}; running: {bool(comfy.get('running') or comfy.get('ready'))}",
+        ]
+        if comfy.get("url"):
+            debug_findings.append(f"ComfyUI URL: {comfy['url']}")
+        if comfy.get("port_conflict"):
+            debug_findings.append(
+                f"Port {comfy.get('requested_port') or 8188} is busy; nvHive will choose a free port."
+            )
+        extra_grounding_sources.append("live ComfyUI service probe")
     elif any(word in q for word in ["model", "models", "llm", "ollama", "local ai", "license"]):
         focus = "models"
         commands = _commands_for_actions(actions, "rootless-ollama", "starter-models") or [
@@ -1101,6 +1200,9 @@ def setup_assistant_reply(
 
     assistant_info = report.get("assistant", {})
     reply_actions = _reply_actions_for_focus(actions, focus)
+    if extra_reply_actions:
+        seen = {action.get("id") for action in extra_reply_actions}
+        reply_actions = extra_reply_actions + [action for action in reply_actions if action.get("id") not in seen]
     return {
         "question": question,
         "answer": _persona_wrap(answer),
@@ -1112,7 +1214,7 @@ def setup_assistant_reply(
         "requires_local_model": bool(assistant_info.get("requires_local_model", False)),
         "official_repo_url": OFFICIAL_REPO_URL,
         "readme_url": OFFICIAL_README_URL,
-        "grounding_sources": assistant_info.get("grounding_sources", []),
+        "grounding_sources": [*assistant_info.get("grounding_sources", []), *extra_grounding_sources],
         "diagnostics_report_id": diagnostics_report_id,
         "debug_findings": debug_findings,
         "log_highlights": log_highlights,

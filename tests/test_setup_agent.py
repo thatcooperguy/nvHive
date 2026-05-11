@@ -71,6 +71,65 @@ def test_setup_assistant_answers_comfyui_question(tmp_path, monkeypatch) -> None
     assert reply["commands"]
 
 
+def test_setup_assistant_reports_running_comfyui_url(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    monkeypatch.setattr(
+        setup_agent,
+        "detect_comfyui",
+        lambda **_: {
+            "installed": True,
+            "running": True,
+            "ready": True,
+            "url": "http://127.0.0.1:8190",
+            "port": 8190,
+            "service_status": "running",
+            "app_dir": str(tmp_path / "nvh" / "comfyui" / "ComfyUI"),
+            "examples_installed": True,
+            "log_tail": ["ComfyUI server listening on 127.0.0.1:8190"],
+        },
+    )
+
+    reply = setup_agent.setup_assistant_reply("where can I launch or access comfyUI?", tmp_path / "nvh")
+
+    assert reply["focus"] == "comfyui"
+    assert "http://127.0.0.1:8190" in reply["answer"]
+    assert "installed and running" in reply["answer"]
+    assert reply["actions"][0]["id"] == "start-comfyui"
+    assert reply["actions"][0]["title"] == "Open ComfyUI"
+    assert any("live ComfyUI service probe" == source for source in reply["grounding_sources"])
+    assert any("ComfyUI URL" in finding for finding in reply["debug_findings"])
+
+
+def test_setup_assistant_reports_installed_stopped_comfyui(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    monkeypatch.setattr(
+        setup_agent,
+        "detect_comfyui",
+        lambda **_: {
+            "installed": True,
+            "running": False,
+            "ready": False,
+            "url": None,
+            "port": 8188,
+            "service_status": "installed-stopped",
+            "app_dir": str(tmp_path / "nvh" / "comfyui" / "ComfyUI"),
+            "examples_installed": True,
+            "log_tail": ["last launch exited cleanly"],
+        },
+    )
+
+    reply = setup_agent.setup_assistant_reply("Is ComfyUI installed and how do I start it?", tmp_path / "nvh")
+
+    assert reply["focus"] == "comfyui"
+    assert "installed at" in reply["answer"]
+    assert "not running yet" in reply["answer"]
+    assert "Start ComfyUI" in reply["answer"]
+    assert reply["actions"][0]["id"] == "start-comfyui"
+    assert reply["actions"][0]["title"] == "Start ComfyUI"
+    assert reply["commands"] == []
+    assert any("installed-stopped" in finding for finding in reply["debug_findings"])
+
+
 def test_setup_assistant_does_not_require_comfyui_for_local_ai(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
     monkeypatch.setattr(
