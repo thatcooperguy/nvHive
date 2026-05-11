@@ -70,6 +70,63 @@ def test_service_registry_summarizes_api_webui_and_ollama(tmp_path, monkeypatch)
     assert by_id["ollama"]["ready"] is True
     assert report["service_count"] >= 4
     assert report["ready_count"] >= 3
+    assert report["snapshot"]["enabled"] is True
+    assert (tmp_path / "nvh" / "state" / "services" / "latest.json").exists()
+
+
+def test_service_health_report_includes_ports_actions_and_friendly_copy(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    monkeypatch.setattr(service_registry, "_port_open", lambda host, port, timeout=0.25: port == 8000)
+    monkeypatch.setattr(service_registry, "_http_ok", lambda url, timeout=0.75: "8000" in url)
+
+    import nvh.integrations.studio_packs as studio_packs
+
+    monkeypatch.setattr(
+        studio_packs,
+        "ollama_runtime_doctor",
+        lambda home_dir=None: {
+            "status": "missing",
+            "ready": False,
+            "summary": "Ollama runtime is missing.",
+            "binary_valid": False,
+            "server_running": False,
+            "local_candidate": str(tmp_path / "nvh" / "bin" / "ollama"),
+            "next_action": {"id": "rootless-ollama", "label": "Install Runtime"},
+        },
+    )
+    monkeypatch.setattr(
+        comfyui,
+        "detect_comfyui",
+        lambda **_: {"installed": False, "running": False, "ready": False, "service_status": "not-installed"},
+    )
+    monkeypatch.setattr(studio_packs, "catalog_with_status", lambda: {"packs": []})
+
+    report = service_registry.service_health_report(home_dir=tmp_path / "nvh")
+
+    assert report["status"] == "blocked"
+    assert report["ports"]["occupied"][0]["port"] == 8000
+    assert any(action["action_id"] == "rootless-ollama" for action in report["next_actions"])
+    assert "nvHive rootless service health" in report["support_text"]
+
+
+def test_run_service_action_refresh_and_rejects_unknown_action(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    monkeypatch.setattr(
+        comfyui,
+        "detect_comfyui",
+        lambda **_: {"installed": False, "running": False, "ready": False, "service_status": "not-installed"},
+    )
+
+    result = service_registry.run_service_action("comfyui", "refresh", home_dir=tmp_path / "nvh")
+
+    assert result["ok"] is True
+    assert result["service"]["id"] == "comfyui"
+    try:
+        service_registry.run_service_action("comfyui", "sudo-apt-install", home_dir=tmp_path / "nvh")
+    except ValueError as exc:
+        assert "Unsupported rootless service action" in str(exc)
+    else:
+        raise AssertionError("unknown service action should be rejected")
 
 
 def test_setup_assistant_answers_generic_service_question(tmp_path, monkeypatch) -> None:

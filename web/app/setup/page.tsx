@@ -27,7 +27,9 @@ import {
   getSetupDiagnostics,
   getSetupHelper,
   getSetupReceipts,
+  getSetupServiceHealth,
   repairSetupWorkspace,
+  runSetupServiceAction,
   cancelInstallJob,
   getComfyUIStatus,
   getComfyUIExamples,
@@ -60,6 +62,8 @@ import type {
   DiagnosticsReport,
   SetupAssistantReply,
   AutoRepairResult,
+  ServiceHealthReport,
+  RootlessServiceStatus,
   SetupCatalogResult,
   SetupHelperReport,
   SetupReceiptsResult,
@@ -423,6 +427,9 @@ export default function SetupPage() {
   const [mountActivating, setMountActivating] = useState(false);
   const [setupHelper, setSetupHelper] = useState<SetupHelperReport | null>(null);
   const [setupHelperError, setSetupHelperError] = useState<string | null>(null);
+  const [serviceHealth, setServiceHealth] = useState<ServiceHealthReport | null>(null);
+  const [serviceHealthError, setServiceHealthError] = useState<string | null>(null);
+  const [serviceActionRunning, setServiceActionRunning] = useState<string | null>(null);
   const [setupReceipts, setSetupReceipts] = useState<SetupReceiptsResult | null>(null);
   const [setupCatalog, setSetupCatalog] = useState<SetupCatalogResult | null>(null);
   const [setupCompatibility, setSetupCompatibility] = useState<CompatibilityReport | null>(null);
@@ -535,6 +542,16 @@ export default function SetupPage() {
     }
   }, []);
 
+  const refreshServiceHealth = useCallback(async (homeDir?: string) => {
+    try {
+      const data = await getSetupServiceHealth(homeDir);
+      setServiceHealth(data);
+      setServiceHealthError(null);
+    } catch (err) {
+      setServiceHealthError(err instanceof Error ? err.message : 'Service health unavailable');
+    }
+  }, []);
+
   const refreshWorkspacePassport = useCallback(async (homeDir?: string, profile?: WizardProfile) => {
     const activeHome = homeDir ?? storageStatus?.layout.home;
     const activeProfile = profile ?? selectedWizardProfile;
@@ -571,11 +588,12 @@ export default function SetupPage() {
       setProductionReadiness(readiness);
       setWorkspaceState(workspace);
       void refreshWorkspacePassport(activeHome);
+      void refreshServiceHealth(activeHome);
       setSetupInventoryError(null);
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Could not load setup inventory');
     }
-  }, [refreshWorkspacePassport, storageStatus?.layout.home]);
+  }, [refreshServiceHealth, refreshWorkspacePassport, storageStatus?.layout.home]);
 
   const handleDiagnosticsReport = async () => {
     if (diagnosticsLoading) return;
@@ -2314,6 +2332,77 @@ export default function SetupPage() {
     setStep('studio');
   };
 
+  const handleServiceAction = async (service: RootlessServiceStatus, actionId?: string | null) => {
+    const nextAction = actionId ?? service.next_action_id ?? 'refresh';
+    const key = `${service.id}:${nextAction}`;
+    if (nextAction === 'webui') {
+      setWizardBuildMessage('The WebUI is already open here. If it goes offline, relaunch with the desktop icon or nvh webui.');
+      return;
+    }
+    if ([
+      'comfyui',
+      'comfyui-examples',
+      'rootless-ollama',
+      'starter-models',
+      'runtime-fallback',
+      'agent-lab',
+      'claw-agents',
+      'creative-tools',
+      'game-tools',
+      'music-tools',
+      'vault',
+    ].includes(nextAction)) {
+      runHelperAction(nextAction);
+      return;
+    }
+    setServiceActionRunning(key);
+    setServiceHealthError(null);
+    try {
+      const result = await runSetupServiceAction({
+        service_id: service.id,
+        action_id: nextAction,
+        home_dir: storageStatus?.layout.home,
+      });
+      if (result.health) setServiceHealth(result.health);
+      if (result.service && serviceHealth) {
+        setServiceHealth({
+          ...serviceHealth,
+          services: serviceHealth.services.map(item => item.id === result.service?.id ? result.service as RootlessServiceStatus : item),
+        });
+      }
+      if (result.support_text && navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(result.support_text);
+        } catch {
+          // Copy failures are non-fatal; the message still explains where the report lives.
+        }
+      }
+      setWizardBuildMessage(result.message);
+      if (service.url && nextAction === 'refresh' && service.ready) {
+        window.open(service.url, '_blank', 'noopener,noreferrer');
+      }
+      void refreshServiceHealth(storageStatus?.layout.home);
+    } catch (err) {
+      setServiceHealthError(err instanceof Error ? err.message : 'Service action failed');
+    } finally {
+      setServiceActionRunning(null);
+    }
+  };
+
+  const handleCopyServiceReport = async () => {
+    const fallback = serviceHealth?.support_text ?? '';
+    if (!fallback) {
+      void refreshServiceHealth(storageStatus?.layout.home);
+      return;
+    }
+    try {
+      await navigator.clipboard?.writeText(fallback);
+      setWizardBuildMessage('Copied rootless service health report.');
+    } catch {
+      setWizardBuildMessage('Service health report is ready in the persistent workspace snapshot.');
+    }
+  };
+
   const helperActionLabel = (actionId: string) => {
     if (apiDisconnected) return 'API Offline';
     if (actionId.startsWith('repair-receipt:')) return !storageReady ? 'Use Drive' : 'Repair';
@@ -2656,6 +2745,140 @@ export default function SetupPage() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {serviceHealth && (
+        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+            <div className="min-w-0">
+              <div className="section-label">Service Control</div>
+              <div className="text-[10px] font-mono text-[#525252] mt-1">
+                {serviceHealth.summary}
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                <span className="border border-[#76B900]/30 bg-[#76B900]/5 px-2 py-1 text-[9px] font-mono text-[#76B900] uppercase">
+                  {serviceHealth.ready_count}/{serviceHealth.service_count} ready
+                </span>
+                <span className="border border-[#76B900]/30 bg-[#76B900]/5 px-2 py-1 text-[9px] font-mono text-[#76B900] uppercase">
+                  {serviceHealth.running_count} running
+                </span>
+                <span className={`border px-2 py-1 text-[9px] font-mono uppercase ${
+                  serviceHealth.ports.conflict_count
+                    ? 'border-[#d97706]/40 bg-[#fff7ed] text-[#d97706]'
+                    : 'border-[#76B900]/30 bg-[#76B900]/5 text-[#76B900]'
+                }`}>
+                  {serviceHealth.ports.conflict_count ? `${serviceHealth.ports.conflict_count} port conflict` : 'ports clear'}
+                </span>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void refreshServiceHealth(storageStatus?.layout.home)}
+                className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+              >
+                Refresh
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCopyServiceReport()}
+                className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+              >
+                Copy Report
+              </button>
+            </div>
+          </div>
+          {serviceHealthError && (
+            <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
+              {serviceHealthError}
+            </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
+            {serviceHealth.services.slice(0, 8).map(service => {
+              const tone = service.ready
+                ? 'border-[#76B900]/30 bg-[#76B900]/5 text-[#76B900]'
+                : service.installed
+                  ? 'border-[#d97706]/30 bg-[#fff7ed] text-[#d97706]'
+                  : 'border-[#e5e5e5] bg-[#fafafa] text-[#737373]';
+              const actionKey = `${service.id}:${service.next_action_id ?? 'refresh'}`;
+              const isRunning = serviceActionRunning === actionKey;
+              return (
+                <div key={service.id} className={`border p-3 ${tone}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">{service.name}</div>
+                      <div className="text-[9px] font-mono uppercase mt-1">{service.status}</div>
+                    </div>
+                    <span className={`w-2 h-2 mt-1 flex-shrink-0 ${
+                      service.ready ? 'bg-[#76B900]' : service.installed ? 'bg-[#d97706]' : 'bg-[#d4d4d4]'
+                    }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                  </div>
+                  <div className="text-[10px] text-[#525252] mt-2 min-h-[2.4rem] leading-relaxed">
+                    {service.summary}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5 text-[9px] font-mono text-[#737373]">
+                    {service.port && <span className="border border-[#e5e5e5] bg-white px-1.5 py-0.5">:{service.port}</span>}
+                    {service.url && <span className="border border-[#e5e5e5] bg-white px-1.5 py-0.5 truncate max-w-full">{service.url}</span>}
+                    <span className="border border-[#e5e5e5] bg-white px-1.5 py-0.5">{service.rootless ? 'rootless' : 'external'}</span>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    {service.url && service.ready ? (
+                      <button
+                        type="button"
+                        onClick={() => window.open(service.url ?? '', '_blank', 'noopener,noreferrer')}
+                        className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider flex-1"
+                      >
+                        Open
+                      </button>
+                    ) : service.next_action_id ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleServiceAction(service)}
+                        disabled={isRunning}
+                        className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider flex-1 disabled:opacity-40"
+                      >
+                        {isRunning ? 'Working' : service.next_action_label ?? 'Repair'}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void handleServiceAction(service, 'refresh')}
+                        disabled={isRunning}
+                        className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider flex-1 disabled:opacity-40"
+                      >
+                        {isRunning ? 'Checking' : 'Check'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {serviceHealth.next_actions.length > 0 && (
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+              <div className="text-[9px] font-mono uppercase tracking-wider text-[#737373] mb-2">
+                Suggested safe actions
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {serviceHealth.next_actions.slice(0, 5).map(action => (
+                  <button
+                    key={`${action.service_id}-${action.action_id}`}
+                    type="button"
+                    onClick={() => {
+                      const service = serviceHealth.services.find(item => item.id === action.service_id);
+                      if (service) void handleServiceAction(service, action.action_id);
+                      else runHelperAction(action.action_id);
+                    }}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                    title={action.summary}
+                  >
+                    {action.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

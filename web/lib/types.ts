@@ -732,6 +732,88 @@ export interface SetupHelperReport {
   };
 }
 
+export interface RootlessServiceStatus {
+  id: string;
+  name: string;
+  category: string;
+  installed: boolean;
+  running: boolean;
+  ready: boolean;
+  status: string;
+  summary: string;
+  url?: string | null;
+  host?: string | null;
+  port?: number | null;
+  install_path?: string | null;
+  launcher?: string | null;
+  log_path?: string | null;
+  log_tail: string[];
+  next_action_id?: string | null;
+  next_action_label?: string | null;
+  command?: string | null;
+  rootless: boolean;
+  metadata: Record<string, unknown>;
+  checked_at: string;
+}
+
+export interface ServiceSnapshotInfo {
+  enabled: boolean;
+  path?: string | null;
+  service_dir?: string | null;
+  error?: string | null;
+}
+
+export interface ServicePortReport {
+  conflict_count: number;
+  conflicts: Array<{ port: number; services: Array<Record<string, unknown>> }>;
+  occupied: Array<{ port: number; services: Array<Record<string, unknown>> }>;
+  expected: number[];
+}
+
+export interface ServiceNextAction {
+  service_id: string;
+  service_name?: string | null;
+  action_id: string;
+  label: string;
+  summary: string;
+  rootless: boolean;
+  command?: string | null;
+}
+
+export interface ServiceRegistryReport {
+  checked_at: string;
+  service_count: number;
+  ready_count: number;
+  running_count: number;
+  rootless: boolean;
+  services: RootlessServiceStatus[];
+  snapshot?: ServiceSnapshotInfo;
+}
+
+export interface ServiceHealthReport extends ServiceRegistryReport {
+  summary: string;
+  status: 'ready' | 'warn' | 'blocked' | string;
+  blocked_count: number;
+  warning_count: number;
+  issue_count: number;
+  ports: ServicePortReport;
+  next_actions: ServiceNextAction[];
+  support_text: string;
+}
+
+export interface ServiceActionResult {
+  ok: boolean;
+  service_id: string;
+  action_id: string;
+  message: string;
+  service?: RootlessServiceStatus;
+  health?: ServiceHealthReport;
+  support_text?: string;
+  requires_job?: boolean;
+  command?: string | null;
+  result?: Record<string, unknown>;
+}
+
 export interface InstallReceiptHealth {
   install_path_exists: boolean;
   missing_launchers: string[];

@@ -842,12 +842,13 @@ def start_comfyui(
     *,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
+    home_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Start ComfyUI in the background and return launch metadata."""
     if host not in {"127.0.0.1", "localhost"}:
         raise ValueError("ComfyUI auto-start is restricted to localhost.")
 
-    root = comfyui_root()
+    root = comfyui_root(home_dir)
     app_dir = comfyui_app_dir(root)
     python_exe = comfyui_python(root)
 
@@ -881,7 +882,7 @@ def start_comfyui(
     ]
 
     env = os.environ.copy()
-    env.update(storage_layout().env())
+    env.update(storage_layout(home_dir).env())
     env["PYTHONUTF8"] = "1"
 
     kwargs: dict[str, Any] = {

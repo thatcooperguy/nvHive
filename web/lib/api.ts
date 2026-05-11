@@ -41,6 +41,9 @@ import type {
   RootlessPolicyReport,
   SetupAssistantReply,
   SetupCatalogResult,
+  ServiceActionResult,
+  ServiceHealthReport,
+  ServiceRegistryReport,
   SetupHelperReport,
   SetupReceiptsResult,
   CompatibilityReport,
@@ -448,6 +451,28 @@ export async function getInstallJobEvents(
 
 export async function cancelInstallJob(jobId: string): Promise<InstallJob> {
   return apiPost<InstallJob>(`/v1/jobs/${encodeURIComponent(jobId)}/cancel`, {});
+}
+
+export async function getSetupServices(homeDir?: string): Promise<ServiceRegistryReport> {
+  const params = new URLSearchParams();
+  if (homeDir) params.set('home_dir', homeDir);
+  const qs = params.toString();
+  return apiGet<ServiceRegistryReport>(`/v1/setup/services${qs ? `?${qs}` : ''}`);
+}
+
+export async function getSetupServiceHealth(homeDir?: string): Promise<ServiceHealthReport> {
+  const params = new URLSearchParams();
+  if (homeDir) params.set('home_dir', homeDir);
+  const qs = params.toString();
+  return apiGet<ServiceHealthReport>(`/v1/setup/service-health${qs ? `?${qs}` : ''}`);
+}
+
+export async function runSetupServiceAction(request: {
+  service_id: string;
+  action_id: string;
+  home_dir?: string;
+}): Promise<ServiceActionResult> {
+  return apiPost<ServiceActionResult>('/v1/setup/service-action', request);
 }
 
 export async function startComfyUIInstallJob(request: ComfyUIInstallRequest): Promise<InstallJob> {

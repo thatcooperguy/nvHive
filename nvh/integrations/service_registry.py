@@ -8,6 +8,7 @@ should we read, and what is the next safe rootless action?
 from __future__ import annotations
 
 import os
+import json
 import socket
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -50,6 +51,25 @@ class ServiceStatus:
 
 
 Probe = Callable[[str | Path | None], ServiceStatus]
+
+CORE_SERVICE_IDS = {"nvhive-api", "nvhive-webui", "ollama"}
+SAFE_SERVICE_ACTIONS = {
+    "refresh",
+    "copy-report",
+    "start-comfyui",
+    "comfyui",
+    "comfyui-examples",
+    "rootless-ollama",
+    "starter-models",
+    "runtime-fallback",
+    "agent-lab",
+    "claw-agents",
+    "creative-tools",
+    "game-tools",
+    "music-tools",
+    "vault",
+    "webui",
+}
 
 
 @dataclass(frozen=True)
@@ -110,6 +130,149 @@ def _service_error(service_id: str, name: str, exc: Exception) -> ServiceStatus:
         summary=f"{name} status check failed: {type(exc).__name__}: {exc}",
         metadata={"error": str(exc), "error_type": type(exc).__name__},
     )
+
+
+def _service_snapshot_dir(home_dir: str | Path | None) -> Path:
+    return storage_layout(home_dir).state_dir / "services"
+
+
+def _write_service_snapshots(report: dict[str, Any], home_dir: str | Path | None) -> dict[str, Any]:
+    """Persist the latest rootless service state for support and offline debugging."""
+
+    snapshot_dir = _service_snapshot_dir(home_dir)
+    try:
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+        for service in report.get("services", []):
+            service_id = str(service.get("id") or "unknown")
+            (snapshot_dir / f"{service_id}.json").write_text(
+                json.dumps(service, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        latest_path = snapshot_dir / "latest.json"
+        latest_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        return {
+            "enabled": True,
+            "path": str(latest_path),
+            "service_dir": str(snapshot_dir),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "enabled": False,
+            "path": None,
+            "service_dir": str(snapshot_dir),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def friendly_service_issue(service: dict[str, Any]) -> str:
+    """Translate a raw probe into a short user-facing explanation."""
+
+    name = str(service.get("name") or service.get("id") or "Service")
+    service_id = str(service.get("id") or "")
+    if service.get("ready"):
+        url = service.get("url")
+        return f"{name} is ready" + (f" at {url}." if url else ".")
+    if not service.get("installed"):
+        if service_id in CORE_SERVICE_IDS:
+            return f"{name} is missing. nvHive can install or repair it inside the rootless workspace."
+        return f"{name} is optional and not installed yet."
+    if service.get("running"):
+        return f"{name} is running but did not pass its readiness check. Check the service log or retry start."
+    port = service.get("port")
+    if port:
+        return f"{name} is installed but not listening on localhost:{port}."
+    next_label = service.get("next_action_label")
+    if next_label:
+        return f"{name} needs attention. Suggested action: {next_label}."
+    return str(service.get("summary") or f"{name} needs attention.")
+
+
+def _port_report(services: list[dict[str, Any]]) -> dict[str, Any]:
+    by_port: dict[int, list[dict[str, Any]]] = {}
+    for service in services:
+        port = service.get("port")
+        if not isinstance(port, int):
+            continue
+        by_port.setdefault(port, []).append(
+            {
+                "id": service.get("id"),
+                "name": service.get("name"),
+                "ready": service.get("ready"),
+                "running": service.get("running"),
+                "url": service.get("url"),
+                "status": service.get("status"),
+            }
+        )
+    conflicts = [
+        {"port": port, "services": entries}
+        for port, entries in sorted(by_port.items())
+        if len(entries) > 1 and any(entry.get("running") for entry in entries)
+    ]
+    occupied = [
+        {"port": port, "services": entries}
+        for port, entries in sorted(by_port.items())
+        if any(entry.get("running") for entry in entries)
+    ]
+    return {
+        "conflict_count": len(conflicts),
+        "conflicts": conflicts,
+        "occupied": occupied,
+        "expected": sorted(by_port),
+    }
+
+
+def _next_actions(services: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for service in services:
+        action_id = service.get("next_action_id")
+        if not action_id:
+            continue
+        service_id = str(service.get("id") or "")
+        include = service_id in CORE_SERVICE_IDS or bool(service.get("installed")) or service.get("status") in {"probe-error", "partial"}
+        if not include:
+            continue
+        key = (service_id, str(action_id))
+        if key in seen:
+            continue
+        seen.add(key)
+        actions.append(
+            {
+                "service_id": service_id,
+                "service_name": service.get("name"),
+                "action_id": action_id,
+                "label": service.get("next_action_label") or "Repair",
+                "summary": friendly_service_issue(service),
+                "rootless": service.get("rootless", True),
+                "command": service.get("command"),
+            }
+        )
+    return actions
+
+
+def _support_text(report: dict[str, Any], ports: dict[str, Any], actions: list[dict[str, Any]]) -> str:
+    lines = [
+        "nvHive rootless service health",
+        f"Checked: {report.get('checked_at')}",
+        f"Ready services: {report.get('ready_count')}/{report.get('service_count')}; running: {report.get('running_count')}",
+    ]
+    if ports.get("conflict_count"):
+        lines.append(f"Port conflicts: {ports['conflict_count']}")
+    if actions:
+        lines.append("Next actions:")
+        lines.extend(f"- {item['service_name']}: {item['label']} ({item['action_id']})" for item in actions[:8])
+    lines.append("Services:")
+    for service in report.get("services", []):
+        lines.append(
+            f"- {service.get('name')}: {service.get('status')} | "
+            f"ready={service.get('ready')} running={service.get('running')} | "
+            f"{friendly_service_issue(service)}"
+        )
+    snapshot = report.get("snapshot") or {}
+    if snapshot.get("path"):
+        lines.append(f"Snapshot: {snapshot['path']}")
+    return "\n".join(lines)
 
 
 def _probe_api(home_dir: str | Path | None = None) -> ServiceStatus:
@@ -412,13 +575,134 @@ def list_service_statuses(home_dir: str | Path | None = None) -> dict[str, Any]:
         services.append(status.as_dict())
     ready = sum(1 for service in services if service.get("ready"))
     running = sum(1 for service in services if service.get("running"))
-    return {
+    report = {
         "checked_at": datetime.now(UTC).isoformat(),
         "service_count": len(services),
         "ready_count": ready,
         "running_count": running,
         "rootless": True,
         "services": services,
+    }
+    report["snapshot"] = _write_service_snapshots(report, home_dir)
+    return report
+
+
+def service_health_report(home_dir: str | Path | None = None) -> dict[str, Any]:
+    """Return a consolidated health view for the web UI Service Control Center."""
+
+    report = list_service_statuses(home_dir=home_dir)
+    services = list(report.get("services") or [])
+    ports = _port_report(services)
+    actions = _next_actions(services)
+    blocked = [
+        service
+        for service in services
+        if service.get("id") in CORE_SERVICE_IDS and not service.get("ready")
+    ]
+    warnings = [
+        service
+        for service in services
+        if service.get("id") not in CORE_SERVICE_IDS
+        and bool(service.get("installed"))
+        and not service.get("ready")
+    ]
+    issue_count = len(blocked) + len(warnings) + int(ports.get("conflict_count") or 0)
+    if blocked:
+        summary = f"{len(blocked)} core service(s) need attention before nvHive is fully ready."
+    elif ports.get("conflict_count"):
+        summary = f"{ports['conflict_count']} port conflict(s) need attention."
+    elif warnings:
+        summary = f"Core nvHive is ready; {len(warnings)} optional service(s) need attention."
+    else:
+        summary = "Core nvHive services are ready."
+    health = {
+        "checked_at": report.get("checked_at"),
+        "summary": summary,
+        "status": "blocked" if blocked else "warn" if warnings or ports.get("conflict_count") else "ready",
+        "service_count": report.get("service_count"),
+        "ready_count": report.get("ready_count"),
+        "running_count": report.get("running_count"),
+        "blocked_count": len(blocked),
+        "warning_count": len(warnings),
+        "issue_count": issue_count,
+        "rootless": True,
+        "services": services,
+        "ports": ports,
+        "next_actions": actions,
+        "snapshot": report.get("snapshot"),
+    }
+    health["support_text"] = _support_text(health, ports, actions)
+    return health
+
+
+def run_service_action(
+    service_id: str,
+    action_id: str,
+    home_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Run or route a small allowlisted rootless service action."""
+
+    normalized_service = service_id.strip().lower()
+    normalized_action = action_id.strip().lower()
+    if normalized_action not in SAFE_SERVICE_ACTIONS:
+        raise ValueError(f"Unsupported rootless service action: {action_id}")
+
+    if normalized_action == "copy-report":
+        health = service_health_report(home_dir=home_dir)
+        return {
+            "ok": True,
+            "service_id": normalized_service,
+            "action_id": normalized_action,
+            "message": "Service health report is ready to copy.",
+            "health": health,
+            "support_text": health.get("support_text"),
+        }
+
+    if normalized_action == "refresh":
+        if normalized_service in {"", "all"}:
+            health = service_health_report(home_dir=home_dir)
+            return {
+                "ok": True,
+                "service_id": "all",
+                "action_id": normalized_action,
+                "message": health.get("summary"),
+                "health": health,
+            }
+        status = service_status(normalized_service, home_dir=home_dir)
+        return {
+            "ok": True,
+            "service_id": normalized_service,
+            "action_id": normalized_action,
+            "message": friendly_service_issue(status),
+            "service": status,
+        }
+
+    if normalized_action == "start-comfyui":
+        from nvh.integrations.comfyui import start_comfyui
+
+        result = start_comfyui(home_dir=home_dir)
+        status = service_status("comfyui", home_dir=home_dir)
+        return {
+            "ok": bool(result.get("ok", status.get("running"))),
+            "service_id": "comfyui",
+            "action_id": normalized_action,
+            "message": result.get("message") or friendly_service_issue(status),
+            "service": status,
+            "result": result,
+        }
+
+    status = service_status(normalized_service, home_dir=home_dir)
+    return {
+        "ok": True,
+        "service_id": normalized_service,
+        "action_id": normalized_action,
+        "requires_job": True,
+        "message": (
+            f"{status.get('name') or normalized_service} uses the existing nvWizard install job "
+            f"for '{normalized_action}'. Progress will appear in Install Jobs."
+        ),
+        "service": status,
+        "command": status.get("command"),
     }
 
 

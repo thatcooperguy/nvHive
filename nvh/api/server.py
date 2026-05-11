@@ -1093,6 +1093,15 @@ class SetupHomeRequest(BaseModel):
     min_free_gb: float = Field(default=200.0, ge=0)
 
 
+class SetupServiceActionRequest(BaseModel):
+    service_id: str = Field(..., min_length=1, max_length=80)
+    action_id: str = Field(..., min_length=1, max_length=80)
+    home_dir: str | None = Field(
+        default=None,
+        description="Optional NVH_HOME on the persistent mounted volume",
+    )
+
+
 class WizardPlanRequest(BaseModel):
     profile: str = Field(default="student", description="Mission profile to plan")
     home_dir: str | None = Field(
@@ -1455,6 +1464,38 @@ async def setup_services(
     from nvh.integrations.service_registry import list_service_statuses
 
     return _response_envelope(list_service_statuses(home_dir=home_dir))
+
+
+@app.get("/v1/setup/service-health", summary="Return rootless service health report")
+async def setup_service_health(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return service health, ports, next safe actions, and copyable support text."""
+    from nvh.integrations.service_registry import service_health_report
+
+    return _response_envelope(service_health_report(home_dir=home_dir))
+
+
+@app.post("/v1/setup/service-action", summary="Run an allowlisted rootless service action")
+async def setup_service_action(
+    request: SetupServiceActionRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Run or route a small allowlisted rootless service action."""
+    from nvh.integrations.service_registry import run_service_action
+
+    try:
+        result = run_service_action(
+            request.service_id,
+            request.action_id,
+            home_dir=request.home_dir,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _response_envelope(result)
 
 
 @app.get("/v1/setup/mission-control", summary="Return nvWizard setup mission timeline")
