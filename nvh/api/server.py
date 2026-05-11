@@ -1446,6 +1446,17 @@ async def setup_helper(
     return _response_envelope(setup_helper_report(home_dir=home_dir))
 
 
+@app.get("/v1/setup/services", summary="Return rootless service registry status")
+async def setup_services(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return normalized status for nvHive apps, runtimes, URLs, ports, and logs."""
+    from nvh.integrations.service_registry import list_service_statuses
+
+    return _response_envelope(list_service_statuses(home_dir=home_dir))
+
+
 @app.get("/v1/setup/mission-control", summary="Return nvWizard setup mission timeline")
 async def setup_mission_control(
     home_dir: str | None = None,

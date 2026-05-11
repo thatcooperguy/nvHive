@@ -18,6 +18,7 @@ from nvh.integrations.jobs import list_jobs
 from nvh.integrations.local_chat import local_chat_smoke_status
 from nvh.integrations.receipts import receipt_summary, repair_plan
 from nvh.integrations.runtime import runtime_status
+from nvh.integrations.service_registry import list_service_statuses, service_for_question, service_status
 from nvh.integrations.storage import storage_status
 from nvh.integrations.studio_packs import catalog_with_status, model_catalog_with_status
 from nvh.integrations.troubleshooter import analyze_setup_failure
@@ -888,6 +889,93 @@ def _comfyui_answer_parts(comfy: dict[str, Any]) -> tuple[str, list[str], list[d
     return answer, commands, [action.as_dict()]
 
 
+def _action_from_service(service: dict[str, Any]) -> dict[str, Any] | None:
+    action_id = service.get("next_action_id")
+    if not action_id:
+        return None
+    return SetupAction(
+        id=str(action_id),
+        title=str(service.get("next_action_label") or "Fix Service"),
+        priority=5,
+        status="recommended",
+        command=str(service.get("command") or ""),
+        reason=str(service.get("summary") or "Service needs attention."),
+    ).as_dict()
+
+
+def _service_answer_parts(service: dict[str, Any]) -> tuple[str, list[str], list[dict[str, Any]], list[str], list[str]]:
+    name = str(service.get("name") or service.get("id") or "service")
+    installed = bool(service.get("installed"))
+    running = bool(service.get("running"))
+    ready = bool(service.get("ready"))
+    status = str(service.get("status") or "unknown")
+    summary = str(service.get("summary") or "")
+    url = str(service.get("url") or "").strip()
+    port = service.get("port")
+    path = str(service.get("install_path") or "").strip()
+    log_path = str(service.get("log_path") or "").strip()
+    log_tail = [
+        f"{Path(log_path).name if log_path else name}: {_short_text(line, limit=220)}"
+        for line in (service.get("log_tail") or [])[-4:]
+        if str(line or "").strip()
+    ]
+    if ready and url:
+        answer = f"{name} is installed and running at {url}. {summary}"
+    elif running:
+        answer = f"{name} is running on localhost port {port or 'auto'}, but readiness is {status}. {summary}"
+    elif installed:
+        answer = f"{name} is installed at {path or 'the nvHive workspace'}, but it is not running yet. {summary}"
+    else:
+        answer = f"{name} is not installed yet. {summary}"
+    if path and "installed at" not in answer:
+        answer += f" Install path: {path}."
+    if service.get("next_action_label"):
+        answer += f" Next button: {service['next_action_label']}."
+    if log_tail:
+        answer += f" Latest log clue: {log_tail[-1]}"
+    action = _action_from_service(service)
+    commands = [str(service.get("command"))] if service.get("command") and action else []
+    debug_findings = [
+        f"{name} status: {status}",
+        f"{name} installed: {installed}; running: {running}; ready: {ready}",
+    ]
+    if url:
+        debug_findings.append(f"{name} URL: {url}")
+    if port:
+        debug_findings.append(f"{name} port: {port}")
+    if log_path:
+        debug_findings.append(f"{name} log: {log_path}")
+    return answer, commands, [action] if action else [], debug_findings, log_tail
+
+
+def _service_summary_answer(registry: dict[str, Any]) -> tuple[str, list[str]]:
+    services = registry.get("services", [])
+    not_ready = [service for service in services if not service.get("ready")]
+    running = [service for service in services if service.get("running")]
+    top = ", ".join(
+        f"{service.get('name')}: {service.get('status')}"
+        for service in services[:6]
+    )
+    answer = (
+        f"I checked {registry.get('service_count', len(services))} rootless service(s): "
+        f"{registry.get('ready_count', 0)} ready, {registry.get('running_count', len(running))} running. "
+        f"Current map: {top}."
+    )
+    if not_ready:
+        first = not_ready[0]
+        answer += (
+            f" First service needing attention: {first.get('name')} "
+            f"({first.get('status')}). {first.get('summary')}"
+        )
+    else:
+        answer += " All registered services look ready."
+    findings = [
+        f"{service.get('name')}: installed={service.get('installed')} running={service.get('running')} ready={service.get('ready')} status={service.get('status')}"
+        for service in services
+    ]
+    return answer, findings
+
+
 def setup_assistant_reply(
     question: str,
     home_dir: str | Path | None = None,
@@ -1065,24 +1153,29 @@ def setup_assistant_reply(
     elif any(word in q for word in ["comfy", "image", "video", "workflow"]):
         focus = "comfyui"
         suppress_command_fallback = True
-        comfy = _live_comfyui_status(home_dir=home_dir, fallback=report.get("comfyui"))
-        answer, commands, extra_reply_actions = _comfyui_answer_parts(comfy)
-        log_highlights = [
-            f"comfyui.log: {_short_text(line, limit=220)}"
-            for line in (comfy.get("log_tail") or [])[-4:]
-            if str(line or "").strip()
-        ]
-        debug_findings = [
-            f"ComfyUI service state: {comfy.get('service_status') or comfy.get('next_action') or 'unknown'}",
-            f"ComfyUI installed: {bool(comfy.get('installed'))}; running: {bool(comfy.get('running') or comfy.get('ready'))}",
-        ]
-        if comfy.get("url"):
-            debug_findings.append(f"ComfyUI URL: {comfy['url']}")
-        if comfy.get("port_conflict"):
-            debug_findings.append(
-                f"Port {comfy.get('requested_port') or 8188} is busy; nvHive will choose a free port."
-            )
-        extra_grounding_sources.append("live ComfyUI service probe")
+        service = service_status("comfyui", home_dir=home_dir)
+        answer, commands, extra_reply_actions, debug_findings, log_highlights = _service_answer_parts(service)
+        extra_grounding_sources.extend(["rootless service registry", "live ComfyUI service probe"])
+    elif service_for_question(q):
+        service_focus = service_for_question(q)
+        focus = "service-status"
+        suppress_command_fallback = True
+        if service_focus and service_focus.get("id") != "all":
+            service = service_status(str(service_focus["id"]), home_dir=home_dir)
+            focus = str(service_focus["id"])
+            answer, commands, extra_reply_actions, debug_findings, log_highlights = _service_answer_parts(service)
+        else:
+            registry = list_service_statuses(home_dir=home_dir)
+            answer, debug_findings = _service_summary_answer(registry)
+            commands = []
+            log_highlights = []
+            extra_reply_actions = [
+                action for action in (
+                    _action_from_service(service) for service in registry.get("services", [])
+                )
+                if action
+            ][:5]
+        extra_grounding_sources.append("rootless service registry")
     elif any(word in q for word in ["model", "models", "llm", "ollama", "local ai", "license"]):
         focus = "models"
         commands = _commands_for_actions(actions, "rootless-ollama", "starter-models") or [

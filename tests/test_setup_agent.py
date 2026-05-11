@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from nvh.integrations import receipts, setup_agent
+from nvh.integrations import comfyui, receipts, setup_agent
 
 
 def test_setup_helper_prioritizes_storage(tmp_path, monkeypatch) -> None:
@@ -74,7 +74,7 @@ def test_setup_assistant_answers_comfyui_question(tmp_path, monkeypatch) -> None
 def test_setup_assistant_reports_running_comfyui_url(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
     monkeypatch.setattr(
-        setup_agent,
+        comfyui,
         "detect_comfyui",
         lambda **_: {
             "installed": True,
@@ -103,7 +103,7 @@ def test_setup_assistant_reports_running_comfyui_url(tmp_path, monkeypatch) -> N
 def test_setup_assistant_reports_installed_stopped_comfyui(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
     monkeypatch.setattr(
-        setup_agent,
+        comfyui,
         "detect_comfyui",
         lambda **_: {
             "installed": True,
