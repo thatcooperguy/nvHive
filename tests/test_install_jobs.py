@@ -34,6 +34,8 @@ def test_job_store_persists_events(tmp_path, monkeypatch) -> None:
     events = jobs.read_events(job["id"])
     assert len(events) == 1
     assert events[0]["message"] == "Preparing download"
+    listed = jobs.list_jobs(limit=1)
+    assert listed[0]["recent_events"][0]["message"] == "Preparing download"
 
     jobs.append_event(
         job["id"],
@@ -71,3 +73,23 @@ async def test_start_job_consumes_async_source(tmp_path, monkeypatch) -> None:
     assert loaded["status"] == "complete"
     assert loaded["event_count"] == 2
     assert [event["event"] for event in jobs.read_events(job["id"])] == ["plan", "complete"]
+
+
+def test_job_progress_accepts_numeric_payload(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    jobs._TASKS.clear()
+
+    job = jobs.create_job(kind="studio-pack-install", title="Build Creator Studio")
+    jobs.append_event(
+        job["id"],
+        {
+            "event": "download",
+            "status": "running",
+            "message": "Downloaded 164.0 MB",
+            "progress": 38,
+        },
+    )
+
+    loaded = jobs.load_job(job["id"])
+    assert loaded["progress"] == 38
+    assert loaded["recent_events"][-1]["message"] == "Downloaded 164.0 MB"

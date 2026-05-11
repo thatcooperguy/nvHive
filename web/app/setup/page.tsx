@@ -316,6 +316,63 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
 
 const isActiveInstallJob = (job: InstallJob) => job.status === 'queued' || job.status === 'running';
 
+const dateMs = (value?: string | null) => {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const formatDuration = (ms: number | null) => {
+  if (ms === null || ms < 0) return 'unknown';
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+};
+
+const formatJobElapsed = (job: InstallJob) => {
+  const start = dateMs(job.started_at ?? job.created_at);
+  const end = dateMs(job.completed_at) ?? Date.now();
+  return start === null ? 'unknown' : formatDuration(end - start);
+};
+
+const formatJobUpdatedAgo = (job: InstallJob) => {
+  const updated = dateMs(job.updated_at);
+  if (updated === null) return 'unknown';
+  return `${formatDuration(Date.now() - updated)} ago`;
+};
+
+const formatJobSilentFor = (job: InstallJob) => {
+  const updated = dateMs(job.updated_at);
+  if (updated === null) return 'unknown';
+  return formatDuration(Date.now() - updated);
+};
+
+const jobIsPossiblyStalled = (job: InstallJob) => {
+  const updated = dateMs(job.updated_at);
+  return isActiveInstallJob(job) && updated !== null && Date.now() - updated > 120_000;
+};
+
+const jobPhase = (job: InstallJob) => {
+  const text = `${job.kind} ${job.title} ${job.message}`.toLowerCase();
+  if (job.status === 'queued') return 'Queued';
+  if (job.status === 'complete') return 'Complete';
+  if (job.status === 'failed' || job.status === 'interrupted') return 'Needs review';
+  if (text.includes('download')) return 'Downloading';
+  if (text.includes('extract') || text.includes('unpack')) return 'Extracting';
+  if (text.includes('pip') || text.includes('dependency') || text.includes('install')) return 'Installing';
+  if (text.includes('clone') || text.includes('git')) return 'Cloning';
+  if (text.includes('start') || text.includes('launch')) return 'Starting';
+  return 'Working';
+};
+
+const jobIsComfyRelated = (job: InstallJob) => {
+  const text = `${job.kind} ${job.title} ${job.message}`.toLowerCase();
+  return text.includes('comfy') || text.includes('creator') || text.includes('graphics');
+};
+
 const studioPackDetails = (pack: StudioPack): Record<string, unknown> => pack.status?.details ?? {};
 
 const studioPackInstallable = (pack: StudioPack) => studioPackDetails(pack).installable !== false;
@@ -1255,7 +1312,7 @@ export default function SetupPage() {
         onComplete: event => {
           setModelEvents(prev => [...prev.slice(-10), event]);
           setModelsInstalling(false);
-          setStartupAutopilotMessage('Model download complete. Local AI can now use the installed recommended models.');
+          setStartupAutopilotMessage('Model download complete. nvWizard is verifying that local chat returns text.');
           refreshStudioModels();
           void refreshInstallJobs();
           void refreshSetupInventory(false);
@@ -1896,6 +1953,10 @@ export default function SetupPage() {
         ? 'checking'
         : 'warn';
   const localAiReady = ollamaStatus === 'online' || modelFitOllamaRunning;
+  const localChatStatus = setupHelper?.local_chat ?? null;
+  const localChatReady = localChatStatus?.ready === true;
+  const localChatKnown = Boolean(localChatStatus);
+  const localChatSummary = localChatStatus?.summary ?? null;
   const recommendedMissingIds = recommendedMissingModelIds();
   const recommendedMissingModels = studioModels.filter(model => recommendedMissingIds.includes(model.id));
   const startupModelNames = recommendedMissingModels
@@ -1906,6 +1967,7 @@ export default function SetupPage() {
     : recommendedModelLabel;
   const activeModelJob = activeInstallJobs.find(job => job.kind === 'studio-model-install') ?? null;
   const activeRuntimeJob = activeInstallJobs.find(job => job.kind === 'studio-pack-install') ?? null;
+  const activeComfyInstallJob = activeInstallJobs.find(job => job.kind === 'comfyui-install' || jobIsComfyRelated(job)) ?? null;
   const workspaceStateChecks = workspaceState?.checks ?? [];
   const workspaceStateReady = workspaceState?.ready === true;
   const modelDownloadComplete =
@@ -1919,11 +1981,12 @@ export default function SetupPage() {
     Boolean(startupAutopilotMessage?.toLowerCase().startsWith('downloading '));
   const activeStartupMessage = staleDownloadMessage ? null : startupAutopilotMessage;
   const startupAutopilotReady =
-    workspaceStateReady || (
+    (workspaceStateReady && (!localChatKnown || localChatReady)) || (
       apiStatus === 'connected' &&
       storageReady &&
       localAiReady &&
       recommendedMissingIds.length === 0 &&
+      (!localChatKnown || localChatReady) &&
       !activeInstallJobs.length &&
       !modelsInstalling &&
       !studioInstalling &&
@@ -1959,13 +2022,23 @@ export default function SetupPage() {
       state: localAiReady ? 'ready' : ollamaStatus === 'checking' ? 'checking' : 'warn',
     },
     {
-      label: 'Model',
-      value: recommendedMissingIds.length > 0 ? startupDownloadLabel : 'ready',
+      label: 'Chat',
+      value: localChatReady
+        ? (localChatStatus?.model ? `${localChatStatus.model}` : 'verified')
+        : recommendedMissingIds.length > 0
+          ? startupDownloadLabel
+          : localAiReady
+            ? 'verifying'
+            : 'not ready',
       state: activeModelJob || modelsInstalling || startupCountdown !== null
         ? 'checking'
         : recommendedMissingIds.length > 0
           ? 'warn'
-          : 'ready',
+          : localChatReady
+            ? 'ready'
+            : localAiReady
+              ? 'warn'
+              : 'fix',
     },
     {
       label: 'Jobs',
@@ -1980,12 +2053,18 @@ export default function SetupPage() {
         state: setupStateFromWorkspaceStatus(check.status),
       }))
     : fallbackStartupChecklist;
-  const workspaceStateSummary = activeStartupMessage
+  const localChatReadinessMessage = localChatKnown
+    ? localChatReady
+      ? localChatSummary ?? 'Local chat verified.'
+      : `Setup guide is online; local model chat is not verified yet. ${localChatSummary ?? 'Run Fix Setup or ask nvWizard for the next repair.'}`
+    : null;
+  const workspaceStateSummary = localChatReadinessMessage
+    ?? activeStartupMessage
     ?? workspaceState?.summary
     ?? (startupAutopilotReady
       ? setupConcernCount > 0
-        ? 'Local AI and recommended models are ready. Review the remaining setup warnings below.'
-        : 'Workspace is ready. Local AI and recommended models are installed.'
+        ? 'Local chat is verified. Review the remaining setup warnings below.'
+        : 'Workspace is ready. Local chat has been verified.'
       : 'nvWizard is checking storage, runtime, local AI, models, and setup jobs.');
 
   useEffect(() => {
@@ -2064,8 +2143,20 @@ export default function SetupPage() {
     },
     {
       label: 'Local AI',
-      value: ollamaStatus === 'checking' ? 'checking' : localAiReady ? 'Ollama online' : 'install on click',
-      state: ollamaStatus === 'checking' ? 'checking' : localAiReady ? 'ready' : 'warn',
+      value: ollamaStatus === 'checking'
+        ? 'checking'
+        : localChatReady
+          ? 'chat verified'
+          : localAiReady
+            ? 'runtime online'
+            : 'install on click',
+      state: ollamaStatus === 'checking'
+        ? 'checking'
+        : localChatReady
+          ? 'ready'
+          : localAiReady
+            ? 'warn'
+            : 'warn',
     },
     {
       label: 'Runtime',
@@ -2084,21 +2175,31 @@ export default function SetupPage() {
   ];
   const advisorModeLabel = bootAgentHelper?.local_agent_ready
     ? 'local agent ready'
-    : setupHelper?.assistant?.mode === 'offline-deterministic'
-      ? 'offline guide ready'
+    : localChatReady
+      ? 'local chat verified'
+      : setupHelper?.assistant?.mode === 'offline-deterministic'
+        ? 'offline setup guide'
       : setupHelper?.assistant?.mode ?? 'offline guide ready';
+  const advisorReadinessLabel = localChatReady
+    ? 'chat verified'
+    : localChatKnown
+      ? 'chat not verified'
+      : 'checking chat';
   const primarySetupIssue = setupHelper?.issues?.find(issue => (
     issue.severity !== 'optional' &&
     issue.affected_item !== 'agent-lab' &&
     issue.affected_item !== 'openclaw-agent'
   ));
+  const primarySetupIssueSummary = primarySetupIssue
+    ? `${primarySetupIssue.title}: ${primarySetupIssue.reason}`
+    : null;
   const assistantActions = Array.from(
     new Map((assistantReply?.actions ?? []).map(action => [action.id, action])).values()
   );
   const advisorSummary = assistantLoading
     ? 'nvWizard is checking jobs, receipts, boot drift, logs, runtime, models, and safe rootless repairs.'
     : assistantReply?.answer
-    ?? primarySetupIssue?.title
+    ?? primarySetupIssueSummary
     ?? setupHelper?.summary
     ?? missionControl?.summary
     ?? 'Ready to inspect installs, logs, and rootless repair options.';
@@ -2451,6 +2552,8 @@ export default function SetupPage() {
               const failed = job.status === 'failed' || job.status === 'interrupted';
               const complete = job.status === 'complete';
               const bar = Math.max(0, Math.min(100, job.progress || 0));
+              const recentEvents = job.recent_events?.slice(-4) ?? [];
+              const maybeStalled = jobIsPossiblyStalled(job);
               return (
                 <div key={job.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3">
                   <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:justify-between">
@@ -2468,6 +2571,20 @@ export default function SetupPage() {
                       </div>
                       <div className="text-[10px] font-mono text-[#525252] mt-1 break-words">
                         {job.message || job.kind}
+                      </div>
+                      <div className="flex flex-wrap gap-2 mt-2 text-[9px] font-mono text-[#737373]">
+                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5">
+                          Phase: {jobPhase(job)}
+                        </span>
+                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5">
+                          Updated {formatJobUpdatedAgo(job)}
+                        </span>
+                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5">
+                          Elapsed {formatJobElapsed(job)}
+                        </span>
+                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5">
+                          {job.event_count} event{job.event_count === 1 ? '' : 's'}
+                        </span>
                       </div>
                       <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all">
                         {job.id}
@@ -2492,6 +2609,36 @@ export default function SetupPage() {
                       style={{ width: `${bar}%` }}
                     />
                   </div>
+                  {maybeStalled && (
+                    <div className="mt-2 border border-[#d97706]/30 bg-[#fff7ed] px-2 py-1 text-[10px] font-mono text-[#92400e]">
+                      No job update for {formatJobSilentFor(job)}. Large downloads can be quiet, but this is worth watching.
+                    </div>
+                  )}
+                  {recentEvents.length > 0 && (
+                    <div className="mt-3 border border-[#e5e5e5] bg-[#ffffff] p-2">
+                      <div className="text-[9px] font-mono uppercase tracking-wider text-[#a3a3a3] mb-1">
+                        Recent activity
+                      </div>
+                      <div className="space-y-1">
+                        {recentEvents.map(event => (
+                          <div key={`${job.id}-${event.sequence}`} className="grid grid-cols-[84px_1fr] gap-2 text-[10px] font-mono">
+                            <span className={`uppercase ${
+                              event.event === 'error' || event.status === 'failed'
+                                ? 'text-[#dc2626]'
+                                : event.event === 'complete' || event.status === 'complete'
+                                  ? 'text-[#76B900]'
+                                  : 'text-[#737373]'
+                            }`}>
+                              {event.event || event.status}
+                            </span>
+                            <span className="text-[#525252] break-words">
+                              {event.message || event.status}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -3412,8 +3559,12 @@ export default function SetupPage() {
                     <span className="text-[9px] font-mono text-[#76B900] uppercase border border-[#76B900]/40 px-1.5 py-0.5">
                       {advisorModeLabel}
                     </span>
-                    <span className="text-[9px] font-mono text-[#76B900] uppercase border border-[#76B900]/40 px-1.5 py-0.5">
-                      ready now
+                    <span className={`text-[9px] font-mono uppercase border px-1.5 py-0.5 ${
+                      localChatReady
+                        ? 'text-[#76B900] border-[#76B900]/40'
+                        : 'text-[#d97706] border-[#d97706]/40 bg-[#fff7ed]'
+                    }`}>
+                      {advisorReadinessLabel}
                     </span>
                   </div>
                   <div className="text-[10px] text-[#525252] mt-1 leading-relaxed">
@@ -4726,7 +4877,44 @@ export default function SetupPage() {
               </div>
             )}
 
-            {(comfyInstalling || comfyEvents.length > 0) && (
+            {activeComfyInstallJob && (
+              <div className="bg-[#fff7ed] border border-[#d97706]/30 p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                  <div>
+                    <div className="section-label text-[#92400e]">ComfyUI Install Is Working</div>
+                    <div className="text-xs font-mono text-[#525252] mt-1">
+                      {activeComfyInstallJob.message || 'Building the visual workspace inside persistent storage.'}
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2 text-[9px] font-mono text-[#92400e]">
+                      <span className="border border-[#d97706]/20 bg-[#ffffff] px-1.5 py-0.5">Phase: {jobPhase(activeComfyInstallJob)}</span>
+                      <span className="border border-[#d97706]/20 bg-[#ffffff] px-1.5 py-0.5">Updated {formatJobUpdatedAgo(activeComfyInstallJob)}</span>
+                      <span className="border border-[#d97706]/20 bg-[#ffffff] px-1.5 py-0.5">Elapsed {formatJobElapsed(activeComfyInstallJob)}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleCancelInstallJob(activeComfyInstallJob.id)}
+                    disabled={cancelingJobId === activeComfyInstallJob.id}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {cancelingJobId === activeComfyInstallJob.id ? 'Canceling' : 'Cancel'}
+                  </button>
+                </div>
+                <div className="h-1.5 bg-[#f5d0a1] overflow-hidden">
+                  <div
+                    className="h-full bg-[#d97706] transition-all"
+                    style={{ width: `${Math.max(8, Math.min(100, activeComfyInstallJob.progress || 0))}%` }}
+                  />
+                </div>
+                {jobIsPossiblyStalled(activeComfyInstallJob) && (
+                  <div className="text-[10px] font-mono text-[#92400e]">
+                    No update for {formatJobSilentFor(activeComfyInstallJob)}. It may still be downloading a large asset; recent activity below is the source of truth.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {(comfyInstalling || comfyEvents.length > 0 || activeComfyInstallJob) && (
               <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="section-label">Install Stream</div>
@@ -4735,12 +4923,7 @@ export default function SetupPage() {
                   </div>
                 </div>
                 <div className="max-h-44 overflow-y-auto space-y-1">
-                  {comfyEvents.length === 0 ? (
-                    <div className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
-                      <span className="text-[#a3a3a3]">START</span>
-                      <span className="text-[#525252] break-words">Preparing ComfyUI inside the persistent workspace.</span>
-                    </div>
-                  ) : (
+                  {comfyEvents.length > 0 ? (
                     comfyEvents.map((event, index) => (
                       <div key={`${event.event}-${index}`} className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
                         <span className={event.event === 'error' ? 'text-[#dc2626]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#a3a3a3]'}>
@@ -4749,6 +4932,20 @@ export default function SetupPage() {
                         <span className="text-[#525252] break-words">{event.message}</span>
                       </div>
                     ))
+                  ) : activeComfyInstallJob?.recent_events?.length ? (
+                    activeComfyInstallJob.recent_events.slice(-6).map(event => (
+                      <div key={`${event.job_id}-${event.sequence}`} className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
+                        <span className={event.event === 'error' ? 'text-[#dc2626]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#a3a3a3]'}>
+                          {event.event.toUpperCase()}
+                        </span>
+                        <span className="text-[#525252] break-words">{event.message || event.status}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
+                      <span className="text-[#a3a3a3]">START</span>
+                      <span className="text-[#525252] break-words">Preparing ComfyUI inside the persistent workspace.</span>
+                    </div>
                   )}
                 </div>
               </div>

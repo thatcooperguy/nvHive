@@ -15,6 +15,7 @@ from typing import Any
 from nvh.integrations.catalog import catalog_status
 from nvh.integrations.comfyui import detect_comfyui
 from nvh.integrations.jobs import list_jobs
+from nvh.integrations.local_chat import local_chat_smoke_status
 from nvh.integrations.receipts import receipt_summary, repair_plan
 from nvh.integrations.runtime import runtime_status
 from nvh.integrations.storage import storage_status
@@ -428,6 +429,103 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             reason=f"{len(missing_models)} recommended model(s) are not installed yet.",
         ))
 
+    installed_targets = list(models.get("installed_targets", []))
+    if not ollama_pack.get("status", {}).get("installed"):
+        local_chat = {
+            "ready": False,
+            "status": "missing-runtime",
+            "summary": "The offline setup guide is ready, but local model chat needs the rootless Ollama runtime.",
+            "provider": "ollama",
+            "model": None,
+            "output_chars": 0,
+            "latency_ms": None,
+            "error": None,
+            "next_action_id": "rootless-ollama",
+            "checked_at": None,
+            "cached": False,
+            "rootless": True,
+        }
+    elif missing_models:
+        local_chat = {
+            "ready": False,
+            "status": "missing-models",
+            "summary": f"The offline setup guide is ready, but local model chat needs {len(missing_models)} recommended model(s).",
+            "provider": "ollama",
+            "model": None,
+            "output_chars": 0,
+            "latency_ms": None,
+            "error": None,
+            "next_action_id": "starter-models",
+            "checked_at": None,
+            "cached": False,
+            "rootless": True,
+        }
+    elif not models.get("ollama_running"):
+        local_chat = {
+            "ready": False,
+            "status": "runtime-offline",
+            "summary": "Ollama is installed and models are present, but the local model server is not reachable.",
+            "provider": "ollama",
+            "model": None,
+            "output_chars": 0,
+            "latency_ms": None,
+            "error": None,
+            "next_action_id": "rootless-ollama",
+            "checked_at": None,
+            "cached": False,
+            "rootless": True,
+        }
+    elif installed_targets:
+        local_chat = local_chat_smoke_status(home_dir=home_dir, max_age_s=45, timeout_s=20.0)
+    else:
+        local_chat = {
+            "ready": False,
+            "status": "no-models",
+            "summary": "The offline setup guide is ready, but no local chat model is installed yet.",
+            "provider": "ollama",
+            "model": None,
+            "output_chars": 0,
+            "latency_ms": None,
+            "error": None,
+            "next_action_id": "starter-models",
+            "checked_at": None,
+            "cached": False,
+            "rootless": True,
+        }
+
+    if (
+        not local_chat.get("ready")
+        and local_chat.get("status") not in {"missing-runtime", "missing-models"}
+    ):
+        next_action = str(local_chat.get("next_action_id") or "rootless-ollama")
+        issues.append(SetupIssue(
+            id="local-chat-smoke",
+            title="Local chat response test needs attention",
+            severity="recommended",
+            reason=str(local_chat.get("summary") or "A local model did not return text yet."),
+            fix_action_id=next_action,
+            affected_item="local-chat",
+        ))
+        if not any(action.id == next_action for action in actions):
+            if next_action == "starter-models":
+                actions.append(SetupAction(
+                    id="starter-models",
+                    title="Download recommended local models",
+                    priority=40,
+                    status="recommended",
+                    command="nvh studio --install-models recommended -y",
+                    reason=str(local_chat.get("summary") or "Local chat needs a working installed model."),
+                ))
+            else:
+                actions.append(SetupAction(
+                    id="rootless-ollama",
+                    title="Repair local model runtime",
+                    priority=30,
+                    status="recommended",
+                    command="nvh studio --install rootless-ollama -y",
+                    reason=str(local_chat.get("summary") or "Local chat needs a reachable Ollama runtime."),
+                ))
+
     if not comfy.get("installed"):
         issues.append(SetupIssue(
             id="comfyui",
@@ -622,11 +720,19 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     ready = not any(action.status == "required" for action in actions)
     agent_helper = boot_preflight.get("agent_helper") or {}
     if core_issues:
-        summary = f"{len(core_issues)} core setup item(s) need attention"
+        first_issue = core_issues[0]
+        more = len(core_issues) - 1
+        summary = (
+            f"Core setup needs attention: {first_issue.title}"
+            f"{f' (+{more} more)' if more else ''}."
+        )
     elif optional_issues or optional_actions:
-        summary = "Core AI setup is ready; optional add-ons are available"
+        if local_chat.get("ready"):
+            summary = "Core local AI chat is verified; optional add-ons are available"
+        else:
+            summary = str(local_chat.get("summary") or "Core setup guide is ready; local chat is still being verified")
     else:
-        summary = "Ready for downloads"
+        summary = str(local_chat.get("summary") or "Ready for downloads")
     return {
         "ready": ready,
         "summary": summary,
@@ -634,6 +740,7 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
         "runtime": runtime.as_dict(),
         "comfyui": comfy,
         "model_recommendation_count": len(missing_models),
+        "local_chat": local_chat,
         "actions": [action.as_dict() for action in actions],
         "issues": [issue.as_dict() for issue in issues],
         "issue_count": len(issues),
@@ -713,6 +820,7 @@ def setup_assistant_reply(
     debug_findings: list[str] = []
     log_highlights: list[str] = []
     troubleshooting: dict[str, Any] | None = None
+    local_chat = report.get("local_chat") or {}
 
     if not q:
         answer = (
@@ -808,6 +916,33 @@ def setup_assistant_reply(
             f"{report['storage']['layout']['home']}. The wizard should guide this with a folder picker; "
             "the CLI command is only an advanced override."
         )
+    elif any(phrase in q for phrase in [
+        "are we online",
+        "are we fully online",
+        "is chat working",
+        "chat working",
+        "local chat",
+        "can you answer",
+        "are you ready",
+        "llm ready",
+    ]):
+        focus = "chat-readiness"
+        next_action_id = str(local_chat.get("next_action_id") or "")
+        commands = _commands_for_actions(actions, next_action_id) if next_action_id else []
+        if local_chat.get("ready"):
+            answer = (
+                f"Yes: setup is online and local model chat returned text. "
+                f"{local_chat.get('summary', 'Local chat is verified.')} "
+                "ComfyUI is not required for local chat; it is only needed for visual image/video workflows. "
+                "You can use Ask AI for normal questions and this nvWizard box for setup repair guidance."
+            )
+        else:
+            answer = (
+                "The setup guide is online, but local model chat is not verified yet. "
+                f"{local_chat.get('summary', report['summary'])} "
+                "That means I can still read setup state, jobs, receipts, and redacted logs here, "
+                "but Ask AI may fail until the runtime/model smoke test returns text."
+            )
     elif any(word in q for word in ["privacy", "data leave", "leave this vm", "send data", "cost", "money", "free", "quota"]):
         focus = "privacy-cost"
         suppress_command_fallback = True
@@ -942,12 +1077,19 @@ def setup_assistant_reply(
                 if optional_titles
                 else ""
             )
-            answer = (
-                "Core local AI setup looks ready. ComfyUI is not required for local chat, "
-                "coding help, or nvWizard repair guidance; it is only needed for visual "
-                f"image/video workflows. {report['summary']}.{optional_note} "
-                f"Receipts tracked: {receipts.get('count', 0)}."
-            )
+            if local_chat.get("ready"):
+                answer = (
+                    "Core local AI chat is verified. ComfyUI is not required for local chat, "
+                    "coding help, or nvWizard repair guidance; it is only needed for visual "
+                    f"image/video workflows. {report['summary']}.{optional_note} "
+                    f"Receipts tracked: {receipts.get('count', 0)}."
+                )
+            else:
+                answer = (
+                    "The offline setup guide is ready, but local model chat is not verified yet. "
+                    f"{local_chat.get('summary', report['summary'])}.{optional_note} "
+                    f"Receipts tracked: {receipts.get('count', 0)}."
+                )
         else:
             answer = (
                 f"{report['summary']}. I do not see a safe automatic core action yet; "

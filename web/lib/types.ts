@@ -669,6 +669,21 @@ export interface SetupIssue {
   available_version: string | null;
 }
 
+export interface LocalChatSmokeReport {
+  ready: boolean;
+  status: string;
+  summary: string;
+  provider?: string;
+  model?: string | null;
+  output_chars?: number;
+  latency_ms?: number | null;
+  error?: string | null;
+  next_action_id?: string | null;
+  checked_at?: string | null;
+  cached?: boolean;
+  rootless?: boolean;
+}
+
 export interface SetupHelperReport {
   ready: boolean;
   summary: string;
@@ -676,6 +691,7 @@ export interface SetupHelperReport {
   runtime: RuntimeStatus;
   comfyui: Record<string, unknown>;
   model_recommendation_count: number;
+  local_chat?: LocalChatSmokeReport;
   actions: SetupAction[];
   issues?: SetupIssue[];
   issue_count?: number;
@@ -1079,6 +1095,7 @@ export interface InstallJob {
   started_at: string | null;
   completed_at: string | null;
   event_count: number;
+  recent_events?: InstallJobEvent[];
   cancel_requested: boolean;
   events_path: string;
 }

@@ -90,6 +90,12 @@ def test_setup_assistant_does_not_require_comfyui_for_local_ai(tmp_path, monkeyp
                     "can_run_without_root": True,
                 },
             ],
+            "local_chat": {
+                "ready": True,
+                "status": "ready",
+                "summary": "Local chat verified with gemma3:4b.",
+                "model": "gemma3:4b",
+            },
             "receipts": {"count": 7, "unhealthy": 0, "receipts": []},
             "assistant": {
                 "product": "nvHive / nvWizard",
@@ -101,7 +107,7 @@ def test_setup_assistant_does_not_require_comfyui_for_local_ai(tmp_path, monkeyp
 
     reply = setup_agent.setup_assistant_reply("Are we fully online?", tmp_path / "nvh")
 
-    assert "Core local AI setup looks ready" in reply["answer"]
+    assert "local model chat returned text" in reply["answer"]
     assert "ComfyUI is not required for local chat" in reply["answer"]
     assert "Best next step: Install ComfyUI" not in reply["answer"]
     assert reply["commands"] == []

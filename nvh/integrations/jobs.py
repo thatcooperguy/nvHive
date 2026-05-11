@@ -94,6 +94,7 @@ def load_job(
     job_id: str,
     *,
     reconcile: bool = True,
+    include_recent_events: bool = True,
     home_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Load one job record by id."""
@@ -104,6 +105,8 @@ def load_job(
     job = _read_job(path)
     if reconcile:
         job = reconcile_job(job, home_dir=home_dir)
+    if include_recent_events:
+        job = with_recent_events(job, home_dir=home_dir)
     return job
 
 
@@ -125,7 +128,7 @@ def list_jobs(
             continue
         if status and job.get("status") != status:
             continue
-        jobs.append(job)
+        jobs.append(with_recent_events(job, home_dir=home_dir))
         if len(jobs) >= limit:
             break
     return jobs
@@ -158,7 +161,29 @@ def read_events(
     return events
 
 
+def with_recent_events(
+    job: dict[str, Any],
+    *,
+    limit: int = 6,
+    home_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Attach a compact tail of recent events for list/detail UI status."""
+    job_id = str(job.get("id", ""))
+    event_count = max(0, int(job.get("event_count", 0) or 0))
+    if not job_id or event_count <= 0:
+        job["recent_events"] = []
+        return job
+    try:
+        after = max(0, event_count - max(1, limit))
+        job["recent_events"] = read_events(job_id, after=after, limit=limit, home_dir=home_dir)
+    except Exception:
+        job["recent_events"] = []
+    return job
+
+
 def _progress_for_event(job: dict[str, Any], payload: dict[str, Any]) -> int:
+    if isinstance(payload.get("progress"), (int, float)):
+        return max(0, min(100, int(payload["progress"])))
     if payload.get("event") == "complete" or payload.get("status") == "complete":
         return 100
     if payload.get("event") == "error" or payload.get("status") == "failed":
@@ -178,7 +203,7 @@ def _progress_for_event(job: dict[str, Any], payload: dict[str, Any]) -> int:
 
 def append_event(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Append one event to the job log and update the job summary."""
-    job = load_job(job_id, reconcile=False)
+    job = load_job(job_id, reconcile=False, include_recent_events=False)
     sequence = int(job.get("event_count", 0)) + 1
     now = _now()
     event = {
@@ -258,7 +283,7 @@ async def _consume_job_events(
     source_factory: Callable[[], AsyncIterator[dict[str, Any]]],
 ) -> None:
     try:
-        job = load_job(job_id, reconcile=False)
+        job = load_job(job_id, reconcile=False, include_recent_events=False)
         job["status"] = "running"
         job["started_at"] = job.get("started_at") or _now()
         job["message"] = "Starting"
@@ -267,7 +292,7 @@ async def _consume_job_events(
 
         saw_terminal = False
         async for payload in source_factory():
-            current = load_job(job_id, reconcile=False)
+            current = load_job(job_id, reconcile=False, include_recent_events=False)
             if current.get("cancel_requested"):
                 append_event(
                     job_id,
@@ -336,7 +361,7 @@ def start_job(
 
 def cancel_job(job_id: str) -> dict[str, Any]:
     """Request cancellation for a running job."""
-    job = load_job(job_id, reconcile=False)
+    job = load_job(job_id, reconcile=False, include_recent_events=False)
     if job.get("status") in TERMINAL_STATUSES:
         return job
     job["cancel_requested"] = True
