@@ -615,15 +615,21 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
 
     actions.sort(key=lambda action: action.priority)
     issues.sort(key=lambda issue: {"required": 0, "recommended": 1, "optional": 2}.get(issue.severity, 3))
+    core_issues = [issue for issue in issues if issue.severity != "optional"]
+    optional_issues = [issue for issue in issues if issue.severity == "optional"]
+    core_actions = [action for action in actions if action.status != "optional"]
+    optional_actions = [action for action in actions if action.status == "optional"]
     ready = not any(action.status == "required" for action in actions)
     agent_helper = boot_preflight.get("agent_helper") or {}
+    if core_issues:
+        summary = f"{len(core_issues)} core setup item(s) need attention"
+    elif optional_issues or optional_actions:
+        summary = "Core AI setup is ready; optional add-ons are available"
+    else:
+        summary = "Ready for downloads"
     return {
         "ready": ready,
-        "summary": (
-            "Ready for downloads"
-            if ready and not issues
-            else f"{len(issues)} setup item(s) need attention"
-        ),
+        "summary": summary,
         "storage": storage.as_dict(),
         "runtime": runtime.as_dict(),
         "comfyui": comfy,
@@ -631,6 +637,10 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
         "actions": [action.as_dict() for action in actions],
         "issues": [issue.as_dict() for issue in issues],
         "issue_count": len(issues),
+        "core_issue_count": len(core_issues),
+        "optional_issue_count": len(optional_issues),
+        "core_action_count": len(core_actions),
+        "optional_action_count": len(optional_actions),
         "receipts": receipts,
         "catalog": _safe_catalog_status(),
         "compatibility": {
@@ -664,6 +674,27 @@ def _persona_wrap(answer: str) -> str:
     return answer
 
 
+def _core_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [action for action in actions if action.get("status") != "optional"]
+
+
+def _reply_actions_for_focus(
+    actions: list[dict[str, Any]],
+    focus: str,
+) -> list[dict[str, Any]]:
+    optional_focuses = {
+        "comfyui",
+        "creator",
+        "game",
+        "music",
+        "agent",
+        "mission-choice",
+    }
+    if focus in optional_focuses:
+        return actions[:5]
+    return _core_actions(actions)[:5]
+
+
 def setup_assistant_reply(
     question: str,
     home_dir: str | Path | None = None,
@@ -671,6 +702,7 @@ def setup_assistant_reply(
     """Answer a setup question using local state and deterministic rules."""
     report = setup_helper_report(home_dir=home_dir)
     actions = report["actions"]
+    core_actions = _core_actions(actions)
     q = question.strip().lower()
     receipts = report.get("receipts", {})
     failed_job = _recent_failed_job(home_dir=home_dir)
@@ -893,19 +925,40 @@ def setup_assistant_reply(
                 "Run the wizard step again if you want to refresh an installed component."
             )
     else:
-        commands = [action["command"] for action in actions[:3]]
-        next_title = actions[0]["title"] if actions else "Open the setup wizard"
-        answer = (
-            f"Best next step: {next_title}. {report['summary']}. "
-            f"Receipts tracked: {receipts.get('count', 0)}. I can answer setup and "
-            "repair questions immediately; general homework or coding questions use "
-            "the local model after the runtime and selected model are ready."
-        )
+        commands = [action["command"] for action in core_actions[:3]]
+        optional_actions = [action for action in actions if action.get("status") == "optional"]
+        if core_actions:
+            next_title = core_actions[0]["title"]
+            answer = (
+                f"Best core setup step: {next_title}. {report['summary']}. "
+                f"Receipts tracked: {receipts.get('count', 0)}. I can answer setup and "
+                "repair questions immediately; general homework or coding questions use "
+                "the local model after the runtime and selected model are ready."
+            )
+        elif report.get("ready"):
+            optional_titles = ", ".join(action["title"] for action in optional_actions[:3])
+            optional_note = (
+                f" Optional one-click add-ons are available later: {optional_titles}."
+                if optional_titles
+                else ""
+            )
+            answer = (
+                "Core local AI setup looks ready. ComfyUI is not required for local chat, "
+                "coding help, or nvWizard repair guidance; it is only needed for visual "
+                f"image/video workflows. {report['summary']}.{optional_note} "
+                f"Receipts tracked: {receipts.get('count', 0)}."
+            )
+        else:
+            answer = (
+                f"{report['summary']}. I do not see a safe automatic core action yet; "
+                "use Copy Support Report or Advanced Details if the VM image changed."
+            )
 
     if not commands and actions and not suppress_command_fallback:
-        commands = [actions[0]["command"]]
+        commands = [core_actions[0]["command"]] if core_actions else []
 
     assistant_info = report.get("assistant", {})
+    reply_actions = _reply_actions_for_focus(actions, focus)
     return {
         "question": question,
         "answer": _persona_wrap(answer),
@@ -932,5 +985,5 @@ def setup_assistant_reply(
             "catalog_source": report.get("catalog", {}).get("source"),
             "recent_problem": failed_job,
         },
-        "actions": actions[:5],
+        "actions": reply_actions,
     }

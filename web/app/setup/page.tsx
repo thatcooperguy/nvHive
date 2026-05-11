@@ -1679,6 +1679,9 @@ export default function SetupPage() {
   const activeInstallJobs = installJobs.filter(isActiveInstallJob);
   const visibleInstallJobs = installJobs.slice(0, 5);
   const helperActions = setupHelper?.actions.slice(0, 4) ?? [];
+  const coreHelperActions = setupHelper?.actions
+    .filter(action => action.status !== 'optional')
+    .slice(0, 4) ?? [];
   const helperIssues = setupHelper?.issues?.slice(0, 4) ?? [];
   const visibleReceipts = setupReceipts?.receipts.slice(0, 5) ?? [];
   const unhealthyReceiptCount = setupReceipts?.summary.unhealthy ?? setupHelper?.receipts?.unhealthy ?? 0;
@@ -1744,7 +1747,7 @@ export default function SetupPage() {
     comfyEvents.length > 0 ||
     (showAdvancedSetup && (visibleInstallJobs.length > 0 || jobsError));
   const anyInstallRunning = Boolean(activeWizardBuild) || studioInstalling || modelsInstalling || comfyInstalling;
-  const topHelperAction = helperActions[0] ?? null;
+  const topHelperAction = coreHelperActions[0] ?? null;
   const catalogProfiles = setupCatalog?.catalog.profiles ?? [];
   const catalogProfileFor = (profileId: WizardProfile) => (
     catalogProfiles.find(profile => profile.id === profileId) ?? null

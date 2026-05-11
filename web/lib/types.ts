@@ -679,6 +679,10 @@ export interface SetupHelperReport {
   actions: SetupAction[];
   issues?: SetupIssue[];
   issue_count?: number;
+  core_issue_count?: number;
+  optional_issue_count?: number;
+  core_action_count?: number;
+  optional_action_count?: number;
   receipts?: SetupReceiptsSummary;
   catalog?: SetupCatalogStatus;
   compatibility?: {

@@ -71,6 +71,43 @@ def test_setup_assistant_answers_comfyui_question(tmp_path, monkeypatch) -> None
     assert reply["commands"]
 
 
+def test_setup_assistant_does_not_require_comfyui_for_local_ai(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    monkeypatch.setattr(
+        setup_agent,
+        "setup_helper_report",
+        lambda home_dir=None: {
+            "ready": True,
+            "summary": "Core AI setup is ready; optional add-ons are available",
+            "actions": [
+                {
+                    "id": "comfyui",
+                    "title": "Install ComfyUI visual workspace",
+                    "priority": 50,
+                    "status": "optional",
+                    "command": "nvh workstation --with-comfyui -y",
+                    "reason": "Visual workflows are optional.",
+                    "can_run_without_root": True,
+                },
+            ],
+            "receipts": {"count": 7, "unhealthy": 0, "receipts": []},
+            "assistant": {
+                "product": "nvHive / nvWizard",
+                "grounding_sources": ["local setup helper report"],
+            },
+        },
+    )
+    monkeypatch.setattr(setup_agent, "_recent_failed_job", lambda home_dir=None: None)
+
+    reply = setup_agent.setup_assistant_reply("Are we fully online?", tmp_path / "nvh")
+
+    assert "Core local AI setup looks ready" in reply["answer"]
+    assert "ComfyUI is not required for local chat" in reply["answer"]
+    assert "Best next step: Install ComfyUI" not in reply["answer"]
+    assert reply["commands"] == []
+    assert reply["actions"] == []
+
+
 def test_setup_assistant_explains_product_and_repo(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
 
