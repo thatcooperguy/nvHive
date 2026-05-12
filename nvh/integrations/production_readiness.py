@@ -403,7 +403,7 @@ def production_readiness_report(
     *,
     target_vm_validated: bool | None = None,
 ) -> dict[str, Any]:
-    """Return a conservative production readiness report for nvWizard."""
+    """Return a conservative production readiness report for AI Wizard."""
     storage = storage_status(home_dir=home_dir, min_free_gb=200).as_dict()
     mount = mount_autopilot_report(
         min_free_gb=200,

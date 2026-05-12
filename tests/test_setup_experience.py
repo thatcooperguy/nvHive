@@ -1,4 +1,4 @@
-"""Tests for nvWizard setup experience helpers."""
+"""Tests for AI Wizard setup experience helpers."""
 
 from __future__ import annotations
 

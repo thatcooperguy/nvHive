@@ -1,4 +1,4 @@
-"""Canonical rootless workspace readiness state for nvWizard.
+"""Canonical rootless workspace readiness state for AI Wizard.
 
 The setup UI has several useful diagnostics, but first-run users need one
 clear answer: "am I ready, what is happening, and what should happen next?"

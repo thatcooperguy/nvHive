@@ -642,19 +642,19 @@ nvwizard_model_download_countdown() {
 
     case "${NVH_INSTALL_MODEL_DOWNLOAD:-auto}" in
         0|false|False|no|No|off|Off)
-            echo -e "${D}Skipping nvWizard model download because NVH_INSTALL_MODEL_DOWNLOAD=0.${N}"
+            echo -e "${D}Skipping AI Wizard model download because NVH_INSTALL_MODEL_DOWNLOAD=0.${N}"
             return 1
             ;;
     esac
 
     if [ -r /dev/tty ] && [ -w /dev/tty ] && [ "${NVH_INSTALL_MODEL_DOWNLOAD:-auto}" = "auto" ]; then
         while [ "$delay" -gt 0 ]; do
-            printf "\rDownloading %s for nvWizard in %s... press s to skip " "$model" "$delay" >/dev/tty
+            printf "\rDownloading %s for AI Wizard in %s... press s to skip " "$model" "$delay" >/dev/tty
             if IFS= read -r -s -n 1 -t 1 key </dev/tty; then
                 case "$key" in
                     s|S|c|C|q|Q)
                         printf "\n" >/dev/tty
-                        echo -e "${Y}Skipped nvWizard model download. You can download it from the WebUI later.${N}"
+                        echo -e "${Y}Skipped AI Wizard model download. You can download it from the WebUI later.${N}"
                         return 1
                         ;;
                 esac
@@ -663,7 +663,7 @@ nvwizard_model_download_countdown() {
         done
         printf "\n" >/dev/tty
     else
-        echo -e "${B}Downloading $model for nvWizard.${N}"
+        echo -e "${B}Downloading $model for AI Wizard.${N}"
     fi
 
     return 0
@@ -683,14 +683,14 @@ pull_nvwizard_model_cli() {
     fi
 
     nvwizard_model_download_countdown "$model" || return 0
-    echo -e "${B}Downloading $model for nvWizard. This can take a few minutes on first run.${N}"
+    echo -e "${B}Downloading $model for AI Wizard. This can take a few minutes on first run.${N}"
     : >"$NVH_LOGS/model-pull.log"
     set +e
     OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" pull "$model" 2>&1 | tee -a "$NVH_LOGS/model-pull.log"
     pull_rc=${PIPESTATUS[0]}
     set -e
     if [ "$pull_rc" -eq 0 ]; then
-        echo -e "${G}Model $model ready for nvWizard.${N}"
+        echo -e "${G}Model $model ready for AI Wizard.${N}"
         return 0
     fi
     echo -e "${Y}Model download did not complete. Log: $NVH_LOGS/model-pull.log${N}"
@@ -1146,7 +1146,7 @@ if [ -n "$GPU_NAME" ]; then
         if ollama_model_installed "$MODEL"; then
             echo -e "${G}Model $MODEL ready.${N}"
         elif should_launch_webui; then
-            echo -e "${B}WebUI will show nvWizard model download, cancel, and health checks for $MODEL.${N}"
+            echo -e "${B}WebUI will show AI Wizard model download, cancel, and health checks for $MODEL.${N}"
         else
             pull_nvwizard_model_cli "$MODEL" || true
         fi

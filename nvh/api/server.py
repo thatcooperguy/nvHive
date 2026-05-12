@@ -1392,7 +1392,7 @@ async def wizard_mission_plan(
     )
 
 
-@app.post("/v1/wizard/mission/job", summary="Start a backend-owned nvWizard mission build")
+@app.post("/v1/wizard/mission/job", summary="Start a backend-owned AI Wizard mission build")
 async def wizard_mission_job(
     request: WizardMissionBuildRequest,
     _auth: None = Depends(require_auth),
@@ -1498,7 +1498,7 @@ async def setup_service_action(
     return _response_envelope(result)
 
 
-@app.get("/v1/setup/mission-control", summary="Return nvWizard setup mission timeline")
+@app.get("/v1/setup/mission-control", summary="Return AI Wizard setup mission timeline")
 async def setup_mission_control(
     home_dir: str | None = None,
     _auth: None = Depends(require_auth),
@@ -1558,7 +1558,7 @@ async def setup_runtime_doctor(
     home_dir: str | None = None,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Return a non-mutating Ollama/runtime diagnosis for nvWizard."""
+    """Return a non-mutating Ollama/runtime diagnosis for AI Wizard."""
     from nvh.integrations.studio_packs import ollama_runtime_doctor
 
     return _response_envelope(ollama_runtime_doctor(home_dir=home_dir))
@@ -1648,7 +1648,7 @@ async def setup_compatibility(
     home_dir: str | None = None,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Return host facts and per-app compatibility checks for nvWizard."""
+    """Return host facts and per-app compatibility checks for AI Wizard."""
     from nvh.integrations.compatibility import compatibility_report
 
     return _response_envelope(compatibility_report(home_dir=home_dir))
@@ -3758,6 +3758,9 @@ def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) ->
     Called by the CLI via `nvh serve --host HOST --port PORT`.
     """
     import uvicorn
+
+    os.environ["NVH_API_PORT"] = str(port)
+    os.environ["NVH_API_SERVER_PROCESS"] = "1"
 
     uvicorn.run(
         "nvh.api.server:app",

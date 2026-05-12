@@ -1,4 +1,4 @@
-"""Mission timeline for the nvWizard setup journey."""
+"""Mission timeline for the AI Wizard setup journey."""
 
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def mission_control_report(home_dir: str | None = None) -> dict[str, Any]:
     return {
         "summary": (
             "Ready to build" if blocked == 0 and all(stage["status"] == "pass" for stage in stages[:2])
-            else f"{blocked} blocked compatibility item(s); nvWizard has next steps."
+            else f"{blocked} blocked compatibility item(s); AI Wizard has next steps."
         ),
         "ready": blocked == 0,
         "stages": stages,

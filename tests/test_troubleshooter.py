@@ -1,4 +1,4 @@
-"""Tests for nvWizard's rootless troubleshooting playbook."""
+"""Tests for AI Wizard's rootless troubleshooting playbook."""
 
 from __future__ import annotations
 
@@ -81,6 +81,23 @@ def test_troubleshooter_classifies_python_venv_without_sudo() -> None:
     assert primary["id"] == "python-venv-runtime"
     assert primary["action_id"] == "runtime-fallback"
     assert "Do not ask" in primary["rootless_note"]
+
+
+def test_troubleshooter_classifies_micromamba_archive_race_as_runtime_retry() -> None:
+    report = analyze_setup_failure(
+        _diagnostics_with_log(
+            "Micromamba fallback install failed: [Errno 2] No such file or directory: "
+            "'$NVH_HOME/cache/downloads/micromamba-linux-64.tar.bz2'"
+        ),
+        home_dir="/home/kiosk/nvhive",
+    )
+
+    primary = report["primary_finding"]
+
+    assert primary["id"] == "micromamba-runtime-retry"
+    assert primary["action_id"] == "runtime-fallback"
+    assert primary["button_label"] == "Install Runtime"
+    assert primary["can_auto_repair"] is True
 
 
 def test_troubleshooter_general_case_still_has_safe_action() -> None:

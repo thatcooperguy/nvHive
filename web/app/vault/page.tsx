@@ -196,7 +196,7 @@ export default function VaultPage() {
             value={body}
             onChange={event => setBody(event.target.value)}
             className="input-base min-h-[180px] w-full px-3 py-2 text-sm"
-            placeholder="What should nvWizard remember?"
+            placeholder="What should AI Wizard remember?"
           />
           <div className="grid gap-3 md:grid-cols-[1fr_180px]">
             <input
@@ -236,7 +236,7 @@ export default function VaultPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="section-label">Conflicts</div>
-            <h2 className="text-xl font-bold mt-1">Tradeoffs nvWizard should explain</h2>
+            <h2 className="text-xl font-bold mt-1">Tradeoffs AI Wizard should explain</h2>
           </div>
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-2">

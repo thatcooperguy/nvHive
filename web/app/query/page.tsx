@@ -58,7 +58,7 @@ function friendlyQueryError(message: string): string {
   ) {
     return [
       'Local AI is not ready yet.',
-      'Open Setup, run Fix Setup, then use Download Models or Install Runtime if nvWizard recommends it.',
+      'Open Setup, run Fix Setup, then use Download Models or Install Runtime if AI Wizard recommends it.',
       `Last error: ${raw}`,
     ].join(' ');
   }
@@ -143,7 +143,7 @@ function QueryPageInner() {
       setResponse({
         content: wizard.answer,
         model: wizard.mode ?? 'offline-helper',
-        provider: 'nvwizard',
+        provider: 'ai-wizard',
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         cost_usd: '0',
         latency_ms: 0,

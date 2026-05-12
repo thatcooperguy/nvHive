@@ -19,7 +19,7 @@ def test_init_vault_creates_markdown_memory_tree(tmp_path) -> None:
     assert result["initialized"] is True
     assert vault_dir == home / "vault"
     assert (vault_dir / "README.md").exists()
-    assert (vault_dir / "Wizard Memory" / "nvWizard.md").exists()
+    assert (vault_dir / "Wizard Memory" / "AI Wizard.md").exists()
     assert (vault_dir / "Conflicts" / "Product Conflicts.md").exists()
     assert (vault_dir / "Process Playbooks" / "Pilot Test Checklist.md").exists()
     assert (vault_dir / ".obsidian" / "app.json").exists()

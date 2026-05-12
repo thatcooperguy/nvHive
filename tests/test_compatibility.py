@@ -1,4 +1,4 @@
-"""Tests for nvWizard host/app compatibility checks."""
+"""Tests for AI Wizard host/app compatibility checks."""
 
 from __future__ import annotations
 

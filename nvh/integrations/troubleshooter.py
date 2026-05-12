@@ -1,4 +1,4 @@
-"""Rootless setup troubleshooting playbook for nvWizard.
+"""Rootless setup troubleshooting playbook for AI Wizard.
 
 The setup wizard needs one shared way to translate jobs, receipts, smoke tests,
 and log tails into student-friendly next actions. This module is intentionally
@@ -289,6 +289,33 @@ def analyze_setup_failure(
             rootless_note="Do not ask the student to install python3-venv with apt; use rootless fallback.",
         ))
 
+    if _contains(joined, "micromamba fallback install failed", "micromamba-linux", "extracting micromamba"):
+        findings.append(_finding(
+            id="micromamba-runtime-retry",
+            title="Rootless micromamba runtime needs a clean retry",
+            severity="required",
+            summary=(
+                "The Python runtime fallback started but did not finish cleanly. nvHive should "
+                "retry the rootless runtime installer with an isolated download archive."
+            ),
+            evidence=evidence,
+            action_id="runtime-fallback",
+            button_label="Install Runtime",
+            can_auto_repair=True,
+            safe_changes=[
+                "Re-download the micromamba archive into NVH_HOME/cache",
+                "Extract the binary under NVH_HOME/bin",
+                "Leave OS Python, apt, and sudo untouched",
+            ],
+            report_fields=["logs.nvhive.log", "jobs.failed_event_tails", "checks.runtime"],
+            web_search_queries=[
+                "micromamba rootless install Linux tar.bz2",
+                "micromamba linux-64 latest archive rootless",
+            ],
+            official_urls=[],
+            rootless_note="This repair stays inside the persistent nvHive workspace.",
+        ))
+
     if _contains(joined, "nvh_home", "persistent storage", "read-only", "no space left", "permission denied", "not writable"):
         findings.append(_finding(
             id="workspace-storage",
@@ -376,7 +403,7 @@ def analyze_setup_failure(
             severity="info",
             summary=(
                 "The latest report did not contain a known high-signal setup failure. Retry the action, "
-                "then ask nvWizard again so it can read the fresh job and log trail."
+                "then ask AI Wizard again so it can read the fresh job and log trail."
             ),
             evidence=evidence,
             action_id="repair-workspace",

@@ -384,7 +384,7 @@ STUDIO_PACKS: list[StudioPack] = [
             "AI Starter installs this as a lightweight guide and launcher, not a default model download.",
             "Use NVIDIA NIM/build.nvidia.com first on smaller student VMs.",
             "Local BF16 weights are roughly 61.5 GB; FP8 is roughly 32.8 GB; NVFP4 is roughly 20.9 GB.",
-            "nvWizard should require persistent storage headroom before recommending local weights.",
+            "AI Wizard should require persistent storage headroom before recommending local weights.",
         ],
     ),
     StudioPack(
@@ -597,7 +597,7 @@ STUDIO_PACKS: list[StudioPack] = [
         ],
         notes=[
             "Unreal access requires an Epic account and linked GitHub account.",
-            "Large Unreal source/editor builds can exceed 150 GB; nvWizard should reserve the block volume first.",
+            "Large Unreal source/editor builds can exceed 150 GB; AI Wizard should reserve the block volume first.",
         ],
     ),
     StudioPack(
@@ -1469,7 +1469,7 @@ def ollama_runtime_doctor(home_dir: str | Path | None = None) -> dict[str, Any]:
         next_action = {
             "id": "starter-models",
             "label": "Download models",
-            "description": "Download GPU-fit starter models for nvWizard and Ask AI.",
+            "description": "Download GPU-fit starter models for AI Wizard and Ask AI.",
         }
     else:
         status = "ready"
@@ -2885,7 +2885,7 @@ Nemotron 3 Nano Omni workflow.
 
 ## Local Path
 
-Only try a local download when nvWizard reports enough persistent storage and
+Only try a local download when AI Wizard reports enough persistent storage and
 GPU headroom. The current published footprints are approximately:
 
 - BF16: 61.5 GB
@@ -2931,7 +2931,7 @@ echo "NVHive NVIDIA Omni Agent"
 echo "Workspace: $ROOT"
 echo
 echo "Default: use NVIDIA NIM / build.nvidia.com for Nemotron 3 Nano Omni."
-echo "Local weights are advanced and gated by nvWizard storage + GPU checks."
+echo "Local weights are advanced and gated by AI Wizard storage + GPU checks."
 echo
 echo "Open: $ROOT/README.md"
 """

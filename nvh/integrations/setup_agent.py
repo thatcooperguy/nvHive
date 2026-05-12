@@ -35,13 +35,17 @@ OPTIONAL_COMPATIBILITY_IDS = {
     "music-producer-lab",
 }
 
-PRODUCT_CONTEXT_FALLBACK = """You are nvWizard, the local setup and repair guide inside nvHive.
+PRODUCT_CONTEXT_FALLBACK = """You are AI Wizard, the local setup and repair guide inside nvHive.
 
 nvHive is a rootless NVIDIA AI lab for students, creators, agents, ComfyUI, and
 local models. It turns a fresh Linux cloud GPU desktop into an AI workstation
 without sudo by finding persistent storage, recommending GPU-fit models,
 installing workload missions, tracking jobs/receipts, and running safe rootless
-repairs. Official repo: https://github.com/thatcooperguy/nvHive
+repairs.
+
+Personality: calm mission-control mentor, lightly playful, practical, and
+confidence-building. Translate scary logs into plain language, name the safest
+button, and keep jokes brief. Official repo: https://github.com/thatcooperguy/nvHive
 """
 
 
@@ -91,7 +95,7 @@ def nvwizard_system_prompt() -> str:
 def _assistant_metadata(agent_helper: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": agent_helper.get("mode", "offline-deterministic"),
-        "product": "nvHive / nvWizard",
+        "product": "nvHive / AI Wizard",
         "available_immediately": True,
         "requires_local_model": False,
         "can_read_jobs": True,
@@ -103,7 +107,7 @@ def _assistant_metadata(agent_helper: dict[str, Any]) -> dict[str, Any]:
         "readme_url": OFFICIAL_README_URL,
         "pypi_url": OFFICIAL_PYPI_URL,
         "grounding_sources": [
-            "packaged nvWizard product brief",
+            "packaged AI Wizard product brief",
             "local setup helper report",
             "boot preflight state",
             "install job logs",
@@ -114,9 +118,10 @@ def _assistant_metadata(agent_helper: dict[str, Any]) -> dict[str, Any]:
         ],
         "system_prompt": nvwizard_system_prompt(),
         "description": (
-            "nvWizard is the rootless setup guide for nvHive: it understands the "
+            "AI Wizard is the rootless setup guide for nvHive: it understands the "
             "product, checks the Linux GPU workstation, watches VM image drift, "
-            "and suggests safe repairs without requiring a cloud model."
+            "and suggests safe repairs without requiring a cloud model. Its voice "
+            "is calm, lightly playful, and focused on getting the user unstuck."
         ),
     }
 
@@ -1035,7 +1040,7 @@ def setup_assistant_reply(
         suppress_command_fallback = True
         answer = (
             "nvHive is a rootless NVIDIA AI lab for students and creators. "
-            "nvWizard is its setup guide: it finds persistent storage, checks the "
+            "AI Wizard is its setup guide: it finds persistent storage, checks the "
             "Linux GPU stack, recommends models that fit VRAM and disk, installs "
             "AI Starter, Graphics Creator, Game Dev, Music Producer, Agent Builder, "
             "ComfyUI, Blender, local LLMs, and safe helper tools under NVH_HOME, "
@@ -1053,6 +1058,16 @@ def setup_assistant_reply(
         troubleshooting = analyze_setup_failure(diagnostics, failed_job, home_dir=home_dir)
         primary_finding = troubleshooting.get("primary_finding") or {}
         primary_action_id = primary_finding.get("action_id")
+        if primary_action_id and not any(action.get("id") == primary_action_id for action in actions):
+            extra_reply_actions.append({
+                "id": primary_action_id,
+                "title": primary_finding.get("button_label") or "Run Repair",
+                "priority": 5,
+                "status": primary_finding.get("severity") or "recommended",
+                "command": "",
+                "reason": primary_finding.get("summary") or "AI Wizard matched the log clue to this repair.",
+                "can_run_without_root": True,
+            })
         if failed_job:
             commands = _commands_for_actions(actions, str(primary_action_id or _action_for_job(failed_job)))
         elif primary_action_id:
@@ -1079,7 +1094,7 @@ def setup_assistant_reply(
                 "I checked local jobs, receipts, the boot/setup report, and redacted log tails"
                 f"{f' ({diagnostics_report_id})' if diagnostics_report_id else ''}. "
                 "I do not see a recent failed job or high-signal error line yet. Try the action again, "
-                "then press Ask nvWizard so I can read the fresh log trail."
+                "then press Ask AI Wizard so I can read the fresh log trail."
             )
     elif any(word in q for word in ["storage", "mount", "persistent", "home", "nvh_home"]):
         focus = "storage"
@@ -1110,7 +1125,7 @@ def setup_assistant_reply(
                 f"Yes: setup is online and local model chat returned text. "
                 f"{local_chat.get('summary', 'Local chat is verified.')} "
                 "ComfyUI is not required for local chat; it is only needed for visual image/video workflows. "
-                "You can use Ask AI for normal questions and this nvWizard box for setup repair guidance."
+                "You can use Ask AI for normal questions and this AI Wizard box for setup repair guidance."
             )
         else:
             answer = (
@@ -1272,7 +1287,7 @@ def setup_assistant_reply(
             if local_chat.get("ready"):
                 answer = (
                     "Core local AI chat is verified. ComfyUI is not required for local chat, "
-                    "coding help, or nvWizard repair guidance; it is only needed for visual "
+                    "coding help, or AI Wizard repair guidance; it is only needed for visual "
                     f"image/video workflows. {report['summary']}.{optional_note} "
                     f"Receipts tracked: {receipts.get('count', 0)}."
                 )
@@ -1301,7 +1316,7 @@ def setup_assistant_reply(
         "answer": _persona_wrap(answer),
         "focus": focus,
         "commands": commands,
-        "product": assistant_info.get("product", "nvHive / nvWizard"),
+        "product": assistant_info.get("product", "nvHive / AI Wizard"),
         "mode": assistant_info.get("mode", "offline-deterministic"),
         "available_immediately": bool(assistant_info.get("available_immediately", True)),
         "requires_local_model": bool(assistant_info.get("requires_local_model", False)),

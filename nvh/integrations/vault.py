@@ -139,9 +139,9 @@ Use this vault for product decisions, setup notes, support reports, model
 choices, and student-friendly troubleshooting. Do not paste API keys or
 secrets here.
 """,
-        "Wizard Memory/nvWizard.md": """# nvWizard Product Memory
+        "Wizard Memory/AI Wizard.md": """# AI Wizard Product Memory
 
-nvWizard helps users run a rootless NVIDIA AI workspace on a Linux GPU VM.
+AI Wizard helps users run a rootless NVIDIA AI workspace on a Linux GPU VM.
 
 Core rules:
 
@@ -225,7 +225,7 @@ def _conflicts_markdown() -> str:
     rows = "\n".join(f"- **{item['title']}**: {item['summary']}" for item in KNOWN_CONFLICTS)
     return f"""# Product Conflicts
 
-These are intentional tradeoffs nvWizard should explain instead of hiding.
+These are intentional tradeoffs AI Wizard should explain instead of hiding.
 
 {rows}
 """
@@ -252,7 +252,7 @@ Last refreshed: {_now()}
 - Platform: `{platform.platform()}`
 - Machine: `{platform.machine()}`
 
-Use nvWizard support reports for redacted logs, receipts, and compatibility checks.
+Use AI Wizard support reports for redacted logs, receipts, and compatibility checks.
 """,
         encoding="utf-8",
     )

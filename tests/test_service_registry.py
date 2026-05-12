@@ -109,6 +109,20 @@ def test_service_health_report_includes_ports_actions_and_friendly_copy(tmp_path
     assert "nvHive rootless service health" in report["support_text"]
 
 
+def test_api_probe_trusts_current_server_process_without_self_deadlock(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    monkeypatch.setenv("NVH_API_PORT", "8000")
+    monkeypatch.setenv("NVH_API_SERVER_PROCESS", "1")
+    monkeypatch.setattr(service_registry, "_port_open", lambda host, port, timeout=0.25: port == 8000)
+    monkeypatch.setattr(service_registry, "_http_ok", lambda *args, **kwargs: False)
+
+    status = service_registry.service_status("api", home_dir=tmp_path / "nvh")
+
+    assert status["ready"] is True
+    assert status["status"] == "ready"
+    assert "current nvHive server process" in status["summary"]
+
+
 def test_run_service_action_refresh_and_rejects_unknown_action(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
     monkeypatch.setattr(

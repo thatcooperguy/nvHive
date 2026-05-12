@@ -1,4 +1,4 @@
-"""Workspace Passport and rootless setup planning for nvWizard.
+"""Workspace Passport and rootless setup planning for AI Wizard.
 
 The target nvHive environment treats the base Linux VM as replaceable and the
 user-writable persistent mount as the durable workstation. This module records
@@ -253,7 +253,7 @@ def workspace_passport(
         "created_at": existing.get("created_at") or now,
         "updated_at": now,
         "product": "nvHive",
-        "assistant": "nvWizard",
+        "assistant": "AI Wizard",
         "nvhive_version": __version__,
         "storage_home": str(layout.home),
         "passport_path": str(passport_path),

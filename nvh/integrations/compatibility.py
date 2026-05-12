@@ -1,4 +1,4 @@
-"""Host and application compatibility checks for nvWizard.
+"""Host and application compatibility checks for AI Wizard.
 
 The compatibility layer separates problems nvHive can fix rootlessly from
 problems that require a different base image, GPU session, driver, or OS.

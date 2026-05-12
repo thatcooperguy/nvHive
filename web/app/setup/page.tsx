@@ -710,7 +710,7 @@ export default function SetupPage() {
   };
 
   const handleQuickDiagnosis = () => {
-    setWizardBuildMessage('nvWizard is checking local state, jobs, receipts, logs, and rootless repair options.');
+    setWizardBuildMessage('AI Wizard is checking local state, jobs, receipts, logs, and rootless repair options.');
     void askSetupQuestion(
       'Debug this Linux GPU desktop setup. Read local jobs, receipts, logs, diagnostics, persistent storage, GPU/VRAM, Python/runtime, Ollama, local models, ComfyUI, and any failed install jobs. Explain what likely broke and recommend the safest next button to press.',
       true,
@@ -733,7 +733,7 @@ export default function SetupPage() {
   const handleRepairWorkspace = async () => {
     if (workspaceRepairing) return;
     setWorkspaceRepairing(true);
-    setWizardBuildMessage('nvWizard is running safe rootless repairs. No sudo, no system changes.');
+    setWizardBuildMessage('AI Wizard is running safe rootless repairs. No sudo, no system changes.');
     setRepairTrail([
       {
         id: 'inspect',
@@ -750,7 +750,7 @@ export default function SetupPage() {
       {
         id: 'refresh',
         label: 'Refresh checks',
-        detail: 'Queued: recheck nvWizard, jobs, ComfyUI, and local AI status.',
+        detail: 'Queued: recheck AI Wizard, jobs, ComfyUI, and local AI status.',
         state: 'queued',
       },
     ]);
@@ -805,7 +805,7 @@ export default function SetupPage() {
       )));
     } catch (err) {
       setSetupInventoryError(err instanceof Error ? err.message : 'Workspace repair failed');
-      setWizardBuildMessage(err instanceof Error ? `nvWizard repair failed: ${err.message}` : 'nvWizard repair failed.');
+      setWizardBuildMessage(err instanceof Error ? `AI Wizard repair failed: ${err.message}` : 'AI Wizard repair failed.');
       setRepairTrail(prev => [
         ...prev.filter(item => item.state !== 'queued'),
         {
@@ -880,7 +880,7 @@ export default function SetupPage() {
                 setStorageStatus(activated.storage);
                 setStorageHomeInput(activated.storage.layout.home);
                 setMountAutopilot(activated.mount_autopilot);
-                setWizardBuildMessage('nvWizard found the large writable block volume and prepared it for models, ComfyUI, Blender, and agents.');
+                setWizardBuildMessage('AI Wizard found the large writable block volume and prepared it for models, ComfyUI, Blender, and agents.');
                 void refreshSetupHelper(activated.storage.layout.home);
                 void refreshSetupInventory(false, activated.storage.layout.home);
                 void refreshWorkspacePassport(activated.storage.layout.home);
@@ -1254,7 +1254,7 @@ export default function SetupPage() {
       setStorageStatus(activated.storage);
       setStorageHomeInput(activated.storage.layout.home);
       setMountAutopilot(activated.mount_autopilot);
-      setWizardBuildMessage('nvWizard prepared the persistent block volume. Models, apps, and projects will live somewhere that survives reboot.');
+      setWizardBuildMessage('AI Wizard prepared the persistent block volume. Models, apps, and projects will live somewhere that survives reboot.');
       await Promise.allSettled([
         refreshStudioModels(),
         refreshStudioPacks(),
@@ -1297,7 +1297,7 @@ export default function SetupPage() {
   const handleInstallStudioModels = (modelIds?: string[]) => {
     if (modelsInstalling) return;
     if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
-      setModelError('nvWizard is finding persistent storage before downloading models.');
+      setModelError('AI Wizard is finding persistent storage before downloading models.');
       void handleUseRecommendedStorage();
       return;
     }
@@ -1330,7 +1330,7 @@ export default function SetupPage() {
         onComplete: event => {
           setModelEvents(prev => [...prev.slice(-10), event]);
           setModelsInstalling(false);
-          setStartupAutopilotMessage('Model download complete. nvWizard is verifying that local chat returns text.');
+          setStartupAutopilotMessage('Model download complete. AI Wizard is verifying that local chat returns text.');
           refreshStudioModels();
           void refreshInstallJobs();
           void refreshSetupInventory(false);
@@ -1366,7 +1366,7 @@ export default function SetupPage() {
   const handleInstallStudioPacks = (packIds?: string[]) => {
     if (studioInstalling) return;
     if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
-      setStudioError('nvWizard is finding persistent storage before installing packs.');
+      setStudioError('AI Wizard is finding persistent storage before installing packs.');
       void handleUseRecommendedStorage();
       return;
     }
@@ -1418,7 +1418,7 @@ export default function SetupPage() {
   const handleInstallComfyUI = () => {
     if (comfyInstalling) return;
     if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
-      setComfyError('nvWizard is finding persistent storage before installing ComfyUI.');
+      setComfyError('AI Wizard is finding persistent storage before installing ComfyUI.');
       void handleUseRecommendedStorage();
       return;
     }
@@ -1426,7 +1426,7 @@ export default function SetupPage() {
     setComfyError(null);
     setComfyPlanMessage(
       comfyAutoLaunch
-        ? 'Installing ComfyUI under the rootless workspace. nvWizard will launch it when the install finishes.'
+        ? 'Installing ComfyUI under the rootless workspace. AI Wizard will launch it when the install finishes.'
         : 'Installing ComfyUI under the rootless workspace. Launch is disabled for this run.'
     );
     setComfyEvents([]);
@@ -1488,7 +1488,7 @@ export default function SetupPage() {
         },
         onError: error => {
           setComfyError(error);
-          setComfyPlanMessage('ComfyUI install stopped before launch. nvWizard captured the error for the support report.');
+          setComfyPlanMessage('ComfyUI install stopped before launch. AI Wizard captured the error for the support report.');
           setComfyInstalling(false);
           void refreshInstallJobs();
           void refreshSetupHelper(storageStatus?.layout.home);
@@ -1547,7 +1547,7 @@ export default function SetupPage() {
     if (activeWizardBuild || studioInstalling || modelsInstalling || comfyInstalling || apiDisconnected) return;
 
     setActiveWizardBuild(profile);
-    setWizardBuildMessage('nvWizard is checking the mission catalog, hardware, and persistent storage.');
+    setWizardBuildMessage('AI Wizard is checking the mission catalog, hardware, and persistent storage.');
 
     try {
       const catalog = await ensureWizardCatalogReady();
@@ -1561,16 +1561,16 @@ export default function SetupPage() {
 
       let missionHomeDir = storageStatus?.layout.home;
       if (!storageReady) {
-        setWizardBuildMessage('nvWizard is finding the persistent block storage first, then it will build the mission there.');
+        setWizardBuildMessage('AI Wizard is finding the persistent block storage first, then it will build the mission there.');
         const detectedStorage = await handleUseRecommendedStorage();
         if (!detectedStorage?.ok || detectedStorage.configured_by === 'default') {
-          setWizardBuildMessage('nvWizard could not prove the persistent storage path yet. It will stay on the simple view; open Advanced Details only if you want the manual override.');
+          setWizardBuildMessage('AI Wizard could not prove the persistent storage path yet. It will stay on the simple view; open Advanced Details only if you want the manual override.');
           return;
         }
         missionHomeDir = detectedStorage.layout.home;
       }
 
-      setWizardBuildMessage('nvWizard picked the beginner-safe defaults and handed the mission to the backend job runner.');
+      setWizardBuildMessage('AI Wizard picked the beginner-safe defaults and handed the mission to the backend job runner.');
       setStep(wizardProfileNeedsComfy(profile) ? 'comfyui' : 'studio');
       setStudioEvents([]);
       setModelEvents([]);
@@ -1628,7 +1628,7 @@ export default function SetupPage() {
             void refreshSetupHelper(missionHomeDir);
           },
           onError: error => {
-            setWizardBuildMessage(`nvWizard paused: ${error}. Ask nvWizard to read the logs, or open Advanced Details if you want the full job trail.`);
+            setWizardBuildMessage(`AI Wizard paused: ${error}. Ask AI Wizard to read the logs, or open Advanced Details if you want the full job trail.`);
             setActiveWizardBuild(null);
             setStudioInstalling(false);
             setModelsInstalling(false);
@@ -1641,8 +1641,8 @@ export default function SetupPage() {
       );
     } catch (err) {
       setWizardBuildMessage(err instanceof Error
-        ? `nvWizard paused: ${err.message}. Ask nvWizard to read logs, jobs, and receipts before opening Advanced Details.`
-        : 'nvWizard paused: setup needs attention. Ask nvWizard to read logs, jobs, and receipts before opening Advanced Details.'
+        ? `AI Wizard paused: ${err.message}. Ask AI Wizard to read logs, jobs, and receipts before opening Advanced Details.`
+        : 'AI Wizard paused: setup needs attention. Ask AI Wizard to read logs, jobs, and receipts before opening Advanced Details.'
       );
       setActiveWizardBuild(null);
       void refreshInstallJobs();
@@ -1679,7 +1679,7 @@ export default function SetupPage() {
       void refreshWorkspacePassport(missionHomeDir);
       void refreshSetupHelper(missionHomeDir);
     } else if (['failed', 'interrupted', 'canceled'].includes(finishedMission.status)) {
-      setWizardBuildMessage(finishedMission.message || `Mission build ${finishedMission.status}. Ask nvWizard to explain the logs, or open Advanced Details for the full job trail.`);
+      setWizardBuildMessage(finishedMission.message || `Mission build ${finishedMission.status}. Ask AI Wizard to explain the logs, or open Advanced Details for the full job trail.`);
       void refreshSetupInventory(false, missionHomeDir);
       void refreshSetupHelper(missionHomeDir);
     }
@@ -2081,7 +2081,7 @@ export default function SetupPage() {
   const localChatReadinessMessage = localChatKnown
     ? localChatReady
       ? localChatSummary ?? 'Local chat verified.'
-      : `Setup guide is online; local model chat is not verified yet. ${localChatSummary ?? 'Run Fix Setup or ask nvWizard for the next repair.'}`
+      : `Setup guide is online; local model chat is not verified yet. ${localChatSummary ?? 'Run Fix Setup or ask AI Wizard for the next repair.'}`
     : null;
   const workspaceStateSummary = localChatReadinessMessage
     ?? activeStartupMessage
@@ -2090,7 +2090,7 @@ export default function SetupPage() {
       ? setupConcernCount > 0
         ? 'Local chat is verified. Review the remaining setup warnings below.'
         : 'Workspace is ready. Local chat has been verified.'
-      : 'nvWizard is checking storage, runtime, local AI, models, and setup jobs.');
+      : 'AI Wizard is checking storage, runtime, local AI, models, and setup jobs.');
 
   useEffect(() => {
     if (startupAutopilotTriggeredRef.current) return;
@@ -2103,7 +2103,7 @@ export default function SetupPage() {
     startupAutopilotTriggeredRef.current = true;
     setStartupCountdown(10);
     setStartupAutopilotMessage(
-      `nvWizard will download ${startupDownloadLabel} so local Ask AI works. You can cancel before it starts.`
+      `AI Wizard will download ${startupDownloadLabel} so local Ask AI works. You can cancel before it starts.`
     );
   }, [
     activeInstallJobs.length,
@@ -2222,7 +2222,7 @@ export default function SetupPage() {
     new Map((assistantReply?.actions ?? []).map(action => [action.id, action])).values()
   );
   const advisorSummary = assistantLoading
-    ? 'nvWizard is checking jobs, receipts, boot drift, logs, runtime, models, and safe rootless repairs.'
+    ? 'AI Wizard is checking jobs, receipts, boot drift, logs, runtime, models, and safe rootless repairs.'
     : assistantReply?.answer
     ?? primarySetupIssueSummary
     ?? setupHelper?.summary
@@ -2263,7 +2263,7 @@ export default function SetupPage() {
       return;
     }
     if (actionId === 'watch-jobs') {
-      setWizardBuildMessage('nvWizard is watching the running setup job. Progress appears in the Launch Check and Install Jobs panels.');
+      setWizardBuildMessage('AI Wizard is watching the running setup job. Progress appears in the Launch Check and Install Jobs panels.');
       void refreshInstallJobs();
       return;
     }
@@ -2455,8 +2455,8 @@ export default function SetupPage() {
       const gpu = gpuInfo?.gpus?.[0];
       setWizardBuildMessage(
         gpu
-          ? `GPU detected: ${gpu.name} with ${gpu.vram_gb} GB VRAM. nvWizard will use that to recommend model sizes and GPU-fit installs.`
-          : 'No NVIDIA GPU was detected from the WebUI yet. nvWizard can still explain the host state, but the VM image may need provider/admin attention if nvidia-smi is unavailable.'
+          ? `GPU detected: ${gpu.name} with ${gpu.vram_gb} GB VRAM. AI Wizard will use that to recommend model sizes and GPU-fit installs.`
+          : 'No NVIDIA GPU was detected from the WebUI yet. AI Wizard can still explain the host state, but the VM image may need provider/admin attention if nvidia-smi is unavailable.'
       );
       return;
     }
@@ -2480,7 +2480,7 @@ export default function SetupPage() {
       return;
     }
     if (label === 'Boot') {
-      setWizardBuildMessage('nvWizard is rechecking the VM image, runtime, storage, and app drift without opening the advanced panel.');
+      setWizardBuildMessage('AI Wizard is rechecking the VM image, runtime, storage, and app drift without opening the advanced panel.');
       void handleBootRecheck();
     }
   };
@@ -2509,7 +2509,7 @@ export default function SetupPage() {
       {/* Header */}
       <div className="border-b border-[#e5e5e5] pb-2">
         <div className="flex items-center justify-between gap-3">
-          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase">nvWizard Setup</div>
+          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase">nvHive Setup</div>
           <div className="flex items-center gap-2">
             <Link href="/query" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
               Ask AI
@@ -3010,7 +3010,7 @@ export default function SetupPage() {
             <div className="border border-[#0a0a0a] bg-[#0a0a0a] text-[#f5f5f5] p-3 space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
                 <div>
-                  <div className="text-xs font-mono font-bold text-[#76B900]">nvWizard Boot Watch</div>
+                  <div className="text-xs font-mono font-bold text-[#76B900]">AI Wizard Boot Watch</div>
                   <div className="text-[10px] font-mono text-[#d4d4d4] mt-0.5">
                     {bootPreflight?.summary ?? setupHelper?.boot_preflight?.summary ?? 'Boot preflight runs when nvHive launches.'}
                   </div>
@@ -3300,7 +3300,7 @@ export default function SetupPage() {
         <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
-              <div className="section-label">nvWizard Advanced Details</div>
+              <div className="section-label">AI Wizard Advanced Details</div>
               <div className="text-[10px] font-mono text-[#737373] mt-1">
                 {setupHelper?.summary ?? 'Offline setup recommendations'}
               </div>
@@ -3415,7 +3415,7 @@ export default function SetupPage() {
               <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">Ask nvWizard</div>
+                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">Ask AI Wizard</div>
                     <div className="text-[10px] font-mono text-[#737373] mt-0.5">
                       Product-aware guidance from local state, jobs, receipts, and the nvHive brief
                     </div>
@@ -3570,7 +3570,7 @@ export default function SetupPage() {
               <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <div className="section-label">nvWizard Launch Check</div>
+                    <div className="section-label">AI Wizard Launch Check</div>
                     <span className={`text-[10px] font-mono font-bold uppercase ${
                       startupAutopilotReady ? 'text-[#76B900]' : activeInstallJobs.length > 0 ? 'text-[#d97706]' : 'text-[#0a0a0a]'
                     }`}>
@@ -3766,7 +3766,7 @@ export default function SetupPage() {
                     disabled={assistantLoading || apiDisconnected}
                     className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                   >
-                    {assistantLoading ? 'Thinking' : 'Ask nvWizard'}
+                    {assistantLoading ? 'Thinking' : 'Ask AI Wizard'}
                   </button>
                 </div>
               </div>
@@ -3791,7 +3791,7 @@ export default function SetupPage() {
               <div className="border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-mono font-bold text-[#0a0a0a]">nvWizard Advisor</span>
+                    <span className="text-[10px] font-mono font-bold text-[#0a0a0a]">AI Wizard Advisor</span>
                     <span className="text-[9px] font-mono text-[#76B900] uppercase border border-[#76B900]/40 px-1.5 py-0.5">
                       {advisorModeLabel}
                     </span>
@@ -3823,7 +3823,7 @@ export default function SetupPage() {
                   value={assistantQuestion}
                   onChange={event => setAssistantQuestion(event.target.value)}
                   onKeyDown={event => { if (event.key === 'Enter') void handleAskAssistant(); }}
-                  placeholder="Ask nvWizard what to fix, why something failed, or what to install next"
+                  placeholder="Ask AI Wizard what to fix, why something failed, or what to install next"
                   className="input-base flex-1 px-3 py-2 text-xs font-mono"
                 />
                 <button
@@ -3832,14 +3832,14 @@ export default function SetupPage() {
                   disabled={assistantLoading || !assistantQuestion.trim() || apiDisconnected}
                   className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
                 >
-                  {assistantLoading ? 'Thinking' : 'Ask nvWizard'}
+                  {assistantLoading ? 'Thinking' : 'Ask AI Wizard'}
                 </button>
               </div>
               {(assistantLoading || assistantError || assistantReply) && (
                 <div className="border border-[#d4d4d4] bg-white p-3 space-y-2">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div>
-                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">nvWizard Chat</div>
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">AI Wizard Chat</div>
                       <div className="text-[10px] text-[#737373] mt-0.5">
                         Works immediately from local setup state, jobs, receipts, and redacted logs. The local model takes over when it is healthy.
                       </div>
@@ -4018,7 +4018,7 @@ export default function SetupPage() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <div className="section-label">Install Options</div>
-                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">Choose a workload; nvWizard picks GPU-fit dependencies.</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">Choose a workload; AI Wizard picks GPU-fit dependencies.</div>
                 </div>
               </div>
               {apiDisconnected && (
@@ -4174,7 +4174,7 @@ export default function SetupPage() {
                                     applyWizardProfile(profile.id);
                                     setWizardBuildMessage(`${profile.title} customization controls are open below. Advanced Details stays hidden unless you show it.`);
                                   } else {
-                                    setWizardBuildMessage('nvWizard could not prove persistent storage yet. It will stay in the simple view; show Advanced Details only if you want manual overrides.');
+                                    setWizardBuildMessage('AI Wizard could not prove persistent storage yet. It will stay in the simple view; show Advanced Details only if you want manual overrides.');
                                   }
                                 });
                                 return;
@@ -4203,7 +4203,7 @@ export default function SetupPage() {
             <div>
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 2</div>
               <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Persistent Storage</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">nvWizard prefers a writable 200GB+ block-backed home/data mount and avoids read-only OS or network shares</p>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1">AI Wizard prefers a writable 200GB+ block-backed home/data mount and avoids read-only OS or network shares</p>
             </div>
 
             <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-4">
@@ -4212,7 +4212,7 @@ export default function SetupPage() {
                   <div className="min-w-0">
                     <div className="text-xs font-bold text-[#0a0a0a]">Persistent home</div>
                     <div className="text-[10px] font-mono text-[#76B900] mt-1 break-all">
-                      {storageStatus?.layout.home ?? 'nvWizard is finding the durable block volume'}
+                      {storageStatus?.layout.home ?? 'AI Wizard is finding the durable block volume'}
                     </div>
                     <div className="text-[10px] text-[#525252] mt-1">
                       Models, apps, projects, outputs, logs, and support snapshots live under this one workspace.
@@ -4251,7 +4251,7 @@ export default function SetupPage() {
                 {mountRecommendation && (
                   <div className="mt-2 border border-[#76B900]/30 bg-[#76B900]/5 p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-[#76B900]">nvWizard Recommendation</div>
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-[#76B900]">AI Wizard Recommendation</div>
                       <div className="text-xs font-mono text-[#0a0a0a] mt-1 break-all">{mountRecommendation.recommended_home}</div>
                       <div className="text-[10px] text-[#525252] mt-1">
                         {mountRecommendation.large_block_mount ? 'block storage candidate' : 'candidate'}
@@ -4746,7 +4746,7 @@ export default function SetupPage() {
                   <div className="section-label">Local AI Action</div>
                   <div className="text-sm font-bold text-[#0a0a0a] mt-1">Install the rootless runtime and the GPU-fit model queue.</div>
                   <div className="text-xs text-[#525252] mt-1">
-                    nvWizard keeps the runtime, models, and launchers under the persistent workspace.
+                    AI Wizard keeps the runtime, models, and launchers under the persistent workspace.
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -4823,7 +4823,7 @@ export default function SetupPage() {
               <div className="mt-3">
                 <code className="text-[10px] font-mono text-[#76B900]">docker compose up -d</code>
                 <div className="text-[10px] text-[#737373] mt-1">
-                  Only use this when Docker/Podman is available without sudo. Otherwise nvWizard uses the workspace runtime.
+                  Only use this when Docker/Podman is available without sudo. Otherwise AI Wizard uses the workspace runtime.
                 </div>
               </div>
             </details>

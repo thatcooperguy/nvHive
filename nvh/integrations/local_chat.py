@@ -1,4 +1,4 @@
-"""Local model chat readiness checks for nvWizard.
+"""Local model chat readiness checks for AI Wizard.
 
 The setup wizard needs to distinguish "Ollama is installed" from "a local
 model can actually answer." This module keeps that probe rootless, bounded,

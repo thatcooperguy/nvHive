@@ -94,13 +94,13 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     assert "Pulling $MODEL in background" not in install
     assert "NVH_INSTALL_MODEL_DOWNLOAD" in install
     assert "press s to skip" in install
-    assert "WebUI will show nvWizard model download" in install
+    assert "WebUI will show AI Wizard model download" in install
 
 
 def test_setup_page_surfaces_startup_autopilot_status() -> None:
     setup_page = (ROOT / "web" / "app" / "setup" / "page.tsx").read_text(encoding="utf-8")
 
-    assert "nvWizard Launch Check" in setup_page
+    assert "AI Wizard Launch Check" in setup_page
     assert "Download starts in" in setup_page
     assert "Cancel Download" in setup_page
     assert "Skip Model Download" in setup_page

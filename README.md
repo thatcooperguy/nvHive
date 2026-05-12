@@ -23,12 +23,12 @@ and music production.
 
 | First-time user question | nvHive answer |
 | --- | --- |
-| Where should this install? | nvWizard auto-detects the writable persistent block volume and keeps models, apps, logs, jobs, and config under `NVH_HOME`. |
+| Where should this install? | AI Wizard auto-detects the writable persistent block volume and keeps models, apps, logs, jobs, and config under `NVH_HOME`. |
 | What can I make? | Pick **AI Starter**, **Graphics Creator Studio**, **Game Dev Lab**, **Music Producer Studio**, or **Agent Builder**. |
 | What models fit this GPU? | The wizard detects GPU/VRAM/CUDA and recommends local LLMs and ComfyUI profiles that fit the machine. |
 | What if the VM image changed? | Boot health checks compare storage, drivers, CUDA, Python, Node, and receipts against the previous session. |
 | What if something breaks? | **Fix My Setup** runs safe rootless repairs, and support snapshots redact secrets and local paths. |
-| What should nvWizard remember? | **nvHive Vault** keeps product memory, pilot notes, decisions, conflicts, and support playbooks as plain Markdown under `NVH_HOME`. Obsidian is optional. |
+| What should AI Wizard remember? | **nvHive Vault** keeps product memory, pilot notes, decisions, conflicts, and support playbooks as plain Markdown under `NVH_HOME`. Obsidian is optional. |
 | Do I need root? | No for nvHive, local models, ComfyUI, Blender, Godot helpers, music tools, and OpenClaw. NemoClaw stays blocked until Docker already works without sudo. |
 
 The ideal student journey is:
@@ -37,7 +37,7 @@ The ideal student journey is:
 2. Run the one-line install or download the Linux binary.
 3. Open **nvHive AI Studio** from the desktop icon.
 4. Pick a mission.
-5. Let nvWizard install the right rootless tools into persistent storage.
+5. Let AI Wizard install the right rootless tools into persistent storage.
 
 What you get on the happy path:
 
@@ -47,7 +47,7 @@ What you get on the happy path:
 - GPU-aware model recommendations and disk estimates.
 - Mission cards for AI Starter, Graphics Creator, Game Dev, Music Producer, and Agent Builder.
 - Self-healing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts.
-- A product-aware nvWizard chat helper that works immediately from local setup state, jobs, receipts, redacted logs, and rootless safety rules, then hands off to the local model when Ollama is healthy.
+- A product-aware AI Wizard chat helper that works immediately from local setup state, jobs, receipts, redacted logs, and rootless safety rules, then hands off to the local model when Ollama is healthy.
 - A rootless Markdown vault for durable memory, known product conflicts, pilot test notes, and optional Obsidian viewing.
 - Redacted error reports with request IDs when something needs debugging.
 
@@ -211,7 +211,7 @@ nvh studio --install python-runtime-fallback -y  # optional rescue pack, not the
 ### Pick Your Mission
 
 The setup wizard starts with one simple question: **what do you want to make?**
-Pick a mission and nvWizard handles storage, GPU checks, Python/Node runtime
+Pick a mission and AI Wizard handles storage, GPU checks, Python/Node runtime
 checks, model recommendations, rootless installers, and background jobs.
 
 The wizard does these checks before heavy installs:
@@ -242,7 +242,7 @@ ComfyUI, AI Studio packs, and local model downloads run as persistent jobs under
 clear retry trail after cloud desktop reconnects. The model picker shows GPU-fit
 badges, disk estimates, installed status, and a selected download queue.
 
-When the VM image changes between sessions, nvWizard compares the new boot
+When the VM image changes between sessions, AI Wizard compares the new boot
 fingerprint with `$NVH_HOME/config/boot-preflight.json` and recommends rootless
 repairs before launching large installs. If something still fails, **Copy Error
 Report** creates a redacted report with request IDs and log locations. See
@@ -282,7 +282,7 @@ with local models when available. Every advanced step is skippable. Run
 ### Memory Vault
 
 The WebUI includes **Memory Vault**, a plain Markdown workspace at
-`$NVH_HOME/vault`. It keeps nvWizard product memory, pilot notes, support
+`$NVH_HOME/vault`. It keeps AI Wizard product memory, pilot notes, support
 playbooks, troubleshooting, decisions, and known product conflicts without
 requiring root, a database, or a specific editor.
 

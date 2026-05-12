@@ -1,4 +1,4 @@
-"""Rootless service registry for nvWizard diagnostics.
+"""Rootless service registry for AI Wizard diagnostics.
 
 Every service should answer the same small set of questions: is it installed,
 is it running, where does it live, what URL should the user open, which log
@@ -87,13 +87,15 @@ def _port_open(host: str, port: int, *, timeout: float = 0.25) -> bool:
         return False
 
 
-def _http_ok(url: str, *, timeout: float = 0.75) -> bool:
-    try:
-        request = Request(url, headers={"User-Agent": "nvhive-service-registry"})
-        with urlopen(request, timeout=timeout) as response:
-            return 200 <= int(response.status) < 500
-    except (OSError, URLError, ValueError):
-        return False
+def _http_ok(url: str, *, timeout: float = 2.5, attempts: int = 2) -> bool:
+    for _ in range(max(1, attempts)):
+        try:
+            request = Request(url, headers={"User-Agent": "nvhive-service-registry"})
+            with urlopen(request, timeout=timeout) as response:
+                return 200 <= int(response.status) < 500
+        except (OSError, URLError, ValueError):
+            continue
+    return False
 
 
 def _tail(path: str | Path | None, *, lines: int = 4) -> list[str]:
@@ -281,7 +283,15 @@ def _probe_api(home_dir: str | Path | None = None) -> ServiceStatus:
     url = f"http://127.0.0.1:{port}"
     health_url = f"{url}/v1/health"
     port_ready = _port_open("127.0.0.1", port)
-    healthy = _http_ok(health_url) if port_ready else False
+    in_current_api_process = (
+        port_ready
+        and os.environ.get("NVH_API_SERVER_PROCESS") == "1"
+        and str(port) == os.environ.get("NVH_API_PORT", str(port))
+    )
+    # Service-health can run inside the API process. A blocking loopback call
+    # to /v1/health from that same request can starve the event loop and create
+    # a false PORT-OPEN warning, so trust the process that owns the port.
+    healthy = in_current_api_process or (_http_ok(health_url) if port_ready else False)
     status = "ready" if healthy else "port-open" if port_ready else "stopped"
     return ServiceStatus(
         id="nvhive-api",
@@ -292,7 +302,9 @@ def _probe_api(home_dir: str | Path | None = None) -> ServiceStatus:
         ready=healthy,
         status=status,
         summary=(
-            f"API is healthy at {health_url}."
+            "API is healthy in the current nvHive server process."
+            if in_current_api_process
+            else f"API is healthy at {health_url}."
             if healthy
             else f"API port {port} is open but /v1/health did not respond."
             if port_ready
@@ -698,7 +710,7 @@ def run_service_action(
         "action_id": normalized_action,
         "requires_job": True,
         "message": (
-            f"{status.get('name') or normalized_service} uses the existing nvWizard install job "
+            f"{status.get('name') or normalized_service} uses the existing AI Wizard install job "
             f"for '{normalized_action}'. Progress will appear in Install Jobs."
         ),
         "service": status,

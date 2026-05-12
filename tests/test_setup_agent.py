@@ -47,7 +47,7 @@ def test_setup_helper_flags_default_storage(monkeypatch) -> None:
     assert report["ready"] is False
     assert report["actions"][0]["id"] == "storage"
     assert report["assistant"]["mode"] == "offline-deterministic"
-    assert report["assistant"]["product"] == "nvHive / nvWizard"
+    assert report["assistant"]["product"] == "nvHive / AI Wizard"
     assert report["assistant"]["available_immediately"] is True
     assert report["assistant"]["requires_local_model"] is False
     assert report["assistant"]["official_repo_url"].endswith("/thatcooperguy/nvHive")
@@ -157,7 +157,7 @@ def test_setup_assistant_does_not_require_comfyui_for_local_ai(tmp_path, monkeyp
             },
             "receipts": {"count": 7, "unhealthy": 0, "receipts": []},
             "assistant": {
-                "product": "nvHive / nvWizard",
+                "product": "nvHive / AI Wizard",
                 "grounding_sources": ["local setup helper report"],
             },
         },
@@ -225,7 +225,7 @@ def test_setup_assistant_debugs_failed_jobs_and_logs(tmp_path, monkeypatch) -> N
             ],
             "receipts": {"count": 0, "unhealthy": 0, "receipts": []},
             "assistant": {
-                "product": "nvHive / nvWizard",
+                "product": "nvHive / AI Wizard",
                 "grounding_sources": ["local setup helper report", "install job logs"],
             },
         },
@@ -282,6 +282,68 @@ def test_setup_assistant_debugs_failed_jobs_and_logs(tmp_path, monkeypatch) -> N
     assert reply["troubleshooting"]["primary_id"] == "ollama-wrong-binary"
     assert reply["official_urls"]
     assert reply["commands"] == ["nvh studio --install rootless-ollama -y"]
+
+
+def test_setup_assistant_turns_micromamba_log_into_runtime_button(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    line = (
+        "Micromamba fallback install failed: [Errno 2] No such file or directory: "
+        "'$NVH_HOME/cache/downloads/micromamba-linux-64.tar.bz2'"
+    )
+    monkeypatch.setattr(
+        setup_agent,
+        "setup_helper_report",
+        lambda home_dir=None: {
+            "ready": False,
+            "summary": "Runtime needs attention",
+            "actions": [],
+            "receipts": {"count": 0, "unhealthy": 0, "receipts": []},
+            "assistant": {
+                "product": "nvHive / AI Wizard",
+                "grounding_sources": ["local setup helper report", "install job logs"],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        setup_agent,
+        "_recent_failed_job",
+        lambda home_dir=None: {
+            "kind": "studio-pack-install",
+            "title": "Install AI Studio packs",
+            "status": "failed",
+            "message": line,
+        },
+    )
+    monkeypatch.setattr(
+        setup_agent,
+        "_safe_diagnostics_report",
+        lambda home_dir=None: {
+            "report_id": "diag-mamba",
+            "checks": {
+                "jobs": {
+                    "ok": True,
+                    "data": {
+                        "failed_event_tails": [
+                            {
+                                "kind": "studio-pack-install",
+                                "status": "failed",
+                                "message": line,
+                                "events": [{"message": line}],
+                            },
+                        ],
+                    },
+                },
+            },
+            "logs": {"recent": [{"path": "/tmp/nvhive.log", "lines": [line]}]},
+        },
+    )
+
+    reply = setup_agent.setup_assistant_reply("Can you fix the micromamba issue?", tmp_path / "nvh")
+
+    assert reply["focus"] == "debugger"
+    assert reply["troubleshooting"]["primary_id"] == "micromamba-runtime-retry"
+    assert any(action["id"] == "runtime-fallback" for action in reply["actions"])
+    assert "Install Runtime" in reply["answer"]
 
 
 def test_setup_helper_surfaces_unhealthy_receipt(tmp_path, monkeypatch) -> None:

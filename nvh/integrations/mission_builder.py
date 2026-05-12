@@ -1,4 +1,4 @@
-"""Backend-owned nvWizard mission builds.
+"""Backend-owned AI Wizard mission builds.
 
 The setup UI should be able to start one durable job for a mission instead of
 holding the dependency chain in the browser tab. This module turns the mission
@@ -41,7 +41,7 @@ COMFY_MISSIONS = {"creator", "game", "full"}
 def _validate_profile(profile: str) -> str:
     normalized = (profile or "student").strip().lower()
     if normalized not in MISSION_TITLES:
-        raise KeyError(f"Unknown nvWizard mission profile: {profile}")
+        raise KeyError(f"Unknown AI Wizard mission profile: {profile}")
     return normalized
 
 

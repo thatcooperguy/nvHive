@@ -15,6 +15,7 @@ import shutil
 import sys
 import tarfile
 import time
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ from typing import Any
 from nvh.integrations.storage import nvh_home, storage_layout
 
 MICROMAMBA_BASE_URL = "https://micro.mamba.pm/api/micromamba"
+_MICROMAMBA_INSTALL_LOCK = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -156,88 +158,91 @@ exec "{micromamba_binary()}" "$@"
 
 async def install_micromamba(*, force_update: bool = False) -> AsyncIterator[dict[str, Any]]:
     """Install micromamba under NVH_HOME and stream progress events."""
-    layout = storage_layout()
-    binary = micromamba_binary()
-    root_prefix = micromamba_root()
+    async with _MICROMAMBA_INSTALL_LOCK:
+        layout = storage_layout()
+        binary = micromamba_binary()
+        root_prefix = micromamba_root()
 
-    if binary.exists() and not force_update:
-        _write_micromamba_launcher()
+        if binary.exists() and not force_update:
+            _write_micromamba_launcher()
+            yield {
+                "event": "step",
+                "status": "complete",
+                "message": "Rootless micromamba already installed",
+                "binary": str(binary),
+            }
+            return
+
+        subdir = micromamba_subdir()
+        url = f"{MICROMAMBA_BASE_URL}/{subdir}/latest"
+        download_dir = layout.cache_dir / "downloads"
+        download_dir.mkdir(parents=True, exist_ok=True)
+        root_prefix.mkdir(parents=True, exist_ok=True)
+        archive = download_dir / f"micromamba-{subdir}-{uuid.uuid4().hex[:8]}.tar.bz2"
+
         yield {
-            "event": "step",
+            "event": "plan",
+            "status": "running",
+            "message": f"Installing rootless micromamba for {subdir}",
+            "url": url,
+            "target": str(binary),
+        }
+
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
+                async with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    total = int(response.headers.get("content-length", "0") or "0")
+                    downloaded = 0
+                    last_emit = time.monotonic()
+                    with archive.open("wb") as handle:
+                        async for chunk in response.aiter_bytes(chunk_size=1024 * 256):
+                            handle.write(chunk)
+                            downloaded += len(chunk)
+                            now = time.monotonic()
+                            if total and now - last_emit > 0.75:
+                                yield {
+                                    "event": "download",
+                                    "status": "running",
+                                    "message": f"Downloaded {downloaded / 1024 / 1024:.1f} MB",
+                                    "progress": min(80, int(downloaded / total * 80)),
+                                }
+                                last_emit = now
+
+            if not archive.exists() or archive.stat().st_size <= 0:
+                raise RuntimeError("Micromamba download did not create a readable archive")
+            yield {"event": "step", "status": "running", "message": "Extracting micromamba"}
+            await asyncio.to_thread(_extract_micromamba, archive, binary)
+            launcher = _write_micromamba_launcher()
+        except Exception as exc:
+            yield {
+                "event": "error",
+                "status": "failed",
+                "message": f"Micromamba fallback install failed: {exc}",
+            }
+            return
+        finally:
+            archive.unlink(missing_ok=True)
+
+        marker = root_prefix / "nvh-runtime.json"
+        marker.write_text(
+            (
+                "{\n"
+                f'  "installed_at": "{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}",\n'
+                f'  "binary": "{binary}",\n'
+                f'  "launcher": "{launcher}",\n'
+                f'  "subdir": "{subdir}"\n'
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+        yield {
+            "event": "complete",
             "status": "complete",
-            "message": "Rootless micromamba already installed",
+            "message": "Rootless micromamba fallback installed",
             "binary": str(binary),
+            "launcher": str(launcher),
+            "status_snapshot": runtime_status().as_dict(),
         }
-        return
-
-    subdir = micromamba_subdir()
-    url = f"{MICROMAMBA_BASE_URL}/{subdir}/latest"
-    download_dir = layout.cache_dir / "downloads"
-    download_dir.mkdir(parents=True, exist_ok=True)
-    root_prefix.mkdir(parents=True, exist_ok=True)
-    archive = download_dir / f"micromamba-{subdir}.tar.bz2"
-
-    yield {
-        "event": "plan",
-        "status": "running",
-        "message": f"Installing rootless micromamba for {subdir}",
-        "url": url,
-        "target": str(binary),
-    }
-
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                total = int(response.headers.get("content-length", "0") or "0")
-                downloaded = 0
-                last_emit = time.monotonic()
-                with archive.open("wb") as handle:
-                    async for chunk in response.aiter_bytes(chunk_size=1024 * 256):
-                        handle.write(chunk)
-                        downloaded += len(chunk)
-                        now = time.monotonic()
-                        if total and now - last_emit > 0.75:
-                            yield {
-                                "event": "download",
-                                "status": "running",
-                                "message": f"Downloaded {downloaded / 1024 / 1024:.1f} MB",
-                                "progress": min(80, int(downloaded / total * 80)),
-                            }
-                            last_emit = now
-
-        yield {"event": "step", "status": "running", "message": "Extracting micromamba"}
-        await asyncio.to_thread(_extract_micromamba, archive, binary)
-        launcher = _write_micromamba_launcher()
-    except Exception as exc:
-        yield {
-            "event": "error",
-            "status": "failed",
-            "message": f"Micromamba fallback install failed: {exc}",
-        }
-        return
-    finally:
-        archive.unlink(missing_ok=True)
-
-    marker = root_prefix / "nvh-runtime.json"
-    marker.write_text(
-        (
-            "{\n"
-            f'  "installed_at": "{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}",\n'
-            f'  "binary": "{binary}",\n'
-            f'  "launcher": "{launcher}",\n'
-            f'  "subdir": "{subdir}"\n'
-            "}\n"
-        ),
-        encoding="utf-8",
-    )
-    yield {
-        "event": "complete",
-        "status": "complete",
-        "message": "Rootless micromamba fallback installed",
-        "binary": str(binary),
-        "launcher": str(launcher),
-        "status_snapshot": runtime_status().as_dict(),
-    }
