@@ -525,6 +525,7 @@ export default function SetupPage() {
   const refreshInstallJobs = useCallback(async () => {
     try {
       const data = await getInstallJobs({ limit: 8 });
+      setApiStatus('connected');
       setInstallJobs(data.jobs);
       setJobsError(null);
     } catch (err) {
@@ -535,6 +536,7 @@ export default function SetupPage() {
   const refreshSetupHelper = useCallback(async (homeDir?: string) => {
     try {
       const data = await getSetupHelper(homeDir);
+      setApiStatus('connected');
       setSetupHelper(data);
       setSetupHelperError(null);
     } catch (err) {
@@ -545,6 +547,7 @@ export default function SetupPage() {
   const refreshServiceHealth = useCallback(async (homeDir?: string) => {
     try {
       const data = await getSetupServiceHealth(homeDir);
+      setApiStatus('connected');
       setServiceHealth(data);
       setServiceHealthError(null);
     } catch (err) {
@@ -564,6 +567,9 @@ export default function SetupPage() {
       getWizardRootlessPolicy(activeHome),
       planPromise,
     ]);
+    if (passportResult.status === 'fulfilled' || policyResult.status === 'fulfilled' || planResult.status === 'fulfilled') {
+      setApiStatus('connected');
+    }
     if (passportResult.status === 'fulfilled') setWorkspacePassport(passportResult.value);
     if (policyResult.status === 'fulfilled') setRootlessPolicy(policyResult.value);
     if (planResult.status === 'fulfilled') setWizardPlan(planResult.value);
@@ -580,6 +586,7 @@ export default function SetupPage() {
         getSetupProductionReadiness(activeHome),
         getWorkspaceState(activeHome),
       ]);
+      setApiStatus('connected');
       setSetupReceipts(receipts);
       setSetupCatalog(catalog);
       setBootPreflight(boot);
@@ -858,6 +865,7 @@ export default function SetupPage() {
       try {
         const status = await getStorageStatus();
         if (cancelled) return;
+        setApiStatus('connected');
         setStorageStatus(status);
         setStorageHomeInput(status.layout.home);
         setStorageError(null);
@@ -972,6 +980,7 @@ export default function SetupPage() {
     setTestResult(null);
     try {
       const resp = await query(testPrompt);
+      setApiStatus('connected');
       setTestResult(resp.content);
     } catch (err) {
       setTestError(err instanceof Error ? err.message : 'Test failed');
@@ -1038,6 +1047,7 @@ export default function SetupPage() {
     setComfyLoading(true);
     try {
       const status = await getComfyUIStatus();
+      setApiStatus('connected');
       setComfyStatus(status);
       setComfyExamples(status.examples ?? []);
     } catch {
@@ -1056,6 +1066,7 @@ export default function SetupPage() {
     setStudioLoading(true);
     try {
       const data = await getStudioPacks();
+      setApiStatus('connected');
       setStudioPacks(data.packs);
       setStudioBundles(data.bundles);
       setStudioRoot(data.root);
@@ -1183,6 +1194,7 @@ export default function SetupPage() {
     setModelsLoading(true);
     try {
       const data = await getStudioModels();
+      setApiStatus('connected');
       setStudioModels(data.models);
       setDetectedModelVram(data.detected_vram_gb);
       setSelectedStudioModels(prev => {
@@ -1330,17 +1342,21 @@ export default function SetupPage() {
         onComplete: event => {
           setModelEvents(prev => [...prev.slice(-10), event]);
           setModelsInstalling(false);
+          setServiceActionRunning(null);
           setStartupAutopilotMessage('Model download complete. AI Wizard is verifying that local chat returns text.');
           refreshStudioModels();
           void refreshInstallJobs();
           void refreshSetupInventory(false);
           void refreshSetupHelper(storageStatus?.layout.home);
+          void refreshServiceHealth(storageStatus?.layout.home);
         },
         onError: error => {
           setModelError(error);
           setModelsInstalling(false);
+          setServiceActionRunning(null);
           void refreshInstallJobs();
           void refreshSetupHelper(storageStatus?.layout.home);
+          void refreshServiceHealth(storageStatus?.layout.home);
         },
       }
     );
@@ -1400,25 +1416,36 @@ export default function SetupPage() {
         onComplete: event => {
           setStudioEvents(prev => [...prev.slice(-10), event]);
           setStudioInstalling(false);
+          setServiceActionRunning(null);
           refreshStudioPacks();
           void refreshInstallJobs();
           void refreshSetupInventory(false);
           void refreshSetupHelper(storageStatus?.layout.home);
+          void refreshServiceHealth(storageStatus?.layout.home);
         },
         onError: error => {
           setStudioError(error);
           setStudioInstalling(false);
+          setServiceActionRunning(null);
           void refreshInstallJobs();
           void refreshSetupHelper(storageStatus?.layout.home);
+          void refreshServiceHealth(storageStatus?.layout.home);
         },
       }
     );
   };
 
   const handleInstallComfyUI = () => {
-    if (comfyInstalling) return;
+    if (comfyInstalling) {
+      setStep('comfyui');
+      setWizardBuildMessage('ComfyUI is already installing. Watch the Install Jobs progress card for the latest event.');
+      return;
+    }
+    setStep('comfyui');
+    setWizardBuildMessage('Starting the ComfyUI install job. Progress will appear in Install Jobs and the ComfyUI panel.');
     if (!storageStatus?.ok || storageStatus.configured_by === 'default') {
       setComfyError('AI Wizard is finding persistent storage before installing ComfyUI.');
+      setServiceActionRunning(null);
       void handleUseRecommendedStorage();
       return;
     }
@@ -1436,6 +1463,8 @@ export default function SetupPage() {
       {
         onJob: job => {
           mergeInstallJob(job);
+          setWizardBuildMessage('ComfyUI install job started. nvHive is tracking download and setup progress in the workspace.');
+          void refreshServiceHealth(storageStatus?.layout.home);
         },
         onStatus: job => {
           mergeInstallJob(job);
@@ -1471,27 +1500,34 @@ export default function SetupPage() {
                 if (status.url && typeof window !== 'undefined') {
                   window.open(status.url, '_blank', 'noopener,noreferrer');
                 }
+                void refreshServiceHealth(storageStatus?.layout.home);
               } catch (err) {
                 setComfyError(err instanceof Error ? err.message : 'ComfyUI installed, but auto-launch failed');
                 setComfyPlanMessage('ComfyUI installed, but auto-launch needs attention. Use Start or Copy Support Report.');
               } finally {
                 setComfyStarting(false);
+                setServiceActionRunning(null);
                 void refreshComfyUI();
+                void refreshServiceHealth(storageStatus?.layout.home);
               }
             })();
           } else {
+            setServiceActionRunning(null);
             refreshComfyUI();
           }
           void refreshInstallJobs();
           void refreshSetupInventory(false);
           void refreshSetupHelper(storageStatus?.layout.home);
+          void refreshServiceHealth(storageStatus?.layout.home);
         },
         onError: error => {
           setComfyError(error);
           setComfyPlanMessage('ComfyUI install stopped before launch. AI Wizard captured the error for the support report.');
           setComfyInstalling(false);
+          setServiceActionRunning(null);
           void refreshInstallJobs();
           void refreshSetupHelper(storageStatus?.layout.home);
+          void refreshServiceHealth(storageStatus?.layout.home);
         },
       }
     );
@@ -1515,6 +1551,8 @@ export default function SetupPage() {
       setComfyError(err instanceof Error ? err.message : 'Failed to start ComfyUI');
     } finally {
       setComfyStarting(false);
+      setServiceActionRunning(null);
+      void refreshServiceHealth(storageStatus?.layout.home);
     }
   };
 
@@ -1708,11 +1746,14 @@ export default function SetupPage() {
   const currentStepIdx = STEPS.findIndex(s => s.id === step);
   const currentStep = STEPS[currentStepIdx] ?? STEPS[0];
   const currentAdvancedGroup = ADVANCED_GROUPS.find(group => group.steps.includes(step)) ?? ADVANCED_GROUPS[0];
-  const apiDisconnected = apiStatus === 'disconnected';
+  const apiServiceStatus = serviceHealth?.services.find(service => service.id === 'nvhive-api') ?? null;
+  const apiConnected = apiStatus === 'connected' || apiServiceStatus?.ready === true;
+  const apiChecking = apiStatus === 'checking' && !apiConnected;
+  const apiDisconnected = apiStatus === 'disconnected' && !apiConnected;
   const storageReady = Boolean(storageStatus?.ok && storageStatus.configured_by !== 'default');
   const storageFreeGb = storageStatus?.free_gb ?? null;
   const mountRecommendation = mountAutopilot?.recommended ?? missionControl?.mount_autopilot.recommended ?? bootPreflight?.mount_autopilot?.recommended ?? null;
-  const storageAutopilotBusy = !storageReady && !apiDisconnected && (mountActivating || storageSaving || apiStatus === 'checking' || storageStatus === null);
+  const storageAutopilotBusy = !storageReady && !apiDisconnected && (mountActivating || storageSaving || apiChecking || storageStatus === null);
   const storageBeginnerLabel = storageReady
     ? 'ready'
     : apiDisconnected
@@ -2007,7 +2048,7 @@ export default function SetupPage() {
   const activeStartupMessage = staleDownloadMessage ? null : startupAutopilotMessage;
   const startupAutopilotReady =
     (workspaceStateReady && (!localChatKnown || localChatReady)) || (
-      apiStatus === 'connected' &&
+      apiConnected &&
       storageReady &&
       localAiReady &&
       recommendedMissingIds.length === 0 &&
@@ -2038,8 +2079,8 @@ export default function SetupPage() {
     },
     {
       label: 'API',
-      value: apiStatus === 'connected' ? 'online' : apiStatus,
-      state: apiStatus === 'connected' ? 'ready' : apiStatus === 'checking' ? 'checking' : 'fix',
+      value: apiConnected ? 'online' : apiChecking ? 'checking' : 'offline',
+      state: apiConnected ? 'ready' : apiChecking ? 'checking' : 'fix',
     },
     {
       label: 'Runtime',
@@ -2095,7 +2136,7 @@ export default function SetupPage() {
   useEffect(() => {
     if (startupAutopilotTriggeredRef.current) return;
     if (startupAutopilotSkipped || step !== 'welcome') return;
-    if (apiStatus !== 'connected' || !storageReady || !localAiReady || modelsLoading || studioModels.length === 0) return;
+    if (!apiConnected || !storageReady || !localAiReady || modelsLoading || studioModels.length === 0) return;
     if (anyInstallRunning || activeInstallJobs.length > 0) return;
     const missing = recommendedMissingModelIds();
     if (missing.length === 0) return;
@@ -2108,7 +2149,7 @@ export default function SetupPage() {
   }, [
     activeInstallJobs.length,
     anyInstallRunning,
-    apiStatus,
+    apiConnected,
     localAiReady,
     modelsLoading,
     recommendedMissingModelIds,
@@ -2190,12 +2231,12 @@ export default function SetupPage() {
     },
     {
       label: 'Boot',
-      value: apiStatus === 'checking'
+      value: apiChecking
         ? 'checking'
         : apiDisconnected
           ? 'API offline'
           : bootChangeCount ? `${bootChangeCount} change${bootChangeCount === 1 ? '' : 's'}` : 'clean',
-      state: apiStatus === 'checking' ? 'checking' : apiDisconnected ? 'fix' : bootChangeCount ? 'warn' : setupConcernCount ? 'fix' : 'ready',
+      state: apiChecking ? 'checking' : apiDisconnected ? 'fix' : bootChangeCount ? 'warn' : setupConcernCount ? 'fix' : 'ready',
     },
   ];
   const advisorModeLabel = bootAgentHelper?.local_agent_ready
@@ -2352,7 +2393,16 @@ export default function SetupPage() {
       'music-tools',
       'vault',
     ].includes(nextAction)) {
+      setServiceActionRunning(key);
+      setServiceHealthError(null);
+      setWizardBuildMessage(`${service.next_action_label ?? helperActionLabel(nextAction)} requested. Progress will appear in Install Jobs or the matching service card.`);
       runHelperAction(nextAction);
+      if (typeof window !== 'undefined') {
+        window.setTimeout(() => {
+          setServiceActionRunning(current => current === key ? null : current);
+          void refreshServiceHealth(storageStatus?.layout.home);
+        }, 2000);
+      }
       return;
     }
     setServiceActionRunning(key);
@@ -2363,6 +2413,7 @@ export default function SetupPage() {
         action_id: nextAction,
         home_dir: storageStatus?.layout.home,
       });
+      setApiStatus('connected');
       if (result.health) setServiceHealth(result.health);
       if (result.service && serviceHealth) {
         setServiceHealth({
@@ -2445,7 +2496,7 @@ export default function SetupPage() {
   };
 
   const handleSystemCheckClick = (label: string) => {
-    if (apiDisconnected || apiStatus === 'checking') return;
+    if (apiDisconnected || apiChecking) return;
     if (label === 'Storage') {
       if (!storageReady) void handleUseRecommendedStorage();
       else setWizardBuildMessage(`Storage looks ready at ${workspaceHome}. Large apps, models, jobs, logs, and outputs should stay on this persistent volume.`);
@@ -2803,6 +2854,7 @@ export default function SetupPage() {
                   : 'border-[#e5e5e5] bg-[#fafafa] text-[#737373]';
               const actionKey = `${service.id}:${service.next_action_id ?? 'refresh'}`;
               const isRunning = serviceActionRunning === actionKey;
+              const actionDisabled = isRunning || (service.next_action_id ? helperActionDisabled(service.next_action_id) : false);
               return (
                 <div key={service.id} className={`border p-3 ${tone}`}>
                   <div className="flex items-start justify-between gap-2">
@@ -2835,7 +2887,7 @@ export default function SetupPage() {
                       <button
                         type="button"
                         onClick={() => void handleServiceAction(service)}
-                        disabled={isRunning}
+                        disabled={actionDisabled}
                         className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider flex-1 disabled:opacity-40"
                       >
                         {isRunning ? 'Working' : service.next_action_label ?? 'Repair'}
@@ -5447,15 +5499,15 @@ export default function SetupPage() {
             </div>
 
             {/* API status */}
-            <div className={`p-4 border ${apiStatus === 'connected' ? 'border-[#76B900]/40 bg-[#76B900]/5' : 'border-[#dc2626]/40 bg-[#dc2626]/5'}`}>
+            <div className={`p-4 border ${apiConnected ? 'border-[#76B900]/40 bg-[#76B900]/5' : 'border-[#dc2626]/40 bg-[#dc2626]/5'}`}>
               <div className="flex items-center gap-3">
-                <span className={`w-2 h-2 flex-shrink-0 ${apiStatus === 'connected' ? 'bg-[#76B900]' : 'bg-[#dc2626]'}`}
+                <span className={`w-2 h-2 flex-shrink-0 ${apiConnected ? 'bg-[#76B900]' : 'bg-[#dc2626]'}`}
                   style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
                 <div>
-                  <div className={`text-sm font-mono font-bold ${apiStatus === 'connected' ? 'text-[#76B900]' : 'text-[#dc2626]'}`}>
-                    Hive API {apiStatus === 'connected' ? 'ONLINE' : 'OFFLINE'}
+                  <div className={`text-sm font-mono font-bold ${apiConnected ? 'text-[#76B900]' : 'text-[#dc2626]'}`}>
+                    Hive API {apiConnected ? 'ONLINE' : apiChecking ? 'CHECKING' : 'OFFLINE'}
                   </div>
-                    {apiStatus === 'disconnected' && (
+                    {apiDisconnected && (
                       <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">
                         Launch nvHive, or use terminal fallback: <span className="text-[#76B900]">nvh webui</span>
                       </div>
@@ -5488,7 +5540,7 @@ export default function SetupPage() {
 
               <button
                 onClick={handleTest}
-                disabled={testLoading || apiStatus !== 'connected'}
+                disabled={testLoading || !apiConnected}
                 className="btn-primary w-full py-2.5 text-sm font-mono uppercase tracking-widest flex items-center justify-center gap-2"
               >
                 {testLoading ? (
@@ -5502,10 +5554,10 @@ export default function SetupPage() {
                 ) : testResult ? 'RUN TEST AGAIN' : 'RUN TEST QUERY'}
               </button>
 
-              {apiStatus !== 'connected' && (
+              {!apiConnected && (
                 <div className="bg-[#d97706]/5 border border-[#d97706]/20 p-3">
                   <div className="text-xs font-mono text-[#d97706]">
-                    API server not connected. Launch nvHive, or use terminal fallback: nvh webui
+                    {apiChecking ? 'API server is still checking. The test will unlock when setup health confirms it.' : 'API server not connected. Launch nvHive, or use terminal fallback: nvh webui'}
                   </div>
                 </div>
               )}
@@ -5560,7 +5612,7 @@ export default function SetupPage() {
                   { label: 'Local Models', value: `${studioModels.filter(model => model.installed).length}/${studioModels.length || 0} installed`, ok: studioModels.some(model => model.installed) },
                   { label: 'AI Studio Packs', value: `${studioPacks.filter(pack => pack.status.installed).length}/${studioPacks.length || 0} installed`, ok: studioPacks.some(pack => pack.status.installed) },
                   { label: 'ComfyUI', value: comfyStatus?.running ? 'Running' : comfyStatus?.installed ? 'Installed' : 'Optional', ok: Boolean(comfyStatus?.installed || comfyStatus?.running), optional: !comfyStatus?.installed && !comfyStatus?.running },
-                  { label: 'Hive API', value: apiStatus === 'connected' ? 'Online' : 'Offline', ok: apiStatus === 'connected' },
+                  { label: 'Hive API', value: apiConnected ? 'Online' : apiChecking ? 'Checking' : 'Offline', ok: apiConnected },
                   { label: 'Active Advisors', value: configuredProviders.length > 0 ? configuredProviders.join(', ') : 'Optional', ok: configuredProviders.length > 0, optional: configuredProviders.length === 0 },
                 ].map(item => (
                   <div key={item.label} className="flex items-center gap-3 px-3 py-2 bg-[#ffffff] border border-[#e5e5e5]">

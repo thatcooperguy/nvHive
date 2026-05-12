@@ -11,6 +11,7 @@ import {
   runCouncil,
   compare,
   getModels,
+  getStudioModels,
   getGPUInfo,
   getBudgetStatus,
   getConversations,
@@ -383,20 +384,44 @@ export default function ChatPage() {
   // Load models once on mount. Provider health is handled separately
   // by useProviderHealth (polled every 30s).
   useEffect(() => {
-    getModels()
-      .then(data => {
-        const mapped = data.models.map(m => ({
-          model_id: m.model_id,
-          provider: m.provider,
-          display_name: m.display_name,
-          is_local: m.provider === 'ollama' || m.provider === 'local',
-          cost_tier: m.input_cost_per_1m_tokens
-            ? (parseFloat(m.input_cost_per_1m_tokens) > 1 ? 'high' as const : 'low' as const)
-            : 'free' as const,
-        }));
-        setModels(mapped);
-      })
-      .catch(() => {});
+    let cancelled = false;
+    Promise.allSettled([getModels(), getStudioModels()])
+      .then(([catalogResult, studioResult]) => {
+        if (cancelled) return;
+        const mapped = catalogResult.status === 'fulfilled'
+          ? catalogResult.value.models.map(m => ({
+              model_id: m.model_id,
+              provider: m.provider,
+              display_name: m.display_name,
+              is_local: m.provider === 'ollama' || m.provider === 'local',
+              cost_tier: m.input_cost_per_1m_tokens
+                ? (parseFloat(m.input_cost_per_1m_tokens) > 1 ? 'high' as const : 'low' as const)
+                : 'free' as const,
+            }))
+          : [];
+        const installedLocal = studioResult.status === 'fulfilled'
+          ? studioResult.value.models
+              .filter(m => m.installed)
+              .map(m => ({
+                model_id: m.install_target,
+                provider: 'ollama',
+                display_name: m.title || m.install_target,
+                is_local: true,
+                cost_tier: 'free' as const,
+              }))
+          : [];
+        const seen = new Set<string>();
+        const merged = [...installedLocal, ...mapped].filter(model => {
+          const key = `${model.provider}:${model.model_id}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+        setModels(merged);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Once both models and provider health are loaded, pick a sensible
