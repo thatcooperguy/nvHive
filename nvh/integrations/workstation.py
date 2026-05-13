@@ -69,10 +69,16 @@ def _detect_gpu() -> tuple[bool, str, int]:
 
 
 def _recommend_chat_models(vram_gb: int) -> list[str]:
+    if vram_gb >= 40:
+        return ["nemotron", "llama3.2-vision", "qwen3:8b", "llama3.1:8b", "gemma3:4b"]
     if vram_gb >= 24:
-        return ["gemma3:4b", "llama3.1:8b"]
+        return ["llama3.2-vision", "qwen3:8b", "llama3.1:8b", "gemma3:4b"]
+    if vram_gb >= 12:
+        return ["minicpm-v", "qwen3:8b", "llama3.1:8b", "gemma3:4b"]
     if vram_gb >= 8:
-        return ["gemma3:4b", "llama3.1:8b"]
+        return ["qwen3:8b", "llama3.1:8b", "gemma3:4b", "llava:7b"]
+    if vram_gb >= 4:
+        return ["gemma3:4b", "moondream"]
     if vram_gb > 0:
         return ["gemma3:4b"]
     return []

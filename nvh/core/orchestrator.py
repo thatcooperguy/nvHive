@@ -10,7 +10,7 @@ Uses the local Nemotron model as an intelligent brain to:
 
 Tiers based on local model capability:
   OFF   — keyword routing, template agents (nemotron-mini or no local model)
-  LIGHT — smart routing + prompt optimization (nemotron-small)
+  LIGHT — smart routing + prompt optimization (best fitting local model)
   FULL  — all features (nemotron 70B+)
   AUTO  — detect from model size (default)
 

@@ -19,10 +19,20 @@ import httpx
 from nvh.integrations.storage import storage_layout
 
 PREFERRED_CHAT_MODELS = (
-    "gemma3:4b",
-    "llama3.1:8b",
+    "nemotron-3-nano-omni",
+    "nemotron-omni",
+    "nemotron",
+    "llama3.3:70b",
+    "qwen2.5-coder:32b",
+    "llama3.2-vision",
     "qwen3:8b",
-    "qwen3-8b",
+    "deepseek-r1:8b",
+    "qwen2.5-coder:7b",
+    "llama3.1:8b",
+    "gemma3:4b",
+    "llava:7b",
+    "minicpm-v",
+    "moondream",
     "nemotron-mini",
 )
 
@@ -64,15 +74,26 @@ def _write_cache(path: Path, data: dict[str, Any]) -> None:
         return
 
 
-def _pick_model(names: list[str]) -> str | None:
+def _rank_models(names: list[str]) -> list[str]:
     if not names:
-        return None
+        return []
+    ranked: list[str] = []
+    remaining = list(names)
     for preferred in PREFERRED_CHAT_MODELS:
         preferred_base = preferred.split(":")[0]
         for name in names:
             if name == preferred or name.split(":")[0] == preferred_base:
-                return name
-    return names[0]
+                if name not in ranked:
+                    ranked.append(name)
+    for name in remaining:
+        if name not in ranked:
+            ranked.append(name)
+    return ranked
+
+
+def _pick_model(names: list[str]) -> str | None:
+    ranked = _rank_models(names)
+    return ranked[0] if ranked else None
 
 
 def _result(
@@ -86,6 +107,7 @@ def _result(
     latency_ms: int | None = None,
     next_action_id: str | None = None,
     checked_at: str | None = None,
+    attempted_models: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "ready": ready,
@@ -97,6 +119,7 @@ def _result(
         "latency_ms": latency_ms,
         "error": error,
         "next_action_id": next_action_id,
+        "attempted_models": attempted_models or [],
         "checked_at": checked_at or _checked_at(),
         "cached": False,
         "rootless": True,
@@ -134,8 +157,8 @@ def local_chat_smoke_status(
                 for item in tags.json().get("models", [])
                 if item.get("name")
             ]
-            model = _pick_model(names)
-            if not model:
+            ranked_models = _rank_models(names)
+            if not ranked_models:
                 result = _result(
                     ready=False,
                     status="no-models",
@@ -145,45 +168,63 @@ def local_chat_smoke_status(
                 _write_cache(state_file, result)
                 return result
 
-            response = client.post(
-                f"{base_url}/api/chat",
-                json={
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": "Reply with exactly: NVHIVE_READY",
-                        }
-                    ],
-                    "stream": False,
-                    "options": {
-                        "temperature": 0,
-                        "num_predict": 16,
-                    },
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-            text = str((data.get("message") or {}).get("content") or "").strip()
+            attempted: list[str] = []
+            last_error: str | None = None
+            for model in ranked_models:
+                attempted.append(model)
+                try:
+                    response = client.post(
+                        f"{base_url}/api/chat",
+                        json={
+                            "model": model,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": "Reply with exactly: NVHIVE_READY",
+                                }
+                            ],
+                            "stream": False,
+                            "options": {
+                                "temperature": 0,
+                                "num_predict": 16,
+                            },
+                        },
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    text = str((data.get("message") or {}).get("content") or "").strip()
+                    latency_ms = int((time.monotonic() - start) * 1000)
+                    if text:
+                        result = _result(
+                            ready=True,
+                            status="ready",
+                            summary=f"Local chat verified with {model}.",
+                            model=model,
+                            output_chars=len(text),
+                            latency_ms=latency_ms,
+                            attempted_models=attempted,
+                        )
+                        _write_cache(state_file, result)
+                        return result
+                    last_error = f"{model} returned no text"
+                except Exception as exc:
+                    last_error = f"{model}: {type(exc).__name__}: {str(exc)[:180]}"
+                    continue
+
             latency_ms = int((time.monotonic() - start) * 1000)
-            if not text:
-                result = _result(
-                    ready=False,
-                    status="no-output",
-                    summary=f"Ollama answered from {model}, but returned no text.",
-                    model=model,
-                    latency_ms=latency_ms,
-                    next_action_id="starter-models",
-                )
-            else:
-                result = _result(
-                    ready=True,
-                    status="ready",
-                    summary=f"Local chat verified with {model}.",
-                    model=model,
-                    output_chars=len(text),
-                    latency_ms=latency_ms,
-                )
+            result = _result(
+                ready=False,
+                status="no-output",
+                summary=(
+                    "Ollama is online, but none of the installed local chat models "
+                    "returned text before fallback was exhausted."
+                ),
+                model=attempted[-1] if attempted else None,
+                error=last_error,
+                latency_ms=latency_ms,
+                next_action_id="starter-models",
+                attempted_models=attempted,
+            )
             _write_cache(state_file, result)
             return result
     except httpx.ConnectError as exc:

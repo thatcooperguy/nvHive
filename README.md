@@ -310,9 +310,9 @@ editing the frontend.
 | 0 GB (no GPU) | Cloud only | Cloud fallback | Free tiers first (Groq, LLM7, GitHub) |
 | 4-8 GB | `gemma3:4b` | `moondream` | First-run local chat + desktop agent |
 | 12-16 GB | `qwen2.5-coder:7b` | `minicpm-v` | Coding + vision local |
-| 24 GB | `gemma2:27b` | `llama3.2-vision` | Strong text + best vision |
-| 48 GB | `llama3.3:70b` | `llama3.2-vision` | Full power local |
-| 96+ GB | Multiple 70B models | `llama3.2-vision` | Full local council, $0 |
+| 24 GB | `llama3.2-vision` | `qwen3:8b` / `gemma3:4b` | Multimodal first, strong fallbacks |
+| 40-48 GB | `nemotron` | `llama3.2-vision` / `qwen3:8b` | Largest fitting local brain first |
+| 96+ GB | `nemotron` + 70B/coder fallbacks | `llama3.2-vision` | Full local council, $0 |
 
 Setup auto-detects your VRAM and recommends models that fit concurrently. No root/sudo needed for nvHive packs: tools install under `NVH_HOME` (`bin`, `models`, `runtimes`, `apps`, `webui`, `studio`, `comfyui`, `cache`, and `config`). [Full GPU guide](docs/GPU_DETECTION.md)
 

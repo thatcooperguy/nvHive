@@ -44,6 +44,7 @@ from nvh.core.agents import generate_agents, get_preset_agents, list_presets
 from nvh.core.engine import BudgetExceededError, Engine
 from nvh.providers.base import (
     CompletionResponse,
+    Message,
     ProviderError,
 )
 from nvh.utils.gpu import (
@@ -500,6 +501,13 @@ def _normalize_optional_selection(value: Any) -> str | None:
     return text
 
 
+class QueryAttachment(BaseModel):
+    name: str = Field(default="", max_length=255)
+    content: str = Field(..., min_length=1, max_length=25_000_000)
+    mime_type: str | None = Field(default=None, max_length=120)
+    is_image: bool = False
+
+
 class QueryRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=500_000)
     provider: str | None = None
@@ -508,11 +516,31 @@ class QueryRequest(BaseModel):
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
     stream: bool = False
+    attachments: list[QueryAttachment] = Field(default_factory=list, max_length=6)
 
     @field_validator("provider", "model", mode="before")
     @classmethod
     def _normalize_provider_model(cls, value: Any) -> str | None:
         return _normalize_optional_selection(value)
+
+
+def _request_has_image_attachments(request: QueryRequest) -> bool:
+    return any(att.is_image for att in request.attachments)
+
+
+def _query_user_content(request: QueryRequest) -> str | list[dict[str, Any]]:
+    """Return text-only or OpenAI-style multimodal message content."""
+    image_attachments = [att for att in request.attachments if att.is_image]
+    if not image_attachments:
+        return request.prompt
+
+    parts: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
+    for att in image_attachments[:4]:
+        parts.append({
+            "type": "image_url",
+            "image_url": {"url": att.content},
+        })
+    return parts
 
 
 class CouncilRequest(BaseModel):
@@ -595,12 +623,11 @@ async def _sse_query_stream(
         return
 
     provider = engine.registry.get(decision.provider)
-    from nvh.providers.base import Message
 
     messages: list[Message] = []
     if sys_prompt:
         messages.append(Message(role="system", content=sys_prompt))
-    messages.append(Message(role="user", content=request.prompt))
+    messages.append(Message(role="user", content=_query_user_content(request)))
 
     accumulated = ""
     last_chunk: StreamChunk | None = None
@@ -616,6 +643,7 @@ async def _sse_query_stream(
             temperature=temp,
             max_tokens=max_tok,
             system_prompt=sys_prompt,
+            prefer_vision=_request_has_image_attachments(request),
         )
         if inspect.isawaitable(stream_result):
             stream_result = await stream_result
@@ -1008,12 +1036,12 @@ async def system_recommendations() -> dict[str, Any]:
         recs = recommend_models(gpus)
         opts = get_ollama_optimizations(gpus)
 
-        # OOM check for the three main model sizes users commonly pull.
-        # Note: there's no real "nemotron-small" on Ollama — llama3.1:8b
-        # is the comparable mid-tier option.
+        # OOM check for the main model sizes users commonly pull. These are
+        # all registry-backed tags so the wizard does not recommend 404s.
         oom_models = {
             "nemotron-mini": 2.0,
-            "llama3.1:8b": 5.0,
+            "qwen3:8b": 6.0,
+            "llama3.2-vision": 7.0,
             "nemotron": 40.0,
         }
         oom_results = {name: check_oom_risk(vram, gpus) for name, vram in oom_models.items()}
@@ -1837,15 +1865,48 @@ async def query(request: QueryRequest, _auth: None = Depends(require_auth)) -> A
         )
 
     try:
-        response = await engine.query(
-            prompt=request.prompt,
-            provider=request.provider,
-            model=request.model,
-            system_prompt=request.system_prompt,
-            temperature=request.temperature,
-            max_tokens=request.max_tokens,
-            stream=False,
-        )
+        if request.attachments:
+            await engine.initialize()
+            await engine._check_budget()
+            config = engine.config
+            temp = request.temperature if request.temperature is not None else config.defaults.temperature
+            max_tok = request.max_tokens or config.defaults.max_tokens
+            sys_prompt = request.system_prompt or config.defaults.system_prompt or None
+            decision = engine.router.route(
+                query=request.prompt,
+                provider_override=request.provider,
+                model_override=request.model,
+            )
+            if not engine.registry.has(decision.provider):
+                raise ProviderError(f"Provider '{decision.provider}' not available.", provider=decision.provider)
+
+            provider = engine.registry.get(decision.provider)
+            messages: list[Message] = []
+            if sys_prompt:
+                messages.append(Message(role="system", content=sys_prompt))
+            messages.append(Message(role="user", content=_query_user_content(request)))
+            response = await provider.complete(
+                messages=messages,
+                model=decision.model or None,
+                system_prompt=sys_prompt,
+                temperature=temp,
+                max_tokens=max_tok,
+                prefer_vision=_request_has_image_attachments(request),
+            )
+            try:
+                await engine._log_query(response, mode="simple")
+            except Exception:
+                logger.debug("Query logging failed for multimodal query", exc_info=True)
+        else:
+            response = await engine.query(
+                prompt=request.prompt,
+                provider=request.provider,
+                model=request.model,
+                system_prompt=request.system_prompt,
+                temperature=request.temperature,
+                max_tokens=request.max_tokens,
+                stream=False,
+            )
     except BudgetExceededError as exc:
         raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc))
     except ProviderError as exc:
@@ -2827,7 +2888,7 @@ def _get_ollama_base_url() -> str:
 
 
 class OllamaPullRequest(BaseModel):
-    model: str = Field(..., min_length=1, description="Model name to pull, e.g. 'nemotron-small'")
+    model: str = Field(..., min_length=1, description="Model name to pull, e.g. 'llama3.2-vision'")
 
 
 async def _ollama_pull_stream(model: str) -> AsyncGenerator:
@@ -2947,7 +3008,7 @@ async def ollama_list_models(_auth: None = Depends(require_auth)) -> dict[str, A
 
 @app.delete("/v1/ollama/models/{name:path}", summary="Delete an installed Ollama model")
 async def ollama_delete_model(
-    name: str = Path(..., description="Model name, e.g. 'nemotron-small'"),
+    name: str = Path(..., description="Model name, e.g. 'llama3.2-vision'"),
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Remove a model from Ollama's local store."""
@@ -3008,7 +3069,7 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
             data = resp.json()
             for m in data.get("models", []):
                 raw = m.get("name", "")
-                # Strip tag for loose matching: "nemotron-small:latest" -> "nemotron-small"
+                # Strip tag for loose matching: "llama3.2-vision:latest" -> "llama3.2-vision"
                 installed_names.add(raw)
                 installed_names.add(raw.split(":")[0])
             ollama_reachable = True
@@ -3018,16 +3079,20 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
     # --- Build plan ---
     # Rough size estimates in GB (used for ETA when exact size is unknown).
     # Only tags that actually exist on Ollama's registry — earlier entries
-    # included nemotron-small and nemotron:120b which return 404 on pull.
+    # included invented high-tier tags which returned 404 on pull.
     size_estimates: dict[str, float] = {
         "nemotron-mini": 2.0,
         "llama3.1:8b": 4.7,
+        "qwen3:8b": 6.0,
+        "qwen2.5-coder:7b": 5.0,
+        "qwen2.5-coder:32b": 18.0,
         "nemotron": 40.0,
         "codellama": 3.8,
         "llama3.2:3b": 2.0,
         "llama3.2-vision": 7.0,
-        "gemma4:26b": 16.0,
-        "gemma4:31b": 20.0,
+        "minicpm-v": 5.0,
+        "moondream": 2.0,
+        "gemma3:4b": 3.0,
         "llama3.3:70b-instruct-q4_K_M": 40.0,
     }
     # Assume ~200 Mbps download (typical cloud / consumer broadband)

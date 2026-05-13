@@ -48,6 +48,19 @@ def test_local_chat_smoke_verifies_real_output(monkeypatch, tmp_path):
     assert result["output_chars"] > 0
 
 
+def test_local_chat_smoke_prefers_largest_installed_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "nvh.integrations.local_chat.httpx.Client",
+        lambda timeout: _FakeClient(models=["gemma3:4b", "nemotron"], answer="NVHIVE_READY"),
+    )
+
+    result = local_chat_smoke_status(home_dir=tmp_path, force=True)
+
+    assert result["ready"] is True
+    assert result["model"] == "nemotron"
+    assert result["attempted_models"] == ["nemotron"]
+
+
 def test_local_chat_smoke_reports_no_models(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "nvh.integrations.local_chat.httpx.Client",

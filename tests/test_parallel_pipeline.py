@@ -29,7 +29,7 @@ class TestModelManager:
 
     def test_plan_swap_fits_in_available(self):
         mm = ModelManager(vram_gb=96)
-        plan = mm.plan_swap("gemma2:9b")
+        plan = mm.plan_swap("qwen3:8b")
         assert plan.fits is True
         assert plan.unload == []
 
@@ -64,8 +64,9 @@ class TestModelManager:
 
     def test_vram_estimates_exist(self):
         assert "llama3.3:70b" in MODEL_VRAM_GB
-        assert "gemma2:27b" in MODEL_VRAM_GB
-        assert MODEL_VRAM_GB["llama3.3:70b"] > MODEL_VRAM_GB["gemma2:27b"]
+        assert "llama3.2-vision" in MODEL_VRAM_GB
+        assert "qwen3:8b" in MODEL_VRAM_GB
+        assert MODEL_VRAM_GB["llama3.3:70b"] > MODEL_VRAM_GB["llama3.2-vision"]
 
 
 class TestSubTaskResult:

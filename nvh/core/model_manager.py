@@ -40,22 +40,29 @@ logger = logging.getLogger(__name__)
 MODEL_VRAM_GB: dict[str, float] = {
     # 70B class
     "llama3.3:70b": 40.0,
+    "nemotron": 40.0,
     "nemotron:70b": 40.0,
     "qwen2.5:72b": 40.0,
     "deepseek-coder-v2:236b": 120.0,
     # 32B class
     "qwen2.5-coder:32b": 18.0,
     "codellama:34b": 20.0,
-    # 27B class
-    "gemma2:27b": 16.0,
+    # Multimodal / vision class
+    "llama3.2-vision": 7.0,
+    "minicpm-v": 5.0,
+    "llava:7b": 4.0,
+    "moondream": 2.0,
     # 14B class
     "qwen2.5-coder:14b": 8.0,
-    # 9B class
-    "gemma2:9b": 5.0,
+    # 8B class
+    "qwen3:8b": 6.0,
     "llama3.1:8b": 5.0,
+    "deepseek-r1:8b": 6.0,
     # 7B class
     "qwen2.5-coder:7b": 4.0,
     "mistral:7b": 4.0,
+    # Small fallback
+    "gemma3:4b": 3.0,
 }
 
 # VRAM overhead for KV cache, CUDA context, etc.

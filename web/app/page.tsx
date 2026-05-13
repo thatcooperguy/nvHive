@@ -4,10 +4,11 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
 import ChatMessage, { exportConversationMarkdown } from '@/components/ChatMessage';
-import ChatInput from '@/components/ChatInput';
+import ChatInput, { type ChatInputAttachment } from '@/components/ChatInput';
 import { useUIShell } from '@/components/UIShellProvider';
 import {
   queryStream,
+  query,
   runCouncil,
   compare,
   getModels,
@@ -34,6 +35,15 @@ const STORAGE_KEY = 'council_chats_v2';
 interface StoredState {
   conversations: ConversationSummary[];
   messages: Record<string, ChatMessageType[]>;
+}
+
+interface ModelOption {
+  model_id: string;
+  provider: string;
+  display_name: string;
+  is_local?: boolean;
+  cost_tier?: 'free' | 'low' | 'high';
+  supports_vision?: boolean;
 }
 
 function loadState(): StoredState {
@@ -237,7 +247,7 @@ function EmptyState({
   selectedModel,
 }: {
   onPrompt: (p: string) => void;
-  models: Array<{ model_id: string; provider: string; display_name: string; is_local?: boolean; cost_tier?: 'free' | 'low' | 'high' }>;
+  models: ModelOption[];
   providerHealth: Array<{ name: string; healthy: boolean; latency_ms: number | null; models_available: number; error: string | null }>;
   selectedModel: string;
 }) {
@@ -334,7 +344,7 @@ export default function ChatPage() {
   const [inputValue, setInputValue] = useState('');
   const [mode, setMode] = useState<ChatMode>('single');
   const [selectedModel, setSelectedModel] = useState('');
-  const [models, setModels] = useState<Array<{ model_id: string; provider: string; display_name: string; is_local?: boolean; cost_tier?: 'free' | 'low' | 'high' }>>([]);
+  const [models, setModels] = useState<ModelOption[]>([]);
   // Live-polled provider health — updates every 30s so the "connected/
   // offline" split in the model picker stays accurate throughout the
   // session without a manual refresh.
@@ -397,6 +407,7 @@ export default function ChatPage() {
               cost_tier: m.input_cost_per_1m_tokens
                 ? (parseFloat(m.input_cost_per_1m_tokens) > 1 ? 'high' as const : 'low' as const)
                 : 'free' as const,
+              supports_vision: Boolean(m.supports_vision),
             }))
           : [];
         const installedLocal = studioResult.status === 'fulfilled'
@@ -408,6 +419,7 @@ export default function ChatPage() {
                 display_name: m.title || m.install_target,
                 is_local: true,
                 cost_tier: 'free' as const,
+                supports_vision: /vision|llava|minicpm|moondream|bakllava/i.test(m.install_target),
               }))
           : [];
         const seen = new Set<string>();
@@ -645,9 +657,21 @@ export default function ChatPage() {
     return () => clearTimeout(timer);
   }, [streaming, handleStop]);
 
-  const handleSubmit = useCallback(async (promptOverride?: string) => {
+  const handleSubmit = useCallback(async (
+    promptOverride?: string,
+    attachments: ChatInputAttachment[] = []
+  ) => {
     const prompt = (promptOverride ?? inputValue).trim();
     if (!prompt || streaming) return;
+    const imageAttachments = attachments
+      .filter(att => att.isImage)
+      .map(att => ({
+        name: att.name,
+        content: att.content,
+        mime_type: att.mimeType,
+        is_image: true,
+      }));
+    const hasImageAttachments = imageAttachments.length > 0;
 
     // Pre-flight health gate: in 'single' mode, if the user has a
     // specific model selected and its backing provider is currently
@@ -739,6 +763,56 @@ export default function ChatPage() {
       };
 
       setMessages(prev => [...prev, assistantMsg]);
+
+      if (hasImageAttachments) {
+        try {
+          const resp = await query(prompt, {
+            model: selectedModel || undefined,
+            attachments: imageAttachments,
+          });
+          setStreaming(false);
+          stopStreamRef.current = null;
+          const finalMsg: ChatMessageType = {
+            id: assistantMsgId,
+            role: 'assistant',
+            content: resp.content,
+            streaming: false,
+            mode: 'single',
+            provider: resp.provider,
+            model: resp.model,
+            tokens: resp.usage?.total_tokens,
+            cost_usd: resp.cost_usd ?? null,
+            latency_ms: resp.latency_ms,
+            timestamp: Date.now(),
+          };
+          setMessages(prev =>
+            prev.map(m => m.id === assistantMsgId ? finalMsg : m)
+          );
+          updateStoredState(prev => ({
+            ...prev,
+            messages: {
+              ...prev.messages,
+              [convId!]: [
+                ...(prev.messages[convId!] ?? []).filter(m => m.id !== assistantMsgId),
+                finalMsg,
+              ],
+            },
+          }));
+        } catch (error) {
+          setStreaming(false);
+          stopStreamRef.current = null;
+          const errMsg: ChatMessageType = {
+            id: assistantMsgId,
+            role: 'error',
+            content: error instanceof Error ? error.message : String(error),
+            timestamp: Date.now(),
+          };
+          setMessages(prev =>
+            prev.map(m => m.id === assistantMsgId ? errMsg : m)
+          );
+        }
+        return;
+      }
 
       const stop = queryStream(
         { prompt, stream: true, model: selectedModel || undefined },

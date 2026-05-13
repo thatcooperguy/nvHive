@@ -21,15 +21,15 @@ from nvh.core.model_manager import (
 class TestPlanSwap:
     def test_already_loaded_returns_no_unload(self):
         mm = ModelManager(vram_gb=48)
-        mm._loaded["gemma2:9b"] = ModelStatus(name="gemma2:9b", loaded=True, size_gb=5.0)
-        plan = mm.plan_swap("gemma2:9b")
+        mm._loaded["qwen3:8b"] = ModelStatus(name="qwen3:8b", loaded=True, size_gb=6.0)
+        plan = mm.plan_swap("qwen3:8b")
         assert plan.fits is True
         assert plan.unload == []
         assert "already loaded" in plan.message
 
     def test_fits_without_unload(self):
         mm = ModelManager(vram_gb=96)
-        plan = mm.plan_swap("gemma2:9b")
+        plan = mm.plan_swap("qwen3:8b")
         assert plan.fits is True
         assert plan.unload == []
         assert plan.estimated_free_after >= 0
@@ -45,8 +45,8 @@ class TestPlanSwap:
 
     def test_needs_unload_multiple_models(self):
         mm = ModelManager(vram_gb=48)
-        mm._loaded["gemma2:9b"] = ModelStatus(
-            name="gemma2:9b", loaded=True, size_gb=5.0, last_used=1.0,
+        mm._loaded["qwen3:8b"] = ModelStatus(
+            name="qwen3:8b", loaded=True, size_gb=6.0, last_used=1.0,
         )
         mm._loaded["qwen2.5-coder:32b"] = ModelStatus(
             name="qwen2.5-coder:32b", loaded=True, size_gb=18.0, last_used=2.0,
@@ -91,9 +91,9 @@ class TestExecuteSwap:
     @pytest.mark.asyncio
     async def test_execute_swap_already_loaded_noop(self):
         mm = ModelManager(vram_gb=96)
-        mm._loaded["gemma2:9b"] = ModelStatus(name="gemma2:9b", loaded=True, size_gb=5.0)
+        mm._loaded["qwen3:8b"] = ModelStatus(name="qwen3:8b", loaded=True, size_gb=6.0)
         plan = SwapPlan(
-            target_model="gemma2:9b", unload=[], estimated_free_after=89.0,
+            target_model="qwen3:8b", unload=[], estimated_free_after=88.0,
             fits=True, message="Already loaded.",
         )
         result = await mm.execute_swap(plan)
@@ -113,7 +113,7 @@ class TestExecuteSwap:
     async def test_execute_swap_calls_subprocess(self):
         mm = ModelManager(vram_gb=96)
         plan = SwapPlan(
-            target_model="gemma2:9b", unload=["old:model"],
+            target_model="qwen3:8b", unload=["old:model"],
             estimated_free_after=80.0, fits=True, message="ok",
         )
         mm._loaded["old:model"] = ModelStatus(name="old:model", loaded=True, size_gb=5.0)
@@ -126,7 +126,7 @@ class TestExecuteSwap:
             result = await mm.execute_swap(plan)
             assert result is True
             assert "old:model" not in mm._loaded
-            assert "gemma2:9b" in mm._loaded
+            assert "qwen3:8b" in mm._loaded
             # Should have called stop + run
             assert mock_run.call_count == 2
 
@@ -134,7 +134,7 @@ class TestExecuteSwap:
     async def test_execute_swap_progress_callback(self):
         mm = ModelManager(vram_gb=96)
         plan = SwapPlan(
-            target_model="gemma2:9b", unload=[],
+            target_model="qwen3:8b", unload=[],
             estimated_free_after=80.0, fits=True, message="ok",
         )
         messages = []
@@ -178,12 +178,12 @@ class TestGetLoadedModels:
         mm = ModelManager(vram_gb=96)
         mock_result = MagicMock()
         mock_result.returncode = 0
-        mock_result.stdout = "NAME\tSIZE\tMODIFIED\ngemma2:9b\t5.0GB\t2min ago\n"
+        mock_result.stdout = "NAME\tSIZE\tMODIFIED\nqwen3:8b\t6.0GB\t2min ago\n"
 
         with patch("nvh.core.model_manager.subprocess.run", return_value=mock_result):
             models = await mm.get_loaded_models()
         assert len(models) == 1
-        assert models[0].name == "gemma2:9b"
+        assert models[0].name == "qwen3:8b"
         assert models[0].loaded is True
 
 
@@ -199,10 +199,10 @@ class TestFormatStatus:
 
     def test_with_loaded_models_shows_vram(self):
         mm = ModelManager(vram_gb=96)
-        mm._loaded["gemma2:27b"] = ModelStatus(
-            name="gemma2:27b", loaded=True, size_gb=16.0,
+        mm._loaded["qwen2.5-coder:32b"] = ModelStatus(
+            name="qwen2.5-coder:32b", loaded=True, size_gb=18.0,
         )
         output = mm.format_status()
-        assert "gemma2:27b" in output
-        assert "16.0 GB" in output
+        assert "qwen2.5-coder:32b" in output
+        assert "18.0 GB" in output
         assert "96.0 GB" in output

@@ -9,20 +9,22 @@ interface ModelOption {
   display_name: string;
   is_local?: boolean;
   cost_tier?: 'free' | 'low' | 'high';
+  supports_vision?: boolean;
 }
 
-interface AttachedFile {
+export interface ChatInputAttachment {
   name: string;
   content: string;       // text content or data URL for images
   isImage: boolean;
   lang?: string;         // detected language for code files
   size: number;
+  mimeType?: string;
 }
 
 interface ChatInputProps {
   value: string;
   onChange: (val: string) => void;
-  onSubmit: (promptOverride?: string) => void;
+  onSubmit: (promptOverride?: string, attachments?: ChatInputAttachment[]) => void;
   onStop?: () => void;
   mode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
@@ -97,7 +99,7 @@ export default function ChatInput({
 }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<ChatInputAttachment[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -110,7 +112,7 @@ export default function ChatInput({
     el.style.height = `${Math.min(el.scrollHeight, maxH)}px`;
   }, [value]);
 
-  const processFile = useCallback((file: File): Promise<AttachedFile | null> => {
+  const processFile = useCallback((file: File): Promise<ChatInputAttachment | null> => {
     return new Promise(resolve => {
       if (file.size > MAX_FILE_SIZE) {
         setFileError(`${file.name} exceeds 10 MB limit`);
@@ -130,6 +132,7 @@ export default function ChatInput({
           isImage,
           lang: isImage ? undefined : (LANG_MAP[ext] ?? 'text'),
           size: file.size,
+          mimeType: file.type || undefined,
         });
       };
       reader.onerror = () => resolve(null);
@@ -146,7 +149,7 @@ export default function ChatInput({
     if (!files || files.length === 0) return;
     setFileError(null);
     const results = await Promise.all(Array.from(files).map(processFile));
-    const valid = results.filter(Boolean) as AttachedFile[];
+    const valid = results.filter(Boolean) as ChatInputAttachment[];
     setAttachedFiles(prev => [...prev, ...valid]);
   }, [processFile]);
 
@@ -163,7 +166,7 @@ export default function ChatInput({
     if (attachedFiles.length === 0) return value;
     const fileSections = attachedFiles.map(f => {
       if (f.isImage) {
-        return `User uploaded image: ${f.name}\n[Image attached — see data URL]`;
+        return `User uploaded image: ${f.name}`;
       }
       const fence = `\`\`\`${f.lang ?? ''}`;
       return `User uploaded file: ${f.name}\n${fence}\n${f.content}\n\`\`\``;
@@ -175,11 +178,12 @@ export default function ChatInput({
   const handleSubmit = useCallback(() => {
     const combined = buildPrompt().trim();
     if (!combined) return;
+    const outgoingAttachments = attachedFiles;
     if (attachedFiles.length > 0) {
       setAttachedFiles([]);
     }
-    onSubmit(combined);
-  }, [attachedFiles.length, buildPrompt, onSubmit]);
+    onSubmit(combined, outgoingAttachments);
+  }, [attachedFiles, buildPrompt, onSubmit]);
 
   // Intercept onChange so we can call the real submit with injected content
   // We wrap the external onSubmit with our file-injecting version
@@ -211,6 +215,8 @@ export default function ChatInput({
   }, [handleFileSelect]);
 
   const selectedModelInfo = models.find(m => m.model_id === selectedModel);
+  const hasImageAttachment = attachedFiles.some(f => f.isImage);
+  const selectedVisionReady = selectedModelInfo?.supports_vision;
 
   // Split models into "connected" and "offline" buckets based on the
   // health of their backing provider. Local models (ollama/local) are
@@ -301,6 +307,14 @@ export default function ChatInput({
           >
             x
           </button>
+        </div>
+      )}
+
+      {hasImageAttachment && !selectedVisionReady && (
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <span className="text-[10px] font-mono text-[#5a9100]">
+            Image attached. nvHive will use a vision-capable local model when one is available.
+          </span>
         </div>
       )}
 

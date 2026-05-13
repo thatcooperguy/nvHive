@@ -227,7 +227,13 @@ class Engine:
         Returns list of enabled provider names.
         """
         if not self._initialized:
-            await repo.init_db()
+            try:
+                await repo.init_db()
+            except Exception as exc:
+                logger.warning(
+                    "Database init failed; continuing without persistent query history: %s",
+                    exc,
+                )
             enabled = self.registry.setup_from_config(self.config)
 
             # Auto-detect zero-signup providers if nothing is configured

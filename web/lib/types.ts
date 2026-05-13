@@ -36,6 +36,14 @@ export interface QueryRequest {
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;
+  attachments?: QueryAttachment[];
+}
+
+export interface QueryAttachment {
+  name: string;
+  content: string;
+  mime_type?: string;
+  is_image: boolean;
 }
 
 export interface StreamChunkPayload {

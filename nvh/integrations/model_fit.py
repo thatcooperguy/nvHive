@@ -40,8 +40,15 @@ def _score_model(model: dict[str, Any], *, free_gb: float | None, vram_gb: int) 
         score += 10
         reasons.append("comfortable disk fit")
     capabilities = {str(cap).lower() for cap in model.get("capabilities", [])}
+    if "large-model" in capabilities or "agent" in capabilities:
+        score += 12
+        reasons.append("highest accuracy tier")
     if "coding" in capabilities:
         score += 8
+    if "reasoning" in capabilities:
+        score += 8
+    if "multimodal" in capabilities or "vision" in capabilities:
+        score += 6
     if "fast" in capabilities:
         score += 5
     return max(0, score), reasons

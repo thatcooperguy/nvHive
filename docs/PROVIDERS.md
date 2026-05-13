@@ -51,16 +51,16 @@ nvHive detects your GPU and automatically selects the best local model:
 | GPU | VRAM | Best Local Model | Performance |
 |-----|------|-------------------|-------------|
 | No GPU | -- | Cloud only | Free tiers: LLM7, Groq, GitHub Models |
-| GTX 1660 / RTX 2060 | 6 GB | nemotron-mini (4B) | ~30 tok/s |
-| RTX 3060 | 12 GB | nemotron-small | ~55 tok/s |
-| RTX 3070 / 3080 | 8-10 GB | nemotron-small | ~75 tok/s |
-| RTX 3090 | 24 GB | nemotron-small + codellama | ~100 tok/s |
-| RTX 4060 | 8 GB | nemotron-small | ~70 tok/s |
-| RTX 4070 | 12 GB | nemotron-small | ~90 tok/s |
-| RTX 4080 | 16 GB | nemotron-small + models | ~130 tok/s |
-| RTX 4090 | 24 GB | nemotron 70B (Q4) | ~40 tok/s (70B) |
-| RTX 5090 | 32 GB | nemotron 70B (Q4) | ~60 tok/s (70B) |
-| A100 / H100 | 80 GB | nemotron 70B (full) | ~120-180 tok/s |
+| GTX 1660 / RTX 2060 | 6 GB | gemma3:4b + moondream | varies |
+| RTX 3060 | 12 GB | qwen3:8b + minicpm-v | varies |
+| RTX 3070 / 3080 | 8-10 GB | qwen3:8b + compact vision | varies |
+| RTX 3090 | 24 GB | llama3.2-vision + qwen3:8b | varies |
+| RTX 4060 | 8 GB | qwen3:8b | varies |
+| RTX 4070 | 12 GB | qwen3:8b + minicpm-v | varies |
+| RTX 4080 | 16 GB | qwen/coder + minicpm-v | varies |
+| RTX 4090 | 24 GB | llama3.2-vision + qwen3:8b | varies |
+| RTX 5090 | 32 GB | llama3.2-vision + coder fallback | varies |
+| A100 / H100 | 80 GB | nemotron + multimodal fallback | varies |
 
 Models unload after inactivity to free VRAM for gaming. Run `nvh bench` to measure your actual throughput.
 

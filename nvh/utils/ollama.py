@@ -18,7 +18,7 @@ def strip_ollama_prefix(model: str) -> str:
     """Normalize a config-style Ollama model name to the tag Ollama stores.
 
     Config values commonly carry a ``ollama/`` prefix (a LiteLLM routing
-    convention): ``ollama/nemotron-small`` → ``nemotron-small``. Ollama's
+    convention): ``ollama/llama3.2-vision`` -> ``llama3.2-vision``. Ollama's
     ``/api/tags`` endpoint returns the bare tag (sometimes with ``:latest``),
     so we strip the prefix before comparing.
     """
@@ -30,10 +30,10 @@ def strip_ollama_prefix(model: str) -> str:
 def _tags_match(required: str, installed: str) -> bool:
     """Return True if an installed tag satisfies a required model name.
 
-    Ollama reports tags like ``nemotron-small:latest``; configs often omit
+    Ollama reports tags like ``llama3.2-vision:latest``; configs often omit
     the ``:latest`` suffix. We accept a prefix match on the base tag so
-    ``nemotron-small`` matches ``nemotron-small:latest`` but ``nemotron``
-    does NOT match ``nemotron-small`` (prevents over-matching).
+    ``llama3.2-vision`` matches ``llama3.2-vision:latest`` but ``llama3.2``
+    does NOT match ``llama3.2-vision`` (prevents over-matching).
     """
     required = required.strip()
     installed = installed.strip()

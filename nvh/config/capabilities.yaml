@@ -544,6 +544,62 @@ models:
       instruction_following: 0.80
 
   # --- NVIDIA Nemotron (Local via Ollama) ---
+  ollama/nemotron-3-nano-omni:
+    provider: ollama
+    display_name: NVIDIA Nemotron 3 Nano Omni (Local Multimodal)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 1200
+    capability_scores:
+      code_generation: 0.83
+      code_review: 0.82
+      code_debug: 0.82
+      reasoning: 0.90
+      math: 0.86
+      creative_writing: 0.82
+      summarization: 0.86
+      translation: 0.80
+      conversation: 0.88
+      question_answering: 0.88
+      structured_extraction: 0.86
+      multimodal: 0.94
+      long_context_analysis: 0.84
+      instruction_following: 0.90
+
+  ollama/nemotron-omni:
+    provider: ollama
+    display_name: NVIDIA Nemotron Omni (Local Multimodal)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 1200
+    capability_scores:
+      code_generation: 0.83
+      code_review: 0.82
+      code_debug: 0.82
+      reasoning: 0.90
+      math: 0.86
+      creative_writing: 0.82
+      summarization: 0.86
+      translation: 0.80
+      conversation: 0.88
+      question_answering: 0.88
+      structured_extraction: 0.86
+      multimodal: 0.94
+      long_context_analysis: 0.84
+      instruction_following: 0.90
+
   ollama/nemotron-mini:
     provider: ollama
     display_name: NVIDIA Nemotron Mini 4B (Local)
@@ -572,34 +628,6 @@ models:
       long_context_analysis: 0.50
       instruction_following: 0.70
 
-  ollama/nemotron-small:
-    provider: ollama
-    display_name: NVIDIA Nemotron Small (Local — Recommended)
-    context_window: 131072
-    max_output_tokens: 16384
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 500
-    capability_scores:
-      code_generation: 0.78
-      code_review: 0.76
-      code_debug: 0.74
-      reasoning: 0.80
-      math: 0.78
-      creative_writing: 0.70
-      summarization: 0.78
-      translation: 0.68
-      conversation: 0.80
-      question_answering: 0.78
-      structured_extraction: 0.76
-      multimodal: 0.0
-      long_context_analysis: 0.72
-      instruction_following: 0.80
-
   ollama/nemotron:
     provider: ollama
     display_name: NVIDIA Nemotron 70B (Local)
@@ -627,34 +655,6 @@ models:
       multimodal: 0.0
       long_context_analysis: 0.80
       instruction_following: 0.86
-
-  ollama/nemotron:120b:
-    provider: ollama
-    display_name: NVIDIA Nemotron 120B Flagship (Local, Q4_K_M)
-    context_window: 131072
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 3000
-    capability_scores:
-      code_generation: 0.90
-      code_review: 0.89
-      code_debug: 0.88
-      reasoning: 0.93
-      math: 0.91
-      creative_writing: 0.85
-      summarization: 0.90
-      translation: 0.82
-      conversation: 0.91
-      question_answering: 0.90
-      structured_extraction: 0.88
-      multimodal: 0.0
-      long_context_analysis: 0.88
-      instruction_following: 0.92
 
   # --- Ollama (Local) ---
   ollama/llama3.1:
@@ -1051,6 +1051,258 @@ models:
       multimodal: 0.0
       long_context_analysis: 0.75
       instruction_following: 0.82
+
+  ollama/llama3.3:70b:
+    provider: ollama
+    display_name: Llama 3.3 70B (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 1800
+    capability_scores:
+      code_generation: 0.84
+      code_review: 0.82
+      code_debug: 0.82
+      reasoning: 0.88
+      math: 0.86
+      creative_writing: 0.82
+      summarization: 0.86
+      translation: 0.82
+      conversation: 0.88
+      question_answering: 0.86
+      structured_extraction: 0.84
+      multimodal: 0.0
+      long_context_analysis: 0.84
+      instruction_following: 0.88
+
+  ollama/qwen3:8b:
+    provider: ollama
+    display_name: Qwen 3 8B (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 450
+    capability_scores:
+      code_generation: 0.80
+      code_review: 0.78
+      code_debug: 0.78
+      reasoning: 0.84
+      math: 0.84
+      creative_writing: 0.70
+      summarization: 0.78
+      translation: 0.82
+      conversation: 0.80
+      question_answering: 0.82
+      structured_extraction: 0.78
+      multimodal: 0.0
+      long_context_analysis: 0.76
+      instruction_following: 0.82
+
+  ollama/qwen2.5-coder:32b:
+    provider: ollama
+    display_name: Qwen 2.5 Coder 32B (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 1200
+    capability_scores:
+      code_generation: 0.90
+      code_review: 0.88
+      code_debug: 0.88
+      reasoning: 0.84
+      math: 0.84
+      creative_writing: 0.64
+      summarization: 0.76
+      translation: 0.78
+      conversation: 0.76
+      question_answering: 0.82
+      structured_extraction: 0.84
+      multimodal: 0.0
+      long_context_analysis: 0.78
+      instruction_following: 0.84
+
+  ollama/qwen2.5-coder:7b:
+    provider: ollama
+    display_name: Qwen 2.5 Coder 7B (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 420
+    capability_scores:
+      code_generation: 0.84
+      code_review: 0.82
+      code_debug: 0.82
+      reasoning: 0.78
+      math: 0.78
+      creative_writing: 0.60
+      summarization: 0.72
+      translation: 0.74
+      conversation: 0.72
+      question_answering: 0.76
+      structured_extraction: 0.80
+      multimodal: 0.0
+      long_context_analysis: 0.70
+      instruction_following: 0.80
+
+  ollama/llama3.1:8b:
+    provider: ollama
+    display_name: Llama 3.1 8B (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.76
+      code_review: 0.74
+      code_debug: 0.72
+      reasoning: 0.76
+      math: 0.72
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.72
+      conversation: 0.78
+      question_answering: 0.76
+      structured_extraction: 0.74
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.78
+
+  ollama/llama3.2-vision:
+    provider: ollama
+    display_name: Llama 3.2 Vision (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: true
+    supports_json_mode: true
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 900
+    capability_scores:
+      code_generation: 0.70
+      code_review: 0.68
+      code_debug: 0.66
+      reasoning: 0.76
+      math: 0.72
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.72
+      conversation: 0.78
+      question_answering: 0.82
+      structured_extraction: 0.74
+      multimodal: 0.86
+      long_context_analysis: 0.72
+      instruction_following: 0.80
+
+  ollama/llava:7b:
+    provider: ollama
+    display_name: LLaVA 7B Vision (Local)
+    context_window: 8192
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: true
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 700
+    capability_scores:
+      code_generation: 0.58
+      code_review: 0.56
+      code_debug: 0.54
+      reasoning: 0.66
+      math: 0.58
+      creative_writing: 0.62
+      summarization: 0.68
+      translation: 0.60
+      conversation: 0.72
+      question_answering: 0.76
+      structured_extraction: 0.64
+      multimodal: 0.78
+      long_context_analysis: 0.46
+      instruction_following: 0.70
+
+  ollama/minicpm-v:
+    provider: ollama
+    display_name: MiniCPM-V Vision (Local)
+    context_window: 8192
+    max_output_tokens: 4096
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: true
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 650
+    capability_scores:
+      code_generation: 0.56
+      code_review: 0.54
+      code_debug: 0.54
+      reasoning: 0.66
+      math: 0.60
+      creative_writing: 0.62
+      summarization: 0.68
+      translation: 0.62
+      conversation: 0.72
+      question_answering: 0.76
+      structured_extraction: 0.66
+      multimodal: 0.80
+      long_context_analysis: 0.44
+      instruction_following: 0.70
+
+  ollama/moondream:
+    provider: ollama
+    display_name: Moondream Vision (Local)
+    context_window: 4096
+    max_output_tokens: 2048
+    supports_streaming: true
+    supports_tools: false
+    supports_vision: true
+    supports_json_mode: false
+    input_cost_per_1m_tokens: 0
+    output_cost_per_1m_tokens: 0
+    typical_latency_ms: 350
+    capability_scores:
+      code_generation: 0.40
+      code_review: 0.38
+      code_debug: 0.38
+      reasoning: 0.58
+      math: 0.48
+      creative_writing: 0.52
+      summarization: 0.60
+      translation: 0.50
+      conversation: 0.62
+      question_answering: 0.70
+      structured_extraction: 0.58
+      multimodal: 0.72
+      long_context_analysis: 0.32
+      instruction_following: 0.62
 
   # --- Mock (testing) ---
   mock/default:

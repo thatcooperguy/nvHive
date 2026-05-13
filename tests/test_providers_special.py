@@ -112,6 +112,19 @@ class TestOllamaProvider:
         assert provider._get_model("recommended") == "ollama/gemma3:4b"
         assert provider._get_model("auto-pick best available") == "ollama/gemma3:4b"
 
+    def test_messages_for_ollama_converts_image_attachments(self):
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ],
+        }]
+
+        converted = OllamaProvider._messages_for_ollama(messages)
+
+        assert converted == [{"role": "user", "content": "describe this", "images": ["AAAA"]}]
+
     @pytest.mark.asyncio
     async def test_list_models_parses_tags_response(self):
         """list_models() parses the /api/tags JSON into ModelInfo records."""
@@ -209,7 +222,11 @@ class TestOllamaProvider:
             {"name": "gemma3:4b"},
         ])
 
-        with patch(
+        with patch.object(
+            provider,
+            "_direct_complete",
+            new=AsyncMock(side_effect=Exception("404 model not found")),
+        ), patch(
             "nvh.providers.ollama_provider.litellm.acompletion",
             new=AsyncMock(side_effect=fake_completion),
         ), patch(
@@ -220,7 +237,7 @@ class TestOllamaProvider:
                 messages=[Message(role="user", content="hi")],
             )
 
-        assert calls == ["ollama/missing-default", "ollama/gemma3:4b"]
+        assert calls == ["ollama/gemma3:4b"]
         assert resp.content == "fallback works"
         assert resp.metadata["fallback_model"] == "ollama/gemma3:4b"
 

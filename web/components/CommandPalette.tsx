@@ -11,7 +11,7 @@ export type PaletteActionId =
   | 'mode-convene'
   | 'mode-poll'
   | 'mode-throwdown'
-  | 'model-nemotron-small'
+  | 'model-best-local'
   | 'model-gpt4o'
   | 'model-claude-sonnet'
   | 'nav-system'
@@ -51,7 +51,7 @@ const STATIC_ACTIONS: PaletteAction[] = [
   { id: 'mode-throwdown', label: 'Throwdown — Deep Analysis',  category: 'Commands',                    icon: '⚡' },
 
   // Models
-  { id: 'model-nemotron-small', label: 'Switch to Nemotron Small', category: 'Models', icon: '▷' },
+  { id: 'model-best-local',     label: 'Switch to Best Local Model', category: 'Models', icon: '▷' },
   { id: 'model-gpt4o',          label: 'Switch to GPT-4o',          category: 'Models', icon: '▷' },
   { id: 'model-claude-sonnet',  label: 'Switch to Claude Sonnet',   category: 'Models', icon: '▷' },
 
@@ -165,7 +165,6 @@ export default function CommandPalette({ open, onClose, onAction, models = [] }:
   }));
 
   // Merge static + dynamic, dedup models section
-  const staticModelIds = new Set(['model-nemotron-small', 'model-gpt4o', 'model-claude-sonnet']);
   const extraModelActions = dynamicModelActions.filter(a => {
     const mid = a.id.replace('model-switch:', '');
     return !['nemotron', 'gpt-4o', 'claude-sonnet'].some(k => mid.includes(k));

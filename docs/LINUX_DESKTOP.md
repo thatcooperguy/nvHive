@@ -191,7 +191,7 @@ nvh studio --install-models gemma3-4b,qwen25-coder-7b -y
 | 4-8 GB | `gemma3:4b` | starter |
 | 8-12 GB | `gemma3:4b`, `llama3.1:8b` | starter, video |
 | 12-24 GB | `gemma3:4b`, `llama3.1:8b` | starter, edit, control, video |
-| 24+ GB | `gemma3:4b`, `nemotron`, `llama3.1:8b` | starter, edit, control, video, video-pro |
+| 24+ GB | strongest fitting tier first: `llama3.2-vision` on 24 GB, `nemotron` on 40+ GB, then smaller fallbacks | starter, edit, control, video, video-pro |
 
 The ComfyUI installer uses an isolated environment under `$NVH_HOME/comfyui`, installs current NVIDIA PyTorch support, enables ComfyUI Manager when available, and writes nvHive starter examples.
 

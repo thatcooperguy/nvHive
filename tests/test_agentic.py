@@ -100,11 +100,11 @@ class TestConfigBuilding:
         assert config.worker_model is not None
         assert "7b" in (config.worker_model or "").lower()
 
-    def test_tier_2_cloud_orch_27b_worker(self):
+    def test_tier_2_cloud_orch_multimodal_worker(self):
         config = build_agent_config(AgentTier.TIER_2)
         assert config.orchestrator_provider is None
         assert config.worker_provider == "ollama"
-        assert "27b" in (config.worker_model or "").lower() or "gemma" in (config.worker_model or "").lower()
+        assert "vision" in (config.worker_model or "").lower()
 
     def test_tier_3_single_mode_default(self):
         config = build_agent_config(AgentTier.TIER_3)

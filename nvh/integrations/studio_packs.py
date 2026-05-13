@@ -116,6 +116,38 @@ class StudioModel:
 
 STUDIO_MODELS: list[StudioModel] = [
     StudioModel(
+        id="nemotron-70b",
+        title="NVIDIA Nemotron 70B",
+        provider="ollama",
+        install_target="nemotron",
+        category="agent",
+        recommended_vram_gb=40,
+        estimated_disk_gb=40.0,
+        priority=5,
+        capabilities=["chat", "reasoning", "coding", "agent", "large-model"],
+        why_recommended=(
+            "Largest high-accuracy local reasoning tier for 40 GB+ NVIDIA GPUs."
+        ),
+        source_url="https://ollama.com/library/nemotron",
+        license_note="NVIDIA Open Model License and Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="llama32-vision",
+        title="Llama 3.2 Vision",
+        provider="ollama",
+        install_target="llama3.2-vision",
+        category="vision",
+        recommended_vram_gb=24,
+        estimated_disk_gb=7.0,
+        priority=8,
+        capabilities=["vision", "image Q&A", "desktop screenshots", "multimodal"],
+        why_recommended=(
+            "Best local vision fallback for screenshots and uploaded images on 24 GB+ GPUs."
+        ),
+        source_url="https://ollama.com/library/llama3.2-vision",
+        license_note="Meta Llama license and Ollama library terms apply.",
+    ),
+    StudioModel(
         id="gemma3-4b",
         title="Gemma 3 4B",
         provider="ollama",
@@ -211,6 +243,34 @@ STUDIO_MODELS: list[StudioModel] = [
         capabilities=["vision", "image Q&A", "desktop screenshots"],
         why_recommended="Adds local image understanding for screenshots and creative media.",
         source_url="https://ollama.com/library/llava",
+        license_note="Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="minicpm-v",
+        title="MiniCPM-V",
+        provider="ollama",
+        install_target="minicpm-v",
+        category="vision",
+        recommended_vram_gb=12,
+        estimated_disk_gb=5.0,
+        priority=80,
+        capabilities=["vision", "image Q&A", "fallback"],
+        why_recommended="Smaller local vision fallback when Llama 3.2 Vision is too heavy.",
+        source_url="https://ollama.com/library/minicpm-v",
+        license_note="Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="moondream",
+        title="Moondream",
+        provider="ollama",
+        install_target="moondream",
+        category="vision",
+        recommended_vram_gb=4,
+        estimated_disk_gb=2.0,
+        priority=90,
+        capabilities=["vision", "image Q&A", "small"],
+        why_recommended="Tiny vision fallback for constrained GPUs or CPU-only sessions.",
+        source_url="https://ollama.com/library/moondream",
         license_note="Ollama library terms apply.",
     ),
 ]
@@ -1196,12 +1256,20 @@ def _fits_vram(model: StudioModel, vram_gb: int) -> bool:
 
 def _recommended_model_ids(vram_gb: int) -> set[str]:
     recommended: set[str] = {"nomic-embed-text"}
+    if vram_gb >= 40:
+        recommended.add("nemotron-70b")
+    if vram_gb >= 24:
+        recommended.add("llama32-vision")
     if vram_gb >= 6:
         recommended.add("gemma3-4b")
     if vram_gb >= 8:
         recommended.update({"qwen3-8b", "llama31-8b", "qwen25-coder-7b", "llava-7b"})
     if vram_gb >= 10:
         recommended.add("deepseek-r1-8b")
+    if 12 <= vram_gb < 24:
+        recommended.add("minicpm-v")
+    if 4 <= vram_gb < 12:
+        recommended.add("moondream")
     if vram_gb == 0:
         recommended.add("gemma3-4b")
     return recommended

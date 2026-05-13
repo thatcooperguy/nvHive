@@ -407,9 +407,8 @@ def _model_exists_on_registry(model: str) -> bool | None:
     failed (network issue, DNS, etc). Callers should treat None as
     "can't confirm — try the pull anyway", not as failure.
 
-    We use this to catch invented/typo'd model names (e.g. the old
-    fictional ``nemotron-small`` tag) before kicking off a progress bar
-    against a pull that will eventually 404.
+    We use this to catch invented/typo'd model names before kicking off a
+    progress bar against a pull that will eventually 404.
     """
     try:
         import httpx
@@ -561,6 +560,8 @@ def _ensure_ollama(console: Console) -> tuple[bool, list[str]]:
 # desktop-agent screenshot assist is available during API-key setup even
 # if the large text models are still downloading.
 _VISION_MODEL_TAGS = {
+    "nemotron-3-nano-omni",
+    "nemotron-omni",
     "moondream",
     "minicpm-v",
     "llama3.2-vision",
@@ -572,6 +573,24 @@ _VISION_MODEL_TAGS = {
     "llava:34b",
     "bakllava",
 }
+
+_MODEL_PULL_PREFERENCE = [
+    "nemotron-3-nano-omni",
+    "nemotron-omni",
+    "nemotron",
+    "nemotron:70b",
+    "llama3.3:70b",
+    "qwen2.5-coder:32b",
+    "llama3.2-vision",
+    "qwen3:8b",
+    "qwen2.5-coder:7b",
+    "llama3.1:8b",
+    "minicpm-v",
+    "llava:7b",
+    "gemma3:4b",
+    "moondream",
+    "nemotron-mini",
+]
 
 
 def _is_vision_model(tag: str) -> bool:
@@ -595,6 +614,16 @@ def _reorder_vision_first(models: list[str]) -> list[str]:
     return vision + text
 
 
+def _prefer_largest_fitting_models(models: list[str]) -> list[str]:
+    """Order model tags by nvHive's strongest-first local preference."""
+    preference = {model: i for i, model in enumerate(_MODEL_PULL_PREFERENCE)}
+    unique_models = list(dict.fromkeys(models))
+    return sorted(
+        unique_models,
+        key=lambda model: preference.get(model, len(preference) + unique_models.index(model)),
+    )
+
+
 def _get_recommended_models(total_vram: float) -> list[str]:
     """Return recommended Ollama model tags for the detected VRAM."""
     try:
@@ -603,34 +632,33 @@ def _get_recommended_models(total_vram: float) -> list[str]:
         recs = recommend_models(gpus) if gpus else []
         models = [r.model for r in recs]
         if total_vram >= 4 and "gemma3:4b" not in models:
-            models.insert(0, "gemma3:4b")
-        elif "gemma3:4b" in models:
-            models = ["gemma3:4b"] + [m for m in models if m != "gemma3:4b"]
-        return models
+            models.append("gemma3:4b")
+        return _prefer_largest_fitting_models(models)
     except Exception:
         pass
 
     # Fallback: manual recommendations by VRAM, all names verified against
-    # Ollama's registry (no fictional tags like nemotron-small or
-    # nemotron:120b which 404'd on pull). Each tier fits text + vision
+    # Ollama's registry. Each tier fits text + vision
     # model concurrently:
     #   llama3.2-vision (~7GB) — best spatial grounding for desktop agent
     #   minicpm-v (~5GB) — good vision, smaller footprint
     #   moondream (~2GB) — basic vision for very tight VRAM
     if total_vram >= 128:
-        return ["gemma3:4b", "nemotron:70b", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision"]
+        return ["nemotron", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision", "gemma3:4b"]
     if total_vram >= 96:
-        return ["gemma3:4b", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision"]
+        return ["nemotron", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision", "gemma3:4b"]
     if total_vram >= 48:
-        return ["gemma3:4b", "llama3.3:70b", "llama3.2-vision"]
+        return ["nemotron", "llama3.3:70b", "llama3.2-vision", "qwen3:8b", "gemma3:4b"]
+    if total_vram >= 40:
+        return ["nemotron", "llama3.2-vision", "qwen3:8b", "gemma3:4b"]
     if total_vram >= 24:
-        return ["gemma3:4b", "gemma4:26b", "llama3.2-vision"]
+        return ["llama3.2-vision", "qwen3:8b", "qwen2.5-coder:7b", "gemma3:4b"]
     if total_vram >= 16:
-        return ["gemma3:4b", "qwen2.5-coder:7b", "minicpm-v"]
+        return ["minicpm-v", "qwen2.5-coder:7b", "qwen3:8b", "gemma3:4b"]
     if total_vram >= 12:
-        return ["gemma3:4b", "qwen2.5-coder:7b", "minicpm-v"]
+        return ["minicpm-v", "qwen2.5-coder:7b", "gemma3:4b"]
     if total_vram >= 8:
-        return ["gemma3:4b", "moondream"]
+        return ["qwen3:8b", "llama3.1:8b", "gemma3:4b", "llava:7b"]
     if total_vram >= 4:
         return ["gemma3:4b", "moondream"]
     return []
@@ -815,7 +843,6 @@ def _write_config(
     }
 
     # Pick the Ollama default/fallback for THIS machine — was hardcoded to
-    # the fictional `nemotron-small`, which 404'd the pull. Using the real
     # recommender ensures the config always references real models.
     try:
         from nvh.utils.gpu import detect_gpus, recommend_models

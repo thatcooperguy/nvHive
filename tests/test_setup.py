@@ -111,7 +111,7 @@ class TestOllamaRunning:
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "models": [
-                {"name": "gemma2:9b"},
+                {"name": "qwen3:8b"},
                 {"name": "llama3.3:70b"},
             ],
         }
@@ -120,7 +120,7 @@ class TestOllamaRunning:
         with patch.dict("sys.modules", {"httpx": mock_httpx}):
             running, models = _ollama_running()
         assert running is True
-        assert "gemma2:9b" in models
+        assert "qwen3:8b" in models
         assert "llama3.3:70b" in models
 
 
@@ -130,12 +130,14 @@ class TestGetRecommendedModels:
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
             recs = _get_recommended_models(128.0)
         assert len(recs) >= 2
-        assert any("70b" in m for m in recs)
+        assert recs[0] == "nemotron"
+        assert any("70b" in m or m == "nemotron" for m in recs)
 
     def test_medium_vram(self):
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
             recs = _get_recommended_models(48.0)
         assert len(recs) >= 1
+        assert recs[0] == "nemotron"
 
     def test_low_vram_gets_small_model(self):
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
@@ -148,18 +150,17 @@ class TestGetRecommendedModels:
             recs = _get_recommended_models(0.0)
         assert recs == []
 
-    def test_24gb_vram_gets_gemma(self):
+    def test_24gb_vram_gets_multimodal_first(self):
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
             recs = _get_recommended_models(24.0)
-        # Fallback recommender uses the real gemma4:26b (was gemma2:27b;
-        # both exist on Ollama but the newer Gemma 4 is what we recommend
-        # everywhere else in the codebase).
-        assert "gemma4:26b" in recs
+        assert recs[0] == "llama3.2-vision"
+        assert "gemma3:4b" in recs
 
     def test_96gb_gets_multiple_models(self):
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
             recs = _get_recommended_models(96.0)
         assert len(recs) >= 2
+        assert recs[0] == "nemotron"
         assert any(v in recs for v in ["llama3.2-vision", "minicpm-v"])  # vision model included
 
 
@@ -310,6 +311,8 @@ class TestVisionModelDetection:
         assert _is_vision_model("moondream")
         assert _is_vision_model("llava")
         assert _is_vision_model("bakllava")
+        assert _is_vision_model("nemotron-3-nano-omni")
+        assert _is_vision_model("nemotron-omni")
 
     def test_versioned_tags(self):
         assert _is_vision_model("llama3.2-vision:11b")
@@ -320,7 +323,7 @@ class TestVisionModelDetection:
     def test_text_models_not_vision(self):
         assert not _is_vision_model("nemotron")
         assert not _is_vision_model("nemotron:70b")
-        assert not _is_vision_model("gemma4:26b")
+        assert not _is_vision_model("qwen2.5-coder:32b")
         assert not _is_vision_model("qwen2.5-coder:7b")
 
     def test_vision_substring_match(self):
@@ -332,13 +335,13 @@ class TestReorderVisionFirst:
     """Tests for _reorder_vision_first — pull ordering."""
 
     def test_vision_moved_to_front(self):
-        result = _reorder_vision_first(["nemotron:70b", "llama3.2-vision", "gemma4:26b"])
+        result = _reorder_vision_first(["nemotron:70b", "llama3.2-vision", "qwen2.5-coder:32b"])
         assert result[0] == "llama3.2-vision"
-        assert result[1:] == ["nemotron:70b", "gemma4:26b"]
+        assert result[1:] == ["nemotron:70b", "qwen2.5-coder:32b"]
 
     def test_no_vision_preserved(self):
-        result = _reorder_vision_first(["nemotron", "gemma4:26b"])
-        assert result == ["nemotron", "gemma4:26b"]
+        result = _reorder_vision_first(["nemotron", "qwen2.5-coder:32b"])
+        assert result == ["nemotron", "qwen2.5-coder:32b"]
 
     def test_only_vision(self):
         result = _reorder_vision_first(["moondream"])
@@ -349,8 +352,8 @@ class TestReorderVisionFirst:
 
     def test_multiple_vision_preserves_order(self):
         # When there are multiple vision models, they stay in original order
-        result = _reorder_vision_first(["nemotron", "moondream", "gemma4:26b", "minicpm-v"])
-        assert result == ["moondream", "minicpm-v", "nemotron", "gemma4:26b"]
+        result = _reorder_vision_first(["nemotron", "moondream", "qwen2.5-coder:32b", "minicpm-v"])
+        assert result == ["moondream", "minicpm-v", "nemotron", "qwen2.5-coder:32b"]
 
 
 class TestWriteConfig:
@@ -427,7 +430,7 @@ class TestModelExistsOnRegistry:
         mock_httpx = MagicMock()
         mock_httpx.head.return_value = mock_resp
         with patch.dict("sys.modules", {"httpx": mock_httpx}):
-            assert _model_exists_on_registry("nemotron-small") is False
+            assert _model_exists_on_registry("clearly-not-a-real-model") is False
 
     def test_returns_none_on_network_error(self):
         from unittest.mock import MagicMock

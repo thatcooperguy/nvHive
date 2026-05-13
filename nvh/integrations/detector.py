@@ -42,13 +42,22 @@ def _cmd_exists(cmd: str) -> str | None:
     return shutil.which(cmd)
 
 
+def _path_exists(path: Path) -> bool:
+    """Check whether a config path exists without failing on locked folders."""
+    try:
+        return path.exists()
+    except OSError as exc:
+        logger.debug("Skipping unreadable integration config path %s: %s", path, exc)
+        return False
+
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     """Read a JSON file, return None if missing or invalid."""
     try:
-        if path.exists():
+        if _path_exists(path):
             return json.loads(path.read_text())
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Skipping unreadable or invalid JSON config %s: %s", path, exc)
     return None
 
 
@@ -186,7 +195,7 @@ def detect_platforms() -> list[Platform]:
         )
 
     for cfg in desktop_configs:
-        if cfg.exists():
+        if _path_exists(cfg):
             claude_desktop.detected = True
             claude_desktop.detection_method = f"Config: {cfg}"
             claude_desktop.config_path = str(cfg)

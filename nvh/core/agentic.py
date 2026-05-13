@@ -61,11 +61,11 @@ class AgentTier(enum.StrEnum):
 # Tier description for display
 TIER_DESCRIPTIONS: dict[AgentTier, str] = {
     AgentTier.TIER_0: "Fully cloud (no local GPU)",
-    AgentTier.TIER_1: "Cloud orchestrator + 7B local worker",
-    AgentTier.TIER_2: "Cloud orchestrator + 27B local worker",
+    AgentTier.TIER_1: "Cloud orchestrator + 7B local coding worker",
+    AgentTier.TIER_2: "Cloud orchestrator + multimodal local worker",
     AgentTier.TIER_3: "Cloud orchestrator + 70B local worker (single/multi configurable)",
     AgentTier.TIER_4: "Cloud orchestrator + dual-model: 70B planner + 32B coder",
-    AgentTier.TIER_5: "Fully local: Nemotron 70B planner + Llama 70B coder + Qwen 72B reviewer",
+    AgentTier.TIER_5: "Fully local: Nemotron planner + Llama 70B coder + Qwen reviewer",
 }
 
 
@@ -109,7 +109,7 @@ _TIER_MODELS: dict[AgentTier, dict[str, tuple[str | None, str | None]]] = {
         # Llama 3.3 70B for coding (strong general + coding, 128K ctx),
         # Qwen 2.5 Coder 72B for review (different architecture catches
         # different bugs). 3 × 40 GB Q4 = 120 GB, 8 GB headroom.
-        "orchestrator": ("ollama", "ollama/nemotron:70b"),
+        "orchestrator": ("ollama", "ollama/nemotron"),
         "worker": ("ollama", "ollama/llama3.3:70b"),
         "reviewer": ("ollama", "ollama/qwen2.5-coder:32b"),
     },
@@ -129,13 +129,13 @@ _TIER_MODELS: dict[AgentTier, dict[str, tuple[str | None, str | None]]] = {
         "orchestrator": (None, None),
         "worker": ("ollama", "ollama/llama3.3:70b"),
         # Reviewer only used in --mode multi:
-        "reviewer": ("ollama", "ollama/gemma2:9b"),
+        "reviewer": ("ollama", "ollama/qwen3:8b"),
     },
     AgentTier.TIER_2: {
         # RTX 3090 / RTX 4090 (24 GB): single local model.
         # Gemma 2 27B Q4 (~16 GB) — strong coder in 24 GB envelope.
         "orchestrator": (None, None),
-        "worker": ("ollama", "ollama/gemma2:27b"),
+        "worker": ("ollama", "ollama/llama3.2-vision"),
     },
     AgentTier.TIER_1: {
         # RTX 4060 Ti 16 GB: single small model.
@@ -154,7 +154,7 @@ _TIER_MODELS: dict[AgentTier, dict[str, tuple[str | None, str | None]]] = {
 _TIER_3_MULTI_MODELS: dict[str, tuple[str | None, str | None]] = {
     "orchestrator": (None, None),
     "worker": ("ollama", "ollama/qwen2.5-coder:32b"),
-    "reviewer": ("ollama", "ollama/gemma2:9b"),
+    "reviewer": ("ollama", "ollama/qwen3:8b"),
 }
 
 

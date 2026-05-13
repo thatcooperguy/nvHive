@@ -15,18 +15,18 @@ NVIDIA GPU recommended but NOT required. Without a GPU, NVHive uses cloud AI pro
 | GPU | VRAM | Best Local Model | tok/s (approx) | Notes |
 |-----|------|-------------------|-----------------|-------|
 | No GPU | — | Cloud only | N/A | Free tiers: LLM7, Groq, GitHub Models |
-| GTX 1660 / RTX 2060 | 6 GB | nemotron-mini (4B) | ~30 tok/s | Basic local AI |
-| RTX 3060 | 12 GB | nemotron-small | ~55 tok/s | Good for students |
-| RTX 3070 / 3080 | 8-10 GB | nemotron-small | ~75 tok/s | Great balance |
-| RTX 3090 | 24 GB | nemotron-small + codellama | ~100 tok/s | Full local suite |
-| RTX 4060 | 8 GB | nemotron-small | ~70 tok/s | Ada architecture boost |
-| RTX 4070 | 12 GB | nemotron-small | ~90 tok/s | Sweet spot |
-| RTX 4070 Ti | 16 GB | nemotron-small + models | ~110 tok/s | Excellent |
-| RTX 4080 | 16 GB | nemotron-small + models | ~130 tok/s | Premium |
-| RTX 4090 | 24 GB | nemotron 70B (Q4) | ~40 tok/s (70B) | Best consumer |
-| RTX 5090 | 32 GB | nemotron 70B (Q4) | ~60 tok/s (70B) | Next-gen |
+| GTX 1660 / RTX 2060 | 6 GB | gemma3:4b + moondream | varies | Basic local AI |
+| RTX 3060 | 12 GB | qwen3:8b + minicpm-v | varies | Good for students |
+| RTX 3070 / 3080 | 8-10 GB | qwen3:8b + compact vision | varies | Great balance |
+| RTX 3090 | 24 GB | llama3.2-vision + qwen3:8b | varies | Full local suite |
+| RTX 4060 | 8 GB | qwen3:8b | varies | Ada architecture boost |
+| RTX 4070 | 12 GB | qwen3:8b + minicpm-v | varies | Sweet spot |
+| RTX 4070 Ti | 16 GB | qwen/coder + minicpm-v | varies | Excellent |
+| RTX 4080 | 16 GB | qwen/coder + minicpm-v | varies | Premium |
+| RTX 4090 | 24 GB | llama3.2-vision + qwen3:8b | varies | Best consumer multimodal |
+| RTX 5090 | 32 GB | llama3.2-vision + coder fallback | varies | Next-gen |
 | A100 80GB | 80 GB | nemotron 70B (full) | ~120 tok/s | Datacenter |
-| H100 | 80 GB | nemotron:120b | ~180 tok/s | Flagship |
+| H100 | 80 GB | nemotron + multimodal fallback | varies | Flagship |
 
 ### Impact on Gaming Performance
 - NVHive uses GPU VRAM, not compute cores, when idle

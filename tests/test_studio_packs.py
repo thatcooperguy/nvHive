@@ -81,6 +81,22 @@ def test_model_catalog_marks_vram_recommendations(monkeypatch) -> None:
     assert by_id["deepseek-r1-8b"]["fits_vram"] is False
 
 
+def test_model_catalog_prefers_large_and_multimodal_models_on_big_gpus(monkeypatch) -> None:
+    monkeypatch.setattr(studio_packs, "_detect_vram_gb", lambda: 47)
+    monkeypatch.setattr(studio_packs, "_ollama_models", lambda: set())
+    monkeypatch.setattr(studio_packs, "_ollama_binary", lambda: "ollama")
+    monkeypatch.setattr(studio_packs, "_ollama_reachable", lambda: True)
+
+    catalog = studio_packs.model_catalog_with_status()
+    by_id = {model["id"]: model for model in catalog["models"]}
+
+    assert catalog["recommended_ids"][0] == "nemotron-70b"
+    assert by_id["nemotron-70b"]["recommended"] is True
+    assert by_id["nemotron-70b"]["fits_vram"] is True
+    assert by_id["llama32-vision"]["recommended"] is True
+    assert by_id["llama32-vision"]["fits_vram"] is True
+
+
 def test_ollama_binary_ignores_unusable_local_file(tmp_path, monkeypatch) -> None:
     home = tmp_path / "nvhive"
     local = home / "bin" / "ollama"
@@ -236,6 +252,7 @@ async def test_ace_step_music_blocks_non_linux(tmp_path, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_music_daw_helper_does_not_mark_installed_without_downloads(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
     monkeypatch.setenv("NVH_STUDIO_HOME", str(tmp_path / "studio"))
     monkeypatch.setattr(studio_packs.platform, "system", lambda: "Linux")
     monkeypatch.setitem(sys.modules, "httpx", None)

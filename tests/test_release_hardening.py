@@ -84,7 +84,9 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     install = (ROOT / "install.sh").read_text(encoding="utf-8")
 
     assert 'DEFAULT_OLLAMA_MODEL="gemma3:4b"' in install
-    assert 'DEFAULT_OLLAMA_MODEL="nemotron"' not in install
+    assert 'DEFAULT_OLLAMA_MODEL="nemotron"' in install
+    assert 'DEFAULT_OLLAMA_MODEL="llama3.2-vision"' in install
+    assert 'DEFAULT_OLLAMA_MODEL="qwen3:8b"' in install
     assert "sync_ollama_default_model_config" in install
     assert 'default_model: "ollama/__NVH_DEFAULT_OLLAMA_MODEL__"' in install
     assert 'MODEL="$DEFAULT_OLLAMA_MODEL"' in install
@@ -137,7 +139,8 @@ def test_workstation_local_ai_uses_hardened_studio_pack_path() -> None:
     local_ai_block = cli.split("if with_local_ai:", 1)[1].split("if with_comfyui:", 1)[0]
 
     assert 'install_studio_packs(["rootless-ollama"]' in local_ai_block
-    assert 'install_studio_models(["gemma3-4b"]' in local_ai_block
+    assert "model_catalog_with_status" in local_ai_block
+    assert "install_studio_models(model_ids" in local_ai_block
     assert "from nvh.cli.setup import _ensure_ollama" not in local_ai_block
     assert "_pull_model" not in local_ai_block
 

@@ -180,19 +180,19 @@ def get_cloud_recommended_config(session: CLOUDSession) -> dict[str, Any]:
         return config
 
     # Model selection based on tier. Only real Ollama registry tags —
-    # earlier versions listed nemotron-small which 404s on pull.
+    # Keep these to pullable tags so first-run setup does not queue 404s.
     tier_models = {
         "priority": {
             "default_model": "ollama/gemma3:4b",
-            "recommended_models": ["gemma3:4b"],
+            "recommended_models": ["gemma3:4b", "moondream"],
         },
         "performance": {
-            "default_model": "ollama/gemma3:4b",
-            "recommended_models": ["gemma3:4b", "llama3.1:8b"],
+            "default_model": "ollama/llama3.2-vision",
+            "recommended_models": ["llama3.2-vision", "qwen3:8b", "gemma3:4b"],
         },
         "ultimate": {
-            "default_model": "ollama/gemma3:4b",
-            "recommended_models": ["gemma3:4b", "llama3.1:8b", "nemotron"],
+            "default_model": "ollama/nemotron",
+            "recommended_models": ["nemotron", "llama3.2-vision", "qwen3:8b", "gemma3:4b"],
         },
     }
 

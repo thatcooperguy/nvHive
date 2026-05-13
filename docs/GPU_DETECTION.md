@@ -16,10 +16,10 @@ flowchart TB
     
     VRAM -->|No GPU / < 4GB| REC_MINI[Recommend: nemotron-mini<br/>CPU mode · ~2GB RAM]
     VRAM -->|4 – 6 GB| REC_MINI_GPU[Recommend: nemotron-mini<br/>GPU accelerated]
-    VRAM -->|6 – 12 GB| REC_SMALL[Recommend: nemotron-small<br/>Sweet spot for quality/speed]
-    VRAM -->|12 – 24 GB| REC_DUAL[Recommend: nemotron-small<br/>+ codellama]
-    VRAM -->|24 – 48 GB| REC_FULL[Recommend: nemotron 70B<br/>Quantized]
-    VRAM -->|48 GB+| REC_FLAG[Recommend: nemotron 70B/120B<br/>Full quality]
+    VRAM -->|6-12 GB| REC_SMALL[Recommend: qwen3:8b<br/>+ compact vision fallback]
+    VRAM -->|12-24 GB| REC_DUAL[Recommend: qwen/coder<br/>+ MiniCPM-V]
+    VRAM -->|24-40 GB| REC_FULL[Recommend: llama3.2-vision<br/>+ coder fallback]
+    VRAM -->|40 GB+| REC_FLAG[Recommend: nemotron first<br/>+ multimodal fallback]
 
     REC_MINI --> OLLAMA_CHECK
     REC_MINI_GPU --> OLLAMA_CHECK
@@ -35,7 +35,7 @@ flowchart TB
     OLLAMA_CHECK -->|Running| MODEL_CHECK{Model already<br/>pulled?}
     
     MODEL_CHECK -->|Yes| READY[Model ready ✓<br/>Registered as provider]
-    MODEL_CHECK -->|No| PULL[Pull model now? Y/n<br/>→ ollama pull nemotron-small]
+    MODEL_CHECK -->|No| PULL[Pull model now? Y/n<br/>ollama pull best fitting model]
     PULL --> READY
     
     READY --> ROUTE[nvHive Router<br/>Local GPU provider active<br/>Learning loop measures quality]
@@ -48,18 +48,16 @@ flowchart TB
 
 ## Model Recommendations by VRAM
 
-| VRAM | Nemotron | Gemma 4 | Both Fit? | Use Case |
-|------|---------|---------|:---------:|----------|
-| No GPU / < 4 GB | `nemotron-mini` | `gemma4:e2b` | ✓ | CPU mode |
-| 4 – 6 GB | `nemotron-mini` | `gemma4:e4b` | ✓ | GPU accelerated |
-| **6 – 12 GB** | **`nemotron-small`** | **`gemma4:e4b`** | **✓** | **Recommended sweet spot** |
-| 12 – 19 GB | `nemotron-small` | `gemma4:e4b` | ✓ | Both fit comfortably |
-| 20 – 24 GB | `nemotron-small` | `gemma4:26b` | ✓ | Reasoning + multimodal |
-| 24 – 39 GB | `nemotron` (70B) | `gemma4:e4b` | ✓ | Full Nemotron + lightweight Gemma |
-| 40 – 48 GB | `nemotron` (70B) | `gemma4:26b` | ✓ | Both full-size models |
-| 48 GB+ | `nemotron` (70B) | `gemma4:31b` | ✓ | Maximum quality |
+| VRAM | Primary Local Model | Multimodal Fallback | Use Case |
+|------|---------------------|---------------------|----------|
+| No GPU / < 4 GB | cloud/free providers | optional tiny local | CPU mode |
+| 4-8 GB | `gemma3:4b` | `moondream` | lightweight local chat |
+| 8-12 GB | `qwen3:8b` or `llama3.1:8b` | `moondream` / `llava:7b` | student chat and code |
+| 12-24 GB | `qwen3:8b` / `qwen2.5-coder:7b` | `minicpm-v` | coding plus image help |
+| 24-40 GB | `llama3.2-vision` | `qwen3:8b` | multimodal desktop assistant |
+| 40 GB+ | `nemotron` | `llama3.2-vision` + coding fallback | strongest local AI first |
 
-**Local council:** Pull both Nemotron and Gemma 4 to run fully local council with two different model architectures. Different architectures catch different blind spots.
+**Local council:** nvHive pulls the strongest fitting primary model first, then smaller multimodal/coding fallbacks so the wizard can keep working if the largest model is busy or unavailable.
 
 Multi-GPU systems: Ollama automatically distributes layers across all detected GPUs.
 
@@ -99,7 +97,7 @@ The easiest way to get local inference running is `nvh setup`. Step 3 handles ev
 1. Detects your GPU and recommends the optimal Nemotron model
 2. Checks if Ollama is installed and running
 3. Checks if the recommended model is already pulled
-4. If not, asks: "Pull nemotron-small now? [Y/n]"
+4. If not, asks before pulling the strongest fitting model for your GPU
 5. After pulling, registers the model with nvHive's router
 
 No manual configuration needed. One wizard, zero to local GPU inference.
@@ -160,18 +158,18 @@ With `--prefer-nvidia`, local NVIDIA providers get a 1.3x routing bonus, keeping
 | nemotron-mini | NVIDIA Nemotron | 2.7 GB | **86.6** | ✓ |
 | gemma3 | Google Gemma 3 | 3.3 GB | **73.4** | ✓ |
 | llama3.1 | Meta Llama 3.1 | 4.9 GB | **48.1** | ✓ |
-| gemma4:e4b | Google Gemma 4 | 9.6 GB | **26.4** | ✓ |
+| qwen3:8b | Qwen 3 | ~6 GB | estimate varies | pending |
 | nemotron-3-super | NVIDIA Nemotron | 86 GB | **24.8** | ✓ |
 
 ### Estimated: Other NVIDIA GPUs
 
 | GPU | VRAM | Expected Performance |
 |-----|------|---------------------|
-| RTX 3060 | 12 GB | ~55 tok/s with nemotron-small |
-| RTX 3080 | 10 GB | ~75 tok/s with nemotron-small |
+| RTX 3060 | 12 GB | qwen3:8b / MiniCPM-V tier |
+| RTX 3080 | 10 GB | qwen3:8b / compact vision tier |
 | RTX 3090 | 24 GB | ~90 tok/s with nemotron |
-| RTX 4070 | 12 GB | ~85 tok/s with nemotron-small |
-| RTX 4080 | 16 GB | ~110 tok/s with nemotron-small |
+| RTX 4070 | 12 GB | qwen/coder + MiniCPM-V tier |
+| RTX 4080 | 16 GB | qwen/coder + MiniCPM-V tier |
 | RTX 4090 | 24 GB | ~140 tok/s with nemotron |
 | A100 | 40/80 GB | ~250 tok/s with nemotron 70B |
 | H100 | 80 GB | ~380 tok/s with nemotron 70B |

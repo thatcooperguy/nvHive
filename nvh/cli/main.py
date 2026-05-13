@@ -4749,7 +4749,7 @@ def bench(
         if all_models:
             models_to_bench = ollama_models
         elif model:
-            # Normalise — allow short names (e.g. "nemotron-small" matches "nemotron-small:latest")
+            # Normalise — allow short names (e.g. "llama3.2-vision" matches "llama3.2-vision:latest")
             matched = [m for m in ollama_models if m == model or m.startswith(model + ":")]
             if not matched:
                 console.print(f"[red]Model '{model}' not found in Ollama.[/red]")
@@ -6445,7 +6445,7 @@ def estimate(
     ),
     model: str | None = typer.Option(
         None, "-m", "--model",
-        help="Model to estimate (e.g. nemotron-small, gemma4:e4b)",
+        help="Model to estimate (e.g. llama3.2-vision, qwen3:8b)",
     ),
     list_gpus: bool = typer.Option(
         False, "--list-gpus",
@@ -6458,9 +6458,9 @@ def estimate(
     IPC, and measured baselines from real hardware.
 
     Examples:
-        nvh estimate --gpu rtx_4090 --model nemotron-small
+        nvh estimate --gpu rtx_4090 --model llama3.2-vision
         nvh estimate --gpu rtx_3080
-        nvh estimate --model gemma4:e4b
+        nvh estimate --model qwen3:8b
         nvh estimate --list-gpus
     """
     from nvh.utils.gpu_emulation import (
@@ -6599,10 +6599,10 @@ def estimate(
 
     console.print(
         "Usage: nvh estimate --gpu rtx_4090"
-        " --model nemotron-small\n"
+        " --model llama3.2-vision\n"
         "       nvh estimate --gpu rtx_3080"
         "  (all models on this GPU)\n"
-        "       nvh estimate --model gemma4:e4b"
+        "       nvh estimate --model qwen3:8b"
         "  (this model on all GPUs)\n"
         "       nvh estimate --list-gpus"
         "  (show all known GPUs)",
@@ -7923,10 +7923,14 @@ def workstation(
                     last_log = now
 
         async def _install_local_ai_starter_model() -> None:
-            from nvh.integrations.studio_packs import install_studio_models
+            from nvh.integrations.studio_packs import install_studio_models, model_catalog_with_status
+
+            model_catalog = model_catalog_with_status(home_dir=storage.layout.home)
+            model_ids = list(model_catalog.get("recommended_ids") or ["gemma3-4b"])
+            model_ids = model_ids[:1] or ["gemma3-4b"]
 
             last_log = 0.0
-            async for event in install_studio_models(["gemma3-4b"], force_update=False):
+            async for event in install_studio_models(model_ids, force_update=False):
                 kind = event.get("event", "")
                 message = event.get("message", "")
                 now = _time.monotonic()
@@ -7940,7 +7944,7 @@ def workstation(
         try:
             _run(_install_local_ai_runtime())
             should_pull = yes or typer.confirm(
-                "  Pull the safe starter model Gemma 3 4B now? Larger NVIDIA/Nemotron options remain optional.",
+                "  Pull the best local model that fits this GPU now? You can add smaller fallbacks later.",
                 default=True,
             )
             if should_pull:
