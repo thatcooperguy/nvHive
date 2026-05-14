@@ -3,7 +3,14 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import ProviderCard from '@/components/ProviderCard';
-import { getModels, getGPUInfo, getRecommendations, getFreeProviders, saveProviderKey } from '@/lib/api';
+import {
+  getModels,
+  getGPUInfo,
+  getRecommendations,
+  getFreeProviders,
+  saveProviderKey,
+  validateProviderKey,
+} from '@/lib/api';
 import { useProviderHealth } from '@/lib/useProviderHealth';
 import type { ModelInfo, GPUInfo, RecommendationsResult, FreeProvider } from '@/lib/types';
 
@@ -12,6 +19,46 @@ const MODEL_STATUS_COLORS: Record<string, string> = {
   deprecated: '#d97706',
   unavailable: '#dc2626',
 };
+
+const LOBE_ICON_CDN = 'https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light';
+
+function ProviderLogo({
+  slug,
+  name,
+  size = 28,
+}: {
+  slug?: string | null;
+  name: string;
+  size?: number;
+}) {
+  // Render a real brand mark from the lobe-icons CDN when we have a slug,
+  // otherwise fall back to a typography monogram so the layout stays stable.
+  if (slug) {
+    return (
+      <img
+        src={`${LOBE_ICON_CDN}/${slug}.png`}
+        alt={`${name} logo`}
+        width={size}
+        height={size}
+        className="flex-shrink-0 rounded-md object-contain"
+        loading="lazy"
+        onError={(event) => {
+          // CDN miss: hide the broken image so the monogram fallback wins.
+          (event.currentTarget as HTMLImageElement).style.display = 'none';
+        }}
+      />
+    );
+  }
+  const initial = (name || '?').trim().charAt(0).toUpperCase();
+  return (
+    <div
+      style={{ width: size, height: size }}
+      className="flex flex-shrink-0 items-center justify-center rounded-md bg-[#f5f5f5] text-xs font-bold text-[#737373]"
+    >
+      {initial}
+    </div>
+  );
+}
 
 function CloudKeyCard({
   provider,
@@ -27,7 +74,7 @@ function CloudKeyCard({
   provider: FreeProvider;
   expanded: boolean;
   saved: boolean;
-  saving: boolean;
+  saving: 'idle' | 'validating' | 'saving';
   keyValue: string;
   error?: string;
   onExpand: () => void;
@@ -36,28 +83,32 @@ function CloudKeyCard({
 }) {
   const configured = provider.configured || saved;
   const keyUrl = provider.key_url || provider.signup_url;
+  const [revealKey, setRevealKey] = useState(false);
 
   return (
-    <div className={`border p-4 bg-white ${configured ? 'border-[#76B900]/40' : 'border-[#e5e5e5]'}`}>
+    <div className={`rounded-lg border p-4 bg-white transition-colors ${configured ? 'border-[#76B900]/40' : 'border-[#e5e5e5]'}`}>
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-mono font-bold text-[#0a0a0a]">{provider.display_name || provider.name}</span>
-            <span className={`text-[10px] font-mono px-1.5 py-0.5 border ${configured ? 'border-[#76B900]/30 text-[#76B900] bg-[#76B900]/10' : 'border-[#d97706]/30 text-[#d97706] bg-[#d97706]/5'}`}>
-              {configured ? 'CONNECTED' : provider.signup_tier.toUpperCase()}
-            </span>
+        <div className="flex min-w-0 items-start gap-3">
+          <ProviderLogo slug={provider.logo_slug ?? undefined} name={provider.display_name || provider.name} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-mono font-bold text-[#0a0a0a]">{provider.display_name || provider.name}</span>
+              <span className={`text-[10px] font-mono px-1.5 py-0.5 border rounded ${configured ? 'border-[#76B900]/30 text-[#76B900] bg-[#76B900]/10' : 'border-[#d97706]/30 text-[#d97706] bg-[#d97706]/5'}`}>
+                {configured ? 'CONNECTED' : provider.signup_tier.toUpperCase()}
+              </span>
+            </div>
+            <div className="text-[10px] font-mono text-[#737373] mt-1">
+              {provider.free_tier_limits || provider.daily_limit || 'Optional cloud provider'}
+            </div>
+            {provider.env_key && (
+              <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">{provider.env_key}</div>
+            )}
           </div>
-          <div className="text-[10px] font-mono text-[#737373] mt-1">
-            {provider.free_tier_limits || provider.daily_limit || 'Optional cloud provider'}
-          </div>
-          {provider.env_key && (
-            <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">{provider.env_key}</div>
-          )}
         </div>
         <div className="flex gap-2 flex-shrink-0">
           {keyUrl && (
             <a href={keyUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost px-2 py-1 text-[10px] font-mono uppercase">
-              Key
+              Get key →
             </a>
           )}
           <button type="button" onClick={onExpand} disabled={configured} className="btn-secondary px-2 py-1 text-[10px] font-mono uppercase disabled:opacity-40">
@@ -69,7 +120,7 @@ function CloudKeyCard({
       {provider.strengths && provider.strengths.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-3">
           {provider.strengths.slice(0, 3).map(strength => (
-            <span key={strength} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+            <span key={strength} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 rounded">
               {strength}
             </span>
           ))}
@@ -79,20 +130,40 @@ function CloudKeyCard({
       {expanded && !configured && (
         <div className="border-t border-[#e5e5e5] mt-3 pt-3 space-y-2">
           <div className="text-[10px] font-mono text-[#737373]">
-            Open the key link, paste the key here, and nvHive saves it under the rootless workspace config.
+            Click <strong className="text-[#76B900]">Get key →</strong> to open the provider&apos;s key page in a new tab, paste the key below, then save. We&apos;ll validate it against the provider before persisting.
           </div>
           <div className="flex gap-2">
-            <input
-              type="password"
-              value={keyValue}
-              onChange={event => onChange(event.target.value)}
-              placeholder={provider.placeholder || 'Paste API key...'}
-              className="input-base flex-1 px-3 py-2 text-xs font-mono"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <button type="button" onClick={onSave} disabled={saving || !keyValue.trim()} className="btn-primary px-3 py-2 text-xs font-mono disabled:opacity-40">
-              {saving ? 'Saving' : 'Save'}
+            <div className="relative flex-1">
+              <input
+                type={revealKey ? 'text' : 'password'}
+                value={keyValue}
+                onChange={event => onChange(event.target.value)}
+                placeholder={provider.placeholder || 'Paste API key...'}
+                className="input-base w-full px-3 py-2 pr-10 text-xs font-mono"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                onClick={() => setRevealKey(prev => !prev)}
+                className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-[#737373] hover:bg-[#f5f5f5] hover:text-[#0a0a0a]"
+                aria-label={revealKey ? 'Hide key' : 'Reveal key'}
+                tabIndex={-1}
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  {revealKey ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+                  ) : (
+                    <>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </>
+                  )}
+                </svg>
+              </button>
+            </div>
+            <button type="button" onClick={onSave} disabled={saving !== 'idle' || !keyValue.trim()} className="btn-primary px-3 py-2 text-xs font-mono disabled:opacity-40 whitespace-nowrap">
+              {saving === 'validating' ? 'Testing...' : saving === 'saving' ? 'Saving' : 'Save'}
             </button>
           </div>
           <div className="flex gap-3 text-[10px] font-mono">
@@ -122,7 +193,7 @@ export default function ProvidersPage() {
   const [freeProvidersLoading, setFreeProvidersLoading] = useState(true);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
-  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [savingKey, setSavingKey] = useState<{ id: string; phase: 'validating' | 'saving' } | null>(null);
   const [savedKeys, setSavedKeys] = useState<Set<string>>(new Set());
   const [keyErrors, setKeyErrors] = useState<Record<string, string>>({});
 
@@ -167,8 +238,30 @@ export default function ProvidersPage() {
   const handleSaveProviderKey = async (providerId: string) => {
     const apiKey = keyInputs[providerId]?.trim();
     if (!apiKey) return;
-    setSavingKey(providerId);
     setKeyErrors(prev => ({ ...prev, [providerId]: '' }));
+
+    // Validate against the provider first so the user gets a real ✗ with the
+    // upstream error message instead of a silent save that fails on first query.
+    setSavingKey({ id: providerId, phase: 'validating' });
+    try {
+      const validation = await validateProviderKey(providerId, apiKey);
+      if (!validation.valid) {
+        setKeyErrors(prev => ({
+          ...prev,
+          [providerId]: validation.error
+            ? `Key rejected: ${validation.error}`
+            : 'The provider rejected this key. Double-check you copied it correctly.',
+        }));
+        setSavingKey(null);
+        return;
+      }
+    } catch (err) {
+      // Validation endpoint missing or transport error — fall through and try
+      // to save anyway so users on older nvh-api builds don't get stuck.
+      console.warn('validate-key failed, attempting save anyway:', err);
+    }
+
+    setSavingKey({ id: providerId, phase: 'saving' });
     try {
       await saveProviderKey(providerId, apiKey);
       setSavedKeys(prev => {
@@ -349,7 +442,7 @@ export default function ProvidersPage() {
                     provider={provider}
                     expanded={expandedProvider === provider.id}
                     saved={savedKeys.has(provider.id)}
-                    saving={savingKey === provider.id}
+                    saving={savingKey?.id === provider.id ? savingKey.phase : 'idle'}
                     keyValue={keyInputs[provider.id] ?? ''}
                     error={keyErrors[provider.id]}
                     onExpand={() => setExpandedProvider(expandedProvider === provider.id ? null : provider.id)}

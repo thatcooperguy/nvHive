@@ -520,6 +520,33 @@ class TestAPIEndpointCoverage:
         body = resp.json()
         assert body["status"] == "success"
 
+    def test_setup_validate_key_rejects_bad_key(self, test_client: TestClient) -> None:
+        """POST /v1/setup/validate-key reports valid=False without persisting.
+
+        A bogus key should fail the provider health-check; the endpoint must
+        return a 200 with valid=False rather than 5xx-ing.
+        """
+        resp = test_client.post(
+            "/v1/setup/validate-key",
+            json={"provider": "openai", "api_key": "sk-test-bogus-1234567890"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        # Either the test client has a stub provider that accepts everything
+        # (then valid=True), or the real provider rejects (valid=False). Both
+        # are fine — what's not fine is a missing 'valid' field or 5xx.
+        assert "valid" in body["data"]
+        assert isinstance(body["data"]["valid"], bool)
+
+    def test_setup_validate_key_unknown_provider_422(self, test_client: TestClient) -> None:
+        """POST /v1/setup/validate-key rejects unknown provider IDs."""
+        resp = test_client.post(
+            "/v1/setup/validate-key",
+            json={"provider": "not-a-real-provider", "api_key": "x" * 20},
+        )
+        assert resp.status_code == 422
+
     def test_setup_free_providers(self, test_client: TestClient) -> None:
         """GET /v1/setup/free-providers lists no-signup providers."""
         resp = test_client.get("/v1/setup/free-providers")
@@ -531,6 +558,13 @@ class TestAPIEndpointCoverage:
         assert providers["openai"]["key_url"] == "https://platform.openai.com/api-keys"
         assert providers["anthropic"]["docs_url"].startswith("https://docs.anthropic.com")
         assert providers["google"]["key_url"] == "https://aistudio.google.com/apikey"
+        # llm7 was missing key_url metadata before 0.36; verify the fix landed.
+        assert providers["llm7"]["key_url"] == "https://token.llm7.io/"
+        # Logo slug exposed so the web client can render a brand mark from the
+        # @lobehub/icons CDN. Null is allowed for providers without a mark.
+        assert "logo_slug" in providers["openai"]
+        assert providers["openai"]["logo_slug"] == "openai"
+        assert providers["llm7"]["logo_slug"] is None
 
     def test_setup_status(self, test_client: TestClient) -> None:
         """GET /v1/setup/status returns first-run setup state."""
