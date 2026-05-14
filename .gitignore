@@ -53,3 +53,6 @@ benchmark_results.md
 .coverage
 /setup-*.png
 docs/screenshots/layout-review/
+.venv-sec/
+.venv/
+venv/

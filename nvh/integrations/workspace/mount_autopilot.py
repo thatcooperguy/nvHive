@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.storage import ensure_storage, storage_status
+from nvh.integrations.workspace.storage import ensure_storage, storage_status
 
 DEFAULT_MIN_FREE_GB = 20.0
 

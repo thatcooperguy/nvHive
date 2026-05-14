@@ -209,7 +209,7 @@ class TestSandboxDeep:
 
 class TestDetectorMore:
     def test_detect_cursor_path_check(self):
-        from nvh.integrations.detector import detect_platforms
+        from nvh.integrations.diagnostics.detector import detect_platforms
         platforms = detect_platforms()
         # Should detect at least something (or empty list on CI)
         assert isinstance(platforms, list)
@@ -217,7 +217,7 @@ class TestDetectorMore:
             assert hasattr(p, "name") or isinstance(p, (dict, str))
 
     def test_detect_with_mocked_vscode(self):
-        from nvh.integrations.detector import detect_platforms
+        from nvh.integrations.diagnostics.detector import detect_platforms
         with patch.dict(os.environ, {"VSCODE_PID": "12345"}):
             platforms = detect_platforms()
             assert isinstance(platforms, list)

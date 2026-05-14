@@ -16,7 +16,7 @@ from typing import Any
 
 import httpx
 
-from nvh.integrations.storage import storage_layout
+from nvh.integrations.workspace.storage import storage_layout
 
 PREFERRED_CHAT_MODELS = (
     "nemotron-3-nano-omni",

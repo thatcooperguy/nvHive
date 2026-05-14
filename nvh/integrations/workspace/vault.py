@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.storage import ensure_storage, storage_layout
+from nvh.integrations.workspace.storage import ensure_storage, storage_layout
 
 OBSIDIAN_RELEASES_API = "https://api.github.com/repos/obsidianmd/obsidian-releases/releases/latest"
 OBSIDIAN_DOWNLOAD_PAGE = "https://obsidian.md/download"

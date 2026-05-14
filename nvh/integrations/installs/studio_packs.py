@@ -29,12 +29,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from nvh.integrations.node_runtime import (
+from nvh.integrations.installs.node_runtime import (
     find_fnm_binary,
     find_rootless_node_bin,
     install_node_tarball,
 )
-from nvh.integrations.storage import storage_layout
+from nvh.integrations.workspace.storage import storage_layout
 from nvh.utils.gpu import detect_gpus
 
 OLLAMA_PORT = 11434
@@ -1589,7 +1589,7 @@ def pack_status(pack: StudioPack, context: dict[str, Any] | None = None) -> dict
         details["binary_probe"] = probe
         details["running"] = _ollama_reachable()
     elif pack.install_kind == "micromamba_runtime":
-        from nvh.integrations.runtime import runtime_status
+        from nvh.integrations.services.runtime import runtime_status
 
         runtime = runtime_status()
         installed = runtime.micromamba_installed
@@ -1799,7 +1799,7 @@ def _write_marker(pack: StudioPack, extra: dict[str, Any] | None = None) -> None
         marker.update(extra)
     _marker_path(pack.id).write_text(json.dumps(marker, indent=2), encoding="utf-8")
     try:
-        from nvh.integrations.receipts import write_receipt
+        from nvh.integrations.services.receipts import write_receipt
 
         launcher_paths = [str(_local_bin() / launcher) for launcher in pack.launchers]
         version = str(marker.get("version")) if marker.get("version") else None
@@ -3264,7 +3264,7 @@ exec "{binary}" "$@"
 
 def _write_model_receipt(model: StudioModel) -> None:
     try:
-        from nvh.integrations.receipts import write_receipt
+        from nvh.integrations.services.receipts import write_receipt
 
         layout = storage_layout()
         write_receipt(
@@ -3627,7 +3627,7 @@ async def install_studio_packs(
                 async for event in _install_rootless_ollama(pack, force_update):
                     yield {**event, "pack_id": pack.id}
             elif pack.install_kind == "micromamba_runtime":
-                from nvh.integrations.runtime import install_micromamba
+                from nvh.integrations.services.runtime import install_micromamba
 
                 async for event in install_micromamba(force_update=force_update):
                     yield {**event, "pack_id": pack.id}

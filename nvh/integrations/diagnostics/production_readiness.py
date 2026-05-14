@@ -14,15 +14,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.boot_preflight import boot_preflight_status
-from nvh.integrations.compatibility import compatibility_report
-from nvh.integrations.model_fit import model_fit_report
-from nvh.integrations.mount_autopilot import mount_autopilot_report
-from nvh.integrations.receipts import receipt_summary
-from nvh.integrations.runtime import runtime_status
-from nvh.integrations.smoke_tests import smoke_test_report
-from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import catalog_with_status
+from nvh.integrations.diagnostics.boot_preflight import boot_preflight_status
+from nvh.integrations.diagnostics.compatibility import compatibility_report
+from nvh.integrations.diagnostics.model_fit import model_fit_report
+from nvh.integrations.diagnostics.smoke_tests import smoke_test_report
+from nvh.integrations.installs.studio_packs import catalog_with_status
+from nvh.integrations.services.receipts import receipt_summary
+from nvh.integrations.services.runtime import runtime_status
+from nvh.integrations.workspace.mount_autopilot import mount_autopilot_report
+from nvh.integrations.workspace.storage import storage_status
 
 TARGET_VM_CHECKLIST = [
     "Fresh no-root install from GitHub or PyPI on the NVIDIA Linux VM.",

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from nvh.integrations.troubleshooter import analyze_setup_failure
+from nvh.integrations.wizard.troubleshooter import analyze_setup_failure
 
 
 def _diagnostics_with_log(line: str) -> dict:

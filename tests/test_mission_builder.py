@@ -7,12 +7,12 @@ from pathlib import Path
 import pytest
 
 from nvh.integrations import mission_builder
-from nvh.integrations.mission_builder import (
+from nvh.integrations.wizard.mission_builder import (
     install_mission_profile,
     mission_profile_pack_ids,
     mission_profile_plan,
 )
-from nvh.integrations.storage import ensure_storage
+from nvh.integrations.workspace.storage import ensure_storage
 
 
 @pytest.fixture()

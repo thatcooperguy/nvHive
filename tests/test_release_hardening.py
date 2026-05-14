@@ -111,8 +111,8 @@ def test_setup_page_surfaces_startup_autopilot_status() -> None:
 
 def test_setup_has_canonical_workspace_state_and_runtime_doctor() -> None:
     server = (ROOT / "nvh" / "api" / "server.py").read_text(encoding="utf-8")
-    workspace_state = (ROOT / "nvh" / "integrations" / "workspace_state.py").read_text(encoding="utf-8")
-    studio_packs = (ROOT / "nvh" / "integrations" / "studio_packs.py").read_text(encoding="utf-8")
+    workspace_state = (ROOT / "nvh" / "integrations" / "diagnostics" / "workspace_state.py").read_text(encoding="utf-8")
+    studio_packs = (ROOT / "nvh" / "integrations" / "installs" / "studio_packs.py").read_text(encoding="utf-8")
     setup_page = (ROOT / "web" / "app" / "setup" / "page.tsx").read_text(encoding="utf-8")
     api = (ROOT / "web" / "lib" / "api.ts").read_text(encoding="utf-8")
 

@@ -16,7 +16,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
-from nvh.integrations.storage import storage_layout
+from nvh.integrations.workspace.storage import storage_layout
 
 NODE_MAJOR_VERSION = "22"
 

@@ -14,19 +14,19 @@ from pathlib import Path
 from typing import Any
 
 from nvh.integrations.catalog import catalog_status
-from nvh.integrations.comfyui import detect_comfyui
-from nvh.integrations.jobs import list_jobs
+from nvh.integrations.installs.comfyui import detect_comfyui
+from nvh.integrations.installs.studio_packs import catalog_with_status, model_catalog_with_status
 from nvh.integrations.local_chat import local_chat_smoke_status
-from nvh.integrations.receipts import receipt_summary, repair_plan
-from nvh.integrations.runtime import runtime_status
-from nvh.integrations.service_registry import (
+from nvh.integrations.services.jobs import list_jobs
+from nvh.integrations.services.receipts import receipt_summary, repair_plan
+from nvh.integrations.services.runtime import runtime_status
+from nvh.integrations.services.service_registry import (
     list_service_statuses,
     service_for_question,
     service_status,
 )
-from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import catalog_with_status, model_catalog_with_status
-from nvh.integrations.troubleshooter import analyze_setup_failure
+from nvh.integrations.wizard.troubleshooter import analyze_setup_failure
+from nvh.integrations.workspace.storage import storage_status
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +169,7 @@ def _safe_compatibility_report(
     pack_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        from nvh.integrations.compatibility import compatibility_report
+        from nvh.integrations.diagnostics.compatibility import compatibility_report
 
         return compatibility_report(
             home_dir=home_dir,
@@ -182,7 +182,7 @@ def _safe_compatibility_report(
 
 def _safe_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
     try:
-        from nvh.integrations.boot_preflight import boot_preflight_status
+        from nvh.integrations.diagnostics.boot_preflight import boot_preflight_status
 
         return boot_preflight_status(home_dir=home_dir, run_if_missing=False)
     except Exception as exc:
@@ -239,7 +239,7 @@ def _question_wants_debug(q: str) -> bool:
 
 def _safe_diagnostics_report(home_dir: str | Path | None = None) -> dict[str, Any]:
     try:
-        from nvh.integrations.diagnostics import diagnostics_report
+        from nvh.integrations.diagnostics.report import diagnostics_report
 
         return diagnostics_report(home_dir=home_dir, include_logs=True, log_lines=80)
     except Exception as exc:

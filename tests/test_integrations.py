@@ -1,6 +1,6 @@
 """Tests for platform detection and integration helpers."""
 
-from nvh.integrations.detector import Platform, detect_platforms
+from nvh.integrations.diagnostics.detector import Platform, detect_platforms
 
 
 def test_detect_platforms_returns_all():

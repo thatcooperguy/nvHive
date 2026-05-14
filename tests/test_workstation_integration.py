@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from nvh.integrations import workstation
-from nvh.integrations.storage import ensure_storage
+from nvh.integrations.workspace.storage import ensure_storage
 
 
 def test_model_recommendations_scale_with_vram() -> None:

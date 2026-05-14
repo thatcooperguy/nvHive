@@ -259,12 +259,12 @@ class TestWorkflowsDeep:
 
 class TestDetectorDeep:
     def test_detect_platforms_returns_list(self):
-        from nvh.integrations.detector import detect_platforms
+        from nvh.integrations.diagnostics.detector import detect_platforms
         platforms = detect_platforms()
         assert isinstance(platforms, list)
 
     def test_platform_info_fields(self):
-        from nvh.integrations.detector import detect_platforms
+        from nvh.integrations.diagnostics.detector import detect_platforms
         platforms = detect_platforms()
         for p in platforms:
             assert hasattr(p, "name") or isinstance(p, dict)

@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import Any
 
 from nvh import __version__
-from nvh.integrations.runtime import runtime_status
-from nvh.integrations.storage import ensure_storage, storage_status
+from nvh.integrations.services.runtime import runtime_status
+from nvh.integrations.workspace.storage import ensure_storage, storage_status
 
 PASSPORT_SCHEMA_VERSION = 1
 ROOTLESS_MIN_FREE_GB = 200.0
@@ -79,25 +79,25 @@ def _layout_paths(layout) -> dict[str, str]:
 
 
 def _receipt_summary() -> dict[str, Any]:
-    from nvh.integrations.receipts import receipt_summary
+    from nvh.integrations.services.receipts import receipt_summary
 
     return receipt_summary()
 
 
 def _recent_jobs() -> list[dict[str, Any]]:
-    from nvh.integrations.jobs import list_jobs
+    from nvh.integrations.services.jobs import list_jobs
 
     return list_jobs(limit=10)
 
 
 def _model_fit(home_dir: str | Path | None = None) -> dict[str, Any]:
-    from nvh.integrations.model_fit import model_fit_report
+    from nvh.integrations.diagnostics.model_fit import model_fit_report
 
     return model_fit_report(home_dir=home_dir)
 
 
 def _compatibility(home_dir: str | Path | None = None) -> dict[str, Any]:
-    from nvh.integrations.compatibility import compatibility_report
+    from nvh.integrations.diagnostics.compatibility import compatibility_report
 
     return compatibility_report(home_dir=home_dir)
 
@@ -395,7 +395,7 @@ def support_snapshot(
     min_free_gb: float = ROOTLESS_MIN_FREE_GB,
 ) -> dict[str, Any]:
     """Write a redacted support snapshot under NVH_HOME/support."""
-    from nvh.integrations.diagnostics import diagnostics_report
+    from nvh.integrations.diagnostics.report import diagnostics_report
 
     passport = workspace_passport(home_dir=home_dir, create=True, min_free_gb=min_free_gb)
     layout_home = Path(passport["storage_home"])
