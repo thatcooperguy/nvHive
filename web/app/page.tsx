@@ -6,6 +6,7 @@ import Sidebar from '@/components/Sidebar';
 import ChatMessage, { exportConversationMarkdown } from '@/components/ChatMessage';
 import ChatInput, { type ChatInputAttachment } from '@/components/ChatInput';
 import { HardwareWidgetCompact, HardwareWidgetHero } from '@/components/HardwareWidget';
+import WelcomeBackPanel from '@/components/WelcomeBackPanel';
 import { useUIShell } from '@/components/UIShellProvider';
 import {
   queryStream,
@@ -240,8 +241,9 @@ function EmptyState({
 
   return (
     <div className="flex flex-1 items-center justify-center px-5 py-8">
-      <div className="w-full max-w-5xl">
-        <div className="mb-8 rounded-lg border border-[#262626] bg-white p-5 sm:p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+      <div className="w-full max-w-5xl space-y-4">
+        <WelcomeBackPanel />
+        <div className="rounded-lg border border-[#262626] bg-white p-5 sm:p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="mb-2 flex items-center gap-2">
