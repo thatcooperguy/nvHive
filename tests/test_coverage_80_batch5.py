@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -347,37 +346,57 @@ class TestOllamaHealthAndStream:
 
     @pytest.mark.asyncio
     async def test_stream_multiple_chunks(self):
-        provider = OllamaProvider()
+        """Stream() now uses _direct_stream over httpx NDJSON, not litellm.
 
-        async def fake_stream():
-            yield SimpleNamespace(
-                choices=[SimpleNamespace(
-                    delta=SimpleNamespace(content="Hello"),
-                    finish_reason=None,
-                )],
-            )
-            yield SimpleNamespace(
-                choices=[SimpleNamespace(
-                    delta=SimpleNamespace(content=" world"),
-                    finish_reason=None,
-                )],
-            )
-            yield SimpleNamespace(
-                choices=[SimpleNamespace(
-                    delta=SimpleNamespace(content=""),
-                    finish_reason="stop",
-                )],
-            )
+        The earlier version of this test mocked ``litellm.acompletion`` which
+        is no longer in the streaming hot path — mocking it had no effect, so
+        the real httpx client was attempting to reach ``http://localhost:11434``
+        and CI (no Ollama daemon) failed every run. Mock the actual httpx
+        streaming response instead.
+        """
+        import json
+        from contextlib import asynccontextmanager
 
         from nvh.providers.base import Message
 
+        provider = OllamaProvider()
+
+        ndjson_lines = [
+            json.dumps({"message": {"content": "Hello"}, "done": False}),
+            json.dumps({"message": {"content": " world"}, "done": False}),
+            json.dumps({
+                "message": {"content": ""},
+                "done": True,
+                "prompt_eval_count": 5,
+                "eval_count": 3,
+            }),
+        ]
+
+        class FakeStreamResponse:
+            def raise_for_status(self) -> None:  # pragma: no cover - trivial
+                return None
+
+            async def aiter_lines(self):
+                for line in ndjson_lines:
+                    yield line
+
+        @asynccontextmanager
+        async def fake_stream_cm(*args, **kwargs):
+            yield FakeStreamResponse()
+
+        fake_client = MagicMock()
+        fake_client.stream = fake_stream_cm
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=None)
+
         with patch(
-            "nvh.providers.ollama_provider.litellm.acompletion",
-            new=AsyncMock(return_value=fake_stream()),
+            "nvh.providers.ollama_provider.httpx.AsyncClient",
+            return_value=fake_client,
         ):
             chunks = []
             async for chunk in provider.stream(
                 messages=[Message(role="user", content="hi")],
+                model="ollama/gemma3:4b",
             ):
                 chunks.append(chunk)
 
