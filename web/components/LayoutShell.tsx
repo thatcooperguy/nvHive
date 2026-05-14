@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import GlobalModals from '@/components/GlobalModals';
+import ThemeToggle from '@/components/ThemeToggle';
 import { UIShellProvider, useUIShell } from '@/components/UIShellProvider';
 import { NVHIVE_VERSION } from '@/lib/version';
 
@@ -26,10 +27,14 @@ function InnerShell({ children }: { children: React.ReactNode }) {
   const { openCommandPalette } = useUIShell();
 
   if (isChatPage || isSetupPage) {
-    // Chat and setup are self-contained surfaces.
+    // Chat and setup are self-contained surfaces — but they still want the
+    // theme toggle, so render it in a fixed corner overlay.
     return (
       <>
         <GlobalModals />
+        <div className="pointer-events-auto fixed right-3 top-3 z-50">
+          <ThemeToggle compact />
+        </div>
         {children}
       </>
     );
@@ -39,22 +44,31 @@ function InnerShell({ children }: { children: React.ReactNode }) {
     <>
       <GlobalModals />
       {/* Top status bar */}
-      <div className="fixed top-0 left-0 right-0 z-50 h-8 bg-white border-b border-[#e5e5e5] flex items-center px-4 gap-6 text-[10px] font-mono text-[#737373]">
+      <div
+        className="fixed top-0 left-0 right-0 z-50 h-8 border-b flex items-center px-4 gap-6 text-[10px] font-mono"
+        style={{
+          background: 'var(--bg-primary)',
+          borderColor: 'var(--border)',
+          color: 'var(--text-muted)',
+        }}
+      >
         <span className="text-[#76B900] font-bold tracking-widest uppercase">NVHIVE</span>
-        <span className="text-[#d4d4d4]">|</span>
+        <span style={{ color: 'var(--border-bright)' }}>|</span>
         <span>Rootless NVIDIA AI Workspace</span>
-        <span className="text-[#d4d4d4]">|</span>
+        <span style={{ color: 'var(--border-bright)' }}>|</span>
         <span className="text-[#5a9100]">Local-first mode</span>
-        <div className="ml-auto flex items-center gap-4">
+        <div className="ml-auto flex items-center gap-3">
           {/* Command palette trigger */}
           <button
-            className="text-[#737373] hover:text-[#76B900] font-mono text-[10px] transition-colors"
+            className="font-mono text-[10px] transition-colors hover:text-[#76B900]"
+            style={{ color: 'var(--text-muted)' }}
             title="Open command palette (Ctrl+K)"
             onClick={openCommandPalette}
           >
             Ctrl+K
           </button>
-          <span className="text-[#a3a3a3]">v{NVHIVE_VERSION}</span>
+          <ThemeToggle compact />
+          <span style={{ color: 'var(--text-faint)' }}>v{NVHIVE_VERSION}</span>
         </div>
       </div>
       {/* Offset for top bar */}

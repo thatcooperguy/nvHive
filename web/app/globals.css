@@ -55,6 +55,41 @@
   --accent-cyan: #0891b2;
 }
 
+/* ============================================================
+   Dark theme — true-black OLED background, NVIDIA green retains
+   its brand value. Activated by adding `.dark` to <html>, which
+   is what Tailwind's darkMode='class' targets too.
+   ============================================================ */
+.dark {
+  /* Backgrounds — true-black hero with one-step elevation. */
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-tertiary: #141414;
+  --bg-card: #0a0a0a;
+  --bg-card-hover: #141414;
+  --bg-elevated: #141414;
+  --bg-subtle: #141414;
+
+  /* Code surfaces stay dark in both modes; tighten contrast slightly. */
+  --bg-code: #050505;
+  --bg-code-header: #0a0a0a;
+  --bg-code-border: #2a2a2a;
+
+  /* Borders — visible on black without being loud. */
+  --border: #262626;
+  --border-subtle: #1f1f1f;
+  --border-bright: #404040;
+  --border-strong: #525252;
+  --border-green: rgba(118, 185, 0, 0.55);
+
+  /* Text — high-contrast white-on-black, then muted ramps. */
+  --text-primary: #fafafa;
+  --text-secondary: #d4d4d4;
+  --text-muted: #a3a3a3;
+  --text-faint: #737373;
+  --text-inverse: #0a0a0a;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -84,7 +119,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cccccc;
+  background: var(--border-strong);
   border-radius: 4px;
 }
 
@@ -117,9 +152,13 @@ button {
    Tailwind component layer
    ============================================================ */
 @layer components {
-  /* Card — white with subtle border, green hover, soft lift on hover */
+  /* Card — themed via CSS vars (Phase 3 dark-mode foundation), with the
+     Phase 1 soft radius + hover lift. Dark mode inherits without per-class
+     overrides. */
   .card {
-    @apply bg-white border border-[#e5e5e5] rounded-lg;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    @apply rounded-lg;
     transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   }
 
@@ -129,20 +168,29 @@ button {
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
     transform: translateY(-1px);
   }
+  .dark .card:hover {
+    /* Shadows nearly disappear on black — bump alpha. */
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  }
 
   /* Flat card (no hover effect) */
   .card-flat {
-    @apply bg-white border border-[#e5e5e5] rounded-lg;
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    @apply rounded-lg;
   }
 
-  /* Input — white with NVIDIA green focus */
+  /* Input — themed via CSS vars + Phase 1 soft radius */
   .input-base {
-    @apply bg-white border border-[#d4d4d4] rounded-md text-[#0a0a0a] placeholder-[#a3a3a3]
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-bright);
+    color: var(--text-primary);
+    @apply rounded-md placeholder-[#a3a3a3]
       focus:outline-none focus:border-[#76B900] focus:ring-1 focus:ring-[#76B900]/40
       transition-colors duration-150;
   }
 
-  /* Primary button — NVIDIA green, black text */
+  /* Primary button — NVIDIA green, black text (works in both modes) */
   .btn-primary {
     @apply bg-[#76B900] hover:bg-[#5a9100] text-black font-semibold rounded-md
       transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed;
@@ -152,17 +200,30 @@ button {
     box-shadow: 0 4px 12px var(--nvidia-green-glow);
   }
 
-  /* Secondary button — white with border, green hover border */
+  /* Secondary button — themed via CSS vars + Phase 1 soft radius */
   .btn-secondary {
-    @apply bg-white hover:bg-[#fafafa] border border-[#d4d4d4] hover:border-[#76B900]
-      text-[#404040] hover:text-[#0a0a0a] font-medium rounded-md transition-all duration-150
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-bright);
+    color: var(--text-secondary);
+    @apply hover:border-[#76B900] hover:text-[#0a0a0a]
+      font-medium rounded-md transition-all duration-150
       disabled:opacity-40 disabled:cursor-not-allowed;
   }
+  .btn-secondary:hover {
+    background-color: var(--bg-card-hover);
+  }
+  .dark .btn-secondary:hover {
+    color: var(--text-primary);
+  }
 
-  /* Ghost button */
+  /* Ghost button — themed via CSS vars + Phase 1 soft radius */
   .btn-ghost {
-    @apply hover:bg-[#f5f5f5] text-[#737373] hover:text-[#0a0a0a]
-      font-medium rounded-md transition-all duration-150;
+    color: var(--text-muted);
+    @apply font-medium rounded-md transition-all duration-150;
+  }
+  .btn-ghost:hover {
+    background-color: var(--bg-subtle);
+    color: var(--text-primary);
   }
 
   /* Status dots */
