@@ -17,7 +17,7 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <script dangerouslySetInnerHTML={{
-          __html: `window.__HIVE_API_URL__ = "${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}";`
+          __html: `window.__HIVE_API_URL__ = ${JSON.stringify(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')};`
         }} />
       </head>
       <body className="bg-white text-[#0a0a0a] antialiased">

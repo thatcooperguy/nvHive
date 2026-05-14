@@ -121,6 +121,30 @@ function getApiBase(): string {
   return getApiBases()[0] ?? 'http://localhost:8000';
 }
 
+// Legacy localStorage keys that previously held the API key. These are
+// migrated into sessionStorage (and then cleared) the first time we see them
+// so existing users keep working while we stop persisting secrets across tabs.
+const LEGACY_LOCAL_STORAGE_KEYS = ['nvh_api_key', 'HIVE_API_KEY', 'hive_api_key'];
+
+function migrateLegacyApiKey(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    for (const legacyKey of LEGACY_LOCAL_STORAGE_KEYS) {
+      const value = window.localStorage.getItem(legacyKey);
+      if (value?.trim()) {
+        window.sessionStorage.setItem('nvh_api_key', value);
+        for (const k of LEGACY_LOCAL_STORAGE_KEYS) {
+          window.localStorage.removeItem(k);
+        }
+        return value;
+      }
+    }
+  } catch {
+    // Storage blocked — fall through.
+  }
+  return null;
+}
+
 function getApiAuthHeaders(): Record<string, string> {
   if (typeof window === 'undefined') return {};
 
@@ -135,15 +159,14 @@ function getApiAuthHeaders(): Record<string, string> {
     const queryKey = params.get('hive_api_key') ?? params.get('api_key') ?? params.get('token');
     if (queryKey?.trim()) {
       const key = queryKey.trim();
+      // Per-tab persistence only — never cross-tab/origin-wide via localStorage.
       window.sessionStorage.setItem('nvh_api_key', key);
       return { Authorization: `Bearer ${key}`, 'X-Hive-API-Key': key };
     }
 
     const storedKey =
       window.sessionStorage.getItem('nvh_api_key') ??
-      window.localStorage.getItem('nvh_api_key') ??
-      window.localStorage.getItem('HIVE_API_KEY') ??
-      window.localStorage.getItem('hive_api_key');
+      migrateLegacyApiKey();
 
     if (storedKey?.trim()) {
       const key = storedKey.trim();

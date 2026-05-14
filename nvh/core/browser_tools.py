@@ -110,30 +110,42 @@ def register_browser_tools(registry: ToolRegistry) -> None:
 
     # ── Process tools ────────────────────────────────────────────────
 
+    # Restrictive whitelist for process names: letters, digits, dot, dash,
+    # underscore, plus. Rejects shell metacharacters, spaces, slashes, etc.
+    _PROCESS_NAME_RE = re.compile(r"^[A-Za-z0-9._\-+]{1,128}$")
+
     async def process_list() -> str:
         """Return a list of running processes (cross-platform)."""
-        cmd = "tasklist" if platform.system() == "Windows" else "ps aux"
+        argv = ["tasklist"] if platform.system() == "Windows" else ["ps", "aux"]
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=10,
+            argv, capture_output=True, text=True, timeout=10,
         )
         return result.stdout[:5000] or result.stderr
 
     async def process_kill(pid_or_name: str) -> str:
-        """Kill a process by PID or name (cross-platform)."""
-        if platform.system() == "Windows":
-            try:
-                int(pid_or_name)
-                cmd = f"taskkill /F /PID {pid_or_name}"
-            except ValueError:
-                cmd = f"taskkill /F /IM {pid_or_name}"
-        else:
-            try:
-                int(pid_or_name)
-                cmd = f"kill -9 {pid_or_name}"
-            except ValueError:
-                cmd = f"pkill -9 -f {pid_or_name}"
+        """Kill a process by PID or name (cross-platform).
+
+        Inputs are passed as argv (no shell). Non-numeric inputs must match a
+        strict whitelist to prevent injection via process-name arguments.
+        """
+        try:
+            pid = int(pid_or_name)
+            if platform.system() == "Windows":
+                argv = ["taskkill", "/F", "/PID", str(pid)]
+            else:
+                argv = ["kill", "-9", str(pid)]
+        except ValueError:
+            if not _PROCESS_NAME_RE.match(pid_or_name):
+                return (
+                    "Refused: process name must match [A-Za-z0-9._-+] "
+                    "(1-128 chars). Use a PID for arbitrary targets."
+                )
+            if platform.system() == "Windows":
+                argv = ["taskkill", "/F", "/IM", pid_or_name]
+            else:
+                argv = ["pkill", "-9", pid_or_name]
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=10,
+            argv, capture_output=True, text=True, timeout=10,
         )
         return result.stdout or result.stderr or "Done."
 
