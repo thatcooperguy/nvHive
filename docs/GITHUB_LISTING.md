@@ -6,7 +6,7 @@ Use this when polishing the public repository page before a release.
 
 Short description:
 
-> Rootless NVIDIA AI lab for Linux GPU desktops: local LLMs, ComfyUI, agents, creative tools, game-dev tools, music tools, and a self-healing setup wizard.
+> Rootless NVIDIA AI lab for Linux GPU desktops: local LLMs, ComfyUI, agents, creative tools, game-dev tools, music tools, and a guided rootless setup wizard with one-click repairs.
 
 Website:
 
