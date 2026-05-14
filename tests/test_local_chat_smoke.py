@@ -21,7 +21,7 @@ class _FakeClient:
         self.models = models
         self.answer = answer
 
-    def __enter__(self) -> "_FakeClient":
+    def __enter__(self) -> _FakeClient:
         return self
 
     def __exit__(self, *_args: object) -> None:

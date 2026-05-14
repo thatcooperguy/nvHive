@@ -7923,7 +7923,10 @@ def workstation(
                     last_log = now
 
         async def _install_local_ai_starter_model() -> None:
-            from nvh.integrations.studio_packs import install_studio_models, model_catalog_with_status
+            from nvh.integrations.studio_packs import (
+                install_studio_models,
+                model_catalog_with_status,
+            )
 
             model_catalog = model_catalog_with_status(home_dir=storage.layout.home)
             model_ids = list(model_catalog.get("recommended_ids") or ["gemma3-4b"])

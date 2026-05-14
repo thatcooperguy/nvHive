@@ -26,6 +26,9 @@ probe_py_dir/
 tmp*/
 .mypy_cache/
 .ruff_cache/
+.venv/
+.venv-*/
+venv/
 *.db
 *.sqlite
 .env

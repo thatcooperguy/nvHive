@@ -11,7 +11,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-
 OLLAMA_DOC_URL = "https://docs.ollama.com/linux"
 OLLAMA_DOWNLOAD_URL = "https://ollama.com/download"
 COMFYUI_REPO_URL = "https://github.com/comfyanonymous/ComfyUI"

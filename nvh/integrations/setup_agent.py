@@ -7,6 +7,7 @@ installed first.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass
 from importlib import resources
 from pathlib import Path
@@ -18,10 +19,16 @@ from nvh.integrations.jobs import list_jobs
 from nvh.integrations.local_chat import local_chat_smoke_status
 from nvh.integrations.receipts import receipt_summary, repair_plan
 from nvh.integrations.runtime import runtime_status
-from nvh.integrations.service_registry import list_service_statuses, service_for_question, service_status
+from nvh.integrations.service_registry import (
+    list_service_statuses,
+    service_for_question,
+    service_status,
+)
 from nvh.integrations.storage import storage_status
 from nvh.integrations.studio_packs import catalog_with_status, model_catalog_with_status
 from nvh.integrations.troubleshooter import analyze_setup_failure
+
+logger = logging.getLogger(__name__)
 
 OFFICIAL_REPO_URL = "https://github.com/thatcooperguy/nvHive"
 OFFICIAL_README_URL = "https://github.com/thatcooperguy/nvHive/blob/main/README.md"
@@ -88,7 +95,8 @@ def nvwizard_system_prompt() -> str:
         return resources.files("nvh.prompts").joinpath("nvwizard_system.md").read_text(
             encoding="utf-8",
         ).strip()
-    except Exception:
+    except Exception as exc:
+        logger.warning("nvwizard_system.md unreadable, using built-in fallback: %s", exc)
         return PRODUCT_CONTEXT_FALLBACK.strip()
 
 
@@ -149,7 +157,8 @@ def _safe_catalog_data() -> dict[str, Any]:
         from nvh.integrations.catalog import load_setup_catalog
 
         return load_setup_catalog(refresh=False).get("catalog", {})
-    except Exception:
+    except Exception as exc:
+        logger.warning("load_setup_catalog failed, returning empty catalog: %s", exc)
         return {}
 
 
@@ -183,7 +192,8 @@ def _safe_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
 def _recent_failed_job(home_dir: str | Path | None = None) -> dict[str, Any] | None:
     try:
         jobs = list_jobs(limit=10, home_dir=home_dir)
-    except Exception:
+    except Exception as exc:
+        logger.debug("list_jobs failed in _recent_failed_job: %s", exc)
         return None
     for job in jobs:
         if job.get("status") in {"failed", "interrupted", "canceled"}:
@@ -343,7 +353,8 @@ def _looks_older(current: str | None, latest: str | None) -> bool:
         from packaging.version import Version
 
         return Version(current) < Version(latest)
-    except Exception:
+    except Exception as exc:
+        logger.debug("Version compare %s vs %s failed: %s", current, latest, exc)
         return current != latest
 
 
@@ -642,7 +653,8 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             ))
             try:
                 command = repair_plan(receipt["id"], home_dir=home_dir)["commands"][0]
-            except Exception:
+            except Exception as exc:
+                logger.debug("repair_plan(%s) failed, using generic command: %s", receipt["id"], exc)
                 command = f"nvh setup repair {receipt['id']}"
             actions.append(SetupAction(
                 id=action_id,
@@ -1255,7 +1267,8 @@ def setup_assistant_reply(
             first = receipts.get("receipts", [{}])[0]
             try:
                 commands = repair_plan(first["id"], home_dir=home_dir)["commands"]
-            except Exception:
+            except Exception as exc:
+                logger.debug("repair_plan(%s) failed in chat handler: %s", first.get("id"), exc)
                 commands = []
             answer = (
                 f"I found {receipts['unhealthy']} receipt(s) with missing files or launchers. "

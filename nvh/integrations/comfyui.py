@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import socket
@@ -20,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from nvh.integrations.storage import storage_layout
+
+logger = logging.getLogger(__name__)
 
 COMFYUI_REPO_URL = "https://github.com/comfyanonymous/ComfyUI.git"
 DEFAULT_HOST = "127.0.0.1"
@@ -351,14 +354,18 @@ def _tail_file(path: Path, lines: int = 40) -> list[str]:
     try:
         raw_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         return raw_lines[-lines:]
-    except Exception:
+    except Exception as exc:
+        logger.debug("_tail_file(%s) failed: %s", path, exc)
         return []
 
 
 def _read_runtime_metadata(root: Path) -> dict[str, Any]:
     try:
         return json.loads(_runtime_file(root).read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        logger.warning("ComfyUI runtime metadata at %s unreadable: %s", _runtime_file(root), exc)
         return {}
 
 
@@ -371,7 +378,10 @@ def _read_pid(root: Path) -> int | None:
     try:
         raw = _pid_file(root).read_text(encoding="utf-8").strip()
         return int(raw) if raw else None
-    except Exception:
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logger.debug("_read_pid(%s) failed: %s", root, exc)
         return None
 
 
@@ -396,7 +406,8 @@ def _is_http_reachable(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bo
 
         response = httpx.get(f"{_status_url(host, port)}/system_stats", timeout=2.0)
         return response.status_code < 500
-    except Exception:
+    except Exception as exc:
+        logger.debug("ComfyUI HTTP probe %s:%s failed: %s", host, port, exc)
         return False
 
 
