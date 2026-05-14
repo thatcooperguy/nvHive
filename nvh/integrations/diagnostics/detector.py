@@ -226,7 +226,7 @@ def register_claude_code() -> tuple[bool, str]:
 
 def register_openclaw(config_path: str | None = None) -> tuple[bool, str]:
     """Register nvHive MCP server in OpenClaw config."""
-    from nvh.integrations.openclaw import write_openclaw_config
+    from nvh.integrations.installs.openclaw import write_openclaw_config
     try:
         path = write_openclaw_config(
             output_path=Path(config_path) if config_path else None,

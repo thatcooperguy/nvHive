@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.storage import nvh_home, storage_layout
+from nvh.integrations.workspace.storage import nvh_home, storage_layout
 
 MICROMAMBA_BASE_URL = "https://micro.mamba.pm/api/micromamba"
 _MICROMAMBA_INSTALL_LOCK = asyncio.Lock()

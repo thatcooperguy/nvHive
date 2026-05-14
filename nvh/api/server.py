@@ -284,7 +284,7 @@ async def _run_boot_preflight_on_startup(app: FastAPI) -> None:
         logger.info("Hive API: boot preflight disabled by NVH_BOOT_PREFLIGHT.")
         return
     try:
-        from nvh.integrations.boot_preflight import run_boot_preflight
+        from nvh.integrations.diagnostics.boot_preflight import run_boot_preflight
 
         result = await asyncio.to_thread(run_boot_preflight)
         app.state.boot_preflight = result
@@ -720,7 +720,7 @@ async def readiness_check(
 ) -> dict[str, Any]:
     """Return a compact readiness signal for launchers and setup clients."""
     try:
-        from nvh.integrations.production_readiness import production_readiness_report
+        from nvh.integrations.diagnostics.production_readiness import production_readiness_report
 
         report = production_readiness_report(home_dir=home_dir)
         payload = {
@@ -1195,7 +1195,7 @@ async def system_storage(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the active rootless storage layout and preflight warnings."""
-    from nvh.integrations.storage import storage_status
+    from nvh.integrations.workspace.storage import storage_status
 
     return _response_envelope(
         storage_status(home_dir=home_dir, min_free_gb=min_free_gb).as_dict()
@@ -1208,7 +1208,7 @@ async def configure_system_storage(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Create and activate the rootless NVH_HOME directory layout."""
-    from nvh.integrations.storage import ensure_storage
+    from nvh.integrations.workspace.storage import ensure_storage
 
     return _response_envelope(
         ensure_storage(
@@ -1225,7 +1225,7 @@ async def vault_status_endpoint(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the Markdown vault and optional Obsidian status."""
-    from nvh.integrations.vault import vault_status
+    from nvh.integrations.workspace.vault import vault_status
 
     return _response_envelope(vault_status(home_dir=home_dir))
 
@@ -1236,7 +1236,7 @@ async def vault_init_endpoint(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Seed a durable Markdown vault under NVH_HOME."""
-    from nvh.integrations.vault import init_vault
+    from nvh.integrations.workspace.vault import init_vault
 
     return _response_envelope(init_vault(home_dir=request.home_dir))
 
@@ -1247,7 +1247,7 @@ async def vault_memory_endpoint(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Write a Markdown memory note without using a database or root path."""
-    from nvh.integrations.vault import append_vault_memory
+    from nvh.integrations.workspace.vault import append_vault_memory
 
     return _response_envelope(
         append_vault_memory(
@@ -1266,7 +1266,7 @@ async def vault_obsidian_install_endpoint(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Install the Obsidian AppImage under NVH_HOME/apps when supported."""
-    from nvh.integrations.vault import install_obsidian
+    from nvh.integrations.workspace.vault import install_obsidian
 
     return _response_envelope(
         install_obsidian(
@@ -1282,7 +1282,7 @@ async def system_mount_autopilot(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Recommend a persistent NVH_HOME without requiring root access."""
-    from nvh.integrations.mount_autopilot import mount_autopilot_report
+    from nvh.integrations.workspace.mount_autopilot import mount_autopilot_report
 
     return _response_envelope(mount_autopilot_report(min_free_gb=min_free_gb))
 
@@ -1293,7 +1293,7 @@ async def system_mount_autopilot_activate(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Create and activate the highest-scoring discovered NVH_HOME."""
-    from nvh.integrations.mount_autopilot import activate_recommended_mount
+    from nvh.integrations.workspace.mount_autopilot import activate_recommended_mount
 
     return _response_envelope(
         activate_recommended_mount(
@@ -1306,7 +1306,7 @@ async def system_mount_autopilot_activate(
 @app.get("/v1/system/runtime", summary="Inspect rootless runtime fallback status")
 async def system_runtime(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return whether nvHive can use Python venv/pip or needs micromamba fallback."""
-    from nvh.integrations.runtime import runtime_status
+    from nvh.integrations.services.runtime import runtime_status
 
     return _response_envelope(runtime_status().as_dict())
 
@@ -1319,7 +1319,7 @@ async def wizard_passport(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the canonical rootless workspace identity and durability state."""
-    from nvh.integrations.workspace_passport import workspace_passport
+    from nvh.integrations.workspace.passport import workspace_passport
 
     return _response_envelope(
         workspace_passport(
@@ -1338,7 +1338,7 @@ async def system_passport(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Alias for clients that group Workspace Passport under system state."""
-    from nvh.integrations.workspace_passport import workspace_passport
+    from nvh.integrations.workspace.passport import workspace_passport
 
     return _response_envelope(
         workspace_passport(
@@ -1355,7 +1355,7 @@ async def system_passport_refresh(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Refresh and persist the Workspace Passport under NVH_HOME/config."""
-    from nvh.integrations.workspace_passport import workspace_passport
+    from nvh.integrations.workspace.passport import workspace_passport
 
     return _response_envelope(
         workspace_passport(
@@ -1373,7 +1373,7 @@ async def wizard_rootless_policy(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the shared rootless gate used by setup/install decisions."""
-    from nvh.integrations.workspace_passport import rootless_policy_report
+    from nvh.integrations.workspace.passport import rootless_policy_report
 
     return _response_envelope(
         rootless_policy_report(home_dir=home_dir, min_free_gb=min_free_gb)
@@ -1388,7 +1388,7 @@ async def wizard_plan(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Plan a no-root mission using action IDs the WebUI can run safely."""
-    from nvh.integrations.workspace_passport import workspace_plan
+    from nvh.integrations.workspace.passport import workspace_plan
 
     return _response_envelope(
         workspace_plan(
@@ -1408,7 +1408,7 @@ async def wizard_mission_plan(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the exact pack/model/ComfyUI stages a one-click mission will run."""
-    from nvh.integrations.mission_builder import mission_profile_plan
+    from nvh.integrations.wizard.mission_builder import mission_profile_plan
 
     return _response_envelope(
         mission_profile_plan(
@@ -1426,9 +1426,9 @@ async def wizard_mission_job(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Build an entire mission profile as one persistent cancellable job."""
-    from nvh.integrations.jobs import start_job
-    from nvh.integrations.mission_builder import MISSION_TITLES, install_mission_profile
-    from nvh.integrations.storage import ensure_storage
+    from nvh.integrations.services.jobs import start_job
+    from nvh.integrations.wizard.mission_builder import MISSION_TITLES, install_mission_profile
+    from nvh.integrations.workspace.storage import ensure_storage
 
     profile = request.profile.strip().lower() or "student"
     title = MISSION_TITLES.get(profile, profile.title())
@@ -1461,7 +1461,7 @@ async def wizard_support_snapshot(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Write a redacted support bundle under NVH_HOME/support."""
-    from nvh.integrations.workspace_passport import support_snapshot
+    from nvh.integrations.workspace.passport import support_snapshot
 
     return _response_envelope(
         support_snapshot(
@@ -1478,7 +1478,7 @@ async def setup_helper(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return offline setup recommendations for the student workstation wizard."""
-    from nvh.integrations.setup_agent import setup_helper_report
+    from nvh.integrations.wizard.setup_agent import setup_helper_report
 
     return _response_envelope(setup_helper_report(home_dir=home_dir))
 
@@ -1489,7 +1489,7 @@ async def setup_services(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return normalized status for nvHive apps, runtimes, URLs, ports, and logs."""
-    from nvh.integrations.service_registry import list_service_statuses
+    from nvh.integrations.services.service_registry import list_service_statuses
 
     return _response_envelope(list_service_statuses(home_dir=home_dir))
 
@@ -1500,7 +1500,7 @@ async def setup_service_health(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return service health, ports, next safe actions, and copyable support text."""
-    from nvh.integrations.service_registry import service_health_report
+    from nvh.integrations.services.service_registry import service_health_report
 
     return _response_envelope(service_health_report(home_dir=home_dir))
 
@@ -1511,7 +1511,7 @@ async def setup_service_action(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Run or route a small allowlisted rootless service action."""
-    from nvh.integrations.service_registry import run_service_action
+    from nvh.integrations.services.service_registry import run_service_action
 
     try:
         result = run_service_action(
@@ -1532,7 +1532,7 @@ async def setup_mission_control(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the combined boot, repair, model-fit, and smoke-test timeline."""
-    from nvh.integrations.mission_control import mission_control_report
+    from nvh.integrations.services.mission_control import mission_control_report
 
     return _response_envelope(mission_control_report(home_dir=home_dir))
 
@@ -1543,7 +1543,7 @@ async def setup_auto_repair(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the safe repair queue without running installers or downloads."""
-    from nvh.integrations.auto_repair import auto_repair_plan
+    from nvh.integrations.wizard.auto_repair import auto_repair_plan
 
     return _response_envelope(auto_repair_plan(home_dir=home_dir))
 
@@ -1554,7 +1554,7 @@ async def setup_repair_workspace(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Run idempotent repairs that leave user files, models, and app data intact."""
-    from nvh.integrations.auto_repair import run_safe_repairs
+    from nvh.integrations.wizard.auto_repair import run_safe_repairs
 
     return _response_envelope(run_safe_repairs(home_dir=request.home_dir))
 
@@ -1565,7 +1565,7 @@ async def setup_smoke_tests(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Check installed apps without running destructive actions."""
-    from nvh.integrations.smoke_tests import smoke_test_report
+    from nvh.integrations.diagnostics.smoke_tests import smoke_test_report
 
     return _response_envelope(smoke_test_report(home_dir=home_dir))
 
@@ -1576,7 +1576,7 @@ async def setup_model_fit(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the simplified student model queue and fit scores."""
-    from nvh.integrations.model_fit import model_fit_report
+    from nvh.integrations.diagnostics.model_fit import model_fit_report
 
     return _response_envelope(model_fit_report(home_dir=home_dir))
 
@@ -1587,7 +1587,7 @@ async def setup_runtime_doctor(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return a non-mutating Ollama/runtime diagnosis for AI Wizard."""
-    from nvh.integrations.studio_packs import ollama_runtime_doctor
+    from nvh.integrations.installs.studio_packs import ollama_runtime_doctor
 
     return _response_envelope(ollama_runtime_doctor(home_dir=home_dir))
 
@@ -1598,7 +1598,7 @@ async def setup_workspace_state(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return one compact readiness state for the setup wizard."""
-    from nvh.integrations.workspace_state import workspace_state
+    from nvh.integrations.diagnostics.workspace_state import workspace_state
 
     return _response_envelope(workspace_state(home_dir=home_dir))
 
@@ -1610,7 +1610,7 @@ async def setup_production_readiness(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Aggregate rootless, storage, model, smoke, and target-VM release gates."""
-    from nvh.integrations.production_readiness import production_readiness_report
+    from nvh.integrations.diagnostics.production_readiness import production_readiness_report
 
     return _response_envelope(
         production_readiness_report(
@@ -1629,7 +1629,7 @@ async def setup_diagnostics(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Package rootless setup state, recent jobs, and redacted log warnings."""
-    from nvh.integrations.diagnostics import diagnostics_report
+    from nvh.integrations.diagnostics.report import diagnostics_report
 
     report = diagnostics_report(
         home_dir=home_dir,
@@ -1653,7 +1653,7 @@ async def setup_assistant(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Answer setup questions with local state, receipts, and deterministic rules."""
-    from nvh.integrations.setup_agent import setup_assistant_reply
+    from nvh.integrations.wizard.setup_agent import setup_assistant_reply
 
     return _response_envelope(
         setup_assistant_reply(request.question, home_dir=request.home_dir)
@@ -1677,7 +1677,7 @@ async def setup_compatibility(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return host facts and per-app compatibility checks for AI Wizard."""
-    from nvh.integrations.compatibility import compatibility_report
+    from nvh.integrations.diagnostics.compatibility import compatibility_report
 
     return _response_envelope(compatibility_report(home_dir=home_dir))
 
@@ -1689,7 +1689,10 @@ async def setup_boot_preflight(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return the persisted boot preflight, running it if needed."""
-    from nvh.integrations.boot_preflight import boot_preflight_status, run_boot_preflight
+    from nvh.integrations.diagnostics.boot_preflight import (
+        boot_preflight_status,
+        run_boot_preflight,
+    )
 
     if recheck:
         result = await asyncio.to_thread(run_boot_preflight, home_dir=home_dir)
@@ -1709,7 +1712,7 @@ async def setup_boot_preflight_recheck(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Force a boot preflight refresh after the user repairs something."""
-    from nvh.integrations.boot_preflight import run_boot_preflight
+    from nvh.integrations.diagnostics.boot_preflight import run_boot_preflight
 
     result = await asyncio.to_thread(run_boot_preflight, home_dir=home_dir)
     app.state.boot_preflight = result
@@ -1724,7 +1727,7 @@ async def setup_receipts(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return install receipts written under NVH_HOME."""
-    from nvh.integrations.receipts import list_receipts, receipt_summary
+    from nvh.integrations.services.receipts import list_receipts, receipt_summary
 
     safe_limit = max(1, min(limit, 500))
     receipts = list_receipts(kind=kind, status=status_filter, limit=safe_limit)
@@ -1737,7 +1740,7 @@ async def setup_receipts(
 
 
 def _receipt_or_404(receipt_id: str) -> dict[str, Any]:
-    from nvh.integrations.receipts import load_receipt
+    from nvh.integrations.services.receipts import load_receipt
 
     try:
         return load_receipt(receipt_id)
@@ -1758,7 +1761,7 @@ async def setup_receipt_repair_plan(
     receipt_id: str,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    from nvh.integrations.receipts import repair_plan
+    from nvh.integrations.services.receipts import repair_plan
 
     _receipt_or_404(receipt_id)
     return _response_envelope(repair_plan(receipt_id))
@@ -1769,7 +1772,7 @@ async def setup_receipt_uninstall_plan(
     receipt_id: str,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    from nvh.integrations.receipts import uninstall_plan
+    from nvh.integrations.services.receipts import uninstall_plan
 
     _receipt_or_404(receipt_id)
     return _response_envelope(uninstall_plan(receipt_id))
@@ -3197,7 +3200,7 @@ class ComfyUIModelPlanRequest(BaseModel):
 @app.get("/v1/comfyui/examples", summary="List curated ComfyUI workflow examples")
 async def comfyui_examples(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return nvHive's curated ComfyUI starter workflow manifest."""
-    from nvh.integrations.comfyui import examples_as_dicts
+    from nvh.integrations.installs.comfyui import examples_as_dicts
 
     examples = examples_as_dicts()
     sources = sorted({item["source_url"] for item in examples})
@@ -3214,7 +3217,7 @@ async def comfyui_model_plan(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Persist selected ComfyUI workflow model requirements and source links."""
-    from nvh.integrations.comfyui import comfyui_model_plan, write_model_plan
+    from nvh.integrations.installs.comfyui import comfyui_model_plan, write_model_plan
 
     plan_path = write_model_plan(request.example_ids or None)
     plan = comfyui_model_plan(request.example_ids or None)
@@ -3225,13 +3228,13 @@ async def comfyui_model_plan(
 @app.get("/v1/comfyui/status", summary="Detect local ComfyUI install and runtime status")
 async def comfyui_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return local ComfyUI install, process, and example-pack status."""
-    from nvh.integrations.comfyui import detect_comfyui
+    from nvh.integrations.installs.comfyui import detect_comfyui
 
     return _response_envelope(detect_comfyui())
 
 
 def _job_or_404(job_id: str) -> dict[str, Any]:
-    from nvh.integrations.jobs import load_job
+    from nvh.integrations.services.jobs import load_job
 
     try:
         return load_job(job_id)
@@ -3247,7 +3250,7 @@ async def setup_jobs(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return recent rootless install jobs persisted under NVH_HOME."""
-    from nvh.integrations.jobs import list_jobs
+    from nvh.integrations.services.jobs import list_jobs
 
     safe_limit = max(1, min(limit, 100))
     jobs = list_jobs(kind=kind, status=status_filter, limit=safe_limit)
@@ -3271,7 +3274,7 @@ async def setup_job_events(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return JSONL-backed setup job events after a sequence number."""
-    from nvh.integrations.jobs import read_events
+    from nvh.integrations.services.jobs import read_events
 
     _job_or_404(job_id)
     try:
@@ -3287,7 +3290,7 @@ async def setup_job_cancel(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Request cancellation for an active setup job."""
-    from nvh.integrations.jobs import cancel_job
+    from nvh.integrations.services.jobs import cancel_job
 
     try:
         job = cancel_job(job_id)
@@ -3300,7 +3303,7 @@ async def _comfyui_install_stream(
     request: ComfyUIInstallRequest,
 ) -> AsyncGenerator:
     """Stream SSE events for ComfyUI installation."""
-    from nvh.integrations.comfyui import install_comfyui
+    from nvh.integrations.installs.comfyui import install_comfyui
 
     async for event in install_comfyui(
         torch_profile=request.torch_profile,
@@ -3332,7 +3335,7 @@ async def comfyui_start(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Start ComfyUI bound to localhost and return launch metadata."""
-    from nvh.integrations.comfyui import start_comfyui
+    from nvh.integrations.installs.comfyui import start_comfyui
 
     try:
         result = start_comfyui(host=request.host, port=request.port)
@@ -3384,7 +3387,7 @@ class StudioModelInstallRequest(BaseModel):
 @app.get("/v1/studio/packs", summary="List rootless AI Studio packs")
 async def studio_packs(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return the no-root AI Studio pack catalog with local status."""
-    from nvh.integrations.studio_packs import catalog_with_status
+    from nvh.integrations.installs.studio_packs import catalog_with_status
 
     return _response_envelope(catalog_with_status())
 
@@ -3392,7 +3395,7 @@ async def studio_packs(_auth: None = Depends(require_auth)) -> dict[str, Any]:
 @app.get("/v1/studio/models", summary="List recommended local models")
 async def studio_models(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return model-by-model recommendations and Ollama install status."""
-    from nvh.integrations.studio_packs import model_catalog_with_status
+    from nvh.integrations.installs.studio_packs import model_catalog_with_status
 
     return _response_envelope(model_catalog_with_status())
 
@@ -3401,7 +3404,7 @@ async def _studio_pack_install_stream(
     request: StudioPackInstallRequest,
 ) -> AsyncGenerator:
     """Stream SSE events for rootless AI Studio pack installation."""
-    from nvh.integrations.studio_packs import install_studio_packs
+    from nvh.integrations.installs.studio_packs import install_studio_packs
 
     async for event in install_studio_packs(
         request.pack_ids,
@@ -3415,7 +3418,7 @@ async def _studio_model_install_stream(
     request: StudioModelInstallRequest,
 ) -> AsyncGenerator:
     """Stream SSE events for selected model installation."""
-    from nvh.integrations.studio_packs import install_studio_models
+    from nvh.integrations.installs.studio_packs import install_studio_models
 
     async for event in install_studio_models(
         request.model_ids,
@@ -3447,8 +3450,8 @@ async def comfyui_install_job(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Install or update ComfyUI in the background with persistent progress."""
-    from nvh.integrations.comfyui import install_comfyui
-    from nvh.integrations.jobs import start_job
+    from nvh.integrations.installs.comfyui import install_comfyui
+    from nvh.integrations.services.jobs import start_job
 
     job = start_job(
         kind="comfyui-install",
@@ -3484,8 +3487,8 @@ async def studio_pack_install_job(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Install AI Studio packs in the background with persistent progress."""
-    from nvh.integrations.jobs import start_job
-    from nvh.integrations.studio_packs import install_studio_packs
+    from nvh.integrations.installs.studio_packs import install_studio_packs
+    from nvh.integrations.services.jobs import start_job
 
     job = start_job(
         kind="studio-pack-install",
@@ -3505,8 +3508,8 @@ async def studio_model_install_job(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Pull selected local models in the background with persistent progress."""
-    from nvh.integrations.jobs import start_job
-    from nvh.integrations.studio_packs import install_studio_models
+    from nvh.integrations.installs.studio_packs import install_studio_models
+    from nvh.integrations.services.jobs import start_job
 
     job = start_job(
         kind="studio-model-install",
@@ -4189,7 +4192,7 @@ class SaveKeyRequest(BaseModel):
 
 def _provider_env_file() -> FilePath:
     try:
-        from nvh.integrations.storage import storage_layout
+        from nvh.integrations.workspace.storage import storage_layout
         layout = storage_layout()
         return FilePath(layout.config_dir) / ".env"
     except Exception:
@@ -4199,7 +4202,7 @@ def _provider_env_file() -> FilePath:
 
 def _provider_config_file() -> FilePath:
     try:
-        from nvh.integrations.storage import storage_layout
+        from nvh.integrations.workspace.storage import storage_layout
         layout = storage_layout()
         return FilePath(layout.config_dir) / "config.yaml"
     except Exception:
@@ -4945,7 +4948,7 @@ async def anthropic_messages(
 )
 async def integrations_scan():
     """Detect installed AI platforms and their connection status."""
-    from nvh.integrations.detector import detect_platforms
+    from nvh.integrations.diagnostics.detector import detect_platforms
 
     platforms = detect_platforms()
     results = []
@@ -4987,7 +4990,7 @@ async def integrations_connect(
     _auth: Any = Depends(require_auth),
 ):
     """Register nvHive with a detected platform."""
-    from nvh.integrations.detector import (
+    from nvh.integrations.diagnostics.detector import (
         register_claude_code,
         register_claude_desktop,
         register_cursor,
@@ -5035,7 +5038,7 @@ async def integrations_connect_all(
     _auth: Any = Depends(require_auth),
 ):
     """Scan and connect all detected platforms in one call."""
-    from nvh.integrations.detector import (
+    from nvh.integrations.diagnostics.detector import (
         detect_platforms,
         register_claude_code,
         register_claude_desktop,

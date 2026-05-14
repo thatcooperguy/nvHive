@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.storage import storage_layout
+from nvh.integrations.workspace.storage import storage_layout
 
 logger = logging.getLogger(__name__)
 
@@ -640,7 +640,11 @@ def _current_python_needs_managed_runtime() -> bool:
 async def _ensure_comfyui_python(root: Path, env: dict[str, str]) -> AsyncIterator[dict[str, Any]]:
     """Create a rootless Python runtime for ComfyUI and yield progress."""
     if _current_python_needs_managed_runtime():
-        from nvh.integrations.runtime import install_micromamba, micromamba_binary, micromamba_root
+        from nvh.integrations.services.runtime import (
+            install_micromamba,
+            micromamba_binary,
+            micromamba_root,
+        )
 
         yield {
             "event": "step",
@@ -811,7 +815,7 @@ async def install_comfyui(
             "examples_dir": str(examples_dir),
         }
         try:
-            from nvh.integrations.receipts import write_receipt
+            from nvh.integrations.services.receipts import write_receipt
 
             write_receipt(
                 kind="comfyui",

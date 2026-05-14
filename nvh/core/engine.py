@@ -351,7 +351,7 @@ class Engine:
 
         try:
             from nvh.cli.setup import _find_ollama_binary
-            from nvh.integrations.storage import storage_layout
+            from nvh.integrations.workspace.storage import storage_layout
         except Exception:
             return
 
@@ -359,7 +359,7 @@ class Engine:
         if not ollama_bin:
             return
         try:
-            from nvh.integrations.studio_packs import _ollama_validation_error
+            from nvh.integrations.installs.studio_packs import _ollama_validation_error
 
             validation_error = _ollama_validation_error(ollama_bin)
             if validation_error:

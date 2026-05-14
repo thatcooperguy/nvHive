@@ -7,13 +7,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.comfyui import detect_comfyui
-from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import (
+from nvh.integrations.installs.comfyui import detect_comfyui
+from nvh.integrations.installs.studio_packs import (
     _node_runtime_status,
     catalog_with_status,
     ollama_runtime_doctor,
 )
+from nvh.integrations.workspace.storage import storage_status
 
 
 @dataclass(frozen=True)

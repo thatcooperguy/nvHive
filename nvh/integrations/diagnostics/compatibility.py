@@ -17,15 +17,15 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.runtime import runtime_status
-from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import (
+from nvh.integrations.installs.studio_packs import (
     BLENDER_VERSION,
     _docker_status,
     _node_runtime_status,
     catalog_with_status,
     model_catalog_with_status,
 )
+from nvh.integrations.services.runtime import runtime_status
+from nvh.integrations.workspace.storage import storage_status
 from nvh.utils.gpu import detect_gpu_status, gpu_architecture_info
 
 
@@ -389,7 +389,7 @@ def compatibility_report(
         if model.get("recommended") and not model.get("installed")
     ]
     try:
-        from nvh.integrations.comfyui import detect_comfyui
+        from nvh.integrations.installs.comfyui import detect_comfyui
 
         comfy_status = detect_comfyui(home_dir=home_dir)
     except Exception:

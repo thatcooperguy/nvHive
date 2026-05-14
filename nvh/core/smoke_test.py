@@ -314,7 +314,7 @@ async def run_smoke_tests(
 
     # ===== INTEGRATIONS =====
     try:
-        from nvh.integrations.detector import detect_platforms
+        from nvh.integrations.diagnostics.detector import detect_platforms
         platforms = detect_platforms()
         detected = [p for p in platforms if p.detected]
         configured = [p for p in platforms if p.already_configured]

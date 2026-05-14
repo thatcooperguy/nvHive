@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.storage import storage_layout, storage_status
+from nvh.integrations.workspace.storage import storage_layout, storage_status
 from nvh.utils.logging import get_request_id
 
 ENV_ALLOWLIST = [
@@ -208,12 +208,12 @@ def diagnostics_report(
     storage = _safe_call("storage", lambda: storage_status(home_dir=home_dir).as_dict())
 
     def _readiness() -> dict[str, Any]:
-        from nvh.integrations.production_readiness import production_readiness_report
+        from nvh.integrations.diagnostics.production_readiness import production_readiness_report
 
         return production_readiness_report(home_dir=home_dir)
 
     def _jobs() -> dict[str, Any]:
-        from nvh.integrations.jobs import list_jobs, read_events
+        from nvh.integrations.services.jobs import list_jobs, read_events
 
         jobs = list_jobs(limit=8, home_dir=layout.home)
         failed = [job for job in jobs if job.get("status") in {"failed", "interrupted"}]
@@ -240,17 +240,17 @@ def diagnostics_report(
         }
 
     def _receipts() -> dict[str, Any]:
-        from nvh.integrations.receipts import receipt_summary
+        from nvh.integrations.services.receipts import receipt_summary
 
         return receipt_summary(home_dir=layout.home)
 
     def _local_ai_runtime() -> dict[str, Any]:
-        from nvh.integrations.studio_packs import ollama_runtime_doctor
+        from nvh.integrations.installs.studio_packs import ollama_runtime_doctor
 
         return ollama_runtime_doctor(home_dir=layout.home)
 
     def _workspace_state() -> dict[str, Any]:
-        from nvh.integrations.workspace_state import workspace_state_report
+        from nvh.integrations.diagnostics.workspace_state import workspace_state_report
 
         report = workspace_state_report(home_dir=layout.home)
         return {
@@ -263,7 +263,7 @@ def diagnostics_report(
         }
 
     def _compatibility() -> dict[str, Any]:
-        from nvh.integrations.compatibility import compatibility_report
+        from nvh.integrations.diagnostics.compatibility import compatibility_report
 
         report = compatibility_report(home_dir=layout.home)
         return {
@@ -286,7 +286,7 @@ def diagnostics_report(
         }
 
     def _smoke_tests() -> dict[str, Any]:
-        from nvh.integrations.smoke_tests import smoke_test_report
+        from nvh.integrations.diagnostics.smoke_tests import smoke_test_report
 
         return smoke_test_report(home_dir=str(layout.home))
 

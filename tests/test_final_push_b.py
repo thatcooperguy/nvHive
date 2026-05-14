@@ -162,13 +162,13 @@ class TestStreaming:
 
 class TestDetector:
     def test_detect_platforms(self):
-        from nvh.integrations.detector import detect_platforms
+        from nvh.integrations.diagnostics.detector import detect_platforms
         result = detect_platforms()
         assert isinstance(result, (list, dict))
 
     def test_detect_cursor(self):
         try:
-            from nvh.integrations.detector import detect_cursor
+            from nvh.integrations.diagnostics.detector import detect_cursor
             result = detect_cursor()
             assert isinstance(result, (bool, dict, type(None)))
         except (ImportError, AttributeError):
@@ -176,7 +176,7 @@ class TestDetector:
 
     def test_detect_vscode(self):
         try:
-            from nvh.integrations.detector import detect_vscode
+            from nvh.integrations.diagnostics.detector import detect_vscode
             result = detect_vscode()
             assert isinstance(result, (bool, dict, type(None)))
         except (ImportError, AttributeError):

@@ -2,7 +2,7 @@
 
 import json
 
-from nvh.integrations.openclaw import (
+from nvh.integrations.installs.openclaw import (
     generate_nemoclaw_agent_config,
     generate_openclaw_config,
     write_openclaw_config,

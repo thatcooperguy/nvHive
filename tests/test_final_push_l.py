@@ -54,7 +54,7 @@ class TestVoice:
 
 class TestService:
     def test_generate_systemd_service_contains_unit_sections(self):
-        from nvh.integrations.service import generate_systemd_service
+        from nvh.integrations.services.service import generate_systemd_service
         content = generate_systemd_service(host="0.0.0.0", port=9000)
         assert "[Unit]" in content
         assert "[Service]" in content
@@ -65,7 +65,7 @@ class TestService:
     def test_generate_launchd_plist_is_valid_xml(self):
         import xml.etree.ElementTree as ET
 
-        from nvh.integrations.service import generate_launchd_plist
+        from nvh.integrations.services.service import generate_launchd_plist
         content = generate_launchd_plist(host="127.0.0.1", port=8080)
         assert content.strip().startswith("<?xml")
         # Should parse without error (strip the DOCTYPE which ET doesn't handle)
@@ -77,7 +77,7 @@ class TestService:
         ET.fromstring(cleaned)
 
     def test_service_status_returns_tuple(self):
-        from nvh.integrations.service import service_status
+        from nvh.integrations.services.service import service_status
         result = service_status()
         assert isinstance(result, tuple)
         assert len(result) == 2

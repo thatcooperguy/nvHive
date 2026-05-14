@@ -12,8 +12,8 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from nvh.integrations.storage import ensure_storage, storage_status
-from nvh.integrations.workspace_passport import rootless_policy_report
+from nvh.integrations.workspace.passport import rootless_policy_report
+from nvh.integrations.workspace.storage import ensure_storage, storage_status
 
 MISSION_TITLES = {
     "student": "AI Starter",
@@ -46,7 +46,7 @@ def _validate_profile(profile: str) -> str:
 
 
 def _installable_pack_ids(pack_ids: list[str]) -> list[str]:
-    from nvh.integrations.studio_packs import catalog_with_status
+    from nvh.integrations.installs.studio_packs import catalog_with_status
 
     status_by_id = {
         pack["id"]: pack.get("status", {})
@@ -67,7 +67,7 @@ def mission_profile_needs_comfy(profile: str) -> bool:
 
 def mission_profile_pack_ids(profile: str) -> list[str]:
     """Return installable pack ids for a mission profile."""
-    from nvh.integrations.studio_packs import expand_pack_ids
+    from nvh.integrations.installs.studio_packs import expand_pack_ids
 
     normalized = _validate_profile(profile)
     groups = MISSION_PACK_GROUPS[normalized]
@@ -82,7 +82,7 @@ def mission_profile_pack_ids(profile: str) -> list[str]:
 
 def mission_profile_model_ids(profile: str) -> list[str]:
     """Return local model ids for a mission profile using detected GPU fit."""
-    from nvh.integrations.studio_packs import model_catalog_with_status
+    from nvh.integrations.installs.studio_packs import model_catalog_with_status
 
     normalized = _validate_profile(profile)
     models = model_catalog_with_status().get("models", [])
@@ -114,8 +114,8 @@ def mission_profile_example_ids(profile: str, *, vram_gb: int | None = None) -> 
     if not mission_profile_needs_comfy(profile):
         return []
 
-    from nvh.integrations.comfyui import examples_as_dicts
-    from nvh.integrations.studio_packs import model_catalog_with_status
+    from nvh.integrations.installs.comfyui import examples_as_dicts
+    from nvh.integrations.installs.studio_packs import model_catalog_with_status
 
     detected_vram = vram_gb
     if detected_vram is None:
@@ -128,7 +128,7 @@ def mission_profile_example_ids(profile: str, *, vram_gb: int | None = None) -> 
 
 
 def _estimated_disk_gb(pack_ids: list[str], model_ids: list[str]) -> float:
-    from nvh.integrations.studio_packs import STUDIO_MODELS, STUDIO_PACKS
+    from nvh.integrations.installs.studio_packs import STUDIO_MODELS, STUDIO_PACKS
 
     pack_disk = sum(
         pack.estimated_disk_gb for pack in STUDIO_PACKS
@@ -218,8 +218,8 @@ async def install_mission_profile(
     min_free_gb: float = 200.0,
 ) -> AsyncIterator[dict[str, Any]]:
     """Install one mission as a single persistent background job."""
-    from nvh.integrations.comfyui import install_comfyui, start_comfyui, write_model_plan
-    from nvh.integrations.studio_packs import install_studio_models, install_studio_packs
+    from nvh.integrations.installs.comfyui import install_comfyui, start_comfyui, write_model_plan
+    from nvh.integrations.installs.studio_packs import install_studio_models, install_studio_packs
 
     normalized = _validate_profile(profile)
     if home_dir:

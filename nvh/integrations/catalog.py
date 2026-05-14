@@ -14,7 +14,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.storage import storage_layout
+from nvh.integrations.workspace.storage import storage_layout
 
 DEFAULT_CATALOG_URL = (
     "https://raw.githubusercontent.com/thatcooperguy/nvHive/main/"
@@ -49,8 +49,8 @@ def _validate_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
 
 
 def _generated_fallback_catalog() -> dict[str, Any]:
-    from nvh.integrations.comfyui import examples_as_dicts
-    from nvh.integrations.studio_packs import (
+    from nvh.integrations.installs.comfyui import examples_as_dicts
+    from nvh.integrations.installs.studio_packs import (
         BLENDER_VERSION,
         catalog_as_dicts,
         model_catalog_as_dicts,

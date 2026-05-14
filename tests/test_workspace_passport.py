@@ -8,13 +8,13 @@ from pathlib import Path
 import pytest
 
 from nvh.integrations import storage as storage_module
-from nvh.integrations.storage import nvh_home, storage_layout
-from nvh.integrations.workspace_passport import (
+from nvh.integrations.workspace.passport import (
     rootless_policy_report,
     support_snapshot,
     workspace_passport,
     workspace_plan,
 )
+from nvh.integrations.workspace.storage import nvh_home, storage_layout
 
 
 @pytest.fixture()

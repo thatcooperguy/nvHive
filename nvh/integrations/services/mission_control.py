@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from nvh.integrations.auto_repair import auto_repair_plan
-from nvh.integrations.boot_preflight import boot_preflight_status
-from nvh.integrations.model_fit import model_fit_report
-from nvh.integrations.mount_autopilot import mount_autopilot_report
-from nvh.integrations.receipts import receipt_summary
-from nvh.integrations.smoke_tests import smoke_test_report
+from nvh.integrations.diagnostics.boot_preflight import boot_preflight_status
+from nvh.integrations.diagnostics.model_fit import model_fit_report
+from nvh.integrations.diagnostics.smoke_tests import smoke_test_report
+from nvh.integrations.services.receipts import receipt_summary
+from nvh.integrations.wizard.auto_repair import auto_repair_plan
+from nvh.integrations.workspace.mount_autopilot import mount_autopilot_report
 
 
 def _stage(stage_id: str, title: str, status: str, summary: str, action_id: str | None = None) -> dict[str, Any]:

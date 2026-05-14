@@ -25,7 +25,7 @@ def test_rootless_node_install_assume_yes_skips_prompt(monkeypatch, tmp_path):
     import shutil
     import subprocess
 
-    import nvh.integrations.storage as storage_mod
+    import nvh.integrations.workspace.storage as storage_mod
     from nvh.integrations import node_runtime
 
     layout = SimpleNamespace(
@@ -76,7 +76,7 @@ def test_rootless_node_discovery_supports_fnm_and_direct_layouts(tmp_path, monke
 def test_webui_npm_env_includes_bootstrapped_node_path(tmp_path, monkeypatch):
     import shutil
 
-    import nvh.integrations.storage as storage_mod
+    import nvh.integrations.workspace.storage as storage_mod
 
     home = tmp_path / "nvhive"
     node_bin = home / "runtimes" / "node" / "current" / "bin"
@@ -142,7 +142,7 @@ def test_webui_launch_opens_setup_in_browser(tmp_path, monkeypatch):
     import shutil
     import socket
 
-    import nvh.integrations.storage as storage_mod
+    import nvh.integrations.workspace.storage as storage_mod
 
     home = tmp_path / "nvhive"
     node_bin = home / "runtimes" / "node" / "current" / "bin"
@@ -230,7 +230,7 @@ def test_webui_launch_prefers_rootless_firefox(tmp_path, monkeypatch):
     import shutil
     import socket
 
-    import nvh.integrations.storage as storage_mod
+    import nvh.integrations.workspace.storage as storage_mod
 
     home = tmp_path / "nvhive"
     node_bin = home / "runtimes" / "node" / "current" / "bin"

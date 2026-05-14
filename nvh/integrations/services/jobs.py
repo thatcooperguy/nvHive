@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.storage import storage_layout
+from nvh.integrations.workspace.storage import storage_layout
 
 TERMINAL_STATUSES = {"complete", "failed", "canceled", "interrupted"}
 RUNNING_STATUSES = {"queued", "running"}

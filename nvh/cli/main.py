@@ -5648,7 +5648,10 @@ def serve(
     if daemon:
         import sys as _sys
 
-        from nvh.integrations.service import install_launchd_service, install_systemd_service
+        from nvh.integrations.services.service import (
+            install_launchd_service,
+            install_systemd_service,
+        )
         console.print("[bold]Installing nvHive proxy as a system service...[/bold]")
         if _sys.platform == "darwin":
             ok, msg = install_launchd_service(host, port)
@@ -5665,7 +5668,7 @@ def serve(
     if not _check_serve_deps():
         raise typer.Exit(1)
     from nvh.api.server import run_server
-    from nvh.integrations.hostname import is_hostname_configured
+    from nvh.integrations.workspace.hostname import is_hostname_configured
     host_label = "nvhive" if is_hostname_configured() else host
     console.print(f"[bold]Hive API Server[/bold] starting on http://{host_label}:{port}")
     console.print(f"  API docs: http://{host_label}:{port}/docs")
@@ -5685,7 +5688,7 @@ def service(
         nvh service stop         Stop the service (keeps it installed)
         nvh service uninstall    Remove the service completely
     """
-    from nvh.integrations.service import service_status, uninstall_service
+    from nvh.integrations.services.service import service_status, uninstall_service
 
     if action == "status":
         running, msg = service_status()
@@ -5936,7 +5939,7 @@ def integrate(
     """
     from rich.rule import Rule
 
-    from nvh.integrations.detector import (
+    from nvh.integrations.diagnostics.detector import (
         detect_platforms,
         register_claude_code,
         register_claude_desktop,
@@ -6132,7 +6135,7 @@ def openclaw(
     if install:
         from pathlib import Path
 
-        from nvh.integrations.detector import register_openclaw
+        from nvh.integrations.diagnostics.detector import register_openclaw
 
         console.print()
         console.print(Rule("Install OpenClaw + register nvHive"))
@@ -6264,7 +6267,7 @@ def openclaw(
     if config:
         from pathlib import Path
 
-        from nvh.integrations.openclaw import write_openclaw_config
+        from nvh.integrations.installs.openclaw import write_openclaw_config
         path = write_openclaw_config(output_path=Path(output) if output else None)
         console.print()
         console.print(f"  [green]✓[/green] Config written to [bold]{path}[/bold]")
@@ -6794,7 +6797,7 @@ def nemoclaw(
     if install:
         import shutil
 
-        from nvh.integrations.detector import register_nemoclaw
+        from nvh.integrations.diagnostics.detector import register_nemoclaw
 
         console.print()
         console.print(Rule("Install NemoClaw + register nvHive"))
@@ -7150,7 +7153,7 @@ def _try_install_node_no_root(
     import subprocess as _sp
 
     from nvh.integrations import node_runtime
-    from nvh.integrations.storage import storage_layout
+    from nvh.integrations.workspace.storage import storage_layout
 
     if sys.platform == "win32":
         return None, None
@@ -7618,14 +7621,14 @@ def studio(
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation prompts"),
 ):
     """Install rootless AI Studio packs for LLMs, agents, ComfyUI, games, and music."""
-    from nvh.integrations.storage import ensure_storage
-    from nvh.integrations.studio_packs import (
+    from nvh.integrations.installs.studio_packs import (
         catalog_with_status,
         expand_pack_ids,
         install_studio_models,
         install_studio_packs,
         model_catalog_with_status,
     )
+    from nvh.integrations.workspace.storage import ensure_storage
 
     storage = ensure_storage(home_dir)
     catalog = catalog_with_status()
@@ -7811,7 +7814,7 @@ def workstation(
         launch = True
         desktop = True
 
-    from nvh.integrations.workstation import (
+    from nvh.integrations.installs.workstation import (
         detect_workstation_profile,
         ensure_storage,
         workstation_next_steps,
@@ -7824,7 +7827,7 @@ def workstation(
     boot_report: dict[str, Any] | None = None
     recommended_torch_profile = "nvidia-cu121"
     try:
-        from nvh.integrations.boot_preflight import run_boot_preflight
+        from nvh.integrations.diagnostics.boot_preflight import run_boot_preflight
 
         boot_report = run_boot_preflight(home_dir=storage.layout.home)
         recommended_torch_profile = (
@@ -7908,7 +7911,7 @@ def workstation(
         console.print("\n[bold]Local AI setup[/bold]")
 
         async def _install_local_ai_runtime() -> None:
-            from nvh.integrations.studio_packs import install_studio_packs
+            from nvh.integrations.installs.studio_packs import install_studio_packs
 
             last_log = 0.0
             async for event in install_studio_packs(["rootless-ollama"], force_update=False):
@@ -7923,7 +7926,7 @@ def workstation(
                     last_log = now
 
         async def _install_local_ai_starter_model() -> None:
-            from nvh.integrations.studio_packs import (
+            from nvh.integrations.installs.studio_packs import (
                 install_studio_models,
                 model_catalog_with_status,
             )
@@ -7961,7 +7964,7 @@ def workstation(
         console.print("\n[bold]ComfyUI setup[/bold]")
 
         async def _install_comfy() -> None:
-            from nvh.integrations.comfyui import install_comfyui
+            from nvh.integrations.installs.comfyui import install_comfyui
 
             last_log = 0.0
             async for event in install_comfyui(torch_profile=recommended_torch_profile):
@@ -7987,7 +7990,7 @@ def workstation(
         console.print("\n[bold]AI Studio packs[/bold]")
 
         async def _install_packs() -> None:
-            from nvh.integrations.studio_packs import install_studio_packs
+            from nvh.integrations.installs.studio_packs import install_studio_packs
 
             last_log = 0.0
             async for event in install_studio_packs(["starter"], force_update=False):
@@ -8090,7 +8093,7 @@ def webui(
     from datetime import UTC, datetime
 
     from nvh.integrations import node_runtime
-    from nvh.integrations.storage import storage_layout
+    from nvh.integrations.workspace.storage import storage_layout
 
     layout = storage_layout()
     cache_web_dir_early = str(layout.webui_dir)
@@ -8711,7 +8714,7 @@ def webui(
     # --- Smart setup: hostname + best port ---
     import socket
 
-    from nvh.integrations.hostname import add_hostname, is_hostname_configured
+    from nvh.integrations.workspace.hostname import add_hostname, is_hostname_configured
 
     def _port_available(p: int) -> bool:
         """Check if a port is free to bind."""
@@ -9509,7 +9512,7 @@ def doctor(
 
     console.print("[bold]Hive Doctor[/bold] — running diagnostics...\n")
 
-    from nvh.integrations.storage import ensure_storage, storage_status
+    from nvh.integrations.workspace.storage import ensure_storage, storage_status
 
     if storage_only:
         storage = ensure_storage(home_dir, min_free_gb=min_free_gb)
@@ -9552,7 +9555,7 @@ def doctor(
         )
 
     try:
-        from nvh.integrations.receipts import receipt_summary
+        from nvh.integrations.services.receipts import receipt_summary
 
         receipts = receipt_summary()
         detail = (
@@ -10059,7 +10062,7 @@ def wizard_plan_command(
     """Preview the rootless setup plan for a mission without installing anything."""
     import json
 
-    from nvh.integrations.workspace_passport import workspace_plan
+    from nvh.integrations.workspace.passport import workspace_plan
 
     plan_data = workspace_plan(profile=profile, home_dir=home_dir, min_free_gb=min_free_gb)
     if json_output:
@@ -10103,7 +10106,7 @@ def wizard_repair_command(
     """Run safe idempotent repairs that never use sudo or delete user assets."""
     import json
 
-    from nvh.integrations.auto_repair import run_safe_repairs
+    from nvh.integrations.wizard.auto_repair import run_safe_repairs
 
     result = run_safe_repairs(home_dir=home_dir)
     if json_output:
@@ -10153,8 +10156,8 @@ def wizard_command(
     """Rootless nvWizard status, planning, repair, and support snapshot tools."""
     import json
 
-    from nvh.integrations.auto_repair import run_safe_repairs
-    from nvh.integrations.workspace_passport import (
+    from nvh.integrations.wizard.auto_repair import run_safe_repairs
+    from nvh.integrations.workspace.passport import (
         support_snapshot,
         workspace_passport,
         workspace_plan,

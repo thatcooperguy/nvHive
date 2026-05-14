@@ -12,13 +12,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.boot_preflight import boot_preflight_status
-from nvh.integrations.jobs import RUNNING_STATUSES, list_jobs
-from nvh.integrations.model_fit import model_fit_report
-from nvh.integrations.production_readiness import production_readiness_report
-from nvh.integrations.runtime import runtime_status
-from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import ollama_runtime_doctor
+from nvh.integrations.diagnostics.boot_preflight import boot_preflight_status
+from nvh.integrations.diagnostics.model_fit import model_fit_report
+from nvh.integrations.diagnostics.production_readiness import production_readiness_report
+from nvh.integrations.installs.studio_packs import ollama_runtime_doctor
+from nvh.integrations.services.jobs import RUNNING_STATUSES, list_jobs
+from nvh.integrations.services.runtime import runtime_status
+from nvh.integrations.workspace.storage import storage_status
 
 
 def _check(

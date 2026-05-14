@@ -35,7 +35,7 @@ def test_auto_repair_writes_env_file_without_downloads(tmp_path, monkeypatch) ->
         ),
     )
 
-    from nvh.integrations.storage import ensure_storage
+    from nvh.integrations.workspace.storage import ensure_storage
 
     ensure_storage(tmp_path / "nvh")
     result = auto_repair.run_safe_repairs(home_dir=tmp_path / "nvh")

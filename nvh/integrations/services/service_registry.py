@@ -18,7 +18,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from nvh.integrations.storage import storage_layout
+from nvh.integrations.workspace.storage import storage_layout
 
 
 @dataclass(frozen=True)
@@ -364,7 +364,7 @@ def _probe_webui(home_dir: str | Path | None = None) -> ServiceStatus:
 
 
 def _probe_ollama(home_dir: str | Path | None = None) -> ServiceStatus:
-    from nvh.integrations.studio_packs import ollama_runtime_doctor
+    from nvh.integrations.installs.studio_packs import ollama_runtime_doctor
 
     layout = storage_layout(home_dir)
     doctor = ollama_runtime_doctor(home_dir=home_dir)
@@ -395,7 +395,7 @@ def _probe_ollama(home_dir: str | Path | None = None) -> ServiceStatus:
 
 
 def _probe_comfyui(home_dir: str | Path | None = None) -> ServiceStatus:
-    from nvh.integrations.comfyui import detect_comfyui
+    from nvh.integrations.installs.comfyui import detect_comfyui
 
     status = detect_comfyui(home_dir=home_dir, check_http=True)
     installed = bool(status.get("installed"))
@@ -455,7 +455,7 @@ def _probe_pack_group(
     command: str,
     log_name: str,
 ) -> ServiceStatus:
-    from nvh.integrations.studio_packs import catalog_with_status
+    from nvh.integrations.installs.studio_packs import catalog_with_status
 
     layout = storage_layout(home_dir)
     packs = catalog_with_status()
@@ -543,7 +543,7 @@ def _probe_music(home_dir: str | Path | None = None) -> ServiceStatus:
 
 
 def _probe_vault(home_dir: str | Path | None = None) -> ServiceStatus:
-    from nvh.integrations.vault import vault_status
+    from nvh.integrations.workspace.vault import vault_status
 
     status = vault_status(home_dir=home_dir)
     obsidian = status.get("obsidian") or {}
@@ -691,7 +691,7 @@ def run_service_action(
         }
 
     if normalized_action == "start-comfyui":
-        from nvh.integrations.comfyui import start_comfyui
+        from nvh.integrations.installs.comfyui import start_comfyui
 
         result = start_comfyui(home_dir=home_dir)
         status = service_status("comfyui", home_dir=home_dir)

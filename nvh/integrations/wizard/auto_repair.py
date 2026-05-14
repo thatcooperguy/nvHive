@@ -6,9 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from nvh.integrations.catalog import load_setup_catalog
-from nvh.integrations.comfyui import detect_comfyui, write_example_pack
-from nvh.integrations.receipts import receipt_summary
-from nvh.integrations.storage import ensure_storage, storage_layout, storage_status, write_env_file
+from nvh.integrations.installs.comfyui import detect_comfyui, write_example_pack
+from nvh.integrations.services.receipts import receipt_summary
+from nvh.integrations.workspace.storage import (
+    ensure_storage,
+    storage_layout,
+    storage_status,
+    write_env_file,
+)
 
 
 def _action(

@@ -15,12 +15,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.auto_repair import auto_repair_plan, run_safe_repairs
-from nvh.integrations.compatibility import compatibility_report
-from nvh.integrations.model_fit import model_fit_report
-from nvh.integrations.mount_autopilot import mount_autopilot_report
-from nvh.integrations.smoke_tests import smoke_test_report
-from nvh.integrations.storage import storage_layout
+from nvh.integrations.diagnostics.compatibility import compatibility_report
+from nvh.integrations.diagnostics.model_fit import model_fit_report
+from nvh.integrations.diagnostics.smoke_tests import smoke_test_report
+from nvh.integrations.wizard.auto_repair import auto_repair_plan, run_safe_repairs
+from nvh.integrations.workspace.mount_autopilot import mount_autopilot_report
+from nvh.integrations.workspace.storage import storage_layout
 
 STATE_FILENAME = "boot-preflight.json"
 STATE_SCHEMA_VERSION = 1

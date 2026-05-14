@@ -48,7 +48,7 @@ def test_service_registry_summarizes_api_webui_and_ollama(tmp_path, monkeypatch)
             "next_action": None,
         }
 
-    import nvh.integrations.studio_packs as studio_packs
+    import nvh.integrations.installs.studio_packs as studio_packs
 
     monkeypatch.setattr(studio_packs, "ollama_runtime_doctor", fake_doctor)
     monkeypatch.setattr(
@@ -79,7 +79,7 @@ def test_service_health_report_includes_ports_actions_and_friendly_copy(tmp_path
     monkeypatch.setattr(service_registry, "_port_open", lambda host, port, timeout=0.25: port == 8000)
     monkeypatch.setattr(service_registry, "_http_ok", lambda url, timeout=0.75: "8000" in url)
 
-    import nvh.integrations.studio_packs as studio_packs
+    import nvh.integrations.installs.studio_packs as studio_packs
 
     monkeypatch.setattr(
         studio_packs,

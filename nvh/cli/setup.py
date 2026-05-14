@@ -180,7 +180,7 @@ def _find_ollama_binary() -> str | None:
     """Return path to an existing Ollama binary, or None."""
     import shutil
 
-    from nvh.integrations.storage import storage_layout
+    from nvh.integrations.workspace.storage import storage_layout
 
     # Check PATH first (system install)
     which = shutil.which("ollama")
@@ -207,13 +207,13 @@ def _install_ollama_rootless_bundle(console: Console) -> str | None:
     import platform
     import subprocess
 
-    from nvh.integrations.storage import storage_layout
-    from nvh.integrations.studio_packs import (
+    from nvh.integrations.installs.studio_packs import (
         _extract_ollama_archive,
         _ollama_download_candidates,
         _ollama_validation_error,
         _platform_arch,
     )
+    from nvh.integrations.workspace.storage import storage_layout
 
     if platform.system() != "Linux":
         console.print(
@@ -333,7 +333,7 @@ def _start_ollama(console: Console, ollama_bin: str) -> bool:
     import subprocess
     import time
 
-    from nvh.integrations.storage import storage_layout
+    from nvh.integrations.workspace.storage import storage_layout
 
     layout = storage_layout()
     models_dir = layout.ollama_models_dir
@@ -507,7 +507,7 @@ def _pull_model(console: Console, model: str, ollama_bin: str) -> bool:
     # Fallback: plain subprocess call
     console.print(f"  Pulling {model} (this may take a while)...")
     try:
-        from nvh.integrations.storage import storage_layout
+        from nvh.integrations.workspace.storage import storage_layout
         env = os.environ.copy()
         env.update(storage_layout().env())
         result = subprocess.run(

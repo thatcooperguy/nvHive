@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import model_catalog_with_status
+from nvh.integrations.installs.studio_packs import model_catalog_with_status
+from nvh.integrations.workspace.storage import storage_status
 
 USE_CASE_LABELS = {
     "starter": "Best first install",
