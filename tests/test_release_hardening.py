@@ -131,7 +131,12 @@ def test_linux_start_launcher_prefers_block_backed_home_over_dot_nvh() -> None:
 
     assert 'printf \'%s\\n\' "$HOME/nvhive"' in launch
     assert 'home_free="$(free_gb_for_path "$HOME")"' in launch
-    assert 'NVH_HOME="$HOME/.nvh"' in launch
+    # Fallback to $HOME/.nvh is now gated behind NVH_ALLOW_EPHEMERAL=1 so
+    # students on ephemeral cloud-desktop OS disks don't silently lose
+    # models/configs on reconnect. See the preflight in start-linux.sh.
+    assert 'fallback_home="$HOME/.nvh"' in launch
+    assert 'NVH_ALLOW_EPHEMERAL' in launch
+    assert 'exit 2' in launch
 
 
 def test_workstation_local_ai_uses_hardened_studio_pack_path() -> None:

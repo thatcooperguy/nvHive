@@ -133,8 +133,24 @@ if [ -z "${NVH_HOME:-}" ]; then
     if NVH_HOME="$(detect_home)"; then
         echo -e "${G}Mount autopilot selected ${NVH_HOME}${N}"
     else
-        NVH_HOME="$HOME/.nvh"
-        echo -e "${Y}No persistent mount was obvious; using ${NVH_HOME}.${N}"
+        fallback_home="$HOME/.nvh"
+        if [ "${NVH_ALLOW_EPHEMERAL:-0}" != "1" ]; then
+            echo -e "${R}No persistent mount was found.${N}" >&2
+            echo "" >&2
+            echo "nvHive could not locate a persistent storage path (>=20GB free) under" >&2
+            echo "any of: /mnt, /media, /workspace, /data, /persistent, /storage, or under" >&2
+            echo "\$HOME with at least 100GB free. On cloud GPU desktops the OS disk is" >&2
+            echo "usually ephemeral — falling back to ${fallback_home} would mean models," >&2
+            echo "configs, and Studio Packs vanish on reconnect." >&2
+            echo "" >&2
+            echo "Fix one of:" >&2
+            echo "  1. Set NVH_HOME=/path/to/persistent/mount and rerun this script." >&2
+            echo "  2. Set NVH_ALLOW_EPHEMERAL=1 to acknowledge the risk and use ${fallback_home}." >&2
+            echo "  3. Mount a persistent volume at /mnt, /workspace, or /data." >&2
+            exit 2
+        fi
+        NVH_HOME="$fallback_home"
+        echo -e "${Y}NVH_ALLOW_EPHEMERAL=1 — using ${NVH_HOME}. Data may be lost on reconnect.${N}"
     fi
 fi
 export NVH_HOME
