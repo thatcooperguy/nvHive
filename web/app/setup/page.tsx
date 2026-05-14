@@ -107,12 +107,25 @@ function setupStateFromWorkspaceStatus(status?: string): SetupCheckState {
   return 'warn';
 }
 
-const STEPS: { id: Step; label: string; num: number }[] = [
+/**
+ * `essential` distinguishes the steps the wizard cannot skip from the ones a
+ * user can come back to anytime. On a freshly-minted cloud GPU desktop the
+ * first 60 seconds matter — we want to make the essentials feel small and the
+ * optional steps feel inviting-but-deferrable.
+ *
+ * Essential (3 steps): storage, gpu, local-ai. The user can't query anything
+ * without persistent storage, a detected accelerator, and at least one local
+ * or routed model.
+ *
+ * Optional (5 steps): packs, comfyui, cloud, test, done — visited per-mission
+ * or whenever the user wants to expand the lab.
+ */
+const STEPS: { id: Step; label: string; num: number; essential?: boolean }[] = [
   { id: 'welcome', label: 'Welcome', num: 1 },
-  { id: 'storage', label: 'Storage', num: 2 },
-  { id: 'gpu', label: 'GPU', num: 3 },
-  { id: 'models', label: 'Models', num: 4 },
-  { id: 'local-ai', label: 'Local AI', num: 5 },
+  { id: 'storage', label: 'Storage', num: 2, essential: true },
+  { id: 'gpu', label: 'GPU', num: 3, essential: true },
+  { id: 'models', label: 'Models', num: 4, essential: true },
+  { id: 'local-ai', label: 'Local AI', num: 5, essential: true },
   { id: 'studio', label: 'Packs', num: 6 },
   { id: 'comfyui', label: 'ComfyUI', num: 7 },
   { id: 'cloud', label: 'Cloud', num: 8 },
@@ -2610,18 +2623,25 @@ export default function SetupPage() {
               <div className="flex flex-wrap gap-2">
                 {currentAdvancedGroup.steps.map(groupStep => {
                   const detail = STEPS.find(s => s.id === groupStep);
+                  const isActive = groupStep === step;
                   return (
                     <button
                       key={groupStep}
                       type="button"
                       onClick={() => setStep(groupStep)}
-                      className={`border px-2 py-1 text-[9px] font-mono uppercase tracking-wider ${
-                        groupStep === step
+                      className={`flex items-center gap-1.5 border px-2 py-1 text-[9px] font-mono uppercase tracking-wider rounded ${
+                        isActive
                           ? 'border-[#76B900] text-[#0a0a0a] bg-[#f7fdf0]'
                           : 'border-[#e5e5e5] text-[#737373] bg-white hover:text-[#0a0a0a]'
                       }`}
+                      title={detail?.essential ? 'Essential step — required to use nvHive' : 'Optional — visit anytime'}
                     >
-                      {detail?.label ?? groupStep}
+                      <span>{detail?.label ?? groupStep}</span>
+                      {detail?.essential ? (
+                        <span className="text-[#76B900]" aria-label="Essential">●</span>
+                      ) : (
+                        <span className="text-[#a3a3a3]" aria-label="Optional">○</span>
+                      )}
                     </button>
                   );
                 })}
@@ -3616,6 +3636,30 @@ export default function SetupPage() {
         {/* WELCOME */}
         {step === 'welcome' && (
           <div className="space-y-4">
+            {/*
+              Mission-first framing: on a freshly-minted ephemeral GPU session
+              the user needs to know "pick what you want to build" comes
+              before any technical questions. This banner sits above the
+              build-status output so it's the first thing they read.
+            */}
+            <div className="rounded-lg border border-[#76B900]/30 bg-[#f7fdf0] p-4">
+              <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.18em] text-[#76B900]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#76B900]" />
+                Start here
+              </div>
+              <div className="mt-2 text-base font-semibold tracking-tight text-[#0a0a0a]">
+                Pick a mission and AI Wizard does the rest.
+              </div>
+              <div className="mt-1 text-xs leading-relaxed text-[#525252]">
+                Three steps mean go (<span className="text-[#76B900]">●</span> = essential):
+                <strong className="ml-1 text-[#0a0a0a]">storage</strong> finds your
+                persistent mount, <strong className="text-[#0a0a0a]">GPU</strong> detects
+                the accelerator, <strong className="text-[#0a0a0a]">local AI</strong>
+                installs your first model. Optional steps (<span className="text-[#a3a3a3]">○</span>)
+                — ComfyUI, packs, cloud keys — can wait until you need them.
+              </div>
+            </div>
+
             {wizardBuildMessage && (
               <div className="border border-[#76B900]/25 bg-[#f7fdf0] px-3 py-2 text-xs text-[#315f00]">
                 {wizardBuildMessage}
