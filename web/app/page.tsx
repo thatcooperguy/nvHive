@@ -270,7 +270,7 @@ function EmptyState({
   return (
     <div className="flex flex-1 items-center justify-center px-5 py-8">
       <div className="w-full max-w-5xl">
-        <div className="mb-8 border border-[#262626] bg-white p-5 sm:p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+        <div className="mb-8 rounded-lg border border-[#262626] bg-white p-5 sm:p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="mb-2 flex items-center gap-2">
@@ -288,7 +288,7 @@ function EmptyState({
               {localModelCount === 0 && (
                 <Link
                   href="/setup"
-                  className="mt-4 inline-flex items-center gap-2 bg-[#76B900] px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider text-black hover:bg-[#5a9100]"
+                  className="mt-4 inline-flex items-center gap-2 rounded-md bg-[#76B900] px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider text-black hover:bg-[#5a9100]"
                 >
                   Install recommended local model
                 </Link>
@@ -296,7 +296,7 @@ function EmptyState({
             </div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:min-w-[420px]">
               {readiness.map(item => (
-                <div key={item.label} className="border border-[#e5e5e5] bg-white px-3 py-2 text-left">
+                <div key={item.label} className="rounded-md border border-[#e5e5e5] bg-white px-3 py-2 text-left">
                   <div className="text-[9px] font-mono uppercase tracking-[0.16em] text-[#737373]">{item.label}</div>
                   <div className="mt-1 truncate text-sm font-semibold text-[#0a0a0a]">{item.value}</div>
                 </div>
@@ -310,7 +310,7 @@ function EmptyState({
             <button
               key={i}
               onClick={() => onPrompt(s)}
-              className="group min-h-[72px] border border-[#e5e5e5] bg-white px-4 py-3 text-left transition-all hover:border-[#76B900]/50 hover:bg-[#f3f9e5]"
+              className="group min-h-[72px] border border-[#e5e5e5] bg-white px-4 py-3 text-left transition-all hover:border-[#76B900]/50 hover:bg-[#f3f9e5] rounded-md"
             >
               <div className="mb-2 flex items-center justify-between">
                 <span className="text-[10px] font-mono uppercase tracking-[0.16em] text-[#737373]">
@@ -323,6 +323,15 @@ function EmptyState({
               </div>
             </button>
           ))}
+        </div>
+
+        <div className="mt-3 flex items-center gap-2 rounded-md border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 text-xs text-[#525252]">
+          <svg className="h-3.5 w-3.5 flex-shrink-0 text-[#76B900]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+          </svg>
+          <span>
+            Drag an image into the chat below to ask about it — vision-capable models will analyze it.
+          </span>
         </div>
       </div>
     </div>
