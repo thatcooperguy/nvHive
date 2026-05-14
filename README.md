@@ -46,7 +46,7 @@ What you get on the happy path:
 - A Workspace Passport for durable storage, boot drift, receipts, jobs, and the rootless policy.
 - GPU-aware model recommendations and disk estimates.
 - Mission cards for AI Starter, Graphics Creator, Game Dev, Music Producer, and Agent Builder.
-- Self-healing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts.
+- Self-diagnosing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts, with one-click rootless repairs in the wizard.
 - A product-aware AI Wizard chat helper that works immediately from local setup state, jobs, receipts, redacted logs, and rootless safety rules, then hands off to the local model when Ollama is healthy.
 - A rootless Markdown vault for durable memory, known product conflicts, pilot test notes, and optional Obsidian viewing.
 - Redacted error reports with request IDs when something needs debugging.
