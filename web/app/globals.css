@@ -85,7 +85,7 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: #cccccc;
-  border-radius: 0;
+  border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -117,33 +117,34 @@ button {
    Tailwind component layer
    ============================================================ */
 @layer components {
-  /* Card — white with subtle border, green hover */
+  /* Card — white with subtle border, green hover, soft lift on hover */
   .card {
-    @apply bg-white border border-[#e5e5e5] rounded-[4px];
-    transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+    @apply bg-white border border-[#e5e5e5] rounded-lg;
+    transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   }
 
   .card:hover {
     border-color: var(--border-green);
     background-color: var(--bg-card-hover);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
+    transform: translateY(-1px);
   }
 
   /* Flat card (no hover effect) */
   .card-flat {
-    @apply bg-white border border-[#e5e5e5] rounded-none;
+    @apply bg-white border border-[#e5e5e5] rounded-lg;
   }
 
   /* Input — white with NVIDIA green focus */
   .input-base {
-    @apply bg-white border border-[#d4d4d4] rounded-none text-[#0a0a0a] placeholder-[#a3a3a3]
+    @apply bg-white border border-[#d4d4d4] rounded-md text-[#0a0a0a] placeholder-[#a3a3a3]
       focus:outline-none focus:border-[#76B900] focus:ring-1 focus:ring-[#76B900]/40
       transition-colors duration-150;
   }
 
   /* Primary button — NVIDIA green, black text */
   .btn-primary {
-    @apply bg-[#76B900] hover:bg-[#5a9100] text-black font-semibold rounded-none
+    @apply bg-[#76B900] hover:bg-[#5a9100] text-black font-semibold rounded-md
       transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed;
   }
 
@@ -154,14 +155,14 @@ button {
   /* Secondary button — white with border, green hover border */
   .btn-secondary {
     @apply bg-white hover:bg-[#fafafa] border border-[#d4d4d4] hover:border-[#76B900]
-      text-[#404040] hover:text-[#0a0a0a] font-medium rounded-none transition-all duration-150
+      text-[#404040] hover:text-[#0a0a0a] font-medium rounded-md transition-all duration-150
       disabled:opacity-40 disabled:cursor-not-allowed;
   }
 
   /* Ghost button */
   .btn-ghost {
     @apply hover:bg-[#f5f5f5] text-[#737373] hover:text-[#0a0a0a]
-      font-medium rounded-none transition-all duration-150;
+      font-medium rounded-md transition-all duration-150;
   }
 
   /* Status dots */
@@ -200,12 +201,12 @@ button {
   /* Tag/badge */
   .tag {
     @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium;
-    border-radius: 0;
+    border-radius: 4px;
   }
 
   /* Progress bar */
   .progress-bar {
-    @apply h-1 overflow-hidden bg-[#e5e5e5];
+    @apply h-1 overflow-hidden bg-[#e5e5e5] rounded-full;
   }
 
   .progress-fill {
@@ -354,7 +355,7 @@ input[type="range"] {
   height: 3px;
   background: #e5e5e5;
   outline: none;
-  border-radius: 0;
+  border-radius: 9999px;
 }
 
 input[type="range"]::-webkit-slider-thumb {
@@ -364,8 +365,7 @@ input[type="range"]::-webkit-slider-thumb {
   height: 14px;
   background: var(--nvidia-green);
   cursor: pointer;
-  border-radius: 0;
-  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+  border-radius: 50%;
 }
 
 input[type="range"]::-moz-range-thumb {
@@ -373,7 +373,7 @@ input[type="range"]::-moz-range-thumb {
   height: 14px;
   background: var(--nvidia-green);
   cursor: pointer;
-  border-radius: 0;
+  border-radius: 50%;
   border: none;
 }
 
