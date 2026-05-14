@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
 import ChatMessage, { exportConversationMarkdown } from '@/components/ChatMessage';
 import ChatInput, { type ChatInputAttachment } from '@/components/ChatInput';
+import { HardwareWidgetCompact, HardwareWidgetHero } from '@/components/HardwareWidget';
 import { useUIShell } from '@/components/UIShellProvider';
 import {
   queryStream,
@@ -13,7 +14,6 @@ import {
   compare,
   getModels,
   getStudioModels,
-  getGPUInfo,
   getBudgetStatus,
   getConversations,
   getConversation,
@@ -73,38 +73,9 @@ function titleFromMessage(msg: string): string {
   return clean.length > 50 ? clean.slice(0, 47) + '...' : clean;
 }
 
-// ─── GPU status pill ──────────────────────────────────────────────────────────
-
-function GPUPill() {
-  const [info, setInfo] = useState<{ name: string; pct: number } | null>(null);
-
-  useEffect(() => {
-    getGPUInfo()
-      .then(g => {
-        if (g.gpus.length > 0) {
-          const gpu = g.gpus[0];
-          setInfo({ name: gpu.name, pct: gpu.utilization_pct });
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  if (!info) return null;
-
-  const shortName = info.name.replace('NVIDIA GeForce ', '').replace('NVIDIA ', '');
-  const color = info.pct > 90 ? '#dc2626' : info.pct > 70 ? '#d97706' : '#76B900';
-
-  return (
-    <div className="flex items-center gap-1.5 px-2 py-0.5 bg-[#ffffff] border border-[#e5e5e5] text-[10px] font-mono">
-      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-        <path strokeLinecap="round" strokeLinejoin="round"
-          d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18" />
-      </svg>
-      <span className="text-[#a3a3a3]">{shortName}</span>
-      <span style={{ color }}>{info.pct}%</span>
-    </div>
-  );
-}
+// ─── Budget pill ──────────────────────────────────────────────────────────────
+// GPU pill is now <HardwareWidgetCompact /> from components/HardwareWidget.tsx,
+// which also renders persistent-mount status — useful on cloud sessions.
 
 function BudgetPill() {
   const [spend, setSpend] = useState<string | null>(null);
@@ -294,13 +265,16 @@ function EmptyState({
                 </Link>
               )}
             </div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:min-w-[420px]">
-              {readiness.map(item => (
-                <div key={item.label} className="rounded-md border border-[#e5e5e5] bg-white px-3 py-2 text-left">
-                  <div className="text-[9px] font-mono uppercase tracking-[0.16em] text-[#737373]">{item.label}</div>
-                  <div className="mt-1 truncate text-sm font-semibold text-[#0a0a0a]">{item.value}</div>
-                </div>
-              ))}
+            <div className="flex flex-col gap-3 lg:min-w-[420px]">
+              <HardwareWidgetHero />
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                {readiness.map(item => (
+                  <div key={item.label} className="rounded-md border border-[#e5e5e5] bg-white px-3 py-2 text-left">
+                    <div className="text-[9px] font-mono uppercase tracking-[0.16em] text-[#737373]">{item.label}</div>
+                    <div className="mt-1 truncate text-sm font-semibold text-[#0a0a0a]">{item.value}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -1246,7 +1220,7 @@ export default function ChatPage() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <GPUPill />
+            <HardwareWidgetCompact />
             <BudgetPill />
             {/* Share button */}
             {messages.length > 0 && (
