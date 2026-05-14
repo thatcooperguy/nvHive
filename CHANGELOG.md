@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.36.0] - 2026-05-14
+
+### Security
+- **Command injection** in the `process_kill` / `process_list` LLM tools
+  (`nvh/core/browser_tools.py`) is blocked. Both tools now invoke subprocess
+  with argv (no shell) and reject non-numeric process names that don't match
+  a strict whitelist. Previously a tool call could expand shell metacharacters.
+- **XSS** in the web root layout is fixed. `NEXT_PUBLIC_API_URL` is now
+  JSON-encoded before being inlined into the bootstrap script tag.
+- **API key persistence** in the web client no longer uses `localStorage`
+  (origin-wide, persists indefinitely). Keys now live only in `sessionStorage`
+  (per-tab, cleared on close), with a one-time migration that moves legacy
+  keys over and deletes them.
+
+### Added
+- `nvh/api/services/` service layer; `QueryService` is the first migrated
+  route, establishing the pattern for decoupling business logic from HTTP
+  handlers. CouncilService / CompareService are the next migrations.
+- `nvh/integrations/installs/_base.py` with the `PackInstaller` ABC and
+  `PackInstallerRegistry`, formalizing the shape the 7 free-function
+  installers in `studio_packs.py` will migrate to.
+- `typecheck` CI job — strict mypy gates on `nvh/sandbox` and `nvh/catalog`
+  today, with a repo-wide informational pass that tracks drift. Modules join
+  the gated list as they reach zero strict errors.
+
+### Changed
+- `nvh/integrations/` is reorganized into subpackages by concern:
+  `installs/`, `diagnostics/`, `services/`, `workspace/`, `wizard/`.
+  Back-compat re-exports in `nvh/integrations/__init__.py` keep
+  `from nvh.integrations import studio_packs` style imports working.
+- `start-linux.sh` now refuses to fall back to ephemeral `$HOME/.nvh` on
+  cloud GPU desktops without an explicit `NVH_ALLOW_EPHEMERAL=1` opt-in,
+  preventing silent data loss when the OS disk is wiped on reconnect.
+- Wizard helpers (`setup_agent.py`, `comfyui.py`) now log silent fallbacks
+  instead of swallowing every exception, so failed probes are diagnosable.
+- README and docs/GITHUB_LISTING.md drop the "self-healing" claim in favor
+  of "self-diagnosing with one-click rootless repairs" — the wizard surfaces
+  repairs but doesn't auto-run them without user confirmation.
+
+### Fixed
+- 11 pre-existing ruff I001 import-order errors that had been keeping CI
+  red on `main`.
+- `test_stream_multiple_chunks` was mocking `litellm.acompletion` after
+  `OllamaProvider.stream` had switched to `_direct_stream` over httpx
+  NDJSON; the mock had no effect and CI was failing on every run trying
+  to reach `http://localhost:11434`.
+
 ## [0.35.1] - 2026-05-01
 
 ### Added
