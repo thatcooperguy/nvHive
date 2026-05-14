@@ -7,13 +7,14 @@ should we read, and what is the next safe rootless action?
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import socket
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 

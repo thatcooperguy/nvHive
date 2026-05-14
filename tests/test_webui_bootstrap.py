@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
-import time
 import subprocess
+import time
 from types import SimpleNamespace
 
 import nvh.cli.main as cli_main
@@ -25,8 +25,8 @@ def test_rootless_node_install_assume_yes_skips_prompt(monkeypatch, tmp_path):
     import shutil
     import subprocess
 
-    from nvh.integrations import node_runtime
     import nvh.integrations.storage as storage_mod
+    from nvh.integrations import node_runtime
 
     layout = SimpleNamespace(
         runtime_dir=tmp_path / "runtimes",

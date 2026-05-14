@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import time
 import json
 import re
+import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from typing import Any

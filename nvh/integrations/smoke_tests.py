@@ -9,7 +9,11 @@ from typing import Any
 
 from nvh.integrations.comfyui import detect_comfyui
 from nvh.integrations.storage import storage_status
-from nvh.integrations.studio_packs import _node_runtime_status, catalog_with_status, ollama_runtime_doctor
+from nvh.integrations.studio_packs import (
+    _node_runtime_status,
+    catalog_with_status,
+    ollama_runtime_doctor,
+)
 
 
 @dataclass(frozen=True)
