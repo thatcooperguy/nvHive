@@ -40,6 +40,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
+from nvh.api.services import QueryService
 from nvh.core.agents import generate_agents, get_preset_agents, list_presets
 from nvh.core.engine import BudgetExceededError, Engine
 from nvh.providers.base import (
@@ -47,6 +48,9 @@ from nvh.providers.base import (
     Message,
     ProviderError,
 )
+
+# Service-layer singletons. Stateless; safe to share across requests.
+_query_service = QueryService()
 from nvh.utils.gpu import (
     check_oom_risk,
     detect_gpu_status,
@@ -1869,6 +1873,8 @@ async def query(request: QueryRequest, _auth: None = Depends(require_auth)) -> A
 
     try:
         if request.attachments:
+            # Multimodal path stays inline for now — it pokes private engine
+            # state. Tracked for migration in nvh/api/services/__init__.py.
             await engine.initialize()
             await engine._check_budget()
             config = engine.config
@@ -1901,14 +1907,14 @@ async def query(request: QueryRequest, _auth: None = Depends(require_auth)) -> A
             except Exception:
                 logger.debug("Query logging failed for multimodal query", exc_info=True)
         else:
-            response = await engine.query(
+            response = await _query_service.execute(
+                engine,
                 prompt=request.prompt,
                 provider=request.provider,
                 model=request.model,
                 system_prompt=request.system_prompt,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
-                stream=False,
             )
     except BudgetExceededError as exc:
         raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc))
