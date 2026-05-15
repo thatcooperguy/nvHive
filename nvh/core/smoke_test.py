@@ -29,6 +29,13 @@ class TestResult:
     duration_ms: int = 0
     message: str = ""
     error: str = ""
+    # Why: previously a 429 was silently re-labeled ``passed=True``, which
+    # masked real product failures (no providers reachable) behind a green
+    # smoke-test report. ``soft_pass`` lets callers tell "actually worked"
+    # apart from "environment-soft-failed but we didn't surface it" without
+    # changing the existing pass/fail contract for non-strict CI.
+    soft_pass: bool = False
+    soft_reason: str = ""
 
 
 @dataclass
@@ -47,6 +54,19 @@ class SmokeTestReport:
     @property
     def total(self) -> int:
         return len(self.results)
+
+    @property
+    def soft_passed(self) -> int:
+        return sum(1 for r in self.results if r.soft_pass)
+
+    def strict_failed(self) -> int:
+        """Count of results that ``--strict`` mode would treat as failures.
+
+        A strict run fails on hard failures *and* on soft-passes, so a CI
+        gate using ``strict_failed() == 0`` actually blocks on "all
+        providers 429'd" instead of cheerfully merging.
+        """
+        return self.failed + self.soft_passed
 
 
 def _soft_fail_reason(error: str) -> tuple[bool, str]:
@@ -109,10 +129,12 @@ async def run_smoke_tests(
     start = time.monotonic()
 
     def add(name: str, category: str, passed: bool,
-            duration_ms: int = 0, message: str = "", error: str = ""):
+            duration_ms: int = 0, message: str = "", error: str = "",
+            soft_pass: bool = False, soft_reason: str = ""):
         report.results.append(TestResult(
             name=name, category=category, passed=passed,
             duration_ms=duration_ms, message=message, error=error,
+            soft_pass=soft_pass, soft_reason=soft_reason,
         ))
 
     # ===== CORE IMPORTS =====
@@ -173,13 +195,15 @@ async def run_smoke_tests(
                     add(f"Provider: {name}", "Providers", soft,
                         duration_ms=ms,
                         message=label if soft else "",
-                        error="" if soft else error)
+                        error="" if soft else error,
+                        soft_pass=soft, soft_reason=label if soft else "")
             except Exception as e:
                 error = str(e)[:200]
                 soft, label = _soft_fail_reason(error)
                 add(f"Provider: {name}", "Providers", soft,
                     message=label if soft else "",
-                    error="" if soft else error)
+                    error="" if soft else error,
+                    soft_pass=soft, soft_reason=label if soft else "")
 
     # ===== QUERY EXECUTION =====
     if engine and not quick:
@@ -189,11 +213,16 @@ async def run_smoke_tests(
                 duration_ms=ms,
                 message=f"{resp.provider}/{resp.model} — {len(resp.content)} chars")
         except Exception as e:
-            error = str(e)[:100]
+            error = str(e)[:200]
             is_rate_limit = "rate" in error.lower() or "429" in error
+            soft_reason = (
+                "all providers rate limited (transient)"
+                if is_rate_limit else ""
+            )
             add("Smart query", "Query", is_rate_limit,
-                message="all providers rate limited (transient)" if is_rate_limit else "",
-                error="" if is_rate_limit else error)
+                message=soft_reason,
+                error="" if is_rate_limit else error,
+                soft_pass=is_rate_limit, soft_reason=soft_reason)
 
         # Safe mode
         if engine.registry.has("ollama"):

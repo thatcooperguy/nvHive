@@ -81,6 +81,47 @@ Since all data is stored locally on your device:
 - **Portability**: Copy ~/.hive/ to another machine
 - **Control**: You choose which providers to use and what data to share
 
+## Opt-In Install Telemetry
+
+NVHive ships an **opt-in, local-only** install-health logger
+(`nvh.telemetry`). It is **off by default** and **never makes network
+requests**.
+
+When enabled (via `NVH_TELEMETRY=1` or `nvh.telemetry.set_enabled(True)`),
+three events get appended to `$NVH_HOME/telemetry/events.jsonl`:
+
+| Event | When it fires | Properties recorded |
+|---|---|---|
+| `install_completed` | First successful `nvh init` / setup wizard | platform, nvh version |
+| `first_wizard_turn` | First successful end-to-end Wizard reply | provider, model, duration (ms) |
+| `reconnect_survived` | Workspace resumed after a disconnect | duration since disconnect (ms) |
+
+Every event includes a stable anonymous `install_id` (UUID4, generated
+once on first emit and cached at `$NVH_HOME/telemetry/install_id`) plus
+the running nvHive version.
+
+**What is never recorded** — and is dropped by the redaction filter even
+if a caller tries to pass it:
+
+- Prompts, completions, conversation text
+- API keys, bearer tokens, passwords
+- File contents, file paths beyond `$NVH_HOME`
+- Personally identifying information
+
+**Reading and deleting your telemetry:**
+
+```bash
+# show the current state
+cat $NVH_HOME/telemetry/events.jsonl
+
+# disable and wipe
+nvh telemetry --disable   # not yet wired; use: rm -rf $NVH_HOME/telemetry
+```
+
+The bundle produced by `nvh selfcheck` includes a *summary* of the
+telemetry log (event counts only — no individual records). You choose
+whether to share the bundle.
+
 ## Changes
 
 This policy may be updated. Check the repository for the latest version.
