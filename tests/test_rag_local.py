@@ -126,6 +126,70 @@ async def test_ingest_walks_dir_and_skips_junk(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_ingest_reads_pdf_when_pypdf_is_available(tmp_path: Path) -> None:
+    """When pypdf is installed and the corpus has a .pdf, the walker should
+    pull text from it and embed the chunks alongside the markdown files."""
+    from nvh.integrations.rag import ingest_folder
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.md").write_text("hello world")
+    pdf_path = corpus / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 placeholder\n%%EOF")  # bytes only; we mock the reader
+
+    # Fake pypdf module exposes a PdfReader that returns one page with text.
+    class _FakePage:
+        def extract_text(self) -> str:
+            return "Abstract: this paper claims rootless GPU desktops are good."
+
+    class _FakeReader:
+        def __init__(self, path: str) -> None:
+            self.pages = [_FakePage()]
+
+    import sys
+    import types
+
+    fake_pypdf = types.ModuleType("pypdf")
+    fake_pypdf.PdfReader = _FakeReader  # type: ignore[attr-defined]
+
+    fake_embed = AsyncMock(side_effect=lambda texts, **kw: [[1.0, 0.0]] * len(texts))
+    with (
+        patch.dict(sys.modules, {"pypdf": fake_pypdf}),
+        patch("nvh.integrations.rag.ingest.embed_texts", new=fake_embed),
+    ):
+        result = await ingest_folder(str(corpus), home_dir=tmp_path / "home", collection="t")
+
+    assert result["ok"] is True
+    assert result["files_ingested"] == 2  # md + pdf
+    # Should NOT advertise "missing pypdf" when pypdf was usable.
+    assert "pdfs_skipped_missing_pypdf" not in result
+
+
+@pytest.mark.asyncio
+async def test_ingest_reports_pdfs_skipped_when_pypdf_missing(tmp_path: Path) -> None:
+    """If the corpus has a PDF but pypdf isn't installed, surface a hint so
+    the user can install `nvhive[rag]` — but don't fail the whole walk."""
+    from nvh.integrations.rag import ingest_folder
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.md").write_text("hello world")
+    (corpus / "paper.pdf").write_bytes(b"%PDF-1.4\n%%EOF")
+
+    fake_embed = AsyncMock(side_effect=lambda texts, **kw: [[1.0, 0.0]] * len(texts))
+    with (
+        patch("nvh.integrations.rag.ingest._can_read_pdf", return_value=False),
+        patch("nvh.integrations.rag.ingest.embed_texts", new=fake_embed),
+    ):
+        result = await ingest_folder(str(corpus), home_dir=tmp_path / "home", collection="t")
+
+    assert result["ok"] is True
+    assert result["files_ingested"] == 1  # md only
+    assert result.get("pdfs_skipped_missing_pypdf") == 1
+    assert "pip install nvhive[rag]" in result["hint"]
+
+
+@pytest.mark.asyncio
 async def test_ingest_surfaces_embed_failures_clearly(tmp_path: Path) -> None:
     """A mid-walk embed failure should return ok=False with a useful message,
     not a half-indexed collection that pretends success."""

@@ -1,9 +1,9 @@
 """Folder → chunks → embeddings → SQLite ingest.
 
-The ingest walker reads .md, .txt, .rst, and .py/.js/.ts source files. We
-deliberately skip binary formats here — PDFs and Word docs need a parsing
-layer we haven't committed to yet, and pulling pypdf+docx2txt for a v1
-RAG feature adds dependency weight users don't necessarily want.
+The walker reads .md/.txt/.rst and common source-code extensions natively.
+PDFs are supported via pypdf when the ``nvhive[rag]`` extra is installed;
+without it, PDFs in the walk are reported back to the caller with a hint
+so the user can install the optional dep rather than getting a silent skip.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Conservative default set — text files we can read without a parser.
 # Source code is included because users frequently want to RAG over a repo.
+# PDFs are included only when pypdf is installed; ``_can_read_pdf`` gates them.
 DEFAULT_EXTENSIONS = (
     ".md", ".markdown", ".txt", ".rst",
     ".py", ".js", ".jsx", ".ts", ".tsx",
@@ -27,6 +28,7 @@ DEFAULT_EXTENSIONS = (
     ".c", ".cc", ".cpp", ".h", ".hpp",
     ".json", ".yaml", ".yml", ".toml",
     ".html", ".xml", ".css",
+    ".pdf",
 )
 
 # Skip obvious junk so users don't accidentally embed `node_modules/`.
@@ -37,6 +39,18 @@ SKIP_DIRS = frozenset({
 })
 
 MAX_FILE_BYTES = 1_000_000  # 1 MB cap — protects against checked-in blobs
+# PDFs are usually larger than text. Bumping the cap just for PDFs keeps the
+# text-file limit tight without forcing users to skip every research paper.
+MAX_PDF_BYTES = 20_000_000  # 20 MB
+
+
+def _can_read_pdf() -> bool:
+    try:
+        import pypdf  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
 
 
 def _iter_files(root: Path, extensions: tuple[str, ...]) -> list[Path]:
@@ -49,15 +63,40 @@ def _iter_files(root: Path, extensions: tuple[str, ...]) -> list[Path]:
         if path.suffix.lower() not in extensions:
             continue
         try:
-            if path.stat().st_size > MAX_FILE_BYTES:
-                continue
+            size = path.stat().st_size
         except OSError:
+            continue
+        cap = MAX_PDF_BYTES if path.suffix.lower() == ".pdf" else MAX_FILE_BYTES
+        if size > cap:
             continue
         files.append(path)
     return files
 
 
+def _read_pdf(path: Path) -> str:
+    """Extract text from a PDF via pypdf. Returns "" on parse failure so the
+    walker treats malformed PDFs the same as empty files (skip, don't fail)."""
+    try:
+        import pypdf
+    except ImportError:
+        return ""
+    try:
+        reader = pypdf.PdfReader(str(path))
+        pages: list[str] = []
+        for page in reader.pages:
+            try:
+                pages.append(page.extract_text() or "")
+            except Exception as exc:
+                logger.debug("pypdf page extract failed in %s: %s", path.name, exc)
+        return "\n\n".join(p for p in pages if p.strip())
+    except Exception as exc:
+        logger.warning("Failed to read PDF %s: %s", path.name, exc)
+        return ""
+
+
 def _read_text(path: Path) -> str:
+    if path.suffix.lower() == ".pdf":
+        return _read_pdf(path)
     try:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -84,7 +123,9 @@ async def ingest_folder(
     folder doesn't duplicate rows.
 
     Returns ``{ok, collection, files_scanned, files_ingested, chunks, skipped,
-    model, error?}``.
+    model, pdfs_skipped_missing_pypdf?, error?}``. The ``pdfs_skipped_...``
+    key is only present when PDFs were found in the walk but pypdf isn't
+    installed — the UI uses it to suggest ``pip install nvhive[rag]``.
     """
     root = Path(path).expanduser().resolve()
     collection = collection or default_collection()
@@ -106,6 +147,9 @@ async def ingest_folder(
             "files_scanned": len(files),
         }
 
+    pdf_capable = _can_read_pdf()
+    pdfs_skipped_missing = 0
+
     model = embed_model_name()
     ingested = 0
     total_chunks = 0
@@ -113,6 +157,9 @@ async def ingest_folder(
 
     with RagStore(home_dir=home_dir) as store:
         for file_path in files:
+            if file_path.suffix.lower() == ".pdf" and not pdf_capable:
+                pdfs_skipped_missing += 1
+                continue
             text = _read_text(file_path)
             if not text.strip():
                 skipped.append(str(file_path))
@@ -146,7 +193,7 @@ async def ingest_folder(
             ingested += 1
             total_chunks += len(chunks)
 
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "collection": collection,
         "files_scanned": len(files),
@@ -155,3 +202,10 @@ async def ingest_folder(
         "skipped": len(skipped),
         "model": model,
     }
+    if pdfs_skipped_missing:
+        result["pdfs_skipped_missing_pypdf"] = pdfs_skipped_missing
+        result["hint"] = (
+            f"Found {pdfs_skipped_missing} PDF(s) but pypdf isn't installed. "
+            "Install with `pip install nvhive[rag]` to index PDFs too."
+        )
+    return result

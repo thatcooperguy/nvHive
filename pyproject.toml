@@ -77,6 +77,11 @@ vision = [
 browser = [
     "playwright>=1.40",
 ]
+rag = [
+    # PDF parsing for the local RAG ingest walker. pypdf is pure-python so it
+    # works on every platform we ship without a system dependency.
+    "pypdf>=4.0",
+]
 all = [
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",
@@ -87,6 +92,7 @@ all = [
     "python-xlib>=0.33; sys_platform == 'linux'",
     "Pillow>=10.0",
     "playwright>=1.40",
+    "pypdf>=4.0",
 ]
 
 [project.urls]
