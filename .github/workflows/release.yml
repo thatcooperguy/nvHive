@@ -25,6 +25,11 @@ on:
         required: true
         type: string
 
+# Opt into the Node.js 24 runtime for JavaScript actions ahead of the June 2,
+# 2026 forced cutover (see ci.yml for the rationale).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   # Python wheel + sdist. These are the canonical release artifacts -
   # PyPI consumes them and users can `pip install` directly from a

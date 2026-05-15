@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# Opt into the Node.js 24 runtime for JavaScript actions ahead of the June 2,
+# 2026 forced cutover. All of our pinned actions (checkout@v5, setup-python@v6,
+# setup-node@v5, upload-artifact@v5, codecov-action@v5) still declare Node 20
+# but run cleanly on Node 24; this silences the deprecation warning and surfaces
+# any incompatibility now rather than on cutover day.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   # Python test matrix: Linux launch target only.
   #
@@ -78,7 +86,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          # Node 22 is the current LTS line (until April 2027). Matches
+          # NODE_MAJOR_VERSION in nvh/integrations/installs/node_runtime.py,
+          # so the WebUI builds with the same Node we install on user
+          # machines. Node 20 enters maintenance mode April 2026; the
+          # WebUI build path shouldn't ride a runtime that's about to
+          # stop receiving security fixes.
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
       - name: Install
