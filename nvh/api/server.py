@@ -1581,6 +1581,55 @@ async def wizard_reconnect(
     return _response_envelope(run_reconnect(home_dir=request.home_dir))
 
 
+class WizardChatTurn(BaseModel):
+    role: str = Field(..., min_length=1, max_length=16)
+    content: str = Field(..., max_length=20_000)
+
+
+class WizardChatRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=20_000)
+    history: list[WizardChatTurn] = Field(default_factory=list, max_length=40)
+    home_dir: str | None = None
+
+
+@app.post("/v1/wizard/chat", summary="AI Wizard chat — live-state-grounded conversation")
+async def wizard_chat_endpoint(
+    request: WizardChatRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Answer a Wizard question grounded in the live workspace state.
+
+    Returns the LLM-routed answer when any provider is healthy, falling
+    back to the deterministic setup helper when no model is reachable.
+    Either way the response shape is stable: ``{answer, mode, context, ...}``.
+    """
+    from nvh.integrations.wizard.chat import wizard_chat as _wizard_chat
+
+    history = [{"role": t.role, "content": t.content} for t in request.history]
+    result = await _wizard_chat(
+        request.question,
+        history=history,
+        home_dir=request.home_dir,
+    )
+    return _response_envelope(result)
+
+
+@app.get("/v1/wizard/context", summary="AI Wizard live workspace context snapshot")
+async def wizard_context_endpoint(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the unified workspace snapshot the Wizard reads on every turn.
+
+    Useful for the WebUI to render hardware/storage/job state alongside the
+    chat without three separate requests, and for debugging "what does the
+    Wizard see right now?" questions.
+    """
+    from nvh.integrations.wizard.context import wizard_context
+
+    return _response_envelope(wizard_context(home_dir=home_dir))
+
+
 @app.get("/v1/setup/smoke-tests", summary="Run lightweight app smoke checks")
 async def setup_smoke_tests(
     home_dir: str | None = None,

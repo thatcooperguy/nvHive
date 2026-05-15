@@ -1157,6 +1157,47 @@ export async function wizardReconnect(homeDir?: string): Promise<WizardReconnect
   return apiPost<WizardReconnectResult>('/v1/wizard/reconnect', { home_dir: homeDir });
 }
 
+// ─── AI Wizard chat ──────────────────────────────────────────────────────────
+
+export interface WizardChatTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface WizardChatResult {
+  answer: string;
+  mode: 'llm' | 'deterministic';
+  used_provider?: string | null;
+  used_model?: string | null;
+  fallback_reason?: string;
+  context?: Record<string, unknown>;
+}
+
+/**
+ * Send a turn to the AI Wizard chat. Grounded in live workspace state
+ * (GPU, storage, providers, jobs, receipts, vault). Routes through the
+ * engine when available; falls back to the deterministic setup helper.
+ */
+export async function wizardChat(
+  question: string,
+  options: { history?: WizardChatTurn[]; homeDir?: string } = {},
+): Promise<WizardChatResult> {
+  return apiPost<WizardChatResult>('/v1/wizard/chat', {
+    question,
+    history: options.history ?? [],
+    home_dir: options.homeDir,
+  });
+}
+
+/**
+ * Get the live workspace snapshot the Wizard sees. Useful for the
+ * "what does the Wizard know right now?" debug surface.
+ */
+export async function getWizardContext(homeDir?: string): Promise<Record<string, unknown>> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<Record<string, unknown>>(`/v1/wizard/context${qs}`);
+}
+
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
 
 /** Derive the WebSocket base URL from the HTTP base URL. */
