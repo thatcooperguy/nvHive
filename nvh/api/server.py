@@ -3925,6 +3925,7 @@ _PROVIDER_KEY_URLS = {
     "perplexity": "https://www.perplexity.ai/settings/api",
     "together": "https://api.together.ai/settings/api-keys",
     "openrouter": "https://openrouter.ai/settings/keys",
+    "llm7": "https://token.llm7.io/",
 }
 
 _PROVIDER_DOC_URLS = {
@@ -3947,6 +3948,35 @@ _PROVIDER_DOC_URLS = {
     "perplexity": "https://docs.perplexity.ai/",
     "together": "https://docs.together.ai/",
     "openrouter": "https://openrouter.ai/docs/quickstart",
+    "llm7": "https://llm7.io/",
+}
+
+# Provider logo slugs for the @lobehub/icons CDN. Slug names match the
+# lobehub icon ids; the frontend renders them from
+# https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/{slug}.png
+# Returns None for providers without a brand mark there.
+_PROVIDER_LOGO_SLUGS = {
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "google": "gemini",
+    "groq": "groq",
+    "mistral": "mistral",
+    "cohere": "cohere",
+    "deepseek": "deepseek",
+    "github": "github",
+    "nvidia": "nvidia",
+    "fireworks": "fireworks",
+    "cerebras": "cerebras",
+    "sambanova": "sambanova",
+    "huggingface": "huggingface",
+    "ai21": "ai21",
+    "siliconflow": "siliconflow",
+    "grok": "grok",
+    "perplexity": "perplexity",
+    "together": "together",
+    "openrouter": "openrouter",
+    "ollama": "ollama",
+    "llm7": None,
 }
 
 _PROVIDER_DEFAULT_CONFIG = {
@@ -4066,14 +4096,14 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "requires_signup": False,
             "requires_key": False,
             "signup_tier": "none",
-            "signup_url": "",
-            "key_url": "",
-            "docs_url": "https://api.llm7.io/",
+            "signup_url": "https://token.llm7.io/",
+            "key_url": "https://token.llm7.io/",
+            "docs_url": "https://llm7.io/",
             "env_var": "",
             "env_key": "",
             "placeholder": "",
             "strengths": ["No signup needed", "Anonymous access", "DeepSeek-R1 free"],
-            "free_tier_limits": "30 RPM anonymous, 120 RPM with token",
+            "free_tier_limits": "30 RPM anonymous, 120 RPM with token (optional)",
         },
     ]
 
@@ -4161,6 +4191,12 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             seen.add(p["id"])
             all_providers.append(p)
     all_providers.sort(key=lambda p: p["priority"])
+
+    # Attach a logo slug for the @lobehub/icons CDN. The frontend renders it
+    # from https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/{slug}.png
+    # Falls back to a text initial when slug is null.
+    for p in all_providers:
+        p["logo_slug"] = _PROVIDER_LOGO_SLUGS.get(p["id"])
 
     return {
         "status": "success",
@@ -4272,6 +4308,79 @@ def _enable_provider_in_config(provider: str, env_key: str) -> FilePath:
 
     config_file.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return config_file
+
+
+@app.post("/v1/setup/validate-key")
+async def validate_provider_key(
+    request: SaveKeyRequest,
+    _auth: None = Depends(require_auth),
+):
+    """Validate an API key by health-checking the provider — does not save.
+
+    Use this before save-key to give the user a real ✓/✗ instead of finding
+    out a bad key at the first query. Temporarily sets the env var so the
+    engine picks up the new key, runs the provider's health_check, then
+    restores the original environment.
+
+    Returns {"valid": bool, "error"?: str, "latency_ms"?: int, "model_count"?: int}.
+    """
+    env_key = _provider_env_var(request.provider)
+    previous_value = os.environ.get(env_key)
+    os.environ[env_key] = request.api_key
+
+    global _engine
+    try:
+        if _engine is None:
+            _engine = Engine()
+        _engine._initialized = False
+        await _engine.initialize()
+
+        provider_obj = _engine.registry.get(request.provider)
+        if provider_obj is None:
+            return {
+                "status": "success",
+                "data": {
+                    "valid": False,
+                    "error": f"Provider '{request.provider}' is registered but didn't load with the new key.",
+                },
+            }
+
+        health = await provider_obj.health_check()
+        if health.healthy:
+            return {
+                "status": "success",
+                "data": {
+                    "valid": True,
+                    "latency_ms": health.latency_ms,
+                    "model_count": health.models_available,
+                },
+            }
+        return {
+            "status": "success",
+            "data": {
+                "valid": False,
+                "error": health.error or "Provider rejected the key.",
+            },
+        }
+    except Exception as exc:
+        logger.warning("validate-key failed for %s: %s", request.provider, exc)
+        return {
+            "status": "success",
+            "data": {"valid": False, "error": str(exc)[:300]},
+        }
+    finally:
+        # Restore the previous env-var state so a failed validation doesn't
+        # leak the new key into other request handlers.
+        if previous_value is None:
+            os.environ.pop(env_key, None)
+        else:
+            os.environ[env_key] = previous_value
+        if _engine is not None:
+            try:
+                _engine._initialized = False
+                await _engine.initialize()
+            except Exception as exc:
+                logger.debug("validate-key engine re-init failed: %s", exc)
 
 
 @app.post("/v1/setup/save-key")

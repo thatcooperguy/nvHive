@@ -1534,4 +1534,6 @@ export interface FreeProvider {
   signup_url?: string;
   key_url?: string;
   docs_url?: string;
+  /** Logo slug for the @lobehub/icons CDN. Null when no brand mark is available. */
+  logo_slug?: string | null;
 }

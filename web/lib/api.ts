@@ -1078,6 +1078,15 @@ export interface FreeProvider {
   signup_url?: string;
   key_url?: string;
   docs_url?: string;
+  /** Logo slug for the @lobehub/icons CDN. Null when no brand mark is available. */
+  logo_slug?: string | null;
+}
+
+export interface ValidateKeyResult {
+  valid: boolean;
+  error?: string;
+  latency_ms?: number;
+  model_count?: number;
 }
 
 export interface FreeProvidersResult {
@@ -1095,6 +1104,14 @@ export async function getFreeProviders(): Promise<FreeProvidersResult> {
 
 export async function saveProviderKey(provider_id: string, api_key: string): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>('/v1/setup/save-key', { provider: provider_id, api_key });
+}
+
+/** Ping the provider with the proposed key. Does not save. */
+export async function validateProviderKey(
+  provider_id: string,
+  api_key: string,
+): Promise<ValidateKeyResult> {
+  return apiPost<ValidateKeyResult>('/v1/setup/validate-key', { provider: provider_id, api_key });
 }
 
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
