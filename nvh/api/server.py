@@ -1614,6 +1614,43 @@ async def wizard_chat_endpoint(
     return _response_envelope(result)
 
 
+@app.post("/v1/wizard/chat/stream", summary="AI Wizard chat — Server-Sent Events stream")
+async def wizard_chat_stream_endpoint(
+    request: WizardChatRequest,
+    _auth: None = Depends(require_auth),
+) -> StreamingResponse:
+    """Stream a Wizard turn as Server-Sent Events.
+
+    Each event is a JSON object — see ``wizard_chat_stream`` for the event
+    type taxonomy. Token events arrive as the LLM emits them so the UI can
+    render text incrementally. Tool calls and results are interleaved as
+    discrete events so the UI can show "Wizard is using X..." cards.
+    """
+    from nvh.integrations.wizard.chat import wizard_chat_stream
+
+    history = [{"role": t.role, "content": t.content} for t in request.history]
+
+    async def _event_source():
+        try:
+            async for event in wizard_chat_stream(
+                request.question,
+                history=history,
+                home_dir=request.home_dir,
+            ):
+                yield f"data: {json.dumps(event)}\n\n".encode()
+        except Exception as exc:
+            # Streaming errors can't raise to FastAPI cleanly after headers
+            # are flushed — emit them as a final event so the client sees
+            # something actionable instead of a torn-off connection.
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)[:300]})}\n\n".encode()
+
+    return StreamingResponse(
+        _event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/v1/wizard/context", summary="AI Wizard live workspace context snapshot")
 async def wizard_context_endpoint(
     home_dir: str | None = None,

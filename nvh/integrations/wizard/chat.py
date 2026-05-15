@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -294,3 +295,235 @@ async def wizard_chat(
         "tool_results": [],
         "iterations": 0,
     }
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Streaming variant — emits incremental events for the UI to render.
+# ────────────────────────────────────────────────────────────────────────────
+
+_TOOL_LINE_RE = re.compile(r"^\s*TOOL_CALL\s*:", re.IGNORECASE)
+
+
+async def _filtered_token_stream(
+    stream: AsyncIterator[Any],
+) -> AsyncIterator[tuple[str, str]]:
+    """Yield ``("token", text)`` for user-visible token deltas, hiding any
+    line that starts with ``TOOL_CALL:`` from the live stream. Also yields
+    ``("full", accumulated)`` once at the end so the caller can parse markers
+    from the complete response.
+
+    The filter buffers up to a newline so a TOOL_CALL line never bleeds into
+    the user-visible stream even if the provider chunks mid-line.
+    """
+    full_parts: list[str] = []
+    line_buf = ""
+    in_tool_line = False
+
+    async for chunk in stream:
+        delta = getattr(chunk, "delta", "") or ""
+        if not delta:
+            continue
+        full_parts.append(delta)
+        line_buf += delta
+        while "\n" in line_buf:
+            line, line_buf = line_buf.split("\n", 1)
+            if in_tool_line:
+                # We were already inside a multi-chunk TOOL_CALL line; drop it.
+                in_tool_line = False
+                continue
+            if _TOOL_LINE_RE.match(line):
+                # Tool-call line — suppress entirely.
+                continue
+            yield ("token", line + "\n")
+        # If we haven't seen a newline yet, check whether the buffer COULD be a
+        # tool-call line. If so, hold it until newline. Otherwise, flush.
+        if line_buf:
+            if _TOOL_LINE_RE.match(line_buf):
+                in_tool_line = True
+            elif in_tool_line:
+                pass  # keep buffering until newline ends the tool line
+            elif "TOOL_CALL".startswith(line_buf.strip()) or line_buf.strip().startswith("TOOL_CALL"):
+                # Could be start of TOOL_CALL — keep buffering.
+                pass
+            else:
+                yield ("token", line_buf)
+                line_buf = ""
+
+    # End of stream — flush any remainder unless it's a tool line.
+    if line_buf and not _TOOL_LINE_RE.match(line_buf) and not in_tool_line:
+        yield ("token", line_buf)
+
+    yield ("full", "".join(full_parts))
+
+
+async def wizard_chat_stream(
+    question: str,
+    *,
+    history: list[dict[str, str]] | None = None,
+    home_dir: str | Path | None = None,
+    enable_followup: bool = True,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream a Wizard turn as a sequence of events.
+
+    Event types yielded:
+
+      - ``{"type": "iteration", "n": int}``
+      - ``{"type": "token", "text": str}``                — user-visible delta
+      - ``{"type": "tool_call", "name": str, "arguments": dict}``
+      - ``{"type": "tool_result", "name": str, "result": dict}``
+      - ``{"type": "confirm_required", "tool_calls": [...]}``  — for UI cards
+      - ``{"type": "done", "answer": str, "used_provider": str,
+            "used_model": str, "tool_calls": [...], "tool_results": [...],
+            "iterations": int}``
+      - ``{"type": "error", "error": str, "fallback": str}``  — falls back to
+        a deterministic answer; fallback is the plain-text answer.
+
+    Streaming is best-effort: if no engine is reachable, the function yields a
+    single ``error`` event with a non-streamed deterministic fallback.
+    """
+    from nvh.integrations.wizard.context import wizard_context
+    from nvh.integrations.wizard.personality import build_system_prompt
+
+    snapshot = wizard_context(home_dir=home_dir)
+
+    tool_schemas: list[dict[str, Any]] = []
+    try:
+        from nvh.integrations.wizard.tools import default_registry
+
+        tool_schemas = [t.as_public_dict() for t in default_registry().list_tools()]
+    except Exception as exc:
+        logger.debug("wizard_chat_stream: tool registry not available (%s)", exc)
+
+    system_prompt = build_system_prompt(snapshot, tools=tool_schemas)
+    history = history or []
+
+    try:
+        from nvh.api.server import get_engine  # type: ignore
+
+        engine = get_engine()
+    except Exception as exc:
+        logger.debug("wizard_chat_stream: engine unavailable (%s)", exc)
+        engine = None
+
+    if engine is None:
+        # No engine — fall back to deterministic, emit as a single chunk so the
+        # UI can show the answer without a streaming render path.
+        det = await _deterministic_fallback(question, home_dir=home_dir)
+        yield {"type": "error", "error": "engine not initialized", "fallback": det}
+        return
+
+    try:
+        from nvh.providers.base import Message
+
+        messages: list[Message] = [Message(role="system", content=system_prompt)]
+        for turn in history:
+            role = turn.get("role")
+            content = turn.get("content", "")
+            if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+                messages.append(Message(role=role, content=content))
+        messages.append(Message(role="user", content=question))
+
+        await engine.initialize()
+        await engine._check_budget()
+
+        decision = engine.router.route(query=question)
+        provider = engine.registry.get(decision.provider)
+        if provider is None:
+            raise RuntimeError(
+                f"Router picked provider '{decision.provider}' but it isn't registered",
+            )
+
+        iterations = 0
+        tool_results: list[dict[str, Any]] = []
+        pending_confirm_calls: list[dict[str, Any]] = []
+        final_text = ""
+
+        while iterations < WIZARD_FOLLOWUP_MAX_ITER:
+            iterations += 1
+            yield {"type": "iteration", "n": iterations}
+
+            stream_ctx = provider.stream(
+                messages=messages,
+                model=decision.model or None,
+                system_prompt=system_prompt,
+                temperature=engine.config.defaults.temperature,
+                max_tokens=engine.config.defaults.max_tokens,
+            )
+
+            full_text = ""
+            async for kind, payload in _filtered_token_stream(stream_ctx):
+                if kind == "token":
+                    yield {"type": "token", "text": payload}
+                else:
+                    full_text = payload
+
+            cleaned_text, tool_calls = _extract_tool_calls(full_text)
+            final_text = cleaned_text
+
+            if not tool_calls or not enable_followup:
+                pending_confirm_calls = tool_calls
+                break
+
+            messages.append(Message(role="assistant", content=cleaned_text))
+
+            ran_any_auto = False
+            deferred: list[dict[str, Any]] = []
+            for call in tool_calls:
+                yield {
+                    "type": "tool_call",
+                    "name": call["name"],
+                    "arguments": call.get("arguments", {}),
+                }
+                result = await _run_auto_tool(call["name"], call.get("arguments", {}))
+                if result.get("deferred_to_user"):
+                    deferred.append(call)
+                    continue
+                ran_any_auto = True
+                tool_results.append({
+                    "name": call["name"],
+                    "arguments": call.get("arguments", {}),
+                    "result": result,
+                })
+                yield {"type": "tool_result", "name": call["name"], "result": result}
+                messages.append(Message(
+                    role="system",
+                    content=_format_tool_result_message(call["name"], result),
+                ))
+
+            if not ran_any_auto:
+                pending_confirm_calls = deferred
+                if deferred:
+                    yield {"type": "confirm_required", "tool_calls": deferred}
+                break
+
+            if deferred:
+                pending_confirm_calls.extend(deferred)
+                yield {"type": "confirm_required", "tool_calls": deferred}
+
+        yield {
+            "type": "done",
+            "answer": final_text,
+            "used_provider": decision.provider,
+            "used_model": decision.model,
+            "tool_calls": pending_confirm_calls,
+            "tool_results": tool_results,
+            "iterations": iterations,
+        }
+    except Exception as exc:
+        logger.info("wizard_chat_stream: LLM path failed (%s)", exc)
+        det = await _deterministic_fallback(question, home_dir=home_dir)
+        yield {"type": "error", "error": str(exc)[:300], "fallback": det}
+
+
+async def _deterministic_fallback(question: str, *, home_dir: str | Path | None) -> str:
+    try:
+        from nvh.integrations.wizard.setup_agent import setup_assistant_reply
+
+        det = setup_assistant_reply(question, home_dir=home_dir)
+        return det.get("answer") if isinstance(det, dict) else str(det)
+    except Exception as exc:
+        logger.warning("wizard_chat_stream: deterministic fallback failed: %s", exc)
+        return (
+            "Sorry — I couldn't reach a model and the offline helper also "
+            "errored. Open Setup → Diagnostics for the latest status."
+        )
