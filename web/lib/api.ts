@@ -1164,6 +1164,11 @@ export interface WizardChatTurn {
   content: string;
 }
 
+export interface WizardChatToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
 export interface WizardChatResult {
   answer: string;
   mode: 'llm' | 'deterministic';
@@ -1171,6 +1176,7 @@ export interface WizardChatResult {
   used_model?: string | null;
   fallback_reason?: string;
   context?: Record<string, unknown>;
+  tool_calls?: WizardChatToolCall[];
 }
 
 /**
