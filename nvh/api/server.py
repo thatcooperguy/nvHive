@@ -1754,6 +1754,37 @@ async def rag_collections_endpoint(
     return _response_envelope({"collections": list_collections(home_dir=home_dir)})
 
 
+class WebSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=400)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+@app.post("/v1/web-search", summary="Web search via the active backend (DDG/SearXNG/Brave)")
+async def web_search_endpoint(
+    request: WebSearchRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return top-k web hits for ``query`` via the active backend.
+
+    Backend is selected per-call by environment: ``NVH_SEARXNG_URL`` wins
+    if set, otherwise ``BRAVE_API_KEY``, otherwise the DuckDuckGo HTML
+    fallback. The Wizard's `web_search` tool is a thin wrapper over this
+    same call so chat and direct API consumers share one implementation.
+    """
+    from nvh.integrations.web_search import web_search
+
+    result = await web_search(request.query, top_k=request.top_k)
+    return _response_envelope(result)
+
+
+@app.get("/v1/web-search/backend", summary="Report the active web-search backend")
+async def web_search_backend_endpoint(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Return ``{backend}`` so the UI can show which path is live."""
+    from nvh.integrations.web_search import active_backend
+
+    return _response_envelope({"backend": active_backend()})
+
+
 @app.get("/v1/setup/smoke-tests", summary="Run lightweight app smoke checks")
 async def setup_smoke_tests(
     home_dir: str | None = None,
