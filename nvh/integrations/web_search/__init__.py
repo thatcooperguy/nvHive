@@ -18,7 +18,14 @@ from nvh.integrations.web_search.client import (
     SearchError,
     SearchResult,
     active_backend,
+    backend_recommendation,
     web_search,
 )
 
-__all__ = ["SearchError", "SearchResult", "active_backend", "web_search"]
+__all__ = [
+    "SearchError",
+    "SearchResult",
+    "active_backend",
+    "backend_recommendation",
+    "web_search",
+]

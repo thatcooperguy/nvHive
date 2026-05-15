@@ -212,3 +212,89 @@ def test_wizard_registry_includes_web_search() -> None:
     # Schema advertises the two params
     assert "query" in tool.parameters
     assert "top_k" in tool.parameters
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Fragility nudge — when DDG breaks, the user should learn how to upgrade.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def test_backend_recommendation_flags_ddg_as_fragile(monkeypatch) -> None:
+    """On the DDG fallback, callers should get a 'fragile' durability flag
+    plus concrete upgrade options."""
+    from nvh.integrations.web_search import backend_recommendation
+
+    monkeypatch.delenv("NVH_SEARXNG_URL", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    rec = backend_recommendation()
+    assert rec["backend"] == "duckduckgo"
+    assert rec["durability"] == "fragile"
+    names = {u["name"] for u in rec["upgrades"]}
+    assert "SearXNG" in names
+    assert "Brave Search" in names
+    # Each upgrade names the env var the user needs to set.
+    assert any(u["env"] == "NVH_SEARXNG_URL" for u in rec["upgrades"])
+    assert any(u["env"] == "BRAVE_API_KEY" for u in rec["upgrades"])
+
+
+def test_backend_recommendation_marks_searxng_as_stable(monkeypatch) -> None:
+    """When SearXNG is configured the rec block should be informational only —
+    no upgrade suggestions, durability stable."""
+    from nvh.integrations.web_search import backend_recommendation
+
+    monkeypatch.setenv("NVH_SEARXNG_URL", "https://searx.example.com")
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    rec = backend_recommendation()
+    assert rec["backend"] == "searxng"
+    assert rec["durability"] == "stable"
+    assert rec["upgrades"] == []
+
+
+def test_backend_recommendation_marks_brave_as_stable(monkeypatch) -> None:
+    from nvh.integrations.web_search import backend_recommendation
+
+    monkeypatch.delenv("NVH_SEARXNG_URL", raising=False)
+    monkeypatch.setenv("BRAVE_API_KEY", "brv_x")
+
+    rec = backend_recommendation()
+    assert rec["backend"] == "brave"
+    assert rec["durability"] == "stable"
+    assert rec["upgrades"] == []
+
+
+@pytest.mark.asyncio
+async def test_web_search_attaches_hint_on_ddg_failure(monkeypatch) -> None:
+    """A DDG SearchError must surface a `hint` field on the envelope so the
+    user sees how to switch to a durable backend without going hunting."""
+    monkeypatch.delenv("NVH_SEARXNG_URL", raising=False)
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    with patch(
+        "nvh.integrations.web_search.backends.duckduckgo_search",
+        new=AsyncMock(side_effect=SearchError("DDG layout changed")),
+    ):
+        result = await web_search("anything")
+
+    assert result["ok"] is False
+    assert "hint" in result
+    assert "NVH_SEARXNG_URL" in result["hint"]
+    assert "BRAVE_API_KEY" in result["hint"]
+
+
+@pytest.mark.asyncio
+async def test_web_search_no_hint_on_searxng_failure(monkeypatch) -> None:
+    """SearXNG failures don't get the DDG nudge — the user already picked a
+    durable backend, the message should describe their actual setup."""
+    monkeypatch.setenv("NVH_SEARXNG_URL", "https://searx.example.com")
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+
+    with patch(
+        "nvh.integrations.web_search.backends.searxng_search",
+        new=AsyncMock(side_effect=SearchError("SearXNG returned no results.")),
+    ):
+        result = await web_search("anything")
+
+    assert result["ok"] is False
+    assert "hint" not in result
