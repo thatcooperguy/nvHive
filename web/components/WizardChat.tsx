@@ -18,9 +18,14 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import AgentProfilePicker from '@/components/AgentProfilePicker';
 import {
+  createConversation,
   executeWizardTool,
   listWizardTools,
+  pinConversation,
+  saveVaultMemory,
+  uploadAndIngest,
   wizardChatStream,
   type WizardChatToolCall,
   type WizardChatToolResult,
@@ -44,6 +49,12 @@ interface Message {
   mode?: 'llm' | 'deterministic';
   usedProvider?: string | null;
   usedModel?: string | null;
+  // Cost + latency + fallback signal for the meter footer. All optional —
+  // the streaming path only fills these on `done`, the non-streaming path
+  // fills them at result time. Footer hides values that are zero/missing.
+  costUsd?: number;
+  latencyMs?: number;
+  fallbackFrom?: string | null;
 }
 
 function makeId(): string {
@@ -60,9 +71,120 @@ export default function WizardChat() {
   // perceived-latency win — even before the first token arrives, the user sees
   // the Wizard moving.
   const [iterationStatus, setIterationStatus] = useState<string | null>(null);
+  // Drag-drop ingest state. dragActive controls the overlay; uploading is the
+  // "we're embedding your files right now" indicator under the chat.
+  const [dragActive, setDragActive] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  // Conversation id is created on first user message — until then chats are
+  // not persisted. /save, /pin, and reconnect-resume all key off this id.
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  // Active agent profile name. "wizard" = default persona. Picker swaps this
+  // and the next turn gets the new persona + LLM preferences via the chat
+  // stream's `profile` field.
+  const [profile, setProfile] = useState<string>('wizard');
   const scrollRef = useRef<HTMLDivElement>(null);
   // Abort any in-flight stream when the user re-sends or unmounts.
   const abortRef = useRef<AbortController | null>(null);
+
+  /** Slash-command handler. Returns true if the input was consumed as a
+   * command (so caller should NOT forward it to the Wizard chat). */
+  const handleSlashCommand = async (raw: string): Promise<boolean> => {
+    const text = raw.trim();
+    if (!text.startsWith('/')) return false;
+    const [cmd, ...rest] = text.slice(1).split(/\s+/);
+    const arg = rest.join(' ').trim();
+
+    const announce = (content: string) => {
+      setMessages(prev => [...prev, { id: makeId(), role: 'system', content }]);
+    };
+
+    switch (cmd.toLowerCase()) {
+      case 'help':
+      case '?':
+        announce(
+          'Available commands: /save [title] (save chat to vault), ' +
+            '/pin (pin this chat for reconnect resume), ' +
+            '/clear (reset this chat), ' +
+            '/tools (list available Wizard tools), ' +
+            '/help (this message).',
+        );
+        return true;
+      case 'clear':
+        abortRef.current?.abort();
+        setMessages([]);
+        setConversationId(null);
+        return true;
+      case 'tools': {
+        const names = Array.from(tools.values())
+          .map(t => `• ${t.name} [${t.safety_class}] — ${t.description}`)
+          .join('\n');
+        announce(names || 'No tools registered.');
+        return true;
+      }
+      case 'pin': {
+        if (!conversationId) {
+          announce('No active conversation to pin yet — say something first.');
+          return true;
+        }
+        const ok = await pinConversation(conversationId, true);
+        announce(ok ? '✓ Pinned this chat. It will surface on next reconnect.' : 'Could not pin (server unavailable).');
+        return true;
+      }
+      case 'save': {
+        // Roll the conversation into a Markdown vault note. Doesn't require
+        // a conversation_id since we have the in-memory thread already.
+        const title = arg || `Wizard chat ${new Date().toISOString().slice(0, 16)}`;
+        const body = messages
+          .filter(m => m.role !== 'system')
+          .map(m => `## ${m.role === 'user' ? 'You' : 'Wizard'}\n\n${m.content}`)
+          .join('\n\n');
+        if (!body.trim()) {
+          announce('Nothing to save yet.');
+          return true;
+        }
+        try {
+          await saveVaultMemory({ title, body, category: 'wizard-chats', tags: ['wizard'] });
+          announce(`✓ Saved to your vault: ${title}`);
+        } catch (err) {
+          announce(`✗ Save failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+        }
+        return true;
+      }
+      default:
+        announce(`Unknown command: /${cmd}. Type /help for the list.`);
+        return true;
+    }
+  };
+
+  const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragActive(false);
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length === 0) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const result = await uploadAndIngest(files);
+      const dropId = makeId();
+      const summary = result.ok
+        ? `Indexed ${result.files_ingested ?? 0} file${result.files_ingested === 1 ? '' : 's'} into the RAG store (${result.chunks ?? 0} chunks). You can now ask questions about them.`
+        : `Upload-ingest failed: ${result.error ?? 'unknown error'}`;
+      setMessages(prev => [
+        ...prev,
+        { id: dropId, role: 'system', content: summary },
+      ]);
+      if (result.hint) {
+        setMessages(prev => [
+          ...prev,
+          { id: makeId(), role: 'system', content: result.hint as string },
+        ]);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   // Load the tool catalog once so we can look up safety classes for any
   // tool the LLM mentions, even before the server echoes one back.
@@ -188,6 +310,14 @@ export default function WizardChat() {
   const send = async () => {
     const text = draft.trim();
     if (!text || sending) return;
+
+    // Slash commands are handled locally and never sent to the LLM.
+    if (text.startsWith('/')) {
+      setDraft('');
+      const consumed = await handleSlashCommand(text);
+      if (consumed) return;
+    }
+
     setError(null);
     setSending(true);
     setIterationStatus(null);
@@ -196,6 +326,18 @@ export default function WizardChat() {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+
+    // Lazily create a conversation on the first real message so /save and
+    // /pin have something to attach to. Failures are silent — chat still
+    // works without persistence.
+    let convId = conversationId;
+    if (!convId) {
+      const conv = await createConversation('Wizard chat');
+      if (conv?.id) {
+        convId = conv.id;
+        setConversationId(conv.id);
+      }
+    }
 
     const userMsg: Message = { id: makeId(), role: 'user', content: text };
     const assistantId = makeId();
@@ -223,7 +365,12 @@ export default function WizardChat() {
     };
 
     try {
-      for await (const event of wizardChatStream(text, { history, signal: controller.signal })) {
+      for await (const event of wizardChatStream(text, {
+        history,
+        conversationId: convId ?? undefined,
+        profile,
+        signal: controller.signal,
+      })) {
         switch (event.type) {
           case 'iteration':
             setIterationStatus(event.n === 1 ? 'thinking…' : `reacting (round ${event.n})…`);
@@ -264,6 +411,9 @@ export default function WizardChat() {
               usedProvider: event.used_provider,
               usedModel: event.used_model,
               iterations: event.iterations,
+              costUsd: event.cost_usd,
+              latencyMs: event.latency_ms,
+              fallbackFrom: event.fallback_from,
             }));
             setIterationStatus(null);
             break;
@@ -299,7 +449,36 @@ export default function WizardChat() {
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="relative flex h-full flex-col"
+      onDragOver={(e) => {
+        // Only react if files are being dragged in; text drags shouldn't
+        // trigger the upload overlay.
+        if (e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault();
+          setDragActive(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        // dragleave fires when crossing internal boundaries too — bail out
+        // only when the pointer actually exits the chat surface.
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        setDragActive(false);
+      }}
+      onDrop={handleDrop}
+    >
+      {dragActive && (
+        <div
+          className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-md border-2 border-dashed text-sm font-mono"
+          style={{
+            borderColor: '#76B900',
+            background: 'rgba(118, 185, 0, 0.10)',
+            color: '#5a9100',
+          }}
+        >
+          Drop to ingest files into your RAG index
+        </div>
+      )}
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-4 py-4 space-y-3"
@@ -323,6 +502,15 @@ export default function WizardChat() {
           >
             <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: '#76B900' }} />
             {iterationStatus}
+          </div>
+        )}
+        {uploading && (
+          <div
+            className="flex items-center gap-2 text-[10px] font-mono italic"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: '#76B900' }} />
+            ingesting dropped files…
           </div>
         )}
         {error && (
@@ -360,9 +548,13 @@ export default function WizardChat() {
             {sending ? 'Asking...' : 'Send'}
           </button>
         </div>
-        <div className="mt-1 text-[10px] font-mono" style={{ color: 'var(--text-faint)' }}>
-          Wizard answers from live workspace state. Press Enter to send,
-          Shift+Enter for a newline.
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono" style={{ color: 'var(--text-faint)' }}>
+          <AgentProfilePicker value={profile} onChange={setProfile} />
+          <span>
+            Press Enter to send, Shift+Enter for a newline. Type{' '}
+            <span className="text-[#76B900]">/help</span> for commands. Drop
+            files into the chat to ingest them.
+          </span>
         </div>
       </div>
     </div>
@@ -491,17 +683,40 @@ function MessageBlock({
           <ServerToolTrace trace={message.serverToolTrace} />
         )}
 
+        {!isUser && message.serverToolTrace && message.serverToolTrace.length > 0 && (
+          <SourcesFooter trace={message.serverToolTrace} />
+        )}
+
+        {!isUser && message.fallbackFrom && (
+          <div
+            className="mt-1 rounded-sm border px-2 py-1 text-[10px] font-mono"
+            style={{
+              borderColor: '#d97706',
+              background: 'rgba(217,119,6,0.08)',
+              color: '#92400e',
+            }}
+          >
+            Routed via {message.usedProvider ?? 'fallback'} — original target
+            {' '}({message.fallbackFrom}) was unavailable.
+          </div>
+        )}
+
         {message.mode === 'deterministic' && (
           <div className="mt-1 text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-faint)' }}>
             offline helper
           </div>
         )}
         {message.mode === 'llm' && message.usedProvider && (
-          <div className="mt-1 text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-faint)' }}>
-            {message.usedProvider}
-            {message.usedModel ? ` · ${message.usedModel.replace(/^.*\//, '')}` : ''}
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-faint)' }}>
+            <span>{message.usedProvider}{message.usedModel ? ` · ${message.usedModel.replace(/^.*\//, '')}` : ''}</span>
             {message.iterations && message.iterations > 1 && (
-              <> · {message.iterations} round-trips</>
+              <span>· {message.iterations} round-trips</span>
+            )}
+            {typeof message.latencyMs === 'number' && message.latencyMs > 0 && (
+              <span>· {(message.latencyMs / 1000).toFixed(1)}s</span>
+            )}
+            {typeof message.costUsd === 'number' && message.costUsd > 0 && (
+              <span>· ${message.costUsd.toFixed(message.costUsd >= 0.01 ? 3 : 5)}</span>
             )}
           </div>
         )}
@@ -732,4 +947,118 @@ function formatServerTraceSummary(
   } catch {
     return 'completed.';
   }
+}
+
+/**
+ * SourcesFooter renders inline-numbered citations beneath an answer when the
+ * Wizard pulled chunks from rag_ask, rag_ask_vault, or web_search. Each hit
+ * gets a [1], [2], … number with the source filename / URL and a click-to-
+ * expand snippet, so users can see exactly where the answer is grounded.
+ *
+ * Beats a separate sources panel (the 2023 pattern). Stitching [N] back into
+ * the answer text is a follow-up — for now numbering matches order of arrival.
+ */
+function SourcesFooter({ trace }: { trace: WizardChatToolResult[] }) {
+  const sources = collectSources(trace);
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+  if (sources.length === 0) return null;
+  return (
+    <div className="mt-2 border-t pt-2 text-[10px] font-mono" style={{ borderColor: 'var(--border)' }}>
+      <div className="mb-1 uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>
+        Sources
+      </div>
+      <div className="space-y-1">
+        {sources.map((src, i) => {
+          const isOpen = openIdx === i;
+          return (
+            <div key={`${src.label}-${i}`}>
+              <button
+                type="button"
+                onClick={() => setOpenIdx(isOpen ? null : i)}
+                className="text-left transition-colors hover:text-[#76B900]"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                <span className="mr-1" style={{ color: '#76B900' }}>[{i + 1}]</span>
+                {src.label}
+                {src.kind === 'web' && src.url && (
+                  <span style={{ color: 'var(--text-faint)' }}> · {new URL(src.url).hostname}</span>
+                )}
+              </button>
+              {isOpen && src.snippet && (
+                <div
+                  className="mt-1 ml-5 rounded-sm border-l-2 px-2 py-1 text-[10px]"
+                  style={{
+                    borderColor: '#76B900',
+                    background: 'var(--bg-subtle)',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  {src.snippet}
+                  {src.url && (
+                    <div className="mt-1">
+                      <a
+                        href={src.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#76B900] underline"
+                      >
+                        Open source ↗
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface SourceEntry {
+  label: string;
+  kind: 'rag' | 'web';
+  snippet?: string;
+  url?: string;
+}
+
+function collectSources(trace: WizardChatToolResult[]): SourceEntry[] {
+  const out: SourceEntry[] = [];
+  const seen = new Set<string>();
+  for (const entry of trace) {
+    const inner = (entry.result?.result as Record<string, unknown> | undefined) ?? undefined;
+    if (!inner) continue;
+    if (entry.name === 'rag_ask' || entry.name === 'rag_ask_vault') {
+      const chunks = Array.isArray(inner.chunks) ? inner.chunks : [];
+      for (const chunk of chunks) {
+        const c = chunk as Record<string, unknown>;
+        const src = typeof c.source === 'string' ? c.source : '';
+        if (!src) continue;
+        const dedupe = `rag:${src}:${c.chunk_index ?? ''}`;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        const label = src.split('/').pop() ?? src;
+        const text = typeof c.text === 'string' ? c.text : '';
+        out.push({ label, kind: 'rag', snippet: text.slice(0, 240) });
+      }
+    } else if (entry.name === 'web_search') {
+      const results = Array.isArray(inner.results) ? inner.results : [];
+      for (const r of results) {
+        const w = r as Record<string, unknown>;
+        const url = typeof w.url === 'string' ? w.url : '';
+        if (!url) continue;
+        const dedupe = `web:${url}`;
+        if (seen.has(dedupe)) continue;
+        seen.add(dedupe);
+        out.push({
+          label: typeof w.title === 'string' ? w.title : url,
+          kind: 'web',
+          snippet: typeof w.snippet === 'string' ? w.snippet : undefined,
+          url,
+        });
+      }
+    }
+  }
+  return out;
 }

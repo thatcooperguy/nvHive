@@ -8,9 +8,12 @@
  * see what the Wizard sees while they chat.
  */
 
+import { useRouter } from 'next/navigation';
+import GPURecommenderCard from '@/components/GPURecommenderCard';
 import WizardChat from '@/components/WizardChat';
 
 export default function WizardPage() {
+  const router = useRouter();
   return (
     <div className="flex h-[calc(100vh-2rem)] flex-col">
       <div
@@ -31,6 +34,8 @@ export default function WizardPage() {
           and vault. Can refresh models, run safe repairs, and validate
           provider keys — confirm-class actions always show a button first.
         </div>
+        {/* First-5-minute nudge: turn raw VRAM into a single Install CTA. */}
+        <GPURecommenderCard onInstall={() => router.push('/setup')} />
       </div>
       <div className="flex-1 min-h-0">
         <WizardChat />

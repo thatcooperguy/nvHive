@@ -48,6 +48,9 @@ serve = [
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",
     "passlib[bcrypt]>=1.7",
+    # Required by FastAPI's multipart form handling — used by the RAG
+    # drag-drop upload endpoint and any future file-upload route.
+    "python-multipart>=0.0.6",
 ]
 nvidia = [
     "nvidia-ml-py3>=7.352.0",
@@ -68,6 +71,8 @@ dev = [
     "uvicorn[standard]>=0.20",
     "passlib[bcrypt]>=1.7",
     "nvidia-ml-py3>=7.352.0",
+    "python-multipart>=0.0.6",
+    "pypdf>=4.0",
 ]
 vision = [
     "pyautogui>=0.9.54",
@@ -92,6 +97,7 @@ all = [
     "python-xlib>=0.33; sys_platform == 'linux'",
     "Pillow>=10.0",
     "playwright>=1.40",
+    "python-multipart>=0.0.6",
     "pypdf>=4.0",
 ]
 
