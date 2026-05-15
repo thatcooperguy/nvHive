@@ -123,78 +123,207 @@ def _markdown_count(root: Path) -> int:
 
 
 def _seed_notes(vault: Path, home: Path) -> dict[str, str]:
+    """Seed the vault with starter notes wired for Obsidian Graph view.
+
+    Every note uses Obsidian-style ``[[wikilinks]]`` so the Graph view shows
+    real structure rather than disconnected dots. Every note also carries
+    a YAML frontmatter ``tags`` block so the Graph view's color-by-tag
+    feature produces visible clusters (wizard / decision / conflict /
+    playbook / setup). The ``MAP.md`` hub note is the navigational
+    starting point and the densest node in the graph.
+    """
     seeded: dict[str, str] = {}
 
     files = {
-        "README.md": f"""# nvHive Vault
+        # ── README — the entry point. Points at the MOC, plus the hard
+        #    rules every other note depends on.
+        "README.md": f"""---
+tags: [vault, setup]
+---
+# nvHive Vault
 
-This is the durable memory for this nvHive workspace.
+This is the durable Markdown memory for this nvHive workspace. The
+[[MAP]] note is the navigational hub — start there.
 
 - Rootless location: `{vault}`
 - Workspace home: `{home}`
-- Format: plain Markdown
-- Obsidian: optional viewer/editor
+- Format: plain Markdown with Obsidian-style `[[wikilinks]]`
+- Obsidian: optional viewer/editor — Graph view shows the full mesh
 
-Use this vault for product decisions, setup notes, support reports, model
-choices, and student-friendly troubleshooting. Do not paste API keys or
-secrets here.
+## Quick links
+
+- [[MAP]] — Map of Content
+- [[AI Wizard]] — what the in-product agent remembers
+- [[Product Direction]] — current product bets
+- [[Product Conflicts]] — known tradeoffs to explain, not hide
+- [[Pilot Test Checklist]] — pre-release pass on a fresh GPU VM
+- [[Support Report Flow]] — handling user failures
+
+## Rules
+
+- Do NOT paste API keys, tokens, or secrets here. The vault is durable
+  Markdown — anything written is also durable. Provider keys belong in
+  rootless config, not in notes.
+- Wikilinks: prefer `[[Note Title]]` over `[note](path/note.md)` so
+  Obsidian's Graph view and backlinks pane keep working.
+- Tags: each note should carry one or more tags in the YAML
+  frontmatter so the Graph clusters by topic.
 """,
-        "Wizard Memory/AI Wizard.md": """# AI Wizard Product Memory
+        # ── The hub. This is the densest node in the Graph view — every
+        #    other note links back to it via the README, and it links
+        #    forward to every category.
+        "MAP.md": """---
+tags: [vault, moc]
+---
+# Map of Content
 
-AI Wizard helps users run a rootless NVIDIA AI workspace on a Linux GPU VM.
+This note is the hub of the vault. Every category links from here so
+Obsidian's Graph view shows real structure.
 
-Core rules:
+## Wizard
+
+- [[AI Wizard]] — persona, rules, and what the agent remembers
+
+## Product
+
+- [[Product Direction]] — what we're shipping and why
+- [[Product Conflicts]] — tradeoffs the Wizard should explain
+
+## Playbooks
+
+- [[Pilot Test Checklist]] — gate before calling a build ready
+- [[Support Report Flow]] — handling user failure reports
+
+## Conventions
+
+- Add a new note with a YAML `tags:` block listing one or more of
+  `wizard`, `decision`, `conflict`, `playbook`, `setup`.
+- Cross-link aggressively — `[[Other Note]]` is cheap and the Graph
+  view rewards density.
+- Re-link this MAP from any new top-level category note so the hub
+  stays connected.
+""",
+        "Wizard Memory/AI Wizard.md": """---
+tags: [wizard, decision]
+---
+# AI Wizard
+
+The in-product agent for this rootless NVIDIA AI workspace. See
+[[Product Direction]] for the broader product bets and
+[[Product Conflicts]] for the tradeoffs the Wizard should explain.
+
+## Core rules
 
 - Never assume root or sudo access.
-- Prefer NVH_HOME on the persistent block-backed mount for models, apps, logs, jobs, and config.
-- Run boot checks because the base VM image, kernel, driver, CUDA, Python,
-  Node, or browser can change between sessions.
-- Keep the UI simple: show readiness, recommended actions, and mission cards
-  first; hide long diagnostics behind Advanced Details.
+- Prefer `NVH_HOME` on the persistent block-backed mount for models,
+  apps, logs, jobs, and config.
+- Run boot checks because the base VM image, kernel, driver, CUDA,
+  Python, Node, or browser can change between sessions.
+- Keep the UI simple: show readiness, recommended actions, and mission
+  cards first; hide long diagnostics behind Advanced Details.
 - Manual commands are fallback overrides, not the main user journey.
-- Use local AI first when ready, then cloud providers only when configured.
-- When something fails, summarize logs in plain English and offer safe rootless repairs.
-""",
-        "Decisions/Product Direction.md": """# Product Direction
+- Use local AI first when ready; cloud providers only when configured.
+- When something fails, summarize logs in plain English and offer safe
+  rootless repairs — see [[Support Report Flow]].
 
-Ideas to preserve:
+## Built-in agent profiles
+
+The Wizard ships six built-in personas the user can swap to. Each maps
+to a preferred provider/model with an optional cost ceiling:
+
+- `wizard` — calm mission-control mentor (default).
+- `coder` — careful code reviewer (prefers `qwen2.5-coder:7b`).
+- `researcher` — web-search-first; $0.05/turn ceiling.
+- `writer` — long-form, plainspoken tone matching.
+- `ops` — repair-workspace operator; whitelisted to safe tools.
+- `vault-rag` — answers strictly from this vault.
+
+## Related
+
+- [[Pilot Test Checklist]] — what to verify before calling a build ready
+- [[Support Report Flow]] — handling user-reported failures
+- [[Product Direction]] — the broader product bets
+""",
+        "Decisions/Product Direction.md": """---
+tags: [decision, product]
+---
+# Product Direction
+
+Ideas to preserve. The [[AI Wizard]] follows these; [[Product Conflicts]]
+captures the tradeoffs we've already made.
 
 - Linux GPU desktop launch is the priority.
 - Rootless install and uninstall must work without OS changes.
-- The wizard should open automatically and guide the user.
-- Mission cards should stay simple: AI Starter, Graphics Creator Studio,
+- The Wizard should open automatically and guide the user.
+- Mission cards stay simple: AI Starter, Graphics Creator Studio,
   Game Dev Lab, Music Producer Studio, and Agent Builder.
-- The wizard should recommend models by GPU, VRAM, disk, and current runtime health.
-- ComfyUI, Blender, Godot, local models, cloud API keys, and debugging should
-  be one-click where possible.
-- A local agent helper should understand this product, read local logs, and
-  generate support reports.
+- The Wizard should recommend models by GPU, VRAM, disk, and current
+  runtime health.
+- ComfyUI, Blender, Godot, local models, cloud API keys, and debugging
+  should be one-click where possible.
+- A local agent helper should understand this product, read local logs,
+  and generate support reports — see [[Support Report Flow]].
 - Boot health should detect base image drift before the user wastes time.
+
+## Related
+
+- [[AI Wizard]] — the in-product agent
+- [[Product Conflicts]] — known tradeoffs
+- [[Pilot Test Checklist]] — pre-release gate
 """,
         "Conflicts/Product Conflicts.md": _conflicts_markdown(),
-        "Process Playbooks/Pilot Test Checklist.md": """# Pilot Test Checklist
+        "Process Playbooks/Pilot Test Checklist.md": """---
+tags: [playbook, setup]
+---
+# Pilot Test Checklist
 
-Use this before calling a Linux GPU VM build ready:
+Run this before calling a Linux GPU VM build ready. Pairs with
+[[Support Report Flow]] when something breaks during the run.
 
 1. Fresh uninstall and reinstall from the GitHub curl command.
-2. Confirm NVH_HOME lands on the persistent block-backed mount.
-3. Confirm browser opens to the setup wizard without manual commands.
-4. Confirm boot health shows a clear ready/warn state.
+2. Confirm `NVH_HOME` lands on the persistent block-backed mount.
+3. Confirm the browser opens to the setup wizard without manual commands.
+4. Confirm boot health shows a clear ready/warn state — see
+   [[AI Wizard]] for the readiness contract.
 5. Download the recommended local model and run a one-question test.
 6. Install ComfyUI and confirm the app launches.
 7. Install one creative/game/music pack and confirm receipt/job history.
-8. Copy a support report and verify secrets are redacted.
-9. Disconnect/reconnect or reboot, then confirm the vault, models, and receipts persist.
+8. Copy a support report and verify secrets are redacted — flow lives
+   in [[Support Report Flow]].
+9. Disconnect/reconnect or reboot, then confirm the vault, models, and
+   receipts persist.
+
+## Related
+
+- [[AI Wizard]] — the readiness states this checklist depends on
+- [[Support Report Flow]] — what to do if a step fails
+- [[Product Conflicts]] — tradeoffs that explain why a "warning" is
+  sometimes the right state
 """,
-        "Process Playbooks/Support Report Flow.md": """# Support Report Flow
+        "Process Playbooks/Support Report Flow.md": """---
+tags: [playbook, support]
+---
+# Support Report Flow
 
-When a user reports a failure:
+When a user reports a failure. Used during the [[Pilot Test Checklist]]
+and as the runbook for incoming support reports.
 
-1. Ask them to click Copy Support Report from setup.
-2. Check job history first, then boot health, then runtime status.
-3. Confirm the failure is rootless-fixable before suggesting any OS-level change.
-4. Prefer latest compatible downloads, but record any pin needed for repeatability.
-5. Add the final fix or workaround back into this vault.
+1. Ask them to click **Copy Support Report** from setup.
+2. Check job history first, then boot health, then runtime status — the
+   [[AI Wizard]] surfaces all three.
+3. Confirm the failure is rootless-fixable before suggesting any
+   OS-level change. The [[Product Conflicts]] note explains what we
+   intentionally won't fix.
+4. Prefer latest compatible downloads, but record any pin needed for
+   repeatability.
+5. Add the final fix or workaround back into this vault so the next
+   support cycle learns from it.
+
+## Related
+
+- [[AI Wizard]] — the agent the user is interacting with
+- [[Pilot Test Checklist]] — where many incoming reports originate
+- [[Product Conflicts]] — known intentional tradeoffs
 """,
     }
 
@@ -206,7 +335,22 @@ When a user reports a failure:
     obsidian_dir = vault / ".obsidian"
     obsidian_dir.mkdir(parents=True, exist_ok=True)
     app_json = obsidian_dir / "app.json"
-    if _write_if_missing(app_json, json.dumps({"alwaysUpdateLinks": True}, indent=2)):
+    if _write_if_missing(
+        app_json,
+        # alwaysUpdateLinks=true keeps wikilinks pointing at the right
+        # note when files are renamed; useLegacyToggle=false enables the
+        # tag-color cluster panel by default; newLinkFormat="shortest"
+        # keeps [[Wikilinks]] compact.
+        json.dumps(
+            {
+                "alwaysUpdateLinks": True,
+                "useLegacyToggle": False,
+                "newLinkFormat": "shortest",
+                "showLineNumber": True,
+            },
+            indent=2,
+        ),
+    ):
         seeded[".obsidian/app.json"] = str(app_json)
     appearance_json = obsidian_dir / "appearance.json"
     if _write_if_missing(
@@ -218,16 +362,68 @@ When a user reports a failure:
     if _write_if_missing(plugins_json, "[]"):
         seeded[".obsidian/community-plugins.json"] = str(plugins_json)
 
+    # Graph view defaults — coloring nodes by the YAML `tags` we seeded
+    # so the cluster mesh is visible immediately on first open. Without
+    # this file, Obsidian's Graph view defaults to all-grey-dots which
+    # hides the structure we just wired in.
+    graph_json = obsidian_dir / "graph.json"
+    if _write_if_missing(
+        graph_json,
+        json.dumps(
+            {
+                "collapse-filter": True,
+                "search": "",
+                "showTags": True,
+                "showAttachments": False,
+                "hideUnresolved": False,
+                "showOrphans": True,
+                "collapse-color-groups": False,
+                "colorGroups": [
+                    {"query": "tag:#wizard", "color": {"a": 1, "rgb": 7777124}},
+                    {"query": "tag:#decision", "color": {"a": 1, "rgb": 14774017}},
+                    {"query": "tag:#conflict", "color": {"a": 1, "rgb": 14430245}},
+                    {"query": "tag:#playbook", "color": {"a": 1, "rgb": 4231423}},
+                    {"query": "tag:#moc", "color": {"a": 1, "rgb": 16776960}},
+                ],
+                "collapse-display": False,
+                "showArrow": False,
+                "textFadeMultiplier": 0,
+                "nodeSizeMultiplier": 1.2,
+                "lineSizeMultiplier": 1,
+                "collapse-forces": False,
+                "centerStrength": 0.5,
+                "repelStrength": 10,
+                "linkStrength": 1,
+                "linkDistance": 250,
+                "scale": 1,
+                "close": True,
+            },
+            indent=2,
+        ),
+    ):
+        seeded[".obsidian/graph.json"] = str(graph_json)
+
     return seeded
 
 
 def _conflicts_markdown() -> str:
     rows = "\n".join(f"- **{item['title']}**: {item['summary']}" for item in KNOWN_CONFLICTS)
-    return f"""# Product Conflicts
+    return f"""---
+tags: [conflict, decision]
+---
+# Product Conflicts
 
-These are intentional tradeoffs AI Wizard should explain instead of hiding.
+These are intentional tradeoffs the [[AI Wizard]] should explain
+instead of hiding. They link back to [[Product Direction]] for the
+underlying bets.
 
 {rows}
+
+## Related
+
+- [[AI Wizard]] — the agent that surfaces these to the user
+- [[Product Direction]] — the bets these tradeoffs come from
+- [[Support Report Flow]] — when a "this is intentional" comes up
 """
 
 
