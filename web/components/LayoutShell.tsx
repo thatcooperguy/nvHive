@@ -4,6 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import GlobalModals from '@/components/GlobalModals';
 import ThemeToggle from '@/components/ThemeToggle';
+import WelcomeBackPanel from '@/components/WelcomeBackPanel';
 import { UIShellProvider, useUIShell } from '@/components/UIShellProvider';
 import { NVHIVE_VERSION } from '@/lib/version';
 
@@ -29,6 +30,8 @@ function InnerShell({ children }: { children: React.ReactNode }) {
   if (isChatPage || isSetupPage) {
     // Chat and setup are self-contained surfaces — but they still want the
     // theme toggle, so render it in a fixed corner overlay.
+    // The chat page already includes its own WelcomeBackPanel inline, so we
+    // don't double-mount it here.
     return (
       <>
         <GlobalModals />
@@ -75,6 +78,12 @@ function InnerShell({ children }: { children: React.ReactNode }) {
       <div className="pt-8 layout-with-sidebar">
         <Sidebar onNewChat={() => router.push('/')} />
         <main className="flex-1 min-w-0 overflow-auto">
+          {/* Reconnect awareness — render on /vault, /wizard, /settings, etc.
+              so users coming back to a non-chat surface still see what changed
+              from last session. Per-tab dismissal lives in the panel. */}
+          <div className="mx-auto max-w-5xl px-4 pt-4">
+            <WelcomeBackPanel />
+          </div>
           {children}
         </main>
       </div>

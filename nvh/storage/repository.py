@@ -116,6 +116,34 @@ async def get_conversation(conversation_id: str) -> Conversation | None:
         return await session.get(Conversation, conversation_id)
 
 
+async def set_conversation_pinned(conversation_id: str, pinned: bool) -> bool:
+    """Pin or unpin a conversation. Returns True on success, False if missing.
+
+    Pinned conversations are what the reconnect-resume card uses to suggest
+    "pick up where you left off" — they survive list eviction and appear in
+    a dedicated section of the chat sidebar.
+    """
+    async with get_session() as session:
+        conv = await session.get(Conversation, conversation_id)
+        if conv is None:
+            return False
+        conv.pinned = bool(pinned)
+        await session.commit()
+        return True
+
+
+async def list_pinned_conversations(limit: int = 20) -> list[Conversation]:
+    """Return conversations the user has explicitly pinned for resume."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(Conversation)
+            .where(Conversation.pinned.is_(True))
+            .order_by(Conversation.updated_at.desc())
+            .limit(limit),
+        )
+        return list(result.scalars().all())
+
+
 async def get_latest_conversation() -> Conversation | None:
     async with get_session() as session:
         result = await session.execute(

@@ -21,10 +21,10 @@ import { useEffect, useRef, useState } from 'react';
 import {
   executeWizardTool,
   listWizardTools,
-  wizardChat,
+  wizardChatStream,
   type WizardChatToolCall,
-  type WizardChatResult,
   type WizardChatToolResult,
+  type WizardStreamEvent,
   type WizardToolSchema,
 } from '@/lib/api';
 
@@ -56,7 +56,13 @@ export default function WizardChat() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tools, setTools] = useState<Map<string, WizardToolSchema>>(new Map());
+  // One-line "thinking…" / "calling X…" status under the spinner. Drives the
+  // perceived-latency win — even before the first token arrives, the user sees
+  // the Wizard moving.
+  const [iterationStatus, setIterationStatus] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Abort any in-flight stream when the user re-sends or unmounts.
+  const abortRef = useRef<AbortController | null>(null);
 
   // Load the tool catalog once so we can look up safety classes for any
   // tool the LLM mentions, even before the server echoes one back.
@@ -184,42 +190,104 @@ export default function WizardChat() {
     if (!text || sending) return;
     setError(null);
     setSending(true);
+    setIterationStatus(null);
+
+    // Abort any prior stream — the user just sent a new turn.
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     const userMsg: Message = { id: makeId(), role: 'user', content: text };
-    setMessages(prev => [...prev, userMsg]);
+    const assistantId = makeId();
+    const assistantSeed: Message = {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      toolCalls: [],
+      toolStatus: {},
+      serverToolTrace: [],
+    };
+    setMessages(prev => [...prev, userMsg, assistantSeed]);
     setDraft('');
 
-    try {
-      const history = messages
-        .filter(m => m.role !== 'system')
-        .slice(-12)
-        .map(m => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        }));
+    const history = messages
+      .filter(m => m.role !== 'system')
+      .slice(-12)
+      .map(m => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }));
 
-      const result: WizardChatResult = await wizardChat(text, { history });
-      const assistantId = makeId();
-      const assistantMsg: Message = {
-        id: assistantId,
-        role: 'assistant',
-        content: result.answer || '(empty response)',
-        toolCalls: result.tool_calls ?? [],
-        toolStatus: {},
-        serverToolTrace: result.tool_results ?? [],
-        iterations: result.iterations,
-        mode: result.mode,
-        usedProvider: result.used_provider,
-        usedModel: result.used_model,
-      };
-      setMessages(prev => [...prev, assistantMsg]);
-      if (result.tool_calls && result.tool_calls.length > 0) {
-        handleAssistantToolCalls(assistantId, result.tool_calls);
+    const updateAssistant = (mut: (m: Message) => Message) => {
+      setMessages(prev => prev.map(m => (m.id === assistantId ? mut(m) : m)));
+    };
+
+    try {
+      for await (const event of wizardChatStream(text, { history, signal: controller.signal })) {
+        switch (event.type) {
+          case 'iteration':
+            setIterationStatus(event.n === 1 ? 'thinking…' : `reacting (round ${event.n})…`);
+            break;
+          case 'token':
+            updateAssistant(m => ({ ...m, content: m.content + event.text }));
+            break;
+          case 'tool_call':
+            setIterationStatus(`calling ${event.name}…`);
+            break;
+          case 'tool_result':
+            updateAssistant(m => ({
+              ...m,
+              serverToolTrace: [
+                ...(m.serverToolTrace ?? []),
+                {
+                  name: event.name,
+                  // Stream events don't echo the args back; the trace card
+                  // tolerates an empty object and only renders args when present.
+                  arguments: {} as Record<string, unknown>,
+                  result: event.result as WizardChatToolResult['result'],
+                },
+              ],
+            }));
+            break;
+          case 'confirm_required':
+            updateAssistant(m => ({ ...m, toolCalls: event.tool_calls }));
+            handleAssistantToolCalls(assistantId, event.tool_calls);
+            break;
+          case 'done':
+            updateAssistant(m => ({
+              ...m,
+              // Server's final answer is authoritative — replace whatever
+              // tokens accumulated to handle the rare case where token+done
+              // diverge (e.g. a tool result rewrites the text).
+              content: event.answer || m.content || '(empty response)',
+              mode: 'llm',
+              usedProvider: event.used_provider,
+              usedModel: event.used_model,
+              iterations: event.iterations,
+            }));
+            setIterationStatus(null);
+            break;
+          case 'error':
+            if (event.fallback) {
+              updateAssistant(m => ({ ...m, content: event.fallback as string, mode: 'deterministic' }));
+            }
+            setError(event.error);
+            setIterationStatus(null);
+            break;
+        }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Wizard chat failed');
+      if ((err as { name?: string })?.name === 'AbortError') {
+        // User reissued the chat — silent abort.
+      } else {
+        setError(err instanceof Error ? err.message : 'Wizard chat failed');
+      }
     } finally {
       setSending(false);
+      setIterationStatus(null);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
     }
   };
 
@@ -248,6 +316,15 @@ export default function WizardChat() {
             onConfirmTool={(call) => runTool(message.id, call, true)}
           />
         ))}
+        {iterationStatus && (
+          <div
+            className="flex items-center gap-2 text-[10px] font-mono italic"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: '#76B900' }} />
+            {iterationStatus}
+          </div>
+        )}
         {error && (
           <div className="rounded-md border border-[#dc2626]/30 bg-[#fef2f2] p-3 text-xs text-[#dc2626]">
             {error}
@@ -293,12 +370,57 @@ export default function WizardChat() {
 }
 
 function EmptyState({ onPickPrompt }: { onPickPrompt: (prompt: string) => void }) {
-  const starters = [
+  // Adaptive starters — seeded from the reconnect payload so the Wizard's
+  // suggestions match the user's actual workspace state. Falls back to the
+  // generic set when reconnect is unavailable (cold first boot, offline, etc.).
+  const [starters, setStarters] = useState<string[]>([
     'What can my GPU run right now?',
     "Why isn't Ollama responding?",
     'Help me pick a mission for image gen.',
     'Refresh the local model list.',
-  ];
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { wizardReconnect } = await import('@/lib/api');
+        const r = await wizardReconnect();
+        if (cancelled) return;
+        const adaptive: string[] = [];
+        // First-run user → walk them through setup directly.
+        if (r.first_run) {
+          adaptive.push('Walk me through setting up this workspace from scratch.');
+        }
+        // Concrete attention items → surface the top one as a starter.
+        for (const item of r.needs_attention.slice(0, 2)) {
+          const title = (item as { title?: string }).title;
+          if (typeof title === 'string' && title.length > 0) {
+            adaptive.push(`Help me with: ${title}`);
+          }
+        }
+        // Auto-repair already ran? Offer to summarize what just happened.
+        if (r.auto_repaired.length > 0) {
+          adaptive.push('What did you just auto-repair, and what should I check?');
+        }
+        // Vault present → invite recall-style questions.
+        const vaultNotes = (r as unknown as { vault?: { memory_files?: number } })?.vault?.memory_files ?? 0;
+        if (vaultNotes > 0) {
+          adaptive.push('What did I write about in my vault recently?');
+        }
+        if (adaptive.length > 0) {
+          // Always keep one generic fallback so the grid never looks empty.
+          adaptive.push('What can my GPU run right now?');
+          setStarters(adaptive.slice(0, 4));
+        }
+      } catch {
+        // Reconnect unavailable — keep the static starters.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   return (
     <div className="mx-auto max-w-lg pt-6 text-center">
       <div className="text-[10px] font-mono uppercase tracking-[0.18em]" style={{ color: '#76B900' }}>

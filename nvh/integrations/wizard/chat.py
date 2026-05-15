@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -39,6 +40,100 @@ logger = logging.getLogger(__name__)
 # the model has to converge on an answer within: initial reply →
 # react-to-tool-result → final summary.
 WIZARD_FOLLOWUP_MAX_ITER = 3
+
+# Threshold above which a top-1 vault chunk is folded into the system prompt
+# verbatim. Higher = fewer, more confident recalls. 0.7 picks up "obvious
+# match" notes without false-positives on tangentially related ones.
+VAULT_AUTOFOLD_MIN_SCORE = 0.7
+VAULT_AUTOFOLD_ENV = "NVH_WIZARD_AUTOFOLD_VAULT"
+VAULT_AUTOFOLD_MAX_CHARS = 500
+
+
+def _autofold_enabled() -> bool:
+    return os.environ.get(VAULT_AUTOFOLD_ENV, "1").strip() not in ("0", "false", "no")
+
+
+async def _auto_fold_vault_chunk(
+    question: str,
+    *,
+    home_dir: str | Path | None,
+    min_score: float = VAULT_AUTOFOLD_MIN_SCORE,
+) -> str | None:
+    """Return a formatted "Relevant note" block if the vault has a strong hit.
+
+    Best-effort: any failure (no vault, embedder down, RAG store empty) returns
+    None and lets the chat proceed without recall. We never break a chat turn
+    over a recall miss.
+    """
+    if len(question.strip()) < 10:
+        return None
+    try:
+        from nvh.integrations.rag import ask_vault
+
+        result = await ask_vault(question, top_k=1, home_dir=home_dir)
+    except Exception as exc:
+        logger.debug("autofold: ask_vault raised (%s)", exc)
+        return None
+    if not result.get("ok"):
+        return None
+    chunks = result.get("chunks") or []
+    if not chunks:
+        return None
+    top = chunks[0]
+    score = float(top.get("score") or 0.0)
+    if score < min_score:
+        return None
+    source = Path(str(top.get("source", "vault note"))).name
+    text = str(top.get("text", "")).strip()[:VAULT_AUTOFOLD_MAX_CHARS]
+    if not text:
+        return None
+    return f"Relevant note: {source} (score {score:.2f}) — {text}"
+
+
+async def _persist_wizard_turn(
+    conversation_id: str | None,
+    *,
+    user_question: str,
+    assistant_text: str,
+    provider: str = "",
+    model: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Write the user + assistant pair to the conversations store.
+
+    Best-effort: if the conversation doesn't exist or the repo is unreachable,
+    we log and continue. Persistence is a feature, not a correctness invariant.
+    """
+    if not conversation_id:
+        return
+    try:
+        from nvh.storage import repository as repo
+
+        await repo.add_message(
+            conversation_id=conversation_id,
+            role="user",
+            content=user_question,
+            provider=provider,
+            model=model,
+        )
+        # Append metadata as a fenced JSON tail so the conversations store's
+        # plain text content column still renders cleanly in the legacy UI but
+        # downstream readers can parse the tool trace.
+        content = assistant_text
+        if metadata:
+            try:
+                content = f"{assistant_text}\n\n<!-- wizard-meta: {json.dumps(metadata, default=str)} -->"
+            except Exception:
+                content = assistant_text
+        await repo.add_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=content,
+            provider=provider,
+            model=model,
+        )
+    except Exception as exc:
+        logger.info("wizard: persistence skipped (%s)", exc)
 
 # Matches `TOOL_CALL: {...json...}` (optionally inside a fenced code block).
 # Greedy on the JSON object so multi-line argument bodies still match.
@@ -117,6 +212,7 @@ async def wizard_chat(
     history: list[dict[str, str]] | None = None,
     home_dir: str | Path | None = None,
     enable_followup: bool = True,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     """Answer a Wizard question with the live-state-grounded LLM path.
 
@@ -158,7 +254,13 @@ async def wizard_chat(
     except Exception as exc:
         logger.debug("wizard_chat: tool registry not available (%s)", exc)
 
-    system_prompt = build_system_prompt(snapshot, tools=tool_schemas)
+    # Auto-fold the top vault chunk if the user's question matches anything
+    # they've already written down. Free recall — saves a tool round-trip.
+    vault_recall: str | None = None
+    if enable_followup and _autofold_enabled():
+        vault_recall = await _auto_fold_vault_chunk(question, home_dir=home_dir)
+
+    system_prompt = build_system_prompt(snapshot, tools=tool_schemas, vault_recall=vault_recall)
     history = history or []
 
     # Try the LLM path first.
@@ -256,6 +358,19 @@ async def wizard_chat(
                 # we keep iterating on the auto-class side.
                 pending_confirm_calls.extend(deferred)
 
+            await _persist_wizard_turn(
+                conversation_id,
+                user_question=question,
+                assistant_text=final_text,
+                provider=decision.provider or "",
+                model=decision.model or "",
+                metadata={
+                    "source": "wizard",
+                    "iterations": iterations,
+                    "tool_calls": pending_confirm_calls,
+                    "tool_results": tool_results,
+                },
+            )
             return {
                 "answer": final_text,
                 "mode": "llm",
@@ -286,6 +401,12 @@ async def wizard_chat(
             "share a support snapshot from the wizard."
         )
 
+    await _persist_wizard_turn(
+        conversation_id,
+        user_question=question,
+        assistant_text=answer,
+        metadata={"source": "wizard", "mode": "deterministic", "fallback_reason": fallback_reason},
+    )
     return {
         "answer": answer,
         "mode": "deterministic",
@@ -362,6 +483,7 @@ async def wizard_chat_stream(
     history: list[dict[str, str]] | None = None,
     home_dir: str | Path | None = None,
     enable_followup: bool = True,
+    conversation_id: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a Wizard turn as a sequence of events.
 
@@ -394,7 +516,11 @@ async def wizard_chat_stream(
     except Exception as exc:
         logger.debug("wizard_chat_stream: tool registry not available (%s)", exc)
 
-    system_prompt = build_system_prompt(snapshot, tools=tool_schemas)
+    vault_recall: str | None = None
+    if enable_followup and _autofold_enabled():
+        vault_recall = await _auto_fold_vault_chunk(question, home_dir=home_dir)
+
+    system_prompt = build_system_prompt(snapshot, tools=tool_schemas, vault_recall=vault_recall)
     history = history or []
 
     try:
@@ -500,6 +626,20 @@ async def wizard_chat_stream(
                 pending_confirm_calls.extend(deferred)
                 yield {"type": "confirm_required", "tool_calls": deferred}
 
+        await _persist_wizard_turn(
+            conversation_id,
+            user_question=question,
+            assistant_text=final_text,
+            provider=decision.provider or "",
+            model=decision.model or "",
+            metadata={
+                "source": "wizard",
+                "iterations": iterations,
+                "tool_calls": pending_confirm_calls,
+                "tool_results": tool_results,
+                "streamed": True,
+            },
+        )
         yield {
             "type": "done",
             "answer": final_text,
@@ -512,6 +652,12 @@ async def wizard_chat_stream(
     except Exception as exc:
         logger.info("wizard_chat_stream: LLM path failed (%s)", exc)
         det = await _deterministic_fallback(question, home_dir=home_dir)
+        await _persist_wizard_turn(
+            conversation_id,
+            user_question=question,
+            assistant_text=det,
+            metadata={"source": "wizard", "mode": "deterministic-stream-fallback"},
+        )
         yield {"type": "error", "error": str(exc)[:300], "fallback": det}
 
 
