@@ -1,5 +1,93 @@
 # Changelog
 
+## [0.37.0] - 2026-05-14
+
+### Added
+
+- **AI Wizard chat surface** at `/wizard` — the new primary conversational
+  layer. Reads live workspace state (GPU, persistent storage, providers,
+  Ollama models, recent install jobs, install receipts, vault) on every
+  turn. Routes through the engine: local Ollama when healthy, cheapest
+  free cloud otherwise, deterministic offline helper as the safe fallback.
+  A stable persona (calm mission-control mentor, lightly playful, names
+  the safest button) lives in `nvh/integrations/wizard/personality.py`.
+- **Wizard tool registry** with explicit safety classes. `auto`-class
+  tools run without asking (refresh_models, repair_workspace,
+  validate_provider_key); `confirm`-class tools surface a UI confirmation
+  card (save_provider_key); `never`-class operations are disabled at the
+  registry level and cannot be registered. Per-tool handlers expose
+  `name`, `description`, `safety_class`, `parameters` schema, and
+  `summary_template`.
+- **Chat ↔ tool wiring** via a `TOOL_CALL: {...}` JSON marker convention
+  that works on any LLM, including local Ollama models without native
+  function-calling. The WizardChat UI auto-runs auto-class tools and
+  renders inline confirmation cards for the rest.
+- **Welcome Back panel** on the chat page that calls
+  `POST /v1/wizard/reconnect` once on mount. Shows what survived since
+  last session, what changed (driver / CUDA / Python / etc.), what was
+  auto-repaired, and what needs attention. Auto-hides on the happy
+  "nothing changed, nothing repaired" path.
+- **Autonomous safe-repair loop** runs on every reconnect with two new
+  handlers: `ollama-model-refresh` (re-queries the local daemon's
+  `/api/tags`) and `config-validate` (parses `config.yaml` without
+  modifying it, surfaces schema drift before the first failed query).
+- **`HardwareWidget`** in compact + hero variants on the chat empty
+  state, top status bar, and setup page. Shows GPU short name,
+  utilization gauge, VRAM bar, and persistent-workspace path + free GB.
+  Polls every 5 s. Designed so a freshly-minted cloud Linux GPU session
+  immediately confirms "yes, the rented hardware is real."
+- **Dark mode foundation** — CSS-variable theming with a `.dark` swap;
+  ThemeToggle component cycles Light → Dark → System and persists to
+  `localStorage`. Pre-hydration inline script applies the chosen theme
+  before React paints so dark-mode users never flash a white page.
+- **Provider logos** in the cloud-key catalog via the `@lobehub/icons`
+  CDN. New `logo_slug` field on the `/v1/setup/free-providers` response;
+  the web client renders a brand mark or a typography monogram fallback.
+- **Validate-before-save API key flow** — new
+  `POST /v1/setup/validate-key` endpoint health-checks a proposed key
+  against the provider without persisting. The WebUI surfaces "Testing…"
+  → ✓ valid / ✗ rejected inline before the save button enables, so users
+  catch a typo'd key at paste time instead of at the first query.
+- **`/query` page promoted into the sidebar** as "Ask AI" with a new
+  IconAsk SVG, fixing the orphan power-user surface.
+- **AI Wizard sidebar entry** as the first item in BOTTOM_NAV with a
+  new IconWizard sparkles icon.
+
+### Changed
+
+- **`/setup` welcome step** leads with a mission-first banner:
+  *"Pick a mission and AI Wizard does the rest"* — names the three
+  essential steps (storage, GPU, local AI) explicitly with ●/○
+  vocabulary that matches the advanced step nav.
+- **Setup advanced-group step nav** shows Essential (●) vs Optional (○)
+  dots so a freshly-minted cloud GPU user sees what's required for
+  first-query without guessing.
+- **Convene mode empty state** explains *why* you'd use the council
+  ("Best for decisions that need a second opinion: code review,
+  architecture choices, debugging hard bugs") instead of the previous
+  generic placeholder.
+- **Soft radius pass** across the component layer: `.card`, `.card-flat`,
+  `.input-base`, `.btn-primary`, `.btn-secondary`, `.btn-ghost`, `.tag`,
+  `.progress-bar` move from `rounded-none` to `rounded-md`/`rounded-lg`
+  with softer hover shadows. Scrollbar thumb and range-slider thumb gain
+  rounded corners.
+- **Drag-an-image hint** appears under the chat suggestion tiles so
+  vision-capable model use is no longer a hidden feature.
+- **`nvh/integrations/`** is now reorganized into subpackages by concern
+  (`installs/`, `diagnostics/`, `services/`, `workspace/`, `wizard/`)
+  with back-compat re-exports so existing `from nvh.integrations import …`
+  callers keep working.
+
+### Fixed
+
+- `test_auto_repair_writes_env_file_without_downloads` mock now provides
+  `config_dir` + `comfyui_dir` on its `SimpleNamespace` so the new
+  Wizard-1 safe-repair handlers (`config-validate`, `comfyui-examples`)
+  can resolve them.
+- Provider key persistence no longer leaks to `localStorage` (security
+  fix landed in 0.36.0; this release adds the validate-before-save UX
+  that catches bad keys upstream of the save).
+
 ## [0.36.0] - 2026-05-14
 
 ### Security
