@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { HardwareWidgetHero } from '@/components/HardwareWidget';
 import {
   checkHealth,
   query,
@@ -2557,6 +2558,9 @@ export default function SetupPage() {
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto space-y-4">
+      {/* Hero hardware status — first thing the user sees on a fresh session */}
+      <HardwareWidgetHero />
+
       {/* Header */}
       <div className="border-b border-[#e5e5e5] pb-2">
         <div className="flex items-center justify-between gap-3">
