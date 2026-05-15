@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.38.0] - 2026-05-15
+
+### Added
+
+- **`nvh selfcheck`** — one-shot diagnostic bundle for product tests on
+  rented GPU desktops. Runs `nvh test --quick` + a live Wizard
+  round-trip + a redacted workspace snapshot, then writes a single JSON
+  bundle to `$NVH_HOME/support/selfcheck-<ts>.json` (or `--output`
+  path). No network egress; everything stays local so the bundle can be
+  inspected, redacted, and shared on the user's terms. Flags:
+  `--no-live-query`, `--strict`, `--quiet`, `--output`.
+- **Opt-in install telemetry** (`nvh.telemetry`). Off by default; enable
+  via `NVH_TELEMETRY=1` or the persisted config flag. Three events
+  appended to `$NVH_HOME/telemetry/events.jsonl`: `install_completed`,
+  `first_wizard_turn`, `reconnect_survived`. Stable anonymous
+  `install_id` (UUID4), property redaction for secret-shaped keys,
+  `emit()` is exception-safe and never destabilizes the host product.
+  Documented in PRIVACY.md.
+- **`nvh doctor --json`** — emits structured diagnostic JSON on stdout
+  with rich UI redirected to stderr, so the output is parseable by
+  `nvh selfcheck` and CI scripts. Pre-existing `nvh doctor` rich output
+  is unchanged.
+- **`nvh test --strict`** — CI-friendly invocation that fails the run
+  when *any* provider soft-passes (rate limit / quota). Without
+  `--strict`, soft-passes are still counted as passing but surfaced
+  explicitly in the report summary.
+- **Obsidian Graph view** wired into the seeded vault. `nvh init-vault`
+  now ships a `MAP.md` Map-of-Content hub note, YAML `tags:` frontmatter
+  on every seed note, `[[wikilinks]]` between hub / category / sibling
+  notes, and `.obsidian/graph.json` color groups. Re-running on a
+  populated workspace preserves user content via `_write_if_missing()`.
+
+### Fixed
+
+- **Smoke-test 429 soft-pass regression.** Previously a 429 from every
+  provider silently re-labeled the result `passed=True`, so the report
+  looked green even when no provider was reachable. `TestResult` now
+  carries explicit `soft_pass` / `soft_reason` fields and
+  `SmokeTestReport.strict_failed()` returns `hard_fails + soft_passes`
+  so `--strict` mode (and the selfcheck bundle's strict mode) fail
+  loud instead of silently counting environmental failures as passes.
+
 ## [0.37.0] - 2026-05-14
 
 ### Added
