@@ -287,6 +287,21 @@ async def _tool_rag_ask(args: dict[str, Any]) -> dict[str, Any]:
     return await ask(question, collection=collection, top_k=top_k, home_dir=home_dir)
 
 
+async def _tool_web_search(args: dict[str, Any]) -> dict[str, Any]:
+    """Run a web search and return top-k hits with title/url/snippet."""
+    from nvh.integrations.web_search import web_search
+
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        return {"ok": False, "error": "query required (string)"}
+    top_k_raw = args.get("top_k", 5)
+    try:
+        top_k = max(1, min(20, int(top_k_raw)))
+    except (TypeError, ValueError):
+        top_k = 5
+    return await web_search(query, top_k=top_k)
+
+
 def default_registry() -> WizardToolRegistry:
     """Build the registry with nvHive's stock tools.
 
@@ -362,6 +377,18 @@ def default_registry() -> WizardToolRegistry:
         },
         handler=_tool_rag_ingest,
         summary_template="Ingest {path} into the RAG index.",
+    ))
+
+    reg.register(WizardTool(
+        name="web_search",
+        description="Run a web search via the active backend (SearXNG, Brave, or DuckDuckGo) and return top hits with title, URL, and snippet.",
+        safety_class="auto",
+        parameters={
+            "query": {"type": "string", "required": True, "description": "Natural-language search query."},
+            "top_k": {"type": "integer", "required": False, "description": "Max hits to return (1-20, default 5)."},
+        },
+        handler=_tool_web_search,
+        summary_template="Search the web for: {query}",
     ))
 
     return reg
