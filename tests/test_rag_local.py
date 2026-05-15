@@ -15,7 +15,7 @@ here. What we test:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -208,3 +208,106 @@ def test_wizard_registry_includes_rag_tools() -> None:
     # Safety classes set correctly
     assert registry.get("rag_ask").safety_class == "auto"
     assert registry.get("rag_ingest").safety_class == "confirm"
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Auto-pull of the embed model on first-use
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_auto_pulls_missing_model_then_succeeds(monkeypatch) -> None:
+    """When the embed model is missing AND auto-pull is enabled, embed_texts
+    should call the pull endpoint once and retry — matching the first-use
+    pattern we want for new RAG users."""
+    from nvh.integrations.rag import embedder as embedder_mod
+
+    monkeypatch.delenv("NVH_RAG_AUTO_PULL", raising=False)
+
+    not_found_resp = MagicMock()
+    not_found_resp.status_code = 404
+    not_found_resp.text = '{"error":"model \\"nomic-embed-text\\" not found"}'
+
+    ok_resp = MagicMock()
+    ok_resp.status_code = 200
+    ok_resp.raise_for_status = MagicMock()
+    ok_resp.json = MagicMock(return_value={"embedding": [0.1, 0.2, 0.3]})
+
+    fake_client = MagicMock()
+    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+    fake_client.__aexit__ = AsyncMock(return_value=False)
+    fake_client.post = AsyncMock(side_effect=[not_found_resp, ok_resp])
+
+    pull_called: list[str] = []
+
+    async def fake_pull(model: str, *, timeout: float = 600.0) -> bool:
+        pull_called.append(model)
+        return True
+
+    monkeypatch.setattr(embedder_mod, "_pull_ollama_model", fake_pull)
+    monkeypatch.setattr(embedder_mod.httpx, "AsyncClient", lambda *a, **kw: fake_client)
+
+    vectors = await embedder_mod.embed_texts(["hello"])
+    assert vectors == [[0.1, 0.2, 0.3]]
+    assert pull_called == ["nomic-embed-text"]
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_does_not_auto_pull_when_disabled(monkeypatch) -> None:
+    """NVH_RAG_AUTO_PULL=0 must keep the old behavior — actionable error,
+    no network noise from a surprise pull."""
+    from nvh.integrations.rag import embedder as embedder_mod
+    from nvh.integrations.rag.embedder import EmbeddingError
+
+    monkeypatch.setenv("NVH_RAG_AUTO_PULL", "0")
+
+    not_found_resp = MagicMock()
+    not_found_resp.status_code = 404
+    not_found_resp.text = '{"error":"model not found"}'
+
+    fake_client = MagicMock()
+    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+    fake_client.__aexit__ = AsyncMock(return_value=False)
+    fake_client.post = AsyncMock(return_value=not_found_resp)
+
+    pulled = False
+
+    async def fake_pull(*args, **kwargs):
+        nonlocal pulled
+        pulled = True
+        return True
+
+    monkeypatch.setattr(embedder_mod, "_pull_ollama_model", fake_pull)
+    monkeypatch.setattr(embedder_mod.httpx, "AsyncClient", lambda *a, **kw: fake_client)
+
+    with pytest.raises(EmbeddingError, match="doesn't have"):
+        await embedder_mod.embed_texts(["hello"])
+    assert pulled is False
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_raises_when_auto_pull_fails(monkeypatch) -> None:
+    """If the pull itself fails (network down, disk full, etc.) we should
+    surface a real error rather than spinning on a retry loop."""
+    from nvh.integrations.rag import embedder as embedder_mod
+    from nvh.integrations.rag.embedder import EmbeddingError
+
+    monkeypatch.delenv("NVH_RAG_AUTO_PULL", raising=False)
+
+    not_found_resp = MagicMock()
+    not_found_resp.status_code = 404
+    not_found_resp.text = '{"error":"model not found"}'
+
+    fake_client = MagicMock()
+    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+    fake_client.__aexit__ = AsyncMock(return_value=False)
+    fake_client.post = AsyncMock(return_value=not_found_resp)
+
+    async def failed_pull(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(embedder_mod, "_pull_ollama_model", failed_pull)
+    monkeypatch.setattr(embedder_mod.httpx, "AsyncClient", lambda *a, **kw: fake_client)
+
+    with pytest.raises(EmbeddingError):
+        await embedder_mod.embed_texts(["hello"])
