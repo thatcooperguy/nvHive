@@ -1687,6 +1687,73 @@ async def wizard_tools_execute(
     return _response_envelope(result)
 
 
+class RagIngestRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    collection: str | None = None
+    home_dir: str | None = None
+
+
+@app.post("/v1/rag/ingest", summary="Walk a folder and store embeddings for RAG")
+async def rag_ingest_endpoint(
+    request: RagIngestRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Embed every text/source file under ``path`` into the local RAG index.
+
+    Idempotent at the file level — re-ingesting the same folder replaces
+    a source's chunks rather than appending duplicates. Returns counts so
+    the caller can show "indexed N files, M chunks" without a second call.
+    """
+    from nvh.integrations.rag import ingest_folder
+
+    result = await ingest_folder(
+        request.path,
+        collection=request.collection,
+        home_dir=request.home_dir,
+    )
+    return _response_envelope(result)
+
+
+class RagAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=4000)
+    collection: str | None = None
+    top_k: int = Field(default=5, ge=1, le=20)
+    home_dir: str | None = None
+
+
+@app.post("/v1/rag/ask", summary="Retrieve top-k RAG chunks for a question")
+async def rag_ask_endpoint(
+    request: RagAskRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the chunks most relevant to ``question`` from the local index.
+
+    The Wizard chat layer wraps these chunks into a prompt; bare API
+    callers receive ``{ok, chunks: [{source, chunk_index, text, score}]}``
+    so they can build their own grounding step.
+    """
+    from nvh.integrations.rag import ask
+
+    result = await ask(
+        request.question,
+        collection=request.collection,
+        top_k=request.top_k,
+        home_dir=request.home_dir,
+    )
+    return _response_envelope(result)
+
+
+@app.get("/v1/rag/collections", summary="List known RAG collections and chunk counts")
+async def rag_collections_endpoint(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return ``[{name, chunks, sources}, ...]`` so the UI can render a picker."""
+    from nvh.integrations.rag import list_collections
+
+    return _response_envelope({"collections": list_collections(home_dir=home_dir)})
+
+
 @app.get("/v1/setup/smoke-tests", summary="Run lightweight app smoke checks")
 async def setup_smoke_tests(
     home_dir: str | None = None,
