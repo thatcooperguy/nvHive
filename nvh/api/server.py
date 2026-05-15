@@ -1630,6 +1630,63 @@ async def wizard_context_endpoint(
     return _response_envelope(wizard_context(home_dir=home_dir))
 
 
+# Singleton Wizard tool registry — built lazily on first request.
+_wizard_tool_registry = None
+
+
+def _get_wizard_tools():
+    """Lazy-init the Wizard tool registry. Importable so tests can replace it."""
+    global _wizard_tool_registry
+    if _wizard_tool_registry is None:
+        from nvh.integrations.wizard.tools import default_registry
+
+        _wizard_tool_registry = default_registry()
+    return _wizard_tool_registry
+
+
+@app.get("/v1/wizard/tools", summary="List AI Wizard tools available for natural-language action")
+async def wizard_tools_list(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Return the publicly-exposed Wizard tool catalog.
+
+    Each entry includes its safety_class so the UI knows whether to surface
+    a confirmation card before calling /v1/wizard/tools/execute.
+    """
+    registry = _get_wizard_tools()
+    tools = [tool.as_public_dict() for tool in registry.list_tools()]
+    return _response_envelope({
+        "tools": tools,
+        "auto_count": sum(1 for t in tools if t["safety_class"] == "auto"),
+        "confirm_count": sum(1 for t in tools if t["safety_class"] == "confirm"),
+    })
+
+
+class WizardToolExecuteRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    confirmed: bool = False
+
+
+@app.post("/v1/wizard/tools/execute", summary="Execute an AI Wizard tool with safety enforcement")
+async def wizard_tools_execute(
+    request: WizardToolExecuteRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Run a Wizard tool. Safety enforcement happens server-side.
+
+    Returns ``{ok, result?, error?, needs_confirmation?, tool?, ...}``. When
+    ``needs_confirmation`` is true the UI should render a confirmation card
+    with the included ``summary`` and re-call this endpoint with
+    ``confirmed=true``.
+    """
+    registry = _get_wizard_tools()
+    result = await registry.execute(
+        request.name,
+        arguments=request.arguments,
+        confirmed=request.confirmed,
+    )
+    return _response_envelope(result)
+
+
 @app.get("/v1/setup/smoke-tests", summary="Run lightweight app smoke checks")
 async def setup_smoke_tests(
     home_dir: str | None = None,

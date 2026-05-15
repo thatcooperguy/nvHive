@@ -573,6 +573,41 @@ class TestAPIEndpointCoverage:
         assert isinstance(body["data"]["auto_repaired"], list)
         assert isinstance(body["data"]["elapsed_ms"], int)
 
+    def test_wizard_tools_list_returns_safety_classified_catalog(self, test_client: TestClient) -> None:
+        """GET /v1/wizard/tools lists Wizard tools with safety classes."""
+        resp = test_client.get("/v1/wizard/tools")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        tools = body["data"]["tools"]
+        names = {t["name"] for t in tools}
+        assert {"refresh_models", "repair_workspace", "save_provider_key"}.issubset(names)
+        # Every tool advertises its safety class so the UI can decide whether
+        # to show a confirmation card before /v1/wizard/tools/execute.
+        for tool in tools:
+            assert tool["safety_class"] in ("auto", "confirm")
+        assert body["data"]["confirm_count"] >= 1
+        assert body["data"]["auto_count"] >= 1
+
+    def test_wizard_tools_execute_unknown_tool_returns_error(self, test_client: TestClient) -> None:
+        resp = test_client.post("/v1/wizard/tools/execute", json={"name": "does_not_exist"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"]["ok"] is False
+        assert "Unknown" in body["data"]["error"]
+
+    def test_wizard_tools_execute_confirm_class_blocks_without_confirmed_flag(self, test_client: TestClient) -> None:
+        """save_provider_key is confirm-class — it must refuse without confirmed=True."""
+        resp = test_client.post(
+            "/v1/wizard/tools/execute",
+            json={"name": "save_provider_key", "arguments": {"provider": "openai", "api_key": "sk-test"}},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"]["ok"] is False
+        assert body["data"]["needs_confirmation"] is True
+        assert "summary" in body["data"]
+
     def test_setup_free_providers(self, test_client: TestClient) -> None:
         """GET /v1/setup/free-providers lists no-signup providers."""
         resp = test_client.get("/v1/setup/free-providers")

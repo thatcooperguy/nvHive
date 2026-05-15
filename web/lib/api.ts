@@ -1198,6 +1198,56 @@ export async function getWizardContext(homeDir?: string): Promise<Record<string,
   return apiGet<Record<string, unknown>>(`/v1/wizard/context${qs}`);
 }
 
+// ─── AI Wizard tool registry ─────────────────────────────────────────────────
+
+export type WizardToolSafetyClass = 'auto' | 'confirm';
+
+export interface WizardToolSchema {
+  name: string;
+  description: string;
+  safety_class: WizardToolSafetyClass;
+  parameters: Record<string, unknown>;
+  summary_template: string;
+}
+
+export interface WizardToolListResult {
+  tools: WizardToolSchema[];
+  auto_count: number;
+  confirm_count: number;
+}
+
+export interface WizardToolExecuteResult {
+  ok: boolean;
+  result?: Record<string, unknown>;
+  error?: string;
+  needs_confirmation?: boolean;
+  tool?: WizardToolSchema | string;
+  arguments?: Record<string, unknown>;
+  summary?: string;
+  safety_class?: WizardToolSafetyClass;
+}
+
+/** Fetch the Wizard tool catalog with safety classes. */
+export async function listWizardTools(): Promise<WizardToolListResult> {
+  return apiGet<WizardToolListResult>('/v1/wizard/tools');
+}
+
+/**
+ * Execute a Wizard tool. For confirm-class tools, omit/pass false for
+ * `confirmed` first to surface the structured confirmation card, then re-call
+ * with `confirmed: true` once the user clicks the confirmation button.
+ */
+export async function executeWizardTool(
+  name: string,
+  args: { arguments?: Record<string, unknown>; confirmed?: boolean } = {},
+): Promise<WizardToolExecuteResult> {
+  return apiPost<WizardToolExecuteResult>('/v1/wizard/tools/execute', {
+    name,
+    arguments: args.arguments ?? {},
+    confirmed: args.confirmed ?? false,
+  });
+}
+
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
 
 /** Derive the WebSocket base URL from the HTTP base URL. */
