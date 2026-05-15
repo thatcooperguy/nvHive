@@ -145,14 +145,59 @@ def _format_context_block(context: dict[str, Any]) -> str:
     return json.dumps(compact, indent=2, default=str)
 
 
-def build_system_prompt(context: dict[str, Any]) -> str:
-    """Combine the persona block with this turn's live state block."""
+def _format_tools_block(tools: list[dict[str, Any]]) -> str:
+    """Render the available Wizard tools as a compact instruction block.
+
+    Uses a structured ``TOOL_CALL:`` line format any LLM can emit — works on
+    local Ollama models that lack native function-calling, and on any cloud
+    provider that just streams text. The chat loop parses these markers back
+    out into a structured ``tool_calls`` field on the response.
+    """
+    if not tools:
+        return ""
+
+    lines: list[str] = [
+        "",
+        "--- Available actions (tools you can request) ---",
+        "When the user clearly asks you to DO something a tool covers, emit a",
+        "tool call at the end of your reply on its own line, exactly like:",
+        "",
+        "  TOOL_CALL: {\"name\": \"<tool_name>\", \"arguments\": {...}}",
+        "",
+        "Rules:",
+        "  - Only call a tool the user clearly asked for. Don't surprise them.",
+        "  - For `auto` tools, your reply can be short (\"Refreshing models now.\")",
+        "    plus the TOOL_CALL line. The system runs the tool immediately.",
+        "  - For `confirm` tools, explain what you're about to do and END with",
+        "    the TOOL_CALL line. The UI shows a confirmation button — you do",
+        "    NOT need to ask \"OK?\" yourself, the button does that.",
+        "  - Never invent a tool. If nothing fits, answer in plain text.",
+        "",
+        "Tools:",
+    ]
+    for tool in tools:
+        params = ", ".join(sorted((tool.get("parameters") or {}).keys())) or "(none)"
+        lines.append(
+            f"  • {tool['name']} [{tool.get('safety_class', 'auto')}] — "
+            f"{tool.get('description', '')} Params: {params}.",
+        )
+    lines.append("--- end tools ---")
+    return "\n".join(lines)
+
+
+def build_system_prompt(
+    context: dict[str, Any],
+    tools: list[dict[str, Any]] | None = None,
+) -> str:
+    """Combine persona + live state + (optional) tool instructions."""
     block = _format_context_block(context)
+    tools_block = _format_tools_block(tools or [])
     return (
         f"{WIZARD_PERSONA}\n\n"
         "--- Live workspace state (this turn) ---\n"
         f"{block}\n"
-        "--- end live state ---\n"
+        "--- end live state ---"
+        f"{tools_block}\n\n"
         "Answer the user's next message using the live state when it's "
         "relevant. If a fact isn't in the live state, say so once and "
         "name what to check."

@@ -20,11 +20,42 @@ to emit structured action requests that the UI renders as one-click cards.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Matches `TOOL_CALL: {...json...}` (optionally inside a fenced code block).
+# Greedy on the JSON object so multi-line argument bodies still match.
+_TOOL_CALL_RE = re.compile(
+    r"TOOL_CALL\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Strip ``TOOL_CALL:`` markers out of the LLM's text response.
+
+    Returns ``(stripped_text, [{name, arguments}, ...])``. Malformed JSON is
+    silently dropped — better to show the user a plain answer than to
+    surface a parse error mid-chat.
+    """
+    calls: list[dict[str, Any]] = []
+    for match in _TOOL_CALL_RE.finditer(text):
+        try:
+            parsed = json.loads(match.group(1))
+            if isinstance(parsed, dict) and isinstance(parsed.get("name"), str):
+                calls.append({
+                    "name": parsed["name"],
+                    "arguments": parsed.get("arguments", {}) if isinstance(parsed.get("arguments"), dict) else {},
+                })
+        except (json.JSONDecodeError, ValueError):
+            continue
+    stripped = _TOOL_CALL_RE.sub("", text).strip()
+    return stripped, calls
 
 
 async def wizard_chat(
@@ -53,7 +84,19 @@ async def wizard_chat(
     from nvh.integrations.wizard.personality import build_system_prompt
 
     snapshot = wizard_context(home_dir=home_dir)
-    system_prompt = build_system_prompt(snapshot)
+
+    # Pull the Wizard tool catalog so the system prompt can teach the model
+    # how to request actions. Best-effort — if the registry isn't available
+    # (e.g. import order during tests) we just omit the tools block.
+    tool_schemas: list[dict[str, Any]] = []
+    try:
+        from nvh.integrations.wizard.tools import default_registry
+
+        tool_schemas = [t.as_public_dict() for t in default_registry().list_tools()]
+    except Exception as exc:
+        logger.debug("wizard_chat: tool registry not available (%s)", exc)
+
+    system_prompt = build_system_prompt(snapshot, tools=tool_schemas)
     history = history or []
 
     # Try the LLM path first.
@@ -99,12 +142,14 @@ async def wizard_chat(
             except Exception:
                 logger.debug("wizard_chat: query logging failed", exc_info=True)
 
+            cleaned_text, tool_calls = _extract_tool_calls(response.content)
             return {
-                "answer": response.content,
+                "answer": cleaned_text,
                 "mode": "llm",
                 "used_provider": decision.provider,
                 "used_model": decision.model,
                 "context": snapshot,
+                "tool_calls": tool_calls,
             }
         except Exception as exc:
             logger.info("wizard_chat: LLM path failed, falling back to deterministic (%s)", exc)
