@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { HardwareWidgetHero } from '@/components/HardwareWidget';
 import {
   checkHealth,
@@ -423,6 +424,7 @@ const shouldAutoActivateStorage = (status: StorageStatus, report: MountAutopilot
 };
 
 export default function SetupPage() {
+  const router = useRouter();
   const [step, setStep] = useState<Step>('welcome');
   const [ollamaStatus, setOllamaStatus] = useState<'checking' | 'online' | 'offline'>('checking');
   const [apiStatus, setApiStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking');
@@ -2509,6 +2511,16 @@ export default function SetupPage() {
     return studioInstalling || !storageReady;
   };
 
+  /** Route the user into the Wizard chat with a starter prompt pre-filled
+   * for the System-Check item they clicked. The Wizard then fetches the live
+   * findings list and answers the user's question with full diagnostic
+   * context — the explicit bridge from the diagnostic surface to the agent
+   * that can explain or fix it. */
+  const askWizardAbout = useCallback((label: string) => {
+    const starter = `Help me with: ${label} — what's wrong and what's the safest fix?`;
+    router.push(`/wizard?starter=${encodeURIComponent(starter)}`);
+  }, [router]);
+
   const handleSystemCheckClick = (label: string) => {
     if (apiDisconnected || apiChecking) return;
     if (label === 'Storage') {
@@ -2518,11 +2530,13 @@ export default function SetupPage() {
     }
     if (label === 'GPU') {
       const gpu = gpuInfo?.gpus?.[0];
-      setWizardBuildMessage(
-        gpu
-          ? `GPU detected: ${gpu.name} with ${gpu.vram_gb} GB VRAM. AI Wizard will use that to recommend model sizes and GPU-fit installs.`
-          : 'No NVIDIA GPU was detected from the WebUI yet. AI Wizard can still explain the host state, but the VM image may need provider/admin attention if nvidia-smi is unavailable.'
-      );
+      if (gpu) {
+        setWizardBuildMessage(`GPU detected: ${gpu.name} with ${gpu.vram_gb} GB VRAM. AI Wizard will use that to recommend model sizes and GPU-fit installs.`);
+      } else {
+        // No GPU detected — let the Wizard explain root cause (driver,
+        // container config, instance type) rather than dead-end the user.
+        askWizardAbout('GPU');
+      }
       return;
     }
     if (label === 'Models') {
@@ -3868,6 +3882,17 @@ export default function SetupPage() {
                   >
                     {assistantLoading ? 'Thinking' : 'Ask AI Wizard'}
                   </button>
+                  {setupConcernCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => askWizardAbout('these system check items')}
+                      disabled={apiDisconnected}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                      title="Open the full AI Wizard chat with the current diagnostic findings pre-loaded"
+                    >
+                      Open in Wizard →
+                    </button>
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap gap-1.5">

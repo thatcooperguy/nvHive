@@ -152,6 +152,30 @@ class WizardToolRegistry:
 # ────────────────────────────────────────────────────────────────────────────
 
 
+async def _tool_diagnose(args: dict[str, Any]) -> dict[str, Any]:
+    """Return current diagnostic findings + the live workspace snapshot.
+
+    The Wizard already gets these in the system prompt at turn start, but
+    state can change mid-conversation (e.g. user installs a model in another
+    tab). Calling ``diagnose`` mid-turn refreshes the agent's view without
+    waiting for the next reconnect.
+    """
+    from nvh.integrations.wizard.context import wizard_context
+    from nvh.integrations.wizard.findings import derive_findings
+
+    home_dir = args.get("home_dir")
+    snapshot = wizard_context(home_dir=home_dir)
+    findings = derive_findings(snapshot)
+    return {
+        "findings": [f.to_dict() for f in findings],
+        "context": snapshot,
+        "summary": (
+            f"{len(findings)} active finding(s)"
+            + (f": {', '.join(f.id for f in findings[:5])}" if findings else "")
+        ),
+    }
+
+
 async def _tool_refresh_models(args: dict[str, Any]) -> dict[str, Any]:
     """Re-query the local Ollama daemon for installed models."""
     from nvh.integrations.wizard.auto_repair import _refresh_ollama_models
@@ -420,6 +444,26 @@ def default_registry() -> WizardToolRegistry:
     Both passes are best-effort: a broken plugin logs and is skipped.
     """
     reg = WizardToolRegistry()
+
+    reg.register(WizardTool(
+        name="diagnose",
+        description=(
+            "Refresh and return the current diagnostic findings (GPU, storage, "
+            "providers, models, runtime). Use this when the user asks 'what's "
+            "wrong' or after running a repair to check whether the issue "
+            "cleared."
+        ),
+        safety_class="auto",
+        parameters={
+            "home_dir": {
+                "type": "string",
+                "description": "Optional NVH_HOME override.",
+                "required": False,
+            },
+        },
+        handler=_tool_diagnose,
+        summary_template="Refresh diagnostic findings.",
+    ))
 
     reg.register(WizardTool(
         name="refresh_models",

@@ -264,9 +264,11 @@ async def wizard_chat(
         ``iterations`` is the count of LLM round-trips for this user turn.
     """
     from nvh.integrations.wizard.context import wizard_context
+    from nvh.integrations.wizard.findings import derive_findings
     from nvh.integrations.wizard.personality import build_system_prompt
 
     snapshot = wizard_context(home_dir=home_dir)
+    findings = derive_findings(snapshot)
 
     # Pull the Wizard tool catalog so the system prompt can teach the model
     # how to request actions. Best-effort — if the registry isn't available
@@ -285,7 +287,9 @@ async def wizard_chat(
     if enable_followup and _autofold_enabled():
         vault_recall = await _auto_fold_vault_chunk(question, home_dir=home_dir)
 
-    system_prompt = build_system_prompt(snapshot, tools=tool_schemas, vault_recall=vault_recall)
+    system_prompt = build_system_prompt(
+        snapshot, tools=tool_schemas, vault_recall=vault_recall, findings=findings,
+    )
     system_prompt, profile_provider, profile_model = _apply_profile(system_prompt, profile, home_dir)
     history = history or []
 
@@ -565,9 +569,11 @@ async def wizard_chat_stream(
     single ``error`` event with a non-streamed deterministic fallback.
     """
     from nvh.integrations.wizard.context import wizard_context
+    from nvh.integrations.wizard.findings import derive_findings
     from nvh.integrations.wizard.personality import build_system_prompt
 
     snapshot = wizard_context(home_dir=home_dir)
+    findings = derive_findings(snapshot)
 
     tool_schemas: list[dict[str, Any]] = []
     try:
@@ -581,7 +587,9 @@ async def wizard_chat_stream(
     if enable_followup and _autofold_enabled():
         vault_recall = await _auto_fold_vault_chunk(question, home_dir=home_dir)
 
-    system_prompt = build_system_prompt(snapshot, tools=tool_schemas, vault_recall=vault_recall)
+    system_prompt = build_system_prompt(
+        snapshot, tools=tool_schemas, vault_recall=vault_recall, findings=findings,
+    )
     history = history or []
 
     try:

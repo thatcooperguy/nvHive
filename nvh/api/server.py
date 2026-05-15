@@ -1565,6 +1565,38 @@ async def setup_repair_workspace(
     return _response_envelope(run_safe_repairs(home_dir=request.home_dir))
 
 
+@app.get("/v1/wizard/diagnostics", summary="Active Wizard diagnostic findings + live context")
+async def wizard_diagnostics(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the consolidated diagnostic findings the Wizard sees this turn.
+
+    Powers the setup-page System Check section (one source of truth) and is
+    the same data folded into the Wizard's system prompt — so a finding the
+    user clicks on the setup page is the *exact* finding the Wizard would
+    cite if asked. The setup page links each item to
+    ``/wizard?issue=<finding.id>`` for a guided fix.
+
+    Read-only and idempotent; safe to poll.
+    """
+    from nvh.integrations.wizard.context import wizard_context
+    from nvh.integrations.wizard.findings import derive_findings
+
+    snapshot = wizard_context(home_dir=home_dir)
+    findings = derive_findings(snapshot)
+    return _response_envelope({
+        "findings": [f.to_dict() for f in findings],
+        "context": snapshot,
+        "counts": {
+            "total": len(findings),
+            "error": sum(1 for f in findings if f.severity == "error"),
+            "warn": sum(1 for f in findings if f.severity == "warn"),
+            "info": sum(1 for f in findings if f.severity == "info"),
+        },
+    })
+
+
 @app.post("/v1/wizard/reconnect", summary="Wizard reconnect — preflight + auto-repair + UI-friendly summary")
 async def wizard_reconnect(
     request: SetupHomeRequest,

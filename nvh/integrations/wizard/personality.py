@@ -229,16 +229,29 @@ def build_system_prompt(
     context: dict[str, Any],
     tools: list[dict[str, Any]] | None = None,
     vault_recall: str | None = None,
+    findings: list[Any] | None = None,
 ) -> str:
-    """Combine persona + live state + optional vault recall + tool instructions."""
+    """Combine persona + live state + optional vault recall + tool instructions.
+
+    ``findings`` is the explicit-diagnostic list from
+    :func:`nvh.integrations.wizard.findings.derive_findings`. It is rendered
+    AFTER the structural context block so the model sees "here is what's
+    happening" and immediately after "here is what's broken." The findings
+    block is omitted when there are no findings — silence is the signal.
+    """
+    from nvh.integrations.wizard.findings import render_findings_block
+
     block = _format_context_block(context)
     tools_block = _format_tools_block(tools or [])
     recall_block = _format_vault_recall_block(vault_recall)
+    findings_block = render_findings_block(findings or [])
+    findings_section = f"\n\n{findings_block}" if findings_block else ""
     return (
         f"{WIZARD_PERSONA}\n\n"
         "--- Live workspace state (this turn) ---\n"
         f"{block}\n"
         "--- end live state ---"
+        f"{findings_section}"
         f"{recall_block}"
         f"{tools_block}\n\n"
         "Answer the user's next message using the live state when it's "
