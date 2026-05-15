@@ -370,9 +370,13 @@ export default function Sidebar({
   return (
     <>
       <aside
-        className={`flex flex-col bg-[#fafafa] border-r border-[#e5e5e5] transition-all duration-300 ${
+        className={`flex flex-col border-r transition-all duration-300 ${
           topOffset ? 'h-[calc(100vh-2rem)] sticky top-8' : 'h-screen'
         } ${collapsed ? 'w-14' : 'w-64'}`}
+        style={{
+          background: 'var(--bg-secondary)',
+          borderColor: 'var(--border)',
+        }}
       >
         {/* Logo header */}
         <div className={`flex items-center gap-3 px-3 py-3 border-b border-[#e5e5e5] ${collapsed ? 'justify-center' : ''}`}>
