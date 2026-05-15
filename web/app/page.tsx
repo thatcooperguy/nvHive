@@ -1328,13 +1328,22 @@ export default function ChatPage() {
                   phase={councilPhase}
                 />
               ) : (
-                <div className="p-6 flex flex-col items-center justify-center h-full text-center">
-                  <div className="mb-3 h-8 w-8 border border-[#d4d4d4] bg-[#ffffff]" />
+                <div className="p-6 flex flex-col items-center justify-center h-full text-center max-w-xs mx-auto">
+                  <div className="mb-3 h-8 w-8 border border-[#d4d4d4] bg-[#ffffff] rounded" />
                   <div className="text-xs font-mono text-[#a3a3a3] uppercase tracking-wider mb-1">
                     Convene Mode
                   </div>
-                  <div className="text-[10px] font-mono text-[#333333] leading-relaxed">
-                    Advisor responses will stream here as the hive deliberates
+                  <div className="text-sm font-semibold text-[#0a0a0a] mb-2 leading-snug">
+                    Ask 3+ models in parallel, get a synthesized answer
+                  </div>
+                  <div className="text-[11px] text-[#525252] leading-relaxed mb-3">
+                    Best for decisions that need a second opinion: code review,
+                    architecture choices, debugging hard bugs, or anything where
+                    "what would another expert say?" matters.
+                  </div>
+                  <div className="text-[10px] font-mono text-[#737373] leading-relaxed">
+                    Type your question below and your selected providers will
+                    deliberate in this panel.
                   </div>
                 </div>
               )}
