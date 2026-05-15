@@ -13,11 +13,11 @@ redistributions should use distinct project names, package names, release
 channels, and branding. See [NOTICE](NOTICE.md) and
 [TRADEMARKS](TRADEMARKS.md).
 
-nvHive turns a fresh cloud Linux GPU desktop into a ready-to-use AI workstation
-without `sudo`: it finds persistent storage, installs into user-owned paths,
-opens a setup wizard, recommends models for the detected GPU, and gives students
-one-click paths for local LLMs, ComfyUI, agents, creative tools, game-dev tools,
-and music production.
+nvHive™ turns a fresh cloud Linux GPU desktop into a ready-to-use AI
+workstation without `sudo`: it finds persistent storage, installs into
+user-owned paths, opens a setup wizard, recommends models for the detected
+GPU, and gives students one-click paths for local LLMs, ComfyUI, agents,
+creative tools, game-dev tools, and music production.
 
 ## At A Glance
 
