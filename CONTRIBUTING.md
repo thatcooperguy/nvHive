@@ -26,7 +26,32 @@ See `docs/plugins.md` for the full plugin API reference.
 2. Make your changes and add tests.
 3. Run the test suite: `pytest tests/`
 4. Run the linter: `ruff check nvh/` and `mypy nvh/`
-5. Open a PR against `main` with a clear description of what and why.
+5. **Sign your commits**: `git commit -s -m "your message"` (see DCO below).
+6. Open a PR against `main` with a clear description of what and why.
+
+## Developer Certificate of Origin (DCO)
+
+Every commit in a PR must carry a `Signed-off-by:` line. We use the
+[Developer Certificate of Origin 1.1](https://developercertificate.org/) —
+the same lightweight contribution model the Linux kernel, Docker, and most
+Linux Foundation projects use. By signing off you certify that:
+
+- You have the right to submit the contribution under the project's license.
+- The contribution is your own work, or you have permission to submit it.
+- You understand the contribution and the signature are public.
+
+There is no separate Contributor License Agreement to sign — the sign-off
+is the agreement. Add it with:
+
+```bash
+git commit -s -m "your message"
+# or amend the last commit:
+git commit --amend --signoff
+```
+
+CI (`.github/workflows/dco.yml`) verifies every commit in a PR carries a
+sign-off line. PRs with unsigned commits will be asked to add `-s` and
+force-push.
 
 ## Inbound License and Project Identity
 
