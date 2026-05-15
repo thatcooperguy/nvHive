@@ -318,11 +318,106 @@ async def _tool_web_search(args: dict[str, Any]) -> dict[str, Any]:
     return await web_search(query, top_k=top_k)
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Tool discovery — entry-points + workspace plugin directory
+# ────────────────────────────────────────────────────────────────────────────
+
+# Distributions that ship Wizard tools (incl. third-party plugins down the
+# road) advertise them under this entry-point group. Each entry point should
+# resolve to a callable ``register(reg: WizardToolRegistry) -> None`` so
+# multi-tool packages don't have to publish one entry per tool.
+ENTRY_POINT_GROUP = "nvh.wizard_tools"
+
+# Workspace-local plugin directory. Drop a Python file with a top-level
+# ``register(reg)`` callable here and it gets loaded on registry build. This
+# is the simplest possible "extend the Wizard" path that doesn't need a wheel
+# rebuild. Sandbox is the user's filesystem; same trust boundary as their
+# own scripts. The directory is ignored if it doesn't exist.
+WORKSPACE_PLUGIN_DIR_ENV = "NVH_WIZARD_PLUGIN_DIR"
+
+
+def _load_entry_point_tools(reg: WizardToolRegistry) -> None:
+    """Discover Wizard-tool registrations advertised via importlib.metadata.
+
+    Best-effort: a broken entry point logs a warning and is skipped — never
+    fatal to the rest of the registry build.
+    """
+    try:
+        from importlib.metadata import entry_points
+    except ImportError:
+        return
+    try:
+        eps = entry_points(group=ENTRY_POINT_GROUP)
+    except Exception as exc:
+        logger.debug("entry-point discovery failed: %s", exc)
+        return
+    for ep in eps:
+        try:
+            fn = ep.load()
+            if callable(fn):
+                fn(reg)
+                logger.info("loaded wizard tools from entry point %s", ep.name)
+        except Exception as exc:
+            logger.warning("entry point %s failed: %s", ep.name, exc)
+
+
+def _load_workspace_plugin_tools(reg: WizardToolRegistry) -> None:
+    """Load .py plugins from the workspace plugin directory.
+
+    Walks ``$NVH_WIZARD_PLUGIN_DIR`` (or ``$NVH_HOME/wizard-tools/`` by
+    default) and imports each ``.py`` file via spec_from_file_location. If
+    the file exposes a top-level ``register(reg)`` callable, it gets called.
+    """
+    import os as _os
+    from importlib import util as _util
+
+    plugin_dir_str = _os.environ.get(WORKSPACE_PLUGIN_DIR_ENV)
+    if plugin_dir_str:
+        from pathlib import Path as _Path
+
+        plugin_dir = _Path(plugin_dir_str).expanduser()
+    else:
+        try:
+            from nvh.integrations.workspace.storage import nvh_home
+
+            home, _src = nvh_home(None)
+            from pathlib import Path as _Path
+
+            plugin_dir = home / "wizard-tools"
+        except Exception:
+            return
+    if not plugin_dir.is_dir():
+        return
+    for path in plugin_dir.glob("*.py"):
+        if path.name.startswith("_"):
+            continue
+        try:
+            spec = _util.spec_from_file_location(f"nvh_wizard_plugin_{path.stem}", path)
+            if spec is None or spec.loader is None:
+                continue
+            mod = _util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            reg_fn = getattr(mod, "register", None)
+            if callable(reg_fn):
+                reg_fn(reg)
+                logger.info("loaded wizard plugin %s", path.name)
+        except Exception as exc:
+            logger.warning("wizard plugin %s failed: %s", path.name, exc)
+
+
 def default_registry() -> WizardToolRegistry:
-    """Build the registry with nvHive's stock tools.
+    """Build the registry with nvHive's stock tools + any discovered plugins.
 
     Kept as a builder rather than a module-level singleton so the API layer
     can rebuild it for tests without import-time side effects.
+
+    After the stock tools land, we run two discovery passes:
+      1. ``importlib.metadata`` entry points under the ``nvh.wizard_tools``
+         group — for packaged plugins installed via pip.
+      2. ``.py`` files under the workspace plugin directory — for one-off
+         user tools dropped into the rootless home without a wheel rebuild.
+
+    Both passes are best-effort: a broken plugin logs and is skipped.
     """
     reg = WizardToolRegistry()
 
@@ -418,5 +513,10 @@ def default_registry() -> WizardToolRegistry:
         handler=_tool_web_search,
         summary_template="Search the web for: {query}",
     ))
+
+    # Pull in any third-party / workspace-local tools after the stock set so
+    # plugins can override (with a logged warning) or extend without forking.
+    _load_entry_point_tools(reg)
+    _load_workspace_plugin_tools(reg)
 
     return reg

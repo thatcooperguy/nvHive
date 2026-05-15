@@ -1035,6 +1035,15 @@ export async function deleteConversation(id: string): Promise<void> {
   }
 }
 
+export async function pinConversation(id: string, pinned = true): Promise<boolean> {
+  try {
+    await apiPost(`/v1/conversations/${encodeURIComponent(id)}/pin`, { pinned });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function renameConversation(id: string, title: string): Promise<void> {
   try {
     await apiFetch(`/v1/conversations/${encodeURIComponent(id)}`, {
@@ -1187,10 +1196,16 @@ export interface WizardChatResult {
   used_provider?: string | null;
   used_model?: string | null;
   fallback_reason?: string;
+  fallback_from?: string | null;
   context?: Record<string, unknown>;
   tool_calls?: WizardChatToolCall[];
   tool_results?: WizardChatToolResult[];
   iterations?: number;
+  // Aggregated across the full follow-up loop, not just the last iteration.
+  cost_usd?: number;
+  latency_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
 }
 
 /**
@@ -1210,6 +1225,96 @@ export async function wizardChat(
   });
 }
 
+// ─── Agent profiles ─────────────────────────────────────────────────────────
+
+export interface AgentProfileSchema {
+  name: string;
+  title: string;
+  description: string;
+  system_prompt: string;
+  provider: string;
+  model: string;
+  temperature: number | null;
+  max_tokens: number | null;
+  tools_allowed: string[] | null;
+  built_in: boolean;
+  tags: string[];
+}
+
+export async function listAgentProfiles(homeDir?: string): Promise<{ profiles: AgentProfileSchema[] }> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<{ profiles: AgentProfileSchema[] }>(`/v1/wizard/profiles${qs}`);
+}
+
+export async function saveAgentProfile(
+  profile: Omit<AgentProfileSchema, 'built_in'> & { home_dir?: string },
+): Promise<{ saved: boolean; path: string; name: string }> {
+  return apiPost('/v1/wizard/profiles', profile);
+}
+
+export async function deleteAgentProfile(name: string, homeDir?: string): Promise<void> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  await apiFetch(`/v1/wizard/profiles/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
+}
+
+// ─── RAG upload-and-ingest (multipart) ──────────────────────────────────────
+
+export interface RagUploadIngestResult {
+  ok: boolean;
+  collection?: string;
+  files_ingested?: number;
+  chunks?: number;
+  uploaded_files?: number;
+  upload_dir?: string;
+  pdfs_skipped_missing_pypdf?: number;
+  hint?: string;
+  error?: string;
+}
+
+/**
+ * Upload one or more files via multipart and ingest them into a RAG
+ * collection. The server lands the files under ``NVH_HOME/rag/uploads/``
+ * (so they survive reconnect) and points the standard ingest walker at
+ * the directory.
+ */
+export async function uploadAndIngest(
+  files: File[],
+  options: { collection?: string; homeDir?: string } = {},
+): Promise<RagUploadIngestResult> {
+  const bases = getApiBases();
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f, f.name);
+
+  const qs = new URLSearchParams();
+  if (options.collection) qs.set('collection', options.collection);
+  if (options.homeDir) qs.set('home_dir', options.homeDir);
+
+  let lastError: unknown;
+  for (const base of bases) {
+    try {
+      const url =
+        `${base}/v1/rag/upload-ingest` + (qs.toString() ? `?${qs}` : '');
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { ...getApiAuthHeaders() },
+        body: fd,
+      });
+      rememberApiBase(base);
+      if (!res.ok) {
+        const detail = `HTTP ${res.status}`;
+        throw new Error(detail);
+      }
+      const env = (await res.json()) as ApiEnvelope<RagUploadIngestResult>;
+      return env.data;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('upload-ingest: API offline');
+}
+
 // ─── AI Wizard chat — streaming variant ─────────────────────────────────────
 
 export type WizardStreamEvent =
@@ -1226,6 +1331,9 @@ export type WizardStreamEvent =
       tool_calls: WizardChatToolCall[];
       tool_results: WizardChatToolResult[];
       iterations: number;
+      cost_usd?: number;
+      latency_ms?: number;
+      fallback_from?: string | null;
     }
   | { type: 'error'; error: string; fallback?: string };
 
@@ -1233,6 +1341,7 @@ interface WizardChatStreamOptions {
   history?: WizardChatTurn[];
   homeDir?: string;
   conversationId?: string;
+  profile?: string;
   signal?: AbortSignal;
 }
 
@@ -1269,6 +1378,7 @@ export async function* wizardChatStream(
           history: options.history ?? [],
           home_dir: options.homeDir,
           conversation_id: options.conversationId,
+          profile: options.profile,
         }),
         signal: options.signal,
       });

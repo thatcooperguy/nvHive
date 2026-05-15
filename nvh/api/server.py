@@ -28,9 +28,11 @@ from urllib.parse import urlparse
 from fastapi import (
     Depends,
     FastAPI,
+    File,
     HTTPException,
     Path,
     Request,
+    UploadFile,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -1594,6 +1596,9 @@ class WizardChatRequest(BaseModel):
     # subsequent reconnects can resume the thread. Best-effort: a missing
     # conversation never breaks the chat reply.
     conversation_id: str | None = None
+    # Optional named agent profile (e.g. "coder", "researcher"). Falls back
+    # to the default Wizard persona when omitted or unknown.
+    profile: str | None = None
 
 
 @app.post("/v1/wizard/chat", summary="AI Wizard chat — live-state-grounded conversation")
@@ -1615,6 +1620,7 @@ async def wizard_chat_endpoint(
         history=history,
         home_dir=request.home_dir,
         conversation_id=request.conversation_id,
+        profile=request.profile,
     )
     return _response_envelope(result)
 
@@ -1655,6 +1661,80 @@ async def wizard_chat_stream_endpoint(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/v1/wizard/profiles", summary="List Wizard agent profiles (built-in + user-defined)")
+async def wizard_profiles_list(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return the agent-profile catalog so the UI can render a switcher.
+
+    Built-in profiles always appear first; user-defined profiles follow.
+    A user can override a built-in by saving a profile with the same name.
+    """
+    from nvh.integrations.wizard.profiles import list_profiles
+
+    profiles = [p.to_dict() for p in list_profiles(home_dir=home_dir)]
+    return _response_envelope({"profiles": profiles})
+
+
+class WizardProfileUpsertRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    title: str = Field(..., max_length=128)
+    description: str = Field(default="", max_length=400)
+    system_prompt: str = Field(default="", max_length=8000)
+    provider: str = ""
+    model: str = ""
+    temperature: float | None = None
+    max_tokens: int | None = None
+    tools_allowed: list[str] | None = None
+    tags: list[str] = Field(default_factory=list)
+    home_dir: str | None = None
+
+
+@app.post("/v1/wizard/profiles", summary="Create or update a user-defined agent profile")
+async def wizard_profiles_upsert(
+    request: WizardProfileUpsertRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Persist a profile under ``$NVH_HOME/agent-profiles/<name>.yaml``.
+
+    Saving a profile with the same name as a built-in is allowed and acts
+    as an override — the user version wins at runtime.
+    """
+    from nvh.integrations.wizard.profiles import AgentProfile, save_user_profile
+
+    profile = AgentProfile(
+        name=request.name,
+        title=request.title,
+        description=request.description,
+        system_prompt=request.system_prompt,
+        provider=request.provider,
+        model=request.model,
+        temperature=request.temperature,
+        max_tokens=request.max_tokens,
+        tools_allowed=request.tools_allowed,
+        tags=request.tags,
+    )
+    path = save_user_profile(profile, home_dir=request.home_dir)
+    return _response_envelope({"saved": True, "path": str(path), "name": profile.name})
+
+
+@app.delete("/v1/wizard/profiles/{name}", summary="Delete a user-defined agent profile")
+async def wizard_profiles_delete(
+    name: str = Path(..., description="Profile name"),
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Remove a user profile YAML. Built-in profiles can't be deleted —
+    use the upsert path to override their behavior instead."""
+    from nvh.integrations.wizard.profiles import delete_user_profile
+
+    ok = delete_user_profile(name, home_dir=home_dir)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"User profile '{name}' not found")
+    return _response_envelope({"deleted": True, "name": name})
 
 
 @app.get("/v1/wizard/context", summary="AI Wizard live workspace context snapshot")
@@ -1783,6 +1863,58 @@ async def rag_ask_endpoint(
         top_k=request.top_k,
         home_dir=request.home_dir,
     )
+    return _response_envelope(result)
+
+
+@app.post("/v1/rag/upload-ingest", summary="Upload files and ingest them into a RAG collection")
+async def rag_upload_ingest_endpoint(
+    files: list[UploadFile] = File(...),
+    collection: str | None = None,
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Save uploaded files into the rootless workspace upload area, then run
+    the standard RAG ingest walker against that directory.
+
+    Designed for the WebUI's drag-drop surface: the browser ships file bytes
+    over multipart, we land them under ``$NVH_HOME/rag/uploads/<timestamp>/``
+    so they survive reconnect, then point the ingest walker at the folder.
+    Same path users would get from a CLI ``rag ingest <dir>`` invocation.
+    """
+    from datetime import UTC, datetime
+    from pathlib import Path as _Path
+
+    from nvh.integrations.rag import ingest_folder
+    from nvh.integrations.workspace.storage import nvh_home
+
+    home, _ = nvh_home(home_dir)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    upload_dir = home / "rag" / "uploads" / stamp
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved: list[str] = []
+    for upload in files:
+        # UploadFile.filename can be any browser-supplied string. Strip path
+        # components hard so a malicious "../foo" never escapes upload_dir.
+        original = upload.filename or "file"
+        safe_name = _Path(original).name or "file"
+        dest = upload_dir / safe_name
+        # If the same name appears twice in the batch, dedupe with a counter.
+        suffix_idx = 1
+        while dest.exists():
+            dest = upload_dir / f"{dest.stem}-{suffix_idx}{dest.suffix}"
+            suffix_idx += 1
+        contents = await upload.read()
+        dest.write_bytes(contents)
+        saved.append(str(dest))
+
+    result = await ingest_folder(
+        upload_dir,
+        collection=collection,
+        home_dir=home_dir,
+    )
+    result.setdefault("uploaded_files", len(saved))
+    result.setdefault("upload_dir", str(upload_dir))
     return _response_envelope(result)
 
 

@@ -206,6 +206,30 @@ async def _run_auto_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
     return await registry.execute(name, arguments=arguments, confirmed=True)
 
 
+def _apply_profile(system_prompt: str, profile_name: str | None, home_dir: str | Path | None) -> tuple[str, str | None, str | None]:
+    """Apply an agent profile's overrides on top of the global persona.
+
+    Returns ``(system_prompt, preferred_provider, preferred_model)``. Missing
+    or unknown profile names fall back to the unchanged system prompt — the
+    Wizard's default persona — and ``(None, None)`` for routing.
+    """
+    if not profile_name or profile_name == "wizard":
+        return system_prompt, None, None
+    try:
+        from nvh.integrations.wizard.profiles import get_profile
+
+        profile = get_profile(profile_name, home_dir=home_dir)
+    except Exception as exc:
+        logger.debug("profile lookup failed (%s); falling back to default", exc)
+        return system_prompt, None, None
+    if profile is None:
+        return system_prompt, None, None
+    persona_addon = profile.system_prompt.strip()
+    if persona_addon:
+        system_prompt = f"{system_prompt}\n\n--- Agent profile: {profile.title} ---\n{persona_addon}\n--- end profile ---"
+    return system_prompt, profile.provider or None, profile.model or None
+
+
 async def wizard_chat(
     question: str,
     *,
@@ -213,6 +237,7 @@ async def wizard_chat(
     home_dir: str | Path | None = None,
     enable_followup: bool = True,
     conversation_id: str | None = None,
+    profile: str | None = None,
 ) -> dict[str, Any]:
     """Answer a Wizard question with the live-state-grounded LLM path.
 
@@ -261,6 +286,7 @@ async def wizard_chat(
         vault_recall = await _auto_fold_vault_chunk(question, home_dir=home_dir)
 
     system_prompt = build_system_prompt(snapshot, tools=tool_schemas, vault_recall=vault_recall)
+    system_prompt, profile_provider, profile_model = _apply_profile(system_prompt, profile, home_dir)
     history = history or []
 
     # Try the LLM path first.
@@ -292,6 +318,14 @@ async def wizard_chat(
             # Use the engine's router so we get the same local-first behavior
             # as `nvh ask` — Ollama if healthy, cheapest free cloud otherwise.
             decision = engine.router.route(query=question)
+            # Profile override: if the profile names a specific provider/model
+            # and it's actually registered, prefer it over the router pick.
+            if profile_provider:
+                cand = engine.registry.get(profile_provider)
+                if cand is not None:
+                    decision.provider = profile_provider
+                    if profile_model:
+                        decision.model = profile_model
             provider = engine.registry.get(decision.provider)
             if provider is None:
                 raise RuntimeError(f"Router picked provider '{decision.provider}' but it isn't registered")
@@ -301,6 +335,14 @@ async def wizard_chat(
             pending_confirm_calls: list[dict[str, Any]] = []
             final_text = ""
             response = None
+            # Accumulate cost/latency across the (possibly multi-iteration)
+            # follow-up loop so the UI can show the *full* turn cost, not just
+            # the last iteration's slice.
+            total_cost_usd: float = 0.0
+            total_latency_ms: int = 0
+            total_input_tokens: int = 0
+            total_output_tokens: int = 0
+            fallback_from: str | None = None
 
             while iterations < WIZARD_FOLLOWUP_MAX_ITER:
                 iterations += 1
@@ -315,6 +357,18 @@ async def wizard_chat(
                     await engine._log_query(response, mode="wizard-chat")
                 except Exception:
                     logger.debug("wizard_chat: query logging failed", exc_info=True)
+                # Roll up the meter so the chat footer can render a single
+                # honest "1.2s · 500 tokens · $0.001" badge for the turn.
+                try:
+                    total_cost_usd += float(response.cost_usd or 0)
+                except Exception:
+                    pass
+                total_latency_ms += int(response.latency_ms or 0)
+                if response.usage is not None:
+                    total_input_tokens += int(response.usage.input_tokens or 0)
+                    total_output_tokens += int(response.usage.output_tokens or 0)
+                if getattr(response, "fallback_from", None) and not fallback_from:
+                    fallback_from = response.fallback_from
 
                 cleaned_text, tool_calls = _extract_tool_calls(response.content)
                 final_text = cleaned_text
@@ -369,6 +423,8 @@ async def wizard_chat(
                     "iterations": iterations,
                     "tool_calls": pending_confirm_calls,
                     "tool_results": tool_results,
+                    "cost_usd": total_cost_usd,
+                    "latency_ms": total_latency_ms,
                 },
             )
             return {
@@ -380,6 +436,11 @@ async def wizard_chat(
                 "tool_calls": pending_confirm_calls,
                 "tool_results": tool_results,
                 "iterations": iterations,
+                "cost_usd": total_cost_usd,
+                "latency_ms": total_latency_ms,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "fallback_from": fallback_from,
             }
         except Exception as exc:
             logger.info("wizard_chat: LLM path failed, falling back to deterministic (%s)", exc)
@@ -648,6 +709,12 @@ async def wizard_chat_stream(
             "tool_calls": pending_confirm_calls,
             "tool_results": tool_results,
             "iterations": iterations,
+            # Streaming providers don't always emit usage in the same place
+            # complete() does. The UI hides these fields when 0, so a missing
+            # meter is graceful — but we surface what we know.
+            "cost_usd": 0.0,
+            "latency_ms": 0,
+            "fallback_from": None,
         }
     except Exception as exc:
         logger.info("wizard_chat_stream: LLM path failed (%s)", exc)
