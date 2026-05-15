@@ -49,6 +49,53 @@ def active_backend() -> str:
     return "duckduckgo"
 
 
+def backend_recommendation() -> dict[str, Any]:
+    """Return a UI-renderable recommendation for the active backend.
+
+    DDG is the zero-config fallback — when it's the active backend, we
+    nudge the user toward more durable options because the HTML scrape
+    breaks every 12-18 months. SearXNG and Brave have stable JSON APIs
+    so the nudge is just informational ("you're set, good choice").
+    """
+    backend = active_backend()
+    if backend == "duckduckgo":
+        return {
+            "backend": backend,
+            "durability": "fragile",
+            "summary": (
+                "Web search is using the DuckDuckGo HTML fallback. It works zero-config "
+                "but the layout changes roughly once a year. For a more durable backend:"
+            ),
+            "upgrades": [
+                {
+                    "name": "SearXNG",
+                    "env": SEARXNG_URL_ENV,
+                    "description": "Self-host SearXNG and set NVH_SEARXNG_URL to its base URL. Privacy-preserving and key-free.",
+                    "docs": "https://docs.searxng.org/",
+                },
+                {
+                    "name": "Brave Search",
+                    "env": BRAVE_KEY_ENV,
+                    "description": "Get a free Brave Search API key (~2k queries/month) and set BRAVE_API_KEY. Stable JSON API.",
+                    "docs": "https://brave.com/search/api/",
+                },
+            ],
+        }
+    if backend == "searxng":
+        return {
+            "backend": backend,
+            "durability": "stable",
+            "summary": f"Web search routes through your self-hosted SearXNG at ${SEARXNG_URL_ENV}.",
+            "upgrades": [],
+        }
+    return {
+        "backend": backend,
+        "durability": "stable",
+        "summary": "Web search routes through Brave Search.",
+        "upgrades": [],
+    }
+
+
 async def web_search(
     query: str,
     *,
@@ -81,10 +128,25 @@ async def web_search(
 
             results = await duckduckgo_search(query, top_k=top_k, timeout=timeout)
     except SearchError as exc:
-        return {"ok": False, "backend": backend, "error": str(exc)}
+        envelope: dict[str, Any] = {"ok": False, "backend": backend, "error": str(exc)}
+        if backend == "duckduckgo":
+            # The HTML scrape is the most likely path to break. When it does,
+            # nudge the user toward a durable backend instead of just leaving
+            # them with a stack trace.
+            envelope["hint"] = (
+                "DuckDuckGo's HTML layout may have changed. Set NVH_SEARXNG_URL "
+                "(self-hosted) or BRAVE_API_KEY (free tier) for a stable backend."
+            )
+        return envelope
     except Exception as exc:
         logger.warning("web_search backend=%s raised: %s", backend, exc)
-        return {"ok": False, "backend": backend, "error": f"{type(exc).__name__}: {exc}"}
+        envelope = {"ok": False, "backend": backend, "error": f"{type(exc).__name__}: {exc}"}
+        if backend == "duckduckgo":
+            envelope["hint"] = (
+                "DuckDuckGo's HTML layout may have changed. Set NVH_SEARXNG_URL "
+                "(self-hosted) or BRAVE_API_KEY (free tier) for a stable backend."
+            )
+        return envelope
 
     return {
         "ok": True,

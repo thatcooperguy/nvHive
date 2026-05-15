@@ -1866,6 +1866,20 @@ async def web_search_backend_endpoint(_auth: None = Depends(require_auth)) -> di
     return _response_envelope({"backend": active_backend()})
 
 
+@app.get("/v1/web-search/recommendations", summary="Web-search backend upgrade recommendations")
+async def web_search_recommendations_endpoint(_auth: None = Depends(require_auth)) -> dict[str, Any]:
+    """Return UI guidance on durable backend options.
+
+    When the active backend is the DuckDuckGo HTML fallback, this returns
+    a fragility nudge with concrete env vars and links the user can follow
+    to move to SearXNG or Brave. When the active backend is already stable,
+    durability is "stable" and `upgrades` is empty.
+    """
+    from nvh.integrations.web_search import backend_recommendation
+
+    return _response_envelope(backend_recommendation())
+
+
 @app.get("/v1/setup/smoke-tests", summary="Run lightweight app smoke checks")
 async def setup_smoke_tests(
     home_dir: str | None = None,
