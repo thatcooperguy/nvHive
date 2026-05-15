@@ -145,6 +145,25 @@ def _format_context_block(context: dict[str, Any]) -> str:
     return json.dumps(compact, indent=2, default=str)
 
 
+_TOOL_DECISION_GUIDE = """
+Decision guide — pick the smallest reliable answer:
+  1. If the answer is in the live workspace state above, just answer.
+     Don't call a tool to confirm what you already see.
+  2. If the user is asking about their OWN files / notes / code, prefer
+     `rag_ask` (their indexed folder) over `web_search` (public web).
+  3. If the user is asking about current events, library docs, or
+     anything time-sensitive that wouldn't be in your training data,
+     use `web_search`.
+  4. If a question touches BOTH local context and the public web,
+     run `rag_ask` first; only fall back to `web_search` if rag returns
+     no usable chunks.
+  5. Prefer one tool call per turn. The system gives you another turn
+     after each tool result — chain on the next turn, not in parallel.
+  6. Never call a `confirm` tool just to show off a capability. Only
+     when the user clearly asked for that exact action.
+""".rstrip()
+
+
 def _format_tools_block(tools: list[dict[str, Any]]) -> str:
     """Render the available Wizard tools as a compact instruction block.
 
@@ -152,6 +171,10 @@ def _format_tools_block(tools: list[dict[str, Any]]) -> str:
     local Ollama models that lack native function-calling, and on any cloud
     provider that just streams text. The chat loop parses these markers back
     out into a structured ``tool_calls`` field on the response.
+
+    The decision guide below the schema list is the part that actually
+    moves accuracy on small local models — without it, 4B-class models
+    over-call tools they don't need ("let me web_search what time it is").
     """
     if not tools:
         return ""
@@ -181,6 +204,7 @@ def _format_tools_block(tools: list[dict[str, Any]]) -> str:
             f"  • {tool['name']} [{tool.get('safety_class', 'auto')}] — "
             f"{tool.get('description', '')} Params: {params}.",
         )
+    lines.append(_TOOL_DECISION_GUIDE)
     lines.append("--- end tools ---")
     return "\n".join(lines)
 
