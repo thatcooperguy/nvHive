@@ -1754,6 +1754,50 @@ async def rag_collections_endpoint(
     return _response_envelope({"collections": list_collections(home_dir=home_dir)})
 
 
+class RagVaultIngestRequest(BaseModel):
+    home_dir: str | None = None
+
+
+@app.post("/v1/rag/vault/ingest", summary="Index the nvHive Vault into the RAG store")
+async def rag_vault_ingest_endpoint(
+    request: RagVaultIngestRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Walk the Vault markdown directory and refresh the ``vault`` collection.
+
+    Idempotent at the source-file level — running again just replaces each
+    note's chunks. Useful as a periodic refresh after the user has been
+    writing in Obsidian.
+    """
+    from nvh.integrations.rag import ingest_vault
+
+    return _response_envelope(await ingest_vault(home_dir=request.home_dir))
+
+
+class RagVaultAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=4000)
+    top_k: int = Field(default=5, ge=1, le=20)
+    home_dir: str | None = None
+
+
+@app.post("/v1/rag/vault/ask", summary="Ask a question grounded in the nvHive Vault")
+async def rag_vault_ask_endpoint(
+    request: RagVaultAskRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Search the Vault collection; auto-index on first use.
+
+    Returns the same shape as ``/v1/rag/ask`` with an extra ``auto_indexed``
+    flag so the UI can surface "first call took longer — we just indexed
+    your vault" without a second request.
+    """
+    from nvh.integrations.rag import ask_vault
+
+    return _response_envelope(
+        await ask_vault(request.question, top_k=request.top_k, home_dir=request.home_dir),
+    )
+
+
 class WebSearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=400)
     top_k: int = Field(default=5, ge=1, le=20)

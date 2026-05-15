@@ -17,5 +17,20 @@ from __future__ import annotations
 from nvh.integrations.rag.ingest import ingest_folder
 from nvh.integrations.rag.query import ask
 from nvh.integrations.rag.store import RagStore, list_collections
+from nvh.integrations.rag.vault_bridge import (
+    VAULT_COLLECTION,
+    ask_vault,
+    ensure_vault_indexed,
+    ingest_vault,
+)
 
-__all__ = ["RagStore", "ask", "ingest_folder", "list_collections"]
+__all__ = [
+    "RagStore",
+    "VAULT_COLLECTION",
+    "ask",
+    "ask_vault",
+    "ensure_vault_indexed",
+    "ingest_folder",
+    "ingest_vault",
+    "list_collections",
+]
