@@ -114,3 +114,23 @@ def test_build_system_prompt_appends_tools_block_when_provided() -> None:
     assert "refresh_models" not in without_tools
     assert "TOOL_CALL" in with_tools
     assert "TOOL_CALL" not in without_tools
+
+
+def test_tools_block_includes_decision_guide_when_tools_present() -> None:
+    """The decision guide is the thing that prevents 4B-class models from
+    over-calling tools they don't need. If we ship the tools block we
+    must ship the guide with it."""
+    tools = [{
+        "name": "rag_ask",
+        "description": "Local index search.",
+        "safety_class": "auto",
+        "parameters": {"question": {}},
+        "summary_template": "",
+    }]
+    block = _format_tools_block(tools)
+    # Guide enforces "answer from live state first; pick local-vs-web correctly"
+    assert "Decision guide" in block
+    assert "rag_ask" in block.lower() or "local" in block.lower()
+    assert "web_search" in block.lower() or "web" in block.lower()
+    # And the guide is omitted when no tools — no orphan instruction block.
+    assert _format_tools_block([]) == ""
