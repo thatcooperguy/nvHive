@@ -949,3 +949,38 @@ def start_comfyui(
         },
     )
     return status
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Portrait generation — minimal HTTP wrapper used by the agent-profile UI
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def generate_portrait(
+    prompt: str,
+    *,
+    home_dir: str | Path | None = None,
+    width: int = 512,
+    height: int = 512,
+    timeout: float = 180.0,
+) -> tuple[bytes, str]:
+    """Submit a portrait prompt to a running ComfyUI and return ``(bytes, ext)``.
+
+    Implementation note: ComfyUI's workflow JSON is intentionally not bundled
+    in code yet — different users run different checkpoints (SDXL, FLUX,
+    SD1.5) and the workflow shape changes per model. Until we ship a default
+    that works on a known-good checkpoint, this function raises
+    ``NotImplementedError`` with a clear next-step message so the UI can show
+    a "upload your own image" fallback instead of failing silently.
+
+    The endpoint and avatar-resolution layers are already wired so the only
+    follow-up to enable this is: drop a workflow JSON template that uses an
+    installed model into ``nvh/catalog/comfyui_portrait_workflow.json`` and
+    POST it to ``{COMFYUI_URL}/prompt`` here. Polling, websocket events, and
+    ``/view`` retrieval are standard ComfyUI patterns.
+    """
+    raise NotImplementedError(
+        "Portrait generation via ComfyUI isn't wired up yet. "
+        "Upload your own image via POST /v1/wizard/profiles/{name}/avatar/upload, "
+        "or drop a PNG/JPG at $NVH_HOME/agent-profiles/avatars/<name>.<ext>.",
+    )

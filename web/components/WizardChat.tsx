@@ -19,6 +19,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import AgentProfilePicker from '@/components/AgentProfilePicker';
+import CreateAgentModal from '@/components/CreateAgentModal';
 import {
   createConversation,
   executeWizardTool,
@@ -82,6 +83,7 @@ export default function WizardChat() {
   // and the next turn gets the new persona + LLM preferences via the chat
   // stream's `profile` field.
   const [profile, setProfile] = useState<string>('wizard');
+  const [creatingAgent, setCreatingAgent] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Abort any in-flight stream when the user re-sends or unmounts.
   const abortRef = useRef<AbortController | null>(null);
@@ -549,7 +551,16 @@ export default function WizardChat() {
           </button>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono" style={{ color: 'var(--text-faint)' }}>
-          <AgentProfilePicker value={profile} onChange={setProfile} />
+          <AgentProfilePicker
+            value={profile}
+            onChange={setProfile}
+            onCreateNew={() => setCreatingAgent(true)}
+          />
+          <CreateAgentModal
+            open={creatingAgent}
+            onClose={() => setCreatingAgent(false)}
+            onCreated={(name) => setProfile(name)}
+          />
           <span>
             Press Enter to send, Shift+Enter for a newline. Type{' '}
             <span className="text-[#76B900]">/help</span> for commands. Drop

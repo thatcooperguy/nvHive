@@ -235,6 +235,65 @@ export default function ProvidersPage() {
       .finally(() => setGpuLoading(false));
   }, [loadModels, loadCloudKeys]);
 
+  // Clipboard auto-detect: when the user lands on /providers, peek at the
+  // clipboard once and offer to auto-fill the matching provider's key field.
+  // Read-only — we never write the clipboard back and never silently save.
+  const [clipboardOffer, setClipboardOffer] = useState<{ providerId: string; key: string; preview: string } | null>(null);
+
+  useEffect(() => {
+    if (freeProviders.length === 0) return;
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.readText) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const text = (await navigator.clipboard.readText()).trim();
+        if (cancelled || !text || text.length > 256 || text.includes(' ')) return;
+        // Map common API-key prefixes to provider ids. We match on the
+        // visible prefix and let the user confirm — the validate step
+        // verifies the actual key before saving.
+        const matchers: Array<[RegExp, string]> = [
+          [/^sk-proj-/, 'openai'],
+          [/^sk-ant-/, 'anthropic'],
+          [/^sk-or-/, 'openrouter'],
+          [/^sk-/, 'openai'],
+          [/^gsk_/, 'groq'],
+          [/^xai-/, 'xai'],
+          [/^pcsk_/, 'perplexity'],
+          [/^AIza/, 'google'],
+          [/^nvapi-/, 'nvidia'],
+          [/^tvly-/, 'tavily'],
+          [/^brv-/, 'brave'],
+        ];
+        for (const [re, id] of matchers) {
+          if (!re.test(text)) continue;
+          if (!freeProviders.some(p => p.name === id)) continue;
+          if (savedKeys.has(id)) return;
+          setClipboardOffer({
+            providerId: id,
+            key: text,
+            preview: `${text.slice(0, 6)}…${text.slice(-4)}`,
+          });
+          break;
+        }
+      } catch {
+        // Permission denied / no clipboard / hardened browser — silently bail.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-run when the list of providers (or already-saved set) changes.
+  }, [freeProviders, savedKeys]);
+
+  const acceptClipboardKey = () => {
+    if (!clipboardOffer) return;
+    setKeyInputs(prev => ({ ...prev, [clipboardOffer.providerId]: clipboardOffer.key }));
+    setExpandedProvider(clipboardOffer.providerId);
+    setClipboardOffer(null);
+  };
+
+  const dismissClipboardKey = () => setClipboardOffer(null);
+
   const handleSaveProviderKey = async (providerId: string) => {
     const apiKey = keyInputs[providerId]?.trim();
     if (!apiKey) return;
@@ -378,6 +437,39 @@ export default function ProvidersPage() {
               <div className="text-[10px] font-mono text-[#a3a3a3]">via Ollama</div>
               <div className="text-[10px] font-mono text-[#76B900]">$0.00 / 1M tokens</div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clipboard auto-detect — offer to fill the matching key field. */}
+      {clipboardOffer && (
+        <div
+          className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs"
+          style={{
+            background: 'rgba(118, 185, 0, 0.08)',
+            borderColor: 'rgba(118, 185, 0, 0.4)',
+            color: '#0a0a0a',
+          }}
+        >
+          <div>
+            <span className="font-mono font-semibold">Clipboard key detected</span> —
+            looks like a {clipboardOffer.providerId} key ({clipboardOffer.preview}). Use it?
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={acceptClipboardKey}
+              className="btn-primary px-3 py-1 text-[10px] font-mono"
+            >
+              Fill {clipboardOffer.providerId}
+            </button>
+            <button
+              type="button"
+              onClick={dismissClipboardKey}
+              className="btn-ghost px-3 py-1 text-[10px] font-mono"
+            >
+              Dismiss
+            </button>
           </div>
         </div>
       )}
