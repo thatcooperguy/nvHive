@@ -1114,6 +1114,49 @@ export async function validateProviderKey(
   return apiPost<ValidateKeyResult>('/v1/setup/validate-key', { provider: provider_id, api_key });
 }
 
+// ─── Wizard reconnect ────────────────────────────────────────────────────────
+
+export interface WizardReconnectFact {
+  label: string;
+  value: string;
+}
+
+export interface WizardReconnectChange {
+  fact: string;
+  label: string;
+  previous: string;
+  current: string;
+  severity: string;
+}
+
+export interface WizardReconnectAction {
+  id: string;
+  title: string;
+  summary: string;
+  button_action_id?: string;
+}
+
+export interface WizardReconnectResult {
+  summary: string;
+  first_run: boolean;
+  changed: boolean;
+  needs_attention: WizardReconnectAction[];
+  auto_repaired: WizardReconnectAction[];
+  what_changed: WizardReconnectChange[];
+  what_survived: WizardReconnectFact[];
+  elapsed_ms: number;
+  preflight?: unknown;
+}
+
+/**
+ * Runs the Wizard reconnect routine: boot preflight, safe auto-repair,
+ * and a shaped "Welcome back" summary. Cheap enough to call once per
+ * page mount; the underlying state is cached under NVH_HOME.
+ */
+export async function wizardReconnect(homeDir?: string): Promise<WizardReconnectResult> {
+  return apiPost<WizardReconnectResult>('/v1/wizard/reconnect', { home_dir: homeDir });
+}
+
 // ─── WebSocket helpers ────────────────────────────────────────────────────────
 
 /** Derive the WebSocket base URL from the HTTP base URL. */

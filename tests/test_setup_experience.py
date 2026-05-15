@@ -31,7 +31,14 @@ def test_auto_repair_writes_env_file_without_downloads(tmp_path, monkeypatch) ->
         lambda home_dir=None: SimpleNamespace(
             ok=True,
             configured_by="argument",
-            layout=SimpleNamespace(home=tmp_path / "nvh"),
+            layout=SimpleNamespace(
+                home=tmp_path / "nvh",
+                # New auto-repair handlers (Wizard-1) read config_dir + comfyui_dir;
+                # supply both so the SimpleNamespace mock matches the production
+                # StorageLayout surface they touch.
+                config_dir=tmp_path / "nvh" / "config",
+                comfyui_dir=tmp_path / "nvh" / "comfyui",
+            ),
         ),
     )
 

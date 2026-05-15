@@ -547,6 +547,32 @@ class TestAPIEndpointCoverage:
         )
         assert resp.status_code == 422
 
+    def test_wizard_reconnect_returns_welcome_back_payload(self, test_client: TestClient) -> None:
+        """POST /v1/wizard/reconnect returns the shaped Welcome-back payload.
+
+        End-to-end: route exists, runs through the reconnect helper without
+        raising, and returns every key the UI's <WelcomeBackPanel> expects.
+        """
+        resp = test_client.post("/v1/wizard/reconnect", json={})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        for key in (
+            "summary",
+            "first_run",
+            "changed",
+            "needs_attention",
+            "auto_repaired",
+            "what_changed",
+            "what_survived",
+            "elapsed_ms",
+        ):
+            assert key in body["data"], f"missing key: {key}"
+        assert isinstance(body["data"]["summary"], str)
+        assert isinstance(body["data"]["needs_attention"], list)
+        assert isinstance(body["data"]["auto_repaired"], list)
+        assert isinstance(body["data"]["elapsed_ms"], int)
+
     def test_setup_free_providers(self, test_client: TestClient) -> None:
         """GET /v1/setup/free-providers lists no-signup providers."""
         resp = test_client.get("/v1/setup/free-providers")

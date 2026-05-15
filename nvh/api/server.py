@@ -1563,6 +1563,24 @@ async def setup_repair_workspace(
     return _response_envelope(run_safe_repairs(home_dir=request.home_dir))
 
 
+@app.post("/v1/wizard/reconnect", summary="Wizard reconnect — preflight + auto-repair + UI-friendly summary")
+async def wizard_reconnect(
+    request: SetupHomeRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Run the boot-preflight reconnect routine and shape it for the WebUI.
+
+    Returns the "Welcome back" payload: a one-line greeting, the facts that
+    survived since last session, the facts that changed, the safe repairs
+    that ran automatically, and the items that still need user action.
+    Powers the chat-mount welcome panel and is read by the AI Wizard chat
+    when greeting the user.
+    """
+    from nvh.integrations.wizard.reconnect import wizard_reconnect as run_reconnect
+
+    return _response_envelope(run_reconnect(home_dir=request.home_dir))
+
+
 @app.get("/v1/setup/smoke-tests", summary="Run lightweight app smoke checks")
 async def setup_smoke_tests(
     home_dir: str | None = None,

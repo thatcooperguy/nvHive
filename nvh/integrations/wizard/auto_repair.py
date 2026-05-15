@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,53 @@ from nvh.integrations.workspace.storage import (
     storage_status,
     write_env_file,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _refresh_ollama_models() -> str:
+    """Re-query the Ollama daemon for installed models (read-only).
+
+    Returns a one-line summary the auto-repair pipeline can record. If Ollama
+    is not running we report that — not an error, just "nothing to refresh".
+    """
+    try:
+        import httpx
+
+        resp = httpx.get("http://127.0.0.1:11434/api/tags", timeout=2.0)
+        resp.raise_for_status()
+        models = resp.json().get("models", []) or []
+        return f"Refreshed local Ollama model list: {len(models)} model(s) installed."
+    except Exception as exc:
+        logger.debug("ollama-model-refresh: daemon unreachable (%s)", exc)
+        return "Ollama daemon not reachable; skipped model refresh."
+
+
+def _validate_config(config_dir: Path) -> str:
+    """Parse the nvHive config.yaml without modifying it.
+
+    Surfaces schema drift early — a corrupt config can stall the wizard, and
+    catching it at reconnect-time means we can flag it before the user runs
+    into a downstream failure.
+    """
+    config_path = Path(config_dir) / "config.yaml"
+    if not config_path.exists():
+        return "No config.yaml yet — wizard will create one on first install."
+    try:
+        import yaml
+
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return "config.yaml exists but isn't a mapping — wizard will repair it on next install."
+        version = data.get("version", "?")
+        provider_keys = [k for k in ("providers", "advisors") if k in data]
+        section = provider_keys[0] if provider_keys else "—"
+        providers = data.get(section, {}) if section != "—" else {}
+        configured = sum(1 for v in (providers or {}).values() if isinstance(v, dict) and v.get("enabled"))
+        return f"config.yaml v{version} parsed; {configured} provider(s) enabled."
+    except Exception as exc:
+        logger.warning("config-validate: %s unreadable (%s)", config_path, exc)
+        return f"config.yaml present but not parseable: {exc}"
 
 
 def _action(
@@ -59,6 +107,22 @@ def auto_repair_plan(home_dir: str | Path | None = None) -> dict[str, Any]:
         "Verify setup catalog fallback",
         status="queued",
         summary="Ensure the setup catalog can load from cache or the bundled fallback.",
+        safe_to_auto_run=True,
+        button_action_id="repair-workspace",
+    ))
+    actions.append(_action(
+        "ollama-model-refresh",
+        "Refresh the local Ollama model list",
+        status="queued",
+        summary="Re-query the Ollama daemon for installed models so the picker doesn't show stale entries.",
+        safe_to_auto_run=True,
+        button_action_id="repair-workspace",
+    ))
+    actions.append(_action(
+        "config-validate",
+        "Validate the nvHive config",
+        status="queued",
+        summary=f"Parse {layout.config_dir / 'config.yaml'} to surface schema drift without modifying it.",
         safe_to_auto_run=True,
         button_action_id="repair-workspace",
     ))
@@ -112,6 +176,10 @@ def run_safe_repairs(home_dir: str | Path | None = None) -> dict[str, Any]:
             elif action["id"] == "comfyui-examples":
                 examples_dir = write_example_pack(storage.layout.comfyui_dir)
                 completed.append({**action, "result": str(examples_dir)})
+            elif action["id"] == "ollama-model-refresh":
+                completed.append({**action, "result": _refresh_ollama_models()})
+            elif action["id"] == "config-validate":
+                completed.append({**action, "result": _validate_config(storage.layout.config_dir)})
             else:
                 skipped.append({**action, "reason": "No safe repair handler."})
         except Exception as exc:
