@@ -1200,13 +1200,139 @@ export interface WizardChatResult {
  */
 export async function wizardChat(
   question: string,
-  options: { history?: WizardChatTurn[]; homeDir?: string } = {},
+  options: { history?: WizardChatTurn[]; homeDir?: string; conversationId?: string } = {},
 ): Promise<WizardChatResult> {
   return apiPost<WizardChatResult>('/v1/wizard/chat', {
     question,
     history: options.history ?? [],
     home_dir: options.homeDir,
+    conversation_id: options.conversationId,
   });
+}
+
+// ─── AI Wizard chat — streaming variant ─────────────────────────────────────
+
+export type WizardStreamEvent =
+  | { type: 'iteration'; n: number }
+  | { type: 'token'; text: string }
+  | { type: 'tool_call'; name: string; arguments: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; result: WizardChatToolResult['result'] }
+  | { type: 'confirm_required'; tool_calls: WizardChatToolCall[] }
+  | {
+      type: 'done';
+      answer: string;
+      used_provider: string | null;
+      used_model: string | null;
+      tool_calls: WizardChatToolCall[];
+      tool_results: WizardChatToolResult[];
+      iterations: number;
+    }
+  | { type: 'error'; error: string; fallback?: string };
+
+interface WizardChatStreamOptions {
+  history?: WizardChatTurn[];
+  homeDir?: string;
+  conversationId?: string;
+  signal?: AbortSignal;
+}
+
+/**
+ * Stream a Wizard turn. Uses POST + ReadableStream rather than EventSource
+ * because EventSource doesn't support custom auth headers, and our auth
+ * lives in Authorization / X-Hive-API-Key.
+ *
+ * Yields one event per SSE message. The caller drives token-by-token UI
+ * rendering off `token` events and renders tool-call cards off `tool_call` /
+ * `tool_result` / `confirm_required`. Final state lands in `done`; errors
+ * land in `error` (with an optional `fallback` string when the deterministic
+ * helper saved the turn).
+ */
+export async function* wizardChatStream(
+  question: string,
+  options: WizardChatStreamOptions = {},
+): AsyncGenerator<WizardStreamEvent> {
+  const bases = getApiBases();
+  let lastNetworkError: unknown;
+
+  for (const base of bases) {
+    let resp: Response;
+    try {
+      resp = await fetch(`${base}/v1/wizard/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          ...getApiAuthHeaders(),
+        },
+        body: JSON.stringify({
+          question,
+          history: options.history ?? [],
+          home_dir: options.homeDir,
+          conversation_id: options.conversationId,
+        }),
+        signal: options.signal,
+      });
+    } catch (err) {
+      lastNetworkError = err;
+      continue;
+    }
+
+    rememberApiBase(base);
+
+    if (!resp.ok || !resp.body) {
+      let detail = `HTTP ${resp.status}`;
+      try {
+        const body = await resp.json();
+        const bodyDetail = body?.error?.message ?? body?.detail ?? detail;
+        detail = typeof bodyDetail === 'string' ? bodyDetail : JSON.stringify(bodyDetail);
+      } catch {
+        // ignore
+      }
+      yield { type: 'error', error: detail };
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        // SSE frames are separated by a blank line. Split, parse the JSON
+        // payload of each `data: …` line, yield. The producer guarantees
+        // one event per frame and no comments.
+        let idx: number;
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          for (const line of frame.split('\n')) {
+            if (!line.startsWith('data:')) continue;
+            const payload = line.slice(5).trim();
+            if (!payload) continue;
+            try {
+              yield JSON.parse(payload) as WizardStreamEvent;
+            } catch {
+              // Malformed payload — drop and keep streaming.
+            }
+          }
+        }
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // ignore
+      }
+    }
+    return;
+  }
+
+  throw lastNetworkError instanceof Error
+    ? lastNetworkError
+    : new Error(`Hive API is offline. Tried ${bases.join(', ')}`);
 }
 
 /**

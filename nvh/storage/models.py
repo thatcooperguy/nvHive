@@ -44,6 +44,9 @@ class Conversation(Base):
     message_count: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
+    # Pinned conversations survive list-eviction and surface in the
+    # reconnect-resume card. Default False; flip via the pin endpoint.
+    pinned: Mapped[bool] = mapped_column(default=False)
 
     messages: Mapped[list[ConversationMessage]] = relationship(
         back_populates="conversation",

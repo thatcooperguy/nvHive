@@ -1590,6 +1590,10 @@ class WizardChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=20_000)
     history: list[WizardChatTurn] = Field(default_factory=list, max_length=40)
     home_dir: str | None = None
+    # When set, the Wizard turn is persisted to the conversations store so
+    # subsequent reconnects can resume the thread. Best-effort: a missing
+    # conversation never breaks the chat reply.
+    conversation_id: str | None = None
 
 
 @app.post("/v1/wizard/chat", summary="AI Wizard chat — live-state-grounded conversation")
@@ -1610,6 +1614,7 @@ async def wizard_chat_endpoint(
         request.question,
         history=history,
         home_dir=request.home_dir,
+        conversation_id=request.conversation_id,
     )
     return _response_envelope(result)
 
@@ -1636,6 +1641,7 @@ async def wizard_chat_stream_endpoint(
                 request.question,
                 history=history,
                 home_dir=request.home_dir,
+                conversation_id=request.conversation_id,
             ):
                 yield f"data: {json.dumps(event)}\n\n".encode()
         except Exception as exc:
@@ -1864,6 +1870,108 @@ async def web_search_backend_endpoint(_auth: None = Depends(require_auth)) -> di
     from nvh.integrations.web_search import active_backend
 
     return _response_envelope({"backend": active_backend()})
+
+
+class ConversationPinRequest(BaseModel):
+    pinned: bool = True
+
+
+@app.post("/v1/conversations/{conversation_id}/pin", summary="Pin or unpin a conversation for resume")
+async def conversation_pin_endpoint(
+    conversation_id: str = Path(..., description="Conversation UUID"),
+    request: ConversationPinRequest = None,  # type: ignore[assignment]
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Toggle the pinned flag. Pinned conversations survive list eviction and
+    are surfaced in the reconnect-resume card on next session start."""
+    from nvh.storage import repository as repo
+
+    if request is None:
+        request = ConversationPinRequest()
+    ok = await repo.set_conversation_pinned(conversation_id, request.pinned)
+    if not ok:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Conversation '{conversation_id}' not found.",
+        )
+    return _response_envelope({"conversation_id": conversation_id, "pinned": request.pinned})
+
+
+@app.get("/v1/conversations/pinned", summary="List pinned conversations (resume targets)")
+async def conversations_pinned_endpoint(
+    limit: int = 20,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Return conversations the user pinned for cross-session resume.
+
+    These are the "pick up where you left off" candidates the reconnect-resume
+    card uses on the next session start.
+    """
+    from nvh.storage import repository as repo
+
+    pinned = await repo.list_pinned_conversations(limit=limit)
+    return _response_envelope({
+        "conversations": [
+            {
+                "id": c.id,
+                "title": c.title,
+                "provider": c.provider,
+                "model": c.model,
+                "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+                "message_count": c.message_count,
+            }
+            for c in pinned
+        ],
+    })
+
+
+class SnapshotExportRequest(BaseModel):
+    home_dir: str | None = None
+
+
+@app.post("/v1/workspace/snapshot/export", summary="Bundle the workspace into a portable tarball")
+async def workspace_snapshot_export_endpoint(
+    request: SnapshotExportRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Export a tarball of vault + RAG index + config + receipts.
+
+    Secrets, API keys, and model weights are deliberately excluded so the
+    tarball is small and safe to mail/share. The user pulls model weights and
+    pastes keys again on the destination — the bundle is configuration, not
+    a disk image.
+    """
+    from nvh.integrations.workspace.snapshot import export_snapshot
+
+    result = export_snapshot(home_dir=request.home_dir)
+    return _response_envelope(result)
+
+
+class SnapshotImportRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    home_dir: str | None = None
+    overwrite: bool = False
+
+
+@app.post("/v1/workspace/snapshot/import", summary="Restore a workspace snapshot tarball")
+async def workspace_snapshot_import_endpoint(
+    request: SnapshotImportRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Extract a previously-exported snapshot into the current workspace.
+
+    Refuses to overwrite existing files unless ``overwrite=True``. Returns
+    counts so the UI can show "12 paths restored, 3 skipped" without a
+    second roundtrip.
+    """
+    from nvh.integrations.workspace.snapshot import import_snapshot
+
+    result = import_snapshot(
+        request.path,
+        home_dir=request.home_dir,
+        overwrite=request.overwrite,
+    )
+    return _response_envelope(result)
 
 
 @app.get("/v1/web-search/recommendations", summary="Web-search backend upgrade recommendations")

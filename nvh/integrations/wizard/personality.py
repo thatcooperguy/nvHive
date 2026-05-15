@@ -209,18 +209,37 @@ def _format_tools_block(tools: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _format_vault_recall_block(recall: str | None) -> str:
+    """Render an auto-folded vault chunk as a prompt block, or empty if None.
+
+    Placed between live state and tools so the model treats it as durable
+    background, not a tool result. The chunk text is sized + truncated by the
+    caller (chat.py); this layer only frames it.
+    """
+    if not recall:
+        return ""
+    return (
+        "\n\n--- Relevant note from your vault (auto-folded) ---\n"
+        f"{recall}\n"
+        "--- end note ---"
+    )
+
+
 def build_system_prompt(
     context: dict[str, Any],
     tools: list[dict[str, Any]] | None = None,
+    vault_recall: str | None = None,
 ) -> str:
-    """Combine persona + live state + (optional) tool instructions."""
+    """Combine persona + live state + optional vault recall + tool instructions."""
     block = _format_context_block(context)
     tools_block = _format_tools_block(tools or [])
+    recall_block = _format_vault_recall_block(vault_recall)
     return (
         f"{WIZARD_PERSONA}\n\n"
         "--- Live workspace state (this turn) ---\n"
         f"{block}\n"
         "--- end live state ---"
+        f"{recall_block}"
         f"{tools_block}\n\n"
         "Answer the user's next message using the live state when it's "
         "relevant. If a fact isn't in the live state, say so once and "
