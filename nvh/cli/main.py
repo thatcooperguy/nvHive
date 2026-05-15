@@ -9337,6 +9337,13 @@ def test(
         False, "--json",
         help="Emit the report as JSON on stdout (for CI / scripting)",
     ),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help=(
+            "Treat soft-passes (e.g. all providers 429'd) as failures. "
+            "Use in CI so a rate-limited environment fails loud."
+        ),
+    ),
     fix: bool = typer.Option(False, "--fix", help="Attempt to fix issues found"),
 ):
     """Run end-to-end smoke tests on your nvHive installation.
@@ -9349,6 +9356,7 @@ def test(
         nvh test                  Run all tests
         nvh test --quick          Fast sanity check (core only, no network)
         nvh test --no-webui       Skip WebUI (if not running)
+        nvh test --strict         CI-mode: rate-limited providers fail loud
         nvh test --fix            Try to fix issues automatically
     """
     # --quick implies skipping webui and provider health checks
@@ -9375,6 +9383,8 @@ def test(
         quick=quick,
     ))
 
+    exit_failed = report.strict_failed() if strict else report.failed
+
     if json_output:
         import json
         from dataclasses import asdict
@@ -9382,11 +9392,14 @@ def test(
             "total": report.total,
             "passed": report.passed,
             "failed": report.failed,
+            "soft_passed": report.soft_passed,
+            "strict_failed": report.strict_failed(),
+            "strict": strict,
             "total_ms": report.total_ms,
             "results": [asdict(r) for r in report.results],
         }
         print(json.dumps(payload, indent=2))
-        raise typer.Exit(0 if report.failed == 0 else 1)
+        raise typer.Exit(0 if exit_failed == 0 else 1)
 
     # Group by category
     categories: dict[str, list] = {}
@@ -9416,16 +9429,37 @@ def test(
     console.print(Rule("Summary"))
     console.print()
     if report.failed == 0:
+        soft_note = (
+            f" — [yellow]{report.soft_passed} soft-pass[/yellow]"
+            f" (would fail under --strict)" if report.soft_passed else ""
+        )
         console.print(
             f"  [bold green]All {report.total} tests passed"
-            f"[/bold green] in {report.total_ms}ms"
+            f"[/bold green] in {report.total_ms}ms{soft_note}"
         )
     else:
+        soft_note = (
+            f", [yellow]{report.soft_passed} soft-pass[/yellow]"
+            if report.soft_passed else ""
+        )
         console.print(
             f"  [bold]{report.passed}[/bold] passed, "
-            f"[bold red]{report.failed}[/bold red] failed "
+            f"[bold red]{report.failed}[/bold red] failed{soft_note} "
             f"out of {report.total} tests ({report.total_ms}ms)"
         )
+
+    # Always surface soft-pass detail so users see *why* providers were
+    # transient-skipped, even in green runs.
+    soft = [r for r in report.results if r.soft_pass]
+    if soft:
+        console.print()
+        console.print("  [yellow]Soft-pass detail[/yellow] (counted as passing"
+                      " unless --strict):")
+        for r in soft:
+            console.print(
+                f"    [yellow]~[/yellow] {r.name}"
+                f" [dim]({r.soft_reason or 'transient'})[/dim]"
+            )
 
     if fix and report.failed > 0:
         console.print()
@@ -9454,6 +9488,12 @@ def test(
 
     console.print()
 
+    # Preserve legacy behavior: the rich-output run is lenient and only
+    # exits non-zero when the user explicitly asks for strict mode. JSON
+    # mode (handled above) still exits 1 on hard failures for CI scripts.
+    if strict and exit_failed > 0:
+        raise typer.Exit(1)
+
 
 # ---------------------------------------------------------------------------
 # hive doctor
@@ -9480,11 +9520,18 @@ def doctor(
         "--min-free-gb",
         help="Minimum free space recommended for local models and ComfyUI",
     ),
+    json_output: bool = typer.Option(
+        False, "--json",
+        help="Emit the diagnostic as JSON on stdout (for selfcheck / scripting)",
+    ),
 ):
     """Run comprehensive system diagnostic."""
     import os
 
     rows: list[tuple[str, str, str]] = []  # (check, status, detail)
+    # Structured mirror of the rows table, so --json doesn't have to
+    # re-parse rich markup. ``status`` is one of pass/warn/fail.
+    structured: list[dict[str, str]] = []
 
     passed = 0
     warned = 0
@@ -9495,11 +9542,16 @@ def doctor(
         nonlocal passed
         passed += 1
         rows.append((check, "[green]PASS[/green]", detail))
+        structured.append({"check": check, "status": "pass", "detail": detail})
 
     def _warn(check: str, detail: str = "", fix: str = "") -> None:
         nonlocal warned
         warned += 1
         rows.append((check, "[yellow]WARN[/yellow]", detail))
+        structured.append({
+            "check": check, "status": "warn", "detail": detail,
+            "fix": fix,
+        })
         if fix:
             fixes.append(fix)
 
@@ -9507,8 +9559,24 @@ def doctor(
         nonlocal failed
         failed += 1
         rows.append((check, "[red]FAIL[/red]", detail))
+        structured.append({
+            "check": check, "status": "fail", "detail": detail,
+            "fix": fix,
+        })
         if fix:
             fixes.append(fix)
+
+    # When --json is requested, suppress all rich output so stdout is
+    # pure JSON for selfcheck / CI parsers. We swap the global console
+    # for an stderr-bound one for the duration of the gathering phase
+    # and restore it before raising.
+    _saved_console_file = getattr(console, "file", None)
+    if json_output:
+        import sys as _sys
+        try:
+            console.file = _sys.stderr
+        except Exception:
+            pass
 
     console.print("[bold]Hive Doctor[/bold] — running diagnostics...\n")
 
@@ -10000,8 +10068,31 @@ def doctor(
         _warn("nvh on PATH", str(e))
 
     # -----------------------------------------------------------------------
-    # Render results table
+    # Render results
     # -----------------------------------------------------------------------
+    total = passed + warned + failed
+
+    if json_output:
+        import json as _json
+        # Restore stdout binding so JSON goes to the real stdout even
+        # though the rich body wrote everything to stderr.
+        try:
+            if _saved_console_file is not None:
+                console.file = _saved_console_file
+        except Exception:
+            pass
+        payload = {
+            "schema_version": 1,
+            "total": total,
+            "passed": passed,
+            "warned": warned,
+            "failed": failed,
+            "fixes": fixes,
+            "checks": structured,
+        }
+        print(_json.dumps(payload, indent=2))
+        raise typer.Exit(0 if failed == 0 else 1)
+
     table = Table(title="Diagnostic Results", show_lines=False)
     table.add_column("Check", style="bold", min_width=35)
     table.add_column("Status", justify="center", min_width=8)
@@ -10012,8 +10103,6 @@ def doctor(
 
     console.print(table)
 
-    # Summary
-    total = passed + warned + failed
     summary_parts = []
     if passed:
         summary_parts.append(f"[green]{passed} passed[/green]")
@@ -10030,6 +10119,240 @@ def doctor(
 
     if failed:
         raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# nvh selfcheck — one-shot diagnostic bundle for GPU-VM product tests
+# ---------------------------------------------------------------------------
+
+@app.command(rich_help_panel="Admin")
+def selfcheck(
+    home_dir: str | None = typer.Option(
+        None, "--home-dir",
+        help="Persistent NVH_HOME on a mounted volume to check",
+    ),
+    output: str | None = typer.Option(
+        None, "--output", "-o",
+        help="Write the bundle to this path (default: $NVH_HOME/support/selfcheck-<ts>.json)",
+    ),
+    test_query: str = typer.Option(
+        "Say hello in one sentence", "--query",
+        help="Prompt to fire at the live Wizard turn as the end-to-end check",
+    ),
+    skip_live_query: bool = typer.Option(
+        False, "--no-live-query",
+        help="Skip the live Wizard round-trip (useful when no providers are configured)",
+    ),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help="Treat soft-passes (rate limits) as failures in the bundle status",
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet",
+        help="Suppress rich output; only print the bundle path on stdout",
+    ),
+):
+    """One-shot health bundle for product tests on rented GPU desktops.
+
+    Runs `nvh doctor` + `nvh test --quick` + a live Wizard round-trip + a
+    redacted workspace snapshot, then writes a single JSON bundle the user
+    can scp back for triage. **No network egress** — everything stays under
+    ``$NVH_HOME/support/``.
+
+    Examples:
+        nvh selfcheck                              Run all checks, write to default path
+        nvh selfcheck --output /tmp/nvh.json       Custom bundle path
+        nvh selfcheck --no-live-query --strict     CI-friendly invocation
+    """
+    import json as _json
+    from dataclasses import asdict
+
+    from nvh import telemetry as _telemetry
+    from nvh.core.smoke_test import run_smoke_tests
+    from nvh.integrations.workspace.passport import support_snapshot
+    from nvh.integrations.workspace.storage import nvh_home as _nvh_home
+
+    home_path, home_source = _nvh_home(home_dir)
+
+    bundle: dict[str, Any] = {
+        "schema_version": 1,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "nvh_home": str(home_path),
+        "nvh_home_source": home_source,
+        "nvh_version": _safe_nvh_version(),
+        "platform": _platform_summary(),
+        "components": {},
+        "status": {"ok": True, "failures": [], "warnings": []},
+    }
+
+    if not quiet:
+        console.print("[bold]nvHive Selfcheck[/bold] — gathering diagnostic bundle...\n")
+        console.print(f"  NVH_HOME: [bold]{home_path}[/bold] ([dim]{home_source}[/dim])\n")
+
+    # ------- smoke test (quick mode, skip webui/providers if unconfigured) -
+    if not quiet:
+        console.print("  [dim]→ running smoke test ...[/dim]")
+    try:
+        smoke_report = _run(run_smoke_tests(
+            quick=True,
+            skip_webui=True,
+            skip_providers=False,
+        ))
+        smoke_payload = {
+            "total": smoke_report.total,
+            "passed": smoke_report.passed,
+            "failed": smoke_report.failed,
+            "soft_passed": smoke_report.soft_passed,
+            "strict_failed": smoke_report.strict_failed(),
+            "total_ms": smoke_report.total_ms,
+            "results": [asdict(r) for r in smoke_report.results],
+        }
+        bundle["components"]["smoke"] = smoke_payload
+        if smoke_report.failed:
+            bundle["status"]["failures"].append(
+                f"smoke: {smoke_report.failed} hard failure(s)"
+            )
+        if strict and smoke_report.soft_passed:
+            bundle["status"]["failures"].append(
+                f"smoke: {smoke_report.soft_passed} soft-pass(es) under --strict"
+            )
+        elif smoke_report.soft_passed:
+            bundle["status"]["warnings"].append(
+                f"smoke: {smoke_report.soft_passed} soft-pass(es)"
+                " (would fail under --strict)"
+            )
+    except Exception as e:  # noqa: BLE001 — bundle continues even if one block fails
+        bundle["components"]["smoke"] = {"error": str(e)[:500]}
+        bundle["status"]["failures"].append(f"smoke: crashed ({type(e).__name__})")
+
+    # ------- live wizard turn (the canonical end-to-end signal) -----------
+    if skip_live_query:
+        bundle["components"]["wizard_live_turn"] = {"skipped": True}
+    else:
+        if not quiet:
+            console.print("  [dim]→ exercising live Wizard turn ...[/dim]")
+        try:
+            from nvh.core.engine import Engine
+            async def _live() -> dict[str, Any]:
+                engine = Engine()
+                await engine.initialize()
+                t0 = time.monotonic()
+                resp = await engine.query(test_query)
+                ms = int((time.monotonic() - t0) * 1000)
+                return {
+                    "ok": True,
+                    "provider": getattr(resp, "provider", "?"),
+                    "model": getattr(resp, "model", "?"),
+                    "duration_ms": ms,
+                    "reply_chars": len(getattr(resp, "content", "") or ""),
+                }
+            result = _run(_live())
+            bundle["components"]["wizard_live_turn"] = result
+            # Best-effort telemetry breadcrumb so the bundle and the
+            # opt-in event log agree on "the product actually worked here".
+            _telemetry.emit(
+                "first_wizard_turn",
+                {
+                    "provider": result.get("provider"),
+                    "model": result.get("model"),
+                    "duration_ms": result.get("duration_ms"),
+                    "source": "selfcheck",
+                },
+                home_dir=home_dir,
+            )
+        except Exception as e:  # noqa: BLE001
+            err = str(e)[:500]
+            is_rate_limit = "rate" in err.lower() or "429" in err
+            bundle["components"]["wizard_live_turn"] = {
+                "ok": False,
+                "error": err,
+                "rate_limited": is_rate_limit,
+            }
+            if is_rate_limit and not strict:
+                bundle["status"]["warnings"].append(
+                    "wizard_live_turn: rate limited (transient)"
+                )
+            else:
+                bundle["status"]["failures"].append(
+                    f"wizard_live_turn: {type(e).__name__}"
+                )
+
+    # ------- workspace support snapshot (already redacted) ----------------
+    if not quiet:
+        console.print("  [dim]→ writing redacted workspace snapshot ...[/dim]")
+    try:
+        snap = support_snapshot(home_dir=str(home_path), include_logs=True)
+        bundle["components"]["support_snapshot"] = {
+            "path": snap.get("path"),
+            "workspace_id": snap.get("passport", {}).get("workspace_id"),
+            "rootless": snap.get("passport", {}).get("rootless"),
+            "excludes": snap.get("excludes", []),
+        }
+    except Exception as e:  # noqa: BLE001
+        bundle["components"]["support_snapshot"] = {"error": str(e)[:500]}
+        bundle["status"]["warnings"].append(
+            f"support_snapshot: {type(e).__name__}"
+        )
+
+    # ------- telemetry summary --------------------------------------------
+    try:
+        bundle["components"]["telemetry"] = _telemetry.summary(home_dir=home_dir)
+    except Exception as e:  # noqa: BLE001
+        bundle["components"]["telemetry"] = {"error": str(e)[:500]}
+
+    # ------- finalize status ----------------------------------------------
+    bundle["status"]["ok"] = not bundle["status"]["failures"]
+
+    # ------- write the bundle ---------------------------------------------
+    if output:
+        bundle_path = Path(output).expanduser()
+    else:
+        support_dir = home_path / "support"
+        support_dir.mkdir(parents=True, exist_ok=True)
+        stamp = bundle["created_at"].replace(":", "").replace("-", "")
+        bundle_path = support_dir / f"selfcheck-{stamp}.json"
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    bundle_path.write_text(
+        _json.dumps(bundle, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+
+    if quiet:
+        print(str(bundle_path))
+    else:
+        console.print()
+        if bundle["status"]["ok"]:
+            console.print(f"  [bold green]Bundle OK[/bold green] → {bundle_path}")
+        else:
+            console.print(f"  [bold red]Bundle has failures[/bold red] → {bundle_path}")
+            for f in bundle["status"]["failures"]:
+                console.print(f"    [red]✗[/red] {f}")
+        for w in bundle["status"]["warnings"]:
+            console.print(f"    [yellow]![/yellow] {w}")
+        console.print(
+            "\n  [dim]Send the bundle file above to support, or paste"
+            " its contents into the issue.[/dim]"
+        )
+
+    raise typer.Exit(0 if bundle["status"]["ok"] else 1)
+
+
+def _safe_nvh_version() -> str:
+    try:
+        from nvh import __version__
+        return str(__version__)
+    except Exception:
+        return "unknown"
+
+
+def _platform_summary() -> dict[str, str]:
+    import platform as _platform
+    return {
+        "system": _platform.system(),
+        "release": _platform.release(),
+        "machine": _platform.machine(),
+        "python": _platform.python_version(),
+    }
 
 
 # ---------------------------------------------------------------------------
