@@ -24,6 +24,7 @@ import {
   wizardChat,
   type WizardChatToolCall,
   type WizardChatResult,
+  type WizardChatToolResult,
   type WizardToolSchema,
 } from '@/lib/api';
 
@@ -34,6 +35,12 @@ interface Message {
   toolCalls?: WizardChatToolCall[];
   toolStatus?: Record<string, 'idle' | 'running' | 'ok' | 'error' | 'awaiting-confirm'>;
   toolResults?: Record<string, string>;
+  // Auto-class tool results that ran server-side inside the follow-up loop.
+  // Surfaced as a compact "Wizard's reasoning" trace below the answer so the
+  // user can see exactly what fired and what came back. Builds trust in the
+  // model's grounding (RAG, web search, etc.) without dumping raw JSON.
+  serverToolTrace?: WizardChatToolResult[];
+  iterations?: number;
   mode?: 'llm' | 'deterministic';
   usedProvider?: string | null;
   usedModel?: string | null;
@@ -199,6 +206,8 @@ export default function WizardChat() {
         content: result.answer || '(empty response)',
         toolCalls: result.tool_calls ?? [],
         toolStatus: {},
+        serverToolTrace: result.tool_results ?? [],
+        iterations: result.iterations,
         mode: result.mode,
         usedProvider: result.used_provider,
         usedModel: result.used_model,
@@ -356,6 +365,10 @@ function MessageBlock({
       >
         <div>{message.content}</div>
 
+        {!isUser && message.serverToolTrace && message.serverToolTrace.length > 0 && (
+          <ServerToolTrace trace={message.serverToolTrace} />
+        )}
+
         {message.mode === 'deterministic' && (
           <div className="mt-1 text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-faint)' }}>
             offline helper
@@ -365,6 +378,9 @@ function MessageBlock({
           <div className="mt-1 text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-faint)' }}>
             {message.usedProvider}
             {message.usedModel ? ` · ${message.usedModel.replace(/^.*\//, '')}` : ''}
+            {message.iterations && message.iterations > 1 && (
+              <> · {message.iterations} round-trips</>
+            )}
           </div>
         )}
 
@@ -482,6 +498,115 @@ function formatToolResultSummary(name: string, result: Record<string, unknown> |
   // Fall through: stringify a short version.
   try {
     return JSON.stringify(result).slice(0, 120);
+  } catch {
+    return 'completed.';
+  }
+}
+
+/**
+ * ServerToolTrace renders auto-class tool calls that ran server-side
+ * inside the Wizard's follow-up loop, so the user can see "Wizard
+ * called rag_ask → got 4 chunks from notes.md, ideas.md" rather than
+ * just an answer that appears out of nowhere.
+ *
+ * Collapsed by default to keep the chat feeling like chat. Click to
+ * expand the details (args + raw result excerpt) for the curious.
+ */
+function ServerToolTrace({ trace }: { trace: WizardChatToolResult[] }) {
+  const [open, setOpen] = useState(false);
+  if (trace.length === 0) return null;
+  return (
+    <div className="mt-2 rounded-md border" style={{ background: 'var(--bg-subtle)', borderColor: 'var(--border)' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="flex w-full items-center justify-between px-2 py-1 text-[10px] font-mono"
+        style={{ color: 'var(--text-muted)' }}
+      >
+        <span>
+          {open ? '▾' : '▸'} Wizard used {trace.length} tool{trace.length === 1 ? '' : 's'} to answer
+          <span style={{ color: 'var(--text-faint)' }}>
+            {' '}
+            ({trace.map(t => t.name).join(' → ')})
+          </span>
+        </span>
+      </button>
+      {open && (
+        <div className="border-t px-2 py-2 space-y-2" style={{ borderColor: 'var(--border)' }}>
+          {trace.map((entry, i) => (
+            <ServerToolTraceItem key={`${entry.name}-${i}`} entry={entry} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ServerToolTraceItem({ entry }: { entry: WizardChatToolResult }) {
+  const ok = entry.result?.ok !== false;
+  const innerResult = (entry.result?.result as Record<string, unknown> | undefined) ?? undefined;
+  const summary = formatServerTraceSummary(entry.name, innerResult, entry.result?.error);
+  return (
+    <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+      <div className="flex items-baseline gap-2">
+        <span
+          className="font-mono font-semibold"
+          style={{ color: ok ? 'var(--text-primary)' : '#dc2626' }}
+        >
+          {entry.name}
+        </span>
+        <span className="text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: ok ? '#16a34a' : '#dc2626' }}>
+          {ok ? '✓' : '✗'}
+        </span>
+      </div>
+      <div className="mt-0.5" style={{ color: 'var(--text-secondary)' }}>{summary}</div>
+      {Object.keys(entry.arguments).length > 0 && (
+        <div className="mt-0.5 font-mono text-[9px]" style={{ color: 'var(--text-muted)' }}>
+          args: {JSON.stringify(entry.arguments).slice(0, 200)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatServerTraceSummary(
+  name: string,
+  inner: Record<string, unknown> | undefined,
+  error: string | undefined,
+): string {
+  if (error) return error;
+  if (!inner) return 'completed.';
+  // Shape-aware renderings — only the tools we ship today. Unknown shapes
+  // fall through to a stringified excerpt.
+  if (name === 'rag_ask' || name === 'rag_ask_vault') {
+    const chunks = Array.isArray(inner.chunks) ? inner.chunks : [];
+    const sources = new Set<string>();
+    for (const c of chunks) {
+      const src = (c as Record<string, unknown>)?.source;
+      if (typeof src === 'string') {
+        const tail = src.split('/').pop() ?? src;
+        sources.add(tail);
+      }
+    }
+    const srcList = Array.from(sources).slice(0, 4).join(', ');
+    const auto = inner.auto_indexed ? ' (auto-indexed vault)' : '';
+    return `${chunks.length} chunk(s) from ${srcList || 'index'}${auto}`;
+  }
+  if (name === 'web_search') {
+    const results = Array.isArray(inner.results) ? inner.results : [];
+    const backend = typeof inner.backend === 'string' ? inner.backend : 'web';
+    return `${results.length} result(s) via ${backend}`;
+  }
+  if (name === 'rag_ingest') {
+    const ingested = typeof inner.files_ingested === 'number' ? inner.files_ingested : 0;
+    const chunks = typeof inner.chunks === 'number' ? inner.chunks : 0;
+    return `indexed ${ingested} file(s), ${chunks} chunk(s)`;
+  }
+  if (name === 'refresh_models' && typeof inner.summary === 'string') {
+    return inner.summary;
+  }
+  try {
+    return JSON.stringify(inner).slice(0, 140);
   } catch {
     return 'completed.';
   }

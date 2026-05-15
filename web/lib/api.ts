@@ -1169,6 +1169,18 @@ export interface WizardChatToolCall {
   arguments: Record<string, unknown>;
 }
 
+export interface WizardChatToolResult {
+  name: string;
+  arguments: Record<string, unknown>;
+  result: {
+    ok?: boolean;
+    error?: string;
+    result?: unknown;
+    safety_class?: string;
+    [key: string]: unknown;
+  };
+}
+
 export interface WizardChatResult {
   answer: string;
   mode: 'llm' | 'deterministic';
@@ -1177,6 +1189,8 @@ export interface WizardChatResult {
   fallback_reason?: string;
   context?: Record<string, unknown>;
   tool_calls?: WizardChatToolCall[];
+  tool_results?: WizardChatToolResult[];
+  iterations?: number;
 }
 
 /**
