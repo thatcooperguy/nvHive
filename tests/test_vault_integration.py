@@ -19,12 +19,42 @@ def test_init_vault_creates_markdown_memory_tree(tmp_path) -> None:
     assert result["initialized"] is True
     assert vault_dir == home / "vault"
     assert (vault_dir / "README.md").exists()
+    assert (vault_dir / "MAP.md").exists()
     assert (vault_dir / "Wizard Memory" / "AI Wizard.md").exists()
     assert (vault_dir / "Conflicts" / "Product Conflicts.md").exists()
     assert (vault_dir / "Process Playbooks" / "Pilot Test Checklist.md").exists()
     assert (vault_dir / ".obsidian" / "app.json").exists()
-    assert result["markdown_files"] >= 5
+    # Graph view defaults are seeded so the graph isn't grey-dots on first open.
+    assert (vault_dir / ".obsidian" / "graph.json").exists()
+    assert result["markdown_files"] >= 6
     assert any(item["title"] == "OS disk vs persistent mount" for item in result["conflicts"])
+
+    # Wikilinks: every category note should reference the hub and at least
+    # one sibling, so Obsidian's Graph view shows real mesh structure.
+    readme = (vault_dir / "README.md").read_text()
+    assert "[[MAP]]" in readme
+    assert "[[AI Wizard]]" in readme
+    wizard_note = (vault_dir / "Wizard Memory" / "AI Wizard.md").read_text()
+    assert "[[Product Direction]]" in wizard_note
+    assert "[[Support Report Flow]]" in wizard_note
+    map_note = (vault_dir / "MAP.md").read_text()
+    assert "[[Product Direction]]" in map_note
+    assert "[[Pilot Test Checklist]]" in map_note
+
+    # Tag clusters: each seeded note carries a YAML tags block so the
+    # Graph view color-by-tag shows the structure we wired in.
+    for relative_path in (
+        "README.md",
+        "MAP.md",
+        "Wizard Memory/AI Wizard.md",
+        "Decisions/Product Direction.md",
+        "Conflicts/Product Conflicts.md",
+        "Process Playbooks/Pilot Test Checklist.md",
+        "Process Playbooks/Support Report Flow.md",
+    ):
+        content = (vault_dir / relative_path).read_text()
+        assert content.startswith("---\n"), f"{relative_path} missing frontmatter"
+        assert "tags:" in content.splitlines()[1], f"{relative_path} missing tags"
 
 
 def test_append_vault_memory_writes_safe_markdown(tmp_path) -> None:
