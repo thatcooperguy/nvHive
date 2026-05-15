@@ -86,7 +86,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          # Node 22 is the current LTS line (until April 2027). Matches
+          # NODE_MAJOR_VERSION in nvh/integrations/installs/node_runtime.py,
+          # so the WebUI builds with the same Node we install on user
+          # machines. Node 20 enters maintenance mode April 2026; the
+          # WebUI build path shouldn't ride a runtime that's about to
+          # stop receiving security fixes.
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
       - name: Install
