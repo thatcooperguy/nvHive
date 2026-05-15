@@ -1242,6 +1242,12 @@ export interface WizardChatResult {
   latency_ms?: number;
   input_tokens?: number;
   output_tokens?: number;
+  // Profile-level cost ceiling diagnostics. cost_ceiling_hit=true means the
+  // follow-up loop was aborted because the running cost crossed the active
+  // profile's max_cost_usd_per_turn. cost_ceiling_usd echoes the limit for
+  // display ("Stopped at $0.05 — profile budget").
+  cost_ceiling_hit?: boolean;
+  cost_ceiling_usd?: number | null;
 }
 
 /**
@@ -1414,6 +1420,8 @@ export type WizardStreamEvent =
       cost_usd?: number;
       latency_ms?: number;
       fallback_from?: string | null;
+      cost_ceiling_hit?: boolean;
+      cost_ceiling_usd?: number | null;
     }
   | { type: 'error'; error: string; fallback?: string };
 

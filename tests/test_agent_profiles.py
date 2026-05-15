@@ -103,11 +103,11 @@ def test_apply_profile_no_op_for_default_wizard() -> None:
     from nvh.integrations.wizard.chat import _apply_profile
 
     base = "BASE PROMPT"
-    out, prov, model = _apply_profile(base, None, None)
+    out, prov, model, ceiling = _apply_profile(base, None, None)
     assert out == base
-    assert prov is None and model is None
+    assert prov is None and model is None and ceiling is None
 
-    out2, _, _ = _apply_profile(base, "wizard", None)
+    out2, *_ = _apply_profile(base, "wizard", None)
     assert out2 == base
 
 
@@ -129,20 +129,21 @@ def test_apply_profile_appends_persona_and_routes(tmp_path: Path) -> None:
         home_dir=tmp_path,
     )
 
-    out, prov, model = _apply_profile("BASE", "careful", tmp_path)
+    out, prov, model, ceiling = _apply_profile("BASE", "careful", tmp_path)
     assert "BASE" in out
     assert "Careful Reviewer" in out
     assert "skeptical" in out
     assert prov == "ollama"
     assert model == "ollama/qwen2.5-coder:7b"
+    assert ceiling is None
 
 
 def test_apply_profile_unknown_name_is_safe() -> None:
     from nvh.integrations.wizard.chat import _apply_profile
 
-    out, prov, model = _apply_profile("BASE", "this-profile-does-not-exist", None)
+    out, prov, model, ceiling = _apply_profile("BASE", "this-profile-does-not-exist", None)
     assert out == "BASE"
-    assert prov is None and model is None
+    assert prov is None and model is None and ceiling is None
 
 
 @pytest.mark.asyncio

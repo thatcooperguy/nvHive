@@ -992,11 +992,172 @@ async def generate_portrait(
         return await _generate_portrait_nvidia(
             prompt, nvapi_key, width=width, height=height, timeout=timeout,
         )
+    # Fall back to a locally-running ComfyUI if reachable. We probe the
+    # default host/port and submit a minimal SDXL workflow. Users who run a
+    # different checkpoint can override NVH_COMFYUI_CHECKPOINT.
+    if _is_http_reachable():
+        return await _generate_portrait_comfyui(
+            prompt, width=width, height=height, timeout=timeout,
+        )
     raise NotImplementedError(
-        "Set NVAPI_KEY to enable NVIDIA-hosted portrait generation, or "
-        "upload your own image via POST /v1/wizard/profiles/{name}/avatar/upload, "
-        "or drop a PNG/JPG at $NVH_HOME/agent-profiles/avatars/<name>.<ext>.",
+        "No portrait generator available. Either:\n"
+        "  • set NVAPI_KEY to use NVIDIA-hosted image gen,\n"
+        "  • start ComfyUI locally and re-try,\n"
+        "  • upload an image via POST /v1/wizard/profiles/{name}/avatar/upload,\n"
+        "  • or drop a PNG/JPG at $NVH_HOME/agent-profiles/avatars/<name>.<ext>.",
     )
+
+
+COMFYUI_CHECKPOINT_ENV = "NVH_COMFYUI_CHECKPOINT"
+_DEFAULT_COMFYUI_CHECKPOINT = "sd_xl_base_1.0.safetensors"
+
+
+def _comfyui_portrait_workflow(
+    prompt: str,
+    *,
+    checkpoint: str,
+    width: int,
+    height: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Return a minimal SDXL ComfyUI workflow as a JSON-serializable dict.
+
+    Five nodes — checkpoint, latent, positive prompt, negative prompt,
+    sampler — plus VAE decode and SaveImage. Matches the default
+    SDXL workflow ComfyUI ships in its examples, just trimmed.
+    """
+    return {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": checkpoint},
+        },
+        "2": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+        },
+        "3": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": prompt, "clip": ["1", 1]},
+        },
+        "4": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {
+                "text": (
+                    "blurry, lowres, text, watermark, signature, frame, "
+                    "deformed, extra limbs, jpeg artifacts"
+                ),
+                "clip": ["1", 1],
+            },
+        },
+        "5": {
+            "class_type": "KSampler",
+            "inputs": {
+                "model": ["1", 0],
+                "positive": ["3", 0],
+                "negative": ["4", 0],
+                "latent_image": ["2", 0],
+                "seed": seed,
+                "steps": 28,
+                "cfg": 6.5,
+                "sampler_name": "dpmpp_2m",
+                "scheduler": "karras",
+                "denoise": 1.0,
+            },
+        },
+        "6": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
+        },
+        "7": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["6", 0], "filename_prefix": "nvh_portrait"},
+        },
+    }
+
+
+async def _generate_portrait_comfyui(
+    prompt: str,
+    *,
+    width: int,
+    height: int,
+    timeout: float,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+) -> tuple[bytes, str]:
+    """Submit the workflow to ComfyUI's HTTP API, poll until complete, fetch
+    the image bytes via /view. Returns ``(png_bytes, ".png")``.
+
+    Polls ``/history/{prompt_id}`` at 1 Hz with a hard ``timeout`` ceiling.
+    On any error we raise with the upstream status/message so the calling
+    endpoint can show a clean inline error.
+    """
+    import json as _json
+    import secrets
+
+    import httpx
+
+    base = _status_url(host, port)
+    checkpoint = os.environ.get(COMFYUI_CHECKPOINT_ENV, _DEFAULT_COMFYUI_CHECKPOINT)
+    seed = secrets.randbits(63)
+    workflow = _comfyui_portrait_workflow(
+        prompt, checkpoint=checkpoint, width=width, height=height, seed=seed,
+    )
+    client_id = f"nvh-{secrets.token_hex(4)}"
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        # 1. Submit the prompt — ComfyUI returns a prompt_id we poll on.
+        submit = await client.post(
+            f"{base}/prompt",
+            content=_json.dumps({"prompt": workflow, "client_id": client_id}),
+            headers={"Content-Type": "application/json"},
+        )
+        if submit.status_code >= 400:
+            raise RuntimeError(f"ComfyUI submit failed: HTTP {submit.status_code} — {submit.text[:200]}")
+        sub_data = submit.json()
+        prompt_id = sub_data.get("prompt_id")
+        if not prompt_id:
+            raise RuntimeError(f"ComfyUI did not return a prompt_id: {sub_data}")
+
+        # 2. Poll /history/<id> until the workflow produces an output image.
+        import asyncio
+
+        deadline = asyncio.get_event_loop().time() + timeout
+        image_info: dict[str, Any] | None = None
+        while asyncio.get_event_loop().time() < deadline:
+            hist = await client.get(f"{base}/history/{prompt_id}")
+            if hist.status_code == 200:
+                payload = hist.json()
+                entry = payload.get(prompt_id) or {}
+                outputs = entry.get("outputs") or {}
+                # Find the first node that produced an image.
+                for _node_id, node_out in outputs.items():
+                    imgs = node_out.get("images") or []
+                    if imgs:
+                        image_info = imgs[0]
+                        break
+                if image_info is not None:
+                    break
+            await asyncio.sleep(1.0)
+        if image_info is None:
+            raise RuntimeError(f"ComfyUI workflow {prompt_id} produced no image within {int(timeout)}s")
+
+        # 3. Fetch the raw image bytes via /view.
+        params = {
+            "filename": image_info.get("filename", ""),
+            "subfolder": image_info.get("subfolder", ""),
+            "type": image_info.get("type", "output"),
+        }
+        view = await client.get(f"{base}/view", params=params)
+        if view.status_code >= 400:
+            raise RuntimeError(f"ComfyUI /view failed: HTTP {view.status_code}")
+        # ComfyUI typically returns PNG; the filename suffix backs that up.
+        suffix = ".png"
+        fname = image_info.get("filename") or ""
+        if isinstance(fname, str) and "." in fname:
+            ext = fname.rsplit(".", 1)[-1].lower()
+            if ext in ("png", "jpg", "jpeg", "webp"):
+                suffix = f".{'jpg' if ext == 'jpeg' else ext}"
+        return view.content, suffix
 
 
 async def _generate_portrait_nvidia(

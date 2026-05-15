@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import PageHeader from '@/components/PageHeader';
 import ProviderCard from '@/components/ProviderCard';
 import {
   getModels,
@@ -431,20 +432,16 @@ export default function ProvidersPage() {
   const cloudKeyProviders = freeProviders.filter(p => p.requires_key !== false);
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
-        <div className="relative flex items-center justify-between">
-          <div>
-            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">AI Connections</div>
-            <h1 className="text-2xl font-bold text-[#0a0a0a]">AI Connections</h1>
-            <p className="text-xs font-mono text-[#737373] mt-1">
-              {providers.length > 0
-                ? `${healthyCount} of ${providers.length} AI connections healthy`
-                : 'Install a local GPU model or connect optional cloud providers'}
-            </p>
-          </div>
+    <div>
+      <PageHeader
+        eyebrow="AI Connections"
+        title="AI Connections"
+        subtitle={
+          providers.length > 0
+            ? `${healthyCount} of ${providers.length} AI connections healthy`
+            : 'Install a local GPU model or connect optional cloud providers'
+        }
+        trailing={
           <div className="flex items-center gap-2">
             <button
               onClick={() => setEnvImportOpen(true)}
@@ -465,8 +462,9 @@ export default function ProvidersPage() {
               CHECK AGAIN
             </button>
           </div>
-        </div>
-      </div>
+        }
+      />
+      <div className="p-6 space-y-6 max-w-7xl mx-auto">
 
       {/* Status summary */}
       {providers.length > 0 && (
@@ -1081,6 +1079,7 @@ export default function ProvidersPage() {
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

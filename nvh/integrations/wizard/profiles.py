@@ -50,6 +50,13 @@ class AgentProfile:
     # user profiles it can be: a path under NVH_HOME/agent-profiles/
     # avatars/, an absolute URL the user pasted, or empty (initial fallback).
     avatar: str = ""
+    # Per-turn cost ceiling in USD. When set and >0, the chat layer aborts a
+    # turn before invoking the LLM if the running cost for this conversation
+    # has already exceeded the ceiling, OR after a completion lands if the
+    # turn pushed past it. Useful for letting a hourly-metered user route an
+    # expensive cloud model behind a Researcher profile without surprise
+    # bills. None / 0 = no limit (inherit engine-level budget guards).
+    max_cost_usd_per_turn: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -117,6 +124,9 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         built_in=True,
         tags=["research", "search"],
         avatar=_avatar_url_for("researcher"),
+        # Researcher routes to whatever the router picks (often a stronger
+        # cloud model). 5¢ keeps deep-dives bounded for hourly-metered users.
+        max_cost_usd_per_turn=0.05,
     ),
     AgentProfile(
         name="writer",
