@@ -44,11 +44,15 @@ What you get on the happy path:
 - A desktop launcher and WebUI setup wizard.
 - Persistent `NVH_HOME`/`NVHIVE_HOME` storage for models, ComfyUI, apps, logs, jobs, and config.
 - A Workspace Passport for durable storage, boot drift, receipts, jobs, and the rootless policy.
-- GPU-aware model recommendations and disk estimates.
+- GPU-aware model recommendations and disk estimates with a one-click install card.
 - Mission cards for AI Starter, Graphics Creator, Game Dev, Music Producer, and Agent Builder.
 - Self-diagnosing checks for storage, Python, Node, CUDA, drivers, boot drift, and install receipts, with one-click rootless repairs in the wizard.
-- A product-aware AI Wizard chat helper that works immediately from local setup state, jobs, receipts, redacted logs, and rootless safety rules, then hands off to the local model when Ollama is healthy.
-- A rootless Markdown vault for durable memory, known product conflicts, pilot test notes, and optional Obsidian viewing.
+- A streaming, tool-aware **AI Wizard** that reads live workspace state, calls auto-class tools (refresh models, repair workspace, RAG over your folder/vault/PDFs, web search) in a conversational loop, cites sources inline, and surfaces cost + latency + provider fallback per response.
+- Six built-in **agent profiles** (Wizard, Coder, Researcher, Writer, Ops, Vault-RAG) you can map to local Ollama models or cloud LLMs; save your own profiles to `$NVH_HOME/agent-profiles/`.
+- A rootless Markdown vault for durable memory, known product conflicts, pilot test notes, and optional Obsidian viewing — with auto-folded vault recall on every Wizard turn.
+- Reconnect-survival: pinned conversations, workspace snapshot tarballs, and a global Welcome Back panel so a fresh ephemeral GPU desktop picks up where the last one left off.
+- Drag-drop ingest: drop files into the chat and they get embedded into the local RAG store (`pypdf`-backed PDFs supported via `nvhive[rag]`).
+- Slash commands in the WebUI: `/help`, `/save` (chat → vault), `/pin` (resume after reconnect), `/clear`, `/tools`.
 - Redacted error reports with request IDs when something needs debugging.
 
 Release status: CI is green across Linux, Windows, and macOS. nvHive is a
