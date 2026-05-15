@@ -956,6 +956,16 @@ def start_comfyui(
 # ────────────────────────────────────────────────────────────────────────────
 
 
+# NVIDIA-hosted image endpoints live under integrate.api.nvidia.com (or
+# api.nvcf.nvidia.com depending on account tier). We probe via env so users
+# can swap to any image model they have access to without a code change.
+NVIDIA_IMAGE_ENDPOINT_ENV = "NVH_NVIDIA_IMAGE_ENDPOINT"
+NVIDIA_IMAGE_MODEL_ENV = "NVH_NVIDIA_IMAGE_MODEL"
+_DEFAULT_NVIDIA_IMAGE_ENDPOINT = (
+    "https://integrate.api.nvidia.com/v1/genai/stabilityai/sdxl-turbo"
+)
+
+
 async def generate_portrait(
     prompt: str,
     *,
@@ -964,23 +974,89 @@ async def generate_portrait(
     height: int = 512,
     timeout: float = 180.0,
 ) -> tuple[bytes, str]:
-    """Submit a portrait prompt to a running ComfyUI and return ``(bytes, ext)``.
+    """Generate a portrait image. Returns ``(image_bytes, file_extension)``.
 
-    Implementation note: ComfyUI's workflow JSON is intentionally not bundled
-    in code yet — different users run different checkpoints (SDXL, FLUX,
-    SD1.5) and the workflow shape changes per model. Until we ship a default
-    that works on a known-good checkpoint, this function raises
-    ``NotImplementedError`` with a clear next-step message so the UI can show
-    a "upload your own image" fallback instead of failing silently.
+    Resolution order:
+      1. ``NVAPI_KEY`` set → NVIDIA-hosted image endpoint. Zero install,
+         ties directly to the rootless-NVIDIA wedge. Preferred path on
+         cloud GPU desktops where the user already has an NVIDIA account.
+      2. Local ComfyUI — not wired yet (needs a default workflow JSON for
+         the installed checkpoint). Raises NotImplementedError so the UI
+         falls back to the upload path with a clear hint.
 
-    The endpoint and avatar-resolution layers are already wired so the only
-    follow-up to enable this is: drop a workflow JSON template that uses an
-    installed model into ``nvh/catalog/comfyui_portrait_workflow.json`` and
-    POST it to ``{COMFYUI_URL}/prompt`` here. Polling, websocket events, and
-    ``/view`` retrieval are standard ComfyUI patterns.
+    Both branches surface clean errors via the existing avatar/generate
+    endpoint envelope so the modal shows a meaningful inline message.
     """
+    nvapi_key = os.environ.get("NVAPI_KEY", "").strip()
+    if nvapi_key:
+        return await _generate_portrait_nvidia(
+            prompt, nvapi_key, width=width, height=height, timeout=timeout,
+        )
     raise NotImplementedError(
-        "Portrait generation via ComfyUI isn't wired up yet. "
-        "Upload your own image via POST /v1/wizard/profiles/{name}/avatar/upload, "
+        "Set NVAPI_KEY to enable NVIDIA-hosted portrait generation, or "
+        "upload your own image via POST /v1/wizard/profiles/{name}/avatar/upload, "
         "or drop a PNG/JPG at $NVH_HOME/agent-profiles/avatars/<name>.<ext>.",
     )
+
+
+async def _generate_portrait_nvidia(
+    prompt: str,
+    api_key: str,
+    *,
+    width: int,
+    height: int,
+    timeout: float,
+) -> tuple[bytes, str]:
+    """Call NVIDIA-hosted image-gen API and return PNG bytes.
+
+    Tolerates the three common response shapes (raw base64, Stability-style
+    artifacts, OpenAI-style url+b64). Raises with the upstream status/body
+    on failure so the caller's envelope surfaces it to the user.
+    """
+    import base64
+    import json as _json
+
+    import httpx
+
+    endpoint = os.environ.get(NVIDIA_IMAGE_ENDPOINT_ENV, _DEFAULT_NVIDIA_IMAGE_ENDPOINT)
+    payload: dict[str, Any] = {
+        "prompt": prompt,
+        "width": width,
+        "height": height,
+        "samples": 1,
+        "steps": 30,
+    }
+    model_override = os.environ.get(NVIDIA_IMAGE_MODEL_ENV)
+    if model_override:
+        payload["model"] = model_override
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(endpoint, headers=headers, content=_json.dumps(payload))
+        if resp.status_code >= 400:
+            raise RuntimeError(f"NVIDIA image API {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        b64: str | None = None
+        if isinstance(data.get("image"), str):
+            b64 = data["image"]
+        elif isinstance(data.get("artifacts"), list) and data["artifacts"]:
+            first = data["artifacts"][0]
+            if isinstance(first, dict):
+                b64 = first.get("base64")
+        elif isinstance(data.get("data"), list) and data["data"]:
+            entry = data["data"][0]
+            if isinstance(entry, dict):
+                if isinstance(entry.get("b64_json"), str):
+                    b64 = entry["b64_json"]
+                elif isinstance(entry.get("url"), str):
+                    url_resp = await client.get(entry["url"])
+                    url_resp.raise_for_status()
+                    return url_resp.content, ".png"
+        if not b64:
+            raise RuntimeError(
+                f"NVIDIA image response shape not recognized: keys={list(data.keys())[:8]}",
+            )
+        return base64.b64decode(b64), ".png"

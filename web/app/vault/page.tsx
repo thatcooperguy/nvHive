@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import PageHeader from '@/components/PageHeader';
 import { getVaultStatus, initVault, installObsidian, saveVaultMemory } from '@/lib/api';
 import type { VaultStatus } from '@/lib/types';
 
@@ -133,17 +134,12 @@ export default function VaultPage() {
   };
 
   return (
-    <main className="p-6 space-y-6 max-w-6xl mx-auto">
-      <section className="nvidia-corner relative border border-[#d4d4d4] bg-white p-6 overflow-hidden">
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-1">Memory</div>
-            <h1 className="text-3xl font-bold text-[#0a0a0a]">nvHive Vault</h1>
-            <p className="text-sm text-[#525252] mt-2 max-w-2xl">
-              Plain Markdown memory for this rootless workspace. Obsidian can open it, but nvHive owns the durable vault.
-            </p>
-          </div>
+    <main>
+      <PageHeader
+        eyebrow="Memory"
+        title="nvHive Vault"
+        subtitle="Plain Markdown memory for this rootless workspace. Obsidian can open it, but nvHive owns the durable vault."
+        trailing={
           <div className="flex gap-2">
             <button onClick={refresh} disabled={loading || Boolean(working)} className="btn-secondary px-4 py-2 text-xs font-mono uppercase tracking-wider">
               Refresh
@@ -155,8 +151,9 @@ export default function VaultPage() {
               {working === 'obsidian' ? 'Installing' : 'Install Obsidian'}
             </button>
           </div>
-        </div>
-      </section>
+        }
+      />
+      <div className="p-6 space-y-6 max-w-6xl mx-auto">
 
       <InlineMessage message={message} />
       <InlineMessage message={error} error />
@@ -248,6 +245,7 @@ export default function VaultPage() {
           ))}
         </div>
       </section>
+      </div>
     </main>
   );
 }

@@ -2262,6 +2262,36 @@ class SnapshotImportRequest(BaseModel):
     overwrite: bool = False
 
 
+class SnapshotImportFromUrlRequest(BaseModel):
+    url: str = Field(..., min_length=8, max_length=2000)
+    home_dir: str | None = None
+    overwrite: bool = False
+
+
+@app.post(
+    "/v1/workspace/snapshot/import-url",
+    summary="Download a snapshot from a URL and restore it",
+)
+async def workspace_snapshot_import_url_endpoint(
+    request: SnapshotImportFromUrlRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Pull a previously-exported snapshot from ``url`` and extract it.
+
+    The file lands under ``NVH_HOME/snapshots/incoming/<stamp>-<basename>``
+    so a failed extract still keeps the bytes for retry. Capped at 200 MB
+    to protect persistent storage on hourly-metered desktops.
+    """
+    from nvh.integrations.workspace.snapshot import import_snapshot_from_url
+
+    result = await import_snapshot_from_url(
+        request.url,
+        home_dir=request.home_dir,
+        overwrite=request.overwrite,
+    )
+    return _response_envelope(result)
+
+
 @app.post("/v1/workspace/snapshot/import", summary="Restore a workspace snapshot tarball")
 async def workspace_snapshot_import_endpoint(
     request: SnapshotImportRequest,

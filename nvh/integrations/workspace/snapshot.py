@@ -109,6 +109,67 @@ def export_snapshot(home_dir: str | Path | None = None) -> dict[str, Any]:
     }
 
 
+async def import_snapshot_from_url(
+    url: str,
+    *,
+    home_dir: str | Path | None = None,
+    overwrite: bool = False,
+    max_bytes: int = 200 * 1024 * 1024,
+) -> dict[str, Any]:
+    """Download a snapshot tarball from ``url`` and extract it locally.
+
+    Caps the download at ``max_bytes`` (default 200 MB) so a runaway URL
+    doesn't fill the persistent mount. The downloaded file lands under
+    ``$NVH_HOME/snapshots/incoming/<timestamp>-<basename>.tar.gz`` so it
+    survives reconnect and can be re-extracted later without re-downloading.
+    """
+    import urllib.parse
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from nvh.integrations.workspace.storage import nvh_home
+
+    if not url.startswith(("http://", "https://")):
+        return {"ok": False, "error": "URL must be http:// or https://"}
+
+    home, _src = nvh_home(home_dir)
+    incoming = home / "snapshots" / "incoming"
+    incoming.mkdir(parents=True, exist_ok=True)
+
+    parsed = urllib.parse.urlparse(url)
+    base = Path(parsed.path).name or "snapshot.tar.gz"
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    dest = incoming / f"{stamp}-{base}"
+
+    try:
+        async with httpx.AsyncClient(timeout=300.0, follow_redirects=True) as client:
+            async with client.stream("GET", url) as resp:
+                if resp.status_code >= 400:
+                    return {"ok": False, "error": f"download failed: HTTP {resp.status_code}"}
+                total = 0
+                with dest.open("wb") as fh:
+                    async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            fh.close()
+                            dest.unlink(missing_ok=True)
+                            return {
+                                "ok": False,
+                                "error": f"snapshot exceeds {max_bytes // (1024 * 1024)} MB cap",
+                            }
+                        fh.write(chunk)
+    except httpx.HTTPError as exc:
+        dest.unlink(missing_ok=True)
+        return {"ok": False, "error": f"download error: {exc}"}
+
+    result = import_snapshot(dest, home_dir=home_dir, overwrite=overwrite)
+    result["downloaded_from"] = url
+    result["downloaded_bytes"] = total
+    result["local_path"] = str(dest)
+    return result
+
+
 def import_snapshot(
     tar_path: str | Path,
     *,
