@@ -287,6 +287,22 @@ async def _tool_rag_ask(args: dict[str, Any]) -> dict[str, Any]:
     return await ask(question, collection=collection, top_k=top_k, home_dir=home_dir)
 
 
+async def _tool_rag_ask_vault(args: dict[str, Any]) -> dict[str, Any]:
+    """Search the nvHive Vault (user's own notes) — auto-indexes on first use."""
+    from nvh.integrations.rag import ask_vault
+
+    question = args.get("question")
+    if not isinstance(question, str) or not question.strip():
+        return {"ok": False, "error": "question required (string)"}
+    home_dir = args.get("home_dir") if isinstance(args.get("home_dir"), str) else None
+    top_k_raw = args.get("top_k", 5)
+    try:
+        top_k = max(1, min(20, int(top_k_raw)))
+    except (TypeError, ValueError):
+        top_k = 5
+    return await ask_vault(question, top_k=top_k, home_dir=home_dir)
+
+
 async def _tool_web_search(args: dict[str, Any]) -> dict[str, Any]:
     """Run a web search and return top-k hits with title/url/snippet."""
     from nvh.integrations.web_search import web_search
@@ -377,6 +393,18 @@ def default_registry() -> WizardToolRegistry:
         },
         handler=_tool_rag_ingest,
         summary_template="Ingest {path} into the RAG index.",
+    ))
+
+    reg.register(WizardTool(
+        name="rag_ask_vault",
+        description="Search the nvHive Vault (user's own Markdown notes) for chunks relevant to a question. Auto-indexes the vault on first use.",
+        safety_class="auto",
+        parameters={
+            "question": {"type": "string", "required": True, "description": "The natural-language question."},
+            "top_k": {"type": "integer", "required": False, "description": "Max chunks to return (1-20, default 5)."},
+        },
+        handler=_tool_rag_ask_vault,
+        summary_template="Search your nvHive Vault for: {question}",
     ))
 
     reg.register(WizardTool(
