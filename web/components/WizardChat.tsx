@@ -64,6 +64,9 @@ interface Message {
   // banner so the user understands why the follow-up loop stopped early.
   costCeilingHit?: boolean;
   costCeilingUsd?: number | null;
+  // Router's one-line explanation for why this provider/model was chosen.
+  // Surfaces as a tooltip on the provider chip in the message footer.
+  routingReason?: string | null;
   // Name of the agent profile that produced this reply ("wizard", "coder",
   // …). Snapshot at send time so the bubble keeps showing the right avatar
   // even after the user swaps to a different profile mid-conversation.
@@ -99,6 +102,9 @@ export default function WizardChat() {
   // stream's `profile` field.
   const [profile, setProfile] = useState<string>('wizard');
   const [creatingAgent, setCreatingAgent] = useState(false);
+  // Tool-budget slider: 1 = "just answer", 3 = "let it chain". Sent on every
+  // turn so the user can dial the Wizard's chattiness per question.
+  const [maxIterations, setMaxIterations] = useState<number>(3);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Abort any in-flight stream when the user re-sends or unmounts.
   const abortRef = useRef<AbortController | null>(null);
@@ -441,6 +447,7 @@ export default function WizardChat() {
         history,
         conversationId: convId ?? undefined,
         profile,
+        maxIterations,
         signal: controller.signal,
       })) {
         switch (event.type) {
@@ -488,6 +495,7 @@ export default function WizardChat() {
               fallbackFrom: event.fallback_from,
               costCeilingHit: event.cost_ceiling_hit,
               costCeilingUsd: event.cost_ceiling_usd,
+              routingReason: event.routing_reason,
             }));
             setIterationStatus(null);
             break;
@@ -646,6 +654,33 @@ export default function WizardChat() {
             onClose={() => setCreatingAgent(false)}
             onCreated={(name) => setProfile(name)}
           />
+          <div
+            className="flex items-center gap-1"
+            title={
+              maxIterations === 1
+                ? 'Just answer me — skip tool chains.'
+                : maxIterations === 2
+                  ? 'Allow one tool round + one reaction.'
+                  : 'Let the Wizard chain up to 3 rounds of tool calls.'
+            }
+          >
+            <label htmlFor="iter-budget" style={{ color: 'var(--text-muted)' }}>
+              Depth:
+            </label>
+            <input
+              id="iter-budget"
+              type="range"
+              min={1}
+              max={3}
+              step={1}
+              value={maxIterations}
+              onChange={(e) => setMaxIterations(Number.parseInt(e.target.value, 10))}
+              className="h-1 w-12 cursor-pointer accent-[#76B900]"
+            />
+            <span className="font-mono" style={{ color: 'var(--text-primary)' }}>
+              {maxIterations}
+            </span>
+          </div>
           <span>
             Press Enter to send, Shift+Enter for a newline. Type{' '}
             <span className="text-[#76B900]">/help</span> for commands. Drop
@@ -689,6 +724,11 @@ function EmptyState({
     'Help me pick a mission for image gen.',
     'Refresh the local model list.',
   ]);
+  // Proactive repair nudge — when reconnect surfaces unhealthy receipts or
+  // attention items we render a single-line banner above the agent grid so
+  // the user sees the problem before they pick an agent. One-click = fire
+  // off the repair-workspace tool via a "Fix this" prompt.
+  const [proactiveNudge, setProactiveNudge] = useState<{ text: string; prompt: string } | null>(null);
   const agentList = Array.from(profileMap.values()).slice(0, 6);
 
   useEffect(() => {
@@ -724,6 +764,25 @@ function EmptyState({
           adaptive.push('What can my GPU run right now?');
           setStarters(adaptive.slice(0, 4));
         }
+
+        // Proactive nudge: build a one-line "I noticed X looks broken — want
+        // me to fix it?" message from the most important attention item. This
+        // is the "self-healing" promise made visible.
+        if (r.needs_attention.length > 0) {
+          const top = r.needs_attention[0] as { title?: string; summary?: string };
+          const summary = top.summary || top.title;
+          if (summary) {
+            setProactiveNudge({
+              text: `Heads up — ${summary}.`,
+              prompt: `Run a safe repair on the issue: ${top.title ?? summary}`,
+            });
+          }
+        } else if ((r.auto_repaired ?? []).length > 0) {
+          setProactiveNudge({
+            text: `I auto-repaired ${r.auto_repaired.length} item(s) on reconnect.`,
+            prompt: 'What did you just auto-repair, and is anything still broken?',
+          });
+        }
       } catch {
         // Reconnect unavailable — keep the static starters.
       }
@@ -747,6 +806,25 @@ function EmptyState({
           and can run repairs, refresh models, and validate keys.
         </div>
       </div>
+
+      {proactiveNudge && (
+        <button
+          type="button"
+          onClick={() => onPickPrompt(proactiveNudge.prompt)}
+          className="mt-4 flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-xs transition-colors hover:border-[#d97706]"
+          style={{
+            borderColor: '#d97706',
+            background: 'rgba(217,119,6,0.08)',
+            color: '#92400e',
+          }}
+          title="Click to seed a repair request"
+        >
+          <span>{proactiveNudge.text}</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em]" style={{ color: '#92400e' }}>
+            Fix it →
+          </span>
+        </button>
+      )}
 
       {agentList.length > 0 && (
         <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -951,7 +1029,12 @@ function MessageBlock({
         )}
         {message.mode === 'llm' && message.usedProvider && (
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-faint)' }}>
-            <span>{message.usedProvider}{message.usedModel ? ` · ${message.usedModel.replace(/^.*\//, '')}` : ''}</span>
+            <span
+              title={message.routingReason ?? 'Why this provider was picked is unavailable for this turn.'}
+              style={{ cursor: message.routingReason ? 'help' : undefined }}
+            >
+              {message.usedProvider}{message.usedModel ? ` · ${message.usedModel.replace(/^.*\//, '')}` : ''}
+            </span>
             {message.iterations && message.iterations > 1 && (
               <span>· {message.iterations} round-trips</span>
             )}

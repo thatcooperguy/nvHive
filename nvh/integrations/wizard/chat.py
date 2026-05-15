@@ -238,6 +238,18 @@ def _apply_profile(
     return system_prompt, profile.provider or None, profile.model or None, ceiling
 
 
+def _clamp_max_iterations(value: int | None) -> int:
+    """Clamp a user-supplied max_iterations to the safe [1, WIZARD_FOLLOWUP_MAX_ITER]
+    range. None or anything non-numeric falls back to the global cap."""
+    if value is None:
+        return WIZARD_FOLLOWUP_MAX_ITER
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return WIZARD_FOLLOWUP_MAX_ITER
+    return max(1, min(WIZARD_FOLLOWUP_MAX_ITER, v))
+
+
 async def wizard_chat(
     question: str,
     *,
@@ -246,6 +258,7 @@ async def wizard_chat(
     enable_followup: bool = True,
     conversation_id: str | None = None,
     profile: str | None = None,
+    max_iterations: int | None = None,
 ) -> dict[str, Any]:
     """Answer a Wizard question with the live-state-grounded LLM path.
 
@@ -363,7 +376,12 @@ async def wizard_chat(
             # final reply.
             cost_ceiling_hit = False
 
-            while iterations < WIZARD_FOLLOWUP_MAX_ITER:
+            iter_cap = _clamp_max_iterations(max_iterations)
+            # max_iterations=1 = "just answer me, don't chain tools."
+            # We honor that by short-circuiting the follow-up loop the same
+            # way enable_followup=False would.
+            effective_followup = enable_followup and iter_cap > 1
+            while iterations < iter_cap:
                 iterations += 1
                 response = await provider.complete(
                     messages=messages,
@@ -410,8 +428,11 @@ async def wizard_chat(
                     )
                     break
 
-                if not tool_calls or not enable_followup:
-                    # No tool calls (or follow-up disabled) — done.
+                if not tool_calls or not effective_followup:
+                    # No tool calls (or follow-up disabled / capped at 1) —
+                    # done. With max_iterations=1 we still surface tool_calls
+                    # as confirm-style so the UI can render them; we just
+                    # don't auto-execute or react.
                     pending_confirm_calls = tool_calls
                     break
 
@@ -469,6 +490,7 @@ async def wizard_chat(
                 "mode": "llm",
                 "used_provider": decision.provider,
                 "used_model": decision.model,
+                "routing_reason": getattr(decision, "reason", None),
                 "context": snapshot,
                 "tool_calls": pending_confirm_calls,
                 "tool_results": tool_results,
@@ -585,6 +607,7 @@ async def wizard_chat_stream(
     enable_followup: bool = True,
     conversation_id: str | None = None,
     profile: str | None = None,
+    max_iterations: int | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a Wizard turn as a sequence of events.
 
@@ -681,7 +704,9 @@ async def wizard_chat_stream(
         pending_confirm_calls: list[dict[str, Any]] = []
         final_text = ""
 
-        while iterations < WIZARD_FOLLOWUP_MAX_ITER:
+        iter_cap = _clamp_max_iterations(max_iterations)
+        effective_followup = enable_followup and iter_cap > 1
+        while iterations < iter_cap:
             iterations += 1
             yield {"type": "iteration", "n": iterations}
 
@@ -703,7 +728,7 @@ async def wizard_chat_stream(
             cleaned_text, tool_calls = _extract_tool_calls(full_text)
             final_text = cleaned_text
 
-            if not tool_calls or not enable_followup:
+            if not tool_calls or not effective_followup:
                 pending_confirm_calls = tool_calls
                 break
 
@@ -762,6 +787,7 @@ async def wizard_chat_stream(
             "answer": final_text,
             "used_provider": decision.provider,
             "used_model": decision.model,
+            "routing_reason": getattr(decision, "reason", None),
             "tool_calls": pending_confirm_calls,
             "tool_results": tool_results,
             "iterations": iterations,

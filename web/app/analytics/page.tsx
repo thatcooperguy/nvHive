@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import PageHeader from '@/components/PageHeader';
 import { getAnalytics } from '@/lib/api';
 import type { AnalyticsData } from '@/lib/api';
 
@@ -70,18 +71,12 @@ export default function AnalyticsPage() {
   const maxCost = Math.max(...costEntries.map(e => e.cost), 0.0001);
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
-        <div className="relative flex items-center justify-between">
-          <div>
-            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Usage</div>
-            <h1 className="text-2xl font-bold text-[#0a0a0a]">Usage</h1>
-            <p className="text-xs font-mono text-[#737373] mt-1">
-              See local-vs-cloud use, money saved by your GPU, and model performance.
-            </p>
-          </div>
+    <div>
+      <PageHeader
+        eyebrow="Usage"
+        title="Usage"
+        subtitle="See local-vs-cloud use, money saved by your GPU, and model performance."
+        trailing={
           <button
             onClick={loadData}
             disabled={loading}
@@ -89,8 +84,9 @@ export default function AnalyticsPage() {
           >
             {loading ? 'Loading...' : 'Refresh'}
           </button>
-        </div>
-      </div>
+        }
+      />
+      <div className="p-6 space-y-6 max-w-7xl mx-auto">
 
       {error && (
         <div className="border border-[#dc2626]/30 bg-[#dc2626]/5 p-4">
@@ -274,6 +270,7 @@ export default function AnalyticsPage() {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import ApiHealthBanner from '@/components/ApiHealthBanner';
 import Sidebar from '@/components/Sidebar';
 import GlobalModals from '@/components/GlobalModals';
+import SessionAgePill from '@/components/SessionAgePill';
 import ThemeToggle from '@/components/ThemeToggle';
 import WelcomeBackPanel from '@/components/WelcomeBackPanel';
 import { UIShellProvider, useUIShell } from '@/components/UIShellProvider';
@@ -67,6 +68,9 @@ function InnerShell({ children }: { children: React.ReactNode }) {
         <span style={{ color: 'var(--border-bright)' }}>|</span>
         <span className="text-[#5a9100]">Local-first mode</span>
         <div className="ml-auto flex items-center gap-3">
+          {/* Session-age indicator — load-bearing for metered cloud-GPU users. */}
+          <SessionAgePill />
+          <span style={{ color: 'var(--border-bright)' }}>|</span>
           {/* Command palette trigger */}
           <button
             className="font-mono text-[10px] transition-colors hover:text-[#76B900]"
