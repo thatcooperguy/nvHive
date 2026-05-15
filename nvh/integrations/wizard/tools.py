@@ -258,6 +258,35 @@ async def _tool_save_provider_key(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _tool_rag_ingest(args: dict[str, Any]) -> dict[str, Any]:
+    """Ingest a folder of text/source files into the local RAG index."""
+    from nvh.integrations.rag import ingest_folder
+
+    path = args.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return {"ok": False, "error": "path required (string)"}
+    collection = args.get("collection") if isinstance(args.get("collection"), str) else None
+    home_dir = args.get("home_dir") if isinstance(args.get("home_dir"), str) else None
+    return await ingest_folder(path, collection=collection, home_dir=home_dir)
+
+
+async def _tool_rag_ask(args: dict[str, Any]) -> dict[str, Any]:
+    """Ask a question grounded in the local RAG index — returns retrieved chunks."""
+    from nvh.integrations.rag import ask
+
+    question = args.get("question")
+    if not isinstance(question, str) or not question.strip():
+        return {"ok": False, "error": "question required (string)"}
+    collection = args.get("collection") if isinstance(args.get("collection"), str) else None
+    home_dir = args.get("home_dir") if isinstance(args.get("home_dir"), str) else None
+    top_k_raw = args.get("top_k", 5)
+    try:
+        top_k = max(1, min(20, int(top_k_raw)))
+    except (TypeError, ValueError):
+        top_k = 5
+    return await ask(question, collection=collection, top_k=top_k, home_dir=home_dir)
+
+
 def default_registry() -> WizardToolRegistry:
     """Build the registry with nvHive's stock tools.
 
@@ -308,6 +337,31 @@ def default_registry() -> WizardToolRegistry:
         },
         handler=_tool_save_provider_key,
         summary_template="Save the {provider} API key under the rootless workspace config.",
+    ))
+
+    reg.register(WizardTool(
+        name="rag_ask",
+        description="Search the local RAG index for chunks relevant to a question and return them with source citations.",
+        safety_class="auto",
+        parameters={
+            "question": {"type": "string", "required": True, "description": "The natural-language question."},
+            "collection": {"type": "string", "required": False, "description": "Named collection; defaults to 'default'."},
+            "top_k": {"type": "integer", "required": False, "description": "Max chunks to return (1-20, default 5)."},
+        },
+        handler=_tool_rag_ask,
+        summary_template="Search the RAG index for: {question}",
+    ))
+
+    reg.register(WizardTool(
+        name="rag_ingest",
+        description="Walk a folder, chunk + embed every text/source file, and store under a RAG collection.",
+        safety_class="confirm",
+        parameters={
+            "path": {"type": "string", "required": True, "description": "Folder to index."},
+            "collection": {"type": "string", "required": False, "description": "Named collection; defaults to 'default'."},
+        },
+        handler=_tool_rag_ingest,
+        summary_template="Ingest {path} into the RAG index.",
     ))
 
     return reg
