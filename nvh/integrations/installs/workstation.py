@@ -195,6 +195,7 @@ set -u
 PORT="{port}"
 API_PORT="{api_port}"
 URL="http://localhost:${{PORT}}/setup"
+API_URL="http://localhost:${{API_PORT}}/v1/health"
 LOG_DIR="${{NVH_LOGS:-{storage.layout.logs_dir}}}"
 LOG="$LOG_DIR/desktop-launcher.log"
 mkdir -p "$LOG_DIR"
@@ -203,7 +204,7 @@ log() {{
   printf '%s %s\\n' "$(date -Is 2>/dev/null || date)" "$*" >> "$LOG"
 }}
 
-server_ready() {{
+webui_ready() {{
   if command -v curl >/dev/null 2>&1; then
     curl -fsS "http://localhost:${{PORT}}/setup" >/dev/null 2>&1 \
       || curl -fsS "http://localhost:${{PORT}}/" >/dev/null 2>&1
@@ -215,6 +216,25 @@ server_ready() {{
     return $?
   fi
   return 1
+}}
+
+api_ready() {{
+  # The WebUI is useless without the API — every panel renders empty,
+  # producing the silent "nothing ever loaded" failure mode. Check API
+  # health (port {api_port} by default) before declaring the stack ready.
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS "$API_URL" >/dev/null 2>&1
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO- "$API_URL" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}}
+
+server_ready() {{
+  webui_ready && api_ready
 }}
 
 open_url() {{
@@ -261,6 +281,7 @@ nohup nvh webui --port "$PORT" --api-port "$API_PORT" -y >> "$LOG" 2>&1 &
 attempts=0
 while [ "$attempts" -lt 90 ]; do
   if server_ready; then
+    log "WebUI + API both ready after ${{attempts}}s"
     open_url
     exit 0
   fi
@@ -268,7 +289,14 @@ while [ "$attempts" -lt 90 ]; do
   sleep 1
 done
 
-log "WebUI did not become ready after 90 seconds; opening URL anyway"
+# Diagnose which of the two stalled so the user can grep this log.
+if webui_ready; then
+  log "WebUI is up on $PORT but API on $API_PORT did not respond after 90s"
+  log "Panels will be empty until the API is healthy. See $LOG_DIR/api-server.log."
+else
+  log "Neither WebUI on $PORT nor API on $API_PORT responded after 90s"
+  log "Opening anyway. See $LOG_DIR/api-server.log for the underlying error."
+fi
 open_url
 exit 0
 """
