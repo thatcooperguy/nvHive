@@ -9,6 +9,7 @@
  */
 
 import { useRouter } from 'next/navigation';
+import { Suspense } from 'react';
 import GPURecommenderCard from '@/components/GPURecommenderCard';
 import WizardChat from '@/components/WizardChat';
 
@@ -38,7 +39,14 @@ export default function WizardPage() {
         <GPURecommenderCard onInstall={() => router.push('/setup')} />
       </div>
       <div className="flex-1 min-h-0">
-        <WizardChat />
+        {/* Suspense boundary required because WizardChat uses
+            useSearchParams() (to read the ?issue=… / ?starter=… deep-link
+            from the setup page). Next.js 16's static prerender errors out
+            without one. The fallback is invisible — the chat loads in
+            <50ms so users never see a flash. */}
+        <Suspense fallback={null}>
+          <WizardChat />
+        </Suspense>
       </div>
     </div>
   );
