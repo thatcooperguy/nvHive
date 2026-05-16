@@ -8804,11 +8804,35 @@ def webui(
             api_cmd = [nvh_exe, "-m", "nvh.cli.main", "serve", "--port", str(api_port)]
         else:
             api_cmd = [nvh_exe, "serve", "--port", str(api_port)]
+
+        # Pipe API server stdout+stderr to a real log file. The previous
+        # behavior (subprocess.DEVNULL) made every silent boot failure
+        # (slow imports, port collision, missing dep, Pydantic config
+        # error) invisible to the user — they'd open the WebUI, see empty
+        # cards, and have nothing to look at. Now there is one canonical
+        # file to read.
+        api_log_path: Path | None = None
+        api_log_handle = None
+        try:
+            from nvh.integrations.workspace.storage import nvh_home as _nvh_home
+            api_log_path = _nvh_home()[0] / "logs" / "api-server.log"
+            api_log_path.parent.mkdir(parents=True, exist_ok=True)
+            api_log_handle = open(api_log_path, "a", buffering=1, encoding="utf-8")
+            _stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            api_log_handle.write(f"\n--- nvh webui auto-start at {_stamp} ---\n")
+            api_log_handle.flush()
+        except Exception:
+            # Logging is best-effort; if we can't open the log file we
+            # still want the API subprocess to start (it just won't be
+            # diagnosable). The user only sees the consequences later.
+            api_log_path = None
+            api_log_handle = None
+
         try:
             api_proc = subprocess.Popen(
                 api_cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=api_log_handle or subprocess.DEVNULL,
+                stderr=subprocess.STDOUT if api_log_handle else subprocess.DEVNULL,
                 env=webui_env,
             )
         except Exception as e:
@@ -8817,28 +8841,69 @@ def webui(
                 f"Run [bold]nvh serve[/bold] manually in another terminal."
             )
             api_proc = None
+            if api_log_handle is not None:
+                try:
+                    api_log_handle.close()
+                except Exception:
+                    pass
 
         if api_proc is not None:
-            # Wait up to ~8s for the API to accept connections.
-            deadline = _time.monotonic() + 8.0
+            # Cold-import time for FastAPI + nvh providers on a fresh
+            # cloud VM can be 10-15s. 8s was the prior bound and is a
+            # common cause of "nothing ever loaded" because the WebUI
+            # opens before the API actually accepts connections. We now
+            # wait up to 30s, log every 5s so the user knows we're still
+            # alive, and emit a structured failure message naming the
+            # log file path if it never comes up.
+            api_ready = False
+            api_wait_seconds = 30.0
+            api_poll_every = 0.25
+            api_status_tick = 5.0  # progress beat
+            deadline = _time.monotonic() + api_wait_seconds
+            next_tick = _time.monotonic() + api_status_tick
             while _time.monotonic() < deadline:
                 if _api_reachable(api_port):
-                    console.print(f"  [green]✓[/green] API server ready on {api_port}")
+                    api_ready = True
+                    elapsed = api_wait_seconds - (deadline - _time.monotonic())
+                    console.print(
+                        f"  [green]✓[/green] API server ready on {api_port}"
+                        f" (took {elapsed:.1f}s)"
+                    )
                     break
                 if api_proc.poll() is not None:
+                    log_hint = (
+                        f"\n      Log: [bold]{api_log_path}[/bold]"
+                        if api_log_path is not None
+                        else ""
+                    )
                     console.print(
-                        f"  [yellow]![/yellow] API server exited early "
-                        f"(code {api_proc.returncode}). The UI will work but "
-                        f"Advisors/Providers pages will be empty until you "
-                        f"run [bold]nvh serve[/bold] manually."
+                        f"  [red]✗[/red] API server exited early "
+                        f"(code {api_proc.returncode}). "
+                        f"The WebUI will load but every panel will be empty "
+                        f"until the API is running.{log_hint}\n"
+                        f"      Run [bold]nvh serve[/bold] manually or check "
+                        f"the log above for the underlying error."
                     )
                     api_proc = None
                     break
-                _time.sleep(0.25)
-            else:
+                if _time.monotonic() >= next_tick:
+                    console.print(
+                        f"  [dim]…still waiting for API on {api_port}"
+                        f" ({int(_time.monotonic() - (deadline - api_wait_seconds))}s)[/dim]"
+                    )
+                    next_tick += api_status_tick
+                _time.sleep(api_poll_every)
+
+            if not api_ready and api_proc is not None:
+                log_hint = (
+                    f" Check [bold]{api_log_path}[/bold] for the error."
+                    if api_log_path is not None
+                    else ""
+                )
                 console.print(
-                    "  [yellow]![/yellow] API server did not respond within 8s — "
-                    "continuing anyway."
+                    f"  [red]✗[/red] API server did not bind within "
+                    f"{api_wait_seconds:.0f}s — the WebUI will open but "
+                    f"panels will be empty.{log_hint}"
                 )
 
     console.print("[bold]Starting nvHive Web UI...[/bold]")

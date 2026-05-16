@@ -1,6 +1,7 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
+import ApiHealthBanner from '@/components/ApiHealthBanner';
 import Sidebar from '@/components/Sidebar';
 import GlobalModals from '@/components/GlobalModals';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -35,6 +36,10 @@ function InnerShell({ children }: { children: React.ReactNode }) {
     return (
       <>
         <GlobalModals />
+        {/* Surfaces "API offline" on the chat + setup pages too — these
+            are the first pages a fresh-install user lands on, and they
+            both depend on the API for everything they render. */}
+        <ApiHealthBanner />
         <div className="pointer-events-auto fixed right-3 top-3 z-50">
           <ThemeToggle compact />
         </div>
@@ -46,6 +51,7 @@ function InnerShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <GlobalModals />
+      <ApiHealthBanner />
       {/* Top status bar */}
       <div
         className="fixed top-0 left-0 right-0 z-50 h-8 border-b flex items-center px-4 gap-6 text-[10px] font-mono"

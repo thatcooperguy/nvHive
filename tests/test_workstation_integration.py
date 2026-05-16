@@ -73,3 +73,38 @@ def test_desktop_launcher_opens_browser_without_terminal(tmp_path, monkeypatch) 
     desktop_copy = tmp_path / "Desktop" / "NVHive AI Studio.desktop"
     assert desktop_copy.exists()
     assert "Terminal=false" in desktop_copy.read_text(encoding="utf-8")
+
+
+def test_desktop_launcher_polls_api_health_not_just_webui(tmp_path, monkeypatch) -> None:
+    """Regression test for the silent "nothing ever loaded" bug.
+
+    Prior behavior: the launcher's ``server_ready`` only polled the WebUI
+    on port 3000. So on cold cloud-VM boots where the API on 8000 was
+    still importing FastAPI + 100+ deps, Firefox would open onto a
+    functional WebUI shell whose every fetch silently failed. The user
+    saw blank cards with no explanation.
+
+    Fix: the launcher now requires BOTH the WebUI AND the API to be
+    healthy before opening the browser, and logs which side stalled
+    so users can grep the log.
+    """
+    monkeypatch.setattr(workstation.Path, "home", lambda: tmp_path)
+    storage = ensure_storage(tmp_path / "persist", min_free_gb=0, activate=False)
+
+    script = workstation.write_desktop_launch_script(
+        port=3100, api_port=8100, storage=storage,
+    )
+    body = script.read_text(encoding="utf-8")
+
+    # Both probes exist as separate functions so the diagnostic can
+    # distinguish which one stalled.
+    assert "webui_ready()" in body
+    assert "api_ready()" in body
+    # Combined gate: server_ready === webui_ready && api_ready
+    assert "webui_ready && api_ready" in body
+    # API probe must hit the canonical health endpoint, not the WebUI.
+    assert "/v1/health" in body
+    # When the timeout elapses, the log must name which side failed so
+    # the user has a place to look (the api-server.log we now produce).
+    assert "WebUI is up on $PORT but API on $API_PORT did not respond" in body
+    assert "api-server.log" in body
