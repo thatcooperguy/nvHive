@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "PhantomInput (dev)",
+  "version": "0.1.0",
+  "description": "Inject trusted input events into WebRTC remote-desktop streams (GeForce NOW, Parsec, etc.) for QA and AI-agent automation.",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "scripting",
+    "storage",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://play.geforcenow.com/*",
+    "https://*.geforcenow.com/*",
+    "https://*.parsec.app/*",
+    "https://*.frame.io/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "PhantomInput",
+    "default_popup": "src/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://play.geforcenow.com/*",
+        "https://*.geforcenow.com/*"
+      ],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

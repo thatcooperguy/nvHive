@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PhantomInput</title>
+  <style>
+    body {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      width: 320px;
+      margin: 0;
+      padding: 12px;
+      background: #0a0a0a;
+      color: #e5e5e5;
+      font-size: 12px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      color: #76B900;
+      text-transform: uppercase;
+    }
+    .row { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+    .row label { min-width: 64px; opacity: 0.7; }
+    button {
+      background: #1a1a1a;
+      color: #76B900;
+      border: 1px solid #2a2a2a;
+      padding: 6px 10px;
+      font-family: inherit;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    button:hover { border-color: #76B900; }
+    .danger { color: #ef4444; border-color: #7f1d1d; }
+    .status { margin-top: 12px; padding: 8px; background: #111; border-left: 2px solid #76B900; word-break: break-all; }
+    code { color: #76B900; }
+    .hint { margin-top: 10px; opacity: 0.6; line-height: 1.4; font-size: 10px; }
+  </style>
+</head>
+<body>
+  <h1>PhantomInput</h1>
+  <div id="status" class="status">scanning…</div>
+
+  <div class="row">
+    <button id="attach">Attach</button>
+    <button id="detach" class="danger">Detach</button>
+    <button id="status-refresh">Refresh</button>
+  </div>
+
+  <div class="row">
+    <label>Test:</label>
+    <button id="test-echo">echo "hi"</button>
+  </div>
+
+  <div class="hint">
+    Attaches via <code>chrome.debugger</code>. The yellow "being debugged"
+    bar will appear at the top of the tab — that's normal.
+    Detach when done to remove it.
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
