@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.39.0] - 2026-05-15
+
+### Fixed
+
+- **"WebUI opens but nothing loads" silent-failure bug.** Three gaps
+  were stacked: (1) `nvh webui` piped the auto-started `nvh serve`
+  subprocess output to `/dev/null` so boot failures were invisible;
+  (2) the readiness wait was 8s, too short for cold cloud-VM imports
+  that take 10-15s; (3) the desktop-icon launcher polled the WebUI
+  port but never checked the API port, so Firefox opened onto a UI
+  shell whose every fetch silently failed. Fix:
+  - API subprocess output now goes to `$NVH_HOME/logs/api-server.log`
+    with a per-run timestamp preamble.
+  - Readiness wait extended to 30s with a "…still waiting…" beat
+    every 5s.
+  - Desktop launcher now requires BOTH WebUI and API to be healthy
+    before opening Firefox; logs which side stalled on timeout.
+  - New `ApiHealthBanner` component in the WebUI surfaces a sticky
+    red "API offline" banner with retry + dismiss when `/v1/health`
+    is unreachable for 3+ consecutive polls. Names the log path
+    explicitly so the user has somewhere to look.
+
+### Added
+
+- **AI Wizard now reads explicit diagnostic findings** on every chat
+  turn. New `nvh/integrations/wizard/findings.py` derives a list of
+  findings (e.g. `gpu-missing`, `no-providers`, `no-local-models`,
+  `provider-unhealthy-<name>`) from the live workspace snapshot.
+  Each finding has a stable id, severity, category, title, detail,
+  and (when applicable) a `suggested_tool` the Wizard can invoke.
+- **`GET /v1/wizard/diagnostics`** — consolidated endpoint that
+  returns the findings list + workspace context + severity counts.
+  Single source of truth for the setup-page System Check and the
+  Wizard system prompt — same data, same shape, same ids.
+- **New `diagnose` Wizard tool** (auto-class) refreshes the findings
+  list mid-conversation so the agent can verify "did the repair
+  actually clear the issue?" without waiting for the next reconnect.
+- **Setup page → Wizard bridge.** New "Open in Wizard →" button in
+  the System Check header (visible only when there are concerns)
+  routes to `/wizard?starter=…`. The Wizard reads the URL param on
+  mount, fetches diagnostics, and auto-sends a precise starter so
+  the conversation lands directly on the user's issue.
+
 ## [0.38.0] - 2026-05-15
 
 ### Added
