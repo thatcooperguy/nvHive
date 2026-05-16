@@ -17,6 +17,7 @@
  *   4. After execution, append a small system message showing what ran.
  */
 
+import { useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import AgentProfilePicker from '@/components/AgentProfilePicker';
 import {
@@ -85,6 +86,15 @@ export default function WizardChat() {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Abort any in-flight stream when the user re-sends or unmounts.
   const abortRef = useRef<AbortController | null>(null);
+  // Setup-page bridge: when the user clicks a System Check item we navigate
+  // here with ?issue=<finding_id>. We fetch the matching finding from
+  // /v1/wizard/diagnostics, seed the draft with "Help me with: <title>", and
+  // auto-send so the conversation lands directly on the issue.
+  const searchParams = useSearchParams();
+  const issueHandledRef = useRef(false);
+  // Ref so the URL-param effect can invoke send() without a temporal-dead-zone
+  // reference to a function declared further down the component body.
+  const sendRef = useRef<(() => Promise<void>) | null>(null);
 
   /** Slash-command handler. Returns true if the input was consumed as a
    * command (so caller should NOT forward it to the Wizard chat). */
@@ -211,6 +221,46 @@ export default function WizardChat() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
+
+  // Deep-link from the setup page: either ?issue=<finding_id> (we look up the
+  // matching finding from /v1/wizard/diagnostics so the starter cites the real
+  // title) or ?starter=<text> (free-form starter, no lookup). Whichever lands,
+  // we auto-send so the conversation opens on the issue. Best-effort: any
+  // failure leaves the chat empty.
+  useEffect(() => {
+    const issueId = searchParams?.get('issue');
+    const rawStarter = searchParams?.get('starter');
+    if (!issueId && !rawStarter) return;
+    if (issueHandledRef.current) return;
+    issueHandledRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      let starter = rawStarter ?? '';
+      if (issueId) {
+        try {
+          const { wizardDiagnostics } = await import('@/lib/api');
+          const d = await wizardDiagnostics();
+          if (cancelled) return;
+          const match = d.findings.find(f => f.id === issueId);
+          starter = match
+            ? `Help me with: ${match.title}`
+            : `Help me with issue: ${issueId}`;
+        } catch {
+          starter = `Help me with issue: ${issueId}`;
+        }
+      }
+      if (!starter || cancelled) return;
+      setDraft(starter);
+      // One tick so React commits the draft state before send() reads it.
+      setTimeout(() => {
+        if (!cancelled && sendRef.current) void sendRef.current();
+      }, 0);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const runTool = async (
     messageId: string,
@@ -440,6 +490,13 @@ export default function WizardChat() {
       }
     }
   };
+
+  // Keep sendRef pointed at the latest ``send`` closure so the URL-param
+  // auto-send effect (declared earlier in the body) can invoke it without
+  // a forward-reference / temporal-dead-zone error.
+  useEffect(() => {
+    sendRef.current = send;
+  });
 
   const handleKey = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {

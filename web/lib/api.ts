@@ -1166,6 +1166,42 @@ export async function wizardReconnect(homeDir?: string): Promise<WizardReconnect
   return apiPost<WizardReconnectResult>('/v1/wizard/reconnect', { home_dir: homeDir });
 }
 
+// ─── AI Wizard diagnostics ───────────────────────────────────────────────────
+
+export interface WizardFinding {
+  id: string;
+  severity: 'info' | 'warn' | 'error';
+  category: 'gpu' | 'storage' | 'providers' | 'models' | 'runtime' | 'workspace';
+  title: string;
+  detail: string;
+  suggested_tool: string | null;
+  suggested_tool_args: Record<string, unknown>;
+}
+
+export interface WizardDiagnosticsPayload {
+  findings: WizardFinding[];
+  context: Record<string, unknown>;
+  counts: {
+    total: number;
+    error: number;
+    warn: number;
+    info: number;
+  };
+}
+
+/**
+ * Consolidated Wizard diagnostic findings + live workspace context.
+ *
+ * This is the single source of truth for the setup page's System Check
+ * surface AND the Wizard's prompt context — same data, two surfaces. Each
+ * finding has a stable `id` the setup page can link to as
+ * `/wizard?issue=<id>` for a guided fix.
+ */
+export async function wizardDiagnostics(homeDir?: string): Promise<WizardDiagnosticsPayload> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<WizardDiagnosticsPayload>(`/v1/wizard/diagnostics${qs}`);
+}
+
 // ─── AI Wizard chat ──────────────────────────────────────────────────────────
 
 export interface WizardChatTurn {
