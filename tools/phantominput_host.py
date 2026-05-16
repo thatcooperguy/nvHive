@@ -34,6 +34,12 @@ _msg_id = 0
 _pending: dict[int, Any] = {}
 _pending_lock = threading.Lock()
 
+# Becomes True as soon as the extension service worker sends us its
+# "hello" message on connect. The /installed endpoint reads this so
+# the install script knows when the extension is loaded.
+_extension_connected = False
+_extension_hello: dict[str, Any] | None = None
+
 
 def _next_id() -> int:
     global _msg_id  # noqa: PLW0603
@@ -67,11 +73,25 @@ def _read_from_extension() -> dict[str, Any] | None:
 
 
 def _stdio_reader() -> None:
-    """Read responses from the extension and route to pending requests."""
+    """Read messages from the extension and route them.
+
+    Two message shapes:
+    * ``{"op": "hello", ...}`` — extension greeting on connect; we
+      flip ``_extension_connected = True`` so /installed reports ready.
+    * ``{"requestId": N, "response": {...}}`` — response to a request
+      we previously sent; route to the pending waiter.
+    """
+    global _extension_connected, _extension_hello  # noqa: PLW0603
     while True:
         msg = _read_from_extension()
         if msg is None:
+            _extension_connected = False
             return
+        # Greeting / heartbeat
+        if msg.get("op") == "hello":
+            _extension_connected = True
+            _extension_hello = msg
+            continue
         request_id = msg.get("requestId")
         if request_id is None:
             continue
@@ -127,7 +147,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path == "/health":
-            self._send(200, {"ok": True, "host_alive": True})
+            self._send(200, {
+                "ok": True,
+                "host_alive": True,
+                "extension_connected": _extension_connected,
+            })
+            return
+        if self.path == "/installed":
+            # Poll target for the install script. 200 means "extension
+            # is loaded and the SW has connected to us"; 503 means
+            # "host is alive but extension hasn't checked in yet."
+            if _extension_connected:
+                self._send(200, {"ok": True, "extension": _extension_hello or {}})
+            else:
+                self._send(503, {
+                    "ok": False,
+                    "detail": "extension not connected yet — load unpacked in chrome://extensions",
+                })
             return
         if self.path == "/status":
             self._send(200, call_extension("status"))

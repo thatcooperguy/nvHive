@@ -202,8 +202,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // Native messaging host — pumps messages between the local bridge
-// process and this service worker. The host is started by the user once
-// (or auto-spawned on first message).
+// process and this service worker. We auto-connect on SW startup so
+// the install script can detect the extension is loaded by polling
+// the host's /installed endpoint.
 let nativePort = null;
 function connectNativeHost() {
   if (nativePort) return nativePort;
@@ -211,16 +212,33 @@ function connectNativeHost() {
     nativePort = chrome.runtime.connectNative('com.nvhive.phantominput');
     nativePort.onMessage.addListener(async (msg) => {
       // Forward to runtime message handler and echo result back.
-      chrome.runtime.sendMessage(msg, (resp) => {
-        nativePort.postMessage({ requestId: msg.requestId, response: resp });
-      });
+      try {
+        chrome.runtime.sendMessage(msg, (resp) => {
+          if (nativePort) {
+            nativePort.postMessage({ requestId: msg.requestId, response: resp });
+          }
+        });
+      } catch (e) {
+        // ignore
+      }
     });
-    nativePort.onDisconnect.addListener(() => { nativePort = null; });
+    nativePort.onDisconnect.addListener(() => {
+      const err = chrome.runtime.lastError;
+      console.warn('[PhantomInput] native host disconnected', err);
+      nativePort = null;
+      // Retry after a short delay in case the host is restarting.
+      setTimeout(connectNativeHost, 5000);
+    });
+    // Greet the host so it can mark the extension as installed.
+    nativePort.postMessage({ op: 'hello', from: 'extension', version: '0.1.0' });
   } catch (e) {
     nativePort = null;
+    // Will retry on next event.
   }
   return nativePort;
 }
 
-// Lazy: only connect when something asks us to.
-chrome.runtime.onStartup.addListener(() => { /* don't auto-connect */ });
+// Connect immediately + on every wakeup.
+connectNativeHost();
+chrome.runtime.onStartup.addListener(connectNativeHost);
+chrome.runtime.onInstalled.addListener(connectNativeHost);

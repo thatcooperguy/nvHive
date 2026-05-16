@@ -11,18 +11,32 @@ Chrome DevTools Protocol `Input.dispatchKeyEvent` — those events are
 flagged trusted at the Chromium level, so they pass through the
 streamer's filter.
 
-## Install (dev mode)
+## Install (one-shot)
 
 ```bash
-# 1. Open chrome://extensions and enable "Developer mode" (top right).
-# 2. Click "Load unpacked" and pick this directory:
-#    /Users/ccooper/nvh/tools/phantominput-extension
-# 3. Note the extension ID Chrome assigns (looks like 32 random letters).
-# 4. Register the native messaging host:
-EXT_ID=<that-id> ./install-host.sh
+# From the repo root:
+./tools/operator_install.sh
 ```
 
-That's it. The extension auto-activates on `play.geforcenow.com`.
+That script:
+1. Reads the deterministic extension ID from `.keys/extension_id.txt`
+   (committed; same on every machine that clones this repo).
+2. Registers the Chrome native messaging host manifest.
+3. Opens `chrome://extensions` for you.
+4. Polls the local host until the extension's service worker connects.
+
+You only need to do two manual things in Chrome (≈ 20 seconds total):
+  1. Toggle **Developer mode** ON (top-right).
+  2. Click **Load unpacked** → pick `tools/phantominput-extension`.
+
+The extension auto-connects to the native host on load; the install
+script prints `✅ Extension is loaded and connected.` when ready.
+
+> **Why deterministic?** We embed an RSA public key in `manifest.json`
+> so the extension ID is the same for every developer + every CI
+> runner. That eliminates the `EXT_ID=<copy-paste>` step in the prior
+> install flow. The private key under `.keys/extension_key.pem` is
+> gitignored; only the public key + derived ID are committed.
 
 ## Usage
 
