@@ -32,6 +32,10 @@ from typing import Any
 
 EXTENSION_URL = "http://127.0.0.1:9877"
 BRIDGE_URL = "http://127.0.0.1:9876"
+CDP_URL = "http://127.0.0.1:9222"
+# Default substring used to find the right tab when the CDP backend is
+# in play. The caller can override per-Session.
+CDP_DEFAULT_TAB_MATCH = "geforcenow.com"
 
 
 def _post(url: str, payload: dict[str, Any] | None = None, timeout: float = 30.0) -> dict[str, Any]:
@@ -50,45 +54,99 @@ def _get(url: str, timeout: float = 5.0) -> dict[str, Any]:
 
 
 def _detect_backend() -> str | None:
-    """Return 'extension' or 'bridge' or None depending on what's reachable."""
-    for label, url in (("extension", EXTENSION_URL), ("bridge", BRIDGE_URL)):
-        try:
-            r = _get(f"{url}/health", timeout=1.5)
-            if r.get("ok"):
-                return label
-        except Exception:
-            continue
+    """Return preferred backend label or None if nothing is reachable.
+
+    Preference order: extension (fastest, cross-platform, no Chrome
+    restart) → CDP-over-debug-port (no install but Chrome must be
+    launched with the flag) → AppleScript bridge (macOS-only fallback).
+    """
+    # 1. extension host
+    try:
+        r = _get(f"{EXTENSION_URL}/health", timeout=1.0)
+        if r.get("ok"):
+            return "extension"
+    except Exception:
+        pass
+    # 2. CDP-over-debug-port — check /json/version which Chrome always serves
+    try:
+        with urllib.request.urlopen(f"{CDP_URL}/json/version", timeout=1.0) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            if "Browser" in data:
+                return "cdp"
+    except Exception:
+        pass
+    # 3. AppleScript bridge
+    try:
+        r = _get(f"{BRIDGE_URL}/health", timeout=1.0)
+        if r.get("ok"):
+            return "bridge"
+    except Exception:
+        pass
     return None
 
 
 class GFNSession:
-    """Backend-agnostic GFN session controller."""
+    """Backend-agnostic GFN session controller.
 
-    def __init__(self, backend: str | None = None) -> None:
+    Three backends, auto-detected in priority order:
+      - "extension": PhantomInput Chrome extension + native host (best,
+        works while user is in other apps, cross-platform)
+      - "cdp":       Chrome relaunched with --remote-debugging-port=9222
+                     (no extension install, ideal for headless CI)
+      - "bridge":    macOS AppleScript bridge (fallback)
+    """
+
+    def __init__(
+        self,
+        backend: str | None = None,
+        *,
+        cdp_tab_match: str = CDP_DEFAULT_TAB_MATCH,
+    ) -> None:
         if backend is None:
             backend = _detect_backend()
             if backend is None:
                 raise RuntimeError(
-                    "no GFN input backend reachable. Start either:\n"
-                    f"  - phantominput extension host on {EXTENSION_URL}\n"
-                    f"  - applescript bridge on {BRIDGE_URL}\n"
-                    "(see tools/phantominput-extension/README.md or tools/gfn_input_bridge.py)"
+                    "no input backend reachable. Start one of:\n"
+                    f"  - phantominput extension + host  ({EXTENSION_URL})\n"
+                    f"  - Chrome with --remote-debugging-port=9222  ({CDP_URL})\n"
+                    f"  - applescript bridge  ({BRIDGE_URL})\n"
+                    "See tools/phantominput-extension/README.md, tools/cdp_session.py,\n"
+                    "or tools/gfn_input_bridge.py."
                 )
-        if backend not in {"extension", "bridge"}:
+        if backend not in {"extension", "cdp", "bridge"}:
             raise ValueError(f"unknown backend {backend!r}")
         self.backend = backend
-        self._url = EXTENSION_URL if backend == "extension" else BRIDGE_URL
+        self._cdp_tab_match = cdp_tab_match
+        self._cdp = None  # lazy
+        if backend == "extension":
+            self._url = EXTENSION_URL
+        elif backend == "bridge":
+            self._url = BRIDGE_URL
+        else:
+            self._url = CDP_URL
+
+    def _ensure_cdp(self):
+        """Lazy-construct the CDPSession for the cdp backend."""
+        if self._cdp is None:
+            from tools.cdp_session import CDPSession  # local import: optional dep path
+            self._cdp = CDPSession(debug_url=self._url)
+            self._cdp.attach_to_first_tab_matching(self._cdp_tab_match)
+        return self._cdp
 
     # ------------------------------------------------------------------
     # Health + introspection
     # ------------------------------------------------------------------
 
     def health(self) -> dict[str, Any]:
+        if self.backend == "cdp":
+            return {"ok": True, "backend": "cdp", "url": self._url}
         return _get(f"{self._url}/health")
 
     def status(self) -> dict[str, Any]:
         if self.backend == "extension":
             return _get(f"{self._url}/status")
+        if self.backend == "cdp":
+            return {"ok": True, "backend": "cdp", "tabs": self._ensure_cdp().list_tabs()}
         return self.health()
 
     # ------------------------------------------------------------------
@@ -97,18 +155,24 @@ class GFNSession:
 
     def run(self, command: str, wait_after: float = 0.5) -> dict[str, Any]:
         """Type a command line + Enter, return when the call completes."""
+        if self.backend == "cdp":
+            return self._ensure_cdp().run(command, wait_after=wait_after)
         payload = {"command": command, "wait_after": wait_after}
         if self.backend == "bridge":
             payload["activate"] = "Google Chrome"
         return _post(f"{self._url}/run", payload)
 
     def type(self, text: str) -> dict[str, Any]:  # noqa: A003 — clearer name
+        if self.backend == "cdp":
+            return self._ensure_cdp().type(text)
         payload = {"text": text}
         if self.backend == "bridge":
             payload["activate"] = "Google Chrome"
         return _post(f"{self._url}/type", payload)
 
     def key(self, key: str, modifiers: list[str] | int | None = None) -> dict[str, Any]:
+        if self.backend == "cdp":
+            return self._ensure_cdp().key(key)
         payload = {"key": key}
         if modifiers is not None:
             payload["modifiers"] = modifiers
@@ -117,6 +181,8 @@ class GFNSession:
         return _post(f"{self._url}/key", payload)
 
     def click(self, x: int, y: int, button: str = "left") -> dict[str, Any]:
+        if self.backend == "cdp":
+            return self._ensure_cdp().click(x, y, button=button)
         payload = {"x": x, "y": y, "button": button}
         if self.backend == "bridge":
             payload["activate"] = "Google Chrome"
@@ -125,16 +191,17 @@ class GFNSession:
     def move(self, x: int, y: int) -> dict[str, Any]:
         if self.backend == "extension":
             return _post(f"{self._url}/move", {"x": x, "y": y})
-        # Bridge takes deltas, not absolute; translation isn't possible
-        # without knowing current cursor. Caller should use absolute
-        # click() instead.
-        return {"ok": False, "error": "absolute move requires extension backend"}
+        if self.backend == "cdp":
+            return self._ensure_cdp().move(x, y)
+        return {"ok": False, "error": "absolute move requires extension or cdp backend"}
 
     def screenshot(self) -> dict[str, Any]:
         """Return {"ok": True, "data": "<base64 PNG>"} on success."""
         if self.backend == "extension":
             return _post(f"{self._url}/screenshot")
-        return {"ok": False, "error": "screenshot requires extension backend"}
+        if self.backend == "cdp":
+            return self._ensure_cdp().screenshot()
+        return {"ok": False, "error": "screenshot requires extension or cdp backend"}
 
     # ------------------------------------------------------------------
     # Keepalive (bridge-only; extension doesn't need it)
