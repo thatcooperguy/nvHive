@@ -458,13 +458,20 @@ if command -v nvidia-smi &>/dev/null; then
 fi
 [ -z "$GPU_NAME" ] && echo -e "${Y}No NVIDIA GPU detected - CPU mode${N}"
 if [ -n "$GPU_NAME" ]; then
-    if [ "$VRAM_GB" -ge 40 ]; then DEFAULT_OLLAMA_MODEL="nemotron"
-    elif [ "$VRAM_GB" -ge 24 ]; then DEFAULT_OLLAMA_MODEL="llama3.2-vision"
-    elif [ "$VRAM_GB" -ge 12 ]; then DEFAULT_OLLAMA_MODEL="minicpm-v"
-    elif [ "$VRAM_GB" -ge 8 ]; then DEFAULT_OLLAMA_MODEL="qwen3:8b"
-    else DEFAULT_OLLAMA_MODEL="gemma3:4b"; fi
+    # Default the AI Wizard to an NVIDIA multimodal model so it can see
+    # screenshots, images, and documents — not just read text. Downgrade
+    # by VRAM tier; smallest tier still gets a vision-capable model so
+    # the Wizard's multimodal tools stay functional.
+    if   [ "$VRAM_GB" -ge 40 ]; then DEFAULT_OLLAMA_MODEL="nemotron-omni"          # NVIDIA Nemotron Omni — full multimodal flagship
+    elif [ "$VRAM_GB" -ge 24 ]; then DEFAULT_OLLAMA_MODEL="nemotron-3-nano-omni"   # Nemotron 3 Nano Omni (30B MoE, 3B active) — multimodal
+    elif [ "$VRAM_GB" -ge 16 ]; then DEFAULT_OLLAMA_MODEL="llama3.2-vision"        # Llama 3.2 11B Vision — multimodal
+    elif [ "$VRAM_GB" -ge 12 ]; then DEFAULT_OLLAMA_MODEL="minicpm-v"              # MiniCPM-V — small multimodal
+    elif [ "$VRAM_GB" -ge 6  ]; then DEFAULT_OLLAMA_MODEL="moondream"              # Moondream — tiny multimodal (~2 GB)
+    else DEFAULT_OLLAMA_MODEL="moondream"; fi
 else
-    DEFAULT_OLLAMA_MODEL="gemma3:4b"
+    # CPU-only fallback. moondream is still small enough to run usefully
+    # on CPU for the multimodal tools.
+    DEFAULT_OLLAMA_MODEL="moondream"
 fi
 echo -e "${D}Recommended local model: $DEFAULT_OLLAMA_MODEL${N}"
 
