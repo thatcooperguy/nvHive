@@ -193,6 +193,7 @@ Obsidian's Graph view shows real structure.
 
 - [[Pilot Test Checklist]] — gate before calling a build ready
 - [[Support Report Flow]] — handling user failure reports
+- [[Headless QA Loop]] — automated install verification on a rented cloud rig
 
 ## Conventions
 
@@ -324,6 +325,103 @@ and as the runbook for incoming support reports.
 - [[AI Wizard]] — the agent the user is interacting with
 - [[Pilot Test Checklist]] — where many incoming reports originate
 - [[Product Conflicts]] — known intentional tradeoffs
+""",
+        "Process Playbooks/Headless QA Loop.md": """---
+tags: [playbook, setup, qa]
+---
+# Headless QA Loop
+
+Automates the [[Pilot Test Checklist]] on a rented cloud GPU desktop
+(e.g. NVIDIA CloudMatch Beta / GeForce NOW Enterprise private tile,
+RunPod, Lambda) so a "did nvHive install clean?" answer comes back
+without any manual clicking. Run before tagging a release.
+
+The loop:
+
+1. Launch a dedicated, isolated Chrome that the test harness owns —
+   never the user's everyday browser. This avoids tab-routing ambiguity
+   and lets the harness drive input over the Chrome DevTools Protocol
+   (CDP), where events are marked as trusted by the renderer.
+2. Open the cloud-desktop deep-link, dismiss any session-ready scrim,
+   wait for the streamed Ubuntu desktop.
+3. Send the install one-liner into the streamed Konsole via CDP key
+   events.
+4. Wait for `nvh selfcheck` to report green; screenshot the [[AI Wizard]]
+   surface; diff against the recorded baseline.
+5. If anything regressed, file the screenshot + the failing step as a
+   support report — same shape as [[Support Report Flow]].
+
+## Why this is its own playbook
+
+Driving cloud-desktop streamers via synthesized input is fragile in
+specific ways that informed the harness design:
+
+- **Tab visibility gating.** The streamer's "Your rig is ready" scrim
+  refuses to dismiss while Chrome's `document.visibilityState` is
+  `hidden`. A tab that is "active within Chrome" is not enough; the
+  Chrome window itself must be the foreground OS window. CDP input
+  dispatch bypasses this because it talks directly to the renderer.
+- **Session bumping.** Cloud-desktop providers enforce a single live
+  stream per account. A second tab opening the same rig will bump the
+  first. The dedicated Chrome the harness owns must be the *only*
+  process holding a session, so close stray tabs first.
+- **WebRTC streamer input mode.** Some providers (GeForce NOW
+  specifically) gate keyboard/mouse passthrough on a real
+  "session-active" handshake — letting the rig-ready scrim auto-dismiss
+  or clicking it via the harness is required, and the streamer also
+  drops input if the `<video>` element isn't playing. The harness must
+  keep the video playing and refresh activity to prevent the
+  provider's idle-timeout from ending the session.
+
+## Provider compatibility
+
+- **RunPod / Lambda / Vast / Paperspace**: SSH + web terminal. The
+  install one-liner runs directly. Simplest path for unattended CI.
+- **GeForce NOW (CloudMatch Beta)**: viable via dedicated Chrome +
+  `--remote-debugging-port` + CDP. Drive deeplink → tile → PLAY,
+  background keepalive (`mouseMoved` every ~60s), CDP keystrokes into
+  the streamed Konsole. The right channel when QA also needs to
+  validate the streamed-desktop UX (auto-launched browser, KDE Plasma
+  interactions).
+
+## Running the loop
+
+The Operator harness lives in `tools/`. The current entry points are
+`tools/operator_install.sh` for one-shot install and the SSH-backed
+QA driver for the actual loop.
+
+## Open: NVIDIA Omni model not yet on Ollama library
+
+The Wizard's default-model selector targets `nemotron-omni` (and the
+smaller `nemotron-3-nano-omni`) — see the VRAM-tier picker in
+`install.sh` and the [[AI Wizard]] profile chain. As of 2026-05-17 the
+public Ollama library does **not** yet publish either tag (`ollama
+pull nemotron-omni` 404s). The model is available on Hugging Face as
+`nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-{BF16,FP8,NVFP4}`.
+
+Two paths to close the gap, in priority order:
+
+1. **HuggingFace → Ollama Modelfile bootstrap.** When `ollama pull
+   nemotron-omni` 404s, fall back to downloading the FP8 weights from
+   HF and registering them via an Ollama Modelfile, then continue. This
+   ships the actual NVIDIA Omni model that the Wizard surface was
+   designed for and is the right long-term answer.
+
+2. **Soft fallback to `llama3.2-vision`.** Keep `nemotron-omni` as the
+   preferred tag, but when the pull errors, transparently try
+   `llama3.2-vision:90b` (40 GB+ tier) and `llama3.2-vision:11b`
+   (smaller tiers) which DO exist in the Ollama library. Loses the
+   NVIDIA-branded label but ships today.
+
+Until one of these lands, fresh installs on rigs that hit the
+preferred tier will fail at the pull step.
+
+## Related
+
+- [[Pilot Test Checklist]] — the manual variant, useful when the
+  harness can't reach the rig
+- [[Support Report Flow]] — what to do when a step fails
+- [[AI Wizard]] — the readiness surface the harness diffs against
 """,
     }
 
