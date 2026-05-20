@@ -8283,21 +8283,42 @@ def webui(
                 if _launch_browser_command("NVH_BROWSER", cmd, url):
                     return True
 
+        # Prefer any pre-installed browser before attempting a rootless
+        # Firefox download. On minimal Linux desktops (e.g. NVIDIA
+        # CloudMatch / GFN rigs) Chromium is already in the taskbar; the
+        # Firefox download is slow and can be blocked by network policy,
+        # so trying it first leaves users staring at "Browser:
+        # http://localhost:3000/setup" with nothing visibly opening.
         rootless_firefox = _rootless_firefox_binary()
-        if rootless_firefox and _launch_browser_command(
-            "rootless-firefox",
-            _firefox_command(rootless_firefox, "rootless-firefox", url),
-            url,
-        ):
-            return True
+        if rootless_firefox:
+            console.print(f"  Opening WebUI in rootless Firefox at [bold]{url}[/bold]")
+            if _launch_browser_command(
+                "rootless-firefox",
+                _firefox_command(rootless_firefox, "rootless-firefox", url),
+                url,
+            ):
+                return True
 
         for browser in ("firefox", "firefox-esr"):
             found = shutil.which(browser, path=webui_env.get("PATH"))
             if not found:
                 continue
+            console.print(f"  Opening WebUI in {browser} at [bold]{url}[/bold]")
             if _launch_browser_command(browser, _firefox_command(found, browser, url), url):
                 return True
 
+        for browser in ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave-browser", "microsoft-edge"):
+            found = shutil.which(browser, path=webui_env.get("PATH"))
+            if not found:
+                continue
+            console.print(f"  Opening WebUI in {browser} at [bold]{url}[/bold]")
+            if _launch_browser_command(browser, [found, "--new-window", url], url):
+                return True
+
+        # No pre-installed browser worked — fall back to installing a
+        # rootless Firefox. This is the slow path (~100MB download) so it
+        # only runs after everything else has been tried.
+        console.print("  No pre-installed browser found; downloading rootless Firefox...")
         installed_firefox = _install_rootless_firefox()
         if installed_firefox and _launch_browser_command(
             "rootless-firefox",
@@ -8305,11 +8326,6 @@ def webui(
             url,
         ):
             return True
-
-        for browser in ("chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave-browser", "microsoft-edge"):
-            found = shutil.which(browser, path=webui_env.get("PATH"))
-            if found and _launch_browser_command(browser, [found, "--new-window", url], url):
-                return True
 
         for opener in ("xdg-open", "gio", "sensible-browser"):
             found = shutil.which(opener, path=webui_env.get("PATH"))
