@@ -97,6 +97,22 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     # preferred Omni tag 404s on Ollama, walk down vision-capable
     # alternatives instead of failing the install.
     assert "_nvwizard_fallback_chain" in install
+    # HuggingFace → Ollama Modelfile bootstrap — when the Omni tag 404s
+    # on the Ollama library, download the official GGUF + mmproj from
+    # the ggml-org HuggingFace repo and register it locally before
+    # falling through to llama3.2-vision. Lands the actual NVIDIA
+    # Nemotron Omni model end users were promised.
+    assert "bootstrap_omni_via_hf" in install
+    assert "_nvwizard_hf_gguf_source" in install
+    assert "ggml-org/NVIDIA-Nemotron-3-Nano-Omni" in install
+    assert "mmproj-nemotron-3-nano-omni-ga_v1.0.gguf" in install
+    assert "nemotron-3-nano-omni-ga_v1.0-Q4_K_M.gguf" in install
+    assert "nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf" in install
+    # The bootstrap must respect the user opt-out env knob.
+    assert "NVH_INSTALL_MODEL_DOWNLOAD" in install
+    # ollama create wires the downloaded GGUF + mmproj into a usable
+    # local tag.
+    assert '"$OLLAMA_BIN" create "$target_tag" -f "$modelfile"' in install
     assert "sync_ollama_default_model_config" in install
     assert 'default_model: "ollama/__NVH_DEFAULT_OLLAMA_MODEL__"' in install
     assert 'MODEL="$DEFAULT_OLLAMA_MODEL"' in install

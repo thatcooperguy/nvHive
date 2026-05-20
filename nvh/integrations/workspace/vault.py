@@ -390,31 +390,30 @@ The Operator harness lives in `tools/`. The current entry points are
 `tools/operator_install.sh` for one-shot install and the SSH-backed
 QA driver for the actual loop.
 
-## Open: NVIDIA Omni model not yet on Ollama library
+## How NVIDIA Nemotron Omni gets installed
 
-The Wizard's default-model selector targets `nemotron-omni` (and the
-smaller `nemotron-3-nano-omni`) — see the VRAM-tier picker in
-`install.sh` and the [[AI Wizard]] profile chain. As of 2026-05-17 the
-public Ollama library does **not** yet publish either tag (`ollama
-pull nemotron-omni` 404s). The model is available on Hugging Face as
-`nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-{BF16,FP8,NVFP4}`.
-
-Two paths to close the gap, in priority order:
+The Ollama library doesn't publish `nemotron-omni` or
+`nemotron-3-nano-omni` yet (verified 2026-05-17 and 2026-05-20). The
+install handles this in two layers:
 
 1. **HuggingFace → Ollama Modelfile bootstrap.** When `ollama pull
-   nemotron-omni` 404s, fall back to downloading the FP8 weights from
-   HF and registering them via an Ollama Modelfile, then continue. This
-   ships the actual NVIDIA Omni model that the Wizard surface was
-   designed for and is the right long-term answer.
+   nemotron-omni` 404s, the installer downloads the official GGUF +
+   vision projector from the `ggml-org/NVIDIA-Nemotron-3-Nano-Omni`
+   HuggingFace repo and registers it locally with an Ollama Modelfile
+   (`ollama create`). Picks the Q8_0 quant on 40 GB+ rigs, Q4_K_M on
+   24-40 GB. After this, `ollama list` shows `nemotron-omni` as a
+   local tag and the Wizard uses it like any other Ollama model.
 
-2. **Soft fallback to `llama3.2-vision`.** Keep `nemotron-omni` as the
-   preferred tag, but when the pull errors, transparently try
-   `llama3.2-vision:90b` (40 GB+ tier) and `llama3.2-vision:11b`
-   (smaller tiers) which DO exist in the Ollama library. Loses the
-   NVIDIA-branded label but ships today.
+2. **Soft fallback chain.** If the HF bootstrap also fails — too
+   little disk, opted out via `NVH_INSTALL_MODEL_DOWNLOAD=0`, ollama
+   create rejects the Modelfile, etc. — the installer walks down a
+   chain of vision-capable models that **do** exist in the Ollama
+   library: `llama3.2-vision` → `minicpm-v` → `moondream`. The Wizard
+   stays multimodal even on the smallest GPUs.
 
-Until one of these lands, fresh installs on rigs that hit the
-preferred tier will fail at the pull step.
+Skip the Omni download with `NVH_INSTALL_MODEL_DOWNLOAD=0` before
+running the installer if you'd rather just take the Path 2 fallback
+(useful on slow connections or when testing the install path itself).
 
 ## Related
 
