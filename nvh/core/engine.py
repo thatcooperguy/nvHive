@@ -401,11 +401,16 @@ class Engine:
             log_file.close()  # child inherited the fd, parent can close
             logger.info("Auto-starting Ollama from %s", ollama_bin)
 
-            # Keep startup detection snappy; nvWizard surfaces deeper repair
-            # guidance if the local runtime does not respond.
+            # Cold-start Ollama needs ~3-8s on first-run rigs (CUDA init,
+            # model index load). The earlier 2s default was too short:
+            # the daemon was launched but hadn't bound yet, so the engine
+            # silently fell back to cloud providers, and the AI Wizard
+            # appeared "not working" instead of "Ollama not ready yet."
+            # 10s default is empirical headroom; override via env if you
+            # need a snappier check on a warm restart.
             import httpx as _httpx
             ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-            wait_seconds = max(0.0, float(os.environ.get("NVH_OLLAMA_START_WAIT", "2")))
+            wait_seconds = max(0.0, float(os.environ.get("NVH_OLLAMA_START_WAIT", "10")))
             deadline = time.monotonic() + wait_seconds
             while time.monotonic() < deadline:
                 time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))

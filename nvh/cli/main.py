@@ -8922,6 +8922,29 @@ def webui(
                     f"panels will be empty.{log_hint}"
                 )
 
+    # Surface the local LLM runtime state. The AI Wizard's router prefers
+    # local Ollama (Nemotron broker) when available; if Ollama isn't
+    # serving, the Wizard silently falls back to cloud providers — which
+    # may not be configured, leaving the user with a "Wizard not working"
+    # impression instead of an actionable status. Make it visible.
+    def _ollama_reachable() -> bool:
+        try:
+            with _socket.create_connection(("127.0.0.1", 11434), timeout=0.5):
+                return True
+        except OSError:
+            return False
+
+    if _ollama_reachable():
+        console.print("  [green]✓[/green] Ollama daemon reachable on 11434 (local Nemotron broker active)")
+    else:
+        console.print(
+            "  [yellow]![/yellow] Ollama not running on 11434 — the AI Wizard will fall back to cloud providers."
+        )
+        console.print(
+            "    [dim]To enable local Nemotron / Llama-vision: "
+            "[bold]nvh workstation --all -y[/bold] (installs Ollama + pulls the GPU-matched model).[/dim]"
+        )
+
     console.print("[bold]Starting nvHive Web UI...[/bold]")
     console.print(f"  WebUI: {access_url}")
     _webui_log(f"Starting WebUI at {access_url}")
