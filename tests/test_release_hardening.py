@@ -83,10 +83,20 @@ def test_linux_installer_autodetects_persistent_home_and_installs_reset_helper()
 def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     install = (ROOT / "install.sh").read_text(encoding="utf-8")
 
-    assert 'DEFAULT_OLLAMA_MODEL="gemma3:4b"' in install
-    assert 'DEFAULT_OLLAMA_MODEL="nemotron"' in install
+    # The Wizard's user-facing default is multimodal at every VRAM tier
+    # so the AI Wizard can see screenshots, images, and documents from
+    # the first install. NVIDIA Nemotron Omni leads on 40+ GB rigs;
+    # progressively smaller vision-capable models fall through to
+    # moondream (~2 GB) which still runs on CPU-only hosts.
+    assert 'DEFAULT_OLLAMA_MODEL="nemotron-omni"' in install
+    assert 'DEFAULT_OLLAMA_MODEL="nemotron-3-nano-omni"' in install
     assert 'DEFAULT_OLLAMA_MODEL="llama3.2-vision"' in install
-    assert 'DEFAULT_OLLAMA_MODEL="qwen3:8b"' in install
+    assert 'DEFAULT_OLLAMA_MODEL="minicpm-v"' in install
+    assert 'DEFAULT_OLLAMA_MODEL="moondream"' in install
+    # Soft-fallback chain in pull_nvwizard_model_cli — when the
+    # preferred Omni tag 404s on Ollama, walk down vision-capable
+    # alternatives instead of failing the install.
+    assert "_nvwizard_fallback_chain" in install
     assert "sync_ollama_default_model_config" in install
     assert 'default_model: "ollama/__NVH_DEFAULT_OLLAMA_MODEL__"' in install
     assert 'MODEL="$DEFAULT_OLLAMA_MODEL"' in install

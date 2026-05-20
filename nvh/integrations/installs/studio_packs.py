@@ -116,8 +116,51 @@ class StudioModel:
 
 STUDIO_MODELS: list[StudioModel] = [
     StudioModel(
+        id="nemotron-omni",
+        title="NVIDIA Nemotron Omni (Multimodal)",
+        provider="ollama",
+        install_target="nemotron-omni",
+        category="agent",
+        recommended_vram_gb=40,
+        estimated_disk_gb=42.0,
+        priority=1,
+        capabilities=[
+            "chat", "reasoning", "coding", "agent",
+            "vision", "multimodal", "large-model",
+        ],
+        why_recommended=(
+            "NVIDIA's flagship multimodal Wizard model — see images, screenshots, "
+            "and documents alongside text. The Wizard's preferred default on 40 GB+ "
+            "NVIDIA GPUs; downgrades to Nemotron 3 Nano Omni or vision-only fallbacks "
+            "on smaller GPUs."
+        ),
+        source_url=NVIDIA_OMNI_BLOG_URL,
+        license_note="NVIDIA Open Model License and Ollama library terms apply.",
+    ),
+    StudioModel(
+        id="nemotron-3-nano-omni",
+        title="NVIDIA Nemotron 3 Nano Omni (Multimodal, 30B MoE)",
+        provider="ollama",
+        install_target="nemotron-3-nano-omni",
+        category="agent",
+        recommended_vram_gb=24,
+        estimated_disk_gb=20.0,
+        priority=2,
+        capabilities=[
+            "chat", "reasoning", "coding", "agent",
+            "vision", "multimodal", "moe",
+        ],
+        why_recommended=(
+            "NVIDIA Nemotron 3 Nano Omni — 30B MoE (3B active) multimodal agent "
+            "tuned for reasoning. The Wizard's preferred default on 24-40 GB GPUs "
+            "where the full Nemotron Omni doesn't fit."
+        ),
+        source_url=NVIDIA_OMNI_TECH_BLOG_URL,
+        license_note="NVIDIA Open Model License and Ollama library terms apply.",
+    ),
+    StudioModel(
         id="nemotron-70b",
-        title="NVIDIA Nemotron 70B",
+        title="NVIDIA Nemotron 70B (text-only)",
         provider="ollama",
         install_target="nemotron",
         category="agent",
@@ -126,7 +169,8 @@ STUDIO_MODELS: list[StudioModel] = [
         priority=5,
         capabilities=["chat", "reasoning", "coding", "agent", "large-model"],
         why_recommended=(
-            "Largest high-accuracy local reasoning tier for 40 GB+ NVIDIA GPUs."
+            "Largest high-accuracy local reasoning tier for 40 GB+ NVIDIA GPUs. "
+            "Text-only; prefer Nemotron Omni if you need multimodal."
         ),
         source_url="https://ollama.com/library/nemotron",
         license_note="NVIDIA Open Model License and Ollama library terms apply.",
