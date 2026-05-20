@@ -487,8 +487,15 @@ path = Path(os.environ["CFG"])
 model = os.environ["MODEL"]
 text = path.read_text(encoding="utf-8")
 updated = text.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model)
+# Alternation order matters — Python's `re` matches leftmost-first, so
+# longer / more-specific prefixes must come BEFORE shorter ones that
+# would otherwise greedily match the first few characters. The previous
+# ordering (with bare `nemotron` last) silently corrupted reinstalls
+# from PR #60 because the existing value `ollama/nemotron-omni` matched
+# the `nemotron` alternative, leaving the trailing `-omni` behind to be
+# concatenated with the new model — producing `nemotron-omni-omni`.
 updated = re.sub(
-    r'default_model:\s*"?ollama/(?:gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b|nemotron-mini|nemotron)"?',
+    r'default_model:\s*"?ollama/(?:nemotron-3-nano-omni|nemotron-omni|nemotron-mini|nemotron|gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b)"?',
     f'default_model: "ollama/{model}"',
     updated,
 )
@@ -500,7 +507,7 @@ sync_ollama_default_model_config() {
     local cfg="$HIVE_CONFIG_HOME/config.yaml"
     [ -n "$GPU_NAME" ] || return 0
     [ -f "$cfg" ] || return 0
-    if grep -Eq 'default_model:[[:space:]]*"?ollama/(gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b|nemotron-mini|nemotron)"?' "$cfg"; then
+    if grep -Eq 'default_model:[[:space:]]*"?ollama/(nemotron-3-nano-omni|nemotron-omni|nemotron-mini|nemotron|gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b)"?' "$cfg"; then
         set_config_ollama_model "$cfg" "$DEFAULT_OLLAMA_MODEL"
         echo -e "${G}Ollama config aligned to GPU recommendation: $DEFAULT_OLLAMA_MODEL${N}"
     fi
@@ -695,6 +702,100 @@ _nvwizard_fallback_chain() {
     esac
 }
 
+# HuggingFace GGUF source for the Nemotron Omni models. The ggml-org
+# org is maintained by the llama.cpp / GGUF team — most authoritative
+# community quantization currently published. Quant is picked by VRAM
+# tier (Q8_0 on 40 GB+, Q4_K_M on 24-40 GB; smaller GPUs fall through
+# to Path 2 fallbacks since the model itself doesn't fit).
+_nvwizard_hf_gguf_source() {
+    local preferred="$1"
+    case "$preferred" in
+        nemotron-omni|nemotron-3-nano-omni)
+            if [ "${VRAM_GB:-0}" -ge 40 ]; then
+                echo "ggml-org/NVIDIA-Nemotron-3-Nano-Omni nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf mmproj-nemotron-3-nano-omni-ga_v1.0.gguf 32"
+            elif [ "${VRAM_GB:-0}" -ge 24 ]; then
+                echo "ggml-org/NVIDIA-Nemotron-3-Nano-Omni nemotron-3-nano-omni-ga_v1.0-Q4_K_M.gguf mmproj-nemotron-3-nano-omni-ga_v1.0.gguf 24"
+            fi
+            ;;
+    esac
+}
+
+# Try to bootstrap a Nemotron Omni model into the local Ollama library
+# by downloading the GGUF + vision projector from HuggingFace and
+# registering them via an Ollama Modelfile. Returns 0 on success, 1 if
+# unsupported / disabled / failed (in which case the caller continues
+# the Path 2 fallback chain).
+bootstrap_omni_via_hf() {
+    local preferred="$1"
+    local target_tag="$1"
+    local spec repo gguf mmproj need_gb
+    spec="$(_nvwizard_hf_gguf_source "$preferred")"
+    [ -n "$spec" ] || return 1
+    # shellcheck disable=SC2086
+    set -- $spec
+    repo="$1"; gguf="$2"; mmproj="$3"; need_gb="$4"
+
+    # User opt-out via env
+    case "${NVH_INSTALL_MODEL_DOWNLOAD:-1}" in
+        0|false|False|no|No|off|Off) return 1 ;;
+    esac
+
+    local target_dir="$NVH_HOME/models/${target_tag}"
+    mkdir -p "$target_dir"
+
+    # Disk-space check (rough: GGUF + mmproj + 5 GB headroom)
+    local free_gb=0
+    if free_gb="$(df -BG "$target_dir" 2>/dev/null | awk 'NR==2 {gsub("G","",$4); print $4}')"; then
+        if [ "${free_gb:-0}" -lt "$((need_gb + 5))" ]; then
+            echo -e "${Y}Skipping Omni HuggingFace bootstrap: need ~${need_gb} GB free under $NVH_HOME, found ${free_gb} GB.${N}"
+            return 1
+        fi
+    fi
+
+    local base="https://huggingface.co/${repo}/resolve/main"
+    local gguf_local="${target_dir}/${gguf}"
+    local mmproj_local="${target_dir}/${mmproj}"
+
+    echo -e "${B}Bootstrapping NVIDIA Nemotron Omni from HuggingFace (${repo})...${N}"
+    echo -e "${D}  Will download: ${gguf} (~${need_gb} GB) + ${mmproj} (~1.5 GB)${N}"
+    echo -e "${D}  Skip with: NVH_INSTALL_MODEL_DOWNLOAD=0${N}"
+
+    # Resumable downloads (-C - resumes if interrupted). curl --fail
+    # treats HTTP 4xx/5xx as errors so partial 404 pages don't pose as
+    # complete files.
+    if ! curl -L --fail -C - --progress-bar -o "$gguf_local" "${base}/${gguf}"; then
+        echo -e "${Y}HuggingFace GGUF download failed for ${repo}/${gguf}.${N}"
+        return 1
+    fi
+    if ! curl -L --fail -C - --progress-bar -o "$mmproj_local" "${base}/${mmproj}"; then
+        echo -e "${Y}HuggingFace mmproj download failed for ${repo}/${mmproj}.${N}"
+        return 1
+    fi
+
+    # Write the Modelfile. Ollama supports multimodal models via two
+    # FROM directives (one for the LLM, one for the mmproj projector)
+    # — this is the same pattern used by the published llama3.2-vision
+    # tag. If a future Ollama version changes the syntax, this falls
+    # through to Path 2 cleanly via the surrounding chain.
+    local modelfile="${target_dir}/Modelfile"
+    cat >"$modelfile" <<EOF
+# Generated by nvHive install.sh — registers NVIDIA Nemotron Omni from
+# the local GGUF + vision projector downloaded from HuggingFace
+# (${repo}). Ollama exposes the result as the tag below; the AI Wizard
+# will use it just like a tag pulled from the Ollama library.
+FROM ${gguf_local}
+FROM ${mmproj_local}
+EOF
+
+    echo -e "${B}Registering ${target_tag} in Ollama (this is fast)...${N}"
+    if ! OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" create "$target_tag" -f "$modelfile" 2>&1 | tee -a "$NVH_LOGS/model-pull.log"; then
+        echo -e "${Y}ollama create failed for ${target_tag}. Falling back to the next chain entry.${N}"
+        return 1
+    fi
+    echo -e "${G}NVIDIA Nemotron Omni (${target_tag}) registered locally from HuggingFace.${N}"
+    return 0
+}
+
 pull_nvwizard_model_cli() {
     local preferred="$1"
     local pull_rc=0
@@ -738,6 +839,19 @@ pull_nvwizard_model_cli() {
             return 0
         fi
         echo -e "${Y}Pull of $model failed (exit $pull_rc).${N}"
+        # If the failed pull is one of the NVIDIA Omni tags (the Ollama
+        # library doesn't publish them yet as of 2026-05-17), try the
+        # HuggingFace → Modelfile bootstrap before walking further down
+        # the fallback chain. This lands the actual NVIDIA Nemotron
+        # Omni model — vision + reasoning — instead of degrading to a
+        # generic llama3.2-vision.
+        case "$model" in
+            nemotron-omni|nemotron-3-nano-omni)
+                if bootstrap_omni_via_hf "$model"; then
+                    return 0
+                fi
+                ;;
+        esac
     done
     echo -e "${Y}AI Wizard model download did not complete. Log: $NVH_LOGS/model-pull.log${N}"
     return "$pull_rc"
