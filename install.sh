@@ -487,18 +487,26 @@ path = Path(os.environ["CFG"])
 model = os.environ["MODEL"]
 text = path.read_text(encoding="utf-8")
 updated = text.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model)
-# Alternation order matters — Python's `re` matches leftmost-first, so
-# longer / more-specific prefixes must come BEFORE shorter ones that
-# would otherwise greedily match the first few characters. The previous
-# ordering (with bare `nemotron` last) silently corrupted reinstalls
-# from PR #60 because the existing value `ollama/nemotron-omni` matched
-# the `nemotron` alternative, leaving the trailing `-omni` behind to be
-# concatenated with the new model — producing `nemotron-omni-omni`.
-updated = re.sub(
-    r'default_model:\s*"?ollama/(?:nemotron-3-nano-omni|nemotron-omni|nemotron-mini|nemotron|gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b)"?',
-    f'default_model: "ollama/{model}"',
-    updated,
-)
+# Replace the entire `default_model:` line for ollama/* values rather
+# than substring-matching. The previous partial-match regex (#63) fixed
+# the FORWARD case where the existing value was a clean model name, but
+# couldn't repair files that had ALREADY been corrupted by the pre-#63
+# version of this code — e.g. lines like
+#     default_model: "ollama/nemotron-omni"-omni"
+# where the orphan `-omni"` trailer sits beyond what any "match a known
+# model name" regex can see. Replacing the whole line is robust to any
+# past corruption pattern AND any future quoting style the writer
+# happens to produce.
+import re as _re
+default_re = _re.compile(r'^(\s*)default_model:\s*[\'"]?ollama/')
+out_lines = []
+for line in updated.split("\n"):
+    m = default_re.match(line)
+    if m:
+        out_lines.append(f'{m.group(1)}default_model: "ollama/{model}"')
+    else:
+        out_lines.append(line)
+updated = "\n".join(out_lines)
 path.write_text(updated, encoding="utf-8")
 PY
 }
@@ -507,7 +515,11 @@ sync_ollama_default_model_config() {
     local cfg="$HIVE_CONFIG_HOME/config.yaml"
     [ -n "$GPU_NAME" ] || return 0
     [ -f "$cfg" ] || return 0
-    if grep -Eq 'default_model:[[:space:]]*"?ollama/(nemotron-3-nano-omni|nemotron-omni|nemotron-mini|nemotron|gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b)"?' "$cfg"; then
+    # Trigger sync if ANY ollama/* default_model line is present, including
+    # corruption-recovery cases like the pre-#63 `ollama/nemotron-omni"-omni"`
+    # trailer. The set_config_ollama_model function now does whole-line
+    # replacement so it's safe to invoke on any malformed value.
+    if grep -Eq "default_model:[[:space:]]*[\"']?ollama/" "$cfg"; then
         set_config_ollama_model "$cfg" "$DEFAULT_OLLAMA_MODEL"
         echo -e "${G}Ollama config aligned to GPU recommendation: $DEFAULT_OLLAMA_MODEL${N}"
     fi
