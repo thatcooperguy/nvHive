@@ -679,31 +679,67 @@ nvwizard_model_download_countdown() {
     return 0
 }
 
+# Fallback chain for a preferred Wizard model. NVIDIA's Nemotron Omni
+# tags aren't published to the public Ollama library yet (verified
+# 2026-05-17: `ollama pull nemotron-omni` 404s) but the Wizard surface
+# is designed multimodal-first — so when the preferred tag is one of
+# the multimodal targets, fall through progressively smaller vision-
+# capable models so the install never breaks. Other tags keep their
+# current single-pull behavior.
+_nvwizard_fallback_chain() {
+    case "$1" in
+        nemotron-omni)         echo "nemotron-omni nemotron-3-nano-omni llama3.2-vision minicpm-v moondream" ;;
+        nemotron-3-nano-omni)  echo "nemotron-3-nano-omni llama3.2-vision minicpm-v moondream" ;;
+        llama3.2-vision*)      echo "$1 llama3.2-vision minicpm-v moondream" ;;
+        *)                     echo "$1" ;;
+    esac
+}
+
 pull_nvwizard_model_cli() {
-    local model="$1"
+    local preferred="$1"
     local pull_rc=0
+    local model
 
     [ -n "${OLLAMA_BIN:-}" ] || return 1
     [ -x "$OLLAMA_BIN" ] || return 1
     mkdir -p "$OLLAMA_MODELS" "$NVH_LOGS"
 
-    if ollama_model_installed "$model"; then
-        echo -e "${G}Model $model ready.${N}"
+    if ollama_model_installed "$preferred"; then
+        echo -e "${G}Model $preferred ready.${N}"
         return 0
     fi
 
-    nvwizard_model_download_countdown "$model" || return 0
-    echo -e "${B}Downloading $model for AI Wizard. This can take a few minutes on first run.${N}"
+    nvwizard_model_download_countdown "$preferred" || return 0
     : >"$NVH_LOGS/model-pull.log"
-    set +e
-    OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" pull "$model" 2>&1 | tee -a "$NVH_LOGS/model-pull.log"
-    pull_rc=${PIPESTATUS[0]}
-    set -e
-    if [ "$pull_rc" -eq 0 ]; then
-        echo -e "${G}Model $model ready for AI Wizard.${N}"
-        return 0
-    fi
-    echo -e "${Y}Model download did not complete. Log: $NVH_LOGS/model-pull.log${N}"
+    local chain attempt=0
+    chain="$(_nvwizard_fallback_chain "$preferred")"
+    for model in $chain; do
+        attempt=$((attempt + 1))
+        if [ "$attempt" -eq 1 ]; then
+            echo -e "${B}Downloading $model for AI Wizard. This can take a few minutes on first run.${N}"
+        else
+            echo -e "${Y}Trying fallback $model (preferred $preferred unavailable)...${N}"
+        fi
+        # Skip ahead if this fallback is already on disk
+        if ollama_model_installed "$model"; then
+            echo -e "${G}Model $model already installed; using it for the AI Wizard.${N}"
+            return 0
+        fi
+        set +e
+        OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" pull "$model" 2>&1 | tee -a "$NVH_LOGS/model-pull.log"
+        pull_rc=${PIPESTATUS[0]}
+        set -e
+        if [ "$pull_rc" -eq 0 ]; then
+            if [ "$model" != "$preferred" ]; then
+                echo -e "${Y}Preferred $preferred unavailable. Using $model — multimodal Wizard tools still work.${N}"
+            else
+                echo -e "${G}Model $model ready for AI Wizard.${N}"
+            fi
+            return 0
+        fi
+        echo -e "${Y}Pull of $model failed (exit $pull_rc).${N}"
+    done
+    echo -e "${Y}AI Wizard model download did not complete. Log: $NVH_LOGS/model-pull.log${N}"
     return "$pull_rc"
 }
 
