@@ -487,8 +487,15 @@ path = Path(os.environ["CFG"])
 model = os.environ["MODEL"]
 text = path.read_text(encoding="utf-8")
 updated = text.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model)
+# Alternation order matters — Python's `re` matches leftmost-first, so
+# longer / more-specific prefixes must come BEFORE shorter ones that
+# would otherwise greedily match the first few characters. The previous
+# ordering (with bare `nemotron` last) silently corrupted reinstalls
+# from PR #60 because the existing value `ollama/nemotron-omni` matched
+# the `nemotron` alternative, leaving the trailing `-omni` behind to be
+# concatenated with the new model — producing `nemotron-omni-omni`.
 updated = re.sub(
-    r'default_model:\s*"?ollama/(?:gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b|nemotron-mini|nemotron)"?',
+    r'default_model:\s*"?ollama/(?:nemotron-3-nano-omni|nemotron-omni|nemotron-mini|nemotron|gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b)"?',
     f'default_model: "ollama/{model}"',
     updated,
 )
@@ -500,7 +507,7 @@ sync_ollama_default_model_config() {
     local cfg="$HIVE_CONFIG_HOME/config.yaml"
     [ -n "$GPU_NAME" ] || return 0
     [ -f "$cfg" ] || return 0
-    if grep -Eq 'default_model:[[:space:]]*"?ollama/(gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b|nemotron-mini|nemotron)"?' "$cfg"; then
+    if grep -Eq 'default_model:[[:space:]]*"?ollama/(nemotron-3-nano-omni|nemotron-omni|nemotron-mini|nemotron|gemma3:4b|qwen3:8b|llama3\.1:8b|llama3\.2-vision|llava:7b|minicpm-v|moondream|qwen2\.5-coder:7b|qwen2\.5-coder:32b|llama3\.3:70b)"?' "$cfg"; then
         set_config_ollama_model "$cfg" "$DEFAULT_OLLAMA_MODEL"
         echo -e "${G}Ollama config aligned to GPU recommendation: $DEFAULT_OLLAMA_MODEL${N}"
     fi
