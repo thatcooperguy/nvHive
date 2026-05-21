@@ -691,6 +691,23 @@ export default function WizardChat() {
               {maxIterations}
             </span>
           </div>
+          <a
+            href={
+              draft.trim()
+                ? `/council?prompt=${encodeURIComponent(draft.trim())}`
+                : '/council'
+            }
+            title={
+              draft.trim()
+                ? 'Open the council with this question prefilled — multiple expert advisors answer in parallel, then synthesize.'
+                : 'Open the council page — multiple expert advisors answer in parallel, then synthesize.'
+            }
+            className="flex items-center gap-1 rounded-md border px-2 py-0.5 hover:bg-[var(--bg-hover)]"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+          >
+            <span aria-hidden>⚖</span>
+            <span>Convene council</span>
+          </a>
           <span>
             Press Enter to send, Shift+Enter for a newline. Type{' '}
             <span className="text-[#76B900]">/help</span> for commands. Drop

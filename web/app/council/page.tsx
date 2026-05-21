@@ -1,6 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+// `useSearchParams()` (used below for the ?prompt= deep-link from
+// WizardChat → /council) requires the calling component to be wrapped
+// in a `<Suspense>` boundary, otherwise `next build` fails the static-
+// prerender step with "useSearchParams() should be wrapped in a
+// suspense boundary at page '/council'". The default export below is
+// the Suspense wrapper; the actual page lives in CouncilPageContent.
+// `force-dynamic` alone wasn't sufficient on Next.js 16 (Turbopack)
+// — the Suspense wrap is the canonical fix in their docs.
+
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import AgentBadge from '@/components/AgentBadge';
 import CouncilPanel from '@/components/CouncilPanel';
 import PageHeader from '@/components/PageHeader';
@@ -29,7 +39,7 @@ type SessionPhase =
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function CouncilPage() {
+function CouncilPageContent() {
   // ── Config state ────────────────────────────────────────────────────────────
   const [prompt, setPrompt] = useState('');
   const [autoAgents, setAutoAgents] = useState(false);
@@ -94,6 +104,18 @@ export default function CouncilPage() {
     }).catch(() => {});
     return () => { mounted = false; };
   }, []);
+
+  // Deep-link prefill: /council?prompt=<...> seeds the prompt textarea so the
+  // WizardChat "Convene a council" handoff lands with the user's question
+  // already typed in. We only seed once on mount — after that the user owns
+  // the field. Encodes the chat → council escalation path without forcing the
+  // chat surface to talk to the council orchestrator directly.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const seed = searchParams?.get('prompt');
+    if (seed && !prompt) setPrompt(seed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // Cleanup WS on unmount
   useEffect(() => {
@@ -812,5 +834,16 @@ export default function CouncilPage() {
       `}</style>
       </div>
     </div>
+  );
+}
+
+
+export default function CouncilPage() {
+  // Suspense boundary keeps `useSearchParams()` happy during static
+  // prerender — see the comment at the top of this file.
+  return (
+    <Suspense fallback={null}>
+      <CouncilPageContent />
+    </Suspense>
   );
 }
