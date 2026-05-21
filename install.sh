@@ -327,6 +327,235 @@ launch_webui_after_install() {
     }
 }
 
+# ---------------------------------------------------------------------------
+# Port-conflict detection
+#
+# The owner explicitly asked: "There should be a deep dive to prevent service
+# or port conflicts." Today we ship two narrow fixes for this — `_api_healthy`
+# / `_kill_stale_api` in nvh/cli/main.py (port 8000, #65) and
+# `start_ollama_with_health_wait` here in install.sh (port 11434, #66). The
+# gap they leave: install.sh doesn't probe the SET of ports the stack needs
+# (3000/3001/3002/8000/11434) BEFORE starting services. If 3000 is held by
+# some other tool the user is running, the WebUI silently falls back to 8080
+# (Next.js's cascade) and the user gets confused that the URL doesn't match
+# the docs. If 8000 is held by a non-nvHive process, the API never binds and
+# the WebUI shows the red banner indefinitely.
+#
+# This helper runs near the start of install.sh — BEFORE any service work —
+# and classifies each port:
+#
+#   OK       — nothing listening, or it's our healthy service (leave it).
+#   STALE    — process name matches one of ours but the service isn't
+#              healthy (kill it with fuser / lsof+kill; same pattern as
+#              _kill_stale_api in nvh/cli/main.py).
+#   FOREIGN  — somebody else owns the port. Aborts with exit 2 unless
+#              NVH_PORT_CONFLICT_KILL_FOREIGN=1.
+#
+# Health-probe contract mirrors _api_healthy in nvh/cli/main.py:
+#   8000           → GET /v1/health, HTTP 200, status: success.
+#   11434          → GET /api/tags, HTTP 200.
+#   3000/3001/3002 → any HTTP response (Next.js dev/start binds these and
+#                    serves something even before the page mounts).
+# ---------------------------------------------------------------------------
+NVH_PORTS_TO_CHECK="3000 3001 3002 8000 11434"
+
+_port_listener_pid() {
+    # Echo the PID listening on $1, or empty if none.
+    local port="$1" pid=""
+    if command -v lsof >/dev/null 2>&1; then
+        # -t = terse (PID only). Works on Linux + macOS. Match LISTEN state
+        # so we don't false-positive on a transient client connection.
+        pid="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n1 || true)"
+    fi
+    if [ -z "$pid" ] && command -v fuser >/dev/null 2>&1; then
+        pid="$(fuser "$port"/tcp 2>/dev/null | awk '{print $1}' || true)"
+    fi
+    if [ -z "$pid" ] && command -v ss >/dev/null 2>&1; then
+        # ss -tlnp: state-tcp listen-only numeric process. Parse `pid=NNNN`
+        # out of the `users:(("name",pid=12345,fd=…))` column.
+        pid="$(ss -tlnp 2>/dev/null \
+            | awk -v p=":$port\$" '$4 ~ p {print $0}' \
+            | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' \
+            | head -n1 || true)"
+    fi
+    printf '%s' "$pid"
+}
+
+_pid_cmdline() {
+    # Echo the process name + args for a PID, or empty if gone.
+    local pid="$1"
+    [ -n "$pid" ] || return 0
+    if command -v ps >/dev/null 2>&1; then
+        ps -o command= -p "$pid" 2>/dev/null || ps -p "$pid" -o args= 2>/dev/null || true
+    fi
+}
+
+_pid_looks_like_ours() {
+    # Return 0 if the PID's cmdline matches a known nvHive-stack process.
+    # Conservative: only matches things we control. If a user happens to be
+    # running their own `next start` on 3000 we'd false-positive — but that's
+    # the same risk _kill_stale_api carries, and the alternative (never kill
+    # stale UI processes) is worse.
+    local pid="$1" cmd
+    cmd="$(_pid_cmdline "$pid")"
+    case "$cmd" in
+        *nvh\ serve*|*nvh.cli*|*nvh\ webui*|*nvh\ workstation*) return 0 ;;
+        *ollama\ serve*|*"$NVH_BIN/ollama"*) return 0 ;;
+        *next\ start*|*next\ dev*|*node*next*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+_port_is_healthy_nvh_service() {
+    # Mirror _api_healthy() in nvh/cli/main.py — pure-bash version.
+    # Returns 0 if the listener at $1 looks like one of OUR services AND
+    # passes the per-port health probe.
+    local port="$1" pid="${2:-}" body=""
+    case "$port" in
+        8000)
+            body="$(curl -sf --max-time 2 "http://127.0.0.1:${port}/v1/health" 2>/dev/null || true)"
+            [ -n "$body" ] || return 1
+            # The API answers /v1/health with `{"status":"success",...}` when
+            # the engine initialized cleanly. Same invariant the WebUI's
+            # ApiHealthBanner uses, and the same invariant _api_healthy
+            # checks in nvh/cli/main.py.
+            case "$body" in
+                *'"status"'*'"success"'*) return 0 ;;
+                *'"status": "success"'*) return 0 ;;
+                *) return 1 ;;
+            esac
+            ;;
+        11434)
+            # Ollama answers /api/tags whether it's our binary or one the
+            # user installed system-wide — either way "leave it alone" is
+            # the right call since we'd be talking to the same daemon.
+            curl -sf --max-time 2 "http://127.0.0.1:${port}/api/tags" >/dev/null 2>&1
+            ;;
+        3000|3001|3002)
+            # Next.js binds and serves something even before the React tree
+            # mounts. Per the spec, any HTTP response is treated as "our
+            # WebUI is running" — BUT we also require the process name to
+            # look like one of ours, otherwise an unrelated dev server
+            # (Grafana, Storybook, etc.) on 3000 would silently get
+            # classified OK and the install would proceed without ever
+            # binding the WebUI.
+            [ -n "$pid" ] || return 1
+            _pid_looks_like_ours "$pid" || return 1
+            curl -s --max-time 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/" 2>/dev/null \
+                | grep -qE '^[1-9][0-9][0-9]$'
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+_kill_port_listener() {
+    # Free port $1. Mirror _kill_stale_api in nvh/cli/main.py: fuser -k
+    # (Linux) then lsof + kill -TERM (macOS / fallback). Best-effort.
+    local port="$1"
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -k "$port"/tcp >/dev/null 2>&1 || true
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        local pid
+        for pid in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null); do
+            kill -TERM "$pid" 2>/dev/null || true
+        done
+    fi
+    sleep 1
+    # Last-resort SIGKILL if the process didn't exit cleanly.
+    if command -v lsof >/dev/null 2>&1; then
+        local pid
+        for pid in $(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null); do
+            kill -KILL "$pid" 2>/dev/null || true
+        done
+    fi
+}
+
+detect_port_conflicts() {
+    # Print a small Markdown-ish table summarizing the state of each port,
+    # and abort install if any FOREIGN process is in the way (unless the
+    # NVH_PORT_CONFLICT_KILL_FOREIGN=1 override is set).
+    #
+    # Exit codes:
+    #   0 — all ports are clear or owned by healthy/just-cleaned nvHive
+    #       services. Install can proceed.
+    #   2 — at least one port is held by a foreign process and the kill
+    #       override is OFF.
+    local any_conflict=0
+    local override="${NVH_PORT_CONFLICT_KILL_FOREIGN:-0}"
+
+    echo -e "${B}Checking ports for conflicts before starting services...${N}"
+    printf '  %-6s %-9s %-30s %s\n' "Port" "Status" "Owner" "Action"
+    printf '  %-6s %-9s %-30s %s\n' "----" "------" "-----" "------"
+
+    local port pid cmd owner status action short
+    for port in $NVH_PORTS_TO_CHECK; do
+        pid="$(_port_listener_pid "$port")"
+        if [ -z "$pid" ]; then
+            printf "  %-6s ${G}%-9s${N} %-30s %s\n" "$port" "OK" "(empty)" "available"
+            continue
+        fi
+
+        cmd="$(_pid_cmdline "$pid")"
+        # Trim cmdline to something printable in the Owner column.
+        short="$(printf '%s' "$cmd" | awk '{print $1}' | sed 's#.*/##')"
+        [ -n "$short" ] || short="pid $pid"
+        owner="$short (pid $pid)"
+
+        if _port_is_healthy_nvh_service "$port" "$pid"; then
+            printf "  %-6s ${G}%-9s${N} %-30s %s\n" \
+                "$port" "OK" "$owner" "keeping (healthy nvHive)"
+            continue
+        fi
+
+        if _pid_looks_like_ours "$pid"; then
+            printf "  %-6s ${Y}%-9s${N} %-30s %s\n" \
+                "$port" "STALE" "$owner" "killing + will restart"
+            _kill_port_listener "$port"
+            pid="$(_port_listener_pid "$port")"
+            if [ -z "$pid" ]; then
+                printf "  %-6s ${G}%-9s${N} %-30s %s\n" \
+                    "$port" "CLEARED" "(killed)" "available"
+            else
+                printf "  %-6s ${R}%-9s${N} %-30s %s\n" \
+                    "$port" "STUCK" "pid $pid" "ABORTING — kill failed"
+                any_conflict=1
+            fi
+            continue
+        fi
+
+        # Foreign process. Either abort or kill it.
+        case "$override" in
+            1|true|True|yes|Yes|on|On)
+                printf "  %-6s ${Y}%-9s${N} %-30s %s\n" \
+                    "$port" "FOREIGN" "$owner" "killing (override on)"
+                _kill_port_listener "$port"
+                ;;
+            *)
+                printf "  %-6s ${R}%-9s${N} %-30s %s\n" \
+                    "$port" "FOREIGN" "$owner" "ABORTING — see hint below"
+                any_conflict=1
+                ;;
+        esac
+    done
+
+    if [ "$any_conflict" -ne 0 ]; then
+        echo ""
+        echo -e "${R}Port conflict: one or more required ports are held by a process we don't own.${N}"
+        echo -e "${D}nvHive uses 3000/3001/3002 (WebUI), 8000 (API), 11434 (Ollama).${N}"
+        echo -e "${D}Free the listed processes, then re-run install — or override with:${N}"
+        echo -e "${D}  NVH_PORT_CONFLICT_KILL_FOREIGN=1 bash install.sh${N}"
+        echo -e "${D}(The override kills foreign processes too. Use with care.)${N}"
+        return 2
+    fi
+
+    echo -e "${D}All required ports are clear.${N}"
+    echo ""
+    return 0
+}
+
 mkdir -p "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CACHE" "$NVH_LOGS" "$NVH_STUDIO_HOME" "$COMFYUI_HOME" "$HIVE_CONFIG_HOME" "$TMPDIR"
 write_nvh_env
 export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:$PATH"
@@ -337,6 +566,12 @@ echo -e "${G}║       NVHive — Quick Install         ║${N}"
 echo -e "${G}║  No root. Installs to NVH_HOME     ║${N}"
 echo -e "${G}╚══════════════════════════════════════╝${N}"
 echo ""
+
+# Probe the set of ports the stack needs BEFORE doing any other service
+# work — composes with #65 (per-port API restart) and #66 (Ollama health
+# wait), which are per-service. See detect_port_conflicts() above for the
+# four classifications + NVH_PORT_CONFLICT_KILL_FOREIGN override.
+detect_port_conflicts
 
 # ---------------------------------------------------------------------------
 # Find Python — check common locations since the VM may have it anywhere

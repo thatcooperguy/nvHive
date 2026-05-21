@@ -147,7 +147,6 @@ def test_install_ollama_startup_has_health_wait_and_logging() -> None:
     assert "/api/tags" in install
 
 
-
 def test_nvh_webui_detects_and_restarts_stale_api() -> None:
     """`nvh webui` must HTTP-probe an existing API on the port instead of
     accepting any TCP listener as healthy. Verified empirically 2026-05-20:
@@ -170,6 +169,57 @@ def test_nvh_webui_detects_and_restarts_stale_api() -> None:
     # not silently accepted.
     assert "Existing API on" in cli
     assert "is unhealthy" in cli
+
+
+def test_install_detects_port_conflicts_before_starting_services() -> None:
+    """install.sh must probe the SET of ports the stack needs BEFORE it
+    starts services — 3000/3001/3002 (WebUI cascade), 8000 (API), 11434
+    (Ollama). PR #65's _api_healthy and #66's start_ollama_with_health_wait
+    each fix one service in isolation; this is the top-level guard the
+    owner asked for after the user-reported port-8000-stale-listener
+    incident on 2026-05-20.
+
+    Classifications: OK (empty or healthy nvHive), STALE (process name
+    matches one of ours but health probe fails — kill + restart), FOREIGN
+    (somebody else's process — abort with exit 2 unless override is set).
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # The bash function the owner specifically named.
+    assert "detect_port_conflicts" in install
+    # And it must actually be CALLED, not just defined.
+    assert install.count("detect_port_conflicts") >= 2
+
+    # The full port set — all five must appear in the bash port list so
+    # nobody can silently drop one in a refactor.
+    assert 'NVH_PORTS_TO_CHECK="3000 3001 3002 8000 11434"' in install
+
+    # The override knob for power users / CI environments.
+    assert "NVH_PORT_CONFLICT_KILL_FOREIGN" in install
+
+    # Health-probe contract mirrors _api_healthy() in nvh/cli/main.py:
+    # GET /v1/health for 8000, GET /api/tags for 11434.
+    assert "/v1/health" in install
+    assert "/api/tags" in install
+    # And the macOS fallback pattern from _kill_stale_api — lsof + kill,
+    # plus fuser for Linux. Both must be present.
+    assert "fuser" in install
+    assert "lsof -nP -iTCP" in install
+
+    # The four status classifications all surface in the output table so
+    # the user can read the state at a glance.
+    for status in ("OK", "STALE", "FOREIGN"):
+        assert status in install
+
+    # Call site is wired before the rest of the install runs — find both
+    # the call and a downstream service-start anchor, and assert ordering.
+    call_idx = install.index("\ndetect_port_conflicts\n")
+    # `start_ollama_with_health_wait` is invoked later when Ollama gets
+    # spawned; the port check must precede every service-start call site.
+    first_ollama_start = install.index("start_ollama_with_health_wait \"$OLLAMA_BIN\"")
+    assert call_idx < first_ollama_start, (
+        "detect_port_conflicts must run BEFORE start_ollama_with_health_wait"
+    )
 
 
 def test_setup_page_surfaces_startup_autopilot_status() -> None:
