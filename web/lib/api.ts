@@ -1414,6 +1414,7 @@ export type WizardStreamEvent =
       answer: string;
       used_provider: string | null;
       used_model: string | null;
+      routing_reason?: string | null;
       tool_calls: WizardChatToolCall[];
       tool_results: WizardChatToolResult[];
       iterations: number;
@@ -1430,6 +1431,7 @@ interface WizardChatStreamOptions {
   homeDir?: string;
   conversationId?: string;
   profile?: string;
+  maxIterations?: number;
   signal?: AbortSignal;
 }
 
@@ -1467,6 +1469,7 @@ export async function* wizardChatStream(
           home_dir: options.homeDir,
           conversation_id: options.conversationId,
           profile: options.profile,
+          max_iterations: options.maxIterations,
         }),
         signal: options.signal,
       });

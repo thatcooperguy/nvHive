@@ -1,6 +1,7 @@
 ﻿'use client';
 
 import { useState, useEffect } from 'react';
+import PageHeader from '@/components/PageHeader';
 import { getCacheStats, clearCache, getBudgetStatus } from '@/lib/api';
 import { NVHIVE_VERSION } from '@/lib/version';
 import type { CacheStats, BudgetStatus } from '@/lib/types';
@@ -141,16 +142,12 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-3xl mx-auto">
-      {/* Header */}
-      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
-        <div className="relative flex items-center justify-between">
-          <div>
-            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Preferences</div>
-            <h1 className="text-2xl font-bold text-[#0a0a0a]">Preferences</h1>
-            <p className="text-xs font-mono text-[#737373] mt-1">Choose simple defaults first. Advanced routing and cache controls stay below.</p>
-          </div>
+    <div>
+      <PageHeader
+        eyebrow="Preferences"
+        title="Preferences"
+        subtitle="Choose simple defaults first. Advanced routing and cache controls stay below."
+        trailing={
           <div className="flex gap-2">
             <button onClick={handleReset} className="btn-ghost px-4 py-2 text-xs font-mono uppercase tracking-wider">
               Reset Defaults
@@ -173,8 +170,9 @@ export default function SettingsPage() {
               ) : 'SAVE PREFERENCES'}
             </button>
           </div>
-        </div>
-      </div>
+        }
+      />
+      <div className="p-6 space-y-6 max-w-3xl mx-auto">
 
       <SectionCard title="Simple Defaults">
         <SettingRow label="Use my GPU first" description="Prefer local models before cloud providers">
@@ -478,6 +476,7 @@ export default function SettingsPage() {
       <div className="text-center py-4 border-t border-[#e5e5e5]">
         <div className="text-[10px] font-mono text-[#404040]">NVHIVE - v{NVHIVE_VERSION}</div>
         <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">NVIDIA Nemotron - Next.js 14 - Tailwind CSS</div>
+      </div>
       </div>
     </div>
   );

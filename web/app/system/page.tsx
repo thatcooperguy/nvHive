@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import PageHeader from '@/components/PageHeader';
 import BudgetWidget from '@/components/BudgetWidget';
 import ProviderCard from '@/components/ProviderCard';
 import { checkHealth, getProviders, getCacheStats, getGPUInfo, getRecommendations } from '@/lib/api';
@@ -75,34 +76,25 @@ export default function SystemPage() {
   const cacheHitRate = cacheStats && Number.isFinite(cacheStats.hit_rate) ? cacheStats.hit_rate : 0;
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Page header */}
-      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
-        <div className="absolute inset-0 grid-bg opacity-30 pointer-events-none" />
-        <div className="relative flex items-center justify-between flex-wrap gap-4">
-          <div>
-            <div className="text-[10px] font-mono text-[#76B900] tracking-[0.25em] uppercase mb-1">
-              Computer Check
-            </div>
-            <h1 className="text-2xl font-bold text-[#0a0a0a] tracking-tight">My Computer</h1>
-            <p className="text-sm text-[#737373] mt-1 font-mono">
-              Check whether local AI is ready on this desktop.
-            </p>
-          </div>
+    <div>
+      <PageHeader
+        eyebrow="Computer Check"
+        title="My Computer"
+        subtitle="Check whether local AI is ready on this desktop."
+        trailing={
           <div className="flex items-center gap-3">
             <div className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-mono ${
               apiStatus === 'connected'
                 ? 'border-[#76B900]/40 bg-[#76B900]/5 text-[#76B900]'
                 : apiStatus === 'disconnected'
-                ? 'border-[#dc2626]/40 bg-[#dc2626]/5 text-[#dc2626]'
-                : 'border-[#d4d4d4] text-[#a3a3a3]'
+                  ? 'border-[#dc2626]/40 bg-[#dc2626]/5 text-[#dc2626]'
+                  : 'border-[#d4d4d4] text-[#a3a3a3]'
             }`}>
               <span
                 className={`w-1.5 h-1.5 flex-shrink-0 ${
                   apiStatus === 'connected' ? 'bg-[#76B900] nvidia-pulse' :
-                  apiStatus === 'disconnected' ? 'bg-[#dc2626]' :
-                  'bg-[#a3a3a3] animate-pulse'
+                    apiStatus === 'disconnected' ? 'bg-[#dc2626]' :
+                      'bg-[#a3a3a3] animate-pulse'
                 }`}
                 style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }}
               />
@@ -116,8 +108,9 @@ export default function SystemPage() {
               ASK A QUESTION
             </Link>
           </div>
-        </div>
-      </div>
+        }
+      />
+      <div className="p-6 space-y-6 max-w-7xl mx-auto">
 
       {/* GPU + stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -326,6 +319,7 @@ export default function SystemPage() {
       <div className="border-t border-[#e5e5e5] pt-4 flex items-center justify-between">
         <div className="text-[10px] font-mono text-[#333333]">NVHIVE COMPUTER CHECK</div>
         <div className="text-[10px] font-mono text-[#333333]">POWERED BY NVIDIA LOCAL AI</div>
+      </div>
       </div>
     </div>
   );

@@ -1631,6 +1631,9 @@ class WizardChatRequest(BaseModel):
     # Optional named agent profile (e.g. "coder", "researcher"). Falls back
     # to the default Wizard persona when omitted or unknown.
     profile: str | None = None
+    # Clamp the read→think→act→react loop. 1 = "just answer, no tools",
+    # 3 (current ceiling) = "let it chain". Clamped server-side.
+    max_iterations: int | None = Field(default=None, ge=1, le=10)
 
 
 @app.post("/v1/wizard/chat", summary="AI Wizard chat — live-state-grounded conversation")
@@ -1653,6 +1656,7 @@ async def wizard_chat_endpoint(
         home_dir=request.home_dir,
         conversation_id=request.conversation_id,
         profile=request.profile,
+        max_iterations=request.max_iterations,
     )
     return _response_envelope(result)
 
@@ -1681,6 +1685,7 @@ async def wizard_chat_stream_endpoint(
                 home_dir=request.home_dir,
                 conversation_id=request.conversation_id,
                 profile=request.profile,
+                max_iterations=request.max_iterations,
             ):
                 yield f"data: {json.dumps(event)}\n\n".encode()
         except Exception as exc:

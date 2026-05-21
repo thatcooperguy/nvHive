@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import CouncilPanel from '@/components/CouncilPanel';
 import AgentBadge from '@/components/AgentBadge';
+import CouncilPanel from '@/components/CouncilPanel';
+import PageHeader from '@/components/PageHeader';
 import {
   streamCouncil,
   getAgentPresets,
@@ -377,18 +378,13 @@ export default function CouncilPage() {
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="nvidia-corner relative border border-[#d4d4d4] bg-[#ffffff] p-5 overflow-hidden">
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-[#76B900] to-transparent" />
-        <div className="relative">
-          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Study Group</div>
-          <h1 className="text-2xl font-bold text-[#0a0a0a]">Ask a Study Group</h1>
-          <p className="text-xs font-mono text-[#737373] mt-1">
-            Ask several AI helpers, then combine their answers into one clear response.
-          </p>
-        </div>
-      </div>
+    <div>
+      <PageHeader
+        eyebrow="Study Group"
+        title="Ask a Study Group"
+        subtitle="Ask several AI helpers, then combine their answers into one clear response."
+      />
+      <div className="p-6 space-y-6 max-w-7xl mx-auto">
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
         {/* Config sidebar */}
@@ -814,6 +810,7 @@ export default function CouncilPage() {
           50% { opacity: 0; }
         }
       `}</style>
+      </div>
     </div>
   );
 }
