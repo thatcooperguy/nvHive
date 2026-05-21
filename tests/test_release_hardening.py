@@ -755,10 +755,18 @@ def test_wizard_persona_includes_proactive_repair_instructions() -> None:
     # The proactive-repair section exists as a labeled block in the persona.
     assert "Proactive repair" in persona
     assert "RUN ON EVERY TURN" in persona
-    # The four specific failure → tool mappings the user shipped.
-    assert "Ollama daemon unreachable" in persona and "repair_workspace" in persona
-    assert "No local models installed" in persona and "refresh_models" in persona
-    assert "provider key is missing/invalid" in persona and "validate_provider_key" in persona
+    # The four failure → tool-class mappings. We use natural-language
+    # tool-class names (not literal function names like `refresh_models`)
+    # so the persona doesn't accidentally appear to mention tools that
+    # only show up in the dynamic tools block — see
+    # tests/test_wizard_tool_call_parsing.py::
+    # test_build_system_prompt_appends_tools_block_when_provided.
+    assert "Local-model daemon unreachable" in persona
+    assert "workspace-repair tool" in persona
+    assert "No local models installed" in persona
+    assert "model-refresh tool" in persona
+    assert "provider key is missing/invalid" in persona
+    assert "key-validation tool" in persona
     # The contract: fix first, then answer.
     assert "Only after you've kicked the repair, answer" in persona
     # The user-facing rationale (so future edits don't accidentally
