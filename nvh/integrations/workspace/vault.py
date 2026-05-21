@@ -188,16 +188,20 @@ Obsidian's Graph view shows real structure.
 
 - [[Product Direction]] — what we're shipping and why
 - [[Product Conflicts]] — tradeoffs the Wizard should explain
+- [[Multi-Expert Council]] — when to convene 23 personas instead of one Wizard
+- [[GPU Capability Matrix]] — VRAM tiers and what auto-enables at each one
 
 ## Playbooks
 
 - [[Pilot Test Checklist]] — gate before calling a build ready
 - [[Support Report Flow]] — handling user failure reports
 - [[Headless QA Loop]] — automated install verification on a rented cloud rig
+- [[Service Order]] — boot sequence, health-wait contracts, env knobs
 
 ## Troubleshooting
 
-- [[Common Install Issues]] — port conflicts, stale API, Ollama not starting, browser not opening, model download skipped, dark mode panels
+- [[Common Install Issues]] — port conflicts, stale API,
+  Ollama not starting, browser not opening, dark mode panels
 
 ## Conventions
 
@@ -248,6 +252,9 @@ to a preferred provider/model with an optional cost ceiling:
 - [[Pilot Test Checklist]] — what to verify before calling a build ready
 - [[Support Report Flow]] — handling user-reported failures
 - [[Product Direction]] — the broader product bets
+- [[Multi-Expert Council]] — the escape hatch when one persona isn't enough
+- [[GPU Capability Matrix]] — which capabilities the Wizard recommends
+- [[Service Order]] — the boot sequence the Wizard depends on
 """,
         "Decisions/Product Direction.md": """---
 tags: [decision, product]
@@ -275,6 +282,8 @@ captures the tradeoffs we've already made.
 - [[AI Wizard]] — the in-product agent
 - [[Product Conflicts]] — known tradeoffs
 - [[Pilot Test Checklist]] — pre-release gate
+- [[Multi-Expert Council]] — when a single Wizard answer isn't enough
+- [[GPU Capability Matrix]] — what we promise on which rigs
 """,
         "Conflicts/Product Conflicts.md": _conflicts_markdown(),
         "Process Playbooks/Pilot Test Checklist.md": """---
@@ -304,6 +313,9 @@ Run this before calling a Linux GPU VM build ready. Pairs with
 - [[Support Report Flow]] — what to do if a step fails
 - [[Product Conflicts]] — tradeoffs that explain why a "warning" is
   sometimes the right state
+- [[Service Order]] — the boot sequence each step gates on
+- [[GPU Capability Matrix]] — what should auto-enable at this VRAM tier
+- [[Headless QA Loop]] — automated variant of this checklist
 """,
         "Process Playbooks/Support Report Flow.md": """---
 tags: [playbook, support]
@@ -329,6 +341,8 @@ and as the runbook for incoming support reports.
 - [[AI Wizard]] — the agent the user is interacting with
 - [[Pilot Test Checklist]] — where many incoming reports originate
 - [[Product Conflicts]] — known intentional tradeoffs
+- [[Common Install Issues]] — symptom-driven entry to the same content
+- [[Service Order]] — boot dependency map for log triage
 """,
         "Troubleshooting/Common Install Issues.md": """---
 tags: [troubleshooting, support, setup]
@@ -464,6 +478,8 @@ hex color, add a `dark:` Tailwind sibling next to the light one.
 - [[Support Report Flow]] — what to do when a user hits an issue not
   on this list
 - [[AI Wizard]] — the readiness states the WebUI surfaces
+- [[Service Order]] — boot dependency map for log triage
+- [[GPU Capability Matrix]] — when "auto-enable" doesn't fire
 """,
         "Process Playbooks/Headless QA Loop.md": """---
 tags: [playbook, setup, qa]
@@ -560,6 +576,195 @@ running the installer if you'd rather just take the Path 2 fallback
   harness can't reach the rig
 - [[Support Report Flow]] — what to do when a step fails
 - [[AI Wizard]] — the readiness surface the harness diffs against
+- [[Service Order]] — what the harness is verifying came up in order
+- [[GPU Capability Matrix]] — which capabilities the rig should
+  auto-enable based on VRAM
+""",
+        "Decisions/Multi-Expert Council.md": """---
+tags: [decision, wizard, product]
+---
+# Multi-Expert Council
+
+The [[AI Wizard]] handles the steady-state product surface. The
+**council** is the escape hatch when one persona isn't the right shape
+for the question — e.g. legal + product + engineering tradeoffs at the
+same time.
+
+Council mode is fully built and shipping today (`nvh/core/council.py`,
+`nvh/core/agents.py`). Until recently it was hidden behind the API
+surface; the WizardChat composer now offers a "Convene council" link
+that deep-links into the dedicated `/council` page with the current
+draft pre-filled as the prompt.
+
+## When to convene
+
+Convene a council when **at least two** of these apply:
+
+- The question crosses domains (legal × engineering, marketing ×
+  technical, customer × founder).
+- The answer is a tradeoff, not a fact — and the user needs to *see*
+  the tradeoff debated rather than handed a single recommendation.
+- The downside of the wrong answer is large (naming, licensing,
+  refactor scope, channel partner pick).
+- The user explicitly asks for "another opinion" or "what would <X>
+  say about this."
+
+Skip the council for ordinary "fix this bug" / "what does this command
+do" turns — the Wizard answers those faster.
+
+## Available cabinets
+
+11 cabinets ship by default (e.g. `legal`, `marketing-and-customer`,
+`engineering-and-product`, `student-feedback`). Each cabinet is a
+named subset of the 23 personas, with a strategy:
+
+- `weighted_consensus` — personas weighted by how much they know the
+  domain; produces a single synthesized answer.
+- `majority_vote` — every persona answers, vote tallied.
+- `best_of` — every persona answers, the Wizard picks the most useful.
+
+## API surfaces
+
+- `POST /v1/council` — synchronous (returns the full transcript).
+- `WS /v1/council/stream` — token-streaming each persona.
+- `/council` page in the WebUI — wraps the WS endpoint with a UI for
+  picking cabinet + strategy + watching the debate play out.
+
+## Related
+
+- [[AI Wizard]] — the default single-persona surface this escalates from
+- [[Product Direction]] — why having a "convene experts" gesture matters
+- [[Product Conflicts]] — the kind of tradeoffs councils exist to surface
+- [[Pilot Test Checklist]] — councils have their own readiness signals
+""",
+        "Decisions/GPU Capability Matrix.md": """---
+tags: [decision, setup, product]
+---
+# GPU Capability Matrix
+
+Different rigs run different capabilities. The installer probes VRAM
+once and auto-stages the right pack so users on a 6 GB laptop don't get
+a 40 GB ComfyUI download and users on a 48 GB RTX 6000 Ada don't end up
+on `moondream`. The canonical matrix lives in
+`docs/GPU_TIER_MATRIX.md`; this note explains the *intent* the matrix
+encodes so the [[AI Wizard]] and [[Multi-Expert Council]] can reason
+about it.
+
+## VRAM tiers and defaults
+
+- **40 GB+**: `nemotron-omni` (NVIDIA Nemotron Omni, multimodal LLM),
+  ComfyUI SDXL + Flux dev, WhisperX large-v3, optional video.
+- **24–40 GB**: `nemotron-3-nano-omni`, ComfyUI SDXL, WhisperX
+  medium, faster-whisper, optional ComfyUI portrait workflow.
+- **16–24 GB**: `llama3.2-vision`, ComfyUI SD 1.5 + SDXL turbo,
+  WhisperX small, Piper TTS.
+- **12–16 GB**: `minicpm-v`, ComfyUI SD 1.5, WhisperX small, Piper TTS.
+- **6–12 GB**: `moondream` (multimodal, ~2 GB), text-only generation,
+  Piper TTS only — no diffusion image gen by default.
+- **< 6 GB / CPU-only**: still installs `moondream`. The Wizard works
+  via cloud providers for anything visual.
+
+## What "Omni" means here (and what it doesn't)
+
+NVIDIA Nemotron Omni is a **multimodal LLM** — vision + text in, text
+out. It is *not* an image generator (use ComfyUI + diffusion for that)
+and it is *not* a speech model (use WhisperX / Piper / XTTS for that).
+Image gen and speech are separately VRAM-gated capabilities, not part
+of "Omni."
+
+## Opting in to bigger capability bundles
+
+`NVH_INSTALL_FULL_CAPABILITY=1` before running the installer skips the
+"small rig" check and stages the speech + video + ComfyUI packs even on
+a CPU-only / small-GPU box. Useful when a user knows they'll be running
+heavy workloads on a remote rig but installing on their laptop first.
+
+## How this gets enforced at runtime
+
+The installer writes `auto-enable.json` under `NVH_HOME/state/`
+recording which capabilities the rig qualifies for. The Wizard reads
+this on every WebUI launch and decorates feature panels with a green
+"Available on this rig" / amber "Requires upgrade" badge. The /setup
+page consumes the same file to gate downloads.
+
+## Related
+
+- [[AI Wizard]] — uses this matrix to decide which models to recommend
+- [[Multi-Expert Council]] — falls back to text-only mode on small rigs
+- [[Headless QA Loop]] — checks that auto-enable matches expected tier
+- [[Common Install Issues]] — falling-back-to-cloud diagnostics
+- [[Service Order]] — Ollama health-wait depends on the model size we
+  asked it to load
+""",
+        "Process Playbooks/Service Order.md": """---
+tags: [playbook, setup]
+---
+# Service Order
+
+The install + launch path runs four services in a specific dependency
+order. When something looks broken, this note tells you which one *was*
+supposed to come up first and where to look in the logs. Canonical
+contract lives in `docs/SERVICE_ORDER.md`; this note is the on-rig
+mirror so [[AI Wizard]] support reports can deep-link to it.
+
+## Boot sequence
+
+1. **Ollama** (`http://localhost:11434`) — local model server.
+   Health-checked by polling `GET /api/tags` until 200 or
+   `NVH_OLLAMA_BOOT_TIMEOUT` (default 15s) expires.
+2. **nvHive API** (`http://localhost:8000`) — FastAPI server.
+   Health-checked by `GET /v1/health` returning 200 *and*
+   `engine_initialized: true`. A live TCP port is not enough — a stale
+   process accepting connections but failing to init the engine is the
+   exact failure mode [[Common Install Issues]] §1 covers.
+3. **Next.js WebUI** (`http://localhost:3000`, cascade 3001/3002/8080).
+   Polls the API health endpoint before showing panels; until then,
+   surfaces the amber "Starting up…" banner from
+   `web/components/ApiHealthBanner.tsx`.
+4. **Optional providers** (ComfyUI, browser auto-open, etc.) — fire
+   only after WebUI binds.
+
+## Env knobs
+
+- `NVH_OLLAMA_BOOT_TIMEOUT=30` — wait longer for Ollama on slow rigs.
+- `NVH_API_BOOT_TIMEOUT=45` — wait longer for the FastAPI engine to
+  initialize (cold imports + model warm-up can run 20-30s).
+- `NVH_WEBUI_BOOT_TIMEOUT=30` — Next.js dev server bind window.
+- `NVH_PORTS_TO_CHECK="3000 3001 3002 8000 11434"` — ports the
+  install-time conflict detector probes.
+- `NVH_PORT_CONFLICT_KILL_FOREIGN=1` — let the installer kill a
+  foreign process holding one of the stack ports. Off by default to
+  avoid silently stomping the user's own work.
+
+## Health invariants the helpers check
+
+`nvh services` (and the `webui()` command which delegates to it) uses
+these module-level helpers in `nvh/cli/services.py`:
+
+- `api_healthy(port)` → HTTP probe `/v1/health`, parse JSON, require
+  `engine_initialized: true`.
+- `ollama_healthy(port)` → HTTP probe `/api/tags`, require 200.
+- `webui_port_listening(port)` → TCP `connect()` only (the Next.js
+  dev server doesn't expose a JSON health endpoint).
+- `kill_stale_api(port)` → `fuser -k <port>/tcp` on Linux,
+  `lsof + kill -TERM` on macOS.
+
+## What goes wrong + where to look
+
+| Symptom | Most likely cause | Log path |
+| --- | --- | --- |
+| Red "API offline" banner | Stale `nvh serve` engine failed init | `$NVH_HOME/logs/api.log` |
+| Amber "Starting up…" lingers >20s | API still warming the engine | `$NVH_HOME/logs/api.log` |
+| Wizard falls back to cloud | Ollama bind raced timeout | `$NVH_HOME/logs/ollama.log` |
+| Install aborts "FOREIGN port" | Non-nvh process on stack port | run `lsof -nP -iTCP:<port>` |
+| WebUI never opens | Browser-open chain failed | `$NVH_HOME/logs/webui.log` |
+
+## Related
+
+- [[Common Install Issues]] — symptom-driven entry to the same content
+- [[AI Wizard]] — owner of the readiness surface
+- [[Headless QA Loop]] — automates verification this order holds
+- [[GPU Capability Matrix]] — affects Ollama health-wait duration
 """,
     }
 
