@@ -125,6 +125,26 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     assert "WebUI will show AI Wizard model download" in install
 
 
+def test_install_ollama_startup_has_health_wait_and_logging() -> None:
+    """install.sh must NOT use the racy ``ollama serve &>/dev/null & sleep N``
+    pattern. The previous code silently lost startup errors AND moved on
+    before the daemon bound :11434, so the WebUI later showed "Ollama not
+    running on 11434 — falling back to cloud providers" on rigs where
+    Ollama just needed another 5 seconds to come up.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # The helper that replaces the racy pattern.
+    assert "start_ollama_with_health_wait" in install
+    # Log redirect (not &>/dev/null) so startup errors are diagnosable.
+    assert "ollama.log" in install
+    # `nohup` + `disown` so the daemon survives install.sh's exit.
+    assert "nohup" in install and "disown" in install
+    # Real poll loop with a real timeout knob.
+    assert "NVH_OLLAMA_BOOT_TIMEOUT" in install
+    assert "/api/tags" in install
+
+
 def test_setup_page_surfaces_startup_autopilot_status() -> None:
     setup_page = (ROOT / "web" / "app" / "setup" / "page.tsx").read_text(encoding="utf-8")
 
