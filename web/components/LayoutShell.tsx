@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter } from 'next/navigation';
 import ApiHealthBanner from '@/components/ApiHealthBanner';
+import DebugReportButton from '@/components/DebugReportButton';
 import Sidebar from '@/components/Sidebar';
 import GlobalModals from '@/components/GlobalModals';
 import SessionAgePill from '@/components/SessionAgePill';
@@ -49,6 +50,10 @@ function InnerShell({ children }: { children: React.ReactNode }) {
             are the first pages a fresh-install user lands on, and they
             both depend on the API for everything they render. */}
         <ApiHealthBanner />
+        {/* One-click "show me everything" diagnostic the user can
+            photograph + share. Sits bottom-left so it's reachable on
+            every page including chat + setup. */}
+        <DebugReportButton />
         <div className="pointer-events-auto fixed right-3 top-3 z-50">
           <ThemeToggle compact />
         </div>
@@ -62,6 +67,7 @@ function InnerShell({ children }: { children: React.ReactNode }) {
       <GlobalModals />
       <SystemConsole />
       <ApiHealthBanner />
+      <DebugReportButton />
       {/* Top status bar */}
       <div
         className="fixed top-0 left-0 right-0 z-50 h-8 border-b flex items-center px-4 gap-6 text-[10px] font-mono"

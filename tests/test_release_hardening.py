@@ -525,3 +525,65 @@ def test_install_sh_tees_full_run_to_install_log_for_webui_surface() -> None:
     assert 'exec > >(tee -a "$NVH_LOGS/install.log") 2>&1' in install
     # Marker line so users can tell runs apart.
     assert "=== nvHive install starting at" in install
+
+
+def test_debug_report_button_aggregates_everything_for_phone_sharing() -> None:
+    """The DebugReportButton is the "one-click show me everything" surface
+    the user can photograph with a phone and share. It must:
+
+      1. Live in the bottom-left of every page (mounted in both LayoutShell
+         branches — chat/setup AND the main shell). Bottom-left is the
+         chosen position so it doesn't collide with the SystemConsole at
+         top or any of the right-aligned theme/sidebar controls.
+      2. Pull from /api/debug/report which aggregates API health, Ollama
+         health, log tails, doctor output, and env into one JSON payload.
+      3. Render the payload as a phone-readable monospace report with
+         section headers and pattern-matched suggestions so a screenshot
+         crop is still useful.
+      4. Support Copy-to-clipboard so the user has a paste option too.
+
+    The aggregator route runs all probes in parallel (one bounded wall-time)
+    and includes a `diagnose()` step that pattern-matches common failures
+    (ImportError, EADDRINUSE, engine_initialized: false, etc.) into
+    actionable hints — turning 80 lines of log into 3 lines of "looks like
+    X — try Y."
+    """
+    btn = (ROOT / "web" / "components" / "DebugReportButton.tsx").read_text(encoding="utf-8")
+    layout = (ROOT / "web" / "components" / "LayoutShell.tsx").read_text(encoding="utf-8")
+    report_route = (
+        ROOT / "web" / "app" / "api" / "debug" / "report" / "route.ts"
+    ).read_text(encoding="utf-8")
+
+    # 1. Mounted in both shell branches.
+    assert "import DebugReportButton" in layout
+    assert layout.count("<DebugReportButton />") >= 2
+    # Bottom-left fixed position.
+    assert "left-3 bottom-3" in btn
+    assert 'fixed left-3 bottom-3' in btn
+
+    # 2. Fetches the aggregator + shows the result.
+    assert "/api/debug/report" in btn
+    # The aggregator parallelizes its probes.
+    assert "Promise.all" in report_route
+    # Covers all four log sources the SystemConsole knows about.
+    for filename in ("api-server.log", "webui-bootstrap.log", "ollama.log", "install.log"):
+        assert filename in report_route
+    # Probes API + Ollama.
+    assert "localhost:8000/v1/health" in report_route
+    assert "localhost:11434/api/tags" in report_route
+    # Runs nvh doctor --json with a bounded timeout.
+    assert "doctor" in report_route and "--json" in report_route
+    assert "timeout:" in report_route
+    # Same rootless binary resolution as the other bridge routes.
+    assert "NVH_BIN" in report_route and "venv" in report_route
+    assert "sudo" not in report_route
+
+    # 3. Pattern-matched diagnostics.
+    assert "diagnose(" in report_route
+    assert "ImportError" in report_route
+    assert "engine_initialized" in report_route
+    assert "EADDRINUSE" in report_route
+
+    # 4. Copy-to-clipboard for users on devices without easy screenshot.
+    assert "clipboard" in btn.lower()
+    assert "Copy" in btn
