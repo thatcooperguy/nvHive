@@ -89,7 +89,7 @@ export default function ThemeToggle({ compact = false }: { compact?: boolean }) 
     return (
       <button
         type="button"
-        className="inline-flex items-center gap-1.5 text-[10px] font-mono text-[#737373]"
+        className="inline-flex items-center gap-1.5 text-[10px] font-mono text-[#737373] dark:text-[#a3a3a3]"
         aria-label="Theme"
         disabled
       >
@@ -103,7 +103,7 @@ export default function ThemeToggle({ compact = false }: { compact?: boolean }) 
     <button
       type="button"
       onClick={cycle}
-      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-mono text-[#737373] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)] transition-colors"
+      className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-mono text-[#737373] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)] transition-colors dark:text-[#a3a3a3]"
       aria-label={`Theme: ${label} (click to cycle)`}
       title={`Theme: ${label} — click to cycle Light/Dark/System`}
     >

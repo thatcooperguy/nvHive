@@ -193,7 +193,7 @@ function ConvItem({ conv, active, onClick, onContextMenu, collapsed }: ConvItemP
         className={`w-full flex items-center justify-center py-2 transition-all ${
           active
             ? 'bg-[#76B900]/10 border-l-2 border-[#76B900] text-[#76B900]'
-            : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5]'
+            : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5] dark:text-[#a3a3a3] dark:hover:text-[#fafafa] dark:hover:bg-[#141414]'
         }`}
       >
         <span className="text-[10px]" style={{ color: modeColor(conv.mode) }}>
@@ -210,7 +210,7 @@ function ConvItem({ conv, active, onClick, onContextMenu, collapsed }: ConvItemP
       className={`w-full flex items-start gap-2 px-3 py-2 text-left transition-all group relative ${
         active
           ? 'bg-[#76B900]/8 border-l-2 border-[#76B900]'
-          : 'border-l-2 border-transparent hover:bg-[#f5f5f5] hover:border-[#e5e5e5]'
+          : 'border-l-2 border-transparent hover:bg-[#f5f5f5] hover:border-[#e5e5e5] dark:hover:bg-[#141414] dark:hover:border-[#262626]'
       }`}
     >
       <span
@@ -223,7 +223,7 @@ function ConvItem({ conv, active, onClick, onContextMenu, collapsed }: ConvItemP
         <div className={`text-xs truncate leading-snug ${active ? 'text-[#0a0a0a] font-medium' : 'text-[#404040] group-hover:text-[#0a0a0a]'}`}>
           {conv.title}
         </div>
-        <div className="text-[9px] font-mono text-[#a3a3a3] mt-0.5 flex items-center gap-1.5">
+        <div className="text-[9px] font-mono text-[#a3a3a3] mt-0.5 flex items-center gap-1.5 dark:text-[#737373]">
           {conv.provider && <span>{conv.provider}</span>}
           <span>{conv.message_count} msgs</span>
         </div>
@@ -351,7 +351,7 @@ export default function Sidebar({
     return (
       <div key={label}>
         {!collapsed && (
-          <div className="px-3 py-1.5 text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.15em]">
+          <div className="px-3 py-1.5 text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.15em] dark:text-[#737373]">
             {label}
           </div>
         )}
@@ -367,7 +367,7 @@ export default function Sidebar({
                   if (e.key === 'Enter') handleRenameSubmit();
                   if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); }
                 }}
-                className="w-full bg-white border border-[#76B900]/60 text-[#0a0a0a] text-xs font-mono px-2 py-1 focus:outline-none"
+                className="w-full bg-white border border-[#76B900]/60 text-[#0a0a0a] text-xs font-mono px-2 py-1 focus:outline-none dark:bg-[#0a0a0a] dark:text-[#fafafa]"
               />
             </div>
           ) : (
@@ -403,7 +403,7 @@ export default function Sidebar({
           <HiveLogo />
           {!collapsed && (
             <div className="flex-1 min-w-0">
-              <div className="font-bold text-[#0a0a0a] text-sm leading-none tracking-wide">NVHIVE</div>
+              <div className="font-bold text-[#0a0a0a] text-sm leading-none tracking-wide dark:text-[#fafafa]">NVHIVE</div>
               <div className="text-[9px] text-[#5a9100] font-mono uppercase tracking-[0.2em] mt-0.5">Local GPU Workspace</div>
             </div>
           )}
@@ -428,7 +428,7 @@ export default function Sidebar({
         {!collapsed && (
           <div className="px-2 pb-2">
             <div className="relative">
-              <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[#a3a3a3]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-[#a3a3a3] dark:text-[#737373]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
               </svg>
               <input
@@ -437,7 +437,7 @@ export default function Sidebar({
                 onChange={e => setSearch(e.target.value)}
                 placeholder="Search chats..."
                 className="w-full bg-white border border-[#d4d4d4] text-[#0a0a0a] text-xs font-mono pl-7 pr-3 py-1.5
-                  focus:outline-none focus:border-[#76B900] placeholder-[#a3a3a3] transition-colors"
+                  focus:outline-none focus:border-[#76B900] placeholder-[#a3a3a3] transition-colors dark:bg-[#0a0a0a] dark:border-[#404040] dark:text-[#fafafa]"
               />
             </div>
           </div>
@@ -459,10 +459,10 @@ export default function Sidebar({
 
           {conversations.length === 0 && !collapsed ? (
             <div className="px-3 py-6 text-center">
-              <div className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider">
+              <div className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider dark:text-[#737373]">
                 No conversations yet
               </div>
-              <div className="text-[9px] font-mono text-[#a3a3a3] mt-1">
+              <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                 Start a new chat above
               </div>
             </div>
@@ -478,7 +478,7 @@ export default function Sidebar({
         </div>
 
         {/* Bottom nav links */}
-        <div className="border-t border-[#e5e5e5]">
+        <div className="border-t border-[#e5e5e5] dark:border-[#262626]">
           {BOTTOM_NAV.map(item => {
             const isActive = pathname.startsWith(item.href);
             return (
@@ -489,7 +489,7 @@ export default function Sidebar({
                 className={`flex items-center gap-3 px-3 py-2 text-xs font-medium transition-all ${
                   isActive
                     ? 'nav-active'
-                    : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5]'
+                    : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5] dark:text-[#a3a3a3] dark:hover:text-[#fafafa] dark:hover:bg-[#141414]'
                 } ${collapsed ? 'justify-center' : ''}`}
               >
                 <span className={`flex-shrink-0 ${isActive ? 'text-[#76B900]' : 'text-[#a3a3a3]'}`}>
@@ -501,7 +501,7 @@ export default function Sidebar({
           })}
 
           {/* API status + collapse toggle */}
-          <div className="border-t border-[#eeeeee]">
+          <div className="border-t border-[#eeeeee] dark:border-[#1f1f1f]">
             {!collapsed && (
               <div className="px-3 py-2 flex items-center gap-2">
                 <span
@@ -511,15 +511,15 @@ export default function Sidebar({
                   }`}
                   style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }}
                 />
-                <span className="text-[9px] font-mono text-[#737373]">
+                <span className="text-[9px] font-mono text-[#737373] dark:text-[#a3a3a3]">
                   {connected === null ? 'CHECKING...' : connected ? 'SERVICE ONLINE' : 'SERVICE OFFLINE'}
                 </span>
-                <span className="ml-auto text-[9px] font-mono text-[#a3a3a3]">Ctrl+B</span>
+                <span className="ml-auto text-[9px] font-mono text-[#a3a3a3] dark:text-[#737373]">Ctrl+B</span>
               </div>
             )}
             <button
               onClick={() => setCollapsed(!collapsed)}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-[#737373] hover:text-[#76B900] hover:bg-[#f5f5f5] transition-all text-xs ${
+              className={`w-full flex items-center gap-2 px-3 py-2 text-[#737373] hover:text-[#76B900] hover:bg-[#f5f5f5] dark:text-[#a3a3a3] dark:hover:bg-[#141414] transition-all text-xs ${
                 collapsed ? 'justify-center' : ''
               }`}
               title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -540,7 +540,7 @@ export default function Sidebar({
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="fixed z-50 bg-white border border-[#e5e5e5] shadow-lg py-1 min-w-[160px]"
+          className="fixed z-50 bg-white border border-[#e5e5e5] shadow-lg py-1 min-w-[160px] dark:bg-[#0a0a0a] dark:border-[#262626]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           {[
@@ -581,7 +581,7 @@ export default function Sidebar({
             },
           ].map((item, i) => {
             if ('separator' in item && item.separator) {
-              return <div key={i} className="border-t border-[#eeeeee] my-1" />;
+              return <div key={i} className="border-t border-[#eeeeee] my-1 dark:border-[#1f1f1f]" />;
             }
             const menuItem = item as { label: string; icon: string; action: () => void; danger?: boolean };
             return (
@@ -590,8 +590,8 @@ export default function Sidebar({
                 onClick={menuItem.action}
                 className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-xs font-mono transition-colors text-left ${
                   menuItem.danger
-                    ? 'text-[#dc2626] hover:bg-[#fef2f2]'
-                    : 'text-[#404040] hover:text-[#0a0a0a] hover:bg-[#f5f5f5]'
+                    ? 'text-[#dc2626] hover:bg-[#fef2f2] dark:hover:bg-[#3f1c1c]'
+                    : 'text-[#404040] hover:text-[#0a0a0a] hover:bg-[#f5f5f5] dark:text-[#d4d4d4] dark:hover:text-[#fafafa] dark:hover:bg-[#141414]'
                 }`}
               >
                 <span className="text-[10px]">{menuItem.icon}</span>

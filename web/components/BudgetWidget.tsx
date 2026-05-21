@@ -31,8 +31,8 @@ function StatusBar({ value, label, spend, limit }: {
   return (
     <div>
       <div className="flex items-center justify-between mb-1.5">
-        <span className="text-xs text-[#737373]">{label}</span>
-        <span className="text-xs font-mono text-[#0a0a0a]">
+        <span className="text-xs text-[#737373] dark:text-[#a3a3a3]">{label}</span>
+        <span className="text-xs font-mono text-[#0a0a0a] dark:text-[#fafafa]">
           {formatUSD(spend)} / {formatUSD(limit)}
         </span>
       </div>
@@ -83,7 +83,7 @@ export default function BudgetWidget({ className = '' }: Props) {
             <path strokeLinecap="round" strokeLinejoin="round"
               d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <span className="font-semibold text-sm text-[#0a0a0a]">Budget</span>
+          <span className="font-semibold text-sm text-[#0a0a0a] dark:text-[#fafafa]">Budget</span>
         </div>
         {loading && (
           <div className="w-3 h-3 border-2 border-[#2563eb]/30 border-t-[#2563eb] rounded-full animate-spin" />
@@ -91,15 +91,15 @@ export default function BudgetWidget({ className = '' }: Props) {
       </div>
 
       {error ? (
-        <div className="text-xs text-[#737373] font-mono">
+        <div className="text-xs text-[#737373] font-mono dark:text-[#a3a3a3]">
           Budget tracking is not configured for this local workspace yet.
         </div>
       ) : loading ? (
         <div className="space-y-4">
           {[1, 2].map(i => (
             <div key={i} className="space-y-1.5">
-              <div className="h-3 bg-[#fafafa] rounded animate-pulse" />
-              <div className="h-1.5 bg-[#fafafa] rounded animate-pulse" />
+              <div className="h-3 bg-[#fafafa] rounded animate-pulse dark:bg-[#141414]" />
+              <div className="h-1.5 bg-[#fafafa] rounded animate-pulse dark:bg-[#141414]" />
             </div>
           ))}
         </div>
@@ -119,17 +119,17 @@ export default function BudgetWidget({ className = '' }: Props) {
           />
 
           <div className="grid grid-cols-2 gap-2 pt-1">
-            <div className="bg-[#ffffff] rounded-lg p-2.5 text-center">
-              <div className="font-mono text-sm font-bold text-[#0a0a0a]">
+            <div className="bg-[#ffffff] rounded-lg p-2.5 text-center dark:bg-[#0a0a0a]">
+              <div className="font-mono text-sm font-bold text-[#0a0a0a] dark:text-[#fafafa]">
                 {budget.daily_queries}
               </div>
-              <div className="text-xs text-[#737373] mt-0.5">Today</div>
+              <div className="text-xs text-[#737373] mt-0.5 dark:text-[#a3a3a3]">Today</div>
             </div>
-            <div className="bg-[#ffffff] rounded-lg p-2.5 text-center">
-              <div className="font-mono text-sm font-bold text-[#0a0a0a]">
+            <div className="bg-[#ffffff] rounded-lg p-2.5 text-center dark:bg-[#0a0a0a]">
+              <div className="font-mono text-sm font-bold text-[#0a0a0a] dark:text-[#fafafa]">
                 {budget.monthly_queries}
               </div>
-              <div className="text-xs text-[#737373] mt-0.5">This month</div>
+              <div className="text-xs text-[#737373] mt-0.5 dark:text-[#a3a3a3]">This month</div>
             </div>
           </div>
 
@@ -139,8 +139,8 @@ export default function BudgetWidget({ className = '' }: Props) {
               <div className="space-y-1">
                 {Object.entries(budget.by_provider ?? {}).map(([provider, cost]) => (
                   <div key={provider} className="flex items-center justify-between">
-                    <span className="text-xs text-[#737373] capitalize">{provider}</span>
-                    <span className="text-xs font-mono text-[#0a0a0a]">{formatUSD(String(cost))}</span>
+                    <span className="text-xs text-[#737373] capitalize dark:text-[#a3a3a3]">{provider}</span>
+                    <span className="text-xs font-mono text-[#0a0a0a] dark:text-[#fafafa]">{formatUSD(String(cost))}</span>
                   </div>
                 ))}
               </div>

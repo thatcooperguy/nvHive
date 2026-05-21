@@ -92,7 +92,7 @@ function BudgetPill() {
   if (isNaN(n)) return null;
 
   return (
-    <div className="flex items-center gap-1 px-2 py-0.5 bg-[#ffffff] border border-[#e5e5e5] text-[10px] font-mono text-[#d97706]">
+    <div className="flex items-center gap-1 px-2 py-0.5 bg-[#ffffff] border border-[#e5e5e5] text-[10px] font-mono text-[#d97706] dark:bg-[#0a0a0a] dark:border-[#262626]">
       <span>USD</span>
       <span>${n.toFixed(2)} today</span>
     </div>
@@ -141,7 +141,7 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
         return (
           <div
             key={label}
-            className="border p-3 bg-white transition-all"
+            className="border p-3 bg-white transition-all dark:bg-[#0a0a0a]"
             style={{
               borderColor: state.status === 'streaming' ? color : `${color}30`,
             }}
@@ -159,15 +159,15 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
                 {state.provider.toUpperCase()}
               </span>
               {state.persona && (
-                <span className="text-[9px] font-mono text-[#a3a3a3]">{state.persona}</span>
+                <span className="text-[9px] font-mono text-[#a3a3a3] dark:text-[#737373]">{state.persona}</span>
               )}
               {state.status === 'complete' && (
-                <span className="ml-auto text-[9px] font-mono text-[#a3a3a3]">
+                <span className="ml-auto text-[9px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                   {state.tokens > 0 ? `${state.tokens}t` : ''}
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-[#525252] font-mono whitespace-pre-wrap leading-relaxed max-h-28 overflow-y-auto">
+            <div className="text-[11px] text-[#525252] font-mono whitespace-pre-wrap leading-relaxed max-h-28 overflow-y-auto dark:text-[#a3a3a3]">
               {state.status === 'waiting' && (
                 <span className="text-[#333333] italic">Waiting...</span>
               )}
@@ -243,7 +243,7 @@ function EmptyState({
     <div className="flex flex-1 items-center justify-center px-5 py-8">
       <div className="w-full max-w-5xl space-y-4">
         <WelcomeBackPanel />
-        <div className="rounded-lg border border-[#262626] bg-white p-5 sm:p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+        <div className="rounded-lg border border-[#262626] bg-white p-5 sm:p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)] dark:bg-[#0a0a0a]">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="mb-2 flex items-center gap-2">
@@ -252,10 +252,10 @@ function EmptyState({
                   NVIDIA AI Workspace
                 </span>
               </div>
-              <h2 className="text-3xl font-semibold tracking-tight text-[#0a0a0a] sm:text-4xl">
+              <h2 className="text-3xl font-semibold tracking-tight text-[#0a0a0a] sm:text-4xl dark:text-[#fafafa]">
                 NVHive
               </h2>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-[#525252]">
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-[#525252] dark:text-[#a3a3a3]">
                 Run a private AI assistant on your NVIDIA GPU, then add cloud models or a study group when you need a second opinion.
               </p>
               {localModelCount === 0 && (
@@ -271,9 +271,9 @@ function EmptyState({
               <HardwareWidgetHero />
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 {readiness.map(item => (
-                  <div key={item.label} className="rounded-md border border-[#e5e5e5] bg-white px-3 py-2 text-left">
-                    <div className="text-[9px] font-mono uppercase tracking-[0.16em] text-[#737373]">{item.label}</div>
-                    <div className="mt-1 truncate text-sm font-semibold text-[#0a0a0a]">{item.value}</div>
+                  <div key={item.label} className="rounded-md border border-[#e5e5e5] bg-white px-3 py-2 text-left dark:bg-[#0a0a0a] dark:border-[#262626]">
+                    <div className="text-[9px] font-mono uppercase tracking-[0.16em] text-[#737373] dark:text-[#a3a3a3]">{item.label}</div>
+                    <div className="mt-1 truncate text-sm font-semibold text-[#0a0a0a] dark:text-[#fafafa]">{item.value}</div>
                   </div>
                 ))}
               </div>
@@ -286,22 +286,22 @@ function EmptyState({
             <button
               key={i}
               onClick={() => onPrompt(s)}
-              className="group min-h-[72px] border border-[#e5e5e5] bg-white px-4 py-3 text-left transition-all hover:border-[#76B900]/50 hover:bg-[#f3f9e5] rounded-md"
+              className="group min-h-[72px] border border-[#e5e5e5] bg-white px-4 py-3 text-left transition-all hover:border-[#76B900]/50 hover:bg-[#f3f9e5] rounded-md dark:bg-[#0a0a0a] dark:border-[#262626]"
             >
               <div className="mb-2 flex items-center justify-between">
-                <span className="text-[10px] font-mono uppercase tracking-[0.16em] text-[#737373]">
+                <span className="text-[10px] font-mono uppercase tracking-[0.16em] text-[#737373] dark:text-[#a3a3a3]">
                   Try this
                 </span>
                 <span className="h-px w-8 bg-[#333333] transition-colors group-hover:bg-[#76B900]" />
               </div>
-              <div className="text-sm leading-snug text-[#404040] group-hover:text-[#0a0a0a]">
+              <div className="text-sm leading-snug text-[#404040] group-hover:text-[#0a0a0a] dark:text-[#d4d4d4]">
                 {s}
               </div>
             </button>
           ))}
         </div>
 
-        <div className="mt-3 flex items-center gap-2 rounded-md border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 text-xs text-[#525252]">
+        <div className="mt-3 flex items-center gap-2 rounded-md border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 text-xs text-[#525252] dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
           <svg className="h-3.5 w-3.5 flex-shrink-0 text-[#76B900]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
           </svg>
@@ -1163,7 +1163,7 @@ export default function ChatPage() {
   const hasCouncilActivity = memberOrder.length > 0 || councilPhase !== 'idle';
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#ffffff]">
+    <div className="flex h-screen overflow-hidden bg-[#ffffff] dark:bg-[#0a0a0a]">
       {/* Mobile sidebar overlay */}
       {mobileSidebarOpen && (
         <div
@@ -1193,10 +1193,10 @@ export default function ChatPage() {
       {/* Main area */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         {/* Top bar */}
-        <div className="flex items-center px-3 h-11 border-b border-[#e5e5e5] bg-white flex-shrink-0 gap-2">
+        <div className="flex items-center px-3 h-11 border-b border-[#e5e5e5] bg-white flex-shrink-0 gap-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
           {/* Hamburger — mobile only */}
           <button
-            className="md:hidden flex-shrink-0 w-8 h-8 flex items-center justify-center text-[#a3a3a3] hover:text-[#76B900] transition-colors"
+            className="md:hidden flex-shrink-0 w-8 h-8 flex items-center justify-center text-[#a3a3a3] hover:text-[#76B900] transition-colors dark:text-[#737373]"
             onClick={() => setMobileSidebarOpen(true)}
             title="Open sidebar"
           >
@@ -1211,12 +1211,12 @@ export default function ChatPage() {
             </span>
             <span className="hidden sm:inline text-[#333333]">/</span>
             {activeConvId && (
-              <span className="text-xs font-mono text-[#a3a3a3] truncate">
+              <span className="text-xs font-mono text-[#a3a3a3] truncate dark:text-[#737373]">
                 {allConversations.find(c => c.id === activeConvId)?.title ?? 'Chat'}
               </span>
             )}
             {!activeConvId && (
-              <span className="text-xs font-mono text-[#a3a3a3] truncate">
+              <span className="text-xs font-mono text-[#a3a3a3] truncate dark:text-[#737373]">
                 NVIDIA AI Workspace
               </span>
             )}
@@ -1228,7 +1228,7 @@ export default function ChatPage() {
             {messages.length > 0 && (
               <button
                 onClick={handleShare}
-                className="text-[10px] font-mono px-2 py-0.5 border border-[#d4d4d4] text-[#a3a3a3] hover:border-[#76B900]/30 hover:text-[#76B900] transition-colors flex items-center gap-1"
+                className="text-[10px] font-mono px-2 py-0.5 border border-[#d4d4d4] text-[#a3a3a3] hover:border-[#76B900]/30 hover:text-[#76B900] transition-colors flex items-center gap-1 dark:border-[#404040] dark:text-[#737373]"
                 title="Export conversation as Markdown (copied to clipboard)"
               >
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1287,7 +1287,7 @@ export default function ChatPage() {
                   ))}
                   {/* Convene: also show expert panel inline when right panel closed */}
                   {mode === 'council' && !showRightPanel && hasCouncilActivity && (
-                    <div className="mx-4 mt-2 border border-[#76B900]/20 bg-white">
+                    <div className="mx-4 mt-2 border border-[#76B900]/20 bg-white dark:bg-[#0a0a0a]">
                       <LiveCouncilPanel
                         memberOrder={memberOrder}
                         memberStates={memberStates}
@@ -1320,7 +1320,7 @@ export default function ChatPage() {
 
           {/* Right panel — council experts */}
           {showRightPanel && (
-            <div className="w-80 flex-shrink-0 border-l border-[#e5e5e5] bg-white overflow-y-auto animate-slide-in-right">
+            <div className="w-80 flex-shrink-0 border-l border-[#e5e5e5] bg-white overflow-y-auto animate-slide-in-right dark:bg-[#0a0a0a] dark:border-[#262626]">
               {hasCouncilActivity ? (
                 <LiveCouncilPanel
                   memberOrder={memberOrder}
@@ -1331,19 +1331,19 @@ export default function ChatPage() {
                 />
               ) : (
                 <div className="p-6 flex flex-col items-center justify-center h-full text-center max-w-xs mx-auto">
-                  <div className="mb-3 h-8 w-8 border border-[#d4d4d4] bg-[#ffffff] rounded" />
-                  <div className="text-xs font-mono text-[#a3a3a3] uppercase tracking-wider mb-1">
+                  <div className="mb-3 h-8 w-8 border border-[#d4d4d4] bg-[#ffffff] rounded dark:bg-[#0a0a0a] dark:border-[#404040]" />
+                  <div className="text-xs font-mono text-[#a3a3a3] uppercase tracking-wider mb-1 dark:text-[#737373]">
                     Convene Mode
                   </div>
-                  <div className="text-sm font-semibold text-[#0a0a0a] mb-2 leading-snug">
+                  <div className="text-sm font-semibold text-[#0a0a0a] mb-2 leading-snug dark:text-[#fafafa]">
                     Ask 3+ models in parallel, get a synthesized answer
                   </div>
-                  <div className="text-[11px] text-[#525252] leading-relaxed mb-3">
+                  <div className="text-[11px] text-[#525252] leading-relaxed mb-3 dark:text-[#a3a3a3]">
                     Best for decisions that need a second opinion: code review,
                     architecture choices, debugging hard bugs, or anything where
                     "what would another expert say?" matters.
                   </div>
-                  <div className="text-[10px] font-mono text-[#737373] leading-relaxed">
+                  <div className="text-[10px] font-mono text-[#737373] leading-relaxed dark:text-[#a3a3a3]">
                     Type your question below and your selected providers will
                     deliberate in this panel.
                   </div>

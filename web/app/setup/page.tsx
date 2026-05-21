@@ -98,7 +98,7 @@ const CHECK_TONES: Record<SetupCheckState, { dot: string; text: string; border: 
   ready: { dot: 'bg-[#76B900]', text: 'text-[#76B900]', border: 'border-[#76B900]/30', bg: 'bg-[#76B900]/5', label: 'Ready' },
   warn: { dot: 'bg-[#d97706]', text: 'text-[#d97706]', border: 'border-[#d97706]/30', bg: 'bg-[#fff7ed]', label: 'Review' },
   fix: { dot: 'bg-[#d97706]', text: 'text-[#d97706]', border: 'border-[#d97706]/30', bg: 'bg-[#fff7ed]', label: 'Fix queued' },
-  checking: { dot: 'bg-[#a3a3a3]', text: 'text-[#737373]', border: 'border-[#e5e5e5]', bg: 'bg-[#fafafa]', label: 'Checking' },
+  checking: { dot: 'bg-[#a3a3a3]', text: 'text-[#737373]', border: 'border-[#e5e5e5] dark:border-[#262626]', bg: 'bg-[#fafafa] dark:bg-[#141414]', label: 'Checking' },
 };
 
 function setupStateFromWorkspaceStatus(status?: string): SetupCheckState {
@@ -205,7 +205,7 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
   const docsUrl = p.docs_url;
 
   return (
-    <div className={`border bg-[#ffffff] transition-colors ${isConfigured ? 'border-[#76B900]/40' : 'border-[#e5e5e5]'}`}>
+    <div className={`border bg-[#ffffff] dark:bg-[#0a0a0a] transition-colors ${isConfigured ? 'border-[#76B900]/40' : 'border-[#e5e5e5] dark:border-[#262626]'}`}>
       <div className="flex items-center gap-3 p-3">
         {/* Status indicator */}
         <span className={`w-1.5 h-1.5 flex-shrink-0 ${isConfigured ? 'bg-[#76B900]' : 'bg-[#333333]'}`}
@@ -213,7 +213,7 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-mono font-bold text-[#0a0a0a]">{p.name}</span>
+            <span className="text-sm font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{p.name}</span>
             {isConfigured && (
               <span className="text-[10px] font-mono text-[#76B900] bg-[#76B900]/10 px-1.5 py-0.5 flex items-center gap-1">
                 <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -224,12 +224,12 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
             )}
           </div>
           {p.free_tier_limits && (
-            <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">{p.free_tier_limits}</div>
+            <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 dark:text-[#737373]">{p.free_tier_limits}</div>
           )}
           {p.strengths && p.strengths.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
               {p.strengths.map(s => (
-                <span key={s} className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                <span key={s} className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#737373]">
                   {s}
                 </span>
               ))}
@@ -267,12 +267,12 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
 
       {/* Inline key form */}
       {isExpanded && !isConfigured && (
-        <div className="border-t border-[#e5e5e5] p-3 space-y-2">
-          <div className="text-[10px] font-mono text-[#737373] leading-relaxed">
+        <div className="border-t border-[#e5e5e5] p-3 space-y-2 dark:border-[#262626]">
+          <div className="text-[10px] font-mono text-[#737373] leading-relaxed dark:text-[#a3a3a3]">
             Open the provider key page, create or copy an API key, then paste it here. nvHive stores it under the rootless workspace config, not the OS.
           </div>
           <div className="flex items-center justify-between">
-            <div className="text-[10px] font-mono text-[#a3a3a3]">
+            <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
               {p.env_key ? `Environment variable: ${p.env_key}` : 'Paste your API key below'}
             </div>
             <div className="flex items-center gap-3">
@@ -281,7 +281,7 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
                   href={docsUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-[10px] font-mono text-[#737373] hover:text-[#76B900]"
+                  className="text-[10px] font-mono text-[#737373] hover:text-[#76B900] dark:text-[#a3a3a3]"
                 >
                   Docs
                 </a>
@@ -2589,7 +2589,7 @@ export default function SetupPage() {
       <HardwareWidgetHero />
 
       {/* Header */}
-      <div className="border-b border-[#e5e5e5] pb-2">
+      <div className="border-b border-[#e5e5e5] pb-2 dark:border-[#262626]">
         <div className="flex items-center justify-between gap-3">
           <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase">nvHive Setup</div>
           <div className="flex items-center gap-2">
@@ -2625,7 +2625,7 @@ export default function SetupPage() {
                         ? 'border-[#76B900] bg-[#76B900] text-black'
                         : isComplete
                           ? 'border-[#76B900]/40 text-[#76B900] bg-[#f7fdf0]'
-                          : 'border-[#d4d4d4] text-[#525252] bg-white hover:border-[#76B900]/50 hover:text-[#0a0a0a]'
+                          : 'border-[#d4d4d4] text-[#525252] bg-white hover:border-[#76B900]/50 hover:text-[#0a0a0a] dark:border-[#404040] dark:text-[#a3a3a3] dark:bg-[#0a0a0a] dark:hover:text-[#fafafa]'
                     }`}
                   >
                     <span>{isComplete ? 'OK' : group.label}</span>
@@ -2646,7 +2646,7 @@ export default function SetupPage() {
                       className={`flex items-center gap-1.5 border px-2 py-1 text-[9px] font-mono uppercase tracking-wider rounded ${
                         isActive
                           ? 'border-[#76B900] text-[#0a0a0a] bg-[#f7fdf0]'
-                          : 'border-[#e5e5e5] text-[#737373] bg-white hover:text-[#0a0a0a]'
+                          : 'border-[#e5e5e5] text-[#737373] bg-white hover:text-[#0a0a0a] dark:border-[#262626] dark:text-[#a3a3a3] dark:bg-[#0a0a0a] dark:hover:text-[#fafafa]'
                       }`}
                       title={detail?.essential ? 'Essential step — required to use nvHive' : 'Optional — visit anytime'}
                     >
@@ -2654,7 +2654,7 @@ export default function SetupPage() {
                       {detail?.essential ? (
                         <span className="text-[#76B900]" aria-label="Essential">●</span>
                       ) : (
-                        <span className="text-[#a3a3a3]" aria-label="Optional">○</span>
+                        <span className="text-[#a3a3a3] dark:text-[#737373]" aria-label="Optional">○</span>
                       )}
                     </button>
                   );
@@ -2669,7 +2669,7 @@ export default function SetupPage() {
         <div className="border border-[#76B900]/30 bg-[#f7fdf0] p-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
           <div className="min-w-0">
             <div className="section-label">Workspace</div>
-            <div className="text-[10px] text-[#525252] mt-1 break-all">
+            <div className="text-[10px] text-[#525252] mt-1 break-all dark:text-[#a3a3a3]">
               {storageReady ? 'Persistent workspace ready' : storageBeginnerLabel} - {workspaceFreeText} - {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} to review` : 'checks clear'}
             </div>
           </div>
@@ -2685,7 +2685,7 @@ export default function SetupPage() {
                   title={`${item.label}: ${item.value}`}
                 >
                   <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                  <span className="text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
+                  <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.label}</span>
                 </button>
               );
             })}
@@ -2711,16 +2711,16 @@ export default function SetupPage() {
       )}
 
       {showInstallJobs && (
-        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
+        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3 dark:bg-[#0a0a0a] dark:border-[#404040]">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <div className="section-label">Install Jobs</div>
-              <div className="text-[10px] font-mono text-[#737373] mt-1">
+              <div className="text-[10px] font-mono text-[#737373] mt-1 dark:text-[#a3a3a3]">
                 {activeInstallJobs.length > 0
                   ? `${activeInstallJobs.length} active job${activeInstallJobs.length === 1 ? '' : 's'} tracked in your workspace`
                   : 'Recent setup jobs are saved in your workspace; complete means the job finished, while Launch Check confirms readiness'}
               </div>
-              <div className="text-[10px] text-[#737373] mt-1">
+              <div className="text-[10px] text-[#737373] mt-1 dark:text-[#a3a3a3]">
                 Job history stays in the workspace, so refreshes and retries have a trail to follow.
               </div>
             </div>
@@ -2746,38 +2746,38 @@ export default function SetupPage() {
               const recentEvents = job.recent_events?.slice(-4) ?? [];
               const maybeStalled = jobIsPossiblyStalled(job);
               return (
-                <div key={job.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                <div key={job.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
                   <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className={`w-1.5 h-1.5 flex-shrink-0 ${
                           complete ? 'bg-[#76B900]' : failed ? 'bg-[#dc2626]' : 'bg-[#d97706]'
                         }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                        <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">
+                        <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate dark:text-[#fafafa]">
                           {job.title}
                         </div>
-                        <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                        <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5 dark:border-[#404040] dark:text-[#a3a3a3]">
                           {job.status}
                         </span>
                       </div>
-                      <div className="text-[10px] font-mono text-[#525252] mt-1 break-words">
+                      <div className="text-[10px] font-mono text-[#525252] mt-1 break-words dark:text-[#a3a3a3]">
                         {job.message || job.kind}
                       </div>
-                      <div className="flex flex-wrap gap-2 mt-2 text-[9px] font-mono text-[#737373]">
-                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5">
+                      <div className="flex flex-wrap gap-2 mt-2 text-[9px] font-mono text-[#737373] dark:text-[#a3a3a3]">
+                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626]">
                           Phase: {jobPhase(job)}
                         </span>
-                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5">
+                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626]">
                           Updated {formatJobUpdatedAgo(job)}
                         </span>
-                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5">
+                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626]">
                           Elapsed {formatJobElapsed(job)}
                         </span>
-                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5">
+                        <span className="border border-[#e5e5e5] bg-[#ffffff] px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626]">
                           {job.event_count} event{job.event_count === 1 ? '' : 's'}
                         </span>
                       </div>
-                      <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all">
+                      <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all dark:text-[#737373]">
                         {job.id}
                       </div>
                     </div>
@@ -2806,8 +2806,8 @@ export default function SetupPage() {
                     </div>
                   )}
                   {recentEvents.length > 0 && (
-                    <div className="mt-3 border border-[#e5e5e5] bg-[#ffffff] p-2">
-                      <div className="text-[9px] font-mono uppercase tracking-wider text-[#a3a3a3] mb-1">
+                    <div className="mt-3 border border-[#e5e5e5] bg-[#ffffff] p-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                      <div className="text-[9px] font-mono uppercase tracking-wider text-[#a3a3a3] mb-1 dark:text-[#737373]">
                         Recent activity
                       </div>
                       <div className="space-y-1">
@@ -2822,7 +2822,7 @@ export default function SetupPage() {
                             }`}>
                               {event.event || event.status}
                             </span>
-                            <span className="text-[#525252] break-words">
+                            <span className="text-[#525252] break-words dark:text-[#a3a3a3]">
                               {event.message || event.status}
                             </span>
                           </div>
@@ -2838,11 +2838,11 @@ export default function SetupPage() {
       )}
 
       {serviceHealth && (
-        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
+        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3 dark:bg-[#0a0a0a] dark:border-[#404040]">
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
             <div className="min-w-0">
               <div className="section-label">Service Control</div>
-              <div className="text-[10px] font-mono text-[#525252] mt-1">
+              <div className="text-[10px] font-mono text-[#525252] mt-1 dark:text-[#a3a3a3]">
                 {serviceHealth.summary}
               </div>
               <div className="flex flex-wrap gap-1.5 mt-2">
@@ -2889,7 +2889,7 @@ export default function SetupPage() {
                 ? 'border-[#76B900]/30 bg-[#76B900]/5 text-[#76B900]'
                 : service.installed
                   ? 'border-[#d97706]/30 bg-[#fff7ed] text-[#d97706]'
-                  : 'border-[#e5e5e5] bg-[#fafafa] text-[#737373]';
+                  : 'border-[#e5e5e5] bg-[#fafafa] text-[#737373] dark:border-[#262626] dark:bg-[#141414] dark:text-[#a3a3a3]';
               const actionKey = `${service.id}:${service.next_action_id ?? 'refresh'}`;
               const isRunning = serviceActionRunning === actionKey;
               const actionDisabled = isRunning || (service.next_action_id ? helperActionDisabled(service.next_action_id) : false);
@@ -2897,20 +2897,20 @@ export default function SetupPage() {
                 <div key={service.id} className={`border p-3 ${tone}`}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">{service.name}</div>
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate dark:text-[#fafafa]">{service.name}</div>
                       <div className="text-[9px] font-mono uppercase mt-1">{service.status}</div>
                     </div>
                     <span className={`w-2 h-2 mt-1 flex-shrink-0 ${
                       service.ready ? 'bg-[#76B900]' : service.installed ? 'bg-[#d97706]' : 'bg-[#d4d4d4]'
                     }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
                   </div>
-                  <div className="text-[10px] text-[#525252] mt-2 min-h-[2.4rem] leading-relaxed">
+                  <div className="text-[10px] text-[#525252] mt-2 min-h-[2.4rem] leading-relaxed dark:text-[#a3a3a3]">
                     {service.summary}
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5 text-[9px] font-mono text-[#737373]">
-                    {service.port && <span className="border border-[#e5e5e5] bg-white px-1.5 py-0.5">:{service.port}</span>}
-                    {service.url && <span className="border border-[#e5e5e5] bg-white px-1.5 py-0.5 truncate max-w-full">{service.url}</span>}
-                    <span className="border border-[#e5e5e5] bg-white px-1.5 py-0.5">{service.rootless ? 'rootless' : 'external'}</span>
+                  <div className="mt-3 flex flex-wrap gap-1.5 text-[9px] font-mono text-[#737373] dark:text-[#a3a3a3]">
+                    {service.port && <span className="border border-[#e5e5e5] bg-white px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626]">:{service.port}</span>}
+                    {service.url && <span className="border border-[#e5e5e5] bg-white px-1.5 py-0.5 truncate max-w-full dark:bg-[#0a0a0a] dark:border-[#262626]">{service.url}</span>}
+                    <span className="border border-[#e5e5e5] bg-white px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626]">{service.rootless ? 'rootless' : 'external'}</span>
                   </div>
                   <div className="mt-3 flex gap-2">
                     {service.url && service.ready ? (
@@ -2946,8 +2946,8 @@ export default function SetupPage() {
             })}
           </div>
           {serviceHealth.next_actions.length > 0 && (
-            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-              <div className="text-[9px] font-mono uppercase tracking-wider text-[#737373] mb-2">
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+              <div className="text-[9px] font-mono uppercase tracking-wider text-[#737373] mb-2 dark:text-[#a3a3a3]">
                 Suggested safe actions
               </div>
               <div className="flex flex-wrap gap-2">
@@ -2973,11 +2973,11 @@ export default function SetupPage() {
       )}
 
       {showAdvancedSetup && (setupReceipts || setupCatalog || setupInventoryError) && (
-        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
+        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3 dark:bg-[#0a0a0a] dark:border-[#404040]">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <div className="section-label">Setup Inventory</div>
-              <div className="text-[10px] font-mono text-[#737373] mt-1">
+              <div className="text-[10px] font-mono text-[#737373] mt-1 dark:text-[#a3a3a3]">
                 {receiptCount} receipt{receiptCount === 1 ? '' : 's'} tracked / catalog source {catalogSource}
               </div>
             </div>
@@ -3015,11 +3015,11 @@ export default function SetupPage() {
             </div>
           )}
           {(diagnosticsMessage || diagnosticsError || diagnosticsReport) && (
-            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2 dark:bg-[#141414] dark:border-[#262626]">
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
                 <div>
-                  <div className="text-xs font-mono font-bold text-[#0a0a0a]">Error Report</div>
-                  <div className="text-[10px] font-mono text-[#737373] mt-0.5">
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">Error Report</div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-0.5 dark:text-[#a3a3a3]">
                     Redacted diagnostics for support; API keys and bearer tokens are masked.
                   </div>
                 </div>
@@ -3037,31 +3037,31 @@ export default function SetupPage() {
               )}
               {diagnosticsReport && (
                 <details>
-                  <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                  <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
                     Report summary
                   </summary>
                   <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <div className="border border-[#e5e5e5] bg-white p-2">
-                      <div className="text-[9px] font-mono text-[#737373] uppercase">Report</div>
-                      <div className="text-[10px] font-mono text-[#0a0a0a] break-all">{diagnosticsReport.report_id}</div>
+                    <div className="border border-[#e5e5e5] bg-white p-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                      <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Report</div>
+                      <div className="text-[10px] font-mono text-[#0a0a0a] break-all dark:text-[#fafafa]">{diagnosticsReport.report_id}</div>
                     </div>
-                    <div className="border border-[#e5e5e5] bg-white p-2">
-                      <div className="text-[9px] font-mono text-[#737373] uppercase">Logs</div>
-                      <div className="text-[10px] font-mono text-[#0a0a0a]">{diagnosticsReport.logs.files.length} file(s)</div>
+                    <div className="border border-[#e5e5e5] bg-white p-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                      <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Logs</div>
+                      <div className="text-[10px] font-mono text-[#0a0a0a] dark:text-[#fafafa]">{diagnosticsReport.logs.files.length} file(s)</div>
                     </div>
-                    <div className="border border-[#e5e5e5] bg-white p-2">
-                      <div className="text-[9px] font-mono text-[#737373] uppercase">Home</div>
-                      <div className="text-[10px] font-mono text-[#0a0a0a] break-all">{diagnosticsReport.paths.home}</div>
+                    <div className="border border-[#e5e5e5] bg-white p-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                      <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Home</div>
+                      <div className="text-[10px] font-mono text-[#0a0a0a] break-all dark:text-[#fafafa]">{diagnosticsReport.paths.home}</div>
                     </div>
                   </div>
                   {diagnosticsReport.logs.recent.length > 0 && (
                     <div className="mt-2 space-y-2">
                       {diagnosticsReport.logs.recent.slice(0, 2).map(item => (
-                        <div key={item.path} className="border border-[#e5e5e5] bg-white p-2">
-                          <div className="text-[9px] font-mono text-[#737373] break-all">{item.path}</div>
+                        <div key={item.path} className="border border-[#e5e5e5] bg-white p-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                          <div className="text-[9px] font-mono text-[#737373] break-all dark:text-[#a3a3a3]">{item.path}</div>
                           <div className="mt-1 space-y-1">
                             {item.lines.slice(-4).map((line, index) => (
-                              <div key={`${item.path}-${index}`} className="text-[9px] font-mono text-[#525252] break-words">
+                              <div key={`${item.path}-${index}`} className="text-[9px] font-mono text-[#525252] break-words dark:text-[#a3a3a3]">
                                 {line}
                               </div>
                             ))}
@@ -3075,23 +3075,23 @@ export default function SetupPage() {
             </div>
           )}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-              <div className="text-[9px] font-mono text-[#737373] uppercase">Receipts</div>
-              <div className="text-lg font-mono font-bold text-[#0a0a0a]">{receiptCount}</div>
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+              <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Receipts</div>
+              <div className="text-lg font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{receiptCount}</div>
             </div>
-            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-              <div className="text-[9px] font-mono text-[#737373] uppercase">Needs Repair</div>
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+              <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Needs Repair</div>
               <div className={`text-lg font-mono font-bold ${unhealthyReceiptCount ? 'text-[#d97706]' : 'text-[#76B900]'}`}>{unhealthyReceiptCount}</div>
             </div>
-            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-              <div className="text-[9px] font-mono text-[#737373] uppercase">Profiles</div>
-              <div className="text-lg font-mono font-bold text-[#0a0a0a]">
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+              <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Profiles</div>
+              <div className="text-lg font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">
                 {setupCatalog?.catalog.profiles.length ?? setupHelper?.catalog?.profile_count ?? 0}
               </div>
             </div>
-            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-              <div className="text-[9px] font-mono text-[#737373] uppercase">Compat</div>
-              <div className="text-lg font-mono font-bold text-[#0a0a0a]">
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+              <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Compat</div>
+              <div className="text-lg font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">
                 {compatibilityIssueCount}
               </div>
             </div>
@@ -3126,7 +3126,7 @@ export default function SetupPage() {
                   type="button"
                   onClick={() => runHelperAction(bootAgentHelper.recommended_action_id as string)}
                   disabled={helperActionDisabled(bootAgentHelper.recommended_action_id)}
-                  className="bg-[#76B900] text-[#0a0a0a] px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  className="bg-[#76B900] text-[#0a0a0a] px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40 dark:text-[#fafafa]"
                 >
                   {helperActionLabel(bootAgentHelper.recommended_action_id)}
                 </button>
@@ -3144,11 +3144,11 @@ export default function SetupPage() {
             </div>
           )}
           {missionControl && (
-            <div className="border border-[#e5e5e5] bg-[#ffffff] p-3 space-y-3">
+            <div className="border border-[#e5e5e5] bg-[#ffffff] p-3 space-y-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
                 <div>
-                  <div className="text-xs font-mono font-bold text-[#0a0a0a]">Mission Timeline</div>
-                  <div className="text-[10px] font-mono text-[#737373] mt-0.5">{missionControl.summary}</div>
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">Mission Timeline</div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-0.5 dark:text-[#a3a3a3]">{missionControl.summary}</div>
                 </div>
                 <button
                   type="button"
@@ -3166,10 +3166,10 @@ export default function SetupPage() {
                     type="button"
                     onClick={() => stage.action_id && runHelperAction(stage.action_id)}
                     disabled={!stage.action_id || helperActionDisabled(stage.action_id)}
-                    className="text-left border border-[#e5e5e5] bg-[#fafafa] p-3 hover:border-[#76B900]/50 transition-colors disabled:opacity-70"
+                    className="text-left border border-[#e5e5e5] bg-[#fafafa] p-3 hover:border-[#76B900]/50 transition-colors disabled:opacity-70 dark:bg-[#141414] dark:border-[#262626]"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">{stage.title}</div>
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{stage.title}</div>
                       <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
                         stage.status === 'pass'
                           ? 'border-[#76B900]/40 text-[#76B900]'
@@ -3178,38 +3178,38 @@ export default function SetupPage() {
                         {stage.status}
                       </span>
                     </div>
-                    <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">{stage.summary}</div>
+                    <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">{stage.summary}</div>
                   </button>
                 ))}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-                  <div className="text-[9px] font-mono text-[#737373] uppercase">Mount Autopilot</div>
-                  <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 break-all">
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+                  <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Mount Autopilot</div>
+                  <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 break-all dark:text-[#fafafa]">
                     {mountRecommendation?.recommended_home ?? 'No mount picked yet'}
                   </div>
-                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-1">
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                     score {mountRecommendation?.score ?? 0}
                     {mountRecommendation?.fs_type ? ` / ${mountRecommendation.fs_type}` : ''}
                     {mountRecommendation?.large_block_mount ? ' / block' : ''}
                     {mountRecommendation?.read_only ? ' / read-only' : ''}
                   </div>
                 </div>
-                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-                  <div className="text-[9px] font-mono text-[#737373] uppercase">Auto Repair</div>
-                  <div className="text-[10px] font-mono text-[#0a0a0a] mt-1">
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+                  <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Auto Repair</div>
+                  <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 dark:text-[#fafafa]">
                     {autoRepairActions.filter(action => action.safe_to_auto_run).length} safe / {autoRepairActions.filter(action => !action.safe_to_auto_run).length} confirm
                   </div>
-                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-1">
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                     env, catalog, examples only
                   </div>
                 </div>
-                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-                  <div className="text-[9px] font-mono text-[#737373] uppercase">Smoke Tests</div>
-                  <div className="text-[10px] font-mono text-[#0a0a0a] mt-1">
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+                  <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">Smoke Tests</div>
+                  <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 dark:text-[#fafafa]">
                     {smokeTests?.summary ?? 'Waiting for checks'}
                   </div>
-                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-1">
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                     models: {modelFit?.recommended_ids?.slice(0, 3).join(', ') || 'no queue'}
                   </div>
                 </div>
@@ -3217,11 +3217,11 @@ export default function SetupPage() {
             </div>
           )}
           {productionReadiness && (
-            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2 dark:bg-[#141414] dark:border-[#262626]">
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
                 <div>
-                  <div className="text-xs font-mono font-bold text-[#0a0a0a]">Release Readiness</div>
-                  <div className="text-[10px] font-mono text-[#737373] mt-0.5">
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">Release Readiness</div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-0.5 dark:text-[#a3a3a3]">
                     {productionReadiness.summary}
                   </div>
                 </div>
@@ -3229,7 +3229,7 @@ export default function SetupPage() {
                   <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border border-current ${readinessTone}`}>
                     {productionReadiness.status}
                   </span>
-                  <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d4d4d4] text-[#737373]">
+                  <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d4d4d4] text-[#737373] dark:border-[#404040] dark:text-[#a3a3a3]">
                     {productionReadiness.counts.blocked} blocked
                   </span>
                   <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d97706]/40 text-[#d97706]">
@@ -3240,17 +3240,17 @@ export default function SetupPage() {
               {visibleReadinessGates.length > 0 ? (
                 <div className="space-y-2">
                   {visibleReadinessGates.map(gate => (
-                    <div key={gate.id} className="border border-[#e5e5e5] bg-white p-2">
+                    <div key={gate.id} className="border border-[#e5e5e5] bg-white p-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
                       <div className="flex items-center gap-2">
                         <span className={`w-1.5 h-1.5 flex-shrink-0 ${gate.status === 'blocked' ? 'bg-[#dc2626]' : 'bg-[#d97706]'}`} />
-                        <div className="text-[10px] font-mono font-bold text-[#0a0a0a]">{gate.title}</div>
-                        <span className="text-[9px] font-mono uppercase text-[#737373]">{gate.status}</span>
+                        <div className="text-[10px] font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{gate.title}</div>
+                        <span className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">{gate.status}</span>
                       </div>
-                      <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
+                      <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
                         {gate.summary}
                       </div>
                       {gate.recommendation && (
-                        <div className="text-[9px] font-mono text-[#737373] mt-1 leading-relaxed">
+                        <div className="text-[9px] font-mono text-[#737373] mt-1 leading-relaxed dark:text-[#a3a3a3]">
                           {gate.recommendation}
                         </div>
                       )}
@@ -3258,17 +3258,17 @@ export default function SetupPage() {
                   ))}
                 </div>
               ) : (
-                <div className="text-[10px] font-mono text-[#76B900] border border-[#76B900]/20 bg-white p-2">
+                <div className="text-[10px] font-mono text-[#76B900] border border-[#76B900]/20 bg-white p-2 dark:bg-[#0a0a0a]">
                   All release gates are passing.
                 </div>
               )}
               <details>
-                <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
                   Target VM checklist
                 </summary>
                 <div className="mt-2 space-y-1">
                   {productionReadiness.target_vm_checklist.map(item => (
-                    <div key={item} className="text-[9px] font-mono text-[#525252] flex items-start gap-2">
+                    <div key={item} className="text-[9px] font-mono text-[#525252] flex items-start gap-2 dark:text-[#a3a3a3]">
                       <span className="mt-1 w-1.5 h-1.5 bg-[#76B900] flex-shrink-0" />
                       <span>{item}</span>
                     </div>
@@ -3278,11 +3278,11 @@ export default function SetupPage() {
             </div>
           )}
           {(setupCompatibility || setupHelper?.compatibility) && (
-            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
+            <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2 dark:bg-[#141414] dark:border-[#262626]">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <div>
-                  <div className="text-xs font-mono font-bold text-[#0a0a0a]">Compatibility Preflight</div>
-                  <div className="text-[10px] font-mono text-[#737373] mt-0.5">
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">Compatibility Preflight</div>
+                  <div className="text-[10px] font-mono text-[#737373] mt-0.5 dark:text-[#a3a3a3]">
                     {setupCompatibility?.summary ?? setupHelper?.compatibility?.summary ?? 'Host/app compatibility checks'}
                   </div>
                 </div>
@@ -3295,7 +3295,7 @@ export default function SetupPage() {
                   <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d97706]/40 text-[#d97706]">
                     {compatibilityFixableCount} fixable
                   </span>
-                  <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d4d4d4] text-[#737373]">
+                  <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 border border-[#d4d4d4] text-[#737373] dark:border-[#404040] dark:text-[#a3a3a3]">
                     {setupCompatibility?.recommended_torch_profile ?? setupHelper?.compatibility?.recommended_torch_profile ?? 'torch auto'}
                   </span>
                 </div>
@@ -3303,28 +3303,28 @@ export default function SetupPage() {
               {visibleCompatibilityApps.length > 0 && (
                 <div className="space-y-2">
                   {visibleCompatibilityApps.map(app => (
-                    <div key={app.id} className="border border-[#e5e5e5] bg-[#ffffff] p-3">
+                    <div key={app.id} className="border border-[#e5e5e5] bg-[#ffffff] p-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
                       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className={`w-1.5 h-1.5 flex-shrink-0 ${
                               app.status === 'blocked' ? 'bg-[#dc2626]' : app.status === 'fixable' ? 'bg-[#d97706]' : 'bg-[#76B900]'
                             }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                            <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">{app.title}</div>
-                            <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                            <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate dark:text-[#fafafa]">{app.title}</div>
+                            <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5 dark:border-[#404040] dark:text-[#a3a3a3]">
                               {app.status}
                             </span>
                           </div>
-                          <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
+                          <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
                             {app.summary}
                           </div>
                           <details className="mt-2">
-                            <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                            <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
                               Requirements
                             </summary>
                             <div className="mt-2 space-y-1">
                               {app.requirements.map(req => (
-                                <div key={req.id} className="text-[9px] font-mono text-[#525252] flex items-start gap-2">
+                                <div key={req.id} className="text-[9px] font-mono text-[#525252] flex items-start gap-2 dark:text-[#a3a3a3]">
                                   <span className={`mt-1 w-1.5 h-1.5 flex-shrink-0 ${
                                     req.status === 'ok' ? 'bg-[#76B900]' : req.status === 'blocked' ? 'bg-[#dc2626]' : 'bg-[#d97706]'
                                   }`} />
@@ -3354,17 +3354,17 @@ export default function SetupPage() {
           {visibleReceipts.length > 0 && (
             <div className="space-y-2">
               {visibleReceipts.map(receipt => (
-                <div key={receipt.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <div key={receipt.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 dark:bg-[#141414] dark:border-[#262626]">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className={`w-1.5 h-1.5 flex-shrink-0 ${receipt.health.healthy ? 'bg-[#76B900]' : 'bg-[#d97706]'}`}
                         style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                      <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">{receipt.title}</div>
-                      <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate dark:text-[#fafafa]">{receipt.title}</div>
+                      <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5 dark:border-[#404040] dark:text-[#a3a3a3]">
                         {receipt.kind}
                       </span>
                     </div>
-                    <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all">{receipt.install_path}</div>
+                    <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all dark:text-[#737373]">{receipt.install_path}</div>
                   </div>
                   <button
                     type="button"
@@ -3387,11 +3387,11 @@ export default function SetupPage() {
       )}
 
       {showAdvancedSetup && (setupHelper || setupHelperError) && (
-        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3">
+        <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-3 dark:bg-[#0a0a0a] dark:border-[#404040]">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <div className="section-label">AI Wizard Advanced Details</div>
-              <div className="text-[10px] font-mono text-[#737373] mt-1">
+              <div className="text-[10px] font-mono text-[#737373] mt-1 dark:text-[#a3a3a3]">
                 {setupHelper?.summary ?? 'Offline setup recommendations'}
               </div>
             </div>
@@ -3413,22 +3413,22 @@ export default function SetupPage() {
               {helperIssues.length > 0 && (
                 <div className="space-y-2">
                   {helperIssues.map(issue => (
-                    <div key={issue.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div key={issue.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 dark:bg-[#141414] dark:border-[#262626]">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className={`w-1.5 h-1.5 flex-shrink-0 ${
                             issue.severity === 'required' ? 'bg-[#dc2626]' : issue.severity === 'recommended' ? 'bg-[#d97706]' : 'bg-[#76B900]'
                           }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                          <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate">{issue.title}</div>
-                          <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                          <div className="text-xs font-mono font-bold text-[#0a0a0a] truncate dark:text-[#fafafa]">{issue.title}</div>
+                          <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5 dark:border-[#404040] dark:text-[#a3a3a3]">
                             {issue.severity}
                           </span>
                         </div>
-                        <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
+                        <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
                           {issue.reason}
                         </div>
                         {(issue.current_version || issue.available_version) && (
-                          <div className="text-[9px] font-mono text-[#a3a3a3] mt-1">
+                          <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                             {issue.current_version ?? 'unknown'} {'>'} {issue.available_version ?? 'unknown'}
                           </div>
                         )}
@@ -3451,10 +3451,10 @@ export default function SetupPage() {
                 {helperActions.map(action => (
                   <div
                     key={action.id}
-                    className="text-left border border-[#e5e5e5] bg-[#fafafa] p-3 hover:border-[#76B900]/50 transition-colors"
+                    className="text-left border border-[#e5e5e5] bg-[#fafafa] p-3 hover:border-[#76B900]/50 transition-colors dark:bg-[#141414] dark:border-[#262626]"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">{action.title}</div>
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{action.title}</div>
                       <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border ${
                         action.status === 'required'
                           ? 'border-[#dc2626]/40 text-[#dc2626]'
@@ -3465,7 +3465,7 @@ export default function SetupPage() {
                         {action.status}
                       </span>
                     </div>
-                    <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed">
+                    <div className="text-[10px] font-mono text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
                       {action.reason}
                     </div>
                     <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
@@ -3491,10 +3491,10 @@ export default function SetupPage() {
                       </button>
                     </div>
                     <details className="mt-2">
-                      <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                      <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
                         Manual override
                       </summary>
-                      <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all">
+                      <div className="text-[9px] font-mono text-[#a3a3a3] mt-1 break-all dark:text-[#737373]">
                         {action.command}
                       </div>
                     </details>
@@ -3502,11 +3502,11 @@ export default function SetupPage() {
                 ))}
               </div>
 
-              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2">
+              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 space-y-2 dark:bg-[#141414] dark:border-[#262626]">
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">Ask AI Wizard</div>
-                    <div className="text-[10px] font-mono text-[#737373] mt-0.5">
+                    <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">Ask AI Wizard</div>
+                    <div className="text-[10px] font-mono text-[#737373] mt-0.5 dark:text-[#a3a3a3]">
                       Product-aware guidance from local state, jobs, receipts, and the nvHive brief
                     </div>
                   </div>
@@ -3538,7 +3538,7 @@ export default function SetupPage() {
                       type="button"
                       onClick={() => void askSetupQuestion(question, true)}
                       disabled={assistantLoading}
-                      className="border border-[#e5e5e5] bg-white px-2 py-1 text-[9px] font-mono text-[#525252] hover:border-[#76B900]/50 disabled:opacity-40"
+                      className="border border-[#e5e5e5] bg-white px-2 py-1 text-[9px] font-mono text-[#525252] hover:border-[#76B900]/50 disabled:opacity-40 dark:bg-[#0a0a0a] dark:border-[#262626] dark:text-[#a3a3a3]"
                     >
                       {question}
                     </button>
@@ -3550,23 +3550,23 @@ export default function SetupPage() {
                   </div>
                 )}
                 {assistantReply && (
-                  <div className="border border-[#d4d4d4] bg-[#ffffff] p-3 space-y-2">
-                    <div className="text-xs font-mono text-[#0a0a0a] leading-relaxed">
+                  <div className="border border-[#d4d4d4] bg-[#ffffff] p-3 space-y-2 dark:bg-[#0a0a0a] dark:border-[#404040]">
+                    <div className="text-xs font-mono text-[#0a0a0a] leading-relaxed dark:text-[#fafafa]">
                       {assistantReply.answer}
                     </div>
                     {((assistantReply.debug_findings?.length ?? 0) > 0 || (assistantReply.log_highlights?.length ?? 0) > 0) && (
-                      <details className="border border-[#e5e5e5] bg-[#fafafa] p-2">
-                        <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                      <details className="border border-[#e5e5e5] bg-[#fafafa] p-2 dark:bg-[#141414] dark:border-[#262626]">
+                        <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
                           Debug evidence{assistantReply.diagnostics_report_id ? ` / ${assistantReply.diagnostics_report_id}` : ''}
                         </summary>
                         <div className="mt-2 space-y-1">
                           {assistantReply.debug_findings?.slice(0, 3).map(finding => (
-                            <div key={finding} className="text-[10px] font-mono text-[#525252] leading-relaxed">
+                            <div key={finding} className="text-[10px] font-mono text-[#525252] leading-relaxed dark:text-[#a3a3a3]">
                               {finding}
                             </div>
                           ))}
                           {assistantReply.log_highlights?.slice(0, 4).map(line => (
-                            <div key={line} className="text-[10px] font-mono text-[#525252] leading-relaxed break-all">
+                            <div key={line} className="text-[10px] font-mono text-[#525252] leading-relaxed break-all dark:text-[#a3a3a3]">
                               {line}
                             </div>
                           ))}
@@ -3598,7 +3598,7 @@ export default function SetupPage() {
                         {assistantReply.grounding_sources?.slice(0, 3).map(source => (
                           <span
                             key={source}
-                            className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-[#fafafa] px-1.5 py-0.5 uppercase"
+                            className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-[#fafafa] px-1.5 py-0.5 uppercase dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]"
                           >
                             {source}
                           </span>
@@ -3623,12 +3623,12 @@ export default function SetupPage() {
                     )}
                     {assistantReply.commands.length > 0 && (
                       <details>
-                        <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                        <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
                           Manual overrides
                         </summary>
                         <div className="space-y-1 mt-2">
                           {assistantReply.commands.map(command => (
-                            <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all">
+                            <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
                               {command}
                             </div>
                           ))}
@@ -3661,15 +3661,15 @@ export default function SetupPage() {
                 <span className="h-1.5 w-1.5 rounded-full bg-[#76B900]" />
                 Start here
               </div>
-              <div className="mt-2 text-base font-semibold tracking-tight text-[#0a0a0a]">
+              <div className="mt-2 text-base font-semibold tracking-tight text-[#0a0a0a] dark:text-[#fafafa]">
                 Pick a mission and AI Wizard does the rest.
               </div>
-              <div className="mt-1 text-xs leading-relaxed text-[#525252]">
+              <div className="mt-1 text-xs leading-relaxed text-[#525252] dark:text-[#a3a3a3]">
                 Three steps mean go (<span className="text-[#76B900]">●</span> = essential):
-                <strong className="ml-1 text-[#0a0a0a]">storage</strong> finds your
-                persistent mount, <strong className="text-[#0a0a0a]">GPU</strong> detects
-                the accelerator, <strong className="text-[#0a0a0a]">local AI</strong>
-                installs your first model. Optional steps (<span className="text-[#a3a3a3]">○</span>)
+                <strong className="ml-1 text-[#0a0a0a] dark:text-[#fafafa]">storage</strong> finds your
+                persistent mount, <strong className="text-[#0a0a0a] dark:text-[#fafafa]">GPU</strong> detects
+                the accelerator, <strong className="text-[#0a0a0a] dark:text-[#fafafa]">local AI</strong>
+                installs your first model. Optional steps (<span className="text-[#a3a3a3] dark:text-[#737373]">○</span>)
                 — ComfyUI, packs, cloud keys — can wait until you need them.
               </div>
             </div>
@@ -3696,7 +3696,7 @@ export default function SetupPage() {
                       </span>
                     )}
                   </div>
-                  <div className="text-[10px] text-[#525252] mt-1 leading-relaxed">
+                  <div className="text-[10px] text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
                     {workspaceStateSummary}
                   </div>
                 </div>
@@ -3760,16 +3760,16 @@ export default function SetupPage() {
               </div>
 
               {supportSnapshotMessage && (
-                <div className="border border-[#76B900]/30 bg-white px-3 py-2 text-[10px] font-mono text-[#315f00] break-all">
+                <div className="border border-[#76B900]/30 bg-white px-3 py-2 text-[10px] font-mono text-[#315f00] break-all dark:bg-[#0a0a0a]">
                   {supportSnapshotMessage}
                 </div>
               )}
 
               {repairTrail.length > 0 && (
-                <div className="border border-[#e5e5e5] bg-white p-3 space-y-2">
+                <div className="border border-[#e5e5e5] bg-white p-3 space-y-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
                   <div className="flex items-center justify-between gap-2">
                     <div className="section-label">Repair Status</div>
-                    <span className="text-[9px] font-mono uppercase text-[#737373]">
+                    <span className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">
                       {workspaceRepairing ? 'working' : 'latest run'}
                     </span>
                   </div>
@@ -3785,12 +3785,12 @@ export default function SetupPage() {
                         <div key={item.id} className={`border ${tone.border} ${tone.bg} px-2 py-2 min-w-0`}>
                           <div className="flex items-center gap-1.5">
                             <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                            <span className="text-[9px] font-mono text-[#737373] uppercase">{item.state}</span>
+                            <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.state}</span>
                           </div>
                           <div className={`text-[10px] font-mono mt-1 truncate ${tone.text}`} title={item.label}>
                             {item.label}
                           </div>
-                          <div className="text-[10px] text-[#737373] mt-1 line-clamp-2" title={item.detail}>
+                          <div className="text-[10px] text-[#737373] mt-1 line-clamp-2 dark:text-[#a3a3a3]" title={item.detail}>
                             {item.detail}
                           </div>
                         </div>
@@ -3807,7 +3807,7 @@ export default function SetupPage() {
                     <div key={item.label} className={`border ${tone.border} ${tone.bg} px-2 py-2 min-w-0`}>
                       <div className="flex items-center gap-1.5">
                         <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                        <span className="text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
+                        <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.label}</span>
                       </div>
                       <div className={`text-[10px] font-mono truncate mt-1 ${tone.text}`} title={item.value}>
                         {item.value}
@@ -3818,17 +3818,17 @@ export default function SetupPage() {
               </div>
 
               {(activeModelJob || activeRuntimeJob || modelsInstalling) && (
-                <div className="border border-[#e5e5e5] bg-white px-3 py-2">
+                <div className="border border-[#e5e5e5] bg-white px-3 py-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="text-[10px] font-mono font-bold text-[#0a0a0a] uppercase">
+                      <div className="text-[10px] font-mono font-bold text-[#0a0a0a] uppercase dark:text-[#fafafa]">
                         {activeModelJob?.title ?? activeRuntimeJob?.title ?? 'Preparing local AI'}
                       </div>
-                      <div className="text-[10px] font-mono text-[#525252] mt-1 truncate">
+                      <div className="text-[10px] font-mono text-[#525252] mt-1 truncate dark:text-[#a3a3a3]">
                         {activeModelJob?.message ?? activeRuntimeJob?.message ?? modelEvents[modelEvents.length - 1]?.message ?? 'Working in the background'}
                       </div>
                     </div>
-                    <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5">
+                    <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5 dark:border-[#404040] dark:text-[#a3a3a3]">
                       {activeModelJob?.status ?? activeRuntimeJob?.status ?? 'running'}
                     </span>
                   </div>
@@ -3842,16 +3842,16 @@ export default function SetupPage() {
               )}
             </div>
 
-            <div className="border border-[#e5e5e5] bg-white p-3 space-y-3">
+            <div className="border border-[#e5e5e5] bg-white p-3 space-y-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
               <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="section-label">System Check</div>
-                    <div className="text-xs font-bold text-[#0a0a0a]">
+                    <div className="text-xs font-bold text-[#0a0a0a] dark:text-[#fafafa]">
                       {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready to install without sudo'}
                     </div>
                   </div>
-                  <div className="text-[10px] text-[#525252] mt-1">
+                  <div className="text-[10px] text-[#525252] mt-1 dark:text-[#a3a3a3]">
                     {workspaceFreeText} on persistent storage; {workspaceReceipts} receipt{workspaceReceipts === 1 ? '' : 's'}; {workspaceActiveJobs} active job{workspaceActiveJobs === 1 ? '' : 's'}.
                   </div>
                 </div>
@@ -3907,16 +3907,16 @@ export default function SetupPage() {
                       title={`${item.label}: ${item.value}`}
                     >
                       <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                      <span className="text-[9px] font-mono text-[#737373] uppercase">{item.label}</span>
+                      <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.label}</span>
                       <span className={`text-[10px] font-mono truncate max-w-[11rem] ${tone.text}`}>{item.value}</span>
                     </button>
                   );
                 })}
               </div>
-              <div className="border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+              <div className="border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 dark:bg-[#141414] dark:border-[#262626]">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-mono font-bold text-[#0a0a0a]">AI Wizard Advisor</span>
+                    <span className="text-[10px] font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">AI Wizard Advisor</span>
                     <span className="text-[9px] font-mono text-[#76B900] uppercase border border-[#76B900]/40 px-1.5 py-0.5">
                       {advisorModeLabel}
                     </span>
@@ -3928,7 +3928,7 @@ export default function SetupPage() {
                       {advisorReadinessLabel}
                     </span>
                   </div>
-                  <div className="text-[10px] text-[#525252] mt-1 leading-relaxed">
+                  <div className="text-[10px] text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
                     {advisorSummary}
                   </div>
                 </div>
@@ -3961,11 +3961,11 @@ export default function SetupPage() {
                 </button>
               </div>
               {(assistantLoading || assistantError || assistantReply) && (
-                <div className="border border-[#d4d4d4] bg-white p-3 space-y-2">
+                <div className="border border-[#d4d4d4] bg-white p-3 space-y-2 dark:bg-[#0a0a0a] dark:border-[#404040]">
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div>
-                      <div className="text-xs font-mono font-bold text-[#0a0a0a]">AI Wizard Chat</div>
-                      <div className="text-[10px] text-[#737373] mt-0.5">
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">AI Wizard Chat</div>
+                      <div className="text-[10px] text-[#737373] mt-0.5 dark:text-[#a3a3a3]">
                         Works immediately from local setup state, jobs, receipts, and redacted logs. The local model takes over when it is healthy.
                       </div>
                     </div>
@@ -3999,22 +3999,22 @@ export default function SetupPage() {
                   )}
                   {assistantReply && (
                     <>
-                      <div className="text-xs text-[#0a0a0a] leading-relaxed">
+                      <div className="text-xs text-[#0a0a0a] leading-relaxed dark:text-[#fafafa]">
                         {assistantReply.answer}
                       </div>
                       {((assistantReply.debug_findings?.length ?? 0) > 0 || (assistantReply.log_highlights?.length ?? 0) > 0) && (
-                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2">
-                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2 dark:bg-[#141414] dark:border-[#262626]">
+                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
                             Debug evidence
                           </summary>
                           <div className="mt-2 space-y-1">
                             {assistantReply.debug_findings?.slice(0, 3).map(finding => (
-                              <div key={finding} className="text-[10px] font-mono text-[#525252] leading-relaxed">
+                              <div key={finding} className="text-[10px] font-mono text-[#525252] leading-relaxed dark:text-[#a3a3a3]">
                                 {finding}
                               </div>
                             ))}
                             {assistantReply.log_highlights?.slice(0, 4).map(line => (
-                              <div key={line} className="text-[10px] font-mono text-[#525252] leading-relaxed break-all">
+                              <div key={line} className="text-[10px] font-mono text-[#525252] leading-relaxed break-all dark:text-[#a3a3a3]">
                                 {line}
                               </div>
                             ))}
@@ -4022,14 +4022,14 @@ export default function SetupPage() {
                         </details>
                       )}
                       {((assistantReply.official_urls?.length ?? 0) > 0 || (assistantReply.web_search_queries?.length ?? 0) > 0) && (
-                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2">
-                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2 dark:bg-[#141414] dark:border-[#262626]">
+                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
                             Research hints
                           </summary>
                           <div className="mt-2 space-y-2">
                             {(assistantReply.official_urls?.length ?? 0) > 0 && (
                               <div className="space-y-1">
-                                <div className="text-[9px] font-mono uppercase text-[#737373]">Official sources</div>
+                                <div className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">Official sources</div>
                                 {assistantReply.official_urls?.slice(0, 4).map(url => (
                                   <a
                                     key={url}
@@ -4045,9 +4045,9 @@ export default function SetupPage() {
                             )}
                             {(assistantReply.web_search_queries?.length ?? 0) > 0 && (
                               <div className="space-y-1">
-                                <div className="text-[9px] font-mono uppercase text-[#737373]">Search if internet is available</div>
+                                <div className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">Search if internet is available</div>
                                 {assistantReply.web_search_queries?.slice(0, 3).map(query => (
-                                  <div key={query} className="text-[10px] font-mono text-[#525252] break-all">
+                                  <div key={query} className="text-[10px] font-mono text-[#525252] break-all dark:text-[#a3a3a3]">
                                     {query}
                                   </div>
                                 ))}
@@ -4074,12 +4074,12 @@ export default function SetupPage() {
                       )}
                       {assistantReply.commands.length > 0 && (
                         <details>
-                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase">
+                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
                             Manual overrides
                           </summary>
                           <div className="space-y-1 mt-2">
                             {assistantReply.commands.map(command => (
-                              <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all">
+                              <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
                                 {command}
                               </div>
                             ))}
@@ -4093,11 +4093,11 @@ export default function SetupPage() {
             </div>
 
             {advancedSetupOpen && (
-              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
                 <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                   <div className="min-w-0">
                     <div className="section-label">Advanced Details</div>
-                    <div className="text-xs text-[#525252] mt-1">
+                    <div className="text-xs text-[#525252] mt-1 dark:text-[#a3a3a3]">
                       Use the tabs above for storage, hardware, apps, accounts, and tests. The main install choices stay below.
                     </div>
                   </div>
@@ -4130,9 +4130,9 @@ export default function SetupPage() {
                     ['Boot Changes', bootChangeCount ? `${bootChangeCount} found` : 'None'],
                     ['Logs', diagnosticsLogLineCount ? `${diagnosticsLogLineCount} lines` : 'Quiet'],
                   ].map(([label, value]) => (
-                    <div key={label} className="border border-[#e5e5e5] bg-white p-2 min-w-0">
-                      <div className="text-[9px] font-mono text-[#737373] uppercase">{label}</div>
-                      <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 truncate">{value}</div>
+                    <div key={label} className="border border-[#e5e5e5] bg-white p-2 min-w-0 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                      <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{label}</div>
+                      <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 truncate dark:text-[#fafafa]">{value}</div>
                     </div>
                   ))}
                 </div>
@@ -4143,7 +4143,7 @@ export default function SetupPage() {
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <div className="section-label">Install Options</div>
-                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">Choose a workload; AI Wizard picks GPU-fit dependencies.</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1 dark:text-[#fafafa]">Choose a workload; AI Wizard picks GPU-fit dependencies.</div>
                 </div>
               </div>
               {apiDisconnected && (
@@ -4180,14 +4180,14 @@ export default function SetupPage() {
                           key={profile.id}
                           className={`border p-4 transition-colors ${
                             profileInstalled
-                              ? 'border-[#d4d4d4] bg-[#fafafa]'
+                              ? 'border-[#d4d4d4] bg-[#fafafa] dark:border-[#404040] dark:bg-[#141414]'
                               : profile.primary
-                              ? 'border-[#76B900]/60 bg-white'
-                              : 'border-[#e5e5e5] bg-white'
+                              ? 'border-[#76B900]/60 bg-white dark:bg-[#0a0a0a]'
+                              : 'border-[#e5e5e5] bg-white dark:border-[#262626] dark:bg-[#0a0a0a]'
                           }`}
                         >
                           <div className="flex items-start justify-between gap-3">
-                            <span className="w-14 h-14 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                            <span className="w-14 h-14 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0 dark:bg-[#0a0a0a] dark:border-[#262626]">
                               <div className="grid grid-cols-2 gap-0.5">
                                 {profile.logos.slice(0, 4).map(logo => (
                                   <BrandLogo key={logo} id={logo} className="w-5 h-5" />
@@ -4205,13 +4205,13 @@ export default function SetupPage() {
                             </span>
                           </div>
                           <div className="mt-3">
-                            <h3 className="text-base font-bold text-[#0a0a0a] leading-tight">{profile.title}</h3>
-                            <div className="text-xs text-[#525252] mt-2 leading-relaxed min-h-[3rem]">
+                            <h3 className="text-base font-bold text-[#0a0a0a] leading-tight dark:text-[#fafafa]">{profile.title}</h3>
+                            <div className="text-xs text-[#525252] mt-2 leading-relaxed min-h-[3rem] dark:text-[#a3a3a3]">
                               {beginnerProfileCopy[profile.id] ?? profile.description}
                             </div>
                             <div className="mt-3 flex flex-wrap gap-1">
                               {profile.includes.slice(0, 3).map(item => (
-                                <span key={item} className="text-[9px] font-mono text-[#737373] bg-[#fafafa] border border-[#e5e5e5] px-1.5 py-0.5">
+                                <span key={item} className="text-[9px] font-mono text-[#737373] bg-[#fafafa] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
                                   {item}
                                 </span>
                               ))}
@@ -4241,16 +4241,16 @@ export default function SetupPage() {
                         onMouseEnter={() => setSelectedWizardProfile(profile.id)}
                         onFocus={() => setSelectedWizardProfile(profile.id)}
                         onClick={() => setSelectedWizardProfile(profile.id)}
-                        className={`border bg-white p-4 transition-colors ${
+                        className={`border bg-white dark:bg-[#0a0a0a] p-4 transition-colors ${
                           selectedWizardProfile === profile.id
                             ? 'border-[#76B900] shadow-[0_0_0_1px_rgba(118,185,0,0.16)]'
                             : profile.primary
                             ? 'border-[#76B900]/50 shadow-[0_0_0_1px_rgba(118,185,0,0.08)]'
-                            : 'border-[#e5e5e5]'
+                            : 'border-[#e5e5e5] dark:border-[#262626]'
                         }`}
                       >
                         <div className="flex items-start gap-3">
-                          <span className="w-12 h-12 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                          <span className="w-12 h-12 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0 dark:bg-[#0a0a0a] dark:border-[#262626]">
                             <div className="grid grid-cols-2 gap-0.5">
                               {profile.logos.slice(0, 4).map(logo => (
                                 <BrandLogo key={logo} id={logo} className="w-5 h-5" />
@@ -4259,7 +4259,7 @@ export default function SetupPage() {
                           </span>
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <h3 className="text-base font-bold text-[#0a0a0a] leading-tight min-w-0">{profile.title}</h3>
+                              <h3 className="text-base font-bold text-[#0a0a0a] leading-tight min-w-0 dark:text-[#fafafa]">{profile.title}</h3>
                               <span className={`text-[9px] font-mono uppercase px-1.5 py-0.5 border flex-shrink-0 ${
                                 profile.primary
                                   ? 'border-[#76B900]/40 text-[#76B900] bg-[#76B900]/10'
@@ -4268,15 +4268,15 @@ export default function SetupPage() {
                                 {profile.label}
                               </span>
                             </div>
-                            <p className="text-xs text-[#525252] leading-relaxed mt-1">{profile.description}</p>
+                            <p className="text-xs text-[#525252] leading-relaxed mt-1 dark:text-[#a3a3a3]">{profile.description}</p>
                           </div>
-                          <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] px-1.5 py-0.5 flex-shrink-0">
+                          <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] px-1.5 py-0.5 flex-shrink-0 dark:border-[#262626] dark:text-[#a3a3a3]">
                             {hasCatalogSizing ? `~${Math.max(0, estimatedGb).toFixed(1)} GB` : 'after check'}
                           </span>
                         </div>
                         <div className="mt-3 flex flex-wrap gap-1">
                           {profile.includes.map(item => (
-                            <span key={item} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                            <span key={item} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
                               {item}
                             </span>
                           ))}
@@ -4327,19 +4327,19 @@ export default function SetupPage() {
           <div className="space-y-6">
             <div>
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 2</div>
-              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Persistent Storage</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">AI Wizard prefers a writable 200GB+ block-backed home/data mount and avoids read-only OS or network shares</p>
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">Persistent Storage</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">AI Wizard prefers a writable 200GB+ block-backed home/data mount and avoids read-only OS or network shares</p>
             </div>
 
-            <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-4">
+            <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 space-y-4 dark:bg-[#0a0a0a] dark:border-[#404040]">
               <div className="border border-[#76B900]/30 bg-[#76B900]/5 p-3">
                 <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-xs font-bold text-[#0a0a0a]">Persistent home</div>
+                    <div className="text-xs font-bold text-[#0a0a0a] dark:text-[#fafafa]">Persistent home</div>
                     <div className="text-[10px] font-mono text-[#76B900] mt-1 break-all">
                       {storageStatus?.layout.home ?? 'AI Wizard is finding the durable block volume'}
                     </div>
-                    <div className="text-[10px] text-[#525252] mt-1">
+                    <div className="text-[10px] text-[#525252] mt-1 dark:text-[#a3a3a3]">
                       Models, apps, projects, outputs, logs, and support snapshots live under this one workspace.
                     </div>
                   </div>
@@ -4349,7 +4349,7 @@ export default function SetupPage() {
                 </div>
                 {storageStatus && (
                   <details className="mt-3">
-                    <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">
+                    <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">
                       Workspace paths
                     </summary>
                     <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -4361,9 +4361,9 @@ export default function SetupPage() {
                         ['Outputs', storageStatus.layout.outputs_dir],
                         ['Support', storageStatus.layout.support_dir],
                       ].map(([label, value]) => (
-                        <div key={label} className="border border-[#e5e5e5] bg-white p-2 min-w-0">
-                          <div className="text-[9px] font-mono text-[#737373] uppercase">{label}</div>
-                          <div className="text-[10px] font-mono text-[#525252] mt-1 break-all">{value}</div>
+                        <div key={label} className="border border-[#e5e5e5] bg-white p-2 min-w-0 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                          <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{label}</div>
+                          <div className="text-[10px] font-mono text-[#525252] mt-1 break-all dark:text-[#a3a3a3]">{value}</div>
                         </div>
                       ))}
                     </div>
@@ -4372,13 +4372,13 @@ export default function SetupPage() {
               </div>
 
               <div>
-                <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">NVH_HOME</label>
+                <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">NVH_HOME</label>
                 {mountRecommendation && (
                   <div className="mt-2 border border-[#76B900]/30 bg-[#76B900]/5 p-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-[10px] font-mono uppercase tracking-wider text-[#76B900]">AI Wizard Recommendation</div>
-                      <div className="text-xs font-mono text-[#0a0a0a] mt-1 break-all">{mountRecommendation.recommended_home}</div>
-                      <div className="text-[10px] text-[#525252] mt-1">
+                      <div className="text-xs font-mono text-[#0a0a0a] mt-1 break-all dark:text-[#fafafa]">{mountRecommendation.recommended_home}</div>
+                      <div className="text-[10px] text-[#525252] mt-1 dark:text-[#a3a3a3]">
                         {mountRecommendation.large_block_mount ? 'block storage candidate' : 'candidate'}
                         {mountRecommendation.fs_type ? ` / ${mountRecommendation.fs_type}` : ''}
                         {mountRecommendation.mount_point ? ` / mounted at ${mountRecommendation.mount_point}` : ''}
@@ -4422,7 +4422,7 @@ export default function SetupPage() {
                     <div className={`text-xs font-mono font-bold ${storageReady ? 'text-[#76B900]' : 'text-[#d97706]'}`}>
                       {storageReady ? 'Storage preflight passed' : 'Storage preflight needs attention'}
                     </div>
-                    <div className="text-[10px] font-mono text-[#737373] mt-1">
+                    <div className="text-[10px] font-mono text-[#737373] mt-1 dark:text-[#a3a3a3]">
                       {storageStatus ? `${storageStatus.free_gb ?? 'Unknown'} GB free / ${storageStatus.total_gb ?? 'unknown'} GB total` : 'Waiting for API status'}
                     </div>
                   </div>
@@ -4442,8 +4442,8 @@ export default function SetupPage() {
               </div>
 
               {storageStatus && (
-                <details className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-                  <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">
+                <details className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+                  <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">
                     Manual shell override
                   </summary>
                   <div className="mt-3 bg-[#0a0a0a] border border-[#333333] p-3 overflow-x-auto">
@@ -4484,18 +4484,18 @@ export default function SetupPage() {
           <div className="space-y-6">
             <div>
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 3</div>
-              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">GPU Detection</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">Your NVIDIA GPU will power local AI inference</p>
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">GPU Detection</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">Your NVIDIA GPU will power local AI inference</p>
             </div>
 
             {/* GPU detection result */}
             {gpuLoading ? (
-              <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 animate-pulse">
+              <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 animate-pulse dark:bg-[#0a0a0a] dark:border-[#404040]">
                 <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-[#f5f5f5]" />
+                  <div className="w-14 h-14 bg-[#f5f5f5] dark:bg-[#141414]" />
                   <div className="flex-1 space-y-2">
-                    <div className="h-3 bg-[#f5f5f5] w-1/2" />
-                    <div className="h-2 bg-[#f5f5f5] w-1/3" />
+                    <div className="h-3 bg-[#f5f5f5] w-1/2 dark:bg-[#141414]" />
+                    <div className="h-2 bg-[#f5f5f5] w-1/3 dark:bg-[#141414]" />
                   </div>
                 </div>
               </div>
@@ -4514,9 +4514,9 @@ export default function SetupPage() {
                           </svg>
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-bold text-[#0a0a0a] font-mono">{g.name}</div>
+                          <div className="text-sm font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">{g.name}</div>
                           <div className="text-[10px] font-mono text-[#76B900] mt-0.5">DETECTED / GPU {g.index}</div>
-                          <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 space-x-2">
+                          <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 space-x-2 dark:text-[#737373]">
                             <span>CUDA {g.cuda_version}</span>
                             <span>/</span>
                             <span>driver {g.driver_version}</span>
@@ -4529,15 +4529,15 @@ export default function SetupPage() {
                           </div>
                           <div className="mt-2 space-y-1">
                             <div className="flex justify-between text-[10px] font-mono">
-                              <span className="text-[#a3a3a3]">VRAM</span>
-                              <span className="text-[#525252]">
+                              <span className="text-[#a3a3a3] dark:text-[#737373]">VRAM</span>
+                              <span className="text-[#525252] dark:text-[#a3a3a3]">
                                 {(g.memory_used_mb / 1024).toFixed(1)} used / {g.vram_gb} GB total
                               </span>
                             </div>
                             <div className="progress-bar">
                               <div className="progress-fill" style={{ width: `${usedPct}%`, backgroundColor: barColor }} />
                             </div>
-                            <div className="text-[10px] font-mono text-[#a3a3a3]">
+                            <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                               {(g.memory_free_mb / 1024).toFixed(1)} GB free / Utilization {g.utilization_pct}%
                             </div>
                           </div>
@@ -4548,29 +4548,29 @@ export default function SetupPage() {
                 })}
 
                 {/* System RAM */}
-                <div className="bg-[#ffffff] border border-[#e5e5e5] p-3">
-                  <div className="text-[10px] font-mono text-[#a3a3a3] mb-1 uppercase tracking-wider">System RAM</div>
-                  <div className="text-xs font-mono text-[#525252]">
+                <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] mb-1 uppercase tracking-wider dark:text-[#737373]">System RAM</div>
+                  <div className="text-xs font-mono text-[#525252] dark:text-[#a3a3a3]">
                     {gpuInfo.system_ram.total_gb} GB total / {gpuInfo.system_ram.available_gb} GB available /{' '}
                     {gpuInfo.system_ram.effective_for_llm_gb} GB usable for CPU offload
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="border border-[#d4d4d4] bg-[#ffffff] p-4">
+              <div className="border border-[#d4d4d4] bg-[#ffffff] p-4 dark:bg-[#0a0a0a] dark:border-[#404040]">
                 <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 bg-[#e5e5e5] border border-[#d4d4d4] flex items-center justify-center flex-shrink-0">
-                    <svg className="w-7 h-7 text-[#a3a3a3]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <div className="w-14 h-14 bg-[#e5e5e5] border border-[#d4d4d4] flex items-center justify-center flex-shrink-0 dark:border-[#404040]">
+                    <svg className="w-7 h-7 text-[#a3a3a3] dark:text-[#737373]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                       <path strokeLinecap="round" strokeLinejoin="round"
                         d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18" />
                     </svg>
                   </div>
                   <div>
-                    <div className="text-sm font-bold text-[#0a0a0a] font-mono">
+                    <div className="text-sm font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">
                       {gpuDetectionStatus === 'blocked' ? 'GPU Present, Access Blocked' : 'No NVIDIA GPU Detected'}
                     </div>
-                    <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">{gpuDetectionStatus.toUpperCase()}</div>
-                    <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">
+                    <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 dark:text-[#737373]">{gpuDetectionStatus.toUpperCase()}</div>
+                    <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                       {gpuDetectionIssue || 'Local models will run on CPU. Consider a cloud provider for better speed.'}
                     </div>
                   </div>
@@ -4590,7 +4590,7 @@ export default function SetupPage() {
                     <div key={i} className={`flex items-start gap-3 px-3 py-3 border ${
                       i === 0
                         ? 'border-[#76B900]/40 bg-[#76B900]/5'
-                        : 'border-[#e5e5e5] bg-[#ffffff]'
+                        : 'border-[#e5e5e5] bg-[#ffffff] dark:border-[#262626] dark:bg-[#0a0a0a]'
                     }`}>
                       <span className={`w-1.5 h-1.5 mt-1.5 flex-shrink-0 ${
                         safe && fitsGpu ? 'bg-[#76B900]' :
@@ -4599,7 +4599,7 @@ export default function SetupPage() {
                       }`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-mono font-bold text-[#0a0a0a]">{rec.model}</span>
+                          <span className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{rec.model}</span>
                           <span className={`text-[10px] font-mono px-1.5 py-0.5 uppercase ${
                             i === 0 ? 'bg-[#76B900] text-black font-bold' : 'bg-[#e5e5e5] text-[#737373]'
                           }`}>{rec.tier}</span>
@@ -4613,13 +4613,13 @@ export default function SetupPage() {
                             </span>
                           )}
                         </div>
-                        <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">{rec.reason}</div>
+                        <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 dark:text-[#737373]">{rec.reason}</div>
                         {rec.vram_required_gb > 0 && (
-                          <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">
+                          <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 dark:text-[#737373]">
                             Requires ~{rec.vram_required_gb} GB VRAM
                           </div>
                         )}
-                        <div className="mt-1.5 bg-[#ffffff] border border-[#e5e5e5] px-2 py-1 inline-block">
+                        <div className="mt-1.5 bg-[#ffffff] border border-[#e5e5e5] px-2 py-1 inline-block dark:bg-[#0a0a0a] dark:border-[#262626]">
                           <code className={`text-[10px] font-mono ${i === 0 ? 'text-[#76B900]' : 'text-[#a3a3a3]'}`}>
                             ollama pull {rec.model}
                           </code>
@@ -4633,40 +4633,40 @@ export default function SetupPage() {
 
             {/* Ollama optimizations */}
             {gpuRecs?.optimizations && gpuInfo && gpuInfo.gpus.length > 0 && (
-              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2">
-                <div className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider mb-2">
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                <div className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider mb-2 dark:text-[#737373]">
                   Ollama Optimizations - {gpuRecs.optimizations.architecture}
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
                   <div className="flex justify-between">
-                    <span className="text-[#a3a3a3]">Flash Attention</span>
+                    <span className="text-[#a3a3a3] dark:text-[#737373]">Flash Attention</span>
                     <span className={gpuRecs.optimizations.flash_attention ? 'text-[#76B900]' : 'text-[#a3a3a3]'}>
                       {gpuRecs.optimizations.flash_attention ? 'ENABLED' : 'N/A'}
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-[#a3a3a3]">Parallelism</span>
-                    <span className="text-[#525252]">{gpuRecs.optimizations.num_parallel}x</span>
+                    <span className="text-[#a3a3a3] dark:text-[#737373]">Parallelism</span>
+                    <span className="text-[#525252] dark:text-[#a3a3a3]">{gpuRecs.optimizations.num_parallel}x</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-[#a3a3a3]">Context</span>
-                    <span className="text-[#525252]">{(gpuRecs.optimizations.recommended_ctx / 1024).toFixed(0)}K</span>
+                    <span className="text-[#a3a3a3] dark:text-[#737373]">Context</span>
+                    <span className="text-[#525252] dark:text-[#a3a3a3]">{(gpuRecs.optimizations.recommended_ctx / 1024).toFixed(0)}K</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-[#a3a3a3]">Quantization</span>
-                    <span className="text-[#525252]">{gpuRecs.optimizations.recommended_quant}</span>
+                    <span className="text-[#a3a3a3] dark:text-[#737373]">Quantization</span>
+                    <span className="text-[#525252] dark:text-[#a3a3a3]">{gpuRecs.optimizations.recommended_quant}</span>
                   </div>
                 </div>
                 {gpuRecs.optimizations.notes.map((note, i) => (
-                  <div key={i} className="text-[10px] font-mono text-[#a3a3a3]">- {note}</div>
+                  <div key={i} className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">- {note}</div>
                 ))}
               </div>
             )}
 
             {/* Fallback note for CPU mode */}
             {!gpuLoading && (!gpuInfo || gpuInfo.gpus.length === 0) && (
-              <div className="bg-[#ffffff] border border-[#e5e5e5] p-3">
-                <div className="text-[10px] font-mono text-[#a3a3a3]">
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                   No NVIDIA GPU? Hive still works - Ollama runs on CPU (slower), or use cloud advisors (OpenAI, Anthropic, etc.)
                 </div>
               </div>
@@ -4679,8 +4679,8 @@ export default function SetupPage() {
           <div className="space-y-6">
             <div>
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 4</div>
-              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Model Picker</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">Model Picker</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                 Choose exact local models to download. Recommendations are based on detected VRAM and beginner-friendly defaults.
               </p>
             </div>
@@ -4688,11 +4688,11 @@ export default function SetupPage() {
             <div className="border border-[#76B900]/30 bg-[#76B900]/5 p-4">
               <div className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between">
                 <div>
-                  <div className="text-sm font-mono font-bold text-[#0a0a0a]">Recommended Local Model Queue</div>
+                  <div className="text-sm font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">Recommended Local Model Queue</div>
                   <div className="text-[10px] font-mono text-[#76B900] mt-0.5">
                     Detected VRAM: {detectedModelVram ? `${detectedModelVram} GB` : 'unknown'} / selected download: ~{selectedModelDiskGb.toFixed(1)} GB / persistent free: {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
                   </div>
-                  <div className="text-[10px] font-mono text-[#737373] mt-2">
+                  <div className="text-[10px] font-mono text-[#737373] mt-2 dark:text-[#a3a3a3]">
                     {studioModels.filter(model => model.installed).length}/{studioModels.length} installed
                   </div>
                 </div>
@@ -4731,10 +4731,10 @@ export default function SetupPage() {
             )}
 
             {(modelsInstalling || modelEvents.length > 0) && (
-              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2">
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
                 <div className="flex items-center justify-between">
                   <div className="section-label">Install Queue</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">Ollama rootless runtime</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">Ollama rootless runtime</div>
                 </div>
                 <div className="max-h-44 overflow-y-auto space-y-1">
                   {modelEvents.map((event, index) => (
@@ -4742,7 +4742,7 @@ export default function SetupPage() {
                       <span className={event.event === 'error' ? 'text-[#dc2626]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#737373]'}>
                         {event.event.toUpperCase()}
                       </span>
-                      <span className="text-[#525252] break-words">{event.message}</span>
+                      <span className="text-[#525252] break-words dark:text-[#a3a3a3]">{event.message}</span>
                     </div>
                   ))}
                 </div>
@@ -4752,7 +4752,7 @@ export default function SetupPage() {
             {modelsLoading ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 animate-pulse">
                 {[1, 2, 3, 4].map(i => (
-                  <div key={i} className="h-32 bg-[#ffffff] border border-[#e5e5e5]" />
+                  <div key={i} className="h-32 bg-[#ffffff] border border-[#e5e5e5] dark:bg-[#0a0a0a] dark:border-[#262626]" />
                 ))}
               </div>
             ) : (
@@ -4761,7 +4761,7 @@ export default function SetupPage() {
                   <div key={category} className="space-y-2">
                     <div className="flex items-center gap-2">
                       <div className="section-label">{category}</div>
-                      <span className="text-[10px] font-mono text-[#a3a3a3]">
+                      <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                         {studioModels.filter(model => model.category === category).length} model(s)
                       </span>
                     </div>
@@ -4774,7 +4774,7 @@ export default function SetupPage() {
                             className={`block border p-4 cursor-pointer transition-colors ${
                               selected
                                 ? 'border-[#76B900]/50 bg-[#76B900]/5'
-                                : 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4]'
+                                : 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4] dark:border-[#262626] dark:bg-[#0a0a0a] dark:hover:border-[#404040]'
                             }`}
                           >
                             <div className="flex items-start gap-3">
@@ -4787,7 +4787,7 @@ export default function SetupPage() {
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
-                                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">{model.title}</div>
+                                    <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{model.title}</div>
                                     <div className="text-[10px] font-mono text-[#76B900] mt-0.5">{model.install_target}</div>
                                   </div>
                                   <span className={`text-[9px] font-mono px-1.5 py-0.5 border ${
@@ -4800,7 +4800,7 @@ export default function SetupPage() {
                                     {model.installed ? 'INSTALLED' : model.fits_vram ? 'FITS' : 'CHECK VRAM'}
                                   </span>
                                 </div>
-                                <div className="text-[10px] font-mono text-[#737373] leading-relaxed mt-2">
+                                <div className="text-[10px] font-mono text-[#737373] leading-relaxed mt-2 dark:text-[#a3a3a3]">
                                   {model.why_recommended}
                                 </div>
                                 <div className="flex flex-wrap gap-1 mt-3">
@@ -4809,14 +4809,14 @@ export default function SetupPage() {
                                       recommended
                                     </span>
                                   )}
-                                  <span className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                  <span className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
                                     {model.recommended_vram_gb ? `${model.recommended_vram_gb}GB VRAM` : 'CPU OK'}
                                   </span>
-                                  <span className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                  <span className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
                                     ~{model.estimated_disk_gb}GB
                                   </span>
                                   {model.capabilities.slice(0, 3).map(capability => (
-                                    <span key={capability} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                    <span key={capability} className="text-[9px] font-mono text-[#737373] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
                                       {capability}
                                     </span>
                                   ))}
@@ -4839,12 +4839,12 @@ export default function SetupPage() {
           <div className="space-y-6">
             <div>
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 5</div>
-              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Local AI Setup</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">Install NVIDIA Nemotron via Ollama - runs on your GPU, free forever</p>
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">Local AI Setup</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">Install NVIDIA Nemotron via Ollama - runs on your GPU, free forever</p>
             </div>
 
             {/* Ollama status */}
-            <div className={`p-4 border ${ollamaStatus === 'online' ? 'border-[#76B900]/40 bg-[#76B900]/5' : 'border-[#d4d4d4] bg-[#ffffff]'}`}>
+            <div className={`p-4 border ${ollamaStatus === 'online' ? 'border-[#76B900]/40 bg-[#76B900]/5' : 'border-[#d4d4d4] bg-[#ffffff] dark:border-[#404040] dark:bg-[#0a0a0a]'}`}>
               <div className="flex items-center gap-3">
                 <span className={`w-2 h-2 flex-shrink-0 ${
                   ollamaStatus === 'online' ? 'bg-[#76B900] nvidia-pulse' :
@@ -4855,7 +4855,7 @@ export default function SetupPage() {
                   <div className={`text-sm font-mono font-bold ${ollamaStatus === 'online' ? 'text-[#76B900]' : 'text-[#0a0a0a]'}`}>
                     Ollama {ollamaStatus === 'checking' ? 'CHECKING...' : ollamaStatus === 'online' ? 'RUNNING' : 'NOT DETECTED'}
                   </div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                     {ollamaStatus === 'online' ? 'Local inference server is active at localhost:11434' :
                      ollamaStatus === 'offline' ? 'Install and start Ollama to enable local models' :
                      'Connecting...'}
@@ -4866,11 +4866,11 @@ export default function SetupPage() {
 
             {/* Install instructions */}
             {ollamaStatus !== 'online' && (
-              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-3">
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
                 <div>
                   <div className="section-label">Local AI Action</div>
-                  <div className="text-sm font-bold text-[#0a0a0a] mt-1">Install the rootless runtime and the GPU-fit model queue.</div>
-                  <div className="text-xs text-[#525252] mt-1">
+                  <div className="text-sm font-bold text-[#0a0a0a] mt-1 dark:text-[#fafafa]">Install the rootless runtime and the GPU-fit model queue.</div>
+                  <div className="text-xs text-[#525252] mt-1 dark:text-[#a3a3a3]">
                     AI Wizard keeps the runtime, models, and launchers under the persistent workspace.
                   </div>
                 </div>
@@ -4892,16 +4892,16 @@ export default function SetupPage() {
                     {modelsInstalling ? 'Downloading' : 'Download Recommended Models'}
                   </button>
                 </div>
-                <details className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-                  <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">
+                <details className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+                  <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">
                     Manual overrides
                   </summary>
                   <div className="mt-3 font-mono text-sm space-y-2">
-                    <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider"># Rootless Ollama runtime, no sudo</div>
+                    <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider dark:text-[#737373]"># Rootless Ollama runtime, no sudo</div>
                     <div className="text-[#76B900] break-all">nvh studio --install rootless-ollama -y</div>
-                    <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3"># Start the local model server</div>
+                    <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3 dark:text-[#737373]"># Start the local model server</div>
                     <div className="text-[#76B900] break-all">nvhive-ollama-serve</div>
-                    <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3"># Pull recommended fitting models</div>
+                    <div className="text-[#a3a3a3] text-[10px] uppercase tracking-wider mt-3 dark:text-[#737373]"># Pull recommended fitting models</div>
                     <div className="text-[#76B900] break-all">nvh studio --install-models recommended -y</div>
                   </div>
                 </details>
@@ -4920,34 +4920,34 @@ export default function SetupPage() {
                 <div className="flex items-start gap-3 pr-24">
                   <div className="w-8 h-8 bg-[#76B900]/20 border border-[#76B900]/40 flex items-center justify-center flex-shrink-0 font-bold text-[#76B900] text-sm font-mono">N</div>
                   <div>
-                    <div className="text-sm font-mono font-bold text-[#0a0a0a]">NVIDIA Nemotron Mini (2B)</div>
+                    <div className="text-sm font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">NVIDIA Nemotron Mini (2B)</div>
                     <div className="text-[10px] font-mono text-[#76B900]">~2 GB / Fast / 4K context / Instruction tuned</div>
-                    <div className="mt-1 bg-[#ffffff] border border-[#e5e5e5] px-2 py-1">
+                    <div className="mt-1 bg-[#ffffff] border border-[#e5e5e5] px-2 py-1 dark:bg-[#0a0a0a] dark:border-[#262626]">
                       <code className="text-[10px] font-mono text-[#76B900]">ollama pull nemotron-mini</code>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <div className="border border-[#d4d4d4] p-4">
+              <div className="border border-[#d4d4d4] p-4 dark:border-[#404040]">
                 <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 bg-[#e5e5e5] border border-[#d4d4d4] flex items-center justify-center flex-shrink-0 font-bold text-[#525252] text-sm font-mono">N</div>
+                  <div className="w-8 h-8 bg-[#e5e5e5] border border-[#d4d4d4] flex items-center justify-center flex-shrink-0 font-bold text-[#525252] text-sm font-mono dark:border-[#404040] dark:text-[#a3a3a3]">N</div>
                   <div>
-                    <div className="text-sm font-mono font-bold text-[#0a0a0a]">NVIDIA Nemotron (8B)</div>
-                    <div className="text-[10px] font-mono text-[#a3a3a3]">~8 GB / Best quality / 131K context / Tool calling</div>
-                    <div className="mt-1 bg-[#ffffff] border border-[#e5e5e5] px-2 py-1">
-                      <code className="text-[10px] font-mono text-[#525252]">ollama pull nemotron</code>
+                    <div className="text-sm font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">NVIDIA Nemotron (8B)</div>
+                    <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">~8 GB / Best quality / 131K context / Tool calling</div>
+                    <div className="mt-1 bg-[#ffffff] border border-[#e5e5e5] px-2 py-1 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                      <code className="text-[10px] font-mono text-[#525252] dark:text-[#a3a3a3]">ollama pull nemotron</code>
                     </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <details className="bg-[#ffffff] border border-[#e5e5e5] p-4">
-              <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">Rootless container option</summary>
+            <details className="bg-[#ffffff] border border-[#e5e5e5] p-4 dark:bg-[#0a0a0a] dark:border-[#262626]">
+              <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">Rootless container option</summary>
               <div className="mt-3">
                 <code className="text-[10px] font-mono text-[#76B900]">docker compose up -d</code>
-                <div className="text-[10px] text-[#737373] mt-1">
+                <div className="text-[10px] text-[#737373] mt-1 dark:text-[#a3a3a3]">
                   Only use this when Docker/Podman is available without sudo. Otherwise AI Wizard uses the workspace runtime.
                 </div>
               </div>
@@ -4960,8 +4960,8 @@ export default function SetupPage() {
           <div className="space-y-6">
             <div>
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 6</div>
-              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">AI Studio Packs</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">AI Studio Packs</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                 One-click rootless packs for LLMs, OpenClaw/NemoClaw agents, ComfyUI nodes, Blender, runtime fallback, and Linux game projects.
               </p>
             </div>
@@ -4969,11 +4969,11 @@ export default function SetupPage() {
             <div className="border border-[#76B900]/30 bg-[#76B900]/5 p-4">
               <div className="flex flex-col lg:flex-row lg:items-center gap-4 justify-between">
                 <div>
-                  <div className="text-sm font-mono font-bold text-[#0a0a0a]">AI Starter Pack</div>
+                  <div className="text-sm font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">AI Starter Pack</div>
                   <div className="text-[10px] font-mono text-[#76B900] mt-0.5">
                     No sudo. Installs under {studioRoot || storageStatus?.layout.studio_dir || 'NVH_HOME/studio'} and {storageStatus?.layout.bin_dir || 'NVH_HOME/bin'}
                   </div>
-                  <div className="text-[10px] font-mono text-[#737373] mt-2">
+                  <div className="text-[10px] font-mono text-[#737373] mt-2 dark:text-[#a3a3a3]">
                     {starterStudioPackIds.length} starter packs - {clawStudioPackIds.length} Claw options - {studioPacks.filter(pack => pack.status.installed).length}/{studioPacks.length} installed - {blockedStudioPackCount} blocked by host - selected ~{selectedStudioPackDiskGb.toFixed(1)} GB - free {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
                   </div>
                 </div>
@@ -5019,10 +5019,10 @@ export default function SetupPage() {
             )}
 
             {(studioInstalling || studioEvents.length > 0) && (
-              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2">
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
                 <div className="flex items-center justify-between">
                   <div className="section-label">Pack Stream</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">rootless mode</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">rootless mode</div>
                 </div>
                 <div className="max-h-44 overflow-y-auto space-y-1">
                   {studioEvents.map((event, index) => (
@@ -5030,7 +5030,7 @@ export default function SetupPage() {
                       <span className={event.event === 'error' ? 'text-[#dc2626]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#a3a3a3]'}>
                         {event.event.toUpperCase()}
                       </span>
-                      <span className="text-[#525252] break-words">{event.message}</span>
+                      <span className="text-[#525252] break-words dark:text-[#a3a3a3]">{event.message}</span>
                     </div>
                   ))}
                 </div>
@@ -5040,7 +5040,7 @@ export default function SetupPage() {
             {studioLoading ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3 animate-pulse">
                 {[1, 2, 3, 4].map(i => (
-                  <div key={i} className="h-32 bg-[#ffffff] border border-[#e5e5e5]" />
+                  <div key={i} className="h-32 bg-[#ffffff] border border-[#e5e5e5] dark:bg-[#0a0a0a] dark:border-[#262626]" />
                 ))}
               </div>
             ) : (
@@ -5049,7 +5049,7 @@ export default function SetupPage() {
                   <div key={category} className="space-y-2">
                     <div className="flex items-center gap-2">
                       <div className="section-label">{category}</div>
-                      <span className="text-[10px] font-mono text-[#a3a3a3]">
+                      <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                         {studioPacks.filter(pack => pack.category === category).length} pack(s)
                       </span>
                     </div>
@@ -5066,8 +5066,8 @@ export default function SetupPage() {
                               selected
                                 ? 'border-[#76B900]/50 bg-[#76B900]/5'
                                 : installable
-                                  ? 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4] cursor-pointer'
-                                  : 'border-[#e5e5e5] bg-[#fafafa] opacity-75 cursor-not-allowed'
+                                  ? 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4] cursor-pointer dark:border-[#262626] dark:bg-[#0a0a0a] dark:hover:border-[#404040]'
+                                  : 'border-[#e5e5e5] bg-[#fafafa] opacity-75 cursor-not-allowed dark:border-[#262626] dark:bg-[#141414]'
                             }`}
                           >
                             <div className="flex items-start gap-3">
@@ -5081,7 +5081,7 @@ export default function SetupPage() {
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
-                                    <div className="text-xs font-mono font-bold text-[#0a0a0a]">{pack.title}</div>
+                                    <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{pack.title}</div>
                                     <div className="text-[10px] font-mono text-[#76B900] mt-0.5">{pack.tagline}</div>
                                   </div>
                                   <span className={`text-[9px] font-mono px-1.5 py-0.5 border ${
@@ -5094,7 +5094,7 @@ export default function SetupPage() {
                                     {badgeText}
                                   </span>
                                 </div>
-                                <div className="text-[10px] font-mono text-[#737373] leading-relaxed mt-2">
+                                <div className="text-[10px] font-mono text-[#737373] leading-relaxed mt-2 dark:text-[#a3a3a3]">
                                   {pack.description}
                                 </div>
                                 {blockedReason && (
@@ -5103,24 +5103,24 @@ export default function SetupPage() {
                                   </div>
                                 )}
                                 <div className="flex flex-wrap gap-1 mt-3">
-                                  <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                  <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#737373]">
                                     {pack.recommended_vram_gb ? `${pack.recommended_vram_gb}GB VRAM` : 'any GPU'}
                                   </span>
-                                  <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                  <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#737373]">
                                     ~{pack.estimated_disk_gb}GB
                                   </span>
                                   {pack.models.slice(0, 2).map(model => (
-                                    <span key={model} className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                    <span key={model} className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#737373]">
                                       {model}
                                     </span>
                                   ))}
                                   {pack.comfy_nodes.length > 0 && (
-                                    <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                    <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#737373]">
                                       {pack.comfy_nodes.length} nodes
                                     </span>
                                   )}
                                   {pack.python_packages.length > 0 && (
-                                    <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                                    <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#737373]">
                                       {pack.python_packages.length} packages
                                     </span>
                                   )}
@@ -5143,13 +5143,13 @@ export default function SetupPage() {
           <div className="space-y-6">
             <div>
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 7</div>
-              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">ComfyUI Visual Workflows</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">ComfyUI Visual Workflows</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                 Auto-install a local ComfyUI workspace with NVIDIA-ready PyTorch, Manager support, and nvHive example packs.
               </p>
             </div>
 
-            <div className={`p-4 border ${comfyStatus?.running ? 'border-[#76B900]/40 bg-[#76B900]/5' : comfyStatus?.installed ? 'border-[#d4d4d4] bg-[#ffffff]' : 'border-[#e5e5e5] bg-white'}`}>
+            <div className={`p-4 border ${comfyStatus?.running ? 'border-[#76B900]/40 bg-[#76B900]/5' : comfyStatus?.installed ? 'border-[#d4d4d4] bg-[#ffffff] dark:border-[#404040] dark:bg-[#0a0a0a]' : 'border-[#e5e5e5] bg-white dark:border-[#262626] dark:bg-[#0a0a0a]'}`}>
               <div className="flex flex-col sm:flex-row sm:items-center gap-4 justify-between">
                 <div className="flex items-start gap-3">
                   <span className={`w-2 h-2 mt-1.5 flex-shrink-0 ${
@@ -5162,20 +5162,20 @@ export default function SetupPage() {
                     <div className={`text-sm font-mono font-bold ${comfyStatus?.running ? 'text-[#76B900]' : 'text-[#0a0a0a]'}`}>
                       ComfyUI {comfyLoading ? 'CHECKING...' : comfyStatus?.running ? 'RUNNING' : comfyStatus?.installed ? 'INSTALLED' : 'NOT INSTALLED'}
                     </div>
-                    <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 break-all">
+                    <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 break-all dark:text-[#737373]">
                       {comfyStatus?.installed ? comfyStatus.app_dir : `Install target: ${storageStatus?.layout.comfyui_dir ?? 'NVH_HOME/comfyui'}/ComfyUI`}
                     </div>
                     <div className="flex flex-wrap gap-1 mt-2">
-                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5">
+                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626] dark:text-[#a3a3a3]">
                         Status: {comfyStatus?.service_status ?? (comfyStatus?.running ? 'running' : comfyStatus?.installed ? 'installed-stopped' : 'not-installed')}
                       </span>
-                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5">
+                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626] dark:text-[#a3a3a3]">
                         Port: {comfyStatus?.port ?? 8188}
                       </span>
-                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5">
+                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626] dark:text-[#a3a3a3]">
                         Runtime: {comfyStatus?.runtime_strategy ?? 'venv'}
                       </span>
-                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5">
+                      <span className="text-[9px] font-mono text-[#737373] border border-[#e5e5e5] bg-white px-1.5 py-0.5 dark:bg-[#0a0a0a] dark:border-[#262626] dark:text-[#a3a3a3]">
                         Free: {storageFreeGb === null ? 'unknown' : `${storageFreeGb} GB`}
                       </span>
                     </div>
@@ -5193,7 +5193,7 @@ export default function SetupPage() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <label className="inline-flex items-center gap-2 px-3 py-2 border border-[#e5e5e5] bg-[#fafafa] text-[10px] font-mono uppercase tracking-wider text-[#737373]">
+                  <label className="inline-flex items-center gap-2 px-3 py-2 border border-[#e5e5e5] bg-[#fafafa] text-[10px] font-mono uppercase tracking-wider text-[#737373] dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
                     <input
                       type="checkbox"
                       checked={comfyAutoLaunch}
@@ -5259,13 +5259,13 @@ export default function SetupPage() {
                 <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                   <div>
                     <div className="section-label text-[#92400e]">ComfyUI Install Is Working</div>
-                    <div className="text-xs font-mono text-[#525252] mt-1">
+                    <div className="text-xs font-mono text-[#525252] mt-1 dark:text-[#a3a3a3]">
                       {activeComfyInstallJob.message || 'Building the visual workspace inside persistent storage.'}
                     </div>
                     <div className="flex flex-wrap gap-2 mt-2 text-[9px] font-mono text-[#92400e]">
-                      <span className="border border-[#d97706]/20 bg-[#ffffff] px-1.5 py-0.5">Phase: {jobPhase(activeComfyInstallJob)}</span>
-                      <span className="border border-[#d97706]/20 bg-[#ffffff] px-1.5 py-0.5">Updated {formatJobUpdatedAgo(activeComfyInstallJob)}</span>
-                      <span className="border border-[#d97706]/20 bg-[#ffffff] px-1.5 py-0.5">Elapsed {formatJobElapsed(activeComfyInstallJob)}</span>
+                      <span className="border border-[#d97706]/20 bg-[#ffffff] px-1.5 py-0.5 dark:bg-[#0a0a0a]">Phase: {jobPhase(activeComfyInstallJob)}</span>
+                      <span className="border border-[#d97706]/20 bg-[#ffffff] px-1.5 py-0.5 dark:bg-[#0a0a0a]">Updated {formatJobUpdatedAgo(activeComfyInstallJob)}</span>
+                      <span className="border border-[#d97706]/20 bg-[#ffffff] px-1.5 py-0.5 dark:bg-[#0a0a0a]">Elapsed {formatJobElapsed(activeComfyInstallJob)}</span>
                     </div>
                   </div>
                   <button
@@ -5292,10 +5292,10 @@ export default function SetupPage() {
             )}
 
             {(comfyInstalling || comfyEvents.length > 0 || activeComfyInstallJob) && (
-              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2">
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
                 <div className="flex items-center justify-between">
                   <div className="section-label">Install Stream</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                     PyTorch profile: {selectedComfyTorchProfile}
                   </div>
                 </div>
@@ -5306,7 +5306,7 @@ export default function SetupPage() {
                         <span className={event.event === 'error' ? 'text-[#dc2626]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#a3a3a3]'}>
                           {event.event.toUpperCase()}
                         </span>
-                        <span className="text-[#525252] break-words">{event.message}</span>
+                        <span className="text-[#525252] break-words dark:text-[#a3a3a3]">{event.message}</span>
                       </div>
                     ))
                   ) : activeComfyInstallJob?.recent_events?.length ? (
@@ -5315,13 +5315,13 @@ export default function SetupPage() {
                         <span className={event.event === 'error' ? 'text-[#dc2626]' : event.event === 'complete' ? 'text-[#76B900]' : 'text-[#a3a3a3]'}>
                           {event.event.toUpperCase()}
                         </span>
-                        <span className="text-[#525252] break-words">{event.message || event.status}</span>
+                        <span className="text-[#525252] break-words dark:text-[#a3a3a3]">{event.message || event.status}</span>
                       </div>
                     ))
                   ) : (
                     <div className="grid grid-cols-[72px_1fr] gap-2 text-[10px] font-mono">
-                      <span className="text-[#a3a3a3]">START</span>
-                      <span className="text-[#525252] break-words">Preparing ComfyUI inside the persistent workspace.</span>
+                      <span className="text-[#a3a3a3] dark:text-[#737373]">START</span>
+                      <span className="text-[#525252] break-words dark:text-[#a3a3a3]">Preparing ComfyUI inside the persistent workspace.</span>
                     </div>
                   )}
                 </div>
@@ -5332,7 +5332,7 @@ export default function SetupPage() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <div className="section-label">Workflow Download Checklist</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">
+                  <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                     {selectedComfyExamples.size} workflow(s), {selectedComfyModelCount} model requirement(s)
                   </div>
                 </div>
@@ -5359,7 +5359,7 @@ export default function SetupPage() {
                     <label
                       key={example.id}
                       className={`block border p-4 space-y-3 cursor-pointer transition-colors ${
-                        selected ? 'border-[#76B900]/50 bg-[#76B900]/5' : 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4]'
+                        selected ? 'border-[#76B900]/50 bg-[#76B900]/5' : 'border-[#e5e5e5] bg-[#ffffff] hover:border-[#d4d4d4] dark:border-[#262626] dark:bg-[#0a0a0a] dark:hover:border-[#404040]'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -5371,34 +5371,34 @@ export default function SetupPage() {
                             className="mt-1 accent-[#76B900]"
                           />
                           <div>
-                            <div className="text-xs font-mono font-bold text-[#0a0a0a]">{example.title}</div>
+                            <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{example.title}</div>
                             <div className="text-[10px] font-mono text-[#76B900] uppercase mt-0.5">
                               {example.category} / {example.install_profile}
                             </div>
                           </div>
                         </div>
-                        <div className="text-[10px] font-mono text-[#525252] border border-[#d4d4d4] px-1.5 py-0.5">
+                        <div className="text-[10px] font-mono text-[#525252] border border-[#d4d4d4] px-1.5 py-0.5 dark:border-[#404040] dark:text-[#a3a3a3]">
                           {example.recommended_vram_gb}GB
                         </div>
                       </div>
 
-                      <div className="text-[10px] font-mono text-[#737373] leading-relaxed">
+                      <div className="text-[10px] font-mono text-[#737373] leading-relaxed dark:text-[#a3a3a3]">
                         {example.why_trending}
                       </div>
 
-                      <div className="bg-[#ffffff] border border-[#e5e5e5] p-2">
-                        <div className="text-[9px] font-mono text-[#a3a3a3] uppercase mb-1">Load path</div>
-                        <div className="text-[10px] font-mono text-[#525252]">{example.workflow_hint}</div>
+                      <div className="bg-[#ffffff] border border-[#e5e5e5] p-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                        <div className="text-[9px] font-mono text-[#a3a3a3] uppercase mb-1 dark:text-[#737373]">Load path</div>
+                        <div className="text-[10px] font-mono text-[#525252] dark:text-[#a3a3a3]">{example.workflow_hint}</div>
                       </div>
 
                       <div className="flex flex-wrap gap-1">
                         {example.models.slice(0, 3).map(model => (
-                          <span key={model} className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                          <span key={model} className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#737373]">
                             {model}
                           </span>
                         ))}
                         {example.models.length > 3 && (
-                          <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5">
+                          <span className="text-[9px] font-mono text-[#a3a3a3] bg-[#f5f5f5] border border-[#e5e5e5] px-1.5 py-0.5 dark:bg-[#141414] dark:border-[#262626] dark:text-[#737373]">
                             +{example.models.length - 3} more
                           </span>
                         )}
@@ -5422,8 +5422,8 @@ export default function SetupPage() {
           <div className="space-y-6">
             <div>
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 8</div>
-              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Cloud Providers</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">Cloud Providers</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
                 Optional - add API keys for cloud providers. Local Nemotron works without any keys.
               </p>
             </div>
@@ -5438,7 +5438,7 @@ export default function SetupPage() {
             {freeProvidersLoading ? (
               <div className="space-y-2 animate-pulse">
                 {[1, 2, 3].map(i => (
-                  <div key={i} className="h-16 bg-[#ffffff] border border-[#e5e5e5]" />
+                  <div key={i} className="h-16 bg-[#ffffff] border border-[#e5e5e5] dark:bg-[#0a0a0a] dark:border-[#262626]" />
                 ))}
               </div>
             ) : freeProviders.length > 0 ? (
@@ -5491,11 +5491,11 @@ export default function SetupPage() {
               /* Fallback: static list when API endpoint not available */
               <div className="space-y-3">
                 {CLOUD_PROVIDERS.map(provider => (
-                  <div key={provider.id} className="border border-[#e5e5e5] bg-[#ffffff] p-4">
+                  <div key={provider.id} className="border border-[#e5e5e5] bg-[#ffffff] p-4 dark:bg-[#0a0a0a] dark:border-[#262626]">
                     <div className="flex items-center justify-between mb-2">
                       <div>
-                        <div className="text-sm font-mono font-bold text-[#0a0a0a]">{provider.name}</div>
-                        <div className="text-[10px] font-mono text-[#a3a3a3]">{provider.description}</div>
+                        <div className="text-sm font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{provider.name}</div>
+                        <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{provider.description}</div>
                       </div>
                       <div className="flex items-center gap-2">
                         {savedKeys.has(provider.id) && (
@@ -5532,7 +5532,7 @@ export default function SetupPage() {
                     </div>
                     <div className="mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                       <div className="text-[10px] font-mono text-[#333333]">
-                        Or set as env var: <span className="text-[#a3a3a3]">{provider.envKey}=your-key</span>
+                        Or set as env var: <span className="text-[#a3a3a3] dark:text-[#737373]">{provider.envKey}=your-key</span>
                       </div>
                       <button
                         type="button"
@@ -5554,8 +5554,8 @@ export default function SetupPage() {
               </div>
             )}
 
-            <div className="bg-[#ffffff] border border-[#e5e5e5] p-3">
-              <div className="text-[10px] font-mono text-[#a3a3a3]">
+            <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
+              <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                 API keys entered here are saved via the Hive API. You can also set them as env vars in your <span className="text-[#76B900]">.env</span> file.
               </div>
             </div>
@@ -5567,8 +5567,8 @@ export default function SetupPage() {
           <div className="space-y-6">
             <div>
               <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Step 9</div>
-              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono">Quick Test</h2>
-              <p className="text-xs font-mono text-[#a3a3a3] mt-1">Verify everything is working correctly</p>
+              <h2 className="text-lg font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">Quick Test</h2>
+              <p className="text-xs font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">Verify everything is working correctly</p>
             </div>
 
             {/* API status */}
@@ -5581,7 +5581,7 @@ export default function SetupPage() {
                     Hive API {apiConnected ? 'ONLINE' : apiChecking ? 'CHECKING' : 'OFFLINE'}
                   </div>
                     {apiDisconnected && (
-                      <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5">
+                      <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 dark:text-[#737373]">
                         Launch nvHive, or use terminal fallback: <span className="text-[#76B900]">nvh webui</span>
                       </div>
                     )}
@@ -5606,9 +5606,9 @@ export default function SetupPage() {
             {/* Test prompt */}
             <div className="space-y-3">
               <div className="section-label">Test Query</div>
-              <div className="bg-[#ffffff] border border-[#e5e5e5] p-3">
-                <div className="text-[10px] font-mono text-[#a3a3a3] mb-1">SENDING:</div>
-                <div className="text-xs font-mono text-[#525252]">{testPrompt}</div>
+              <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                <div className="text-[10px] font-mono text-[#a3a3a3] mb-1 dark:text-[#737373]">SENDING:</div>
+                <div className="text-xs font-mono text-[#525252] dark:text-[#a3a3a3]">{testPrompt}</div>
               </div>
 
               <button
@@ -5651,7 +5651,7 @@ export default function SetupPage() {
               {testResult && (
                 <div className="bg-[#76B900]/5 border border-[#76B900]/30 p-3">
                   <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">Response</div>
-                  <div className="text-sm font-mono text-[#0a0a0a]">{testResult}</div>
+                  <div className="text-sm font-mono text-[#0a0a0a] dark:text-[#fafafa]">{testResult}</div>
                   <div className="mt-2 text-[10px] font-mono text-[#76B900]">TEST PASSED</div>
                 </div>
               )}
@@ -5670,7 +5670,7 @@ export default function SetupPage() {
                 </svg>
               </div>
               <div>
-                <h2 className="text-xl font-bold text-[#0a0a0a] font-mono">SETUP COMPLETE</h2>
+                <h2 className="text-xl font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">SETUP COMPLETE</h2>
                 <p className="text-xs font-mono text-[#76B900] mt-1">Hive AI Command Center is ready</p>
               </div>
             </div>
@@ -5688,44 +5688,44 @@ export default function SetupPage() {
                   { label: 'Hive API', value: apiConnected ? 'Online' : apiChecking ? 'Checking' : 'Offline', ok: apiConnected },
                   { label: 'Active Advisors', value: configuredProviders.length > 0 ? configuredProviders.join(', ') : 'Optional', ok: configuredProviders.length > 0, optional: configuredProviders.length === 0 },
                 ].map(item => (
-                  <div key={item.label} className="flex items-center gap-3 px-3 py-2 bg-[#ffffff] border border-[#e5e5e5]">
+                  <div key={item.label} className="flex items-center gap-3 px-3 py-2 bg-[#ffffff] border border-[#e5e5e5] dark:bg-[#0a0a0a] dark:border-[#262626]">
                     <span className={`w-1.5 h-1.5 flex-shrink-0 ${item.ok ? 'bg-[#76B900]' : item.optional ? 'bg-[#a3a3a3]' : 'bg-[#dc2626]'}`}
                       style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                    <span className="text-[10px] font-mono text-[#737373] uppercase w-32">{item.label}</span>
-                    <span className="text-xs font-mono text-[#0a0a0a]">{item.value}</span>
+                    <span className="text-[10px] font-mono text-[#737373] uppercase w-32 dark:text-[#a3a3a3]">{item.label}</span>
+                    <span className="text-xs font-mono text-[#0a0a0a] dark:text-[#fafafa]">{item.value}</span>
                   </div>
                 ))}
               </div>
             </div>
 
-            <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-3">
+            <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
               <div>
                 <div className="section-label">Launcher Dashboard</div>
-                <div className="text-sm font-bold text-[#0a0a0a] mt-1">Open the lab from buttons, not terminal memory</div>
+                <div className="text-sm font-bold text-[#0a0a0a] mt-1 dark:text-[#fafafa]">Open the lab from buttons, not terminal memory</div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
                   <div className="flex items-center gap-3">
-                    <span className="w-10 h-10 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                    <span className="w-10 h-10 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0 dark:bg-[#0a0a0a] dark:border-[#262626]">
                       <BrandLogo id="ollama" />
                     </span>
                     <div className="min-w-0">
-                      <div className="text-xs font-bold text-[#0a0a0a]">Local Chat</div>
-                      <div className="text-[9px] font-mono text-[#737373] uppercase">{ollamaStatus === 'online' ? 'Ollama online' : 'Uses best available advisor'}</div>
+                      <div className="text-xs font-bold text-[#0a0a0a] dark:text-[#fafafa]">Local Chat</div>
+                      <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{ollamaStatus === 'online' ? 'Ollama online' : 'Uses best available advisor'}</div>
                     </div>
                   </div>
                   <Link href="/query" className="btn-primary block text-center mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
                     Open Chat
                   </Link>
                 </div>
-                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
                   <div className="flex items-center gap-3">
-                    <span className="w-10 h-10 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                    <span className="w-10 h-10 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0 dark:bg-[#0a0a0a] dark:border-[#262626]">
                       <BrandLogo id="comfyui" />
                     </span>
                     <div className="min-w-0">
-                      <div className="text-xs font-bold text-[#0a0a0a]">ComfyUI</div>
-                      <div className="text-[9px] font-mono text-[#737373] uppercase">{comfyStatus?.running ? 'running' : comfyStatus?.installed ? 'installed' : 'not installed'}</div>
+                      <div className="text-xs font-bold text-[#0a0a0a] dark:text-[#fafafa]">ComfyUI</div>
+                      <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{comfyStatus?.running ? 'running' : comfyStatus?.installed ? 'installed' : 'not installed'}</div>
                     </div>
                   </div>
                   {comfyStatus?.running ? (
@@ -5752,14 +5752,14 @@ export default function SetupPage() {
                   const pack = studioPacks.find(candidate => candidate.id === item.id);
                   const installed = Boolean(pack?.status.installed);
                   return (
-                    <div key={item.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3">
+                    <div key={item.id} className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
                       <div className="flex items-center gap-3">
-                        <span className="w-10 h-10 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0">
+                        <span className="w-10 h-10 flex items-center justify-center border border-[#e5e5e5] bg-white flex-shrink-0 dark:bg-[#0a0a0a] dark:border-[#262626]">
                           <BrandLogo id={item.logo} />
                         </span>
                         <div className="min-w-0">
-                          <div className="text-xs font-bold text-[#0a0a0a]">{item.title}</div>
-                          <div className="text-[9px] font-mono text-[#737373] uppercase">{installed ? 'launcher ready' : 'optional'}</div>
+                          <div className="text-xs font-bold text-[#0a0a0a] dark:text-[#fafafa]">{item.title}</div>
+                          <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{installed ? 'launcher ready' : 'optional'}</div>
                         </div>
                       </div>
                       <button
@@ -5774,22 +5774,22 @@ export default function SetupPage() {
                   );
                 })}
               </div>
-              <details className="border border-[#e5e5e5] bg-[#fafafa] p-3">
-                <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider">
+              <details className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+                <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">
                   Manual command overrides
                 </summary>
                 <div className="mt-3 space-y-2">
                   {storageStatus && (
                     <>
-                      <div className="text-[10px] font-mono text-[#a3a3a3]"># Persist this shell session</div>
+                      <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]"># Persist this shell session</div>
                       <div className="text-[10px] font-mono text-[#76B900] break-all">source {storageStatus.env_file}</div>
                     </>
                   )}
-                  <div className="text-[10px] font-mono text-[#a3a3a3]"># Rootless all-in-one AI workstation</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]"># Rootless all-in-one AI workstation</div>
                   <div className="text-[10px] font-mono text-[#76B900] break-all">
                     {`nvh workstation --home-dir "${storageStatus?.layout.home ?? '$NVH_HOME'}" --all -y`}
                   </div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]"># Launch dashboard</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]"># Launch dashboard</div>
                   <div className="text-[10px] font-mono text-[#76B900]">nvh webui</div>
                 </div>
               </details>
@@ -5808,7 +5808,7 @@ export default function SetupPage() {
 
         {/* Advanced navigation */}
         {advancedSetupOpen && (
-        <div className="flex items-center justify-between mt-8 pt-6 border-t border-[#e5e5e5]">
+        <div className="flex items-center justify-between mt-8 pt-6 border-t border-[#e5e5e5] dark:border-[#262626]">
           <button
             onClick={() => {
               const idx = STEPS.findIndex(s => s.id === step);

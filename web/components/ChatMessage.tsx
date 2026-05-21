@@ -36,12 +36,12 @@ function parseInline(text: string): React.ReactNode[] {
       parts.push(text.slice(last, match.index));
     }
     if (match[2] !== undefined) {
-      parts.push(<strong key={match.index} className="font-semibold text-[#0a0a0a]">{match[2]}</strong>);
+      parts.push(<strong key={match.index} className="font-semibold text-[#0a0a0a] dark:text-[#fafafa]">{match[2]}</strong>);
     } else if (match[3] !== undefined) {
-      parts.push(<em key={match.index} className="italic text-[#404040]">{match[3]}</em>);
+      parts.push(<em key={match.index} className="italic text-[#404040] dark:text-[#d4d4d4]">{match[3]}</em>);
     } else if (match[4] !== undefined) {
       parts.push(
-        <code key={match.index} className="bg-[#f5f5f5] border border-[#e5e5e5] px-1 py-0.5 text-[#5a9100] font-mono text-[0.85em]">
+        <code key={match.index} className="bg-[#f5f5f5] border border-[#e5e5e5] px-1 py-0.5 text-[#5a9100] font-mono text-[0.85em] dark:bg-[#141414] dark:border-[#262626]">
           {match[4]}
         </code>
       );
@@ -157,7 +157,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
     <div className="relative my-3 group">
       {/* Header bar */}
       <div className="flex items-center justify-between bg-[#141414] border border-[#262626] border-b-0 px-3 py-1.5">
-        <span className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider">
+        <span className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider dark:text-[#737373]">
           {lang || 'code'}
         </span>
         <div className="flex items-center gap-2">
@@ -177,7 +177,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
           {/* Copy button */}
           <button
             onClick={handleCopy}
-            className="text-[10px] font-mono text-[#737373] hover:text-[#76B900] transition-colors flex items-center gap-1"
+            className="text-[10px] font-mono text-[#737373] hover:text-[#76B900] transition-colors flex items-center gap-1 dark:text-[#a3a3a3]"
             title="Copy code"
           >
             {copied ? (
@@ -227,7 +227,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
       elements.push(
         <ul key={`ul-${i}`} className="list-none space-y-1 my-2 pl-2">
           {listItems.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2 text-sm text-[#404040]">
+            <li key={idx} className="flex items-start gap-2 text-sm text-[#404040] dark:text-[#d4d4d4]">
               <span className="mt-1 h-1.5 w-1.5 flex-shrink-0 bg-[#76B900]" />
               <span>{item}</span>
             </li>
@@ -240,7 +240,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
       elements.push(
         <ol key={`ol-${i}`} className="space-y-1 my-2 pl-2">
           {orderedItems.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2 text-sm text-[#404040]">
+            <li key={idx} className="flex items-start gap-2 text-sm text-[#404040] dark:text-[#d4d4d4]">
               <span className="text-[#76B900] font-mono text-xs mt-0.5 flex-shrink-0 w-4">{idx + 1}.</span>
               <span>{item}</span>
             </li>
@@ -273,7 +273,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
     if (line.startsWith('### ')) {
       flushList();
       elements.push(
-        <h3 key={i} className="text-base font-bold text-[#0a0a0a] mt-4 mb-1">
+        <h3 key={i} className="text-base font-bold text-[#0a0a0a] mt-4 mb-1 dark:text-[#fafafa]">
           {parseInline(line.slice(4))}
         </h3>
       );
@@ -283,7 +283,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
     if (line.startsWith('## ')) {
       flushList();
       elements.push(
-        <h2 key={i} className="text-lg font-bold text-[#0a0a0a] mt-4 mb-2">
+        <h2 key={i} className="text-lg font-bold text-[#0a0a0a] mt-4 mb-2 dark:text-[#fafafa]">
           {parseInline(line.slice(3))}
         </h2>
       );
@@ -293,7 +293,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
     if (line.startsWith('# ')) {
       flushList();
       elements.push(
-        <h1 key={i} className="text-xl font-bold text-[#0a0a0a] mt-4 mb-2">
+        <h1 key={i} className="text-xl font-bold text-[#0a0a0a] mt-4 mb-2 dark:text-[#fafafa]">
           {parseInline(line.slice(2))}
         </h1>
       );
@@ -321,7 +321,7 @@ function MarkdownContent({ content, streaming }: MarkdownProps) {
     // Horizontal rule
     if (line.match(/^[-*]{3,}$/)) {
       flushList();
-      elements.push(<hr key={i} className="border-[#e5e5e5] my-3" />);
+      elements.push(<hr key={i} className="border-[#e5e5e5] my-3 dark:border-[#262626]" />);
       i++;
       continue;
     }
@@ -410,7 +410,7 @@ export function CouncilExpertPanel({ data }: ExpertPanelProps) {
 
   return (
     <div className="space-y-3 p-4">
-      <div className="text-[10px] font-mono text-[#737373] uppercase tracking-wider mb-2">Convene Members</div>
+      <div className="text-[10px] font-mono text-[#737373] uppercase tracking-wider mb-2 dark:text-[#a3a3a3]">Convene Members</div>
       {order.map((key, i) => {
         const member = data.member_responses[key];
         if (!member) return null;
@@ -418,19 +418,19 @@ export function CouncilExpertPanel({ data }: ExpertPanelProps) {
         return (
           <div
             key={key}
-            className="border p-3 bg-white"
+            className="border p-3 bg-white dark:bg-[#0a0a0a]"
             style={{ borderColor: `${color}40` }}
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-mono font-bold" style={{ color }}>
                 {member.provider.toUpperCase()}
               </span>
-              <span className="text-[10px] font-mono text-[#a3a3a3]">{member.model}</span>
+              <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{member.model}</span>
             </div>
-            <div className="text-xs text-[#404040] font-mono whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto">
+            <div className="text-xs text-[#404040] font-mono whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto dark:text-[#d4d4d4]">
               {member.content}
             </div>
-            <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#a3a3a3]">
+            <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
               <span>{member.tokens} tokens</span>
               {member.cost && parseFloat(member.cost) > 0 && (
                 <span className="text-[#d97706]">${parseFloat(member.cost).toFixed(4)}</span>
@@ -441,7 +441,7 @@ export function CouncilExpertPanel({ data }: ExpertPanelProps) {
         );
       })}
       {data.total_cost && parseFloat(data.total_cost) > 0 && (
-        <div className="text-[10px] font-mono text-[#d97706] pt-2 border-t border-[#e5e5e5]">
+        <div className="text-[10px] font-mono text-[#d97706] pt-2 border-t border-[#e5e5e5] dark:border-[#262626]">
           Total: ${parseFloat(data.total_cost).toFixed(4)}
         </div>
       )}
@@ -463,11 +463,11 @@ export default function ChatMessage({ message }: ChatMessageProps) {
     return (
       <div className="flex justify-end px-4 py-2 group">
         <div className="max-w-[75%]">
-          <div className="bg-[#f3f9e5] border border-[#76B900]/40 px-4 py-3 text-sm text-[#0a0a0a] font-mono whitespace-pre-wrap leading-relaxed">
+          <div className="bg-[#f3f9e5] border border-[#76B900]/40 px-4 py-3 text-sm text-[#0a0a0a] font-mono whitespace-pre-wrap leading-relaxed dark:text-[#fafafa]">
             {message.content}
           </div>
           <div className="flex justify-end mt-1">
-            <span className="text-[10px] font-mono text-[#a3a3a3] group-hover:text-[#737373] transition-colors">
+            <span className="text-[10px] font-mono text-[#a3a3a3] group-hover:text-[#737373] transition-colors dark:text-[#737373]">
               {timeStr(message.timestamp)}
             </span>
           </div>
@@ -510,27 +510,27 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           {isCouncil ? (
             <span className="text-[10px] font-mono text-[#5a9100] uppercase tracking-wider">Convene</span>
           ) : isCompare ? (
-            <span className="text-[10px] font-mono text-[#525252] uppercase tracking-wider">Compare</span>
+            <span className="text-[10px] font-mono text-[#525252] uppercase tracking-wider dark:text-[#a3a3a3]">Compare</span>
           ) : message.provider ? (
             <span className="text-[10px] font-mono text-[#5a9100] uppercase tracking-wider">
               {message.provider}
             </span>
           ) : null}
           {message.model && !isCouncil && !isCompare && (
-            <span className="text-[10px] font-mono text-[#a3a3a3]">{message.model}</span>
+            <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{message.model}</span>
           )}
           {isCouncil && message.council_data && (
-            <span className="text-[10px] font-mono text-[#737373]">
+            <span className="text-[10px] font-mono text-[#737373] dark:text-[#a3a3a3]">
               Synthesized from {Object.keys(message.council_data.member_responses).length} experts
             </span>
           )}
-          <span className="ml-auto text-[10px] font-mono text-[#a3a3a3] group-hover:text-[#737373] transition-colors">
+          <span className="ml-auto text-[10px] font-mono text-[#a3a3a3] group-hover:text-[#737373] transition-colors dark:text-[#737373]">
             {timeStr(message.timestamp)}
           </span>
         </div>
 
         {/* Message body */}
-        <div className="bg-[#fafafa] border-l-2 border-[#76B900] pl-4 pr-3 py-3">
+        <div className="bg-[#fafafa] border-l-2 border-[#76B900] pl-4 pr-3 py-3 dark:bg-[#141414]">
           {isCompare && message.compare_data ? (
             <CompareContent data={message.compare_data} />
           ) : (
@@ -542,7 +542,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
         {!message.streaming && !isCompare && (
           <div className="flex items-center gap-3 mt-1.5 flex-wrap">
             {message.tokens && message.tokens > 0 && (
-              <span className="text-[10px] font-mono text-[#a3a3a3]">{message.tokens} tokens</span>
+              <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{message.tokens} tokens</span>
             )}
             {costStr && (
               <span className={`text-[10px] font-mono ${costStr === 'FREE' ? 'text-[#5a9100]' : 'text-[#d97706]'}`}>
@@ -550,7 +550,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
               </span>
             )}
             {message.latency_ms && message.latency_ms > 0 && (
-              <span className="text-[10px] font-mono text-[#a3a3a3]">{message.latency_ms}ms</span>
+              <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{message.latency_ms}ms</span>
             )}
           </div>
         )}
@@ -571,19 +571,19 @@ function CompareContent({ data }: { data: NonNullable<ChatMessageType['compare_d
         {entries.map(([provider, resp], i) => (
           <div
             key={provider}
-            className="border p-3 bg-white"
+            className="border p-3 bg-white dark:bg-[#0a0a0a]"
             style={{ borderColor: `${COLORS[i % COLORS.length]}40` }}
           >
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs font-mono font-bold" style={{ color: COLORS[i % COLORS.length] }}>
                 {provider.toUpperCase()}
               </span>
-              <span className="text-[10px] font-mono text-[#a3a3a3]">{resp.model}</span>
+              <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{resp.model}</span>
             </div>
             <div className="text-xs text-[#262626] font-mono whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
               {resp.content}
             </div>
-            <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#a3a3a3]">
+            <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
               {resp.tokens && <span>{resp.tokens} tokens</span>}
               {resp.cost_usd && parseFloat(resp.cost_usd) > 0 ? (
                 <span className="text-[#d97706]">${parseFloat(resp.cost_usd).toFixed(4)}</span>

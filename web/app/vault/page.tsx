@@ -27,8 +27,8 @@ function statusLabel(status: VaultStatus | null): string {
 function StatCard({ label, value, tone = 'green' }: { label: string; value: string | number; tone?: 'green' | 'amber' | 'gray' }) {
   const toneClass = tone === 'amber' ? 'text-[#d97706]' : tone === 'gray' ? 'text-[#737373]' : 'text-[#76B900]';
   return (
-    <div className="border border-[#e5e5e5] bg-white p-4">
-      <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-[#737373]">{label}</div>
+    <div className="border border-[#e5e5e5] bg-white p-4 dark:bg-[#0a0a0a] dark:border-[#262626]">
+      <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-[#737373] dark:text-[#a3a3a3]">{label}</div>
       <div className={`mt-2 font-mono text-lg font-bold ${toneClass}`}>{value}</div>
     </div>
   );
@@ -170,7 +170,7 @@ export default function VaultPage() {
           <div>
             <div className="section-label">Add Memory</div>
             <h2 className="text-xl font-bold mt-1">Capture a decision, fix, or test result</h2>
-            <p className="text-sm text-[#737373] mt-1">
+            <p className="text-sm text-[#737373] mt-1 dark:text-[#a3a3a3]">
               Use this for durable product memory that the wizard and support flow can read later.
             </p>
           </div>
@@ -215,12 +215,12 @@ export default function VaultPage() {
           </div>
           <div className="space-y-3 text-sm">
             <div>
-              <div className="text-[10px] font-mono uppercase tracking-wider text-[#737373]">Vault folder</div>
-              <code className="block mt-1 break-all border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 text-xs">{status?.vault_dir ?? 'loading'}</code>
+              <div className="text-[10px] font-mono uppercase tracking-wider text-[#737373] dark:text-[#a3a3a3]">Vault folder</div>
+              <code className="block mt-1 break-all border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 text-xs dark:bg-[#141414] dark:border-[#262626]">{status?.vault_dir ?? 'loading'}</code>
             </div>
             <div>
-              <div className="text-[10px] font-mono uppercase tracking-wider text-[#737373]">Obsidian command</div>
-              <code className="block mt-1 break-all border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 text-xs">{status?.obsidian.open_command ?? 'install optional viewer'}</code>
+              <div className="text-[10px] font-mono uppercase tracking-wider text-[#737373] dark:text-[#a3a3a3]">Obsidian command</div>
+              <code className="block mt-1 break-all border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 text-xs dark:bg-[#141414] dark:border-[#262626]">{status?.obsidian.open_command ?? 'install optional viewer'}</code>
             </div>
           </div>
           <div className="border border-[#76B900]/30 bg-[#76B900]/5 p-3 text-xs text-[#447000]">
@@ -238,9 +238,9 @@ export default function VaultPage() {
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           {(status?.conflicts ?? []).map(conflict => (
-            <div key={conflict.title} className="border border-[#e5e5e5] bg-white p-4">
-              <h3 className="font-bold text-[#0a0a0a]">{conflict.title}</h3>
-              <p className="mt-1 text-sm text-[#525252]">{conflict.summary}</p>
+            <div key={conflict.title} className="border border-[#e5e5e5] bg-white p-4 dark:bg-[#0a0a0a] dark:border-[#262626]">
+              <h3 className="font-bold text-[#0a0a0a] dark:text-[#fafafa]">{conflict.title}</h3>
+              <p className="mt-1 text-sm text-[#525252] dark:text-[#a3a3a3]">{conflict.summary}</p>
             </div>
           ))}
         </div>

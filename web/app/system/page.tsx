@@ -119,9 +119,9 @@ export default function SystemPage() {
 
           {gpuLoading ? (
             <div className="space-y-2 animate-pulse">
-              <div className="h-10 bg-[#f5f5f5]" />
-              <div className="h-3 bg-[#f5f5f5] w-3/4" />
-              <div className="h-2 bg-[#f5f5f5]" />
+              <div className="h-10 bg-[#f5f5f5] dark:bg-[#141414]" />
+              <div className="h-3 bg-[#f5f5f5] w-3/4 dark:bg-[#141414]" />
+              <div className="h-2 bg-[#f5f5f5] dark:bg-[#141414]" />
             </div>
           ) : gpuInfo && gpuInfo.gpus.length > 0 ? (
             (() => {
@@ -138,33 +138,33 @@ export default function SystemPage() {
                       </svg>
                     </div>
                     <div className="min-w-0">
-                      <div className="text-sm font-bold text-[#0a0a0a] truncate">{g.name}</div>
+                      <div className="text-sm font-bold text-[#0a0a0a] truncate dark:text-[#fafafa]">{g.name}</div>
                       <div className="text-xs font-mono text-[#76B900]">GPU DETECTED</div>
                     </div>
                   </div>
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-[10px] font-mono">
-                      <span className="text-[#a3a3a3]">VRAM</span>
-                      <span className="text-[#525252]">
+                      <span className="text-[#a3a3a3] dark:text-[#737373]">VRAM</span>
+                      <span className="text-[#525252] dark:text-[#a3a3a3]">
                         {(g.memory_used_mb / 1024).toFixed(1)} / {g.vram_gb} GB ({usedPct}%)
                       </span>
                     </div>
                     <div className="progress-bar">
                       <div className="progress-fill transition-all" style={{ width: `${usedPct}%`, backgroundColor: barColor }} />
                     </div>
-                    <div className="flex items-center justify-between text-[10px] font-mono text-[#a3a3a3]">
+                    <div className="flex items-center justify-between text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                       <span>Util {g.utilization_pct}%</span>
                       <span>CUDA {g.cuda_version}</span>
                     </div>
-                    <div className="text-[10px] font-mono text-[#a3a3a3]">driver {g.driver_version}</div>
+                    <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">driver {g.driver_version}</div>
                   </div>
                   {topRec && (
-                    <div className="mt-3 border-t border-[#e5e5e5] pt-2">
+                    <div className="mt-3 border-t border-[#e5e5e5] pt-2 dark:border-[#262626]">
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-mono text-[#a3a3a3] uppercase">Recommended</span>
+                        <span className="text-[10px] font-mono text-[#a3a3a3] uppercase dark:text-[#737373]">Recommended</span>
                         <span className="text-[10px] font-mono px-1.5 py-0.5 bg-[#76B900]/10 text-[#76B900] uppercase">{topRec.tier}</span>
                       </div>
-                      <div className="text-xs font-mono font-bold text-[#0a0a0a] mt-0.5">{topRec.model}</div>
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a] mt-0.5 dark:text-[#fafafa]">{topRec.model}</div>
                     </div>
                   )}
                 </div>
@@ -173,18 +173,18 @@ export default function SystemPage() {
           ) : (
             <div>
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 bg-[#e5e5e5] border border-[#d4d4d4] flex items-center justify-center flex-shrink-0">
-                  <svg className="w-5 h-5 text-[#a3a3a3]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <div className="w-10 h-10 bg-[#e5e5e5] border border-[#d4d4d4] flex items-center justify-center flex-shrink-0 dark:border-[#404040]">
+                  <svg className="w-5 h-5 text-[#a3a3a3] dark:text-[#737373]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                     <path strokeLinecap="round" strokeLinejoin="round"
                       d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18" />
                   </svg>
                 </div>
                 <div>
-                  <div className="text-sm font-bold text-[#0a0a0a]">CPU Mode</div>
-                  <div className="text-xs font-mono text-[#a3a3a3]">NO GPU DETECTED</div>
+                  <div className="text-sm font-bold text-[#0a0a0a] dark:text-[#fafafa]">CPU Mode</div>
+                  <div className="text-xs font-mono text-[#a3a3a3] dark:text-[#737373]">NO GPU DETECTED</div>
                 </div>
               </div>
-              <div className="text-[10px] font-mono text-[#a3a3a3] leading-relaxed">
+              <div className="text-[10px] font-mono text-[#a3a3a3] leading-relaxed dark:text-[#737373]">
                 No NVIDIA GPU found. Local models will run on CPU.
               </div>
             </div>
@@ -229,7 +229,7 @@ export default function SystemPage() {
             <div className="section-label">AI Connections</div>
             <button
               onClick={loadProviders}
-              className="text-[10px] font-mono text-[#a3a3a3] hover:text-[#76B900] flex items-center gap-1.5 transition-colors"
+              className="text-[10px] font-mono text-[#a3a3a3] hover:text-[#76B900] flex items-center gap-1.5 transition-colors dark:text-[#737373]"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round"
@@ -244,16 +244,16 @@ export default function SystemPage() {
               {[1, 2, 3, 4].map(i => (
                 <div key={i} className="card p-5 h-48 animate-pulse">
                   <div className="h-3 bg-[#e5e5e5] mb-3 w-1/2" />
-                  <div className="h-2 bg-[#f5f5f5] mb-2" />
-                  <div className="h-2 bg-[#f5f5f5] w-3/4" />
+                  <div className="h-2 bg-[#f5f5f5] mb-2 dark:bg-[#141414]" />
+                  <div className="h-2 bg-[#f5f5f5] w-3/4 dark:bg-[#141414]" />
                 </div>
               ))}
             </div>
           ) : providers.length === 0 ? (
             <div className="card p-8 text-center">
               <div className="text-3xl mb-3 text-[#333333] font-mono">AI</div>
-              <div className="text-[#737373] font-mono text-sm mb-1">NO ADVISORS AVAILABLE</div>
-              <div className="text-xs text-[#a3a3a3] font-mono mb-4">
+              <div className="text-[#737373] font-mono text-sm mb-1 dark:text-[#a3a3a3]">NO ADVISORS AVAILABLE</div>
+              <div className="text-xs text-[#a3a3a3] font-mono mb-4 dark:text-[#737373]">
                 {apiStatus === 'disconnected'
                   ? 'Start the nvHive service to see AI connections'
                   : 'Use setup to install a local model or connect optional cloud providers'}
@@ -300,7 +300,7 @@ export default function SystemPage() {
                 <Link
                   key={href}
                   href={href}
-                  className="flex items-center gap-3 px-3 py-2 hover:bg-[#f5f5f5] border border-transparent hover:border-[#76B900]/20 text-[#737373] hover:text-[#0a0a0a] transition-all text-xs font-mono"
+                  className="flex items-center gap-3 px-3 py-2 hover:bg-[#f5f5f5] border border-transparent hover:border-[#76B900]/20 text-[#737373] hover:text-[#0a0a0a] transition-all text-xs font-mono dark:text-[#a3a3a3] dark:hover:bg-[#1f1f1f]"
                 >
                   <span style={{ color }}>{displayIcon}</span>
                   {displayLabel}
@@ -316,7 +316,7 @@ export default function SystemPage() {
       </div>
 
       {/* Footer */}
-      <div className="border-t border-[#e5e5e5] pt-4 flex items-center justify-between">
+      <div className="border-t border-[#e5e5e5] pt-4 flex items-center justify-between dark:border-[#262626]">
         <div className="text-[10px] font-mono text-[#333333]">NVHIVE COMPUTER CHECK</div>
         <div className="text-[10px] font-mono text-[#333333]">POWERED BY NVIDIA LOCAL AI</div>
       </div>
@@ -356,17 +356,17 @@ function StatCard({
   return (
     <div className="card p-4">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider">{label}</span>
+        <span className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider dark:text-[#737373]">{label}</span>
         <span style={{ color }} className="text-[10px] font-mono font-bold">{displayIcon}</span>
       </div>
       {loading ? (
-        <div className="h-6 w-16 bg-[#f5f5f5] animate-pulse" />
+        <div className="h-6 w-16 bg-[#f5f5f5] animate-pulse dark:bg-[#141414]" />
       ) : (
         <div className="font-mono font-bold text-lg leading-none" style={{ color }}>
           {safeValue}
         </div>
       )}
-      {safeSub && <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">{safeSub}</div>}
+      {safeSub && <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">{safeSub}</div>}
     </div>
   );
 }

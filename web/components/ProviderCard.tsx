@@ -84,10 +84,10 @@ export default function ProviderCard({ provider, onRefresh }: Props) {
             {icon}
           </div>
           <div>
-            <div className="font-semibold text-[#0a0a0a] capitalize">
+            <div className="font-semibold text-[#0a0a0a] capitalize dark:text-[#fafafa]">
               {provider.name}
             </div>
-            <div className="text-xs text-[#737373] mt-0.5">
+            <div className="text-xs text-[#737373] mt-0.5 dark:text-[#a3a3a3]">
               {provider.models_available} model{provider.models_available !== 1 ? 's' : ''}
             </div>
           </div>
@@ -112,9 +112,9 @@ export default function ProviderCard({ provider, onRefresh }: Props) {
 
       {/* Metrics */}
       <div className="grid grid-cols-2 gap-3">
-        <div className="bg-[#ffffff] rounded-lg p-3">
-          <div className="text-xs text-[#737373] mb-1">Latency</div>
-          <div className="font-mono text-sm font-semibold text-[#0a0a0a]">
+        <div className="bg-[#ffffff] rounded-lg p-3 dark:bg-[#0a0a0a]">
+          <div className="text-xs text-[#737373] mb-1 dark:text-[#a3a3a3]">Latency</div>
+          <div className="font-mono text-sm font-semibold text-[#0a0a0a] dark:text-[#fafafa]">
             {displayHealth.latency_ms != null
               ? `${Math.round(displayHealth.latency_ms)}ms`
               : '—'}
@@ -134,12 +134,12 @@ export default function ProviderCard({ provider, onRefresh }: Props) {
           )}
         </div>
 
-        <div className="bg-[#ffffff] rounded-lg p-3">
-          <div className="text-xs text-[#737373] mb-1">Models</div>
-          <div className="font-mono text-sm font-semibold text-[#0a0a0a]">
+        <div className="bg-[#ffffff] rounded-lg p-3 dark:bg-[#0a0a0a]">
+          <div className="text-xs text-[#737373] mb-1 dark:text-[#a3a3a3]">Models</div>
+          <div className="font-mono text-sm font-semibold text-[#0a0a0a] dark:text-[#fafafa]">
             {provider.models_available}
           </div>
-          <div className="text-xs text-[#737373] mt-1">available</div>
+          <div className="text-xs text-[#737373] mt-1 dark:text-[#a3a3a3]">available</div>
         </div>
       </div>
 

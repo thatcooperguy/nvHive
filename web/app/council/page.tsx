@@ -450,8 +450,8 @@ export default function CouncilPage() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#525252]">Pick helpers automatically</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">AI-generated perspectives</div>
+                  <div className="text-xs font-mono text-[#525252] dark:text-[#a3a3a3]">Pick helpers automatically</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">AI-generated perspectives</div>
                 </div>
                 <button
                   type="button"
@@ -464,7 +464,7 @@ export default function CouncilPage() {
 
               {presets.length > 0 && (
                 <div>
-                  <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Preset</label>
+                  <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider dark:text-[#a3a3a3]">Preset</label>
                   <select
                     value={preset}
                     onChange={e => setPreset(e.target.value)}
@@ -476,7 +476,7 @@ export default function CouncilPage() {
                     ))}
                   </select>
                   {preset && presets.find(p => p.name === preset) && (
-                    <div className="mt-1.5 text-[10px] font-mono text-[#a3a3a3]">
+                    <div className="mt-1.5 text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                       {presets.find(p => p.name === preset)?.description}
                     </div>
                   )}
@@ -485,7 +485,7 @@ export default function CouncilPage() {
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Number of helpers</label>
+                  <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">Number of helpers</label>
                   <span className="text-xs font-mono text-[#76B900]">{numAgents}</span>
                 </div>
                 <input type="range" min="2" max="8" step="1" value={numAgents}
@@ -519,7 +519,7 @@ export default function CouncilPage() {
               <div className="section-label">Advanced Study Group Options</div>
 
               <div>
-                <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Strategy</label>
+                <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider dark:text-[#a3a3a3]">Strategy</label>
                 <select
                   value={strategy}
                   onChange={e => setStrategy(e.target.value)}
@@ -534,8 +534,8 @@ export default function CouncilPage() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#525252]">Combine into one answer</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">Merge helper responses</div>
+                  <div className="text-xs font-mono text-[#525252] dark:text-[#a3a3a3]">Combine into one answer</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">Merge helper responses</div>
                 </div>
                 <button
                   type="button"
@@ -548,7 +548,7 @@ export default function CouncilPage() {
 
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Temperature</label>
+                  <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">Temperature</label>
                   <span className="text-xs font-mono text-[#76B900]">{temperature.toFixed(2)}</span>
                 </div>
                 <input
@@ -559,7 +559,7 @@ export default function CouncilPage() {
               </div>
 
               <div>
-                <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Max Tokens</label>
+                <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider dark:text-[#a3a3a3]">Max Tokens</label>
                 <input
                   type="number" min="1" max="32000" value={maxTokens}
                   onChange={e => setMaxTokens(parseInt(e.target.value) || 1024)}
@@ -573,12 +573,12 @@ export default function CouncilPage() {
               <div className="card p-4 space-y-3">
                 <div className="section-label flex items-center justify-between">
                   <span>Helper Weights</span>
-                  <span className="font-mono text-[9px] text-[#737373]">
+                  <span className="font-mono text-[9px] text-[#737373] dark:text-[#a3a3a3]">
                     <span className="text-[#16a34a]">●</span>{' '}
                     {providerHealth.filter(p => p.healthy).length} online
                   </span>
                 </div>
-                <div className="text-[10px] font-mono text-[#a3a3a3] mb-2">Leave at 0 to use defaults</div>
+                <div className="text-[10px] font-mono text-[#a3a3a3] mb-2 dark:text-[#737373]">Leave at 0 to use defaults</div>
                 {[...providerHealth]
                   .sort((a, b) => {
                     if (a.healthy !== b.healthy) return a.healthy ? -1 : 1;
@@ -602,7 +602,7 @@ export default function CouncilPage() {
                           {p.name}
                         </span>
                         {p.healthy && p.latency_ms != null && (
-                          <span className="text-[9px] text-[#737373]">{p.latency_ms}ms</span>
+                          <span className="text-[9px] text-[#737373] dark:text-[#a3a3a3]">{p.latency_ms}ms</span>
                         )}
                       </span>
                       <span className="text-xs font-mono text-[#76B900]">
@@ -653,7 +653,7 @@ export default function CouncilPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-mono font-bold text-[#dc2626] text-sm">STUDY GROUP ERROR</div>
-                  <div className="text-xs text-[#525252] font-mono mt-1 break-words">{error}</div>
+                  <div className="text-xs text-[#525252] font-mono mt-1 break-words dark:text-[#a3a3a3]">{error}</div>
                 </div>
               </div>
               {/* Retry path — most council errors are transient (rate
@@ -706,7 +706,7 @@ export default function CouncilPage() {
                   style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
               </div>
               <div className="text-[#76B900] text-sm font-mono uppercase tracking-widest">Connecting…</div>
-              <div className="text-xs font-mono text-[#a3a3a3]">Opening WebSocket connection to hive…</div>
+              <div className="text-xs font-mono text-[#a3a3a3] dark:text-[#737373]">Opening WebSocket connection to hive…</div>
             </div>
 
           ) : (phase === 'streaming' || phase === 'synthesis' || phase === 'done') && memberOrder.length > 0 ? (
@@ -725,7 +725,7 @@ export default function CouncilPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-[10px] font-mono text-[#76B900] uppercase tracking-wider mb-1">You asked</div>
-                      <div className="text-sm text-[#0a0a0a] whitespace-pre-wrap break-words leading-relaxed">
+                      <div className="text-sm text-[#0a0a0a] whitespace-pre-wrap break-words leading-relaxed dark:text-[#fafafa]">
                         {submittedPrompt}
                       </div>
                     </div>
@@ -785,8 +785,8 @@ export default function CouncilPage() {
                 </svg>
               </div>
               <div>
-                <div className="text-lg font-bold text-[#0a0a0a] mb-2 font-mono">ASK SEVERAL HELPERS</div>
-                <div className="text-xs font-mono text-[#a3a3a3] max-w-sm">
+                <div className="text-lg font-bold text-[#0a0a0a] mb-2 font-mono dark:text-[#fafafa]">ASK SEVERAL HELPERS</div>
+                <div className="text-xs font-mono text-[#a3a3a3] max-w-sm dark:text-[#737373]">
                   Enter a prompt and nvHive will ask several AI helpers.
                   Each helper streams live; nvHive combines the best parts.
                 </div>

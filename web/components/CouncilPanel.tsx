@@ -149,7 +149,7 @@ function StreamingMemberPanel({
               </span>
             )}
           </div>
-          <div className="text-[10px] text-[#737373] mt-0.5 font-mono uppercase tracking-wider">
+          <div className="text-[10px] text-[#737373] mt-0.5 font-mono uppercase tracking-wider dark:text-[#a3a3a3]">
             {state.status === 'waiting' && 'Waiting…'}
             {state.status === 'streaming' && 'Generating…'}
             {state.status === 'complete' && 'Complete'}
@@ -165,12 +165,12 @@ function StreamingMemberPanel({
             </div>
           )}
           {state.status === 'complete' && (
-            <div className="text-[10px] font-mono text-[#a3a3a3] tabular-nums">
+            <div className="text-[10px] font-mono text-[#a3a3a3] tabular-nums dark:text-[#737373]">
               {formatMs(state.latency_ms)}
             </div>
           )}
           <div className="text-right">
-            <div className="text-[10px] text-[#737373]">weight</div>
+            <div className="text-[10px] text-[#737373] dark:text-[#a3a3a3]">weight</div>
             <div className="text-sm font-mono font-bold" style={{ color: color.text }}>
               {weight.toFixed(2)}
             </div>
@@ -179,7 +179,7 @@ function StreamingMemberPanel({
       </div>
 
       {/* Weight progress bar */}
-      <div className="h-px bg-[#f5f5f5] overflow-hidden">
+      <div className="h-px bg-[#f5f5f5] overflow-hidden dark:bg-[#141414]">
         <div
           className="h-full transition-all duration-500"
           style={{
@@ -192,10 +192,10 @@ function StreamingMemberPanel({
       {/* Content area */}
       <div
         ref={contentRef}
-        className="bg-[#ffffff] rounded-lg p-3 min-h-[80px] max-h-[220px] overflow-y-auto"
+        className="bg-[#ffffff] rounded-lg p-3 min-h-[80px] max-h-[220px] overflow-y-auto dark:bg-[#0a0a0a]"
       >
         {state.status === 'waiting' && (
-          <div className="flex items-center gap-2 text-xs text-[#737373] font-mono italic">
+          <div className="flex items-center gap-2 text-xs text-[#737373] font-mono italic dark:text-[#a3a3a3]">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#333333] animate-pulse" />
             Waiting for response…
           </div>
@@ -207,7 +207,7 @@ function StreamingMemberPanel({
         )}
         {(state.status === 'streaming' || state.status === 'complete') &&
           state.accumulated && (
-            <div className="text-sm text-[#0a0a0a] font-mono whitespace-pre-wrap leading-relaxed">
+            <div className="text-sm text-[#0a0a0a] font-mono whitespace-pre-wrap leading-relaxed dark:text-[#fafafa]">
               {state.accumulated}
               {state.status === 'streaming' && <StreamCursor />}
             </div>
@@ -229,9 +229,9 @@ function StreamingMemberPanel({
             { label: 'Cost', value: formatUSD(state.cost) },
             { label: 'Latency', value: formatMs(state.latency_ms) },
           ].map(({ label, value }) => (
-            <div key={label} className="bg-[#ffffff] border border-[#e5e5e5] rounded-md px-2 py-1">
-              <span className="text-xs text-[#737373]">{label}: </span>
-              <span className="text-xs font-mono text-[#737373]">{value}</span>
+            <div key={label} className="bg-[#ffffff] border border-[#e5e5e5] rounded-md px-2 py-1 dark:bg-[#0a0a0a] dark:border-[#262626]">
+              <span className="text-xs text-[#737373] dark:text-[#a3a3a3]">{label}: </span>
+              <span className="text-xs font-mono text-[#737373] dark:text-[#a3a3a3]">{value}</span>
             </div>
           ))}
         </div>
@@ -280,12 +280,12 @@ function MemberPanel({
             )}
           </div>
           {response && (
-            <div className="text-xs text-[#737373] mt-0.5 font-mono">{response.model}</div>
+            <div className="text-xs text-[#737373] mt-0.5 font-mono dark:text-[#a3a3a3]">{response.model}</div>
           )}
         </div>
         <div className="flex items-center gap-2">
           <div className="text-right">
-            <div className="text-xs text-[#737373]">weight</div>
+            <div className="text-xs text-[#737373] dark:text-[#a3a3a3]">weight</div>
             <div className="text-sm font-mono font-bold" style={{ color: color.text }}>
               {weight.toFixed(2)}
             </div>
@@ -310,15 +310,15 @@ function MemberPanel({
         />
       </div>
 
-      <div className="bg-[#ffffff] rounded-lg p-3 min-h-[80px] max-h-[200px] overflow-y-auto">
+      <div className="bg-[#ffffff] rounded-lg p-3 min-h-[80px] max-h-[200px] overflow-y-auto dark:bg-[#0a0a0a]">
         {failed ? (
           <div className="text-xs text-[#dc2626] font-mono italic">Response failed</div>
         ) : response ? (
-          <div className="text-sm text-[#0a0a0a] font-mono whitespace-pre-wrap leading-relaxed">
+          <div className="text-sm text-[#0a0a0a] font-mono whitespace-pre-wrap leading-relaxed dark:text-[#fafafa]">
             {response.content}
           </div>
         ) : (
-          <div className="text-xs text-[#737373] italic">No response</div>
+          <div className="text-xs text-[#737373] italic dark:text-[#a3a3a3]">No response</div>
         )}
       </div>
 
@@ -329,9 +329,9 @@ function MemberPanel({
             { label: 'Cost', value: formatUSD(response.cost_usd) },
             { label: 'Latency', value: `${Math.round(response.latency_ms)}ms` },
           ].map(({ label: l, value }) => (
-            <div key={l} className="bg-[#ffffff] border border-[#e5e5e5] rounded-md px-2 py-1">
-              <span className="text-xs text-[#737373]">{l}: </span>
-              <span className="text-xs font-mono text-[#737373]">{value}</span>
+            <div key={l} className="bg-[#ffffff] border border-[#e5e5e5] rounded-md px-2 py-1 dark:bg-[#0a0a0a] dark:border-[#262626]">
+              <span className="text-xs text-[#737373] dark:text-[#a3a3a3]">{l}: </span>
+              <span className="text-xs font-mono text-[#737373] dark:text-[#a3a3a3]">{value}</span>
             </div>
           ))}
         </div>
@@ -403,19 +403,19 @@ function SynthesisPanel({ status, content, tokens, cost, result }: SynthesisPane
             </svg>
           </div>
           <div>
-            <div className="text-sm font-semibold text-[#0a0a0a]">Synthesized Response</div>
+            <div className="text-sm font-semibold text-[#0a0a0a] dark:text-[#fafafa]">Synthesized Response</div>
             {displayModel && (
-              <div className="text-xs text-[#737373] font-mono">{displayModel}</div>
+              <div className="text-xs text-[#737373] font-mono dark:text-[#a3a3a3]">{displayModel}</div>
             )}
           </div>
         </div>
 
         <div
           ref={contentRef}
-          className="bg-[#ffffff] rounded-lg p-4 font-mono text-sm text-[#0a0a0a] whitespace-pre-wrap leading-relaxed max-h-[400px] overflow-y-auto"
+          className="bg-[#ffffff] rounded-lg p-4 font-mono text-sm text-[#0a0a0a] whitespace-pre-wrap leading-relaxed max-h-[400px] overflow-y-auto dark:bg-[#0a0a0a] dark:text-[#fafafa]"
         >
           {displayContent || (
-            <span className="text-[#737373] italic flex items-center gap-1.5">
+            <span className="text-[#737373] italic flex items-center gap-1.5 dark:text-[#a3a3a3]">
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#2563eb] animate-pulse" />
               Synthesizing responses…
             </span>
@@ -432,9 +432,9 @@ function SynthesisPanel({ status, content, tokens, cost, result }: SynthesisPane
                 ? [{ label: 'Latency', value: formatMs(displayLatency) }]
                 : []),
             ].map(({ label, value }) => (
-              <div key={label} className="bg-[#ffffff] border border-[#e5e5e5] rounded-md px-2 py-1">
-                <span className="text-xs text-[#737373]">{label}: </span>
-                <span className="text-xs font-mono text-[#737373]">{value}</span>
+              <div key={label} className="bg-[#ffffff] border border-[#e5e5e5] rounded-md px-2 py-1 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                <span className="text-xs text-[#737373] dark:text-[#a3a3a3]">{label}: </span>
+                <span className="text-xs font-mono text-[#737373] dark:text-[#a3a3a3]">{value}</span>
               </div>
             ))}
           </div>
@@ -530,7 +530,7 @@ function LiveCouncilPanel({
           },
         ].map(({ label, value, color }) => (
           <div key={label} className="card p-3 text-center">
-            <div className="text-xs text-[#737373] mb-1">{label}</div>
+            <div className="text-xs text-[#737373] mb-1 dark:text-[#a3a3a3]">{label}</div>
             <div className="text-sm font-mono font-bold" style={{ color }}>{value}</div>
           </div>
         ))}
@@ -606,7 +606,7 @@ function StaticCouncilPanel({ result }: { result: CouncilResult }) {
           },
         ].map(({ label, value, color }) => (
           <div key={label} className="card p-3 text-center">
-            <div className="text-xs text-[#737373] mb-1">{label}</div>
+            <div className="text-xs text-[#737373] mb-1 dark:text-[#a3a3a3]">{label}</div>
             <div className="text-sm font-mono font-bold" style={{ color }}>{value}</div>
           </div>
         ))}

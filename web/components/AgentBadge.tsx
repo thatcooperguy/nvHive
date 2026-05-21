@@ -35,13 +35,13 @@ export default function AgentBadge({ agent, index = 0, compact = false }: Props)
       <div className="flex items-start justify-between mb-2">
         <div className={`font-semibold text-sm ${color.text}`}>{agent.role}</div>
         {agent.weight_boost !== 0 && (
-          <span className="text-xs font-mono text-[#737373]">
+          <span className="text-xs font-mono text-[#737373] dark:text-[#a3a3a3]">
             +{agent.weight_boost.toFixed(2)}w
           </span>
         )}
       </div>
-      <div className="text-xs text-[#737373] mb-1">{agent.expertise}</div>
-      <div className="text-xs text-[#737373] italic">{agent.perspective}</div>
+      <div className="text-xs text-[#737373] mb-1 dark:text-[#a3a3a3]">{agent.expertise}</div>
+      <div className="text-xs text-[#737373] italic dark:text-[#a3a3a3]">{agent.perspective}</div>
     </div>
   );
 }
