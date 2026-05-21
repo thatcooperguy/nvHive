@@ -206,28 +206,36 @@ async def _run_auto_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
     return await registry.execute(name, arguments=arguments, confirmed=True)
 
 
-def _apply_profile(system_prompt: str, profile_name: str | None, home_dir: str | Path | None) -> tuple[str, str | None, str | None]:
+def _apply_profile(
+    system_prompt: str,
+    profile_name: str | None,
+    home_dir: str | Path | None,
+) -> tuple[str, str | None, str | None, float | None]:
     """Apply an agent profile's overrides on top of the global persona.
 
-    Returns ``(system_prompt, preferred_provider, preferred_model)``. Missing
-    or unknown profile names fall back to the unchanged system prompt — the
-    Wizard's default persona — and ``(None, None)`` for routing.
+    Returns ``(system_prompt, preferred_provider, preferred_model,
+    cost_ceiling_usd)``. Missing or unknown profile names fall back to
+    the unchanged system prompt and ``(None, None, None)`` for routing
+    and cost ceiling.
     """
     if not profile_name or profile_name == "wizard":
-        return system_prompt, None, None
+        return system_prompt, None, None, None
     try:
         from nvh.integrations.wizard.profiles import get_profile
 
         profile = get_profile(profile_name, home_dir=home_dir)
     except Exception as exc:
         logger.debug("profile lookup failed (%s); falling back to default", exc)
-        return system_prompt, None, None
+        return system_prompt, None, None, None
     if profile is None:
-        return system_prompt, None, None
+        return system_prompt, None, None, None
     persona_addon = profile.system_prompt.strip()
     if persona_addon:
         system_prompt = f"{system_prompt}\n\n--- Agent profile: {profile.title} ---\n{persona_addon}\n--- end profile ---"
-    return system_prompt, profile.provider or None, profile.model or None
+    ceiling = profile.max_cost_usd_per_turn
+    if ceiling is not None and ceiling <= 0:
+        ceiling = None
+    return system_prompt, profile.provider or None, profile.model or None, ceiling
 
 
 async def wizard_chat(
@@ -290,7 +298,9 @@ async def wizard_chat(
     system_prompt = build_system_prompt(
         snapshot, tools=tool_schemas, vault_recall=vault_recall, findings=findings,
     )
-    system_prompt, profile_provider, profile_model = _apply_profile(system_prompt, profile, home_dir)
+    system_prompt, profile_provider, profile_model, profile_cost_ceiling = _apply_profile(
+        system_prompt, profile, home_dir,
+    )
     history = history or []
 
     # Try the LLM path first.
@@ -347,6 +357,11 @@ async def wizard_chat(
             total_input_tokens: int = 0
             total_output_tokens: int = 0
             fallback_from: str | None = None
+            # Set to True if a profile's max_cost_usd_per_turn aborted the
+            # follow-up loop early. The UI uses this to explain why the
+            # answer is the first iteration's draft instead of a tool-grounded
+            # final reply.
+            cost_ceiling_hit = False
 
             while iterations < WIZARD_FOLLOWUP_MAX_ITER:
                 iterations += 1
@@ -376,6 +391,24 @@ async def wizard_chat(
 
                 cleaned_text, tool_calls = _extract_tool_calls(response.content)
                 final_text = cleaned_text
+
+                # Profile cost ceiling: if the running cost has crossed the
+                # per-turn limit, stop iterating. We keep the answer that
+                # already landed so the user gets *something*, and the
+                # envelope's cost_ceiling_hit flag lets the UI explain why
+                # follow-up tool calls didn't run.
+                if (
+                    profile_cost_ceiling is not None
+                    and total_cost_usd >= profile_cost_ceiling
+                ):
+                    cost_ceiling_hit = True
+                    pending_confirm_calls = tool_calls
+                    logger.info(
+                        "wizard_chat: profile cost ceiling reached "
+                        "(%.4f >= %.4f) — stopping follow-up loop",
+                        total_cost_usd, profile_cost_ceiling,
+                    )
+                    break
 
                 if not tool_calls or not enable_followup:
                     # No tool calls (or follow-up disabled) — done.
@@ -445,6 +478,8 @@ async def wizard_chat(
                 "input_tokens": total_input_tokens,
                 "output_tokens": total_output_tokens,
                 "fallback_from": fallback_from,
+                "cost_ceiling_hit": cost_ceiling_hit,
+                "cost_ceiling_usd": profile_cost_ceiling,
             }
         except Exception as exc:
             logger.info("wizard_chat: LLM path failed, falling back to deterministic (%s)", exc)
@@ -549,6 +584,7 @@ async def wizard_chat_stream(
     home_dir: str | Path | None = None,
     enable_followup: bool = True,
     conversation_id: str | None = None,
+    profile: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Stream a Wizard turn as a sequence of events.
 
@@ -590,6 +626,9 @@ async def wizard_chat_stream(
     system_prompt = build_system_prompt(
         snapshot, tools=tool_schemas, vault_recall=vault_recall, findings=findings,
     )
+    system_prompt, profile_provider, profile_model, profile_cost_ceiling = _apply_profile(
+        system_prompt, profile, home_dir,
+    )
     history = history or []
 
     try:
@@ -622,6 +661,15 @@ async def wizard_chat_stream(
         await engine._check_budget()
 
         decision = engine.router.route(query=question)
+        # Honor profile provider/model preference when registered (mirrors
+        # the non-streaming path so behavior stays identical regardless of
+        # which endpoint the caller used).
+        if profile_provider:
+            cand = engine.registry.get(profile_provider)
+            if cand is not None:
+                decision.provider = profile_provider
+                if profile_model:
+                    decision.model = profile_model
         provider = engine.registry.get(decision.provider)
         if provider is None:
             raise RuntimeError(
@@ -723,6 +771,11 @@ async def wizard_chat_stream(
             "cost_usd": 0.0,
             "latency_ms": 0,
             "fallback_from": None,
+            # Streaming path can't enforce the ceiling without per-chunk
+            # cost reporting, but surfacing the limit lets the UI show
+            # "Profile budget: $0.05/turn (enforced on next non-streaming)".
+            "cost_ceiling_hit": False,
+            "cost_ceiling_usd": profile_cost_ceiling,
         }
     except Exception as exc:
         logger.info("wizard_chat_stream: LLM path failed (%s)", exc)

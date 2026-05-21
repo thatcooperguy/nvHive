@@ -60,6 +60,10 @@ interface Message {
   costUsd?: number;
   latencyMs?: number;
   fallbackFrom?: string | null;
+  // Profile cost-ceiling diagnostics. costCeilingHit=true triggers an inline
+  // banner so the user understands why the follow-up loop stopped early.
+  costCeilingHit?: boolean;
+  costCeilingUsd?: number | null;
   // Name of the agent profile that produced this reply ("wizard", "coder",
   // …). Snapshot at send time so the bubble keeps showing the right avatar
   // even after the user swaps to a different profile mid-conversation.
@@ -482,6 +486,8 @@ export default function WizardChat() {
               costUsd: event.cost_usd,
               latencyMs: event.latency_ms,
               fallbackFrom: event.fallback_from,
+              costCeilingHit: event.cost_ceiling_hit,
+              costCeilingUsd: event.cost_ceiling_usd,
             }));
             setIterationStatus(null);
             break;
@@ -918,6 +924,23 @@ function MessageBlock({
           >
             Routed via {message.usedProvider ?? 'fallback'} — original target
             {' '}({message.fallbackFrom}) was unavailable.
+          </div>
+        )}
+
+        {!isUser && message.costCeilingHit && (
+          <div
+            className="mt-1 rounded-sm border px-2 py-1 text-[10px] font-mono"
+            style={{
+              borderColor: '#d97706',
+              background: 'rgba(217,119,6,0.08)',
+              color: '#92400e',
+            }}
+          >
+            Stopped at the profile&apos;s budget
+            {typeof message.costCeilingUsd === 'number' && (
+              <> (${message.costCeilingUsd.toFixed(2)}/turn)</>
+            )}
+            . Follow-up tool calls were skipped to stay under cost.
           </div>
         )}
 

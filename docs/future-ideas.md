@@ -74,9 +74,11 @@ and stay *in* until they do. Strikethroughs mark shipped or merged-as-done.
 
 - Receipt-aware proactive repair suggestions before user asks.
 - "Why this provider?" tooltip on auto-routed answers.
-- **Per-agent cost ceiling** — "this profile can't spend more than
-  $0.10/turn." Useful for hourly-metered users running expensive
-  cloud models behind a Researcher profile.
+- ~~**Per-agent cost ceiling**~~ — shipped: non-streaming path enforces
+  `max_cost_usd_per_turn` and aborts the follow-up loop early; UI shows a
+  banner. **Follow-up: enforce on the streaming path too** once
+  provider.stream emits per-chunk usage we can roll up (today the stream
+  only surfaces the ceiling for display, not enforcement).
 - Tool-budget slider (max_iterations) in composer.
 - Council-aware citations when council members disagree.
 - Hierarchical agent memory (Mem0-style core/archival/recall).

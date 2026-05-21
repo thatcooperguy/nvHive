@@ -1680,6 +1680,7 @@ async def wizard_chat_stream_endpoint(
                 history=history,
                 home_dir=request.home_dir,
                 conversation_id=request.conversation_id,
+                profile=request.profile,
             ):
                 yield f"data: {json.dumps(event)}\n\n".encode()
         except Exception as exc:
