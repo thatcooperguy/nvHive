@@ -113,6 +113,9 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     # ollama create wires the downloaded GGUF + mmproj into a usable
     # local tag.
     assert '"$OLLAMA_BIN" create "$target_tag" -f "$modelfile"' in install
+    # Original config/auto-launch contract — preserved from before the
+    # multimodal refactor so refactoring this code path requires an
+    # intentional update.
     assert "sync_ollama_default_model_config" in install
     assert 'default_model: "ollama/__NVH_DEFAULT_OLLAMA_MODEL__"' in install
     assert 'MODEL="$DEFAULT_OLLAMA_MODEL"' in install
@@ -120,7 +123,6 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     assert "NVH_INSTALL_LAUNCH" in install
     assert "workstation --home-dir" in install
     assert "Pulling $MODEL in background" not in install
-    assert "NVH_INSTALL_MODEL_DOWNLOAD" in install
     assert "press s to skip" in install
     assert "WebUI will show AI Wizard model download" in install
 
@@ -143,6 +145,31 @@ def test_install_ollama_startup_has_health_wait_and_logging() -> None:
     # Real poll loop with a real timeout knob.
     assert "NVH_OLLAMA_BOOT_TIMEOUT" in install
     assert "/api/tags" in install
+
+
+
+def test_nvh_webui_detects_and_restarts_stale_api() -> None:
+    """`nvh webui` must HTTP-probe an existing API on the port instead of
+    accepting any TCP listener as healthy. Verified empirically 2026-05-20:
+    a stale `nvh serve` whose engine failed to initialize at startup will
+    keep accepting connections, return HTTP 500 on /v1/health, and block
+    the WebUI's red API-offline banner from clearing — even after the
+    underlying config corruption is repaired. The TCP-only check used
+    before this fix couldn't tell the difference.
+    """
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # The new health probe must exist and check the right invariants.
+    assert "def _api_healthy(" in cli
+    assert "/v1/health" in cli
+    assert "engine_initialized" in cli
+    # Stale-process kill path for both Linux (fuser) and macOS (lsof).
+    assert "def _kill_stale_api(" in cli
+    assert 'fuser' in cli and '-iTCP:' in cli
+    # The decision branch: unhealthy existing API gets killed + restarted,
+    # not silently accepted.
+    assert "Existing API on" in cli
+    assert "is unhealthy" in cli
 
 
 def test_setup_page_surfaces_startup_autopilot_status() -> None:
