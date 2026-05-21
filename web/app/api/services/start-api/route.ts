@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { nvhHome, nvhLogsDir, resolveNvhBinary } from '@/lib/nvh-bridge';
 
 /**
  * Start (or restart) the nvHive FastAPI server from inside the WebUI.
@@ -39,44 +39,10 @@ interface StartApiRequestBody {
   port?: number;
 }
 
-function nvhHome(): string {
-  return process.env.NVH_HOME || path.join(os.homedir(), 'nvhive');
-}
-
-function nvhLogsDir(): string {
-  return process.env.NVH_LOGS || path.join(nvhHome(), 'logs');
-}
-
-async function resolveNvhBinary(): Promise<string | null> {
-  // 1. Explicit env override wins.
-  const fromEnv = process.env.NVH_BIN;
-  if (fromEnv) {
-    try {
-      await fs.access(fromEnv, fs.constants.X_OK);
-      return fromEnv;
-    } catch {
-      /* fall through */
-    }
-  }
-  // 2. Common rootless install locations.
-  const home = nvhHome();
-  const candidates = [
-    path.join(home, 'venv', 'bin', 'nvh'),
-    path.join(home, 'bin', 'nvh'),
-    path.join(os.homedir(), '.local', 'bin', 'nvh'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      /* try next */
-    }
-  }
-  // 3. Last resort: rely on PATH. Returning the string lets spawn() do the
-  // PATH lookup itself; if it's not there, spawn emits ENOENT below.
-  return 'nvh';
-}
+// Binary resolution lives in @/lib/nvh-bridge so we don't ship the
+// "treat NVH_BIN as the executable" bug to multiple routes. install.sh
+// exports NVH_BIN as the rootless bin DIRECTORY, not the `nvh` file —
+// see the shared module for the full history + fix.
 
 export async function POST(request: Request) {
   let body: StartApiRequestBody = {};
@@ -92,16 +58,10 @@ export async function POST(request: Request) {
   const logPath = path.join(logsDir, 'api-server.log');
 
   const nvhBin = await resolveNvhBinary();
-  if (nvhBin === null) {
-    return NextResponse.json(
-      {
-        started: false,
-        reason: 'could not locate the `nvh` binary in $NVH_HOME/venv/bin, $NVH_HOME/bin, or ~/.local/bin',
-        hint: 'set NVH_BIN to the absolute path of your `nvh` executable',
-      },
-      { status: 500 },
-    );
-  }
+  // resolveNvhBinary() never returns null — it falls through to the bare
+  // string "nvh" so the spawn below can use PATH lookup. If even PATH
+  // doesn't have it, the spawn call below surfaces ENOENT to the user
+  // via the catch block.
 
   // Append a separator so the user can tell this start from previous ones.
   const stamp = new Date().toISOString();

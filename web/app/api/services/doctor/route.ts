@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 import { execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { promisify } from 'node:util';
+import { nvhHome, resolveNvhBinary } from '@/lib/nvh-bridge';
 
 /**
  * Run `nvh doctor --json` from inside the WebUI and return its parsed output.
@@ -24,36 +22,8 @@ export const dynamic = 'force-dynamic';
 
 const execFileAsync = promisify(execFile);
 
-function nvhHome(): string {
-  return process.env.NVH_HOME || path.join(os.homedir(), 'nvhive');
-}
-
-async function resolveNvhBinary(): Promise<string> {
-  const fromEnv = process.env.NVH_BIN;
-  if (fromEnv) {
-    try {
-      await fs.access(fromEnv, fs.constants.X_OK);
-      return fromEnv;
-    } catch {
-      /* fall through */
-    }
-  }
-  const home = nvhHome();
-  const candidates = [
-    path.join(home, 'venv', 'bin', 'nvh'),
-    path.join(home, 'bin', 'nvh'),
-    path.join(os.homedir(), '.local', 'bin', 'nvh'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      /* try next */
-    }
-  }
-  return 'nvh';
-}
+// Binary resolution lives in @/lib/nvh-bridge — see the shared module
+// for the NVH_BIN-as-directory bug history.
 
 export async function GET() {
   const nvhBin = await resolveNvhBinary();

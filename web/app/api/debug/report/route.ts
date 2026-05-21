@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { nvhHome, nvhLogsDir, resolveNvhBinary } from '@/lib/nvh-bridge';
 
 /**
  * One-shot "tell me everything you can find out" diagnostic aggregator.
@@ -68,40 +69,10 @@ interface DoctorResult {
   elapsedMs: number;
 }
 
-function nvhHome(): string {
-  return process.env.NVH_HOME || path.join(os.homedir(), 'nvhive');
-}
-
-function nvhLogsDir(): string {
-  return process.env.NVH_LOGS || path.join(nvhHome(), 'logs');
-}
-
-async function resolveNvhBinary(): Promise<string> {
-  const fromEnv = process.env.NVH_BIN;
-  if (fromEnv) {
-    try {
-      await fs.access(fromEnv, fs.constants.X_OK);
-      return fromEnv;
-    } catch {
-      /* fall through */
-    }
-  }
-  const home = nvhHome();
-  const candidates = [
-    path.join(home, 'venv', 'bin', 'nvh'),
-    path.join(home, 'bin', 'nvh'),
-    path.join(os.homedir(), '.local', 'bin', 'nvh'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      /* try next */
-    }
-  }
-  return 'nvh';
-}
+// Binary resolution + path helpers live in @/lib/nvh-bridge so all three
+// bridge routes (start-api, doctor, debug/report) share the same logic.
+// The directory-vs-file bug surfaced on the real-rig debug report photo
+// 2026-05-21 is fixed there.
 
 async function probeService(url: string, timeoutMs = 3000): Promise<ServiceProbe> {
   const t0 = Date.now();

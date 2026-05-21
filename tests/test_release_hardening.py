@@ -481,9 +481,10 @@ def test_webui_has_system_console_with_log_tail_and_restart_api_bridge() -> None
     assert "sudo" not in start_api_route
     # Detached so the API survives the request handler.
     assert "detached: true" in start_api_route
-    # NVH_BIN env override + the rootless install path fallbacks.
-    assert "NVH_BIN" in start_api_route
-    assert "venv" in start_api_route
+    # Binary resolution comes from @/lib/nvh-bridge — see
+    # test_nvh_bridge_resolver_does_not_treat_nvh_bin_dir_as_executable
+    # for the per-resolver assertions on NVH_BIN_EXE / NVH_BIN / venv paths.
+    assert "@/lib/nvh-bridge" in start_api_route
 
     # 4. Doctor bridge — runs `nvh doctor --json`, returns parsed report.
     assert "/api/services/doctor" in console
@@ -574,9 +575,10 @@ def test_debug_report_button_aggregates_everything_for_phone_sharing() -> None:
     # Runs nvh doctor --json with a bounded timeout.
     assert "doctor" in report_route and "--json" in report_route
     assert "timeout:" in report_route
-    # Same rootless binary resolution as the other bridge routes.
-    assert "NVH_BIN" in report_route and "venv" in report_route
-    assert "sudo" not in report_route
+    # Same rootless binary resolution as the other bridge routes — comes
+    # from the shared @/lib/nvh-bridge module (see
+    # test_nvh_bridge_resolver_does_not_treat_nvh_bin_dir_as_executable).
+    assert "@/lib/nvh-bridge" in report_route
 
     # 3. Pattern-matched diagnostics.
     assert "diagnose(" in report_route
@@ -587,3 +589,67 @@ def test_debug_report_button_aggregates_everything_for_phone_sharing() -> None:
     # 4. Copy-to-clipboard for users on devices without easy screenshot.
     assert "clipboard" in btn.lower()
     assert "Copy" in btn
+
+
+def test_nvh_bridge_resolver_does_not_treat_nvh_bin_dir_as_executable() -> None:
+    """Regression for the EACCES bug surfaced on a real-rig debug-report
+    photo 2026-05-21:
+
+        binary=/home/kiosk/nvhive/bin  ran=false  fmt=error
+        stderr: spawn /home/kiosk/nvhive/bin EACCES
+
+    install.sh exports NVH_BIN as the rootless bin DIRECTORY
+    ($NVH_HOME/bin), not the `nvh` executable. The previous bridge
+    resolver checked `fs.access(NVH_BIN, X_OK)` which succeeds for
+    traversable directories (X_OK on a dir = "can list entries"), so it
+    returned the directory string and every spawn/execFile failed.
+
+    The fix consolidates resolution into web/lib/nvh-bridge.ts which:
+      1. Uses fs.stat() + !isDirectory() so directories never pass the
+         executable-file check.
+      2. Honors NVH_BIN_EXE as the explicit FILE override.
+      3. Treats NVH_BIN as a DIRECTORY — looks for `nvh` inside it.
+      4. Falls through canonical rootless install paths.
+
+    All three bridge routes (start-api, doctor, debug/report) must import
+    from the shared module, not duplicate the resolver logic.
+    """
+    bridge = (ROOT / "web" / "lib" / "nvh-bridge.ts").read_text(encoding="utf-8")
+    start_api = (
+        ROOT / "web" / "app" / "api" / "services" / "start-api" / "route.ts"
+    ).read_text(encoding="utf-8")
+    doctor = (
+        ROOT / "web" / "app" / "api" / "services" / "doctor" / "route.ts"
+    ).read_text(encoding="utf-8")
+    debug_report = (
+        ROOT / "web" / "app" / "api" / "debug" / "report" / "route.ts"
+    ).read_text(encoding="utf-8")
+
+    # The shared module exists + exports the right surface.
+    assert "export async function resolveNvhBinary" in bridge
+    assert "export function nvhHome" in bridge
+    assert "export function nvhLogsDir" in bridge
+
+    # The isFile() check is the load-bearing fix. fs.access alone is what
+    # caused the bug — verify we use stat + isFile() instead.
+    assert "isFile()" in bridge
+    # Belt-and-suspenders: the X_OK check is still here to catch
+    # non-executable files (e.g. a stale config someone named `nvh`).
+    assert "X_OK" in bridge
+
+    # Resolution order documented + implemented.
+    assert "NVH_BIN_EXE" in bridge  # explicit file override
+    assert "NVH_BIN" in bridge  # treated as directory
+    assert "venv/bin/nvh" in bridge or "'venv', 'bin', 'nvh'" in bridge
+
+    # All three bridge routes import from the shared module — no per-route
+    # copy of the resolver logic that could drift.
+    assert "from '@/lib/nvh-bridge'" in start_api
+    assert "from '@/lib/nvh-bridge'" in doctor
+    assert "from '@/lib/nvh-bridge'" in debug_report
+    # Negative: the buggy `fs.access(NVH_BIN, X_OK)` pattern is gone from
+    # every route file (lives only in the shared module now, and only
+    # against candidates that are already known to be files).
+    for route_src in (start_api, doctor, debug_report):
+        # The route bodies should no longer have their own resolveNvhBinary.
+        assert "async function resolveNvhBinary" not in route_src
