@@ -475,6 +475,162 @@ else
 fi
 echo -e "${D}Recommended local model: $DEFAULT_OLLAMA_MODEL${N}"
 
+# ---------------------------------------------------------------------------
+# GPU capability advisor + opt-in auto-staging
+# ---------------------------------------------------------------------------
+# The DEFAULT_OLLAMA_MODEL picker above handles the AI Wizard's chat +
+# vision tier. But nvHive supports OTHER capabilities — image generation
+# (ComfyUI), video generation, speech (WhisperX), music (ACE-Step) — that
+# are also VRAM-gated and that big-GPU users almost always want.
+#
+# Historically the user had to dig through `nvh studio --install ...`
+# menus to enable them. That made nvHive feel like a chat-only product
+# even on a 48 GB rig that could run everything.
+#
+# This block does two things:
+#
+#   1. ALWAYS print what the current GPU could run (educational; no
+#      downloads). Source of truth for the table: docs/GPU_TIER_MATRIX.md
+#      and the recommended_vram_gb fields on STUDIO_MODELS / STUDIO_PACKS
+#      / TRENDING_COMFYUI_EXAMPLES.
+#   2. When NVH_INSTALL_FULL_CAPABILITY=1, write a marker file under
+#      $NVH_HOME/state/ telling the WebUI / Wizard / `nvh studio` to
+#      auto-offer the appropriate packs on first launch — and, if
+#      NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1 is ALSO set, force-pull
+#      them inline here.
+#
+# Default: opt-in. We don't surprise a school Wi-Fi student with a
+# 60 GB pull on the back of running install.sh.
+
+nvh_capability_tiers_for_vram() {
+    # Echo a space-separated list of capability tokens the given VRAM
+    # tier can run. Tokens are stable strings; the WebUI maps them to
+    # human labels.
+    local vram="${1:-0}"
+    local tokens="vision-chat"  # always: every tier gets a vision-capable chat model
+    if [ "$vram" -ge 8  ]; then tokens="$tokens image-gen-starter"; fi
+    if [ "$vram" -ge 12 ]; then tokens="$tokens image-edit"; fi
+    if [ "$vram" -ge 16 ]; then tokens="$tokens image-control"; fi
+    if [ "$vram" -ge 24 ]; then tokens="$tokens video-gen speech-lab music-gen"; fi
+    if [ "$vram" -ge 40 ]; then tokens="$tokens video-gen-pro"; fi
+    printf '%s' "$tokens"
+}
+
+nvh_capability_human_label() {
+    case "$1" in
+        vision-chat)        echo "Wizard chat + vision (image understanding)" ;;
+        image-gen-starter)  echo "Image generation - starter (ComfyUI + Z-Image-Turbo)" ;;
+        image-edit)         echo "Image editing (ComfyUI + Qwen Image Edit 2509)" ;;
+        image-control)      echo "Controlled image generation (ComfyUI + FLUX.1 ControlNet)" ;;
+        video-gen)          echo "Video generation (ComfyUI + Wan 2.2 5B)" ;;
+        video-gen-pro)      echo "Video generation - pro (ComfyUI + Wan 2.2 14B i2v)" ;;
+        speech-lab)         echo "Local speech (WhisperX, faster-whisper)" ;;
+        music-gen)          echo "Music generation (ACE-Step)" ;;
+        *)                  echo "$1" ;;
+    esac
+}
+
+# Map capability tokens to studio pack ids the Wizard / WebUI will
+# auto-offer. The mapping is intentionally conservative — we only
+# stage packs that are real and tested in studio_packs.py.
+nvh_capability_to_pack_ids() {
+    case "$1" in
+        image-gen-starter|image-edit|image-control|video-gen|video-gen-pro)
+            echo "comfyui-power-nodes" ;;
+        speech-lab|music-gen)
+            echo "music-producer-lab ace-step-music" ;;
+        *) ;;
+    esac
+}
+
+print_capability_summary() {
+    [ -n "$GPU_NAME" ] || return 0
+    local tier_tokens token
+    tier_tokens="$(nvh_capability_tiers_for_vram "$VRAM_GB")"
+    echo -e "${G}GPU capabilities at ${VRAM_GB} GB VRAM:${N}"
+    for token in $tier_tokens; do
+        echo -e "  ${D}-${N} $(nvh_capability_human_label "$token")"
+    done
+    case "${NVH_INSTALL_FULL_CAPABILITY:-0}" in
+        1|true|True|yes|Yes|on|On)
+            echo -e "${B}NVH_INSTALL_FULL_CAPABILITY=1 set; staging the matching packs.${N}"
+            ;;
+        *)
+            echo -e "${D}  (Set NVH_INSTALL_FULL_CAPABILITY=1 to auto-stage the matching packs,${N}"
+            echo -e "${D}   or enable any of these later from the WebUI or 'nvh studio'.)${N}"
+            ;;
+    esac
+}
+
+# Write the marker file the WebUI / Wizard reads to auto-offer matching
+# packs. Idempotent: replaces any prior marker. Living under $NVH_HOME
+# keeps it on the persistent block volume so the surface remembers
+# after reboot.
+stage_full_capability_for_vram_tier() {
+    local vram="${1:-$VRAM_GB}"
+    case "${NVH_INSTALL_FULL_CAPABILITY:-0}" in
+        1|true|True|yes|Yes|on|On) ;;
+        *) return 0 ;;
+    esac
+
+    local marker_dir="${NVH_STATE:-$NVH_HOME/state}/capability"
+    mkdir -p "$marker_dir"
+    local marker="$marker_dir/auto-enable.json"
+    local tier_tokens
+    tier_tokens="$(nvh_capability_tiers_for_vram "$vram")"
+
+    # Collect the pack ids dedup'd, preserving order.
+    local pack_ids="" token packs id
+    for token in $tier_tokens; do
+        packs="$(nvh_capability_to_pack_ids "$token")"
+        for id in $packs; do
+            case " $pack_ids " in
+                *" $id "*) ;;
+                *) pack_ids="$pack_ids $id" ;;
+            esac
+        done
+    done
+    pack_ids="${pack_ids# }"
+
+    # Write the marker as plain JSON without depending on Python (this
+    # runs before the venv may be ready on some paths).
+    {
+        printf '{'
+        printf '"vram_gb": %s, ' "$vram"
+        printf '"capabilities": ['
+        local first=1
+        for token in $tier_tokens; do
+            if [ "$first" -eq 1 ]; then first=0; else printf ', '; fi
+            printf '"%s"' "$token"
+        done
+        printf '], '
+        printf '"auto_offer_pack_ids": ['
+        first=1
+        for id in $pack_ids; do
+            if [ "$first" -eq 1 ]; then first=0; else printf ', '; fi
+            printf '"%s"' "$id"
+        done
+        printf ']'
+        printf '}\n'
+    } >"$marker"
+    echo -e "${G}Capability marker written: $marker${N}"
+
+    # Optional: force-pull packs inline. Only useful for headless cloud
+    # images that won't have a browser to drive the WebUI install.
+    case "${NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD:-0}" in
+        1|true|True|yes|Yes|on|On)
+            if [ -n "$pack_ids" ] && [ -x "$NVH_VENV/bin/nvh" ]; then
+                echo -e "${B}NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1: pulling $pack_ids inline...${N}"
+                # shellcheck disable=SC2086
+                "$NVH_VENV/bin/nvh" studio --install $pack_ids -y || \
+                    echo -e "${Y}Inline pack install reported errors; check 'nvh studio status'.${N}"
+            else
+                echo -e "${Y}NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1 set but 'nvh' is not on PATH yet — staging only.${N}"
+            fi
+            ;;
+    esac
+}
+
 set_config_ollama_model() {
     local cfg="$1"
     local model="$2"
@@ -1368,6 +1524,12 @@ if [ -n "$GPU_NAME" ]; then
             pull_nvwizard_model_cli "$MODEL" || true
         fi
     fi
+
+    # Show the full capability matrix for this GPU, and (if opted in)
+    # stage the matching ComfyUI / speech / music packs. See
+    # docs/GPU_TIER_MATRIX.md for the source of truth.
+    print_capability_summary
+    stage_full_capability_for_vram_tier "$VRAM_GB"
 fi
 
 echo ""

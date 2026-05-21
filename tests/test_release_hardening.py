@@ -199,6 +199,77 @@ def test_setup_has_canonical_workspace_state_and_runtime_doctor() -> None:
     assert "Copy Support Report" in setup_page
 
 
+def test_linux_installer_advertises_gpu_capability_matrix_and_opt_in_staging() -> None:
+    """install.sh must surface the per-VRAM-tier capability matrix on every
+    GPU install, and stage ComfyUI / speech / music packs behind the
+    opt-in NVH_INSTALL_FULL_CAPABILITY=1 knob. See docs/GPU_TIER_MATRIX.md
+    for the source of truth.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # The helpers that map a VRAM tier to capability tokens and pack ids.
+    assert "nvh_capability_tiers_for_vram" in install
+    assert "nvh_capability_to_pack_ids" in install
+    assert "nvh_capability_human_label" in install
+    assert "stage_full_capability_for_vram_tier" in install
+    assert "print_capability_summary" in install
+
+    # Each VRAM tier in the matrix must be represented.
+    assert '"$vram" -ge 8' in install
+    assert '"$vram" -ge 12' in install
+    assert '"$vram" -ge 16' in install
+    assert '"$vram" -ge 24' in install
+    assert '"$vram" -ge 40' in install
+
+    # Capability tokens documented in docs/GPU_TIER_MATRIX.md.
+    assert "vision-chat" in install
+    assert "image-gen-starter" in install
+    assert "image-edit" in install
+    assert "image-control" in install
+    assert "video-gen" in install
+    assert "video-gen-pro" in install
+    assert "speech-lab" in install
+    assert "music-gen" in install
+
+    # The pack ids must be ones that actually exist in studio_packs.py;
+    # cross-checked by test_capability_pack_ids_exist_in_studio_packs.
+    assert "comfyui-power-nodes" in install
+    assert "music-producer-lab" in install
+    assert "ace-step-music" in install
+
+    # Default is opt-in; the env knob is documented and the inline-pull
+    # opt-in is a SEPARATE knob so the marker-only case stays safe.
+    assert "NVH_INSTALL_FULL_CAPABILITY" in install
+    assert "NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD" in install
+    # The summary is printed on every GPU install (advisory, no download).
+    assert "print_capability_summary" in install
+    assert "GPU capabilities at" in install
+
+    # Honesty banner: Nemotron Omni is a multimodal LLM, not an image
+    # generator or speech synthesizer. Documented in GPU_TIER_MATRIX.md;
+    # not asserted in install.sh but the doc must exist.
+    matrix_doc = ROOT / "docs" / "GPU_TIER_MATRIX.md"
+    assert matrix_doc.is_file(), "docs/GPU_TIER_MATRIX.md must exist"
+    matrix_text = matrix_doc.read_text(encoding="utf-8")
+    assert "What is \"Nemotron Omni\", really?" in matrix_text
+    assert "NVH_INSTALL_FULL_CAPABILITY" in matrix_text
+
+
+def test_capability_pack_ids_exist_in_studio_packs() -> None:
+    """The pack ids the install.sh capability advisor references must be
+    real studio packs. Catches typos in install.sh before they ship.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+    studio = (ROOT / "nvh" / "integrations" / "installs" / "studio_packs.py").read_text(encoding="utf-8")
+
+    # Pack ids referenced from nvh_capability_to_pack_ids in install.sh.
+    for pack_id in ("comfyui-power-nodes", "music-producer-lab", "ace-step-music"):
+        assert pack_id in install, f"install.sh must reference {pack_id}"
+        assert f'id="{pack_id}"' in studio, (
+            f"studio_packs.py must define a StudioPack with id={pack_id!r}"
+        )
+
+
 def test_linux_start_launcher_prefers_block_backed_home_over_dot_nvh() -> None:
     launch = (ROOT / "start-linux.sh").read_text(encoding="utf-8")
 
