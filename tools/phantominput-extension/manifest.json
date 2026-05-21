@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "PhantomInput (dev)",
+  "version": "0.1.0",
+  "description": "Inject trusted input events into WebRTC remote-desktop streams (GeForce NOW, Parsec, etc.) for QA and AI-agent automation.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyW4wq31OuhqQqYfhcJmol2NgJRh6lQ5bvhuBd1GEjP86xqDu9rWKYBwhrD+MORorc5UcFbty9+xVPWIGASWUKDwaFgYMsflGAXt2JnKwVIIorlowypdYrWPr9m1Yc70PAyf4IAHHvbQ0/vRabnMTUkSzTEnlpZA8QACwTSauSWmDj9s57bdlXoOP6oVV/pBUiP4k+RCAqr5h5DyXhecYQom2hzNXpdneAIfSgI07lraUg8peN821v0LclWqshbHeoxWVOBMMh36uhyM2osTaSpVeeC8w8DvVuWjjTGOSCHPRTy6Zi9F9vb5f8OAId6rVuvy48CvZax+/oB/Z+og1PwIDAQAB",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "scripting",
+    "storage",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://play.geforcenow.com/*",
+    "https://*.geforcenow.com/*",
+    "https://*.parsec.app/*",
+    "https://*.frame.io/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "PhantomInput",
+    "default_popup": "src/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://play.geforcenow.com/*",
+        "https://*.geforcenow.com/*"
+      ],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
