@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **GPU capability matrix in `install.sh`.** Every GPU install now
+  prints what the detected VRAM tier can actually run — not just
+  Wizard chat. The matrix covers image generation (ComfyUI starter
+  / edit / control), video generation (Wan 2.2 5B and 14B), local
+  speech (WhisperX, faster-whisper), and music generation
+  (ACE-Step), each with their honest VRAM floors:
+  `8 GB → image-gen-starter`, `12 GB → image-edit`,
+  `16 GB → image-control`, `24 GB → video-gen + speech-lab + music-gen`,
+  `40 GB → video-gen-pro`.
+- **`NVH_INSTALL_FULL_CAPABILITY=1`** opt-in env knob. When set, the
+  installer writes a marker file under `$NVH_HOME/state/capability/`
+  that the Wizard / WebUI / `nvh studio` reads to auto-offer the
+  matching packs on first launch. The companion knob
+  `NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1` force-pulls those packs
+  inline at install time (useful for headless cloud images that
+  won't have a browser later). Default for both is OFF so a school
+  Wi-Fi student isn't surprised by a 60 GB pull.
+- **`docs/GPU_TIER_MATRIX.md`.** Canonical reference for the table
+  above, including a frank "what Nemotron Omni is and isn't"
+  section — Omni is a multimodal LLM (it gives the Wizard
+  *vision*), not an image generator or speech synthesizer.
+
 ## [0.39.0] - 2026-05-15
 
 ### Fixed
