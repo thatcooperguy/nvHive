@@ -243,6 +243,16 @@ export default function WizardChat() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
 
+  // Deep-link from the /agents discovery page: `?profile=<name>` selects the
+  // matching agent profile so the next user message routes through that
+  // persona + LLM mapping. Idempotent — only runs while the value differs.
+  useEffect(() => {
+    const requested = searchParams?.get('profile');
+    if (!requested) return;
+    if (requested === profile) return;
+    setProfile(requested);
+  }, [searchParams, profile]);
+
   // Deep-link from the setup page: either ?issue=<finding_id> (we look up the
   // matching finding from /v1/wizard/diagnostics so the starter cites the real
   // title) or ?starter=<text> (free-form starter, no lookup). Whichever lands,
