@@ -653,3 +653,114 @@ def test_nvh_bridge_resolver_does_not_treat_nvh_bin_dir_as_executable() -> None:
     for route_src in (start_api, doctor, debug_report):
         # The route bodies should no longer have their own resolveNvhBinary.
         assert "async function resolveNvhBinary" not in route_src
+
+
+def test_nvh_webui_daemonizes_api_for_terminal_close_survival() -> None:
+    """The API auto-started by `nvh webui` must survive `nvh webui` exit,
+    install terminal close, and SIGHUP. Real-rig 2026-05-21: photo 2
+    showed API UP at install completion, photo 3 ~30 seconds later showed
+    API DOWN — because the previous code terminated the API subprocess
+    in the `finally` block when `nvh webui` exited.
+
+    The fix (same rootless-daemon pattern as Ollama in PR #66):
+      1. `start_new_session=True` so the API is its own session leader
+         (setsid()) and doesn't receive SIGHUP from the install terminal.
+      2. `stdin=subprocess.DEVNULL` so it has no tty to lose.
+      3. The finally-block must NOT call api_proc.terminate() — that's
+         the regression the previous code shipped.
+    """
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # The three load-bearing args on the API Popen call.
+    assert "start_new_session=True" in cli
+    assert "stdin=subprocess.DEVNULL" in cli
+
+    # The finally-block must not terminate the API. We look for the
+    # specific anti-pattern: `api_proc.terminate()` inside a finally
+    # block that runs after `subprocess.run(command, cwd=web_dir`.
+    assert "api_proc.terminate()" not in cli
+    # The new behavior surfaces the daemon's pid + log path so the user
+    # has a path to stop it later.
+    assert "API left running in background" in cli
+    assert "nvh services stop" in cli
+
+
+def test_webui_readiness_requires_engine_initialized_not_just_tcp() -> None:
+    """The post-spawn API readiness wait must require full /v1/health
+    success + engine_initialized: true, not just TCP-listening. A stale
+    process whose engine crashed during init holds the port and answers
+    TCP but returns HTTP 500 on /v1/health — that's the exact failure
+    mode PR #65 added _api_healthy to detect, and the wait loop must
+    use it instead of the TCP-only _api_reachable.
+    """
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # Find the wait loop and verify it calls _api_healthy.
+    wait_block = cli.split(
+        "Cold-import time for FastAPI + nvh providers on a fresh", 1,
+    )[1].split("Surface the local LLM runtime state", 1)[0]
+    assert "_api_healthy(api_port)" in wait_block
+    # The success message names what we actually verified.
+    assert "engine initialized" in wait_block.lower()
+    # On wait timeout, dump the api-server.log tail so the SystemConsole's
+    # Install tab + the install.log file both see the cause.
+    assert "api-server.log tail" in wait_block
+
+
+def test_system_console_silently_auto_restarts_api_when_down() -> None:
+    """The user explicitly said: "we do not want the user to have to click
+    it should all just work out the box." When the API is confirmed-down
+    for several consecutive probes, the SystemConsole must silently POST
+    /api/services/start-api on its own — no button click required.
+
+    The auto-restart must be:
+      - Triggered only after 3+ consecutive failures (~24s) so a normal
+        cold-start grace window doesn't restart-storm us.
+      - Rate-limited so we don't restart-loop a fundamentally broken
+        install (2-min minimum gap, 3 attempts per session max).
+      - Quiet — no banner, no modal, just an actionMessage line.
+    """
+    console = (ROOT / "web" / "components" / "SystemConsole.tsx").read_text(encoding="utf-8")
+
+    # The three thresholds must all exist.
+    assert "AUTO_RESTART_FAILURES_THRESHOLD" in console
+    assert "AUTO_RESTART_MIN_GAP_MS" in console
+    assert "AUTO_RESTART_MAX_ATTEMPTS" in console
+    # The threshold values must match the design contract.
+    assert "AUTO_RESTART_FAILURES_THRESHOLD = 3" in console
+    assert "AUTO_RESTART_MIN_GAP_MS = 120_000" in console
+    assert "AUTO_RESTART_MAX_ATTEMPTS = 3" in console
+    # The auto-restart calls the same bridge route the manual button
+    # does — not a separate code path that could drift.
+    assert "method: 'POST'" in console
+    assert "/api/services/start-api" in console
+    # The maybe-restart gate must run on every probe.
+    assert "maybeAutoRestart" in console
+    # Recovery resets the counter so a later outage starts fresh.
+    assert "apiFailuresRef.current = 0" in console
+
+
+def test_wizard_persona_includes_proactive_repair_instructions() -> None:
+    """The user said: "The Wizard agent can also help out if anything is
+    broken from a change." The Wizard's system prompt must explicitly
+    instruct it to scan workspace state on every turn, detect degraded
+    services (Ollama down, missing models, invalid provider keys), call
+    the relevant auto-tools inline, and only then answer the user's
+    question.
+    """
+    persona = (
+        ROOT / "nvh" / "integrations" / "wizard" / "personality.py"
+    ).read_text(encoding="utf-8")
+
+    # The proactive-repair section exists as a labeled block in the persona.
+    assert "Proactive repair" in persona
+    assert "RUN ON EVERY TURN" in persona
+    # The four specific failure → tool mappings the user shipped.
+    assert "Ollama daemon unreachable" in persona and "repair_workspace" in persona
+    assert "No local models installed" in persona and "refresh_models" in persona
+    assert "provider key is missing/invalid" in persona and "validate_provider_key" in persona
+    # The contract: fix first, then answer.
+    assert "Only after you've kicked the repair, answer" in persona
+    # The user-facing rationale (so future edits don't accidentally
+    # delete this section thinking it's filler).
+    assert "everything just works out of the box" in persona
