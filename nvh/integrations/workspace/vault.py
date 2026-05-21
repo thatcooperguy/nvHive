@@ -195,6 +195,10 @@ Obsidian's Graph view shows real structure.
 - [[Support Report Flow]] — handling user failure reports
 - [[Headless QA Loop]] — automated install verification on a rented cloud rig
 
+## Troubleshooting
+
+- [[Common Install Issues]] — port conflicts, stale API, Ollama not starting, browser not opening, model download skipped, dark mode panels
+
 ## Conventions
 
 - Add a new note with a YAML `tags:` block listing one or more of
@@ -325,6 +329,141 @@ and as the runbook for incoming support reports.
 - [[AI Wizard]] — the agent the user is interacting with
 - [[Pilot Test Checklist]] — where many incoming reports originate
 - [[Product Conflicts]] — known intentional tradeoffs
+""",
+        "Troubleshooting/Common Install Issues.md": """---
+tags: [troubleshooting, support, setup]
+---
+# Common Install Issues
+
+If `curl … install.sh | bash` finished but something doesn't work, this
+note is the first stop. Most "broken install" reports turn out to be
+one of the five issues below. Each entry says what you'll see, what's
+going on under the hood, and the smallest command that resolves it.
+
+Pairs with [[Support Report Flow]] for capturing a fresh report and
+[[Pilot Test Checklist]] for the upstream gate.
+
+## 1. WebUI shows red "API offline" banner
+
+**Symptom:** WebUI loads but every panel is empty and a red ribbon at
+the top says "The nvHive backend at http://localhost:8000 isn't
+responding."
+
+**What's happening:** the FastAPI server failed to initialize (most
+often because an earlier run wrote a malformed `config.yaml` that the
+engine couldn't parse). The TCP port stays held by the stale process
+so the WebUI assumes "API up" — but every health probe returns 500.
+
+**Fix:**
+
+```bash
+# Newer nvh detects + restarts stale APIs automatically — just rerun:
+nvh webui
+# If that doesn't clear it, kill the orphan + relaunch:
+fuser -k 8000/tcp 2>/dev/null || lsof -nP -iTCP:8000 -sTCP:LISTEN -t | xargs kill -TERM
+nvh serve --port 8000
+```
+
+The install script's `_api_healthy` probe now does this dance on every
+`nvh webui` launch.
+
+## 2. WebUI shows amber "Starting up…" banner
+
+**Symptom:** an amber strip near the top says the backend is still
+booting. Not red, not alarming.
+
+**What's happening:** the API server is still importing FastAPI +
+warming the engine. Cold installs take 5-15s; that window is
+normal, not broken.
+
+**Fix:** wait 20 seconds. The banner clears itself once `/v1/health`
+returns 200. Override with `localStorage.setItem('nvh-banner-no-grace', '1')`
+if you want the legacy "red instantly on any failure" behavior.
+
+## 3. Wizard says "Ollama not running on 11434 — falling back to cloud"
+
+**Symptom:** the install reports it started Ollama but the Wizard
+routes every query to a cloud provider (or has no local model).
+
+**What's happening (older installs):** `ollama serve` was launched in
+the background with `&>/dev/null` and a fixed `sleep 2/3`. Cold rigs
+needed longer to bind; the install moved on before the daemon was
+ready. The orphan also died with the script in some shells.
+
+**Fix:**
+
+```bash
+# Start Ollama with the same health-wait the install now uses:
+source $NVH_HOME/nvh-env.sh
+nohup $NVH_HOME/bin/ollama serve > $NVH_HOME/logs/ollama.log 2>&1 &
+# Then wait for it:
+until curl -sf http://localhost:11434/api/tags >/dev/null; do sleep 1; done
+nvh webui
+```
+
+Set `NVH_OLLAMA_BOOT_TIMEOUT=30` before reinstall on slow rigs.
+
+## 4. Install fails with "FOREIGN process on port 3000 / 8000 / 11434"
+
+**Symptom:** install exits early with a table showing one of the
+stack ports held by a non-nvHive process.
+
+**What's happening:** the install runs `detect_port_conflicts` before
+starting services. If a foreign process holds the port, the install
+refuses to silently work around it (would have spawned the WebUI on
+port 8080 cascade and confused everyone).
+
+**Fix:**
+
+```bash
+# See exactly what's there:
+lsof -nP -iTCP:8000 -sTCP:LISTEN   # or :3000, :11434
+
+# Either stop that process or run the installer with the override:
+NVH_PORT_CONFLICT_KILL_FOREIGN=1 bash install.sh
+```
+
+## 5. Browser doesn't open after install
+
+**Symptom:** install completes, prints `Browser: http://localhost:3000/setup`,
+then nothing visible happens.
+
+**What's happening (older installs):** the auto-open chain tried to
+download a rootless Firefox before checking whether Chromium was
+already installed. On rigs where Firefox isn't present and the
+download is slow/blocked, the WebUI server came up but no browser
+window showed.
+
+**Fix:** newer installs probe Chromium / Chrome / Brave / Edge first
+and only fall back to Firefox download if nothing's installed. On
+older installs:
+
+```bash
+# Manually point your installed browser at the running WebUI:
+xdg-open http://localhost:3000/setup   # Linux
+open http://localhost:3000/setup       # macOS
+```
+
+## 6. WebUI panels look light/white even in dark mode
+
+**Symptom:** dark theme is active but a card here and there has a
+white background.
+
+**What's happening:** older versions hardcoded `bg-[#ffffff]` /
+`bg-[#fafafa]` on a handful of components without the `dark:`
+variant. Newer builds add the variants everywhere.
+
+**Fix:** `nvh update` (or pull the latest release). All built-in
+pages now flip cleanly. If your custom WebUI extension has a stale
+hex color, add a `dark:` Tailwind sibling next to the light one.
+
+## Related
+
+- [[Pilot Test Checklist]] — pre-release gate that catches most of
+  these before users see them
+- [[Support Report Flow]] — what to do when a user hits an issue not
+  on this list
+- [[AI Wizard]] — the readiness states the WebUI surfaces
 """,
         "Process Playbooks/Headless QA Loop.md": """---
 tags: [playbook, setup, qa]
