@@ -41,7 +41,7 @@ export default function ResponsePanel({
       {/* Content area */}
       <div
         ref={scrollRef}
-        className="relative min-h-[200px] max-h-[500px] overflow-y-auto bg-[#ffffff] border border-[#e5e5e5] rounded-xl p-4"
+        className="relative min-h-[200px] max-h-[500px] overflow-y-auto bg-[#ffffff] border border-[#e5e5e5] rounded-xl p-4 dark:bg-[#0a0a0a] dark:border-[#262626]"
       >
         {error ? (
           <div className="flex items-start gap-3">
@@ -53,7 +53,7 @@ export default function ResponsePanel({
             </div>
             <div>
               <div className="text-sm font-medium text-[#dc2626] mb-1">Error</div>
-              <div className="text-sm text-[#737373] font-mono">{error}</div>
+              <div className="text-sm text-[#737373] font-mono dark:text-[#a3a3a3]">{error}</div>
             </div>
           </div>
         ) : content ? (
@@ -63,7 +63,7 @@ export default function ResponsePanel({
             {content}
           </div>
         ) : streaming ? (
-          <div className="flex items-center gap-2 text-[#737373]">
+          <div className="flex items-center gap-2 text-[#737373] dark:text-[#a3a3a3]">
             <div className="flex gap-1">
               {[0, 1, 2].map(i => (
                 <div
@@ -76,7 +76,7 @@ export default function ResponsePanel({
             <span className="text-sm">Generating...</span>
           </div>
         ) : (
-          <div className="text-[#737373] text-sm italic">{placeholder}</div>
+          <div className="text-[#737373] text-sm italic dark:text-[#a3a3a3]">{placeholder}</div>
         )}
       </div>
 
@@ -130,8 +130,8 @@ export default function ResponsePanel({
 
 function MetaChip({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div className="flex items-center gap-1.5 bg-[#ffffff] border border-[#e5e5e5] rounded-lg px-2.5 py-1">
-      <span className="text-xs text-[#737373]">{label}:</span>
+    <div className="flex items-center gap-1.5 bg-[#ffffff] border border-[#e5e5e5] rounded-lg px-2.5 py-1 dark:bg-[#0a0a0a] dark:border-[#262626]">
+      <span className="text-xs text-[#737373] dark:text-[#a3a3a3]">{label}:</span>
       <span className="text-xs font-mono font-medium" style={{ color }}>{value}</span>
     </div>
   );

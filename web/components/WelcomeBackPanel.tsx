@@ -98,7 +98,7 @@ export default function WelcomeBackPanel() {
       <button
         type="button"
         onClick={handleDismiss}
-        className="absolute right-2 top-2 rounded p-1 text-[#737373] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]"
+        className="absolute right-2 top-2 rounded p-1 text-[#737373] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)] dark:text-[#a3a3a3]"
         aria-label="Dismiss welcome back panel"
         title="Dismiss"
       >

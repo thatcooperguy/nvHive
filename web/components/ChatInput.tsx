@@ -252,8 +252,8 @@ export default function ChatInput({
 
   return (
     <div
-      className={`border-t bg-white p-3 transition-colors ${
-        dragOver ? 'border-[#76B900] bg-[#f3f9e5]' : 'border-[#e5e5e5]'
+      className={`border-t bg-white dark:bg-[#0a0a0a] p-3 transition-colors ${
+        dragOver ? 'border-[#76B900] bg-[#f3f9e5] dark:bg-[#1a2305]' : 'border-[#e5e5e5] dark:border-[#262626]'
       }`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -283,7 +283,7 @@ export default function ChatInput({
       )}
       {mode === 'compare' && (
         <div className="flex items-center gap-2 mb-2 px-1">
-          <span className="text-[10px] font-mono text-[#737373]">All available advisors will respond for side-by-side comparison</span>
+          <span className="text-[10px] font-mono text-[#737373] dark:text-[#a3a3a3]">All available advisors will respond for side-by-side comparison</span>
         </div>
       )}
 
@@ -324,14 +324,14 @@ export default function ChatInput({
           {attachedFiles.map(f => (
             <div
               key={f.name}
-              className="flex items-center gap-1.5 bg-[#fafafa] border border-[#76B900]/40 px-2 py-1 text-[10px] font-mono group"
+              className="flex items-center gap-1.5 bg-[#fafafa] border border-[#76B900]/40 px-2 py-1 text-[10px] font-mono group dark:bg-[#141414]"
             >
               {f.isImage ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={f.content}
                   alt={f.name}
-                  className="w-5 h-5 object-cover flex-shrink-0 border border-[#e5e5e5]"
+                  className="w-5 h-5 object-cover flex-shrink-0 border border-[#e5e5e5] dark:border-[#262626]"
                 />
               ) : (
                 <span className="text-[#5a9100]">
@@ -341,11 +341,11 @@ export default function ChatInput({
                   </svg>
                 </span>
               )}
-              <span className="text-[#404040] max-w-[120px] truncate">{f.name}</span>
+              <span className="text-[#404040] max-w-[120px] truncate dark:text-[#d4d4d4]">{f.name}</span>
               <button
                 type="button"
                 onClick={() => removeFile(f.name)}
-                className="text-[#a3a3a3] hover:text-[#dc2626] transition-colors ml-0.5 flex-shrink-0"
+                className="text-[#a3a3a3] hover:text-[#dc2626] transition-colors ml-0.5 flex-shrink-0 dark:text-[#737373]"
                 title="Remove file"
               >
                 x
@@ -362,7 +362,7 @@ export default function ChatInput({
           type="button"
           onClick={handleAttachClick}
           disabled={disabled || streaming}
-          className="flex-shrink-0 w-9 h-9 flex items-center justify-center border border-[#d4d4d4] bg-white text-[#737373] hover:text-[#76B900] hover:border-[#76B900] transition-colors disabled:opacity-40"
+          className="flex-shrink-0 w-9 h-9 flex items-center justify-center border border-[#d4d4d4] bg-white text-[#737373] hover:text-[#76B900] hover:border-[#76B900] transition-colors disabled:opacity-40 dark:bg-[#0a0a0a] dark:border-[#404040] dark:text-[#a3a3a3]"
           title="Attach file (.py, .js, .ts, .txt, .md, .json, .yaml, .csv, .pdf, images)"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -388,10 +388,10 @@ export default function ChatInput({
           }
           disabled={disabled || streaming}
           rows={1}
-          className={`flex-1 bg-white border text-[#0a0a0a] placeholder-[#a3a3a3] px-3 py-2.5 text-sm font-mono resize-none
+          className={`flex-1 bg-white dark:bg-[#0a0a0a] border text-[#0a0a0a] dark:text-[#fafafa] placeholder-[#a3a3a3] px-3 py-2.5 text-sm font-mono resize-none
             focus:outline-none focus:border-[#76B900] focus:ring-1 focus:ring-[#76B900]/30
             disabled:opacity-50 transition-colors min-h-[40px] leading-relaxed ${
-            dragOver ? 'border-[#76B900]' : 'border-[#d4d4d4]'
+            dragOver ? 'border-[#76B900]' : 'border-[#d4d4d4] dark:border-[#404040]'
           }`}
           style={{ maxHeight: '50vh' }}
         />
@@ -428,7 +428,7 @@ export default function ChatInput({
       {/* Bottom toolbar */}
       <div className="flex items-center gap-2 mt-2 px-1">
         {/* Mode pills */}
-        <div className="flex items-center bg-white border border-[#d4d4d4] p-0.5 gap-0.5 mode-pills-container">
+        <div className="flex items-center bg-white border border-[#d4d4d4] p-0.5 gap-0.5 mode-pills-container dark:bg-[#0a0a0a] dark:border-[#404040]">
           {MODES.map(m => (
             <button
               key={m.value}
@@ -438,7 +438,7 @@ export default function ChatInput({
               className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wider transition-all flex items-center gap-1.5 disabled:opacity-50 ${
                 mode === m.value
                   ? 'bg-[#76B900] text-black font-bold'
-                  : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5]'
+                  : 'text-[#737373] hover:text-[#0a0a0a] hover:bg-[#f5f5f5] dark:text-[#a3a3a3] dark:hover:text-[#fafafa] dark:hover:bg-[#141414]'
               }`}
             >
               <span className="text-[8px] font-bold">{m.value === 'single' ? 'S' : m.value === 'council' ? 'C' : 'P'}</span>
@@ -453,7 +453,7 @@ export default function ChatInput({
           onChange={e => onModeChange(e.target.value as ChatMode)}
           disabled={disabled || streaming}
           className="mode-dropdown hidden bg-white border border-[#d4d4d4] text-[#404040] text-[10px] font-mono px-2 py-1
-            focus:outline-none focus:border-[#76B900] appearance-none disabled:opacity-50"
+            focus:outline-none focus:border-[#76B900] appearance-none disabled:opacity-50 dark:bg-[#0a0a0a] dark:border-[#404040] dark:text-[#d4d4d4]"
         >
           {MODES.map(m => (
             <option key={m.value} value={m.value}>{m.label}</option>
@@ -468,7 +468,7 @@ export default function ChatInput({
               onChange={e => onModelChange(e.target.value)}
               disabled={disabled || streaming}
               className="bg-white border border-[#d4d4d4] text-[#404040] text-[10px] font-mono pl-2 pr-6 py-1
-                focus:outline-none focus:border-[#76B900] appearance-none disabled:opacity-50 hover:border-[#a3a3a3] transition-colors"
+                focus:outline-none focus:border-[#76B900] appearance-none disabled:opacity-50 hover:border-[#a3a3a3] transition-colors dark:bg-[#0a0a0a] dark:border-[#404040] dark:text-[#d4d4d4]"
             >
               {connectedModels.length > 0 && (
                 <optgroup label={offlineModels.length > 0 ? "Connected" : "Models"}>
@@ -500,7 +500,7 @@ export default function ChatInput({
           </div>
         )}
 
-        <span className="ml-auto text-[9px] font-mono text-[#a3a3a3] ctrl-enter-hint">
+        <span className="ml-auto text-[9px] font-mono text-[#a3a3a3] ctrl-enter-hint dark:text-[#737373]">
           Ctrl+Enter to send
         </span>
       </div>

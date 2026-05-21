@@ -154,13 +154,13 @@ export default function QueryInput({
       {/* AI source / model row */}
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="block text-xs text-[#737373] mb-1.5 flex items-center justify-between">
+          <label className="block text-xs text-[#737373] mb-1.5 flex items-center justify-between dark:text-[#a3a3a3]">
             <span>AI Source</span>
             {sortedProviders.length > 0 && (
-              <span className="font-mono text-[10px] text-[#737373]">
+              <span className="font-mono text-[10px] text-[#737373] dark:text-[#a3a3a3]">
                 <span className="text-[#16a34a]">OK</span> {healthyCount} online
                 {healthyCount < sortedProviders.length && (
-                  <> / <span className="text-[#737373]">{sortedProviders.length - healthyCount} offline</span></>
+                  <> / <span className="text-[#737373] dark:text-[#a3a3a3]">{sortedProviders.length - healthyCount} offline</span></>
                 )}
               </span>
             )}
@@ -193,7 +193,7 @@ export default function QueryInput({
           </select>
         </div>
         <div>
-          <label className="block text-xs text-[#737373] mb-1.5">Model</label>
+          <label className="block text-xs text-[#737373] mb-1.5 dark:text-[#a3a3a3]">Model</label>
           <select
             value={model}
             onChange={e => setModel(e.target.value)}
@@ -212,7 +212,7 @@ export default function QueryInput({
       <button
         type="button"
         onClick={() => setShowAdvanced(!showAdvanced)}
-        className="flex items-center gap-2 text-xs text-[#737373] hover:text-[#737373] transition-colors"
+        className="flex items-center gap-2 text-xs text-[#737373] hover:text-[#737373] transition-colors dark:text-[#a3a3a3]"
       >
         <svg
           className={`w-3.5 h-3.5 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
@@ -224,12 +224,12 @@ export default function QueryInput({
       </button>
 
       {showAdvanced && (
-        <div className="space-y-4 bg-[#eff6ff] border border-[#e5e5e5] rounded-[4px] p-4 animate-fade-in">
+        <div className="space-y-4 bg-[#eff6ff] border border-[#e5e5e5] rounded-[4px] p-4 animate-fade-in dark:border-[#262626]">
           {/* Temperature */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs text-[#737373]">Temperature</label>
-              <span className="text-xs font-mono text-[#0a0a0a]">{temperature.toFixed(2)}</span>
+              <label className="text-xs text-[#737373] dark:text-[#a3a3a3]">Temperature</label>
+              <span className="text-xs font-mono text-[#0a0a0a] dark:text-[#fafafa]">{temperature.toFixed(2)}</span>
             </div>
             <input
               type="range"
@@ -238,20 +238,20 @@ export default function QueryInput({
               step="0.05"
               value={temperature}
               onChange={e => setTemperature(parseFloat(e.target.value))}
-              className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-[#fafafa]"
+              className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-[#fafafa] dark:bg-[#141414]"
               style={{
                 background: `linear-gradient(to right, #2563eb ${(temperature / 2) * 100}%, #fafafa ${(temperature / 2) * 100}%)`
               }}
             />
             <div className="flex justify-between mt-1">
-              <span className="text-xs text-[#737373]">Precise</span>
-              <span className="text-xs text-[#737373]">Creative</span>
+              <span className="text-xs text-[#737373] dark:text-[#a3a3a3]">Precise</span>
+              <span className="text-xs text-[#737373] dark:text-[#a3a3a3]">Creative</span>
             </div>
           </div>
 
           {/* Max tokens */}
           <div>
-            <label className="block text-xs text-[#737373] mb-1.5">Max Tokens</label>
+            <label className="block text-xs text-[#737373] mb-1.5 dark:text-[#a3a3a3]">Max Tokens</label>
             <input
               type="number"
               min="1"
@@ -264,7 +264,7 @@ export default function QueryInput({
 
           {/* System prompt */}
           <div>
-            <label className="block text-xs text-[#737373] mb-1.5">System Prompt</label>
+            <label className="block text-xs text-[#737373] mb-1.5 dark:text-[#a3a3a3]">System Prompt</label>
             <textarea
               value={systemPrompt}
               onChange={e => setSystemPrompt(e.target.value)}
@@ -277,8 +277,8 @@ export default function QueryInput({
           {/* Streaming toggle */}
           <div className="flex items-center justify-between">
             <div>
-              <label className="text-xs text-[#737373]">Streaming</label>
-              <div className="text-[10px] text-[#a3a3a3] mt-0.5">
+              <label className="text-xs text-[#737373] dark:text-[#a3a3a3]">Streaming</label>
+              <div className="text-[10px] text-[#a3a3a3] mt-0.5 dark:text-[#737373]">
                 Leave off for first local model tests; enable after Ollama is warmed up.
               </div>
             </div>

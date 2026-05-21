@@ -253,8 +253,8 @@ function QueryPageInner() {
       <div className="flex items-center justify-between">
         <div>
           <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Ask AI</div>
-          <h1 className="text-2xl font-bold text-[#0a0a0a]">Ask AI</h1>
-          <p className="text-xs font-mono text-[#737373] mt-1">Ask your local model, or compare answers when you need a second opinion.</p>
+          <h1 className="text-2xl font-bold text-[#0a0a0a] dark:text-[#fafafa]">Ask AI</h1>
+          <p className="text-xs font-mono text-[#737373] mt-1 dark:text-[#a3a3a3]">Ask your local model, or compare answers when you need a second opinion.</p>
         </div>
         <div className="flex flex-wrap gap-2 justify-end">
           <Link href="/setup" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
@@ -293,8 +293,8 @@ function QueryPageInner() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#525252]">Pick helpers automatically</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">Choose useful perspectives from the prompt</div>
+                  <div className="text-xs font-mono text-[#525252] dark:text-[#a3a3a3]">Pick helpers automatically</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">Choose useful perspectives from the prompt</div>
                 </div>
                 <button
                   onClick={() => setAutoAgents(!autoAgents)}
@@ -306,7 +306,7 @@ function QueryPageInner() {
 
               {presets.length > 0 && (
                 <div>
-                  <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Cabinet</label>
+                  <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider dark:text-[#a3a3a3]">Cabinet</label>
                   <select
                     value={councilPreset}
                     onChange={e => setCouncilPreset(e.target.value)}
@@ -323,7 +323,7 @@ function QueryPageInner() {
               {autoAgents && (
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider">Helpers</label>
+                    <label className="text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">Helpers</label>
                     <span className="text-xs font-mono text-[#76B900]">{numAgents}</span>
                   </div>
                   <input
@@ -335,7 +335,7 @@ function QueryPageInner() {
               )}
 
               <div>
-                <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider">Strategy</label>
+                <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider dark:text-[#a3a3a3]">Strategy</label>
                 <select
                   value={councilStrategy}
                   onChange={e => setCouncilStrategy(e.target.value)}
@@ -350,8 +350,8 @@ function QueryPageInner() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-xs font-mono text-[#525252]">Combine into one answer</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3]">Summarize the group into one response</div>
+                  <div className="text-xs font-mono text-[#525252] dark:text-[#a3a3a3]">Combine into one answer</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">Summarize the group into one response</div>
                 </div>
                 <button
                   onClick={() => setSynthesize(!synthesize)}
@@ -361,7 +361,7 @@ function QueryPageInner() {
                 </button>
               </div>
 
-              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 text-[10px] font-mono text-[#737373] leading-relaxed">
+              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 text-[10px] font-mono text-[#737373] leading-relaxed dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
                 Agent perspectives are selected when you run the query, using the current question and settings.
               </div>
             </div>
@@ -396,11 +396,11 @@ function QueryPageInner() {
               />
               {/* Response metadata */}
               {response && (
-                <div className="mt-3 pt-3 border-t border-[#e5e5e5] flex items-center gap-4 flex-wrap">
+                <div className="mt-3 pt-3 border-t border-[#e5e5e5] flex items-center gap-4 flex-wrap dark:border-[#262626]">
                   <span className="text-[10px] font-mono text-[#76B900]">
                     {response.usage?.total_tokens} tokens
                   </span>
-                  <span className="text-[10px] font-mono text-[#a3a3a3]">
+                  <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                     {response.provider} / {response.model}
                   </span>
                   {response.cost_usd && parseFloat(String(response.cost_usd)) > 0 && (
@@ -409,7 +409,7 @@ function QueryPageInner() {
                     </span>
                   )}
                   {response.latency_ms > 0 && (
-                    <span className="text-[10px] font-mono text-[#a3a3a3]">
+                    <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                       {response.latency_ms}ms
                     </span>
                   )}
@@ -434,7 +434,7 @@ function QueryPageInner() {
               ) : councilResult ? (
                 <CouncilPanel mode="static" result={councilResult} />
               ) : !loading ? (
-                <div className="text-center py-10 text-[#a3a3a3]">
+                <div className="text-center py-10 text-[#a3a3a3] dark:text-[#737373]">
                   <div className="text-4xl mb-3">◈</div>
                   <div className="text-xs font-mono">RUN A CONVENE QUERY TO SEE MULTI-LLM RESPONSES</div>
                 </div>
@@ -445,7 +445,7 @@ function QueryPageInner() {
           {currentMode === 'compare' && (
             <div className="card p-5">
               <div className="section-label mb-3 flex items-center gap-2">
-                <span className="text-[#525252]">▣</span>
+                <span className="text-[#525252] dark:text-[#a3a3a3]">▣</span>
                 Advisor Comparison
               </div>
               {error ? (
@@ -453,7 +453,7 @@ function QueryPageInner() {
               ) : compareResult ? (
                 <CompareView result={compareResult} />
               ) : !loading ? (
-                <div className="text-center py-10 text-[#a3a3a3]">
+                <div className="text-center py-10 text-[#a3a3a3] dark:text-[#737373]">
                   <div className="text-4xl mb-3">▣</div>
                   <div className="text-xs font-mono">RUN A COMPARE QUERY TO SEE SIDE-BY-SIDE RESPONSES</div>
                 </div>
@@ -476,7 +476,7 @@ function CompareView({ result }: { result: CompareResult }) {
         {entries.map(([provider, resp], i) => (
           <div
             key={provider}
-            className="border p-4 bg-[#ffffff]"
+            className="border p-4 bg-[#ffffff] dark:bg-[#0a0a0a]"
             style={{ borderColor: `${COLORS[i % COLORS.length]}30` }}
           >
             <div className="flex items-center justify-between mb-3">
@@ -484,14 +484,14 @@ function CompareView({ result }: { result: CompareResult }) {
                 <div className="font-mono font-bold text-sm capitalize" style={{ color: COLORS[i % COLORS.length] }}>
                   {provider.toUpperCase()}
                 </div>
-                <div className="text-[10px] font-mono text-[#a3a3a3]">{resp.model}</div>
+                <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{resp.model}</div>
               </div>
               <div className="text-right">
-                <div className="text-[10px] font-mono text-[#525252]">{resp.usage?.total_tokens ?? '—'} tokens</div>
-                <div className="text-[10px] font-mono text-[#a3a3a3]">{Math.round(resp.latency_ms)}ms</div>
+                <div className="text-[10px] font-mono text-[#525252] dark:text-[#a3a3a3]">{resp.usage?.total_tokens ?? '—'} tokens</div>
+                <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{Math.round(resp.latency_ms)}ms</div>
               </div>
             </div>
-            <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 max-h-48 overflow-y-auto">
+            <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 max-h-48 overflow-y-auto dark:bg-[#0a0a0a] dark:border-[#262626]">
               <div className="text-xs text-[#262626] font-mono whitespace-pre-wrap leading-relaxed">
                 {resp.content}
               </div>
@@ -501,28 +501,28 @@ function CompareView({ result }: { result: CompareResult }) {
       </div>
 
       {/* Summary table */}
-      <div className="overflow-x-auto border border-[#e5e5e5]">
+      <div className="overflow-x-auto border border-[#e5e5e5] dark:border-[#262626]">
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-[#e5e5e5] bg-[#ffffff]">
-              <th className="text-left py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider">Provider</th>
-              <th className="text-right py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider">Tokens</th>
-              <th className="text-right py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider">Cost</th>
-              <th className="text-right py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider">Latency</th>
-              <th className="text-right py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider">Cached</th>
+            <tr className="border-b border-[#e5e5e5] bg-[#ffffff] dark:bg-[#0a0a0a] dark:border-[#262626]">
+              <th className="text-left py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider dark:text-[#737373]">Provider</th>
+              <th className="text-right py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider dark:text-[#737373]">Tokens</th>
+              <th className="text-right py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider dark:text-[#737373]">Cost</th>
+              <th className="text-right py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider dark:text-[#737373]">Latency</th>
+              <th className="text-right py-2 px-3 font-mono text-[#a3a3a3] uppercase tracking-wider dark:text-[#737373]">Cached</th>
             </tr>
           </thead>
           <tbody>
             {entries.map(([provider, resp]) => (
-              <tr key={provider} className="border-b border-[#e5e5e5] hover:bg-[#f5f5f5]">
-                <td className="py-2 px-3 font-mono font-bold text-[#0a0a0a] capitalize">{provider}</td>
-                <td className="py-2 px-3 text-right font-mono text-[#525252]">{resp.usage?.total_tokens ?? '—'}</td>
+              <tr key={provider} className="border-b border-[#e5e5e5] hover:bg-[#f5f5f5] dark:border-[#262626] dark:hover:bg-[#1f1f1f]">
+                <td className="py-2 px-3 font-mono font-bold text-[#0a0a0a] capitalize dark:text-[#fafafa]">{provider}</td>
+                <td className="py-2 px-3 text-right font-mono text-[#525252] dark:text-[#a3a3a3]">{resp.usage?.total_tokens ?? '—'}</td>
                 <td className="py-2 px-3 text-right font-mono text-[#d97706]">
                   {resp.cost_usd ? `$${parseFloat(resp.cost_usd).toFixed(4)}` : (
                     <span className="text-[#76B900]">FREE</span>
                   )}
                 </td>
-                <td className="py-2 px-3 text-right font-mono text-[#a3a3a3]">{Math.round(resp.latency_ms)}ms</td>
+                <td className="py-2 px-3 text-right font-mono text-[#a3a3a3] dark:text-[#737373]">{Math.round(resp.latency_ms)}ms</td>
                 <td className="py-2 px-3 text-right font-mono">
                   {resp.cache_hit ? (
                     <span className="text-[#76B900]">YES</span>
@@ -542,7 +542,7 @@ function CompareView({ result }: { result: CompareResult }) {
 export default function QueryPage() {
   return (
     <Suspense fallback={
-      <div className="p-6 flex items-center gap-2 text-xs font-mono text-[#a3a3a3]">
+      <div className="p-6 flex items-center gap-2 text-xs font-mono text-[#a3a3a3] dark:text-[#737373]">
         <div className="w-1.5 h-1.5 bg-[#76B900] animate-pulse" style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
         LOADING...
       </div>

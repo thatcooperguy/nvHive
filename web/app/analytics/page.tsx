@@ -9,11 +9,11 @@ import type { AnalyticsData } from '@/lib/api';
 
 function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
   return (
-    <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-4 relative overflow-hidden">
+    <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-4 relative overflow-hidden dark:bg-[#0a0a0a] dark:border-[#404040]">
       <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/60 to-transparent" />
-      <div className="text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.15em] mb-1">{label}</div>
-      <div className="text-2xl font-bold text-[#0a0a0a] font-mono">{value}</div>
-      {sub && <div className="text-[10px] font-mono text-[#a3a3a3] mt-1">{sub}</div>}
+      <div className="text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.15em] mb-1 dark:text-[#737373]">{label}</div>
+      <div className="text-2xl font-bold text-[#0a0a0a] font-mono dark:text-[#fafafa]">{value}</div>
+      {sub && <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">{sub}</div>}
     </div>
   );
 }
@@ -24,8 +24,8 @@ function CostBar({ provider, cost, maxCost }: { provider: string; cost: number; 
   const pct = maxCost > 0 ? (cost / maxCost) * 100 : 0;
   return (
     <div className="flex items-center gap-3 py-1.5">
-      <span className="text-xs font-mono text-[#525252] w-24 text-right truncate">{provider}</span>
-      <div className="flex-1 bg-[#f5f5f5] h-5 relative overflow-hidden">
+      <span className="text-xs font-mono text-[#525252] w-24 text-right truncate dark:text-[#a3a3a3]">{provider}</span>
+      <div className="flex-1 bg-[#f5f5f5] h-5 relative overflow-hidden dark:bg-[#141414]">
         <div
           className="h-full bg-[#76B900]/70 transition-all duration-500"
           style={{ width: `${Math.max(pct, 1)}%` }}
@@ -80,7 +80,7 @@ export default function AnalyticsPage() {
           <button
             onClick={loadData}
             disabled={loading}
-            className="px-3 py-1.5 text-xs font-mono border border-[#d4d4d4] text-[#525252] hover:text-[#76B900] hover:border-[#76B900]/40 transition-colors disabled:opacity-40"
+            className="px-3 py-1.5 text-xs font-mono border border-[#d4d4d4] text-[#525252] hover:text-[#76B900] hover:border-[#76B900]/40 transition-colors disabled:opacity-40 dark:border-[#404040] dark:text-[#a3a3a3]"
           >
             {loading ? 'Loading...' : 'Refresh'}
           </button>
@@ -96,7 +96,7 @@ export default function AnalyticsPage() {
 
       {loading && !data && (
         <div className="flex items-center justify-center py-20">
-          <div className="text-xs font-mono text-[#a3a3a3] animate-pulse uppercase tracking-widest">Loading analytics...</div>
+          <div className="text-xs font-mono text-[#a3a3a3] animate-pulse uppercase tracking-widest dark:text-[#737373]">Loading analytics...</div>
         </div>
       )}
 
@@ -117,7 +117,7 @@ export default function AnalyticsPage() {
           {/* ── Cost breakdown + Queries per provider ─────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Cost by provider bar chart */}
-            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden">
+            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden dark:bg-[#0a0a0a] dark:border-[#404040]">
               <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/40 to-transparent" />
               <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Cost by Provider (This Month)</div>
               {costEntries.length === 0 ? (
@@ -134,12 +134,12 @@ export default function AnalyticsPage() {
             </div>
 
             {/* Queries per provider table */}
-            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden">
+            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden dark:bg-[#0a0a0a] dark:border-[#404040]">
               <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/40 to-transparent" />
               <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Queries by Provider (This Month)</div>
               <table className="w-full text-xs font-mono">
                 <thead>
-                  <tr className="text-[#a3a3a3] text-left border-b border-[#e5e5e5]">
+                  <tr className="text-[#a3a3a3] text-left border-b border-[#e5e5e5] dark:border-[#262626] dark:text-[#737373]">
                     <th className="pb-2 font-medium">Provider</th>
                     <th className="pb-2 font-medium text-right">Queries</th>
                     <th className="pb-2 font-medium text-right">Avg Latency</th>
@@ -155,15 +155,15 @@ export default function AnalyticsPage() {
                     Object.entries(data.queries_by_provider)
                       .sort(([, a], [, b]) => b - a)
                       .map(([provider, count]) => (
-                        <tr key={provider} className="border-b border-[#e5e5e5] hover:bg-[#f5f5f5] transition-colors">
+                        <tr key={provider} className="border-b border-[#e5e5e5] hover:bg-[#f5f5f5] transition-colors dark:border-[#262626] dark:hover:bg-[#1f1f1f]">
                           <td className="py-2 text-[#262626]">{provider}</td>
-                          <td className="py-2 text-right text-[#525252]">{count}</td>
-                          <td className="py-2 text-right text-[#525252]">
+                          <td className="py-2 text-right text-[#525252] dark:text-[#a3a3a3]">{count}</td>
+                          <td className="py-2 text-right text-[#525252] dark:text-[#a3a3a3]">
                             {data.latency_by_provider[provider]
                               ? `${data.latency_by_provider[provider].toFixed(0)}ms`
                               : '--'}
                           </td>
-                          <td className="py-2 text-right text-[#525252]">
+                          <td className="py-2 text-right text-[#525252] dark:text-[#a3a3a3]">
                             ${parseFloat(data.cost_by_provider[provider] || '0').toFixed(4)}
                           </td>
                         </tr>
@@ -177,12 +177,12 @@ export default function AnalyticsPage() {
           {/* ── Most used models + Savings ────────────────────────── */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Most used models */}
-            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden">
+            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden dark:bg-[#0a0a0a] dark:border-[#404040]">
               <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/40 to-transparent" />
               <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Most Used Models</div>
               <table className="w-full text-xs font-mono">
                 <thead>
-                  <tr className="text-[#a3a3a3] text-left border-b border-[#e5e5e5]">
+                  <tr className="text-[#a3a3a3] text-left border-b border-[#e5e5e5] dark:border-[#262626] dark:text-[#737373]">
                     <th className="pb-2 font-medium">Model</th>
                     <th className="pb-2 font-medium">Provider</th>
                     <th className="pb-2 font-medium text-right">Queries</th>
@@ -195,10 +195,10 @@ export default function AnalyticsPage() {
                     </tr>
                   ) : (
                     data.most_used_models.map((m, i) => (
-                      <tr key={i} className="border-b border-[#e5e5e5] hover:bg-[#f5f5f5] transition-colors">
+                      <tr key={i} className="border-b border-[#e5e5e5] hover:bg-[#f5f5f5] transition-colors dark:border-[#262626] dark:hover:bg-[#1f1f1f]">
                         <td className="py-2 text-[#262626] truncate max-w-[200px]">{m.model || '(default)'}</td>
-                        <td className="py-2 text-[#737373]">{m.provider}</td>
-                        <td className="py-2 text-right text-[#525252]">{m.count}</td>
+                        <td className="py-2 text-[#737373] dark:text-[#a3a3a3]">{m.provider}</td>
+                        <td className="py-2 text-right text-[#525252] dark:text-[#a3a3a3]">{m.count}</td>
                       </tr>
                     ))
                   )}
@@ -207,44 +207,44 @@ export default function AnalyticsPage() {
             </div>
 
             {/* Savings from local models */}
-            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden">
+            <div className="nvidia-corner border border-[#d4d4d4] bg-[#ffffff] p-5 relative overflow-hidden dark:bg-[#0a0a0a] dark:border-[#404040]">
               <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-[#76B900]/40 to-transparent" />
               <div className="text-[10px] font-mono text-[#76B900] tracking-[0.15em] uppercase mb-3">Money Saved by Using Your GPU</div>
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <div className="text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.1em] mb-1">Total Saved</div>
+                    <div className="text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.1em] mb-1 dark:text-[#737373]">Total Saved</div>
                     <div className="text-xl font-bold text-[#76B900] font-mono">
                       ${parseFloat(data.savings.total_savings).toFixed(4)}
                     </div>
                   </div>
                   <div>
-                    <div className="text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.1em] mb-1">Savings Rate</div>
+                    <div className="text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.1em] mb-1 dark:text-[#737373]">Savings Rate</div>
                     <div className="text-xl font-bold text-[#76B900] font-mono">
                       {data.savings.savings_pct.toFixed(1)}%
                     </div>
                   </div>
                 </div>
 
-                <div className="border-t border-[#e5e5e5] pt-3 space-y-2">
+                <div className="border-t border-[#e5e5e5] pt-3 space-y-2 dark:border-[#262626]">
                   <div className="flex justify-between text-xs font-mono">
-                    <span className="text-[#a3a3a3]">Local queries</span>
-                    <span className="text-[#525252]">{data.savings.local_queries}</span>
+                    <span className="text-[#a3a3a3] dark:text-[#737373]">Local queries</span>
+                    <span className="text-[#525252] dark:text-[#a3a3a3]">{data.savings.local_queries}</span>
                   </div>
                   <div className="flex justify-between text-xs font-mono">
-                    <span className="text-[#a3a3a3]">Cloud queries</span>
-                    <span className="text-[#525252]">{data.savings.cloud_queries}</span>
+                    <span className="text-[#a3a3a3] dark:text-[#737373]">Cloud queries</span>
+                    <span className="text-[#525252] dark:text-[#a3a3a3]">{data.savings.cloud_queries}</span>
                   </div>
                   <div className="flex justify-between text-xs font-mono">
-                    <span className="text-[#a3a3a3]">Est. cloud cost (if no local)</span>
-                    <span className="text-[#525252]">${parseFloat(data.savings.estimated_cloud_cost).toFixed(4)}</span>
+                    <span className="text-[#a3a3a3] dark:text-[#737373]">Est. cloud cost (if no local)</span>
+                    <span className="text-[#525252] dark:text-[#a3a3a3]">${parseFloat(data.savings.estimated_cloud_cost).toFixed(4)}</span>
                   </div>
                 </div>
 
                 {/* Savings bar */}
                 <div>
-                  <div className="text-[9px] font-mono text-[#a3a3a3] mb-1">Local vs Cloud Use</div>
-                  <div className="w-full h-4 bg-[#f5f5f5] flex overflow-hidden">
+                  <div className="text-[9px] font-mono text-[#a3a3a3] mb-1 dark:text-[#737373]">Local vs Cloud Use</div>
+                  <div className="w-full h-4 bg-[#f5f5f5] flex overflow-hidden dark:bg-[#141414]">
                     {totalQueries > 0 && (
                       <>
                         <div

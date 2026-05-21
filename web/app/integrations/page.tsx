@@ -152,7 +152,7 @@ function PlatformRow({
       aria-label={`${platform.display_name}, status: ${status}`}
     >
       {/* Icon */}
-      <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-[#f5f5f5] text-[10px] font-mono font-bold text-[#525252]">
+      <div className="flex-shrink-0 w-10 h-10 flex items-center justify-center bg-[#f5f5f5] text-[10px] font-mono font-bold text-[#525252] dark:bg-[#141414] dark:text-[#a3a3a3]">
         {platformInitials(platform)}
       </div>
 
@@ -333,7 +333,7 @@ export default function IntegrationsPage() {
 
       {/* --- Scan & Connect All --- */}
       {!loading && (
-        <div className="mb-8 p-6 border border-[--border] bg-white">
+        <div className="mb-8 p-6 border border-[--border] bg-white dark:bg-[#0a0a0a]">
           {connectAllResults ? (
             /* Results view */
             <div>
@@ -444,14 +444,14 @@ export default function IntegrationsPage() {
           {[1, 2, 3, 4, 5].map((i) => (
             <div
               key={i}
-              className="h-[76px] bg-[#f5f5f5] animate-pulse border border-[--border]"
+              className="h-[76px] bg-[#f5f5f5] animate-pulse border border-[--border] dark:bg-[#141414]"
             />
           ))}
         </div>
       ) : (
         <div role="list" className="space-y-1">
           {sorted.length === 0 ? (
-            <div className="border border-[--border] bg-white p-6 text-sm text-[--text-secondary]">
+            <div className="border border-[--border] bg-white p-6 text-sm text-[--text-secondary] dark:bg-[#0a0a0a]">
               No developer tools were detected yet. Install Cursor, Claude Code, OpenClaw, or NemoClaw, then check again.
             </div>
           ) : (

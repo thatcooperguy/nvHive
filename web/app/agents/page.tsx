@@ -57,21 +57,21 @@ function AgentCard({ profile }: AgentCardProps) {
   const modelLabel = profile.model || (profile.provider ? `${profile.provider} (auto-pick)` : 'Router picks');
 
   return (
-    <div className="flex h-full flex-col gap-3 rounded-lg border border-[#e5e5e5] bg-white p-4 transition-colors hover:border-[#76B900]/40">
+    <div className="flex h-full flex-col gap-3 rounded-lg border border-[#e5e5e5] bg-white p-4 transition-colors hover:border-[#76B900]/40 dark:border-[#262626] dark:bg-[#0a0a0a]">
       <div className="flex items-start gap-3">
         <AgentAvatar profile={profile} size="lg" />
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <div className="truncate text-sm font-bold text-[#0a0a0a]">{profile.title}</div>
-              <div className="truncate text-[10px] font-mono text-[#a3a3a3]">{profile.name}</div>
+              <div className="truncate text-sm font-bold text-[#0a0a0a] dark:text-[#fafafa]">{profile.title}</div>
+              <div className="truncate text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{profile.name}</div>
             </div>
             {profile.built_in ? (
               <span className="flex-shrink-0 rounded border border-[#76B900]/30 bg-[#76B900]/10 px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider text-[#76B900]">
                 Built-in
               </span>
             ) : (
-              <span className="flex-shrink-0 rounded border border-[#d4d4d4] bg-[#f5f5f5] px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider text-[#737373]">
+              <span className="flex-shrink-0 rounded border border-[#d4d4d4] bg-[#f5f5f5] px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider text-[#737373] dark:border-[#404040] dark:bg-[#141414] dark:text-[#a3a3a3]">
                 Custom
               </span>
             )}
@@ -80,7 +80,7 @@ function AgentCard({ profile }: AgentCardProps) {
       </div>
 
       {profile.description && (
-        <p className="text-xs leading-relaxed text-[#525252]">{profile.description}</p>
+        <p className="text-xs leading-relaxed text-[#525252] dark:text-[#a3a3a3]">{profile.description}</p>
       )}
 
       {profile.tags.length > 0 && (
@@ -88,7 +88,7 @@ function AgentCard({ profile }: AgentCardProps) {
           {profile.tags.map(tag => (
             <span
               key={tag}
-              className="rounded border border-[#e5e5e5] bg-[#fafafa] px-1.5 py-0.5 text-[9px] font-mono uppercase tracking-wider text-[#737373]"
+              className="rounded border border-[#e5e5e5] bg-[#fafafa] px-1.5 py-0.5 text-[9px] font-mono uppercase tracking-wider text-[#737373] dark:border-[#262626] dark:bg-[#141414] dark:text-[#a3a3a3]"
             >
               {tag}
             </span>
@@ -96,20 +96,20 @@ function AgentCard({ profile }: AgentCardProps) {
         </div>
       )}
 
-      <dl className="grid grid-cols-1 gap-1 text-[10px] font-mono text-[#737373]">
+      <dl className="grid grid-cols-1 gap-1 text-[10px] font-mono text-[#737373] dark:text-[#a3a3a3]">
         <div className="flex items-baseline justify-between gap-2">
-          <dt className="text-[#a3a3a3]">Model</dt>
-          <dd className="truncate text-right text-[#0a0a0a]" title={modelLabel}>{modelLabel}</dd>
+          <dt className="text-[#a3a3a3] dark:text-[#737373]">Model</dt>
+          <dd className="truncate text-right text-[#0a0a0a] dark:text-[#fafafa]" title={modelLabel}>{modelLabel}</dd>
         </div>
         {temperature && (
           <div className="flex items-baseline justify-between gap-2">
-            <dt className="text-[#a3a3a3]">Temperature</dt>
-            <dd className="text-[#0a0a0a]">{temperature}</dd>
+            <dt className="text-[#a3a3a3] dark:text-[#737373]">Temperature</dt>
+            <dd className="text-[#0a0a0a] dark:text-[#fafafa]">{temperature}</dd>
           </div>
         )}
         {cost && (
           <div className="flex items-baseline justify-between gap-2">
-            <dt className="text-[#a3a3a3]">Cost ceiling</dt>
+            <dt className="text-[#a3a3a3] dark:text-[#737373]">Cost ceiling</dt>
             <dd className="text-[#d97706]">{cost}</dd>
           </div>
         )}
@@ -182,9 +182,9 @@ export default function AgentsPage() {
         }
       />
       <div className="mx-auto max-w-6xl space-y-6 p-6">
-        <p className="text-xs leading-relaxed text-[#525252]">
+        <p className="text-xs leading-relaxed text-[#525252] dark:text-[#a3a3a3]">
           Each agent is a saved persona + preferred LLM mapping. Built-ins ship with nvHive and route through whichever provider is available on your workspace.
-          Custom agents live as YAML under <code className="rounded bg-[#f5f5f5] px-1 py-0.5 font-mono text-[10px] text-[#737373]">NVH_HOME/agent-profiles/</code> so they survive reconnects.
+          Custom agents live as YAML under <code className="rounded bg-[#f5f5f5] px-1 py-0.5 font-mono text-[10px] text-[#737373] dark:bg-[#141414] dark:text-[#a3a3a3]">NVH_HOME/agent-profiles/</code> so they survive reconnects.
         </p>
 
         {error && (
@@ -193,7 +193,7 @@ export default function AgentsPage() {
             style={{ borderColor: '#dc2626', background: 'rgba(220,38,38,0.08)', color: '#dc2626' }}
           >
             <div className="font-bold uppercase tracking-wider">Could not load agents</div>
-            <div className="mt-1 text-[10px] text-[#525252]">{error}</div>
+            <div className="mt-1 text-[10px] text-[#525252] dark:text-[#a3a3a3]">{error}</div>
             <button
               type="button"
               onClick={() => setReloadKey(k => k + 1)}
@@ -207,16 +207,16 @@ export default function AgentsPage() {
         {loading ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[0, 1, 2, 3, 4, 5].map(i => (
-              <div key={i} className="h-56 animate-pulse rounded-lg border border-[#e5e5e5] bg-[#fafafa]" />
+              <div key={i} className="h-56 animate-pulse rounded-lg border border-[#e5e5e5] bg-[#fafafa] dark:border-[#262626] dark:bg-[#141414]" />
             ))}
           </div>
         ) : profiles.length === 0 && !error ? (
-          <div className="rounded-lg border border-[#e5e5e5] bg-white p-10 text-center">
-            <div className="mb-2 text-2xl text-[#a3a3a3]">◇</div>
-            <div className="text-sm font-mono font-bold uppercase tracking-wider text-[#525252]">
+          <div className="rounded-lg border border-[#e5e5e5] bg-white p-10 text-center dark:border-[#262626] dark:bg-[#0a0a0a]">
+            <div className="mb-2 text-2xl text-[#a3a3a3] dark:text-[#737373]">◇</div>
+            <div className="text-sm font-mono font-bold uppercase tracking-wider text-[#525252] dark:text-[#a3a3a3]">
               No agents available
             </div>
-            <div className="mx-auto mt-2 max-w-md text-[11px] font-mono text-[#a3a3a3]">
+            <div className="mx-auto mt-2 max-w-md text-[11px] font-mono text-[#a3a3a3] dark:text-[#737373]">
               The catalog came back empty. The Hive API normally ships with at least the default Wizard persona — check that the API is online.
             </div>
             <button
