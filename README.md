@@ -2,7 +2,7 @@
 
 **A rootless NVIDIA AI lab for students, creators, agents, ComfyUI, and local models.**
 
-![version](https://img.shields.io/badge/version-0.35.1-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
+![version](https://img.shields.io/badge/version-0.37.0-blue) ![python](https://img.shields.io/badge/python-3.11%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green) ![ci](https://img.shields.io/badge/CI-Linux%20%7C%20Windows%20%7C%20macOS-blue)
 
 **Official project:** https://github.com/thatcooperguy/nvHive
 
@@ -13,11 +13,11 @@ redistributions should use distinct project names, package names, release
 channels, and branding. See [NOTICE](NOTICE.md) and
 [TRADEMARKS](TRADEMARKS.md).
 
-nvHive turns a fresh cloud Linux GPU desktop into a ready-to-use AI workstation
-without `sudo`: it finds persistent storage, installs into user-owned paths,
-opens a setup wizard, recommends models for the detected GPU, and gives students
-one-click paths for local LLMs, ComfyUI, agents, creative tools, game-dev tools,
-and music production.
+nvHive™ turns a fresh cloud Linux GPU desktop into a ready-to-use AI
+workstation without `sudo`: it finds persistent storage, installs into
+user-owned paths, opens a setup wizard, recommends models for the detected
+GPU, and gives students one-click paths for local LLMs, ComfyUI, agents,
+creative tools, game-dev tools, and music production.
 
 ## At A Glance
 
@@ -131,15 +131,15 @@ Fully standalone. No Python install, no pip, no venv. Download the asset, make i
 
 <p align="center">
   <a href="https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-linux-x86_64">
-    <img src="https://img.shields.io/badge/Download%20for%20Linux-76B900?style=for-the-badge&logo=linux&logoColor=black" alt="Download for Linux (x86_64)">
+    <img src="https://img.shields.io/badge/Download%20for%20Linux-1f6feb?style=for-the-badge&logo=linux&logoColor=white" alt="Download for Linux (x86_64)">
   </a>
   &nbsp;
   <a href="https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-macos-arm64">
-    <img src="https://img.shields.io/badge/Download%20for%20macOS-76B900?style=for-the-badge&logo=apple&logoColor=black" alt="Download for macOS (Apple Silicon)">
+    <img src="https://img.shields.io/badge/Download%20for%20macOS-1f6feb?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS (Apple Silicon)">
   </a>
   &nbsp;
   <a href="https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-windows-x86_64.exe">
-    <img src="https://img.shields.io/badge/Download%20for%20Windows-76B900?style=for-the-badge&logo=windows&logoColor=black" alt="Download for Windows (x86_64)">
+    <img src="https://img.shields.io/badge/Download%20for%20Windows-1f6feb?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows (x86_64)">
   </a>
 </p>
 
@@ -324,7 +324,7 @@ Setup auto-detects your VRAM and recommends models that fit concurrently. No roo
 
 ## Why nvHive
 
-**Council scored 68% higher than a single model — at $0 cost.** Three free providers running in parallel outperformed a single model on accuracy, completeness, and coherence. [Benchmark details below.](#benchmark-results)
+**Council mode beat a single model on 13 of 16 prompts in our internal evaluation, at $0 cost.** Methodology has known limitations — small sample size, GPT-4 as judge, and judge-model overlap with the council. Results will vary on your prompts and providers. [Full benchmark methodology and raw outputs.](#benchmark-results)
 
 - **Smart team assembly.** nvHive generates expert agents for your question and matches each to the best LLM for their specialty — a "Security Engineer" agent routes to a security-strong provider, a "Database Expert" to one suited for database queries.
 - **Automatic orchestration.** Coding tasks get a planner + coder + reviewer. Complex questions get a council. Simple questions get the fastest advisor. All automatic.
@@ -440,12 +440,16 @@ result = await nvh.convene("Architecture review", cabinet="engineering")
 
 ## Benchmark Results
 
-Real data from NVIDIA DGX Spark (GB10, 120GB). 16 prompts across code generation, debugging, reasoning, math, creative writing, and Q&A. Judged by OpenAI with ground truth verification.
+**Internal evaluation. Methodology has known limitations — read before quoting.**
+
+Sample: 16 prompts across code generation, debugging, reasoning, math, creative writing, and Q&A. Run on a single workstation. Judge: GPT-4. Important caveat — **OpenAI/GPT-4 sits inside the council being scored**, so the judge is not independent of the candidates. Council outperformed single-model on 13 of 16 prompts; the table below shows mean scores.
 
 | Mode | Accuracy | Completeness | Coherence | **Overall** | Cost |
 |------|----------|-------------|-----------|---------|------|
 | Single Model (Nemotron Super) | 5.5 | 5.7 | 5.0 | **5.1** | $0.00 |
 | **Council (Ollama + Groq + Google)** | **9.0** | **8.0** | **9.0** | **8.6** | **$0.00** |
+
+**This is not a benchmark you should quote without rerunning.** Treat it as an "it does work on a small sample" anecdote, not as a published result. A larger, public-eval-based, non-conflicted-judge run is on the roadmap; in the meantime, reproduce on your own prompts:
 
 ```bash
 nvh bench              # GPU speed (tokens/sec)
@@ -453,7 +457,7 @@ nvh bench -q           # speed + quality comparison
 nvh health             # provider resilience
 ```
 
-Results vary by hardware and workload — run `nvh bench` to measure on your setup.
+Results vary by hardware, prompts, providers, and judge model.
 
 ---
 

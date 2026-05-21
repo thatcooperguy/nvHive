@@ -1,69 +1,86 @@
-# nvHive Trademark and Branding Policy
+# nvHive — Trademark and Branding Policy
 
-This policy explains how the nvHive name and branding may be used. It is meant
-to prevent confusing forks and unofficial releases while keeping the source code
-open under the MIT License.
+**Status:** `nvHive` is a common-law trademark in use in commerce since
+2026-03 in connection with software for AI-LLM orchestration and rootless
+GPU workspace installation. It is **not** federally registered (yet). The
+common-law rights described here arise from actual use under U.S. trademark
+law and are geographically limited to the markets of use.
 
-## Protected Project Identity
+This policy explains how the nvHive name and brand may be used. It is
+intended to prevent confusion between official releases and third-party
+forks while keeping the source code open under the MIT License.
+
+## What is covered
 
 The following identify the official nvHive project:
 
-- The names `nvHive`, `NVHive`, `nvhive`, and the `nvh` command when used as
-  project or product branding.
-- nvHive logos, screenshots, UI styling, release badges, release artifacts, and
-  product descriptions.
-- The official GitHub repository: https://github.com/thatcooperguy/nvHive
-- The official PyPI distribution: https://pypi.org/project/nvhive/
+- The names `nvHive`, `NVHive`, `nvhive`, and the `nvh` CLI command when
+  used in connection with software.
+- nvHive logos, product screenshots, UI styling and visual identity
+  (trade dress), release badges, release artifacts, and product
+  descriptions used to identify the project.
+- The official GitHub repository:
+  https://github.com/thatcooperguy/nvHive
+- The official PyPI distribution:
+  https://pypi.org/project/nvhive/
 
-The MIT License does not grant trademark, branding, endorsement, or package
-publishing rights.
+**The MIT License grants broad rights to the source code. It does not
+grant trademark rights, branding rights, endorsement rights, or PyPI
+publishing rights to the `nvhive` distribution name.**
 
-## Allowed Uses
-
-You may:
+## What you can do without asking
 
 - Use, fork, modify, and redistribute the source code under the MIT License.
-- Truthfully state that your project is based on, derived from, compatible with,
-  or originally forked from nvHive.
-- Link to the official nvHive repository or PyPI package.
-- Use the nvHive name in documentation when describing compatibility,
+- Truthfully describe your project as based on, derived from, compatible
+  with, or originally forked from nvHive (nominative fair use).
+- Link to the official repository or PyPI package.
+- Reference the name in documentation when describing compatibility,
   attribution, or provenance.
 
-## Uses That Need Permission
+## What requires a distinct identity
 
-Please get written permission from the nvHive maintainers before you:
+If you publish a fork or commercial redistribution, please use a distinct:
 
-- Publish a modified or independent distribution using the `nvHive`, `NVHive`,
-  `nvhive`, or `nvh` names as the primary product identity.
-- Publish packages, binaries, installers, containers, or app store listings that
-  appear to be official nvHive releases.
-- Use nvHive logos, screenshots, or product UI in a way that implies official
-  endorsement.
-- Register domains, social accounts, package names, or marketplace listings
-  that could be confused with the official project.
+- **Project name** that does not lead with `nvHive` / `nvhive` / `nvh-` as
+  the primary product identity.
+- **Package name** on PyPI or other registries (do not publish to a name
+  that could be confused with `nvhive`).
+- **Release channel** (do not publish binaries, installers, containers,
+  or app store listings that appear to be official nvHive releases).
+- **Visual identity** (do not reuse the logo, color palette, or UI
+  screenshots in a way that implies official endorsement).
 
-Forks and commercial redistributions should use a distinct project name, package
-name, release channel, and visual identity unless they are explicitly approved
-as official nvHive releases.
+This is the *standard* fork-renaming convention in open source — same
+posture the Linux Foundation, Apache, and Mozilla projects apply.
 
-## PyPI and Release Channels
+## PyPI and release channels
 
-The `nvhive` PyPI distribution is the canonical package name for the official
+The `nvhive` PyPI distribution is the canonical package for the official
 project. Only maintainers of `thatcooperguy/nvHive` should publish releases
-under that name.
+under that name or configure PyPI trusted publishing for that distribution.
 
-Third-party builds must not claim to be official nvHive releases or configure
-trusted publishing for the `nvhive` PyPI project. Use a different PyPI
-distribution name and clear fork metadata instead.
+Third-party builds must not claim to be official releases or attempt to
+publish to the `nvhive` PyPI namespace. Use a clearly different distribution
+name and include fork metadata in your `pyproject.toml`.
 
-## NVIDIA and Other Third-Party Marks
+## NVIDIA and other third-party marks
 
 nvHive is independent and is not endorsed by NVIDIA. References to NVIDIA,
-CUDA, GeForce, NIM, NeMo, Nemotron, ComfyUI, Blender, Godot, GitHub, or other
-software names are descriptive compatibility references only. Those marks
-belong to their respective owners.
+CUDA, GeForce, NIM, NeMo, Nemotron, ComfyUI, Blender, Godot, GitHub, or
+other software names are descriptive compatibility references only. Those
+marks belong to their respective owners.
+
+## What this policy does NOT do
+
+- It does not assert federal trademark registration. There is no ® symbol
+  in use; `™` may appear where appropriate to mark common-law use.
+- It does not reserve domains, social media handles, or marketplace
+  listings beyond those listed under "What is covered" above. Common-law
+  trademark rights do not extend to those by default.
+- It does not waive or modify the MIT License grant on existing source
+  code, which remains in force.
 
 ## Questions
 
-For branding or distribution questions, open an issue at:
+For branding, distribution, or fork questions, open an issue at:
 https://github.com/thatcooperguy/nvHive/issues
