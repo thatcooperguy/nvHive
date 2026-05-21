@@ -1753,6 +1753,183 @@ async def wizard_profiles_upsert(
     return _response_envelope({"saved": True, "path": str(path), "name": profile.name})
 
 
+@app.get(
+    "/v1/wizard/profiles/{name}/avatar",
+    summary="Return the avatar image (SVG/PNG) for a profile",
+)
+async def wizard_profile_avatar(
+    name: str = Path(..., description="Profile name"),
+    home_dir: str | None = None,
+) -> Response:
+    """Resolve and return the avatar bytes for ``name``.
+
+    Built-ins always resolve to an inline SVG (~400B). User profiles can
+    override by dropping a PNG/JPG/WEBP/SVG into
+    ``NVH_HOME/agent-profiles/avatars/<name>.<ext>``. 404 when neither
+    exists; callers should fall back to an initial-style placeholder.
+
+    Auth-free intentionally — avatars are cacheable presentation assets
+    with no PII, and gating them on Bearer creates layout flashes in the
+    chat surface every time the picker rerenders.
+    """
+    from nvh.integrations.wizard.profiles import resolve_avatar
+
+    resolved = resolve_avatar(name, home_dir=home_dir)
+    if resolved is None:
+        raise HTTPException(status_code=404, detail=f"No avatar for '{name}'")
+    content_type, body = resolved
+    return Response(
+        content=body,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+class WizardProfileAvatarGenerateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    # Prompt is optional — when missing we derive one from the profile's
+    # description / persona so the user doesn't have to write art-speak.
+    prompt: str | None = Field(default=None, max_length=2000)
+    style: str = Field(default="portrait", max_length=64)
+    home_dir: str | None = None
+
+
+@app.post(
+    "/v1/wizard/profiles/{name}/avatar/generate",
+    summary="Generate a portrait for a user profile via ComfyUI",
+)
+async def wizard_profile_avatar_generate(
+    name: str = Path(..., description="Profile name"),
+    request: WizardProfileAvatarGenerateRequest = None,  # type: ignore[assignment]
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Render a portrait via the local ComfyUI service and save it as the
+    profile's avatar. Returns the saved path + a URL the UI can render.
+
+    This is the "create a new agent and pick a portrait" flow's image side.
+    When ComfyUI isn't installed, returns ok=False with a clear hint so the
+    user can install it from the Studio Packs page.
+    """
+    from nvh.integrations.wizard.profiles import (
+        avatars_dir,
+        get_profile,
+    )
+
+    if request is None:
+        request = WizardProfileAvatarGenerateRequest(name=name)
+    profile = get_profile(name, home_dir=request.home_dir)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"Profile '{name}' not found")
+
+    # Build a prompt from the profile if the caller didn't supply one.
+    derived_prompt = request.prompt or (
+        f"Portrait avatar of an AI assistant persona named {profile.title}. "
+        f"Personality: {profile.description}. "
+        f"{request.style} style, plain studio background, "
+        "soft lighting, head-and-shoulders framing, no text."
+    )
+
+    try:
+        from nvh.integrations.installs.comfyui import generate_portrait
+    except Exception:
+        # ComfyUI helper not bundled in this build — surface a clean error.
+        return _response_envelope({
+            "ok": False,
+            "error": "ComfyUI portrait generation isn't wired up in this build.",
+            "hint": "Install the ComfyUI studio pack and retry, or upload a "
+                    "PNG to NVH_HOME/agent-profiles/avatars/<name>.png manually.",
+        })
+
+    try:
+        # generate_portrait returns the raw image bytes on success or raises.
+        image_bytes, ext = await generate_portrait(
+            derived_prompt,
+            home_dir=request.home_dir,
+        )
+    except Exception as exc:
+        return _response_envelope({
+            "ok": False,
+            "error": f"ComfyUI portrait generation failed: {exc}",
+        })
+
+    out_dir = avatars_dir(home_dir=request.home_dir)
+    out_path = out_dir / f"{name}{ext}"
+    out_path.write_bytes(image_bytes)
+    return _response_envelope({
+        "ok": True,
+        "name": name,
+        "path": str(out_path),
+        "url": f"/v1/wizard/profiles/{name}/avatar",
+        "prompt": derived_prompt,
+    })
+
+
+@app.post(
+    "/v1/wizard/profiles/{name}/avatar/upload",
+    summary="Upload a custom avatar image for a profile",
+)
+async def wizard_profile_avatar_upload(
+    name: str = Path(..., description="Profile name"),
+    file: UploadFile = File(...),
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Save an uploaded image as the profile's avatar.
+
+    Accepted types: png / jpeg / webp / svg. Files land under
+    ``NVH_HOME/agent-profiles/avatars/<name>.<ext>``. The avatar endpoint
+    picks the first matching extension on read, so re-uploading replaces
+    cleanly.
+    """
+    from pathlib import Path as _Path
+
+    from nvh.integrations.wizard.profiles import avatars_dir
+
+    ALLOWED = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/svg+xml": ".svg",
+    }
+    ctype = (file.content_type or "").lower()
+    if ctype not in ALLOWED:
+        # Fall back to inferring from filename so curl-without-content-type
+        # still works for the obvious cases.
+        suffix = _Path(file.filename or "").suffix.lower()
+        ext_lookup = {".png": ".png", ".jpg": ".jpg", ".jpeg": ".jpg",
+                      ".webp": ".webp", ".svg": ".svg"}
+        ext = ext_lookup.get(suffix)
+        if ext is None:
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported avatar type {ctype or suffix}; use png/jpg/webp/svg",
+            )
+    else:
+        ext = ALLOWED[ctype]
+
+    body = await file.read()
+    # Cap upload size — agent avatars don't need to be print-quality.
+    if len(body) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Avatar must be under 5 MB")
+
+    out_dir = avatars_dir(home_dir=home_dir)
+    # Clean prior avatars so the read-side picks the new extension.
+    for prev in out_dir.glob(f"{name}.*"):
+        try:
+            prev.unlink()
+        except OSError:
+            pass
+    out_path = out_dir / f"{name}{ext}"
+    out_path.write_bytes(body)
+    return _response_envelope({
+        "ok": True,
+        "name": name,
+        "path": str(out_path),
+        "url": f"/v1/wizard/profiles/{name}/avatar",
+        "bytes": len(body),
+    })
+
+
 @app.delete("/v1/wizard/profiles/{name}", summary="Delete a user-defined agent profile")
 async def wizard_profiles_delete(
     name: str = Path(..., description="Profile name"),
@@ -2115,6 +2292,36 @@ class SnapshotImportRequest(BaseModel):
     path: str = Field(..., min_length=1)
     home_dir: str | None = None
     overwrite: bool = False
+
+
+class SnapshotImportFromUrlRequest(BaseModel):
+    url: str = Field(..., min_length=8, max_length=2000)
+    home_dir: str | None = None
+    overwrite: bool = False
+
+
+@app.post(
+    "/v1/workspace/snapshot/import-url",
+    summary="Download a snapshot from a URL and restore it",
+)
+async def workspace_snapshot_import_url_endpoint(
+    request: SnapshotImportFromUrlRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Pull a previously-exported snapshot from ``url`` and extract it.
+
+    The file lands under ``NVH_HOME/snapshots/incoming/<stamp>-<basename>``
+    so a failed extract still keeps the bytes for retry. Capped at 200 MB
+    to protect persistent storage on hourly-metered desktops.
+    """
+    from nvh.integrations.workspace.snapshot import import_snapshot_from_url
+
+    result = await import_snapshot_from_url(
+        request.url,
+        home_dir=request.home_dir,
+        overwrite=request.overwrite,
+    )
+    return _response_envelope(result)
 
 
 @app.post("/v1/workspace/snapshot/import", summary="Restore a workspace snapshot tarball")

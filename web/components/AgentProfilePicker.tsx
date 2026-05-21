@@ -9,17 +9,22 @@
  *
  * Selection is held by the parent and round-trips through wizard_chat as the
  * `profile` field, so the persona + LLM mapping apply per turn.
+ *
+ * Renders the active profile's avatar inline so the picker doubles as a
+ * persona reminder while the user is typing.
  */
 
 import { useEffect, useState } from 'react';
+import AgentAvatar from '@/components/AgentAvatar';
 import { listAgentProfiles, type AgentProfileSchema } from '@/lib/api';
 
 interface Props {
   value: string;
   onChange: (name: string) => void;
+  onCreateNew?: () => void;
 }
 
-export default function AgentProfilePicker({ value, onChange }: Props) {
+export default function AgentProfilePicker({ value, onChange, onCreateNew }: Props) {
   const [profiles, setProfiles] = useState<AgentProfileSchema[]>([]);
 
   useEffect(() => {
@@ -42,7 +47,8 @@ export default function AgentProfilePicker({ value, onChange }: Props) {
 
   const active = profiles.find(p => p.name === value);
   return (
-    <div className="flex items-center gap-1 text-[10px] font-mono">
+    <div className="flex items-center gap-2 text-[10px] font-mono">
+      <AgentAvatar profile={active} size="sm" />
       <label htmlFor="agent-profile" style={{ color: 'var(--text-muted)' }}>
         Agent:
       </label>
@@ -65,6 +71,17 @@ export default function AgentProfilePicker({ value, onChange }: Props) {
           </option>
         ))}
       </select>
+      {onCreateNew && (
+        <button
+          type="button"
+          onClick={onCreateNew}
+          className="ml-1 text-[10px] font-mono transition-colors hover:text-[#76B900]"
+          style={{ color: 'var(--text-muted)' }}
+          title="Create a new agent profile"
+        >
+          + New
+        </button>
+      )}
     </div>
   );
 }

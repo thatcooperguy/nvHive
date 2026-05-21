@@ -1275,6 +1275,20 @@ export interface AgentProfileSchema {
   tools_allowed: string[] | null;
   built_in: boolean;
   tags: string[];
+  avatar: string;
+}
+
+/** Build a renderable URL given a profile's avatar field. Returns null when
+ * the profile has no avatar set — caller renders the initial fallback. */
+export function profileAvatarUrl(
+  profile: { avatar?: string } | null | undefined,
+): string | null {
+  if (!profile?.avatar) return null;
+  if (profile.avatar.startsWith('http://') || profile.avatar.startsWith('https://')) {
+    return profile.avatar;
+  }
+  const base = getApiBases()[0] ?? '';
+  return `${base}${profile.avatar}`;
 }
 
 export async function listAgentProfiles(homeDir?: string): Promise<{ profiles: AgentProfileSchema[] }> {
@@ -1283,7 +1297,10 @@ export async function listAgentProfiles(homeDir?: string): Promise<{ profiles: A
 }
 
 export async function saveAgentProfile(
-  profile: Omit<AgentProfileSchema, 'built_in'> & { home_dir?: string },
+  profile: Omit<AgentProfileSchema, 'built_in' | 'avatar'> & {
+    avatar?: string;
+    home_dir?: string;
+  },
 ): Promise<{ saved: boolean; path: string; name: string }> {
   return apiPost('/v1/wizard/profiles', profile);
 }
@@ -1291,6 +1308,33 @@ export async function saveAgentProfile(
 export async function deleteAgentProfile(name: string, homeDir?: string): Promise<void> {
   const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
   await apiFetch(`/v1/wizard/profiles/${encodeURIComponent(name)}${qs}`, { method: 'DELETE' });
+}
+
+export async function uploadAgentAvatar(
+  name: string,
+  file: File,
+  homeDir?: string,
+): Promise<{ ok: boolean; url: string }> {
+  const bases = getApiBases();
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  let lastError: unknown;
+  for (const base of bases) {
+    try {
+      const res = await fetch(
+        `${base}/v1/wizard/profiles/${encodeURIComponent(name)}/avatar/upload${qs}`,
+        { method: 'POST', headers: { ...getApiAuthHeaders() }, body: fd },
+      );
+      rememberApiBase(base);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const env = await res.json() as ApiEnvelope<{ ok: boolean; url: string }>;
+      return env.data;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('avatar upload failed');
 }
 
 // ─── RAG upload-and-ingest (multipart) ──────────────────────────────────────

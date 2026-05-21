@@ -19,15 +19,19 @@
 
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import AgentAvatar from '@/components/AgentAvatar';
 import AgentProfilePicker from '@/components/AgentProfilePicker';
+import CreateAgentModal from '@/components/CreateAgentModal';
 import {
   createConversation,
   executeWizardTool,
+  listAgentProfiles,
   listWizardTools,
   pinConversation,
   saveVaultMemory,
   uploadAndIngest,
   wizardChatStream,
+  type AgentProfileSchema,
   type WizardChatToolCall,
   type WizardChatToolResult,
   type WizardStreamEvent,
@@ -56,6 +60,10 @@ interface Message {
   costUsd?: number;
   latencyMs?: number;
   fallbackFrom?: string | null;
+  // Name of the agent profile that produced this reply ("wizard", "coder",
+  // …). Snapshot at send time so the bubble keeps showing the right avatar
+  // even after the user swaps to a different profile mid-conversation.
+  agentProfile?: string;
 }
 
 function makeId(): string {
@@ -68,6 +76,9 @@ export default function WizardChat() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tools, setTools] = useState<Map<string, WizardToolSchema>>(new Map());
+  // Profile catalog cached so MessageBlock can render the matching avatar
+  // without each bubble making its own /v1/wizard/profiles call.
+  const [profileMap, setProfileMap] = useState<Map<string, AgentProfileSchema>>(new Map());
   // One-line "thinking…" / "calling X…" status under the spinner. Drives the
   // perceived-latency win — even before the first token arrives, the user sees
   // the Wizard moving.
@@ -83,6 +94,7 @@ export default function WizardChat() {
   // and the next turn gets the new persona + LLM preferences via the chat
   // stream's `profile` field.
   const [profile, setProfile] = useState<string>('wizard');
+  const [creatingAgent, setCreatingAgent] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Abort any in-flight stream when the user re-sends or unmounts.
   const abortRef = useRef<AbortController | null>(null);
@@ -196,20 +208,25 @@ export default function WizardChat() {
     }
   };
 
-  // Load the tool catalog once so we can look up safety classes for any
-  // tool the LLM mentions, even before the server echoes one back.
+  // Load the tool catalog + profile catalog once so message bubbles can
+  // render avatars and tool-safety badges without per-bubble API hits.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const list = await listWizardTools();
+        const [tList, pList] = await Promise.all([
+          listWizardTools(),
+          listAgentProfiles().catch(() => ({ profiles: [] as AgentProfileSchema[] })),
+        ]);
         if (cancelled) return;
-        const map = new Map<string, WizardToolSchema>();
-        for (const t of list.tools) map.set(t.name, t);
-        setTools(map);
+        const tmap = new Map<string, WizardToolSchema>();
+        for (const t of tList.tools) tmap.set(t.name, t);
+        setTools(tmap);
+        const pmap = new Map<string, AgentProfileSchema>();
+        for (const p of pList.profiles) pmap.set(p.name, p);
+        setProfileMap(pmap);
       } catch {
-        // Wizard tools endpoint missing on older builds — fall back to
-        // treating all tool calls as confirm-class so we never auto-run.
+        // Endpoints missing on older builds — fall back gracefully.
       }
     })();
     return () => {
@@ -398,6 +415,7 @@ export default function WizardChat() {
       toolCalls: [],
       toolStatus: {},
       serverToolTrace: [],
+      agentProfile: profile,
     };
     setMessages(prev => [...prev, userMsg, assistantSeed]);
     setDraft('');
@@ -542,13 +560,19 @@ export default function WizardChat() {
         style={{ background: 'var(--bg-primary)' }}
       >
         {messages.length === 0 && (
-          <EmptyState onPickPrompt={(p) => setDraft(p)} />
+          <EmptyState
+            onPickPrompt={(p) => setDraft(p)}
+            profileMap={profileMap}
+            activeProfile={profile}
+            onPickAgent={(name) => setProfile(name)}
+          />
         )}
         {messages.map(message => (
           <MessageBlock
             key={message.id}
             message={message}
             tools={tools}
+            profileMap={profileMap}
             onConfirmTool={(call) => runTool(message.id, call, true)}
           />
         ))}
@@ -606,7 +630,16 @@ export default function WizardChat() {
           </button>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono" style={{ color: 'var(--text-faint)' }}>
-          <AgentProfilePicker value={profile} onChange={setProfile} />
+          <AgentProfilePicker
+            value={profile}
+            onChange={setProfile}
+            onCreateNew={() => setCreatingAgent(true)}
+          />
+          <CreateAgentModal
+            open={creatingAgent}
+            onClose={() => setCreatingAgent(false)}
+            onCreated={(name) => setProfile(name)}
+          />
           <span>
             Press Enter to send, Shift+Enter for a newline. Type{' '}
             <span className="text-[#76B900]">/help</span> for commands. Drop
@@ -618,7 +651,29 @@ export default function WizardChat() {
   );
 }
 
-function EmptyState({ onPickPrompt }: { onPickPrompt: (prompt: string) => void }) {
+// Per-agent starter prompts shown on the empty Wizard state. Picking a card
+// both swaps the active profile AND seeds the composer with an on-persona
+// question, so first-time users get a "click → ready to send" experience.
+const AGENT_STARTERS: Record<string, string> = {
+  wizard: 'What can my GPU run right now, and what should I fix first?',
+  coder: 'Review the diff in my current branch — call out the riskiest change.',
+  researcher: 'Summarize the latest on Llama 4 release vs Llama 3, with sources.',
+  writer: 'Help me draft a launch announcement for an internal tool.',
+  ops: 'Run a safe repair pass and tell me what changed.',
+  'vault-rag': 'What did I write about my mount-autopilot setup last week?',
+};
+
+function EmptyState({
+  onPickPrompt,
+  profileMap,
+  activeProfile,
+  onPickAgent,
+}: {
+  onPickPrompt: (prompt: string) => void;
+  profileMap: Map<string, AgentProfileSchema>;
+  activeProfile: string;
+  onPickAgent: (name: string) => void;
+}) {
   // Adaptive starters — seeded from the reconnect payload so the Wizard's
   // suggestions match the user's actual workspace state. Falls back to the
   // generic set when reconnect is unavailable (cold first boot, offline, etc.).
@@ -628,6 +683,7 @@ function EmptyState({ onPickPrompt }: { onPickPrompt: (prompt: string) => void }
     'Help me pick a mission for image gen.',
     'Refresh the local model list.',
   ]);
+  const agentList = Array.from(profileMap.values()).slice(0, 6);
 
   useEffect(() => {
     let cancelled = false;
@@ -671,18 +727,66 @@ function EmptyState({ onPickPrompt }: { onPickPrompt: (prompt: string) => void }
     };
   }, []);
   return (
-    <div className="mx-auto max-w-lg pt-6 text-center">
-      <div className="text-[10px] font-mono uppercase tracking-[0.18em]" style={{ color: '#76B900' }}>
-        AI Wizard
+    <div className="mx-auto max-w-2xl pt-6">
+      <div className="text-center">
+        <div className="text-[10px] font-mono uppercase tracking-[0.18em]" style={{ color: '#76B900' }}>
+          AI Wizard
+        </div>
+        <div className="mt-2 text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
+          Pick an agent to start.
+        </div>
+        <div className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+          Each profile maps to a persona + a preferred LLM. The default Wizard
+          reads your live GPU, storage, providers, and vault before it answers
+          and can run repairs, refresh models, and validate keys.
+        </div>
       </div>
-      <div className="mt-2 text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-        Ask me about your nvHive setup.
-      </div>
-      <div className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-        I read your live GPU, persistent storage, providers, install jobs, and
-        receipts before I answer. I can also <em>do</em> things — refresh the
-        model list, run safe repairs, validate keys. Confirm-class actions
-        always show you a button first.
+
+      {agentList.length > 0 && (
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {agentList.map(p => {
+            const isActive = p.name === activeProfile;
+            return (
+              <button
+                key={p.name}
+                type="button"
+                onClick={() => {
+                  onPickAgent(p.name);
+                  const starter = AGENT_STARTERS[p.name];
+                  if (starter) onPickPrompt(starter);
+                }}
+                className="flex items-start gap-2 rounded-md border p-2 text-left transition-colors hover:border-[#76B900]/40"
+                style={{
+                  borderColor: isActive ? '#76B900' : 'var(--border)',
+                  background: isActive ? 'rgba(118,185,0,0.05)' : 'var(--bg-card)',
+                }}
+                title={p.description}
+              >
+                <AgentAvatar profile={p} size="md" />
+                <div className="min-w-0 flex-1">
+                  <div
+                    className="truncate text-xs font-mono font-bold"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    {p.title}
+                  </div>
+                  <div
+                    className="mt-0.5 line-clamp-2 text-[10px]"
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    {p.description}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-6 text-center">
+        <div className="text-[10px] font-mono uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
+          Or jump straight in
+        </div>
       </div>
       <div className="mt-4 grid grid-cols-1 gap-2 text-left sm:grid-cols-2">
         {starters.map(s => (
@@ -705,13 +809,43 @@ function EmptyState({ onPickPrompt }: { onPickPrompt: (prompt: string) => void }
   );
 }
 
+// Accent colors per built-in profile — keep in sync with the SVG spec in
+// nvh/integrations/wizard/avatars.py so the bubble border matches the
+// avatar background a user sees in the picker.
+const PROFILE_ACCENTS: Record<string, string> = {
+  wizard: '#76B900',
+  coder: '#0ea5e9',
+  researcher: '#a855f7',
+  writer: '#f59e0b',
+  ops: '#dc2626',
+  'vault-rag': '#10b981',
+};
+
+function statusForMessage(message: Message): { color: string; label: string } | null {
+  if (message.mode === 'deterministic') {
+    return { color: '#737373', label: 'offline' };
+  }
+  if (message.fallbackFrom) {
+    return { color: '#d97706', label: 'fallback' };
+  }
+  if ((message.usedProvider ?? '').toLowerCase() === 'ollama') {
+    return { color: '#76B900', label: 'local' };
+  }
+  if (message.usedProvider) {
+    return { color: '#0ea5e9', label: 'cloud' };
+  }
+  return null;
+}
+
 function MessageBlock({
   message,
   tools,
+  profileMap,
   onConfirmTool,
 }: {
   message: Message;
   tools: Map<string, WizardToolSchema>;
+  profileMap: Map<string, AgentProfileSchema>;
   onConfirmTool: (call: WizardChatToolCall) => void;
 }) {
   if (message.role === 'system') {
@@ -722,18 +856,47 @@ function MessageBlock({
     );
   }
   const isUser = message.role === 'user';
+  const profile = !isUser && message.agentProfile
+    ? profileMap.get(message.agentProfile) ?? null
+    : null;
+  const accent = profile ? PROFILE_ACCENTS[profile.name] ?? '#76B900' : null;
+  const status = !isUser ? statusForMessage(message) : null;
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex items-end gap-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
+      {!isUser && (
+        <div className="relative flex-shrink-0">
+          <AgentAvatar profile={profile} size="md" />
+          {status && (
+            <span
+              className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border"
+              style={{ background: status.color, borderColor: 'var(--bg-card)' }}
+              title={status.label}
+            />
+          )}
+        </div>
+      )}
       <div
         className={`max-w-[80%] rounded-lg border px-3 py-2 text-sm whitespace-pre-wrap ${
           isUser ? '' : 'shadow-sm'
         }`}
         style={{
           background: isUser ? '#f7fdf0' : 'var(--bg-card)',
-          borderColor: isUser ? 'var(--border-green)' : 'var(--border)',
+          borderColor: isUser
+            ? 'var(--border-green)'
+            : (accent ? `${accent}55` : 'var(--border)'),
+          borderLeftWidth: !isUser && accent ? '3px' : undefined,
+          borderLeftColor: !isUser && accent ? accent : undefined,
           color: 'var(--text-primary)',
         }}
       >
+        {!isUser && profile && (
+          <div
+            className="mb-1 text-[10px] font-mono font-bold uppercase tracking-[0.14em]"
+            style={{ color: accent ?? '#76B900' }}
+          >
+            {profile.title}
+          </div>
+        )}
         <div>{message.content}</div>
 
         {!isUser && message.serverToolTrace && message.serverToolTrace.length > 0 && (

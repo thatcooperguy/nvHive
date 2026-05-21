@@ -45,6 +45,11 @@ class AgentProfile:
     tools_allowed: list[str] | None = None
     built_in: bool = False
     tags: list[str] = field(default_factory=list)
+    # Optional avatar reference. For built-ins this is the URL of the
+    # /v1/wizard/profiles/{name}/avatar endpoint (returns an SVG). For
+    # user profiles it can be: a path under NVH_HOME/agent-profiles/
+    # avatars/, an absolute URL the user pasted, or empty (initial fallback).
+    avatar: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -55,6 +60,14 @@ class AgentProfile:
 # a new name. The mapping uses provider "" / model "" to mean "let the router
 # pick" — so a user without an OpenAI key still gets a working Coder profile
 # routed through local Ollama.
+_AVATAR_URL_PREFIX = "/v1/wizard/profiles/"
+
+
+def _avatar_url_for(name: str) -> str:
+    """Stable URL the WebUI can render directly without bundling assets."""
+    return f"{_AVATAR_URL_PREFIX}{name}/avatar"
+
+
 BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
     AgentProfile(
         name="wizard",
@@ -65,6 +78,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         model="",
         built_in=True,
         tags=["general", "setup", "support"],
+        avatar=_avatar_url_for("wizard"),
     ),
     AgentProfile(
         name="coder",
@@ -82,6 +96,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         temperature=0.2,
         built_in=True,
         tags=["code", "review"],
+        avatar=_avatar_url_for("coder"),
     ),
     AgentProfile(
         name="researcher",
@@ -101,6 +116,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         tools_allowed=["web_search", "rag_ask", "rag_ask_vault"],
         built_in=True,
         tags=["research", "search"],
+        avatar=_avatar_url_for("researcher"),
     ),
     AgentProfile(
         name="writer",
@@ -118,6 +134,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         temperature=0.6,
         built_in=True,
         tags=["writing"],
+        avatar=_avatar_url_for("writer"),
     ),
     AgentProfile(
         name="ops",
@@ -141,6 +158,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         ],
         built_in=True,
         tags=["ops", "support"],
+        avatar=_avatar_url_for("ops"),
     ),
     AgentProfile(
         name="vault-rag",
@@ -158,6 +176,7 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         tools_allowed=["rag_ask_vault"],
         built_in=True,
         tags=["rag", "notes"],
+        avatar=_avatar_url_for("vault-rag"),
     ),
 )
 
@@ -227,6 +246,50 @@ def save_user_profile(profile: AgentProfile, home_dir: str | Path | None = None)
     # built_in only makes sense for shipped defaults; force False on save.
     payload["built_in"] = False
     out.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return out
+
+
+def resolve_avatar(name: str, home_dir: str | Path | None = None) -> tuple[str, bytes] | None:
+    """Return ``(content_type, body_bytes)`` for the named profile's avatar.
+
+    Resolution order:
+      1. Built-in SVG (always available, never broken).
+      2. User-saved file under NVH_HOME/agent-profiles/avatars/<name>.{png,jpg,
+         webp,svg} — written by the create-agent flow's ComfyUI generation.
+
+    Returns None when nothing matches; the endpoint should render the initial
+    fallback in that case.
+    """
+    from nvh.integrations.wizard.avatars import render_built_in_avatar
+
+    profile = get_profile(name, home_dir=home_dir)
+    # User-saved files take precedence so a user can override a built-in.
+    if profile is not None and not profile.built_in:
+        avatars_dir = _profiles_dir(home_dir) / "avatars"
+        for ext, ctype in (
+            (".png", "image/png"),
+            (".jpg", "image/jpeg"),
+            (".jpeg", "image/jpeg"),
+            (".webp", "image/webp"),
+            (".svg", "image/svg+xml"),
+        ):
+            candidate = avatars_dir / f"{name}{ext}"
+            if candidate.is_file():
+                try:
+                    return ctype, candidate.read_bytes()
+                except OSError as exc:
+                    logger.warning("avatar read %s failed: %s", candidate, exc)
+                    break
+    svg = render_built_in_avatar(name)
+    if svg is None:
+        return None
+    return "image/svg+xml", svg.encode("utf-8")
+
+
+def avatars_dir(home_dir: str | Path | None = None) -> Path:
+    """Return the directory where user avatar files live (creating it)."""
+    out = _profiles_dir(home_dir) / "avatars"
+    out.mkdir(parents=True, exist_ok=True)
     return out
 
 

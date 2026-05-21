@@ -235,6 +235,129 @@ export default function ProvidersPage() {
       .finally(() => setGpuLoading(false));
   }, [loadModels, loadCloudKeys]);
 
+  // Clipboard auto-detect: when the user lands on /providers, peek at the
+  // clipboard once and offer to auto-fill the matching provider's key field.
+  // Read-only — we never write the clipboard back and never silently save.
+  const [clipboardOffer, setClipboardOffer] = useState<{ providerId: string; key: string; preview: string } | null>(null);
+
+  useEffect(() => {
+    if (freeProviders.length === 0) return;
+    if (typeof navigator === 'undefined' || !navigator.clipboard?.readText) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const text = (await navigator.clipboard.readText()).trim();
+        if (cancelled || !text || text.length > 256 || text.includes(' ')) return;
+        // Map common API-key prefixes to provider ids. We match on the
+        // visible prefix and let the user confirm — the validate step
+        // verifies the actual key before saving.
+        const matchers: Array<[RegExp, string]> = [
+          [/^sk-proj-/, 'openai'],
+          [/^sk-ant-/, 'anthropic'],
+          [/^sk-or-/, 'openrouter'],
+          [/^sk-/, 'openai'],
+          [/^gsk_/, 'groq'],
+          [/^xai-/, 'xai'],
+          [/^pcsk_/, 'perplexity'],
+          [/^AIza/, 'google'],
+          [/^nvapi-/, 'nvidia'],
+          [/^tvly-/, 'tavily'],
+          [/^brv-/, 'brave'],
+        ];
+        for (const [re, id] of matchers) {
+          if (!re.test(text)) continue;
+          if (!freeProviders.some(p => p.name === id)) continue;
+          if (savedKeys.has(id)) return;
+          setClipboardOffer({
+            providerId: id,
+            key: text,
+            preview: `${text.slice(0, 6)}…${text.slice(-4)}`,
+          });
+          break;
+        }
+      } catch {
+        // Permission denied / no clipboard / hardened browser — silently bail.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-run when the list of providers (or already-saved set) changes.
+  }, [freeProviders, savedKeys]);
+
+  const acceptClipboardKey = () => {
+    if (!clipboardOffer) return;
+    setKeyInputs(prev => ({ ...prev, [clipboardOffer.providerId]: clipboardOffer.key }));
+    setExpandedProvider(clipboardOffer.providerId);
+    setClipboardOffer(null);
+  };
+
+  const dismissClipboardKey = () => setClipboardOffer(null);
+
+  // .env bulk import — paste multiple KEY=value lines and we route each to
+  // the matching provider via the same validate-then-save path the single
+  // input uses. Common .env aliases (OPENAI_API_KEY, GROQ_API_KEY, etc.)
+  // are mapped to provider ids via the env_key field on each FreeProvider.
+  const [envImportOpen, setEnvImportOpen] = useState(false);
+  const [envImportText, setEnvImportText] = useState('');
+  const [envImportLog, setEnvImportLog] = useState<{ line: string; status: 'ok' | 'skip' | 'error'; detail?: string }[]>([]);
+  const [envImporting, setEnvImporting] = useState(false);
+
+  const handleEnvImport = async () => {
+    setEnvImporting(true);
+    setEnvImportLog([]);
+    const log: { line: string; status: 'ok' | 'skip' | 'error'; detail?: string }[] = [];
+    const lines = envImportText
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(l => l && !l.startsWith('#'));
+
+    // Build a map: env-key -> provider id (e.g. OPENAI_API_KEY -> openai).
+    const envIndex = new Map<string, string>();
+    for (const p of freeProviders) {
+      if (p.env_key) envIndex.set(p.env_key.toUpperCase(), p.name);
+    }
+
+    for (const raw of lines) {
+      const eq = raw.indexOf('=');
+      if (eq <= 0) {
+        log.push({ line: raw, status: 'skip', detail: 'no = separator' });
+        continue;
+      }
+      const key = raw.slice(0, eq).trim().toUpperCase().replace(/^EXPORT\s+/, '');
+      let val = raw.slice(eq + 1).trim();
+      // Strip surrounding quotes for `KEY="value"` shapes.
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      const providerId = envIndex.get(key);
+      if (!providerId) {
+        log.push({ line: key, status: 'skip', detail: 'no matching provider' });
+        continue;
+      }
+      if (!val) {
+        log.push({ line: key, status: 'skip', detail: 'empty value' });
+        continue;
+      }
+      try {
+        const validation = await validateProviderKey(providerId, val);
+        if (!validation.valid) {
+          log.push({ line: key, status: 'error', detail: validation.error ?? 'validation failed' });
+          continue;
+        }
+        await saveProviderKey(providerId, val);
+        setSavedKeys(prev => new Set(prev).add(providerId));
+        log.push({ line: key, status: 'ok', detail: `${providerId} saved` });
+      } catch (err) {
+        log.push({ line: key, status: 'error', detail: err instanceof Error ? err.message : 'save failed' });
+      }
+    }
+    setEnvImportLog(log);
+    setEnvImporting(false);
+    // Refresh the provider list so newly-configured ones show CONNECTED.
+    void loadCloudKeys();
+  };
+
   const handleSaveProviderKey = async (providerId: string) => {
     const apiKey = keyInputs[providerId]?.trim();
     if (!apiKey) return;
@@ -322,17 +445,26 @@ export default function ProvidersPage() {
                 : 'Install a local GPU model or connect optional cloud providers'}
             </p>
           </div>
-          <button
-            onClick={loadProviders}
-            disabled={loading}
-            className="btn-secondary px-4 py-2 text-xs font-mono flex items-center gap-2"
-          >
-            <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round"
-                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-            </svg>
-            CHECK AGAIN
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setEnvImportOpen(true)}
+              className="btn-secondary px-3 py-2 text-xs font-mono"
+              title="Paste a .env block and we'll wire up every key we recognize"
+            >
+              IMPORT .ENV
+            </button>
+            <button
+              onClick={loadProviders}
+              disabled={loading}
+              className="btn-secondary px-4 py-2 text-xs font-mono flex items-center gap-2"
+            >
+              <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+              </svg>
+              CHECK AGAIN
+            </button>
+          </div>
         </div>
       </div>
 
@@ -378,6 +510,103 @@ export default function ProvidersPage() {
               <div className="text-[10px] font-mono text-[#a3a3a3]">via Ollama</div>
               <div className="text-[10px] font-mono text-[#76B900]">$0.00 / 1M tokens</div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* .env bulk-import modal */}
+      {envImportOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.5)' }}
+          onClick={(e) => { if (e.target === e.currentTarget) setEnvImportOpen(false); }}
+        >
+          <div className="w-full max-w-xl rounded-lg border bg-white p-4 shadow-xl">
+            <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-[#76B900]">
+              Bulk import from .env
+            </div>
+            <div className="mt-1 text-xs text-[#737373]">
+              Paste any number of <code className="font-mono">KEY=value</code> lines.
+              We&apos;ll match them to providers by env-var name, validate each,
+              and save the ones that pass. Existing keys aren&apos;t replaced unless
+              the new one validates.
+            </div>
+            <textarea
+              value={envImportText}
+              onChange={(e) => setEnvImportText(e.target.value)}
+              placeholder={'OPENAI_API_KEY=sk-…\nGROQ_API_KEY=gsk_…\nANTHROPIC_API_KEY=sk-ant-…'}
+              rows={8}
+              className="mt-3 w-full resize-none rounded-md border border-[#d4d4d4] bg-[#fafafa] p-2 text-xs font-mono"
+              spellCheck={false}
+            />
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={handleEnvImport}
+                disabled={envImporting || envImportText.trim().length === 0}
+                className="btn-primary px-3 py-1.5 text-xs font-mono disabled:opacity-50"
+              >
+                {envImporting ? 'Validating…' : 'Import + validate'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setEnvImportOpen(false)}
+                className="btn-secondary px-3 py-1.5 text-xs font-mono"
+              >
+                Close
+              </button>
+            </div>
+            {envImportLog.length > 0 && (
+              <div className="mt-3 max-h-48 overflow-y-auto rounded border border-[#e5e5e5] bg-[#fafafa] p-2 text-[10px] font-mono">
+                {envImportLog.map((entry, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      color:
+                        entry.status === 'ok' ? '#16a34a' :
+                          entry.status === 'error' ? '#dc2626' : '#737373',
+                    }}
+                  >
+                    {entry.status === 'ok' ? '✓' : entry.status === 'error' ? '✗' : '·'}{' '}
+                    {entry.line}
+                    {entry.detail && <span className="text-[#a3a3a3]"> — {entry.detail}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Clipboard auto-detect — offer to fill the matching key field. */}
+      {clipboardOffer && (
+        <div
+          className="flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs"
+          style={{
+            background: 'rgba(118, 185, 0, 0.08)',
+            borderColor: 'rgba(118, 185, 0, 0.4)',
+            color: '#0a0a0a',
+          }}
+        >
+          <div>
+            <span className="font-mono font-semibold">Clipboard key detected</span> —
+            looks like a {clipboardOffer.providerId} key ({clipboardOffer.preview}). Use it?
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={acceptClipboardKey}
+              className="btn-primary px-3 py-1 text-[10px] font-mono"
+            >
+              Fill {clipboardOffer.providerId}
+            </button>
+            <button
+              type="button"
+              onClick={dismissClipboardKey}
+              className="btn-ghost px-3 py-1 text-[10px] font-mono"
+            >
+              Dismiss
+            </button>
           </div>
         </div>
       )}
