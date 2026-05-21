@@ -8782,76 +8782,17 @@ def webui(
     # makes fetch calls to http://localhost:8000 by default, and will
     # render an empty Advisors/Providers page if the API is down. Auto-
     # start it in the background unless the user opted out with --no-api.
-    import json as _json
-    import socket as _socket
+    #
+    # The health probes (api_healthy) and stale-process recovery
+    # (kill_stale_api) used to live as closures here — PR #65 introduced
+    # them inline. They were promoted to nvh.cli.services so the new
+    # ``nvh services`` command and the test suite can call them directly.
+    # The behavior is unchanged; only the import surface moved.
     import time as _time
-    import urllib.error as _urllib_error
-    import urllib.request as _urllib_request
 
-    def _api_reachable(p: int, timeout: float = 0.5) -> bool:
-        try:
-            with _socket.create_connection(("127.0.0.1", p), timeout=timeout):
-                return True
-        except OSError:
-            return False
-
-    def _api_healthy(p: int, timeout: float = 2.0) -> tuple[bool, str]:
-        """Probe /v1/health and return (is_healthy, reason).
-
-        Healthy means: HTTP 200, ``status: success``, and
-        ``engine_initialized: true``. The TCP-only check we used before
-        couldn't distinguish a freshly-bound new server from a stale
-        broken one whose engine failed to initialize at startup (which
-        is the exact failure mode after a corrupted config got repaired
-        but the API server wasn't restarted — discovered 2026-05-20).
-        """
-        url = f"http://127.0.0.1:{p}/v1/health"
-        try:
-            with _urllib_request.urlopen(url, timeout=timeout) as resp:
-                if resp.status != 200:
-                    return False, f"HTTP {resp.status}"
-                body = _json.loads(resp.read().decode("utf-8"))
-        except (_urllib_error.URLError, OSError) as exc:
-            # TimeoutError is a subclass of OSError on Python 3.10+,
-            # JSONDecodeError extends ValueError — listing redundant
-            # bases here trips ruff B014.
-            return False, f"unreachable ({exc})"
-        except ValueError:
-            return False, "non-JSON response"
-        if body.get("status") != "success":
-            return False, f"status={body.get('status')!r}"
-        data = body.get("data") or {}
-        if not data.get("engine_initialized"):
-            return False, "engine_not_initialized"
-        return True, "ok"
-
-    def _kill_stale_api(p: int) -> None:
-        """Best-effort: free port `p` by killing whatever's listening.
-
-        Linux: try fuser -k (cleanest). Mac/BSD: lsof + kill. Both are
-        best-effort — if neither tool exists, we just let the new
-        spawn fail to bind and the user sees the error in the log.
-        """
-        for cmd in (["fuser", "-k", f"{p}/tcp"], ["pkill", "-f", f"nvh serve.*{p}"]):
-            try:
-                subprocess.run(cmd, capture_output=True, timeout=5, check=False)
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                continue
-        # On macOS, fuser doesn't exist; lsof+kill is the canonical path.
-        if sys.platform == "darwin":
-            try:
-                out = subprocess.run(
-                    ["lsof", "-nP", "-iTCP:" + str(p), "-sTCP:LISTEN", "-t"],
-                    capture_output=True, text=True, timeout=5, check=False,
-                )
-                for pid in out.stdout.split():
-                    try:
-                        subprocess.run(["kill", "-TERM", pid], capture_output=True, timeout=2)
-                    except subprocess.TimeoutExpired:
-                        pass
-            except FileNotFoundError:
-                pass
-        _time.sleep(0.5)
+    from nvh.cli.services import api_healthy as _api_healthy
+    from nvh.cli.services import kill_stale_api as _kill_stale_api
+    from nvh.cli.services import port_listening as _api_reachable
 
     api_proc: subprocess.Popen | None = None
     api_already_running = _api_reachable(api_port)
@@ -9011,7 +8952,7 @@ def webui(
     # impression instead of an actionable status. Make it visible.
     def _ollama_reachable() -> bool:
         try:
-            with _socket.create_connection(("127.0.0.1", 11434), timeout=0.5):
+            with socket.create_connection(("127.0.0.1", 11434), timeout=0.5):
                 return True
         except OSError:
             return False
@@ -13523,6 +13464,168 @@ def main():
                 app()
             else:
                 _run(_smart_default(prompt, force_iterative=force_iterative))
+
+
+# ---------------------------------------------------------------------------
+# nvh services — single-screen view of the local service pipeline, plus
+# surgical start/restart for troubleshooting. The user-facing first-run /
+# everyday command remains ``nvh webui``; ``nvh services`` is for the case
+# where the pipeline drifted out of sync and the user wants a clear
+# table + a deterministic recovery path.
+# ---------------------------------------------------------------------------
+
+services_app = typer.Typer(
+    help="Inspect / start / restart the local service pipeline (Ollama → API → WebUI).",
+    invoke_without_command=True,
+)
+app.add_typer(services_app, name="services", rich_help_panel="Infrastructure")
+
+
+def _services_render_console(snap: Any) -> None:
+    """Render a service snapshot using the project's Rich console."""
+    from nvh.cli.services import render_status_table  # noqa: WPS433
+
+    console.print(render_status_table(snap))
+
+
+@services_app.callback()
+def _services_root(
+    ctx: typer.Context,
+    api_port: int = typer.Option(8000, "--api-port", help="API server port"),
+    webui_port: int = typer.Option(3000, "--webui-port", help="WebUI port"),
+) -> None:
+    """When ``nvh services`` is invoked with no subcommand, print status.
+
+    Typer's idiomatic way to give a subapp a default action is to use
+    ``invoke_without_command=True`` and check ``ctx.invoked_subcommand``
+    inside the root callback. We keep this small — the heavy lifting is
+    in nvh.cli.services so the test suite can exercise it without going
+    through typer.
+    """
+    ctx.obj = {"api_port": api_port, "webui_port": webui_port}
+    if ctx.invoked_subcommand is None:
+        from nvh.cli.services import snapshot
+
+        _services_render_console(snapshot(api_port=api_port, webui_port=webui_port))
+
+
+@services_app.command("status")
+def services_status(ctx: typer.Context) -> None:
+    """Print a status table of Ollama, the API, and the WebUI."""
+    from nvh.cli.services import snapshot
+
+    ports = ctx.obj or {}
+    _services_render_console(
+        snapshot(
+            api_port=ports.get("api_port", 8000),
+            webui_port=ports.get("webui_port", 3000),
+        )
+    )
+
+
+@services_app.command("start")
+def services_start(
+    ctx: typer.Context,
+    open_browser: bool = typer.Option(
+        True, "--open/--no-open",
+        help="Open http://localhost:<webui_port>/setup when WebUI is ready",
+    ),
+) -> None:
+    """Boot the whole pipeline in order, with real health gates.
+
+    Ollama → API → WebUI. If any step fails the rest are skipped and
+    the failing step + reason is printed.
+    """
+    from nvh.cli.services import snapshot, start_pipeline
+    from nvh.integrations.workspace.storage import storage_layout
+
+    ports = ctx.obj or {}
+    api_port = ports.get("api_port", 8000)
+    webui_port = ports.get("webui_port", 3000)
+
+    layout = storage_layout()
+    log_dir = str(layout.logs_dir)
+    layout.logs_dir.mkdir(parents=True, exist_ok=True)
+
+    def _on_step(label: str, ok: bool, reason: str) -> None:
+        if ok:
+            console.print(f"  [green]✓[/green] {label}: {reason}")
+        else:
+            console.print(f"  [red]✗[/red] {label}: {reason}")
+
+    console.print("[bold]Starting service pipeline...[/bold]")
+    result = start_pipeline(
+        api_port=api_port,
+        webui_port=webui_port,
+        log_dir=log_dir,
+        open_browser=open_browser,
+        on_step=_on_step,
+    )
+
+    console.print()
+    _services_render_console(snapshot(api_port=api_port, webui_port=webui_port))
+
+    if not result.ok:
+        skipped = ", ".join(result.skipped) if result.skipped else "(nothing)"
+        console.print(
+            f"\n[red]Aborted at {result.failed}:[/red] {result.reason}\n"
+            f"  Skipped: {skipped}\n"
+            f"  Logs:    {log_dir}"
+        )
+        raise typer.Exit(1)
+
+
+@services_app.command("restart")
+def services_restart(
+    ctx: typer.Context,
+    open_browser: bool = typer.Option(
+        True, "--open/--no-open",
+        help="Open the WebUI in your browser once it's ready",
+    ),
+) -> None:
+    """Graceful kill of all three services, then ``services start``.
+
+    Sends SIGTERM to whatever's listening on the API + WebUI ports
+    (Ollama is preserved so its model cache stays warm), waits 1s
+    for the OS to settle, then re-runs the start pipeline.
+    """
+    from nvh.cli.services import restart_pipeline, snapshot
+    from nvh.integrations.workspace.storage import storage_layout
+
+    ports = ctx.obj or {}
+    api_port = ports.get("api_port", 8000)
+    webui_port = ports.get("webui_port", 3000)
+
+    layout = storage_layout()
+    log_dir = str(layout.logs_dir)
+    layout.logs_dir.mkdir(parents=True, exist_ok=True)
+
+    def _on_step(label: str, ok: bool, reason: str) -> None:
+        if ok:
+            console.print(f"  [green]✓[/green] {label}: {reason}")
+        else:
+            console.print(f"  [red]✗[/red] {label}: {reason}")
+
+    console.print("[bold]Restarting service pipeline...[/bold]")
+    result = restart_pipeline(
+        api_port=api_port,
+        webui_port=webui_port,
+        log_dir=log_dir,
+        open_browser=open_browser,
+        on_step=_on_step,
+    )
+
+    console.print()
+    _services_render_console(snapshot(api_port=api_port, webui_port=webui_port))
+
+    if not result.ok:
+        skipped = ", ".join(result.skipped) if result.skipped else "(nothing)"
+        console.print(
+            f"\n[red]Aborted at {result.failed}:[/red] {result.reason}\n"
+            f"  Skipped: {skipped}\n"
+            f"  Logs:    {log_dir}"
+        )
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

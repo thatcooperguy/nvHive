@@ -155,16 +155,29 @@ def test_nvh_webui_detects_and_restarts_stale_api() -> None:
     the WebUI's red API-offline banner from clearing — even after the
     underlying config corruption is repaired. The TCP-only check used
     before this fix couldn't tell the difference.
+
+    The helpers were promoted to module level in nvh/cli/services.py so
+    the new ``nvh services`` command + tests can use them; ``nvh webui``
+    now imports them by name. Both files are checked here so neither side
+    of the contract can silently regress.
     """
     cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+    services = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
 
-    # The new health probe must exist and check the right invariants.
-    assert "def _api_healthy(" in cli
-    assert "/v1/health" in cli
-    assert "engine_initialized" in cli
+    # The health probe + stale-kill helpers now live as module-level
+    # functions in nvh.cli.services. The exact invariants:
+    assert "def api_healthy(" in services
+    assert "/v1/health" in services
+    assert "engine_initialized" in services
     # Stale-process kill path for both Linux (fuser) and macOS (lsof).
-    assert "def _kill_stale_api(" in cli
-    assert 'fuser' in cli and '-iTCP:' in cli
+    assert "def kill_stale_api(" in services
+    assert "fuser" in services and "-iTCP:" in services
+
+    # ``nvh webui`` must still use them — the import contract pins the
+    # call sites so a future refactor that drops the helpers will trip
+    # this test instead of silently breaking PR #65's behavior.
+    assert "from nvh.cli.services import api_healthy" in cli
+    assert "from nvh.cli.services import kill_stale_api" in cli
     # The decision branch: unhealthy existing API gets killed + restarted,
     # not silently accepted.
     assert "Existing API on" in cli
@@ -220,6 +233,48 @@ def test_install_detects_port_conflicts_before_starting_services() -> None:
     assert call_idx < first_ollama_start, (
         "detect_port_conflicts must run BEFORE start_ollama_with_health_wait"
     )
+
+
+def test_nvh_services_cli_is_registered_and_documented() -> None:
+    """`nvh services` codifies the startup order across all three local
+    services (Ollama → API → WebUI). The command + its three subcommands
+    must be wired into the typer app, and the dependency contract must be
+    documented so refactoring requires an intentional update.
+    """
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+    services = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+    doc = (ROOT / "docs" / "SERVICE_ORDER.md").read_text(encoding="utf-8")
+
+    # Typer wiring — subapp + the three canonical subcommands.
+    assert "services_app = typer.Typer(" in cli
+    assert 'app.add_typer(services_app, name="services"' in cli
+    assert '@services_app.command("status")' in cli
+    assert '@services_app.command("start")' in cli
+    assert '@services_app.command("restart")' in cli
+    # `nvh services` (no subcommand) defaults to status via the callback.
+    assert "invoke_without_command=True" in cli
+    assert "ctx.invoked_subcommand is None" in cli
+
+    # Orchestration helpers must exist and gate on real health, not TCP.
+    assert "def snapshot(" in services
+    assert "def start_pipeline(" in services
+    assert "def restart_pipeline(" in services
+    assert "def ollama_healthy(" in services
+    assert "def webui_port_listening(" in services
+
+    # The doc covers the dependency graph, the env knobs, and the
+    # cross-PR pointer back to #65/#66 that this command consolidates.
+    assert "Ollama" in doc and "API" in doc and "WebUI" in doc
+    assert "11434" in doc and "8000" in doc and "3000" in doc
+    assert "/api/tags" in doc
+    assert "/v1/health" in doc
+    assert "engine_initialized" in doc
+    assert "NVH_OLLAMA_BOOT_TIMEOUT" in doc
+    assert "NVH_API_BOOT_TIMEOUT" in doc
+    assert "NVH_WEBUI_BOOT_TIMEOUT" in doc
+    # Pointer to the foundation PRs (#65, #66) so future readers know
+    # which fixes this command consolidates.
+    assert "#65" in doc and "#66" in doc
 
 
 def test_setup_page_surfaces_startup_autopilot_status() -> None:
