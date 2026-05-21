@@ -560,6 +560,17 @@ mkdir -p "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CACHE" "$NVH_LOGS" "$NV
 write_nvh_env
 export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:$PATH"
 
+# Tee the install run to a single install.log so the WebUI's SystemConsole
+# (web/components/SystemConsole.tsx → /api/logs?source=install) can surface
+# "what did the install do" to users without terminal access. Mirrors the
+# per-service logs (api-server.log, ollama.log, webui-bootstrap.log) the
+# console already tails. Process-substitution + `tee -a` keeps the user's
+# terminal output unchanged AND captures everything to disk in one pass.
+INSTALL_LOG_TS="$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || date)"
+exec > >(tee -a "$NVH_LOGS/install.log") 2>&1
+echo ""
+echo "=== nvHive install starting at $INSTALL_LOG_TS ==="
+
 echo ""
 echo -e "${G}╔══════════════════════════════════════╗${N}"
 echo -e "${G}║       NVHive — Quick Install         ║${N}"
