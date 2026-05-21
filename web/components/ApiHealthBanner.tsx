@@ -183,7 +183,11 @@ export default function ApiHealthBanner() {
     <div
       className="fixed left-0 right-0 z-[60] border-b"
       style={{
-        top: '32px', // sits under the 32px top status bar
+        // Sits under the 32px top status bar AND the 24px SystemConsole
+        // collapsed bar. The console always renders, so this offset is
+        // fixed regardless of console expanded state — when expanded, the
+        // console grows downward over the page content, not over us.
+        top: '56px',
         background: palette.bg,
         borderColor: palette.border,
         color: palette.text,
@@ -212,15 +216,15 @@ export default function ApiHealthBanner() {
               the API recovers.
             </span>
             <span className="font-mono text-[11px] opacity-90">
-              Run{' '}
+              Use{' '}
               <code className="px-1.5 py-0.5" style={{ background: palette.chipBg }}>
-                nvh serve
+                Restart API
               </code>{' '}
-              in a terminal, or check{' '}
+              in the System Console above, or inspect the{' '}
               <code className="px-1.5 py-0.5" style={{ background: palette.chipBg }}>
-                ~/.nvh/logs/api-server.log
+                API
               </code>{' '}
-              for the error.
+              tab for the underlying error.
             </span>
           </>
         )}

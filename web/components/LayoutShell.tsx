@@ -5,6 +5,7 @@ import ApiHealthBanner from '@/components/ApiHealthBanner';
 import Sidebar from '@/components/Sidebar';
 import GlobalModals from '@/components/GlobalModals';
 import SessionAgePill from '@/components/SessionAgePill';
+import SystemConsole from '@/components/SystemConsole';
 import ThemeToggle from '@/components/ThemeToggle';
 import WelcomeBackPanel from '@/components/WelcomeBackPanel';
 import { UIShellProvider, useUIShell } from '@/components/UIShellProvider';
@@ -37,6 +38,13 @@ function InnerShell({ children }: { children: React.ReactNode }) {
     return (
       <>
         <GlobalModals />
+        {/* The SystemConsole is the load-bearing fix for "the WebUI says
+            run `nvh serve` in a terminal." It tails $NVH_HOME/logs/*.log
+            via a Next.js route (so it works when FastAPI is dead) and
+            exposes [Restart API]/[Doctor] bridges that spawn the rootless
+            CLI directly. Surfaced on every page including chat + setup
+            so a fresh-install user never has to leave the browser. */}
+        <SystemConsole />
         {/* Surfaces "API offline" on the chat + setup pages too — these
             are the first pages a fresh-install user lands on, and they
             both depend on the API for everything they render. */}
@@ -52,6 +60,7 @@ function InnerShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <GlobalModals />
+      <SystemConsole />
       <ApiHealthBanner />
       {/* Top status bar */}
       <div
@@ -84,8 +93,8 @@ function InnerShell({ children }: { children: React.ReactNode }) {
           <span style={{ color: 'var(--text-faint)' }}>v{NVHIVE_VERSION}</span>
         </div>
       </div>
-      {/* Offset for top bar */}
-      <div className="pt-8 layout-with-sidebar">
+      {/* Offset for top bar (32px) + SystemConsole collapsed bar (24px) = 56px */}
+      <div className="pt-14 layout-with-sidebar">
         <Sidebar onNewChat={() => router.push('/')} />
         <main className="flex-1 min-w-0 overflow-auto">
           {/* Reconnect awareness — render on /vault, /wizard, /settings, etc.

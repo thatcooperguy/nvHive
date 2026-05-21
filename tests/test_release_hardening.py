@@ -425,3 +425,103 @@ def test_linux_uninstaller_is_rootless_and_supports_purge_reset() -> None:
     assert "safe_to_remove_home" in uninstall
     assert 'remove_path "$NVH_HOME"' in uninstall
     assert "keep models/config/projects" in uninstall
+
+
+def test_webui_has_system_console_with_log_tail_and_restart_api_bridge() -> None:
+    """The SystemConsole is the visible-in-WebUI fix for "the API is down so
+    the user has to run `nvh serve` in a terminal." It must:
+
+      1. Exist as a top-level component mounted in LayoutShell (both chat/
+         setup branches AND the main shell branch — chat is the first page
+         a fresh-install user sees, so it's the most important one).
+      2. Tail log files via /api/logs (a Next.js route that reads
+         $NVH_HOME/logs/*.log from disk — DOES NOT depend on the FastAPI
+         server, so it works when the API is dead).
+      3. Offer a [Restart API] action that POSTs /api/services/start-api,
+         which spawns `nvh serve` rootlessly via Node child_process.
+      4. Offer a [Doctor] action that hits /api/services/doctor.
+
+    The point is "users never need a terminal." If any of these break,
+    we've regressed the rootless out-of-the-box promise.
+    """
+    console = (ROOT / "web" / "components" / "SystemConsole.tsx").read_text(encoding="utf-8")
+    layout = (ROOT / "web" / "components" / "LayoutShell.tsx").read_text(encoding="utf-8")
+    logs_route = (ROOT / "web" / "app" / "api" / "logs" / "route.ts").read_text(encoding="utf-8")
+    start_api_route = (
+        ROOT / "web" / "app" / "api" / "services" / "start-api" / "route.ts"
+    ).read_text(encoding="utf-8")
+    doctor_route = (
+        ROOT / "web" / "app" / "api" / "services" / "doctor" / "route.ts"
+    ).read_text(encoding="utf-8")
+
+    # 1. Mounted on every shell branch — chat/setup AND main.
+    assert "import SystemConsole" in layout
+    # The mount appears twice (chat/setup branch + main branch).
+    assert layout.count("<SystemConsole />") >= 2
+
+    # 2. The console reads via /api/logs and supports the 4 expected sources.
+    assert "/api/logs?source=" in console
+    for source in ("api", "webui", "ollama", "install"):
+        assert f"'{source}'" in console or f'"{source}"' in console
+    # The logs route reads $NVH_HOME/logs/*.log from disk, not FastAPI.
+    assert "api-server.log" in logs_route
+    assert "webui-bootstrap.log" in logs_route
+    assert "ollama.log" in logs_route
+    assert "install.log" in logs_route
+    assert "NVH_LOGS" in logs_route or "NVH_HOME" in logs_route
+    # Read-only — no spawn/exec in the logs route.
+    assert "child_process" not in logs_route
+
+    # 3. Restart API bridge — POST, child_process.spawn, rootless contract.
+    assert "/api/services/start-api" in console
+    assert "export async function POST" in start_api_route
+    assert "spawn(" in start_api_route
+    assert "'serve'" in start_api_route or '"serve"' in start_api_route
+    # Rootless contract: NEVER acquire sudo / change user.
+    assert "sudo" not in start_api_route
+    # Detached so the API survives the request handler.
+    assert "detached: true" in start_api_route
+    # NVH_BIN env override + the rootless install path fallbacks.
+    assert "NVH_BIN" in start_api_route
+    assert "venv" in start_api_route
+
+    # 4. Doctor bridge — runs `nvh doctor --json`, returns parsed report.
+    assert "/api/services/doctor" in console
+    assert "doctor" in doctor_route
+    assert "--json" in doctor_route
+    assert "execFile" in doctor_route
+    # Bounded execution time — doctor can hang on provider key validation.
+    assert "timeout:" in doctor_route
+
+
+def test_api_health_banner_points_users_at_in_webui_console_not_terminal() -> None:
+    """When the API is offline, the banner must NOT tell users to "run nvh
+    serve in a terminal" — that breaks the out-of-the-box rootless promise.
+    It should point them at the SystemConsole's [Restart API] button.
+    """
+    banner = (ROOT / "web" / "components" / "ApiHealthBanner.tsx").read_text(encoding="utf-8")
+
+    # Negative: the old "run in a terminal" hint is gone.
+    assert "in a terminal" not in banner
+    # Positive: the new copy points at the in-WebUI control.
+    assert "Restart API" in banner
+    assert "System Console" in banner
+    # Banner sits below the SystemConsole's collapsed bar (32 + 24 = 56px).
+    assert "top: '56px'" in banner
+
+
+def test_install_sh_tees_full_run_to_install_log_for_webui_surface() -> None:
+    """install.sh must write its full stdout+stderr to
+    $NVH_LOGS/install.log so the SystemConsole's Install tab has something
+    to show. The redirect must happen AFTER mkdir creates $NVH_LOGS but
+    BEFORE the banner output — earlier and the log file doesn't exist yet,
+    later and we miss the install header.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # Process substitution + tee -a to install.log.
+    assert 'tee -a "$NVH_LOGS/install.log"' in install
+    # Must redirect both stdout and stderr (2>&1 right after the tee).
+    assert 'exec > >(tee -a "$NVH_LOGS/install.log") 2>&1' in install
+    # Marker line so users can tell runs apart.
+    assert "=== nvHive install starting at" in install
