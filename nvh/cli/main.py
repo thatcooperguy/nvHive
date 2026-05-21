@@ -8782,8 +8782,11 @@ def webui(
     # makes fetch calls to http://localhost:8000 by default, and will
     # render an empty Advisors/Providers page if the API is down. Auto-
     # start it in the background unless the user opted out with --no-api.
+    import json as _json
     import socket as _socket
     import time as _time
+    import urllib.error as _urllib_error
+    import urllib.request as _urllib_request
 
     def _api_reachable(p: int, timeout: float = 0.5) -> bool:
         try:
@@ -8792,8 +8795,87 @@ def webui(
         except OSError:
             return False
 
+    def _api_healthy(p: int, timeout: float = 2.0) -> tuple[bool, str]:
+        """Probe /v1/health and return (is_healthy, reason).
+
+        Healthy means: HTTP 200, ``status: success``, and
+        ``engine_initialized: true``. The TCP-only check we used before
+        couldn't distinguish a freshly-bound new server from a stale
+        broken one whose engine failed to initialize at startup (which
+        is the exact failure mode after a corrupted config got repaired
+        but the API server wasn't restarted — discovered 2026-05-20).
+        """
+        url = f"http://127.0.0.1:{p}/v1/health"
+        try:
+            with _urllib_request.urlopen(url, timeout=timeout) as resp:
+                if resp.status != 200:
+                    return False, f"HTTP {resp.status}"
+                body = _json.loads(resp.read().decode("utf-8"))
+        except (_urllib_error.URLError, OSError) as exc:
+            # TimeoutError is a subclass of OSError on Python 3.10+,
+            # JSONDecodeError extends ValueError — listing redundant
+            # bases here trips ruff B014.
+            return False, f"unreachable ({exc})"
+        except ValueError:
+            return False, "non-JSON response"
+        if body.get("status") != "success":
+            return False, f"status={body.get('status')!r}"
+        data = body.get("data") or {}
+        if not data.get("engine_initialized"):
+            return False, "engine_not_initialized"
+        return True, "ok"
+
+    def _kill_stale_api(p: int) -> None:
+        """Best-effort: free port `p` by killing whatever's listening.
+
+        Linux: try fuser -k (cleanest). Mac/BSD: lsof + kill. Both are
+        best-effort — if neither tool exists, we just let the new
+        spawn fail to bind and the user sees the error in the log.
+        """
+        for cmd in (["fuser", "-k", f"{p}/tcp"], ["pkill", "-f", f"nvh serve.*{p}"]):
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=5, check=False)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+        # On macOS, fuser doesn't exist; lsof+kill is the canonical path.
+        if sys.platform == "darwin":
+            try:
+                out = subprocess.run(
+                    ["lsof", "-nP", "-iTCP:" + str(p), "-sTCP:LISTEN", "-t"],
+                    capture_output=True, text=True, timeout=5, check=False,
+                )
+                for pid in out.stdout.split():
+                    try:
+                        subprocess.run(["kill", "-TERM", pid], capture_output=True, timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
+            except FileNotFoundError:
+                pass
+        _time.sleep(0.5)
+
     api_proc: subprocess.Popen | None = None
     api_already_running = _api_reachable(api_port)
+    api_stale = False
+
+    # If something's on the port, probe its /v1/health to make sure it's not
+    # a stale broken instance (engine failed to initialize at startup, etc.).
+    # If unhealthy we kill it and start fresh — otherwise we'd reuse a broken
+    # API server forever and the WebUI would show "API offline" indefinitely.
+    if api_already_running:
+        healthy, reason = _api_healthy(api_port)
+        if not healthy:
+            console.print(
+                f"  [yellow]![/yellow] Existing API on {api_port} is unhealthy ({reason}); "
+                f"restarting it."
+            )
+            _kill_stale_api(api_port)
+            # Give the OS a beat to release the port.
+            for _ in range(10):
+                if not _api_reachable(api_port):
+                    break
+                _time.sleep(0.3)
+            api_already_running = _api_reachable(api_port)
+            api_stale = True
 
     # If serve deps are missing and the API isn't already running externally,
     # treat as --no-api so the web UI still launches (without API features).
@@ -8811,7 +8893,7 @@ def webui(
                 f"{api_port}; the Advisors/Providers pages will be empty."
             )
     elif api_already_running:
-        console.print(f"  [green]✓[/green] API server already running on {api_port}")
+        console.print(f"  [green]✓[/green] API server already running on {api_port} (healthy)")
     else:
         console.print(f"  [bold]Starting API server (nvh serve) on {api_port}...[/bold]")
         # Resolve the current nvh executable so we launch the same install.

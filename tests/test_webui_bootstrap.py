@@ -181,6 +181,22 @@ def test_webui_launch_opens_setup_in_browser(tmp_path, monkeypatch):
         def __exit__(self, *_args):
             return False
 
+        def close(self):
+            return None
+
+        def __getattr__(self, name):
+            # _api_reachable only used the connection as a context
+            # manager, but post-#65 the same monkeypatched
+            # `socket.create_connection` is reached by `_api_healthy`'s
+            # urlopen → http.client, which calls setsockopt/settimeout/
+            # sendall/recv. Make any unknown socket method raise OSError
+            # so urlopen aborts cleanly and `_api_healthy` catches it as
+            # `unreachable` — the kill+restart path that follows is
+            # mocked downstream (subprocess.run is no-op).
+            def _raise(*_a, **_kw):
+                raise OSError("test fixture _FakeConnection has no real socket")
+            return _raise
+
     def fake_create_connection(*_args, **_kwargs):
         return _FakeConnection()
 
@@ -274,6 +290,22 @@ def test_webui_launch_prefers_rootless_firefox(tmp_path, monkeypatch):
 
         def __exit__(self, *_args):
             return False
+
+        def close(self):
+            return None
+
+        def __getattr__(self, name):
+            # _api_reachable only used the connection as a context
+            # manager, but post-#65 the same monkeypatched
+            # `socket.create_connection` is reached by `_api_healthy`'s
+            # urlopen → http.client, which calls setsockopt/settimeout/
+            # sendall/recv. Make any unknown socket method raise OSError
+            # so urlopen aborts cleanly and `_api_healthy` catches it as
+            # `unreachable` — the kill+restart path that follows is
+            # mocked downstream (subprocess.run is no-op).
+            def _raise(*_a, **_kw):
+                raise OSError("test fixture _FakeConnection has no real socket")
+            return _raise
 
     def fake_create_connection(*_args, **_kwargs):
         return _FakeConnection()
