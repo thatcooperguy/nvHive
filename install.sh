@@ -525,6 +525,57 @@ sync_ollama_default_model_config() {
     fi
 }
 
+# Start the Ollama daemon with a real health gate. The previous code
+# was `ollama serve &>/dev/null & sleep 2/3` — three real bugs in one
+# line:
+#   1. `&>/dev/null` swallows every Ollama startup error, so the user
+#      can't tell why the daemon didn't bind.
+#   2. The fixed `sleep 2/3` races against cold-start GPU rigs where
+#      Ollama needs 5-15 seconds before it accepts connections; the
+#      install moves on, the WebUI later shows "Ollama not running on
+#      11434 — falling back to cloud providers", and the user thinks
+#      the install is broken.
+#   3. `&` alone doesn't survive install.sh's exit — the orphaned
+#      process can be killed when the script returns. `disown` plus a
+#      log redirect makes the daemon truly background.
+#
+# This helper writes the daemon's stdout+stderr to $NVH_LOGS/ollama.log
+# (so the install can show the last 5 lines on timeout) and polls the
+# /api/tags endpoint until it binds — up to OLLAMA_BOOT_TIMEOUT_S (15s
+# by default; override via NVH_OLLAMA_BOOT_TIMEOUT). Echoes the live
+# status so the user sees "Waiting for Ollama..." instead of staring
+# at a frozen line.
+start_ollama_with_health_wait() {
+    local ollama_bin="$1"
+    local models_dir="$2"
+    local log_file="${NVH_LOGS:-/tmp}/ollama.log"
+    local timeout_s="${NVH_OLLAMA_BOOT_TIMEOUT:-15}"
+
+    mkdir -p "$models_dir" "${NVH_LOGS:-/tmp}"
+    : >"$log_file"  # truncate so we capture this run only
+
+    echo -e "${B}Starting Ollama...${N}"
+    OLLAMA_MODELS="$models_dir" nohup "$ollama_bin" serve >"$log_file" 2>&1 &
+    local ollama_pid=$!
+    disown "$ollama_pid" 2>/dev/null || true
+
+    local waited=0
+    while [ "$waited" -lt "$timeout_s" ]; do
+        if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+            echo -e "${G}Ollama ready on :11434 (pid $ollama_pid, took ${waited}s).${N}"
+            echo -e "${D}Daemon log: $log_file${N}"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    echo -e "${Y}Ollama did not bind :11434 within ${timeout_s}s. Last log lines:${N}"
+    tail -5 "$log_file" 2>/dev/null | sed "s/^/  /" || true
+    echo -e "${D}Override the timeout with NVH_OLLAMA_BOOT_TIMEOUT=30 if your rig is slow.${N}"
+    return 1
+}
+
 ollama_binary_valid() {
     local bin="${1:-}"
     [ -n "$bin" ] || return 1
@@ -1136,10 +1187,7 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
         OLLAMA_BIN="$NVH_BIN/ollama"
         install_rootless_ollama_binary || OLLAMA_BIN=""
         if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-            echo -e "${D}Starting Ollama...${N}"
-            mkdir -p "$OLLAMA_MODELS"
-            OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" serve &>/dev/null &
-            sleep 2
+            start_ollama_with_health_wait "$OLLAMA_BIN" "$OLLAMA_MODELS"
         fi
     fi
 
@@ -1304,10 +1352,7 @@ if [ -n "$GPU_NAME" ]; then
 
     # Start Ollama
     if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        echo -e "${B}Starting Ollama...${N}"
-        mkdir -p "$OLLAMA_MODELS"
-        OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" serve &>/dev/null &
-        sleep 3
+        start_ollama_with_health_wait "$OLLAMA_BIN" "$OLLAMA_MODELS"
     fi
 
     # Keep first-run model prep visible. If the WebUI is launching, it shows the
