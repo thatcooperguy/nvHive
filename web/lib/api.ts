@@ -1282,6 +1282,10 @@ export interface AgentProfileSchema {
   built_in: boolean;
   tags: string[];
   avatar: string;
+  // Per-turn cost ceiling in USD. Set on profiles (e.g. Researcher) that
+  // route to potentially-expensive cloud models — surfaced on the /agents
+  // discovery cards so users can see the guard before they pick.
+  max_cost_usd_per_turn?: number | null;
 }
 
 /** Build a renderable URL given a profile's avatar field. Returns null when
