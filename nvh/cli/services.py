@@ -174,6 +174,59 @@ def webui_port_listening(port: int = WEBUI_PORT_DEFAULT) -> tuple[bool, str]:
     return False, "no listener"
 
 
+def wizard_smoke_test(
+    api_port: int = API_PORT_DEFAULT, timeout: float = 45.0
+) -> tuple[bool, str]:
+    """Final end-to-end sanity check: can the Wizard actually answer?
+
+    The hardening cycle has covered install / boot / probe / recover.
+    The last "land on a broken state" failure mode is: Ollama up, API
+    up, WebUI up — but no model loaded, OR the Wizard endpoint errors,
+    OR no provider configured. The user lands on the WebUI thinking
+    everything works, types "hi", gets a confusing error, and we lose
+    them.
+
+    This helper closes the loop by actually POSTing to /v1/wizard/chat
+    and verifying a non-empty answer comes back. It's permissive on
+    purpose:
+
+      - HTTP 200 with non-empty answer  → (True, "ok: <mode>")
+      - HTTP 200 with empty answer      → (False, "wizard returned empty answer")
+      - Timeout / connection error      → (False, "<reason>")
+      - HTTP 4xx/5xx                    → (False, "HTTP <code>")
+
+    Callers can treat "ok: fallback" / "ok: deterministic" as degraded
+    (Wizard works but no local LLM) and still proceed. Use ``timeout``
+    generously: cold model load on CPU can run 30s+.
+    """
+    url = f"http://127.0.0.1:{api_port}/v1/wizard/chat"
+    payload = json.dumps({"question": "hi", "history": []}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return False, f"HTTP {resp.status}"
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code}"
+    except (urllib.error.URLError, OSError) as exc:
+        return False, f"unreachable ({exc})"
+    except ValueError:
+        return False, "non-JSON response"
+    # Response envelope: {status: "success", data: {answer, mode, ...}}
+    data = body.get("data") or body  # accept either wrapped or flat
+    answer = (data.get("answer") or "").strip()
+    mode = data.get("mode") or "unknown"
+    if not answer:
+        return False, "wizard returned empty answer"
+    return True, f"ok: {mode}"
+
+
 # ---------------------------------------------------------------------------
 # Stale-process recovery — extracted from PR #65's ``_kill_stale_api`` closure.
 # ---------------------------------------------------------------------------
@@ -632,12 +685,30 @@ def start_pipeline(
     if not ok:
         result.failed = "WebUI"
         result.reason = reason
+        result.skipped = ["Smoke test"]
         return result
     result.started.append("WebUI")
 
+    # 4. End-to-end Wizard smoke test — the load-bearing "everything
+    # actually works" check. Three services listening on ports is not
+    # the same as "the Wizard can answer the user." This step POSTs a
+    # real chat request and verifies a non-empty answer comes back.
+    # Permissive: a fallback-mode answer (no local LLM) still counts
+    # as ok for the browser-open decision — the user has a working
+    # Wizard, just not yet a local one. Only true endpoint failures or
+    # timeouts gate the browser.
+    on_step_begin("Smoke test")
+    ok, reason = wizard_smoke_test(api_port=api_port)
+    on_step("Smoke test", ok, reason)
+    if not ok:
+        result.failed = "Smoke test"
+        result.reason = reason
+        return result
+    result.started.append("Smoke test")
+
     # Only NOW open the browser. The "good and working state" contract:
     # the user sees the WebUI for the first time when every service is
-    # already verified healthy, not before.
+    # already verified healthy AND the Wizard can actually answer.
     if open_browser:
         url = f"http://localhost:{webui_port}/setup"
         try:

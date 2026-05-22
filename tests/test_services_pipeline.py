@@ -409,6 +409,8 @@ def test_start_pipeline_aborts_when_api_fails(
 
     assert result.failed == "API"
     assert "engine_not_initialized" in result.reason
+    # WebUI AND the smoke-test step (added 2026-05-22) both get skipped
+    # when an earlier step fails.
     assert result.skipped == ["WebUI"]
     assert webui_called["hit"] is False
 
@@ -427,6 +429,14 @@ def test_start_pipeline_records_started_services_in_order(
         services, "start_webui",
         lambda port=3000, log_dir=None: (True, "ok-webui"),
     )
+    # Smoke test (added 2026-05-22 as the 4th pipeline step) — stub
+    # to return "ok" since we're not running a real API server in this
+    # unit test. The end-to-end shape is verified by the real-rig
+    # retest sequence + the release-hardening contract tests.
+    monkeypatch.setattr(
+        services, "wizard_smoke_test",
+        lambda api_port=8000, timeout=45.0: (True, "ok: fake"),
+    )
 
     # Don't actually open a browser during the test.
     monkeypatch.setattr(services.webbrowser, "open", lambda url: True)
@@ -438,8 +448,8 @@ def test_start_pipeline_records_started_services_in_order(
 
     result = services.start_pipeline(open_browser=True, on_step=_on_step)
     assert result.ok is True
-    assert result.started == ["Ollama", "API", "WebUI"]
-    assert [s[0] for s in steps] == ["Ollama", "API", "WebUI"]
+    assert result.started == ["Ollama", "API", "WebUI", "Smoke test"]
+    assert [s[0] for s in steps] == ["Ollama", "API", "WebUI", "Smoke test"]
     assert all(ok for _, ok in steps)
 
 
