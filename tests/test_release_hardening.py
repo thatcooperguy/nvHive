@@ -1568,3 +1568,27 @@ def test_start_ollama_error_points_at_install_log() -> None:
     assert "ollama-install.log" in body
     # The previous flat "run install.sh first" message is gone.
     assert '"ollama binary not found (run install.sh first)"' not in body
+
+
+def test_nvh_init_suppresses_litellm_noise() -> None:
+    """2026-05-22 real-rig: users saw "common_utils.py:24 No module named
+    botocore" and similar errors scrolling past during install.sh.
+    Source: litellm's bedrock/sagemaker plugins try `import boto3` at
+    module load — soft-failures litellm catches, but the logging happens
+    before nvh.cli.main:main()'s suppression runs.
+
+    Move the suppression to nvh/__init__.py so it fires the moment any
+    nvh code is imported, including module-level `import litellm` in
+    provider files that run before main().
+    """
+    init_py = (ROOT / "nvh" / "__init__.py").read_text(encoding="utf-8")
+    assert "_suppress_litellm_noise" in init_py
+    # Calls the function eagerly at module load.
+    assert "_suppress_litellm_noise()" in init_py
+    # Sets the litellm-side flag.
+    assert "litellm.suppress_debug_info = True" in init_py
+    # Quiets the package-level bedrock/sagemaker loggers explicitly so
+    # boto3-import-failure tracebacks don't surface during install.
+    assert 'logging.getLogger("LiteLLM").setLevel' in init_py
+    assert "litellm.llms.bedrock" in init_py
+    assert "litellm.llms.sagemaker" in init_py
