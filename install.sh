@@ -1746,34 +1746,55 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Set up Ollama (local AI) — only if we have a GPU
+# Set up Ollama (local AI) — ALWAYS, on every Linux install
 # ---------------------------------------------------------------------------
+# Previously this whole block was gated on `[ -n "$GPU_NAME" ]`. That gate
+# made the install do nothing on rigs where `nvidia-smi` wasn't on PATH —
+# which is common on cloud GPU desktops where the GPU is present but the
+# NVIDIA userspace tooling isn't installed at OS image-build time, OR
+# `nvidia-smi` lives outside the default PATH. Result: real-rig 2026-05-22
+# photo showed "Ollama Local AI: MISSING-RUNTIME" on an RTX 4080 rig
+# because GPU_NAME ended up empty, so install_rootless_ollama_binary was
+# never called.
+#
+# The rootless Ollama tarball runs CPU-only on hosts without a GPU
+# (slow but functional), and the Wizard's multimodal fallback chain
+# (moondream at ~2 GB) keeps it usable. Wasting ~600 MB on a no-GPU host
+# beats shipping a non-working install on every cloud GPU rig where the
+# driver tooling is unusual.
+OLLAMA_BIN="$NVH_BIN/ollama"
+install_rootless_ollama_binary || OLLAMA_BIN=""
+
+# Start Ollama
+if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    start_ollama_with_health_wait "$OLLAMA_BIN" "$OLLAMA_MODELS"
+fi
+
+# First-run model pull. Previously deferred to the WebUI on launch-mode
+# installs ("WebUI will show AI Wizard model download…"), but the WebUI
+# launch path is `nvh workstation --launch -y` — which does NOT imply
+# `--with-local-ai`, so the deferred pull never happened. Result: fresh
+# install ended with no model, Wizard had nothing to route to, falling
+# back to cloud providers (which aren't configured).
+#
+# The fix: always run pull_nvwizard_model_cli on first install. It has
+# the HF→Modelfile bootstrap for Omni tags that aren't in the Ollama
+# library, the multi-step fallback chain to llama3.2-vision → minicpm-v
+# → moondream, the 10s countdown so users on metered connections can
+# press 's' to skip, and the NVH_INSTALL_MODEL_DOWNLOAD=0 opt-out.
+if [ -n "$OLLAMA_BIN" ] && curl -sf http://localhost:11434/api/tags &>/dev/null; then
+    MODEL="$DEFAULT_OLLAMA_MODEL"
+    if ollama_model_installed "$MODEL"; then
+        echo -e "${G}Model $MODEL ready.${N}"
+    else
+        pull_nvwizard_model_cli "$MODEL" || true
+    fi
+fi
+
+# Show the full capability matrix for this GPU, and (if opted in)
+# stage the matching ComfyUI / speech / music packs. See
+# docs/GPU_TIER_MATRIX.md for the source of truth.
 if [ -n "$GPU_NAME" ]; then
-    OLLAMA_BIN="$NVH_BIN/ollama"
-    install_rootless_ollama_binary || OLLAMA_BIN=""
-
-    # Start Ollama
-    if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        start_ollama_with_health_wait "$OLLAMA_BIN" "$OLLAMA_MODELS"
-    fi
-
-    # Keep first-run model prep visible. If the WebUI is launching, it shows the
-    # countdown, cancel button, job progress, and final health state. Terminal
-    # installs without a browser get the same countdown here.
-    if [ -n "$OLLAMA_BIN" ] && curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        MODEL="$DEFAULT_OLLAMA_MODEL"
-        if ollama_model_installed "$MODEL"; then
-            echo -e "${G}Model $MODEL ready.${N}"
-        elif should_launch_webui; then
-            echo -e "${B}WebUI will show AI Wizard model download, cancel, and health checks for $MODEL.${N}"
-        else
-            pull_nvwizard_model_cli "$MODEL" || true
-        fi
-    fi
-
-    # Show the full capability matrix for this GPU, and (if opted in)
-    # stage the matching ComfyUI / speech / music packs. See
-    # docs/GPU_TIER_MATRIX.md for the source of truth.
     print_capability_summary
     stage_full_capability_for_vram_tier "$VRAM_GB"
 fi

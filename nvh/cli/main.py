@@ -7814,6 +7814,15 @@ def workstation(
         launch = True
         desktop = True
 
+    # If --launch is set but the user didn't opt out of local AI, imply
+    # with_local_ai=True. The everything-just-works-out-of-the-box contract
+    # means the WebUI shouldn't open a /setup page where Ollama is still
+    # MISSING-RUNTIME. install.sh runs its own Ollama install + model pull
+    # before invoking workstation, so this is belt-and-suspenders for users
+    # who run `nvh workstation --launch` directly (skipping curl|bash).
+    if launch and not with_local_ai:
+        with_local_ai = True
+
     from nvh.integrations.installs.workstation import (
         detect_workstation_profile,
         ensure_storage,

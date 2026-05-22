@@ -868,3 +868,94 @@ def test_nvh_webui_announce_message_reflects_daemon_lifecycle() -> None:
     # The trailer ("Press Ctrl+C to stop") was misleading too — it implied
     # Ctrl+C kills everything. Reword to clarify only the WebUI stops.
     assert "Press Ctrl+C to stop the WebUI (the API stays running)" in cli
+
+
+def test_install_sh_installs_ollama_and_pulls_model_unconditionally() -> None:
+    """The single highest-leverage install bug fixed 2026-05-22: the
+    "Set up Ollama (local AI)" block USED to be gated on
+    `[ -n "$GPU_NAME" ]` (line 1751). On a real cloud GPU rig where
+    `nvidia-smi` wasn't on PATH or the userspace NVIDIA tools weren't
+    installed, GPU_NAME ended up empty and the entire block — including
+    install_rootless_ollama_binary, start_ollama_with_health_wait, and
+    pull_nvwizard_model_cli — was skipped. Result: setup page showed
+    "Ollama Local AI: MISSING-RUNTIME" on an RTX 4080 rig.
+
+    A second bug compounded it: even on rigs WHERE the gate passed, the
+    model-pull was deferred to the WebUI via an `elif should_launch_webui;
+    then echo "WebUI will show…"` branch. The WebUI launch path is
+    `nvh workstation --launch -y` which doesn't imply --with-local-ai, so
+    the deferred pull never happened. Result: no model, Wizard had
+    nothing to route to.
+
+    Both gates must stay gone. This test is the regression net for the
+    next "Wizard isn't working after install" support ticket — if these
+    asserts fail, the install path silently broke again.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # The Ollama-install block exists.
+    assert "install_rootless_ollama_binary" in install
+    assert "start_ollama_with_health_wait" in install
+    assert "pull_nvwizard_model_cli" in install
+
+    # The narrative comment naming the regression survives in source so
+    # future edits know why this code path is unconditional.
+    assert "ALWAYS, on every Linux install" in install
+
+    # Negative: the gates that caused the failures are gone.
+    #
+    # The new code path looks like:
+    #     # Set up Ollama (local AI) — ALWAYS, on every Linux install
+    #     <comment block>
+    #     OLLAMA_BIN="$NVH_BIN/ollama"
+    #     install_rootless_ollama_binary || OLLAMA_BIN=""
+    #
+    # Verify the lines immediately around `OLLAMA_BIN="$NVH_BIN/ollama"`
+    # at the install-site (NOT the function definition far above) sit at
+    # column 0 — no indentation, no `if` wrapping.
+    install_block = install.split(
+        "# Set up Ollama (local AI) — ALWAYS, on every Linux install", 1,
+    )[1].split("# Show the full capability matrix", 1)[0]
+    # The OLLAMA_BIN assignment + install call should be UNINDENTED
+    # (column 0), proving they are not inside any `if` block.
+    assert '\nOLLAMA_BIN="$NVH_BIN/ollama"' in install_block
+    assert "\ninstall_rootless_ollama_binary || OLLAMA_BIN=" in install_block
+    # The model pull should be unconditional (when Ollama is up), not
+    # deferred to should_launch_webui.
+    assert "should_launch_webui" not in install_block, (
+        "regression: install.sh defers model pull to the WebUI but the WebUI "
+        "launch path (`nvh workstation --launch`) doesn't pull. The deferred "
+        "branch leaves users with no model."
+    )
+    # And the pull call itself should be present in the block.
+    assert "pull_nvwizard_model_cli" in install_block
+
+    # The capability-matrix display is still GPU-gated (correct — no GPU
+    # = no per-tier capability bundle).
+    assert 'if [ -n "$GPU_NAME" ]; then\n    print_capability_summary' in install
+
+
+def test_nvh_workstation_launch_implies_with_local_ai() -> None:
+    """`nvh workstation --launch -y` (the command install.sh invokes
+    after package install) must imply --with-local-ai. Without that, the
+    WebUI launches over a /setup page where Ollama still shows
+    MISSING-RUNTIME — which is exactly the regression we shipped twice
+    before catching it on a real rig.
+
+    This is belt-and-suspenders for the install.sh fix: install.sh now
+    installs Ollama + pulls the model BEFORE invoking workstation, but
+    users who run `nvh workstation --launch` directly (without curl|bash)
+    should ALSO get a working stack.
+    """
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # Find the workstation command body and verify the implication.
+    workstation_block = cli.split("def workstation(", 1)[1].split("\ndef ", 1)[0]
+    # The implication must fire when launch=True even without all_in_one.
+    assert "if launch and not with_local_ai:" in workstation_block
+    assert "with_local_ai = True" in workstation_block
+    # Comment explains the why so future edits know. We use the
+    # hyphenated form to keep the phrase on a single source line — the
+    # multi-word non-hyphenated form is hard to keep intact across line
+    # wraps in the comment block.
+    assert "everything-just-works-out-of-the-box" in workstation_block
