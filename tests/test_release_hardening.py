@@ -1592,3 +1592,35 @@ def test_nvh_init_suppresses_litellm_noise() -> None:
     assert 'logging.getLogger("LiteLLM").setLevel' in init_py
     assert "litellm.llms.bedrock" in init_py
     assert "litellm.llms.sagemaker" in init_py
+
+
+def test_install_sh_extract_heredoc_uses_correct_studio_packs_path() -> None:
+    """2026-05-22 real-rig regression — THE smoking gun behind all the
+    failed installs in this cycle.
+
+    install.sh's Python heredoc imports `_extract_ollama_archive` to
+    unpack the downloaded Ollama tarball. The module lives at
+    `nvh.integrations.installs.studio_packs` (note the `.installs.`
+    middle segment). install.sh previously imported
+    `nvh.integrations.studio_packs` — silently raising
+    ModuleNotFoundError, which install.sh logged as "Ollama
+    extraction failed" and continued without an extracted binary.
+
+    Bring-up then aborted at the very end with the confusing "ollama
+    binary not found (run install.sh first)" message — on a rig
+    where install.sh HAD just run. Single line, broke every install
+    until 2026-05-22.
+
+    The contract test asserts the heredoc uses the CORRECT canonical
+    module path AND that the wrong path is gone, so this can't
+    silently regress.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # Correct path — every other importer in the codebase uses this
+    # one (see grep nvh/ --include='*.py').
+    assert "from nvh.integrations.installs.studio_packs import _extract_ollama_archive" in install
+    # Negative: the wrong path that caused the regression is gone.
+    # We anchor with the import statement to avoid matching narrative
+    # comment text that may reference the historical bug.
+    assert "from nvh.integrations.studio_packs import" not in install

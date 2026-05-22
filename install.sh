@@ -1062,7 +1062,15 @@ extract_rootless_ollama_archive() {
 import os
 from pathlib import Path
 
-from nvh.integrations.studio_packs import _extract_ollama_archive
+# Module lives at nvh.integrations.installs.studio_packs (note the
+# .installs. middle segment). Real-rig regression 2026-05-22: this
+# heredoc previously imported `nvh.integrations.studio_packs` —
+# silently raising ModuleNotFoundError, which install.sh logged to
+# ollama-install.log as "Ollama extraction failed" and continued
+# without an extracted binary. Bring-up then aborted at the very end
+# with the confusing "ollama binary not found (run install.sh first)"
+# message — on a rig where install.sh had just run.
+from nvh.integrations.installs.studio_packs import _extract_ollama_archive
 
 _extract_ollama_archive(
     Path(os.environ["ARCHIVE"]),
