@@ -175,7 +175,7 @@ def webui_port_listening(port: int = WEBUI_PORT_DEFAULT) -> tuple[bool, str]:
 
 
 def wizard_smoke_test(
-    api_port: int = API_PORT_DEFAULT, timeout: float = 45.0
+    api_port: int = API_PORT_DEFAULT, timeout: float = 90.0
 ) -> tuple[bool, str]:
     """Final end-to-end sanity check: can the Wizard actually answer?
 
@@ -186,18 +186,31 @@ def wizard_smoke_test(
     everything works, types "hi", gets a confusing error, and we lose
     them.
 
-    This helper closes the loop by actually POSTing to /v1/wizard/chat
-    and verifying a non-empty answer comes back. It's permissive on
-    purpose:
+    This helper closes the loop by POSTing to /v1/wizard/chat and
+    reading the response's ``mode`` field to distinguish three states:
 
-      - HTTP 200 with non-empty answer  → (True, "ok: <mode>")
-      - HTTP 200 with empty answer      → (False, "wizard returned empty answer")
-      - Timeout / connection error      → (False, "<reason>")
-      - HTTP 4xx/5xx                    → (False, "HTTP <code>")
+      - HTTP 200, mode="llm"               → (True,  "ok: llm")
+      - HTTP 200, mode="deterministic*"    → (True,  "degraded: deterministic (no LLM); <reason>")
+      - HTTP 200 with empty answer         → (False, "wizard returned empty answer")
+      - HTTP 4xx/5xx                       → (False, "HTTP <code>")
+      - Timeout / connection error         → (False, "<reason>")
 
-    Callers can treat "ok: fallback" / "ok: deterministic" as degraded
-    (Wizard works but no local LLM) and still proceed. Use ``timeout``
-    generously: cold model load on CPU can run 30s+.
+    The "degraded" state is the load-bearing fix from the 2026-05-22
+    audit: the previous code treated mode="deterministic" as success
+    because the response had a non-empty answer — but the deterministic
+    fallback ALWAYS returns canned "open Setup" text, even when no LLM
+    is loaded. Surfacing degraded explicitly tells the user "Wizard
+    works but no local LLM" instead of greenlighting a hollow stack.
+
+    The browser-open decision treats degraded as still-acceptable
+    (Wizard returns SOMETHING; user can keep working while they sort
+    out the LLM); the Live table shows yellow with the fallback_reason
+    so the user knows what's missing.
+
+    Default timeout 90s: cold first-run on slow ephemeral disks can
+    spend 30-60s warming Python imports + the deterministic-fallback's
+    diagnostics/catalog/receipts pass before the first response.
+    Subsequent calls run in <1s.
     """
     url = f"http://127.0.0.1:{api_port}/v1/wizard/chat"
     payload = json.dumps({"question": "hi", "history": []}).encode("utf-8")
@@ -218,13 +231,25 @@ def wizard_smoke_test(
         return False, f"unreachable ({exc})"
     except ValueError:
         return False, "non-JSON response"
-    # Response envelope: {status: "success", data: {answer, mode, ...}}
+    # Response envelope: {status: "success", data: {answer, mode,
+    # fallback_reason?, ...}}
     data = body.get("data") or body  # accept either wrapped or flat
     answer = (data.get("answer") or "").strip()
     mode = data.get("mode") or "unknown"
+    fallback_reason = data.get("fallback_reason") or ""
     if not answer:
         return False, "wizard returned empty answer"
-    return True, f"ok: {mode}"
+    # mode="llm" is the only "fully healthy" path. Everything else
+    # (deterministic / deterministic-stream-fallback / unknown) means
+    # the Wizard answered but NOT via an actual LLM call — that's
+    # degraded, not healthy.
+    if mode == "llm":
+        return True, f"ok: {mode}"
+    detail = f"degraded: {mode} (no LLM)"
+    if fallback_reason:
+        # Cap fallback_reason to keep the status row tidy.
+        detail += f" — {fallback_reason[:80]}"
+    return True, detail
 
 
 # ---------------------------------------------------------------------------
@@ -424,10 +449,36 @@ class StartResult:
     skipped: list[str] = field(default_factory=list)
     failed: str | None = None
     reason: str = ""
+    # Path of the log file the failed step was writing to (if any) +
+    # the last N lines of its content. Populated on failure so the
+    # CLI can show the user the actual error without making them
+    # hunt for the log path. Added 2026-05-22 — every previously-
+    # failed retest cycle was a user squinting at
+    # "did not become healthy in 20s" with no further context.
+    log_path: str | None = None
+    log_tail: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return self.failed is None
+
+
+def read_log_tail(log_path: str | None, lines: int = 25) -> list[str]:
+    """Return the last N lines of a log file, or empty if unreadable.
+
+    Used by ``start_pipeline`` to attach failure context to its
+    ``StartResult``. Reads the whole file (log_dir files are small
+    enough — Ollama/API/WebUI each rotate at the install.sh level,
+    not here) and slices the tail. Errors return empty list so the
+    caller never crashes on a missing/permission-denied log.
+    """
+    if not log_path:
+        return []
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            return fh.read().splitlines()[-lines:]
+    except OSError:
+        return []
 
 
 def _wait_for(
@@ -469,10 +520,25 @@ def start_ollama(log_dir: str | None = None) -> tuple[bool, str]:
     Mirrors ``install.sh``'s ``start_ollama_with_health_wait``: a real
     health gate (poll ``/api/tags``), not a fixed sleep. Returns
     ``(True, reason)`` on success, ``(False, reason)`` on failure.
+
+    Wedged-Ollama recovery (2026-05-22 audit): if the port IS listening
+    but ``/api/tags`` doesn't return a healthy response (OOM, hung load,
+    leftover daemon from a previous session), kill the stale process
+    before spawning a new one. Mirrors the kill_stale_api branch in
+    start_api below; without this, the second spawn fails to bind and
+    the user sees an opaque "did not bind 11434 in 15s" error.
     """
     ok, reason = ollama_healthy(OLLAMA_PORT, timeout=1.0)
     if ok:
         return True, f"already running ({reason})"
+    # Port is held but unhealthy → kill the stale process so the new
+    # spawn can bind. Same pattern as start_api below.
+    if port_listening(OLLAMA_PORT):
+        kill_stale_port(OLLAMA_PORT)
+        for _ in range(10):
+            if not port_listening(OLLAMA_PORT):
+                break
+            time.sleep(0.3)
 
     ollama_bin = _ollama_binary()
     if not ollama_bin:
@@ -504,8 +570,77 @@ def start_ollama(log_dir: str | None = None) -> tuple[bool, str]:
     timeout = ollama_boot_timeout()
     ok, reason = _wait_for(lambda: ollama_healthy(OLLAMA_PORT), timeout)
     if ok:
+        _preload_default_model()
         return True, f"healthy after wait ({reason})"
     return False, f"did not bind 11434 in {timeout}s ({reason})"
+
+
+def _preload_default_model() -> None:
+    """Fire-and-forget Ollama keep-alive preload of the default model.
+
+    Closes the gap from the 2026-05-22 audit (B2): `ollama_healthy`
+    returns True the instant `/api/tags` responds — well before any
+    model weights are mmap'd into RAM. Without preloading, the user's
+    FIRST chat turn cold-loads the configured default model inline
+    (30-60s on CPU), looking like a hang.
+
+    Strategy: POST `/api/generate` with empty prompt + `keep_alive`,
+    which is Ollama's documented warmup pattern. Returns immediately
+    (fire-and-forget thread). The user can opt out with
+    NVH_OLLAMA_PRELOAD=0 if they want the slow-first-turn behavior
+    (e.g. unit tests, scripted use).
+    """
+    if os.environ.get("NVH_OLLAMA_PRELOAD", "1").lower() in {"0", "false", "no", "off"}:
+        return
+    model = os.environ.get("NVH_DEFAULT_OLLAMA_MODEL", "").strip()
+    if not model:
+        # Best-effort lookup of the configured default model. Skip if
+        # we can't determine it — preload is a nice-to-have, not a
+        # correctness guarantee.
+        try:
+            from nvh.integrations.workspace.storage import storage_layout
+            config_path = storage_layout().home / "config" / "config.yaml"
+            if config_path.exists():
+                text = config_path.read_text(encoding="utf-8", errors="replace")
+                # Cheap inline scan; we don't want to import pyyaml just for this.
+                for line in text.splitlines():
+                    stripped = line.strip()
+                    if stripped.startswith("default_model:"):
+                        candidate = stripped.split(":", 1)[1].strip().strip("\"'")
+                        if candidate.startswith("ollama/"):
+                            candidate = candidate.split("/", 1)[1]
+                        model = candidate
+                        break
+        except Exception:
+            return
+    if not model:
+        return
+
+    def _kick() -> None:
+        # Empty prompt + keep_alive is Ollama's documented warmup pattern.
+        url = f"http://127.0.0.1:{OLLAMA_PORT}/api/generate"
+        payload = json.dumps({
+            "model": model,
+            "prompt": "",
+            "keep_alive": "10m",
+            "stream": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        try:
+            # 60s — large models can take ~30s to mmap on slow disks.
+            urllib.request.urlopen(req, timeout=60).read()
+        except Exception:
+            # Preload is best-effort; the cold-first-turn fallback path
+            # in the actual Wizard request still works without it.
+            pass
+
+    import threading
+    threading.Thread(target=_kick, name="ollama-preload", daemon=True).start()
 
 
 def start_api(
@@ -656,6 +791,18 @@ def start_pipeline(
         def on_step_begin(label: str) -> None:
             return None
 
+    # Map each pipeline step to the log file the step writes to. On
+    # failure, the pipeline populates result.log_path + result.log_tail
+    # so the CLI can show the user the actual error without making
+    # them hunt for the path. Every previously-failed retest cycle was
+    # a user squinting at "did not become healthy in 20s" with no
+    # further context.
+    log_files = {
+        "Ollama": os.path.join(log_dir, "ollama.log") if log_dir else None,
+        "API":    os.path.join(log_dir, "api-server.log") if log_dir else None,
+        "WebUI":  os.path.join(log_dir, "webui.log") if log_dir else None,
+    }
+
     # 1. Ollama
     on_step_begin("Ollama")
     ok, reason = start_ollama(log_dir=log_dir)
@@ -663,7 +810,9 @@ def start_pipeline(
     if not ok:
         result.failed = "Ollama"
         result.reason = reason
-        result.skipped = ["API", "WebUI"]
+        result.skipped = ["API", "WebUI", "Smoke test"]
+        result.log_path = log_files["Ollama"]
+        result.log_tail = read_log_tail(result.log_path)
         return result
     result.started.append("Ollama")
 
@@ -674,7 +823,9 @@ def start_pipeline(
     if not ok:
         result.failed = "API"
         result.reason = reason
-        result.skipped = ["WebUI"]
+        result.skipped = ["WebUI", "Smoke test"]
+        result.log_path = log_files["API"]
+        result.log_tail = read_log_tail(result.log_path)
         return result
     result.started.append("API")
 
@@ -686,6 +837,8 @@ def start_pipeline(
         result.failed = "WebUI"
         result.reason = reason
         result.skipped = ["Smoke test"]
+        result.log_path = log_files["WebUI"]
+        result.log_tail = read_log_tail(result.log_path)
         return result
     result.started.append("WebUI")
 
@@ -703,6 +856,10 @@ def start_pipeline(
     if not ok:
         result.failed = "Smoke test"
         result.reason = reason
+        # The smoke test fails because the API is unhealthy or its
+        # Wizard path errored — both surface in api-server.log.
+        result.log_path = log_files["API"]
+        result.log_tail = read_log_tail(result.log_path)
         return result
     result.started.append("Smoke test")
 

@@ -251,7 +251,14 @@ install_shell_hook() {
 
 # >>> nvhive rootless env >>>
 source "$NVH_HOME/nvh-env.sh"
-[ -x "$NVH_BIN/ollama" ] && "$NVH_BIN/ollama" --version >/dev/null 2>&1 && ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && OLLAMA_MODELS="$OLLAMA_MODELS" "$NVH_BIN/ollama" serve >/dev/null 2>&1 &
+# Auto-start Ollama on shell login if it's not already running AND no
+# other shell is mid-spawn. Previously this used a curl probe ONLY,
+# which on a slow daemon false-negatived — so every new terminal during
+# boot forked an additional \`ollama serve\` racing for :11434. With
+# multi-tab terminals this stormed the OS; one won, the others wrote
+# "address already in use" to a discarded log and exited. The pgrep
+# guard makes this idempotent (real-rig audit 2026-05-22 Agent D).
+[ -x "$NVH_BIN/ollama" ] && "$NVH_BIN/ollama" --version >/dev/null 2>&1 && ! pgrep -f "$NVH_BIN/ollama serve" >/dev/null 2>&1 && ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && OLLAMA_MODELS="$OLLAMA_MODELS" "$NVH_BIN/ollama" serve >/dev/null 2>&1 &
 # <<< nvhive rootless env <<<
 RCEOF
     mv "$tmp" "$rc"
