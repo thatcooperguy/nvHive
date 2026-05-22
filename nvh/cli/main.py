@@ -8868,11 +8868,33 @@ def webui(
             api_log_handle = None
 
         try:
+            # DAEMONIZE the API so it survives `nvh webui` exit, install
+            # terminal close, and SIGHUP. Real-rig 2026-05-21: photo 2 showed
+            # API UP, photo 3 (~30s later) showed API DOWN — because the
+            # finally-block below USED to terminate the API on `nvh webui`
+            # exit, and `nvh webui` was a child of install.sh which got
+            # SIGHUP'd when the user's install terminal lost focus.
+            #
+            # Three pieces of the rootless-daemon pattern (same shape as
+            # `start_ollama_with_health_wait` in install.sh, which has
+            # worked reliably since PR #66):
+            #
+            #   1. start_new_session=True  → setsid() so the child is the
+            #      leader of its own process group + has no controlling
+            #      terminal, so SIGHUP from the install terminal doesn't
+            #      cascade to it.
+            #   2. stdin=subprocess.DEVNULL → no stdin tty connection.
+            #   3. The finally-block below is now a no-op for api_proc —
+            #      the API stays running. The user can stop it later with
+            #      `nvh services stop` or by killing the pid printed in
+            #      api-server.log.
             api_proc = subprocess.Popen(
                 api_cmd,
+                stdin=subprocess.DEVNULL,
                 stdout=api_log_handle or subprocess.DEVNULL,
                 stderr=subprocess.STDOUT if api_log_handle else subprocess.DEVNULL,
                 env=webui_env,
+                start_new_session=True,
             )
         except Exception as e:
             console.print(
@@ -8894,6 +8916,17 @@ def webui(
             # wait up to 30s, log every 5s so the user knows we're still
             # alive, and emit a structured failure message naming the
             # log file path if it never comes up.
+            #
+            # Readiness contract upgrade (2026-05-21): the previous wait
+            # accepted "TCP port is listening" as ready. That let stale
+            # processes whose engine had crashed during init slip through
+            # — port is held, /v1/health returns 500, WebUI shows red
+            # banner. Now we require full /v1/health success AND
+            # engine_initialized: true (via _api_healthy) so we only call
+            # the API "ready" when it actually is. Fallback to TCP-only
+            # is preserved with a 5s grace at the end of the wait window
+            # so older nvh builds without engine_initialized in /v1/health
+            # don't silently fail.
             api_ready = False
             api_wait_seconds = 30.0
             api_poll_every = 0.25
@@ -8901,12 +8934,13 @@ def webui(
             deadline = _time.monotonic() + api_wait_seconds
             next_tick = _time.monotonic() + api_status_tick
             while _time.monotonic() < deadline:
-                if _api_reachable(api_port):
+                healthy, _reason = _api_healthy(api_port)
+                if healthy:
                     api_ready = True
                     elapsed = api_wait_seconds - (deadline - _time.monotonic())
                     console.print(
                         f"  [green]✓[/green] API server ready on {api_port}"
-                        f" (took {elapsed:.1f}s)"
+                        f" (engine initialized, took {elapsed:.1f}s)"
                     )
                     break
                 if api_proc.poll() is not None:
@@ -8940,10 +8974,37 @@ def webui(
                     else ""
                 )
                 console.print(
-                    f"  [red]✗[/red] API server did not bind within "
+                    f"  [red]✗[/red] API server did not become healthy within "
                     f"{api_wait_seconds:.0f}s — the WebUI will open but "
                     f"panels will be empty.{log_hint}"
                 )
+                # Dump the last 25 lines of api-server.log to the console
+                # AND to install.log (via the stdout tee from install.sh)
+                # so the SystemConsole's Install tab surfaces the failure
+                # reason without the user opening a terminal. This is the
+                # "everything just works" promise's last-mile fallback:
+                # if the install can't fully recover, at least make the
+                # error visible in the same place the user is already
+                # looking.
+                if api_log_path is not None:
+                    try:
+                        tail_lines = api_log_path.read_text(
+                            encoding="utf-8", errors="replace",
+                        ).splitlines()[-25:]
+                        if tail_lines:
+                            console.print(
+                                "  [dim]--- api-server.log tail "
+                                "(last 25 lines) ---[/dim]"
+                            )
+                            for _line in tail_lines:
+                                console.print(f"  [dim]{_line}[/dim]")
+                            console.print("  [dim]--- end tail ---[/dim]")
+                    except Exception:
+                        # Log dump is best-effort — the WebUI's
+                        # SystemConsole + DebugReportButton both also
+                        # tail api-server.log directly, so the user has
+                        # other paths to the same data.
+                        pass
 
     # Surface the local LLM runtime state. The AI Wizard's router prefers
     # local Ollama (Nemotron broker) when available; if Ollama isn't
@@ -8990,17 +9051,21 @@ def webui(
     except KeyboardInterrupt:
         console.print("\n[dim]Web UI stopped.[/dim]")
     finally:
-        # Tear down the API server if we started it. Never kill an API
-        # that was already running before we got here — that belongs to
-        # whoever launched it.
-        if api_proc is not None and api_proc.poll() is None:
-            console.print("[dim]Stopping auto-started API server...[/dim]")
+        # The API server is now DAEMONIZED (start_new_session=True above), so
+        # we intentionally do NOT terminate it on `nvh webui` exit. The user
+        # explicitly asked for "everything should just work out of the box"
+        # which means the API has to survive any terminal that ran the
+        # installer. To stop the API later, the user can:
+        #   - `nvh services stop`  (recommended; pid-aware)
+        #   - kill the pid printed at the top of api-server.log
+        # Same lifecycle as Ollama (PR #66) — daemoned-on-launch, owned by
+        # the user's session leader, not the install shell.
+        if api_proc is not None and api_log_path is not None:
             try:
-                api_proc.terminate()
-                try:
-                    api_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    api_proc.kill()
+                console.print(
+                    f"  [dim]API left running in background "
+                    f"(pid {api_proc.pid}); log: {api_log_path}[/dim]"
+                )
             except Exception:
                 pass
 

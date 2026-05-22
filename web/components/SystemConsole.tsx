@@ -72,6 +72,18 @@ function writeCollapsed(value: boolean): void {
   }
 }
 
+// Silent auto-recovery thresholds. Real-world tuning:
+//   - 8s between probes (matches the chip-update cadence)
+//   - 3 consecutive failures = ~24s of confirmed down, well past the 20s
+//     ApiHealthBanner boot-grace window so we don't restart-storm during
+//     normal cold starts
+//   - 120s minimum gap between auto-restart attempts so we don't restart-loop
+//   - 3 attempts per session max so a fundamentally broken install doesn't
+//     thrash the API endlessly
+const AUTO_RESTART_FAILURES_THRESHOLD = 3;
+const AUTO_RESTART_MIN_GAP_MS = 120_000;
+const AUTO_RESTART_MAX_ATTEMPTS = 3;
+
 export default function SystemConsole() {
   const [collapsed, setCollapsed] = useState<boolean>(true);
   const [source, setSource] = useState<Source>('api');
@@ -81,6 +93,12 @@ export default function SystemConsole() {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<boolean>(false);
   const logRef = useRef<HTMLPreElement | null>(null);
+  // Auto-recovery bookkeeping — refs (not state) so the probe loop reads
+  // current values without triggering re-renders that would reset the
+  // probe's setInterval.
+  const apiFailuresRef = useRef<number>(0);
+  const lastAutoRestartAtRef = useRef<number>(0);
+  const autoRestartAttemptsRef = useRef<number>(0);
 
   // Restore last collapsed state.
   useEffect(() => {
@@ -88,18 +106,60 @@ export default function SystemConsole() {
   }, []);
 
   // Probe API + Ollama every 8s, both states feed the chips at the top.
+  // When the API is confirmed-down across multiple probes, silently kick
+  // /api/services/start-api so the user never has to click a recovery
+  // button — the rootless out-of-the-box contract says everything should
+  // self-heal.
   useEffect(() => {
     let cancelled = false;
+
+    const maybeAutoRestart = async () => {
+      const now = Date.now();
+      if (apiFailuresRef.current < AUTO_RESTART_FAILURES_THRESHOLD) return;
+      if (now - lastAutoRestartAtRef.current < AUTO_RESTART_MIN_GAP_MS) return;
+      if (autoRestartAttemptsRef.current >= AUTO_RESTART_MAX_ATTEMPTS) return;
+      lastAutoRestartAtRef.current = now;
+      autoRestartAttemptsRef.current += 1;
+      try {
+        await fetch('/api/services/start-api', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ port: 8000 }),
+        });
+        if (!cancelled) {
+          setActionMessage(
+            `Auto-restarting API (attempt ${autoRestartAttemptsRef.current}/${AUTO_RESTART_MAX_ATTEMPTS}) — banner clears when /v1/health is 200.`,
+          );
+        }
+      } catch {
+        // Bridge route itself failed — surface but don't loop. The user
+        // can still click Restart API manually.
+        if (!cancelled) setActionMessage('Auto-restart bridge call failed; click Restart API to retry.');
+      }
+    };
+
     const probe = async () => {
+      let apiOk = false;
       try {
         const ctl = new AbortController();
         const t = setTimeout(() => ctl.abort(), 2500);
         const r = await fetch(`${API_BASE}/v1/health`, { signal: ctl.signal, cache: 'no-store' });
         clearTimeout(t);
-        if (!cancelled) setApiHealthy(r.ok);
+        apiOk = r.ok;
       } catch {
-        if (!cancelled) setApiHealthy(false);
+        apiOk = false;
       }
+      if (cancelled) return;
+      setApiHealthy(apiOk);
+      if (apiOk) {
+        // Reset the failure streak on recovery so a later outage starts
+        // counting fresh.
+        apiFailuresRef.current = 0;
+      } else {
+        apiFailuresRef.current += 1;
+        void maybeAutoRestart();
+      }
+
       try {
         const ctl = new AbortController();
         const t = setTimeout(() => ctl.abort(), 2500);
