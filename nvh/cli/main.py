@@ -13661,6 +13661,8 @@ def services_start(
             status = row["status"]
             if status == "healthy":
                 status_cell = "[green]✓ healthy[/green]"
+            elif status == "degraded":
+                status_cell = "[yellow]⚠ degraded[/yellow]"
             elif status == "starting":
                 status_cell = "[cyan]⟳ starting[/cyan]"
             elif status == "failed":
@@ -13685,7 +13687,15 @@ def services_start(
             live.update(_render())
 
         def _on_step(label: str, ok: bool, reason: str) -> None:
-            STATE[label]["status"] = "healthy" if ok else "failed"
+            # "degraded" state: ok=True but the reason starts with
+            # "degraded:" — surfaced by wizard_smoke_test when the
+            # Wizard answered via the deterministic fallback (no LLM
+            # loaded). The browser still opens, but the user sees
+            # yellow + the fallback_reason so they know what's missing.
+            if ok and reason.startswith("degraded:"):
+                STATE[label]["status"] = "degraded"
+            else:
+                STATE[label]["status"] = "healthy" if ok else "failed"
             STATE[label]["detail"] = reason
             # Anything not yet attempted after a failure becomes "skipped".
             if not ok:
@@ -13710,19 +13720,49 @@ def services_start(
         skipped = ", ".join(result.skipped) if result.skipped else "(nothing)"
         console.print(
             f"\n[red]Aborted at {result.failed}:[/red] {result.reason}\n"
-            f"  Skipped: {skipped}\n"
-            f"  Logs:    {log_dir}"
+            f"  Skipped: {skipped}"
         )
+        # 2026-05-22 audit fix: every previously-failed retest cycle
+        # was a user squinting at "did not become healthy in 20s" with
+        # no further context. Dump the last 25 lines of the relevant
+        # service log inline so the actual error is visible without
+        # the user having to know the path.
+        if result.log_path:
+            console.print(f"  Log:     [bold]{result.log_path}[/bold]")
+            if result.log_tail:
+                console.print(
+                    f"\n  [dim]--- {result.log_path.split('/')[-1]} "
+                    f"tail (last {len(result.log_tail)} lines) ---[/dim]"
+                )
+                for _line in result.log_tail:
+                    console.print(f"  [dim]{_line}[/dim]")
+                console.print("  [dim]--- end tail ---[/dim]")
+        else:
+            console.print(f"  Logs:    {log_dir}")
         raise typer.Exit(1)
 
     # Success — final snapshot for the receipt.
     console.print()
     _services_render_console(snapshot(api_port=api_port, webui_port=webui_port))
+    # If the smoke test ended in degraded mode (deterministic fallback,
+    # no local LLM), surface that explicitly so the user knows the
+    # WebUI works but the Wizard isn't using a local model yet. The
+    # 2026-05-22 audit found the previous code printed "All services
+    # healthy" even in this state — misleading.
+    smoke_state = STATE.get("Smoke test", {}).get("status", "")
+    smoke_detail = STATE.get("Smoke test", {}).get("detail", "")
     if open_browser:
-        console.print(
-            f"\n[green]All services healthy.[/green] "
-            f"Browser → http://localhost:{webui_port}/setup"
-        )
+        if smoke_state == "degraded":
+            console.print(
+                f"\n[yellow]Services up, Wizard running in fallback mode.[/yellow]\n"
+                f"  Detail:  {smoke_detail}\n"
+                f"  Browser → http://localhost:{webui_port}/setup"
+            )
+        else:
+            console.print(
+                f"\n[green]All services healthy.[/green] "
+                f"Browser → http://localhost:{webui_port}/setup"
+            )
 
 
 @services_app.command("restart")
@@ -13776,6 +13816,65 @@ def services_restart(
             f"  Logs:    {log_dir}"
         )
         raise typer.Exit(1)
+
+
+@services_app.command("stop")
+def services_stop(
+    ctx: typer.Context,
+    ollama: bool = typer.Option(
+        False, "--ollama/--no-ollama",
+        help="Also stop Ollama (default: leave it running so the warmed model cache stays in RAM)",
+    ),
+) -> None:
+    """Stop the nvHive service stack — WebUI + API (+ optional Ollama).
+
+    Reverse-dependency order: WebUI first (so the API isn't briefly
+    orphaned serving panels), then API. Ollama is preserved by default
+    because killing it discards the warmed-up model in RAM — the
+    user's next chat would cold-load the model again.
+
+    Added 2026-05-22: the daemon message printed by `nvh webui` and
+    the post-install console copy referenced `nvh services stop` but
+    the command was never implemented — users running it got typer's
+    "No such command" error after install told them to use it.
+    """
+    from nvh.cli.services import (
+        kill_stale_api,
+        kill_stale_port,
+        port_listening,
+        OLLAMA_PORT,
+    )
+
+    ports = ctx.obj or {}
+    api_port = ports.get("api_port", 8000)
+    webui_port = ports.get("webui_port", 3000)
+
+    console.print("[bold]Stopping nvHive services...[/bold]")
+    # WebUI first (reverse dependency order).
+    if port_listening(webui_port):
+        kill_stale_port(webui_port)
+        console.print(f"  [green]✓[/green] WebUI on :{webui_port} stopped")
+    else:
+        console.print(f"  [dim]·[/dim] WebUI on :{webui_port} was not running")
+    # Then API.
+    if port_listening(api_port):
+        kill_stale_api(api_port)
+        console.print(f"  [green]✓[/green] API on :{api_port} stopped")
+    else:
+        console.print(f"  [dim]·[/dim] API on :{api_port} was not running")
+    # Ollama only if explicitly requested.
+    if ollama:
+        if port_listening(OLLAMA_PORT):
+            kill_stale_port(OLLAMA_PORT)
+            console.print(f"  [green]✓[/green] Ollama on :{OLLAMA_PORT} stopped")
+        else:
+            console.print(f"  [dim]·[/dim] Ollama on :{OLLAMA_PORT} was not running")
+    else:
+        if port_listening(OLLAMA_PORT):
+            console.print(
+                f"  [dim]·[/dim] Ollama on :{OLLAMA_PORT} left running "
+                "(use --ollama to stop it; preserves warmed model cache)"
+            )
 
 
 @services_app.command("smoke-test")

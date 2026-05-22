@@ -1115,8 +1115,11 @@ def test_services_start_runs_wizard_smoke_test_before_browser() -> None:
     # The helper exists and POSTs to the canonical Wizard endpoint.
     assert "def wizard_smoke_test(" in services
     assert "/v1/wizard/chat" in services
-    # Generous default timeout — cold model load can run 30s+.
-    assert "timeout: float = 45.0" in services
+    # Generous default timeout — bumped 2026-05-22 from 45s to 90s
+    # after audit found cold-cache first-run could exceed 45s on slow
+    # ephemeral disks. The per-call timeout shape is asserted by
+    # test_wizard_smoke_test_distinguishes_llm_from_deterministic_fallback.
+    assert "timeout: float = 90.0" in services
     # Permissive on response shape — handles wrapped and flat envelopes.
     assert 'body.get("data") or body' in services
 
@@ -1162,3 +1165,173 @@ def test_services_smoke_test_subcommand_exists() -> None:
     assert "nvh services restart" in body
     # Non-zero exit on hard failure.
     assert "raise typer.Exit(1)" in body
+
+
+def test_wizard_smoke_test_distinguishes_llm_from_deterministic_fallback() -> None:
+    """2026-05-22 audit (Agent B): the previous wizard_smoke_test treated
+    any non-empty answer as "ok: <mode>". But the deterministic-fallback
+    path in `nvh/integrations/wizard/chat.py` ALWAYS returns a non-empty
+    answer (canned "open Setup" replies) — so the smoke test greened the
+    gate even when no LLM was actually loaded. The fix:
+
+      - mode == "llm"                              → (True, "ok: llm")
+      - mode in {"deterministic", "deterministic-stream-fallback"}
+        → (True, "degraded: <mode> (no LLM); <fallback_reason>")
+
+    Both still return ok=True so the browser opens (the user has SOME
+    Wizard, even if degraded), but the caller can detect "degraded:"
+    prefix and render a yellow row instead of green.
+    """
+    services_py = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+
+    # Mode-based classification.
+    assert 'mode == "llm"' in services_py
+    assert "degraded:" in services_py
+    # Surfaces fallback_reason from the response body so the user sees
+    # WHY it fell back.
+    assert "fallback_reason" in services_py
+    # Default timeout bumped to 90s (Agent A: cold-cache first-run can
+    # exceed 45s on slow ephemeral disks).
+    assert "timeout: float = 90.0" in services_py
+
+
+def test_start_ollama_kills_wedged_process_before_spawn() -> None:
+    """2026-05-22 audit (Agent A): start_api had kill_stale_api for the
+    wedged-but-listening case. start_ollama did not. Common after OOM
+    on small VRAM nodes: Ollama is still bound to :11434 but /api/tags
+    doesn't respond. The new spawn fails to bind, error message is the
+    opaque "did not bind 11434 in 15s". Fix: mirror the kill_stale
+    branch from start_api.
+    """
+    services_py = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+    # Locate the start_ollama body.
+    body = services_py.split("def start_ollama(", 1)[1].split("\ndef ", 1)[0]
+    # The wedged-recovery branch.
+    assert "if port_listening(OLLAMA_PORT):" in body
+    assert "kill_stale_port(OLLAMA_PORT)" in body
+
+
+def test_start_pipeline_attaches_log_tail_to_failure_result() -> None:
+    """2026-05-22 audit (Agent B): every previously-failed retest cycle
+    was a user squinting at "did not become healthy in 20s" with no
+    log path or content. start_pipeline now populates StartResult.log_path
+    + StartResult.log_tail on every failure so the CLI can show the
+    actual error inline.
+    """
+    services_py = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+    cli_py = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # Dataclass fields.
+    assert "log_path: str | None = None" in services_py
+    assert "log_tail: list[str] = field(default_factory=list)" in services_py
+    # Helper that reads the tail.
+    assert "def read_log_tail(" in services_py
+    # Populated on each failure path in start_pipeline.
+    pipeline_block = services_py.split("def start_pipeline(", 1)[1].split(
+        "\ndef restart_pipeline(", 1,
+    )[0]
+    assert pipeline_block.count("result.log_path =") >= 3, \
+        "expected log_path populated on Ollama/API/WebUI/Smoke-test failure"
+    assert pipeline_block.count("result.log_tail = read_log_tail(") >= 3
+
+    # CLI services_start prints the tail on failure.
+    services_start_block = cli_py.split("def services_start(", 1)[1].split(
+        "\n@services_app", 1,
+    )[0]
+    assert "result.log_path" in services_start_block
+    assert "result.log_tail" in services_start_block
+    assert "end tail" in services_start_block
+
+
+def test_start_api_bridge_route_uses_opensync_not_filehandle() -> None:
+    """2026-05-22 audit (Agent D): /api/services/start-api/route.ts used
+    `await fs.open(logPath, 'a')` which returns a FileHandle with a GC
+    finalizer that calls .close() on the underlying fd. Once `fh`
+    becomes unreachable (immediately on function return), GC can close
+    the fd BEFORE spawn() has finished duplicating it into the child,
+    producing an `nvh serve` whose stdout/stderr writes to a closed fd
+    → silent crash on first log line. Fix: use fs.openSync (raw int,
+    no finalizer) and close the parent's reference explicitly after
+    spawn dups it.
+    """
+    route_ts = (
+        ROOT / "web" / "app" / "api" / "services" / "start-api" / "route.ts"
+    ).read_text(encoding="utf-8")
+
+    # Positive: openSync is used.
+    assert "openSync(logPath, 'a')" in route_ts
+    # Negative: the FileHandle-returning fs.open is gone.
+    assert "await fs.open(logPath" not in route_ts
+    # Parent closes its reference after spawn so the fd doesn't leak.
+    assert "fsSync.closeSync(logFd)" in route_ts
+
+
+def test_install_sh_bashrc_hook_uses_pgrep_guard_before_spawning_ollama() -> None:
+    """2026-05-22 audit (Agent D): the .bashrc hook used only a curl
+    probe to decide whether to fork `ollama serve &`. On a slow daemon
+    the curl false-negatives and every new terminal during boot forks
+    an additional `ollama serve` racing for :11434. With multi-tab
+    terminals this stormed the OS. Fix: add a `pgrep -f "ollama serve"`
+    guard so the hook is idempotent.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+    # The marker strings appear twice in install.sh — once in an awk
+    # skip-block on lines 241-242 (used to dedupe re-installs), and
+    # once in the actual heredoc that's appended to the user's rc.
+    # We want the rc-heredoc body — split on the heredoc start marker
+    # ("RCEOF") to skip the awk reference.
+    rc_heredoc = install.split("cat >> \"$tmp\" << RCEOF", 1)[1].split(
+        "RCEOF\n", 1,
+    )[0]
+    # The pgrep guard.
+    assert "pgrep -f" in rc_heredoc
+    assert "ollama serve" in rc_heredoc
+
+
+def test_nvh_services_stop_subcommand_exists_and_preserves_ollama_by_default() -> None:
+    """2026-05-22 audit (Agent B, finding F4): help text + log copy
+    referenced `nvh services stop` but the command was never registered.
+    Users running it got typer's "No such command 'stop'" error. Fix:
+    register the command. Default behavior preserves Ollama (warm model
+    cache is expensive to rebuild); --ollama flag opts in to stopping
+    it too.
+    """
+    cli_py = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # Subcommand wiring.
+    assert '@services_app.command("stop")' in cli_py
+    assert "def services_stop(" in cli_py
+    # Body asserts the right shape.
+    body = cli_py.split("def services_stop(", 1)[1].split("\n@", 1)[0]
+    # Reverse-dependency order: WebUI before API.
+    webui_idx = body.index("WebUI on :")
+    api_idx = body.index("API on :")
+    assert webui_idx < api_idx, "WebUI must stop before API (reverse dependency order)"
+    # Ollama is preserved by default (only stops on --ollama flag).
+    assert "preserves warmed model cache" in body
+    assert '"--ollama/--no-ollama"' in body
+
+
+def test_services_pipeline_preloads_ollama_default_model() -> None:
+    """2026-05-22 audit (Agent B finding F2 / Agent C finding C4):
+    `ollama_healthy()` returns True the instant /api/tags responds —
+    well before any model weights are mmap'd into RAM. The user's
+    FIRST chat turn then cold-loads the model inline (30-60s on CPU),
+    feeling like a hang. Fix: fire-and-forget a `/api/generate
+    {prompt:"", keep_alive:"10m"}` after start_ollama returns healthy,
+    so the model is warm by the time the smoke test runs.
+
+    Opt-out: NVH_OLLAMA_PRELOAD=0 for unit-test / scripted contexts
+    that don't want a background warmup thread.
+    """
+    services_py = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+
+    assert "def _preload_default_model(" in services_py
+    assert "_preload_default_model()" in services_py
+    # The Ollama keep-alive warmup pattern.
+    assert "keep_alive" in services_py
+    assert "/api/generate" in services_py
+    # Opt-out env knob.
+    assert "NVH_OLLAMA_PRELOAD" in services_py
+    # Best-effort: runs in a daemon thread so start_ollama doesn't block.
+    assert "daemon=True" in services_py

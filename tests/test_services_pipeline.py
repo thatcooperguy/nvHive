@@ -383,7 +383,11 @@ def test_start_pipeline_aborts_when_ollama_fails(
     assert result.ok is False
     assert result.failed == "Ollama"
     assert result.reason == "binary missing"
-    assert result.skipped == ["API", "WebUI"]
+    # Skip list now includes Smoke test (added 2026-05-22 as 4th
+    # pipeline step). An earlier-step failure marks ALL later steps,
+    # including the smoke test, so the Live table shows them as
+    # skipped (not stuck on "waiting").
+    assert result.skipped == ["API", "WebUI", "Smoke test"]
     assert called == [], "later steps must be skipped when Ollama fails"
 
 
@@ -411,7 +415,9 @@ def test_start_pipeline_aborts_when_api_fails(
     assert "engine_not_initialized" in result.reason
     # WebUI AND the smoke-test step (added 2026-05-22) both get skipped
     # when an earlier step fails.
-    assert result.skipped == ["WebUI"]
+    # Skip list now includes Smoke test (added 2026-05-22 as 4th
+    # pipeline step) when API fails.
+    assert result.skipped == ["WebUI", "Smoke test"]
     assert webui_called["hit"] is False
 
 

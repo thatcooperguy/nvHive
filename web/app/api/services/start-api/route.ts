@@ -71,17 +71,22 @@ export async function POST(request: Request) {
     /* logging is best-effort */
   }
 
-  // Open the log file as a write stream so we can hand its fd to the child.
-  // We use fs.open + the resulting filehandle's fd because spawn() expects
-  // a fd for "inherit to this file."
+  // Open the log file as a raw fd to hand to the child. CRITICAL: use
+  // `fs.openSync(...)` (returns int) NOT `await fs.open(...)` (returns
+  // FileHandle). FileHandle has a GC finalizer that calls .close() on
+  // the fd; once `fh` becomes unreachable (immediately on this function
+  // returning), GC can close the fd BEFORE `spawn()` has finished
+  // duplicating it into the child, producing an `nvh serve` whose
+  // stdout/stderr writes to a closed fd → silent crash on first log
+  // line. Real-rig audit 2026-05-22 (Agent D) flagged this as a
+  // blocker. The raw-int form has no finalizer, so the parent's fd
+  // stays alive long enough for the child to inherit it; both parent
+  // and child references close cleanly when their respective processes
+  // exit.
+  const fsSync = await import('node:fs');
   let logFd: number;
   try {
-    const fh = await fs.open(logPath, 'a');
-    logFd = fh.fd;
-    // NOTE: we deliberately do NOT close `fh` here — the child inherits the
-    // fd and we want it to stay open for the lifetime of the spawned process.
-    // Node closes the parent's reference when this function returns; the
-    // child's reference keeps the file open.
+    logFd = fsSync.openSync(logPath, 'a');
   } catch (err) {
     return NextResponse.json(
       {
@@ -103,6 +108,12 @@ export async function POST(request: Request) {
       },
     });
     child.unref();
+    // Close the parent's reference to logFd now that the child has
+    // dup'd it via `stdio`. Without this we'd leak one fd per
+    // Restart-API click for the lifetime of the Next.js process.
+    // (The child keeps its own dup, so the file stays open for
+    // `nvh serve`.)
+    try { fsSync.closeSync(logFd); } catch { /* best-effort */ }
 
     return NextResponse.json(
       {
@@ -117,6 +128,8 @@ export async function POST(request: Request) {
       { status: 202 },
     );
   } catch (err) {
+    // Spawn failed — clean up the fd we opened.
+    try { fsSync.closeSync(logFd); } catch { /* best-effort */ }
     return NextResponse.json(
       {
         started: false,
