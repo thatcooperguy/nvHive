@@ -27,6 +27,12 @@ const execFileAsync = promisify(execFile);
 
 export async function GET() {
   const nvhBin = await resolveNvhBinary();
+  // Helper — `nvh doctor --json` returns exit=1 when ANY check fails (e.g.
+  // the "Environment: local / on-prem detected" check returns "not detected
+  // (local / on-prem)" on cloud GPU rigs, making the overall exit code 1).
+  // The JSON payload is still valid and useful — failed checks are exactly
+  // what we want to show in the report. So on non-zero exit, try to parse
+  // err.stdout as JSON before falling back to error-format.
   try {
     const { stdout, stderr } = await execFileAsync(nvhBin, ['doctor', '--json'], {
       timeout: 30_000,
@@ -49,7 +55,29 @@ export async function GET() {
     }
     return NextResponse.json({ ok: true, format: 'json', binary: nvhBin, report: parsed });
   } catch (err) {
-    const e = err as NodeJS.ErrnoException & { stdout?: string; stderr?: string; code?: number | string };
+    const e = err as NodeJS.ErrnoException & {
+      stdout?: string; stderr?: string; code?: number | string;
+    };
+    // Non-zero exit with JSON stdout = "doctor ran, some checks failed."
+    // That's GOOD signal — surface the report as `ok: true` with the
+    // exit code attached so the UI can render the failed-checks bullets.
+    if (e.stdout) {
+      try {
+        const parsed = JSON.parse(e.stdout) as unknown;
+        return NextResponse.json({
+          ok: true,
+          format: 'json',
+          binary: nvhBin,
+          report: parsed,
+          // Preserve the non-zero exit so the UI can show "some checks failed"
+          // chrome without hiding the report content.
+          exitCode: typeof e.code === 'number' ? e.code : null,
+          stderr: (e.stderr || '').slice(-1000),
+        });
+      } catch {
+        /* fall through to the error response below */
+      }
+    }
     return NextResponse.json(
       {
         ok: false,

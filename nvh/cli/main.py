@@ -9036,13 +9036,18 @@ def webui(
     console.print(f"  Browser: {browser_url}")
     _schedule_browser_open(browser_url, chosen_port)
     if api_proc is not None:
+        # Daemonized (start_new_session=True above) — the API survives
+        # Ctrl+C on this terminal AND `nvh webui` exit. This message used
+        # to say "will stop with Ctrl+C" which was wrong + got captured
+        # into install.log via the install.sh tee, misleading users into
+        # thinking they needed to keep the install terminal open.
         console.print(
             f"  [dim]API: http://localhost:{api_port} "
-            f"(auto-started, will stop with Ctrl+C)[/dim]"
+            f"(daemonized; survives Ctrl+C + terminal close)[/dim]"
         )
     elif api_already_running:
         console.print(f"  [dim]API: http://localhost:{api_port} (already running)[/dim]")
-    console.print("  [dim]Press Ctrl+C to stop[/dim]")
+    console.print("  [dim]Press Ctrl+C to stop the WebUI (the API stays running)[/dim]")
     console.print()
 
     try:

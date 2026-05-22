@@ -772,3 +772,99 @@ def test_wizard_persona_includes_proactive_repair_instructions() -> None:
     # The user-facing rationale (so future edits don't accidentally
     # delete this section thinking it's filler).
     assert "everything just works out of the box" in persona
+
+
+def test_system_console_probe_timeout_matches_probe_interval() -> None:
+    """The SystemConsole's /v1/health probe must use a generous-enough
+    timeout for cold cloud-GPU rigs. Real-rig photo 2026-05-22 showed a
+    healthy /v1/health response took 4694ms on a cold RTX 4080 rig (engine
+    init warmup). The previous 2500ms timeout flagged that healthy API as
+    down and triggered an unnecessary auto-restart. The fix: bump probe
+    timeout to match the 8s probe interval so any response inside one
+    cadence counts as "in time."
+    """
+    console = (ROOT / "web" / "components" / "SystemConsole.tsx").read_text(encoding="utf-8")
+
+    # The named constant exists with the right value.
+    assert "PROBE_TIMEOUT_MS = 8_000" in console
+    # The probe loop uses the constant, not a hardcoded value.
+    assert "setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS)" in console
+    # The old 2500ms timeout is gone from the probe path.
+    assert "ctl.abort(), 2500" not in console
+
+
+def test_system_console_auto_restart_respects_boot_grace_window() -> None:
+    """Auto-restart must NOT fire during the first 20s if we've never seen
+    the API healthy. Cold cloud VMs need 15-20s for FastAPI imports + engine
+    init; restarting during that window just resets the warmup clock. The
+    grace window matches ApiHealthBanner.BOOT_GRACE_MS so the two surfaces
+    agree on what "still booting" means.
+
+    Once we've seen the API healthy at least once, the grace window no
+    longer applies — a LATER outage triggers normal auto-restart logic
+    immediately at the failure threshold.
+    """
+    console = (ROOT / "web" / "components" / "SystemConsole.tsx").read_text(encoding="utf-8")
+
+    # The named constant exists and matches the banner.
+    assert "BOOT_GRACE_MS = 20_000" in console
+    # Sticky-once-healthy ref so the grace window only applies on first boot.
+    assert "everHealthyRef" in console
+    # The grace gate fires inside maybeAutoRestart.
+    assert "everHealthyRef.current" in console
+    assert "now - mountedAtRef.current < BOOT_GRACE_MS" in console
+    # The healthy branch flips everHealthyRef so later outages skip the gate.
+    assert "everHealthyRef.current = true" in console
+
+
+def test_doctor_bridge_routes_parse_json_even_on_non_zero_exit() -> None:
+    """Real-rig photo 2026-05-22 showed `nvh doctor --json` exit=1 on a
+    cloud GPU rig because the "Environment: local/on-prem detected" check
+    correctly returns "not detected" — that single failed check makes the
+    overall doctor exit code 1, but the JSON output is fully valid and
+    contains 4+ passing checks worth showing.
+
+    Both doctor-running routes (/api/services/doctor AND
+    /api/debug/report) must parse err.stdout as JSON before declaring
+    the report unreadable. Otherwise we hide useful diagnostics behind a
+    single failed check.
+    """
+    doctor_route = (
+        ROOT / "web" / "app" / "api" / "services" / "doctor" / "route.ts"
+    ).read_text(encoding="utf-8")
+    debug_route = (
+        ROOT / "web" / "app" / "api" / "debug" / "report" / "route.ts"
+    ).read_text(encoding="utf-8")
+
+    for source in (doctor_route, debug_route):
+        # Both routes have a catch block that attempts JSON.parse on
+        # err.stdout before returning a failure.
+        catch_block = source.split("catch (err)", 1)[1]
+        assert "e.stdout" in catch_block
+        assert "JSON.parse(e.stdout)" in catch_block
+        # The successful-parse path returns the report with the non-zero
+        # exit code attached, not an error.
+        assert "exitCode" in catch_block
+    # Doctor route's success-on-non-zero-exit returns format: 'json' with
+    # the report content, not the 500 error path.
+    assert "format: 'json'" in doctor_route.split("catch (err)", 1)[1]
+
+
+def test_nvh_webui_announce_message_reflects_daemon_lifecycle() -> None:
+    """The console message printed by `nvh webui` after starting the API
+    USED to say "auto-started, will stop with Ctrl+C". That was true
+    before PR #80 daemonized the API; it's now wrong AND gets captured
+    into install.log via the install.sh tee, misleading users who read
+    the install log into thinking the API requires the install terminal
+    to stay open. The corrected message must reflect the new daemon
+    lifecycle.
+    """
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # Negative: the old stale message is gone.
+    assert "auto-started, will stop with Ctrl+C" not in cli
+    # Positive: new message names the daemon contract.
+    assert "daemonized; survives Ctrl+C + terminal close" in cli
+    # The trailer ("Press Ctrl+C to stop") was misleading too — it implied
+    # Ctrl+C kills everything. Reword to clarify only the WebUI stops.
+    assert "Press Ctrl+C to stop the WebUI (the API stays running)" in cli
