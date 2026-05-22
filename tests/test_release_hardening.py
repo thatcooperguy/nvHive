@@ -959,3 +959,34 @@ def test_nvh_workstation_launch_implies_with_local_ai() -> None:
     # multi-word non-hyphenated form is hard to keep intact across line
     # wraps in the comment block.
     assert "everything-just-works-out-of-the-box" in workstation_block
+
+
+def test_debug_report_probe_timeout_matches_system_console() -> None:
+    """Real-rig photo 2026-05-22 (4th install retest) showed the Debug
+    Report SUMMARY claiming "API process is not listening" with
+    `(3002ms) error: This operation was aborted` while the SAME page's
+    server-rendered service-control panel said "nvHive API READY". The
+    contradiction was: the Debug Report's probeService default timeout
+    was 3000ms (set when this code was written, never updated when
+    SystemConsole's PROBE_TIMEOUT_MS was bumped to 8000ms in PR #81).
+
+    Both probe surfaces must share the same tolerance, otherwise users
+    will keep seeing this exact false-positive during the heavy-I/O
+    window of a fresh-install model pull.
+    """
+    debug_route = (
+        ROOT / "web" / "app" / "api" / "debug" / "report" / "route.ts"
+    ).read_text(encoding="utf-8")
+    console = (
+        ROOT / "web" / "components" / "SystemConsole.tsx"
+    ).read_text(encoding="utf-8")
+
+    # SystemConsole already has the 8s timeout (locked in by
+    # test_system_console_probe_timeout_matches_probe_interval).
+    assert "PROBE_TIMEOUT_MS = 8_000" in console
+    # Debug Report's probeService default must also be 8000.
+    assert "async function probeService(url: string, timeoutMs = 8000)" in debug_route
+    # Negative: the old 3000 default is gone.
+    assert "timeoutMs = 3000" not in debug_route
+    # Comment cross-references the SystemConsole + names the regression.
+    assert "matches SystemConsole's PROBE_TIMEOUT_MS" in debug_route

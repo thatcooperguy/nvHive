@@ -74,7 +74,15 @@ interface DoctorResult {
 // The directory-vs-file bug surfaced on the real-rig debug report photo
 // 2026-05-21 is fixed there.
 
-async function probeService(url: string, timeoutMs = 3000): Promise<ServiceProbe> {
+// Default probe timeout: 8s — matches SystemConsole's PROBE_TIMEOUT_MS.
+// Real-rig 2026-05-22 photo 4: API was genuinely healthy but the Debug
+// Report's old 3-second timeout fired during the heavy-I/O window of a
+// fresh-install model pull, generating the contradictory state where
+// the SUMMARY said "API process is not listening" while the right-side
+// service-control panel said "READY". The two probe surfaces must
+// share the same tolerance — the SystemConsole's 8s was already
+// tuned for cold-rig response times of ~5s.
+async function probeService(url: string, timeoutMs = 8000): Promise<ServiceProbe> {
   const t0 = Date.now();
   try {
     const ctl = new AbortController();
