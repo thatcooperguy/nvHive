@@ -318,12 +318,26 @@ launch_webui_after_install() {
     [ -n "$nvh_cmd" ] || return 0
 
     echo ""
-    echo -e "${G}Launching nvHive AI Studio WebUI...${N}"
+    echo -e "${G}Verifying all services up before opening the browser...${N}"
     echo -e "${D}Set NVH_INSTALL_LAUNCH=0 before install to skip auto-launch.${N}"
-    echo -e "${D}The terminal will keep the WebUI running; press Ctrl+C to stop it.${N}"
     echo ""
-    "$nvh_cmd" workstation --home-dir "$NVH_HOME" --launch -y || {
-        echo -e "${Y}WebUI auto-launch did not complete. You can retry with: $nvh_cmd webui${N}"
+    # Use `nvh services start` (not `workstation --launch`) so the user
+    # gets a live CLI table showing Ollama → API → WebUI each transition
+    # from waiting → starting → healthy. The browser opens ONLY after
+    # every service is verified healthy. Real-rig 2026-05-22 photos
+    # showed users landing on the WebUI before the API engine was
+    # initialized, seeing a red banner, and having to wait for auto-
+    # recovery. The bring-up-verified-first contract eliminates that
+    # window entirely.
+    #
+    # The previous `workstation --launch -y` path is preserved for the
+    # explicit `nvh workstation` invocation; it just isn't what the
+    # install runs.
+    "$nvh_cmd" services start --open || {
+        echo -e "${Y}Service bring-up failed. The install completed but one or more${N}"
+        echo -e "${Y}services didn't reach a healthy state. Inspect $NVH_LOGS, then:${N}"
+        echo -e "${G}  $nvh_cmd services start${N}    ${D}# retry the bring-up${N}"
+        echo -e "${G}  $nvh_cmd services status${N}   ${D}# see the current per-service status${N}"
     }
 }
 
