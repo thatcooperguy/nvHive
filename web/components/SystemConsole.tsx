@@ -305,6 +305,15 @@ export default function SystemConsole() {
       ? { label: 'Ollama up', color: '#22c55e' }
       : { label: 'Ollama down', color: '#f59e0b' };
 
+  // First-time-user audit 2026-05-22 (Agent C): when everything is
+  // healthy, the System Console shouldn't read as a permanent "tech-
+  // debt billboard" with 3 action buttons (Restart API · Doctor ·
+  // Logs ▾). Collapse to a minimal "all systems good" bar that just
+  // shows a green dot and the Logs toggle. The instant ANY chip
+  // turns yellow/red, the full bar with action buttons reappears.
+  const allGreen = apiHealthy === true && ollamaHealthy === true;
+  const compact = allGreen && collapsed;
+
   return (
     <div
       className="fixed left-0 right-0 z-[55] border-b"
@@ -320,46 +329,61 @@ export default function SystemConsole() {
       role="region"
       aria-label="nvHive system console"
     >
-      {/* Collapsed bar — always visible. */}
+      {/* Collapsed bar — always visible. In compact mode (all green)
+          renders as a minimal "all systems good" indicator + Logs
+          toggle; in full mode it shows chips + action buttons. */}
       <div className="flex items-center gap-3 px-3 h-6 text-[10px] font-mono">
-        <span
-          className="uppercase tracking-wider px-1.5 py-0.5 rounded-sm"
-          style={{ background: apiChip.color, color: '#0a0a0a' }}
-          title={`FastAPI on :8000 ${apiHealthy ? 'is healthy' : 'is not responding'}`}
-        >
-          {apiChip.label}
-        </span>
-        <span
-          className="uppercase tracking-wider px-1.5 py-0.5 rounded-sm"
-          style={{ background: ollamaChip.color, color: '#0a0a0a' }}
-          title={`Ollama on :11434 ${ollamaHealthy ? 'is healthy' : 'is not responding'}`}
-        >
-          {ollamaChip.label}
-        </span>
-        {actionMessage && !collapsed === false ? (
-          <span className="opacity-80 truncate">{actionMessage}</span>
-        ) : null}
+        {compact ? (
+          <span
+            className="uppercase tracking-wider"
+            style={{ color: '#22c55e' }}
+            title="All services healthy (API + Ollama)"
+          >
+            ● All systems good
+          </span>
+        ) : (
+          <>
+            <span
+              className="uppercase tracking-wider px-1.5 py-0.5 rounded-sm"
+              style={{ background: apiChip.color, color: '#0a0a0a' }}
+              title={`FastAPI on :8000 ${apiHealthy ? 'is healthy' : 'is not responding'}`}
+            >
+              {apiChip.label}
+            </span>
+            <span
+              className="uppercase tracking-wider px-1.5 py-0.5 rounded-sm"
+              style={{ background: ollamaChip.color, color: '#0a0a0a' }}
+              title={`Ollama on :11434 ${ollamaHealthy ? 'is healthy' : 'is not responding'}`}
+            >
+              {ollamaChip.label}
+            </span>
+          </>
+        )}
         <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void restartApi()}
-            disabled={actionBusy}
-            className="uppercase tracking-wider px-2 py-0.5 border rounded-sm disabled:opacity-40 hover:opacity-90"
-            style={{ borderColor: 'var(--border-bright, #3f3f46)' }}
-            title="Spawn `nvh serve` rootlessly via the Next.js bridge"
-          >
-            Restart API
-          </button>
-          <button
-            type="button"
-            onClick={() => void runDoctor()}
-            disabled={actionBusy}
-            className="uppercase tracking-wider px-2 py-0.5 border rounded-sm disabled:opacity-40 hover:opacity-90"
-            style={{ borderColor: 'var(--border-bright, #3f3f46)' }}
-            title="Run `nvh doctor --json` via the Next.js bridge"
-          >
-            Doctor
-          </button>
+          {!compact && (
+            <>
+              <button
+                type="button"
+                onClick={() => void restartApi()}
+                disabled={actionBusy}
+                className="uppercase tracking-wider px-2 py-0.5 border rounded-sm disabled:opacity-40 hover:opacity-90"
+                style={{ borderColor: 'var(--border-bright, #3f3f46)' }}
+                title="Spawn `nvh serve` rootlessly via the Next.js bridge"
+              >
+                Restart API
+              </button>
+              <button
+                type="button"
+                onClick={() => void runDoctor()}
+                disabled={actionBusy}
+                className="uppercase tracking-wider px-2 py-0.5 border rounded-sm disabled:opacity-40 hover:opacity-90"
+                style={{ borderColor: 'var(--border-bright, #3f3f46)' }}
+                title="Run `nvh doctor --json` via the Next.js bridge"
+              >
+                Doctor
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={toggleCollapsed}

@@ -119,6 +119,16 @@ async function probeService(url: string, timeoutMs = 8000): Promise<ServiceProbe
   }
 }
 
+// Hard cap on how many bytes we ever read from a log file at once.
+// 2026-05-22 audit (Agent D): the previous implementation called
+// `fs.readFile(path)` which buffers the WHOLE file into memory before
+// slicing the tail. install.log grows unbounded across re-runs (tee
+// -a, no rotation), so on a user who has re-installed 10 times this
+// is a 100MB+ read on every Debug Report click — blocks the Node
+// event loop. 64KB of trailing data is plenty for "last 30 lines"
+// even with very long log entries.
+const LOG_TAIL_CAP_BYTES = 64 * 1024;
+
 async function tailLog(source: string, filename: string, maxLines: number): Promise<LogTail> {
   const filePath = path.join(nvhLogsDir(), filename);
   let stat: Awaited<ReturnType<typeof fs.stat>> | null = null;
@@ -135,7 +145,28 @@ async function tailLog(source: string, filename: string, maxLines: number): Prom
     };
   }
   try {
-    const raw = await fs.readFile(filePath, 'utf8');
+    // Bounded read: open the file, seek to the last N bytes, read.
+    // For files <= LOG_TAIL_CAP_BYTES this reads the whole file; for
+    // bigger files we skip the head entirely. The slice-by-line at
+    // the end is still cheap because we never load more than 64KB.
+    let raw: string;
+    if (stat.size <= LOG_TAIL_CAP_BYTES) {
+      raw = await fs.readFile(filePath, 'utf8');
+    } else {
+      const fh = await fs.open(filePath, 'r');
+      try {
+        const buf = Buffer.alloc(LOG_TAIL_CAP_BYTES);
+        const offset = stat.size - LOG_TAIL_CAP_BYTES;
+        await fh.read(buf, 0, LOG_TAIL_CAP_BYTES, offset);
+        raw = buf.toString('utf8');
+        // The first line in the buffer may be a partial line (we
+        // started mid-line). Drop it so we only return complete lines.
+        const nl = raw.indexOf('\n');
+        if (nl !== -1) raw = raw.slice(nl + 1);
+      } finally {
+        await fh.close();
+      }
+    }
     const lines = raw.split('\n');
     if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
     return {

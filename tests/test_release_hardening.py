@@ -127,7 +127,10 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     # contract is enforced by test_install_sh_uses_services_start_for_verified_bringup.
     assert "services start --open" in install
     assert "Pulling $MODEL in background" not in install
-    assert "press s to skip" in install
+    # The 2026-05-22 polish PR rewrote "press s to skip" → "[s] to skip"
+    # (kbd-style brackets). The contract is "the countdown surfaces a
+    # single-key skip option" — match the new form.
+    assert "[s] to skip" in install
     # The "WebUI will show…" deferral was removed in PR #82 when model
     # pull became unconditional. The string still appears in a historical-
     # narrative comment explaining the removal, so match the actual bash
@@ -1335,3 +1338,161 @@ def test_services_pipeline_preloads_ollama_default_model() -> None:
     assert "NVH_OLLAMA_PRELOAD" in services_py
     # Best-effort: runs in a daemon thread so start_ollama doesn't block.
     assert "daemon=True" in services_py
+
+
+def test_model_download_countdown_surfaces_size_and_skip_options() -> None:
+    """2026-05-22 audit (Agent C, C1): the previous 10-second countdown
+    showed only `Downloading <model> for AI Wizard in 10... press s to skip`
+    with no size estimate, no time estimate, no explanation of what
+    skipping means. Non-engineer users either panic-skipped or sat
+    through a multi-GB pull blind.
+
+    The new copy shows: model name + estimated size, a one-line
+    description of what the model is, a TTY-mode skip prompt with
+    explicit "[s] to skip" hint AND a headless-mode env-knob hint so
+    piped installs aren't silently committed to a multi-GB download.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # Size-hint helper exists with the right tier values.
+    assert "nvwizard_model_size_hint()" in install
+    assert "~32 GB" in install   # nemotron-omni
+    assert "~7.9 GB" in install  # llama3.2-vision
+    assert "~1.7 GB" in install  # moondream
+
+    # New banner copy.
+    assert "AI Wizard local brain:" in install
+    assert "you can grab it later from /setup" in install
+    # Headless install hint surfaces the opt-out env knob inline so
+    # piped installs don't ambush users with multi-GB pulls.
+    assert "Headless install" in install
+    assert "NVH_INSTALL_MODEL_DOWNLOAD=0 bash install.sh" in install
+
+
+def test_api_health_banner_uses_brand_green_during_boot_grace() -> None:
+    """2026-05-22 audit (Agent C, C2): the boot-grace banner used an
+    amber palette. First-time users read banner COLOR, not text — amber
+    + chip "Starting up…" reads as "something's wrong" even though the
+    message says everything's fine. Brand-green during the 20s warmup
+    window so the user sees "things are happening and that's expected."
+    Reserve amber/red for actual degraded / down states.
+    """
+    banner = (ROOT / "web" / "components" / "ApiHealthBanner.tsx").read_text(encoding="utf-8")
+
+    # The nvHive brand-green chip background (lives in the isStarting
+    # branch of the palette ternary).
+    assert "#76B900" in banner
+    # New chip label.
+    assert "'Warming up'" in banner
+    # Negative: the old amber-900 palette is gone for the starting state.
+    # (Amber may still appear elsewhere in the codebase but the banner
+    # should now use green.)
+    assert "amber-900" not in banner
+    # Down state still uses red — separate branch.
+    assert "'API offline'" in banner
+    # Copy is reassuring, not alarming.
+    assert "Warming up the AI engine" in banner
+    # Negative: the old "Starting up…" chip label is gone.
+    assert "'Starting up…'" not in banner
+
+
+def test_services_start_table_uses_outcome_oriented_labels() -> None:
+    """2026-05-22 audit (Agent C, C3): row labels were technical names
+    (Ollama / API / WebUI / Smoke test). First-time users had no model
+    for what those mean. New labels lead with outcome ("Local AI brain")
+    + technical name parenthetical so engineers still find their bearings.
+    """
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+    body = cli.split("def services_start(", 1)[1].split("\n@services_app", 1)[0]
+
+    # The four outcome-oriented labels.
+    assert "Local AI brain (Ollama)" in body
+    assert "nvHive backend (API)" in body
+    assert "Web dashboard (WebUI)" in body
+    assert "End-to-end test" in body
+    # Status verb softened: "ready" reads more like "you can use it"
+    # than "healthy" which is engineer-speak.
+    assert "✓ ready" in body
+
+
+def test_system_console_compacts_when_all_services_healthy() -> None:
+    """2026-05-22 audit (Agent C, C5): when all services are healthy
+    the System Console shouldn't read as a permanent "tech-debt
+    billboard" with three action buttons (Restart API · Doctor ·
+    Logs ▾). Compact-mode shows a single green "● All systems good"
+    indicator + the Logs toggle. Action buttons reappear the instant
+    any chip turns red/amber.
+    """
+    console = (ROOT / "web" / "components" / "SystemConsole.tsx").read_text(encoding="utf-8")
+
+    # The compact-mode derivation.
+    assert "const allGreen = " in console
+    assert "apiHealthy === true && ollamaHealthy === true" in console
+    assert "const compact = allGreen && collapsed" in console
+    # Compact-mode renders the "all systems good" indicator + hides
+    # action buttons (Restart API / Doctor) until something turns red.
+    assert "All systems good" in console
+    # The dead `!collapsed === false` operator-precedence conditional
+    # is gone (D7).
+    assert "!collapsed === false" not in console
+
+
+def test_install_sh_fallback_chain_uses_positive_framing() -> None:
+    """2026-05-22 audit (Agent C, C6): the fallback chain printed
+    "Trying fallback X (preferred Y unavailable)..." and on failure
+    "Pull of Z failed (exit N)." Non-engineer users read this as "the
+    install just died." Reframe as positive swap ("Switching to a
+    smaller model: X (better fit for this rig)") so the chain walking
+    looks like working-as-designed adaptation, not failure.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # Positive framing.
+    assert "Switching to a smaller model:" in install
+    assert "better fit for this rig" in install
+    # The old alarming phrasing is gone from the user-facing path.
+    # (The phrase "preferred $preferred unavailable" was in the old
+    # echo; the new echo uses positive framing instead.)
+    assert "Trying fallback $model (preferred" not in install
+
+
+def test_kill_stale_api_pkill_regex_anchors_on_port_argument() -> None:
+    """2026-05-22 audit (Agent D, D6): the previous pkill -f regex was
+    `"nvh serve.*<port>"` which matched any process whose cmdline
+    contained "nvh serve" followed by the port number ANYWHERE,
+    including `nvh serve --port 80001 --log-port 8000` which would
+    falsely match a process on port 80001 when asked to kill port 8000.
+
+    The tightened form matches only `--port <N>` or `--port=<N>` to
+    avoid the false positive on multi-instance rigs.
+    """
+    services_py = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+    kill_block = services_py.split("def kill_stale_api(", 1)[1].split(
+        "\ndef ", 1,
+    )[0]
+    # The anchored form is present.
+    assert "--port[= ]" in kill_block
+    # The old loose form is gone.
+    assert 'nvh serve.*{port}"' not in kill_block
+
+
+def test_debug_report_log_tail_is_bounded_to_64kb() -> None:
+    """2026-05-22 audit (Agent D, D8): /api/debug/report previously
+    called `fs.readFile(path, 'utf8')` which buffers the entire log
+    into memory before slicing the tail. install.log grows unbounded
+    across re-runs (tee -a, no rotation), so on a user who has re-run
+    install 10 times this is a 100MB+ read per Debug Report click —
+    blocks the Node event loop. The bounded read seeks to the last
+    64KB and reads only that.
+    """
+    route = (
+        ROOT / "web" / "app" / "api" / "debug" / "report" / "route.ts"
+    ).read_text(encoding="utf-8")
+
+    # The cap constant + the bounded-read code path.
+    assert "LOG_TAIL_CAP_BYTES = 64 * 1024" in route
+    # fs.open + read at offset for large files.
+    assert "stat.size - LOG_TAIL_CAP_BYTES" in route
+    assert "await fh.read(" in route
+    # Drop the partial first line (we started mid-line).
+    assert "may be a partial line" in route
