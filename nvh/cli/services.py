@@ -506,10 +506,35 @@ def _wait_for(
 
 
 def _ollama_binary() -> str | None:
-    """Locate the ollama binary, preferring the rootless install location."""
+    """Locate the ollama binary, preferring the rootless install location.
+
+    Resolution order (same defensive layering as nvh-bridge.ts's
+    resolveNvhBinary, hardened 2026-05-22 after a real-rig install
+    failed because the subprocess didn't inherit PATH cleanly):
+
+      1. NVH_OLLAMA_BIN env var (explicit file override)
+      2. $NVH_BIN/ollama                (install.sh's canonical location)
+      3. $NVH_HOME/bin/ollama           (when NVH_BIN isn't exported)
+      4. ~/nvhive/bin/ollama            (default install path)
+      5. shutil.which("ollama")         (PATH lookup, last resort)
+    """
     explicit = os.environ.get("NVH_OLLAMA_BIN")
     if explicit and os.access(explicit, os.X_OK):
         return explicit
+    # Defensive: check the rootless install locations directly so we
+    # don't rely on PATH being inherited correctly into every subprocess.
+    candidates: list[str] = []
+    nvh_bin = os.environ.get("NVH_BIN")
+    if nvh_bin:
+        candidates.append(os.path.join(nvh_bin, "ollama"))
+    nvh_home = os.environ.get("NVH_HOME")
+    if nvh_home:
+        candidates.append(os.path.join(nvh_home, "bin", "ollama"))
+    home = os.path.expanduser("~")
+    candidates.append(os.path.join(home, "nvhive", "bin", "ollama"))
+    for candidate in candidates:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
     return shutil.which("ollama")
 
 
@@ -549,7 +574,20 @@ def start_ollama(log_dir: str | None = None) -> tuple[bool, str]:
 
     ollama_bin = _ollama_binary()
     if not ollama_bin:
-        return False, "ollama binary not found (run install.sh first)"
+        # Better diagnostic 2026-05-22: previously this returned the
+        # bare "run install.sh first" which was confusing on a rig
+        # WHERE install.sh JUST ran — install.sh's
+        # install_rootless_ollama_binary had failed silently. Point
+        # the user at the install log so they can see the actual
+        # download/extract error.
+        nvh_home = os.environ.get("NVH_HOME") or os.path.expanduser("~/nvhive")
+        log_hint = os.path.join(nvh_home, "logs", "ollama-install.log")
+        return False, (
+            f"ollama binary not found at $NVH_HOME/bin/ollama. "
+            f"install.sh's Ollama download likely failed — see {log_hint} "
+            f"for the underlying error, then re-run "
+            f"`curl -fsSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash`"
+        )
 
     log_path = None
     log_handle = None

@@ -1062,7 +1062,15 @@ extract_rootless_ollama_archive() {
 import os
 from pathlib import Path
 
-from nvh.integrations.studio_packs import _extract_ollama_archive
+# Module lives at nvh.integrations.installs.studio_packs (note the
+# .installs. middle segment). Real-rig regression 2026-05-22: this
+# heredoc previously imported `nvh.integrations.studio_packs` —
+# silently raising ModuleNotFoundError, which install.sh logged to
+# ollama-install.log as "Ollama extraction failed" and continued
+# without an extracted binary. Bring-up then aborted at the very end
+# with the confusing "ollama binary not found (run install.sh first)"
+# message — on a rig where install.sh had just run.
+from nvh.integrations.installs.studio_packs import _extract_ollama_archive
 
 _extract_ollama_archive(
     Path(os.environ["ARCHIVE"]),
@@ -1827,7 +1835,28 @@ fi
 # beats shipping a non-working install on every cloud GPU rig where the
 # driver tooling is unusual.
 OLLAMA_BIN="$NVH_BIN/ollama"
-install_rootless_ollama_binary || OLLAMA_BIN=""
+# 2026-05-22 real-rig regression: install_rootless_ollama_binary failing
+# silently meant install.sh continued as if Ollama were installed, then
+# the bring-up pipeline aborted at the very end with the confusing
+# "ollama binary not found (run install.sh first)" message — but
+# install.sh HAD just run. Fix: surface the install-log tail INLINE on
+# failure so the user can see exactly what went wrong (download 404,
+# extract failure, missing libc, whatever) AND continue with a clear
+# warning instead of pretending Ollama is installed.
+if ! install_rootless_ollama_binary; then
+    OLLAMA_BIN=""
+    echo ""
+    echo -e "${R}Ollama binary install failed.${N}"
+    echo -e "${Y}install.sh will continue (API + WebUI can still come up on cloud providers),${N}"
+    echo -e "${Y}but the local Wizard won't work until Ollama is installed.${N}"
+    if [ -s "$NVH_LOGS/ollama-install.log" ]; then
+        echo -e "${D}--- ollama-install.log tail (last 20 lines) ---${N}"
+        tail -n 20 "$NVH_LOGS/ollama-install.log" | sed "s/^/  /"
+        echo -e "${D}--- end tail ---${N}"
+        echo -e "${D}Full log: $NVH_LOGS/ollama-install.log${N}"
+    fi
+    echo ""
+fi
 
 # Start Ollama
 if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then

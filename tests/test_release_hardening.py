@@ -929,9 +929,14 @@ def test_install_sh_installs_ollama_and_pulls_model_unconditionally() -> None:
         "# Set up Ollama (local AI) — ALWAYS, on every Linux install", 1,
     )[1].split("# Show the full capability matrix", 1)[0]
     # The OLLAMA_BIN assignment + install call should be UNINDENTED
-    # (column 0), proving they are not inside any `if` block.
+    # (column 0), proving they are not inside any `if` block. The
+    # 2026-05-22 hotfix replaced the silent `|| OLLAMA_BIN=""` swallow
+    # with an `if ! install_rootless_ollama_binary; then ... fi` block
+    # that surfaces the install-log tail on failure. See
+    # test_install_sh_surfaces_ollama_install_failure_inline for the
+    # detailed contract.
     assert '\nOLLAMA_BIN="$NVH_BIN/ollama"' in install_block
-    assert "\ninstall_rootless_ollama_binary || OLLAMA_BIN=" in install_block
+    assert "\nif ! install_rootless_ollama_binary; then" in install_block
     # The model pull should be unconditional (when Ollama is up), not
     # deferred to should_launch_webui.
     assert "should_launch_webui" not in install_block, (
@@ -1496,3 +1501,126 @@ def test_debug_report_log_tail_is_bounded_to_64kb() -> None:
     assert "await fh.read(" in route
     # Drop the partial first line (we started mid-line).
     assert "may be a partial line" in route
+
+
+def test_ollama_binary_lookup_checks_rootless_paths_defensively() -> None:
+    """2026-05-22 real-rig regression: install.sh ran, Ollama install
+    failed silently (`install_rootless_ollama_binary || OLLAMA_BIN=""`),
+    install.sh continued without aborting. At the END, `nvh services
+    start --open` couldn't find the binary and aborted with the
+    confusing "ollama binary not found (run install.sh first)" message
+    — even though install.sh HAD just run.
+
+    The defensive fix layers _ollama_binary's resolution so even when
+    the subprocess doesn't inherit PATH cleanly OR install.sh wrote to
+    a slightly different path, the rootless locations are checked
+    explicitly. Same shape as resolveNvhBinary in nvh-bridge.ts.
+    """
+    services_py = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+    body = services_py.split("def _ollama_binary(", 1)[1].split("\ndef ", 1)[0]
+
+    # All four explicit lookup paths are wired.
+    assert 'os.environ.get("NVH_OLLAMA_BIN")' in body
+    assert 'os.environ.get("NVH_BIN")' in body
+    assert 'os.environ.get("NVH_HOME")' in body
+    # Default home fallback for when neither env is set.
+    assert '"nvhive", "bin", "ollama"' in body
+    # PATH lookup is last resort, not first.
+    path_idx = body.index('shutil.which("ollama")')
+    home_idx = body.index("nvhive")
+    assert path_idx > home_idx, "PATH lookup must come after rootless-path checks"
+
+
+def test_install_sh_surfaces_ollama_install_failure_inline() -> None:
+    """2026-05-22 real-rig regression: `install_rootless_ollama_binary
+    || OLLAMA_BIN=""` swallowed errors silently. install.sh would
+    continue as if everything were fine, then the bring-up pipeline
+    aborted at the end with a confusing message and the user had no
+    idea what actually went wrong.
+
+    The fix dumps the ollama-install.log tail inline on failure so the
+    user sees the real cause (download 404, extract failure, missing
+    libc, etc.) AND gets a clear "install continues but local Wizard
+    won't work" warning instead of cascading into the bring-up.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # The new failure-handling block.
+    assert "if ! install_rootless_ollama_binary; then" in install
+    assert "Ollama binary install failed." in install
+    # Dumps the install log tail inline for diagnosis.
+    assert 'tail -n 20 "$NVH_LOGS/ollama-install.log"' in install
+    # Tells the user install.sh continues but local Wizard won't work.
+    assert "API + WebUI can still come up on cloud providers" in install
+    assert "local Wizard won't work" in install
+
+
+def test_start_ollama_error_points_at_install_log() -> None:
+    """The "binary not found" error message must point at
+    $NVH_HOME/logs/ollama-install.log so users can see what install.sh
+    actually did. The previous message ("run install.sh first") was
+    confusing on a rig where install.sh JUST ran but failed silently.
+    """
+    services_py = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+    # Locate the binary-not-found error return.
+    body = services_py.split("def start_ollama(", 1)[1].split("\ndef ", 1)[0]
+    assert "ollama binary not found at $NVH_HOME/bin/ollama" in body
+    assert "ollama-install.log" in body
+    # The previous flat "run install.sh first" message is gone.
+    assert '"ollama binary not found (run install.sh first)"' not in body
+
+
+def test_nvh_init_suppresses_litellm_noise() -> None:
+    """2026-05-22 real-rig: users saw "common_utils.py:24 No module named
+    botocore" and similar errors scrolling past during install.sh.
+    Source: litellm's bedrock/sagemaker plugins try `import boto3` at
+    module load — soft-failures litellm catches, but the logging happens
+    before nvh.cli.main:main()'s suppression runs.
+
+    Move the suppression to nvh/__init__.py so it fires the moment any
+    nvh code is imported, including module-level `import litellm` in
+    provider files that run before main().
+    """
+    init_py = (ROOT / "nvh" / "__init__.py").read_text(encoding="utf-8")
+    assert "_suppress_litellm_noise" in init_py
+    # Calls the function eagerly at module load.
+    assert "_suppress_litellm_noise()" in init_py
+    # Sets the litellm-side flag.
+    assert "litellm.suppress_debug_info = True" in init_py
+    # Quiets the package-level bedrock/sagemaker loggers explicitly so
+    # boto3-import-failure tracebacks don't surface during install.
+    assert 'logging.getLogger("LiteLLM").setLevel' in init_py
+    assert "litellm.llms.bedrock" in init_py
+    assert "litellm.llms.sagemaker" in init_py
+
+
+def test_install_sh_extract_heredoc_uses_correct_studio_packs_path() -> None:
+    """2026-05-22 real-rig regression — THE smoking gun behind all the
+    failed installs in this cycle.
+
+    install.sh's Python heredoc imports `_extract_ollama_archive` to
+    unpack the downloaded Ollama tarball. The module lives at
+    `nvh.integrations.installs.studio_packs` (note the `.installs.`
+    middle segment). install.sh previously imported
+    `nvh.integrations.studio_packs` — silently raising
+    ModuleNotFoundError, which install.sh logged as "Ollama
+    extraction failed" and continued without an extracted binary.
+
+    Bring-up then aborted at the very end with the confusing "ollama
+    binary not found (run install.sh first)" message — on a rig
+    where install.sh HAD just run. Single line, broke every install
+    until 2026-05-22.
+
+    The contract test asserts the heredoc uses the CORRECT canonical
+    module path AND that the wrong path is gone, so this can't
+    silently regress.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # Correct path — every other importer in the codebase uses this
+    # one (see grep nvh/ --include='*.py').
+    assert "from nvh.integrations.installs.studio_packs import _extract_ollama_archive" in install
+    # Negative: the wrong path that caused the regression is gone.
+    # We anchor with the import statement to avoid matching narrative
+    # comment text that may reference the historical bug.
+    assert "from nvh.integrations.studio_packs import" not in install
