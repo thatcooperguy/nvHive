@@ -13839,10 +13839,10 @@ def services_stop(
     "No such command" error after install told them to use it.
     """
     from nvh.cli.services import (
+        OLLAMA_PORT,
         kill_stale_api,
         kill_stale_port,
         port_listening,
-        OLLAMA_PORT,
     )
 
     ports = ctx.obj or {}
