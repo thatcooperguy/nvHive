@@ -267,10 +267,17 @@ def kill_stale_api(port: int = API_PORT_DEFAULT) -> None:
 
     Originally added inline in ``nvh webui`` by PR #65; promoted here so
     ``nvh services restart`` and the test suite can call it.
+
+    pkill regex tightened 2026-05-22 audit (Agent D): previous form
+    ``"nvh serve.*<port>"`` matched any process whose cmdline contained
+    "nvh serve" followed by the port number ANYWHERE — including
+    ``--port 80001 --log-port 8000`` which would falsely match port
+    8000. Anchored form ``"-port[ =]<port>(\\s|$)"`` matches only the
+    actual --port argument the spawn supplied.
     """
     for cmd in (
         ["fuser", "-k", f"{port}/tcp"],
-        ["pkill", "-f", f"nvh serve.*{port}"],
+        ["pkill", "-f", rf"nvh serve.*--port[= ]{port}(\s|$)"],
     ):
         try:
             subprocess.run(cmd, capture_output=True, timeout=5, check=False)

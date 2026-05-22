@@ -1138,9 +1138,27 @@ ollama_model_installed() {
     "$OLLAMA_BIN" list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq "$model"
 }
 
+# Rough size estimates for the AI Wizard models we ship. Sourced from
+# the Ollama library + the HF Q4_K_M / Q8 GGUFs the install pulls. Used
+# by the countdown copy so users see "this is a ~7.9 GB download" not
+# just "downloading model X in 10s". Values are approximate; better to
+# slightly over-estimate so users on metered links don't feel ambushed.
+nvwizard_model_size_hint() {
+    case "$1" in
+        nemotron-omni)             echo "~32 GB" ;;
+        nemotron-3-nano-omni)      echo "~17 GB" ;;
+        llama3.2-vision)           echo "~7.9 GB" ;;
+        minicpm-v)                 echo "~5 GB" ;;
+        moondream)                 echo "~1.7 GB" ;;
+        *)                         echo "size TBD" ;;
+    esac
+}
+
 nvwizard_model_download_countdown() {
     local model="$1"
     local delay="${NVH_MODEL_DOWNLOAD_DELAY:-10}"
+    local size
+    size="$(nvwizard_model_size_hint "$model")"
     local key=""
 
     case "${NVH_INSTALL_MODEL_DOWNLOAD:-auto}" in
@@ -1150,14 +1168,26 @@ nvwizard_model_download_countdown() {
             ;;
     esac
 
+    # Pre-roll banner that's visible regardless of TTY state. Tells the
+    # user WHAT they're about to download, ROUGHLY how big it is, and
+    # HOW to skip — both via key on TTY and via env knob on headless.
+    # Real-rig audit 2026-05-22 (Agent C): the previous copy showed
+    # only the model name and 10s skip prompt, leaving non-engineer
+    # users panic-skipping or sitting through a multi-GB pull blind.
+    echo ""
+    echo -e "${G}AI Wizard local brain: $model ($size)${N}"
+    echo -e "${D}  This is the model the Wizard chats with. Smaller models load fast on CPU;${N}"
+    echo -e "${D}  bigger ones are stronger on GPU. You can change it later from the WebUI.${N}"
+
     if [ -r /dev/tty ] && [ -w /dev/tty ] && [ "${NVH_INSTALL_MODEL_DOWNLOAD:-auto}" = "auto" ]; then
+        echo -e "${D}  Press [s] to skip; download starts in 10s (you can grab it later from /setup).${N}"
         while [ "$delay" -gt 0 ]; do
-            printf "\rDownloading %s for AI Wizard in %s... press s to skip " "$model" "$delay" >/dev/tty
+            printf "\r  Starting in %ss... press [s] to skip " "$delay" >/dev/tty
             if IFS= read -r -s -n 1 -t 1 key </dev/tty; then
                 case "$key" in
                     s|S|c|C|q|Q)
                         printf "\n" >/dev/tty
-                        echo -e "${Y}Skipped AI Wizard model download. You can download it from the WebUI later.${N}"
+                        echo -e "${Y}  Skipped. The Wizard will offer the download from the WebUI later.${N}"
                         return 1
                         ;;
                 esac
@@ -1166,7 +1196,12 @@ nvwizard_model_download_countdown() {
         done
         printf "\n" >/dev/tty
     else
-        echo -e "${B}Downloading $model for AI Wizard.${N}"
+        # Headless / piped install — no /dev/tty available. Surface the
+        # opt-out hint inline so users running via `ssh host 'bash -s' <
+        # install.sh` or cloud-init userdata don't get hit with a
+        # multi-GB pull they didn't expect.
+        echo -e "${D}  Headless install — running with no TTY. To skip the download in this${N}"
+        echo -e "${D}  mode, re-run with: ${G}NVH_INSTALL_MODEL_DOWNLOAD=0 bash install.sh${N}"
     fi
 
     return 0
@@ -1305,7 +1340,11 @@ pull_nvwizard_model_cli() {
         if [ "$attempt" -eq 1 ]; then
             echo -e "${B}Downloading $model for AI Wizard. This can take a few minutes on first run.${N}"
         else
-            echo -e "${Y}Trying fallback $model (preferred $preferred unavailable)...${N}"
+            # 2026-05-22 audit (Agent C): the previous copy said "Trying
+            # fallback" / "Pull failed" which read like the install was
+            # dying. Reframe as a positive swap so first-time users
+            # don't panic when the chain walks to a smaller model.
+            echo -e "${B}Switching to a smaller model: $model (better fit for this rig)...${N}"
         fi
         # Skip ahead if this fallback is already on disk
         if ollama_model_installed "$model"; then
@@ -1318,13 +1357,17 @@ pull_nvwizard_model_cli() {
         set -e
         if [ "$pull_rc" -eq 0 ]; then
             if [ "$model" != "$preferred" ]; then
-                echo -e "${Y}Preferred $preferred unavailable. Using $model — multimodal Wizard tools still work.${N}"
+                echo -e "${G}Wizard is using $model. Multimodal tools (vision/reasoning) still work.${N}"
             else
                 echo -e "${G}Model $model ready for AI Wizard.${N}"
             fi
             return 0
         fi
-        echo -e "${Y}Pull of $model failed (exit $pull_rc).${N}"
+        # Internal/log line — kept terse for the model-pull.log tail but
+        # not formatted as a scary user-facing failure. The next iteration
+        # of the loop will surface the actual user-facing "switching to
+        # smaller model" message.
+        echo -e "${D}  ($model not available; trying the next option…)${N}"
         # If the failed pull is one of the NVIDIA Omni tags (the Ollama
         # library doesn't publish them yet as of 2026-05-17), try the
         # HuggingFace → Modelfile bootstrap before walking further down

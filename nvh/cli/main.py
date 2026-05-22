@@ -13639,11 +13639,17 @@ def services_start(
     # "skipped". The 4th row is the end-to-end Wizard smoke test that
     # closes the loop on "the user can actually use this" (not just
     # "three ports are listening").
+    #
+    # Row labels (2026-05-22 audit Agent C): the previous labels
+    # "Ollama / API / WebUI / Smoke test" spoke engineer. First-time
+    # users had no model for what those names mean. New labels lead
+    # with the OUTCOME ("Local AI brain") and keep the technical name
+    # parenthetical for engineers who still want to see it.
     STATE: dict[str, dict[str, str]] = {
-        "Ollama":     {"port": "11434", "status": "waiting", "detail": "queued"},
-        "API":        {"port": str(api_port),   "status": "waiting", "detail": "queued"},
-        "WebUI":      {"port": str(webui_port), "status": "waiting", "detail": "queued"},
-        "Smoke test": {"port": "—",     "status": "waiting", "detail": "queued"},
+        "Ollama":     {"label": "Local AI brain (Ollama)",  "port": "11434",            "status": "waiting", "detail": "queued"},
+        "API":        {"label": "nvHive backend (API)",     "port": str(api_port),      "status": "waiting", "detail": "queued"},
+        "WebUI":      {"label": "Web dashboard (WebUI)",    "port": str(webui_port),    "status": "waiting", "detail": "queued"},
+        "Smoke test": {"label": "End-to-end test",          "port": "—",                "status": "waiting", "detail": "queued"},
     }
 
     def _render() -> Table:
@@ -13657,10 +13663,10 @@ def services_start(
         table.add_column("Port")
         table.add_column("Status", min_width=10)
         table.add_column("Detail", overflow="fold")
-        for name, row in STATE.items():
+        for _name, row in STATE.items():
             status = row["status"]
             if status == "healthy":
-                status_cell = "[green]✓ healthy[/green]"
+                status_cell = "[green]✓ ready[/green]"
             elif status == "degraded":
                 status_cell = "[yellow]⚠ degraded[/yellow]"
             elif status == "starting":
@@ -13671,7 +13677,10 @@ def services_start(
                 status_cell = "[yellow]– skipped[/yellow]"
             else:
                 status_cell = "[dim]· waiting[/dim]"
-            table.add_row(name, row["port"], status_cell, row["detail"])
+            # Outcome-oriented label (e.g. "Local AI brain (Ollama)")
+            # with the technical name parenthetical so engineers can
+            # still find their bearings. See STATE init for the contract.
+            table.add_row(row["label"], row["port"], status_cell, row["detail"])
         return table
 
     console.print("[bold]Starting service pipeline...[/bold]")

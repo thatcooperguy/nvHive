@@ -161,15 +161,20 @@ export default function ApiHealthBanner() {
 
   const isStarting = status === 'starting';
 
-  // Amber for "still booting" (informational), red for "was up, went away"
-  // (alarming). Same layout, different palette + copy.
+  // First-time-user audit 2026-05-22 (Agent C): the previous boot-grace
+  // palette was amber. Students read banner COLOR, not text — amber +
+  // chip-style copy "Starting up…" reads as "something's wrong" even
+  // though the actual message says everything's fine. Switch to brand-
+  // green during boot grace so the user sees "things are happening
+  // and that's expected." Reserve amber/red for actual degraded /
+  // down states (post-grace, where there IS something wrong).
   const palette = isStarting
     ? {
-        bg: '#78350f', // amber-900
-        border: '#92400e', // amber-800
-        text: '#fef3c7', // amber-100
-        chipBg: '#92400e',
-        chipLabel: 'Starting up…',
+        bg: '#1f3a1f', // brand-green-tinted dark — nvHive accent #76B900
+        border: '#3a5c1f', // slightly lighter green border
+        text: '#d4f1c2', // pale green-tinted off-white
+        chipBg: '#76B900', // nvHive brand green
+        chipLabel: 'Warming up',
       }
     : {
         bg: '#7f1d1d', // red-900
@@ -204,9 +209,8 @@ export default function ApiHealthBanner() {
         </span>
         {isStarting ? (
           <span className="flex-1 min-w-[200px]">
-            Starting up… The nvHive backend at{' '}
-            <code className="font-mono">{API_BASE}</code> is finishing its
-            initial boot. This usually takes 5-15 seconds on a fresh install.
+            Warming up the AI engine — usually 5-15 seconds on a fresh install.
+            The dashboard will start showing data the moment it&apos;s ready.
           </span>
         ) : (
           <>
