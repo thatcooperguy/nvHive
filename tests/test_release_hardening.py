@@ -1091,3 +1091,74 @@ def test_start_pipeline_threads_on_step_begin_callback() -> None:
     # restart_pipeline must thread the same callback so the Live table
     # works on restart too.
     assert services_py.count("on_step_begin=on_step_begin") >= 1
+
+
+def test_services_start_runs_wizard_smoke_test_before_browser() -> None:
+    """The final piece of the "open the browser only on a working state"
+    contract: `nvh services start` must run a real end-to-end Wizard
+    smoke test as the 4th pipeline step, AFTER WebUI port is listening
+    but BEFORE the browser opens.
+
+    Why: three ports listening doesn't prove the Wizard can actually
+    answer. The model might not be loaded, the engine might be in a
+    broken state, providers might be misconfigured. The smoke test
+    POSTs to /v1/wizard/chat and waits for a non-empty answer — the
+    minimum signal that the user can chat.
+
+    Permissive: fallback-mode answers (no local LLM available) still
+    count as ok for the browser-open decision. Only timeouts / endpoint
+    errors / empty answers gate the browser.
+    """
+    services = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # The helper exists and POSTs to the canonical Wizard endpoint.
+    assert "def wizard_smoke_test(" in services
+    assert "/v1/wizard/chat" in services
+    # Generous default timeout — cold model load can run 30s+.
+    assert "timeout: float = 45.0" in services
+    # Permissive on response shape — handles wrapped and flat envelopes.
+    assert 'body.get("data") or body' in services
+
+    # start_pipeline runs the smoke test as the 4th step, after WebUI.
+    pipeline_block = services.split("def start_pipeline(", 1)[1].split(
+        "\ndef restart_pipeline(", 1,
+    )[0]
+    assert "wizard_smoke_test(" in pipeline_block
+    assert 'on_step_begin("Smoke test")' in pipeline_block
+    assert 'on_step("Smoke test"' in pipeline_block
+    # The smoke step must come AFTER the WebUI step in source order.
+    webui_idx = pipeline_block.index('on_step_begin("WebUI")')
+    smoke_idx = pipeline_block.index('on_step_begin("Smoke test")')
+    assert smoke_idx > webui_idx, "smoke test must run after WebUI"
+
+    # The Rich Live table has a 4th row for the smoke test.
+    services_start_block = cli.split("def services_start(", 1)[1].split(
+        "\n@services_app", 1,
+    )[0]
+    assert '"Smoke test"' in services_start_block
+    # Skip-propagation order includes the new row.
+    assert '["Ollama", "API", "WebUI", "Smoke test"]' in services_start_block
+
+
+def test_services_smoke_test_subcommand_exists() -> None:
+    """`nvh services smoke-test` is the standalone command users run
+    when they want to verify the stack works without redoing the full
+    start pipeline. Exits 0 on success, 1 on hard failure with a
+    diagnostic hint pointing at `nvh services status` + `nvh doctor`
+    + `nvh services restart`.
+    """
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # Subcommand wiring.
+    assert '@services_app.command("smoke-test")' in cli
+    assert "def services_smoke_test(" in cli
+    # Body imports + calls the shared helper (no duplicate logic).
+    body = cli.split("def services_smoke_test(", 1)[1].split("\n@", 1)[0]
+    assert "from nvh.cli.services import wizard_smoke_test" in body
+    # The diagnostic hints on failure.
+    assert "nvh services status" in body
+    assert "nvh doctor" in body
+    assert "nvh services restart" in body
+    # Non-zero exit on hard failure.
+    assert "raise typer.Exit(1)" in body

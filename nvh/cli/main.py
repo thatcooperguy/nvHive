@@ -13634,12 +13634,16 @@ def services_start(
     log_dir = str(layout.logs_dir)
     layout.logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # State for the Live table — three rows, mutated as the pipeline
-    # progresses. Statuses: "waiting", "starting", "healthy", "failed".
+    # State for the Live table — four rows, mutated as the pipeline
+    # progresses. Statuses: "waiting", "starting", "healthy", "failed",
+    # "skipped". The 4th row is the end-to-end Wizard smoke test that
+    # closes the loop on "the user can actually use this" (not just
+    # "three ports are listening").
     STATE: dict[str, dict[str, str]] = {
-        "Ollama": {"port": "11434", "status": "waiting", "detail": "queued"},
-        "API":    {"port": str(api_port),   "status": "waiting", "detail": "queued"},
-        "WebUI":  {"port": str(webui_port), "status": "waiting", "detail": "queued"},
+        "Ollama":     {"port": "11434", "status": "waiting", "detail": "queued"},
+        "API":        {"port": str(api_port),   "status": "waiting", "detail": "queued"},
+        "WebUI":      {"port": str(webui_port), "status": "waiting", "detail": "queued"},
+        "Smoke test": {"port": "—",     "status": "waiting", "detail": "queued"},
     }
 
     def _render() -> Table:
@@ -13685,7 +13689,7 @@ def services_start(
             STATE[label]["detail"] = reason
             # Anything not yet attempted after a failure becomes "skipped".
             if not ok:
-                order = ["Ollama", "API", "WebUI"]
+                order = ["Ollama", "API", "WebUI", "Smoke test"]
                 idx = order.index(label)
                 for later in order[idx + 1:]:
                     if STATE[later]["status"] == "waiting":
@@ -13772,6 +13776,45 @@ def services_restart(
             f"  Logs:    {log_dir}"
         )
         raise typer.Exit(1)
+
+
+@services_app.command("smoke-test")
+def services_smoke_test(
+    ctx: typer.Context,
+    timeout: float = typer.Option(
+        45.0, "--timeout",
+        help="Seconds to wait for the Wizard to answer (cold model load can run 30s+)",
+    ),
+) -> None:
+    """End-to-end "can the Wizard actually answer?" check.
+
+    POSTs a small chat request to ``/v1/wizard/chat`` and verifies a
+    non-empty answer comes back. Use this any time you suspect the
+    stack is half-working — e.g. all ports listening but the Wizard
+    is silent in the WebUI.
+
+    Exits 0 on success (non-empty answer, any mode including fallback),
+    1 on hard failure (timeout, endpoint error, empty answer).
+    """
+    from nvh.cli.services import wizard_smoke_test
+
+    ports = ctx.obj or {}
+    api_port = ports.get("api_port", 8000)
+
+    console.print(f"[bold]Wizard smoke test on :{api_port}...[/bold]")
+    console.print(f"[dim]Timeout: {timeout:.0f}s · POST /v1/wizard/chat[/dim]")
+    ok, reason = wizard_smoke_test(api_port=api_port, timeout=timeout)
+    if ok:
+        console.print(f"  [green]✓[/green] {reason}")
+        return
+    console.print(f"  [red]✗[/red] {reason}")
+    console.print(
+        "\nTo diagnose:\n"
+        "  [bold]nvh services status[/bold]   show per-service health\n"
+        "  [bold]nvh doctor --json[/bold]     run the full diagnostic\n"
+        "  [bold]nvh services restart[/bold]  recycle the API\n"
+    )
+    raise typer.Exit(1)
 
 
 if __name__ == "__main__":
