@@ -190,6 +190,29 @@ async function runDoctor(): Promise<DoctorResult> {
       stderr?: string;
       code?: number | string;
     };
+    // `nvh doctor --json` returns exit=1 when ANY check fails (e.g. the
+    // "Environment: local / on-prem detected" check fails on cloud GPU
+    // rigs). The JSON output is still there and useful. Parse it before
+    // declaring the report unreadable. Real-rig photo 2026-05-22 hit
+    // exactly this — exit=1 hid a perfectly readable doctor report with
+    // 4 passing checks.
+    if (e.stdout) {
+      try {
+        const parsed = JSON.parse(e.stdout) as unknown;
+        return {
+          ran: true,
+          format: 'json',
+          binary: nvhBin,
+          exitCode: typeof e.code === 'number' ? e.code : null,
+          report: parsed,
+          stdout: '',
+          stderr: (e.stderr || '').slice(-1000),
+          elapsedMs: Date.now() - t0,
+        };
+      } catch {
+        /* stdout wasn't JSON; fall through to error result below */
+      }
+    }
     return {
       ran: false,
       format: 'error',

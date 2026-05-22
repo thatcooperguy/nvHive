@@ -80,9 +80,20 @@ function writeCollapsed(value: boolean): void {
 //   - 120s minimum gap between auto-restart attempts so we don't restart-loop
 //   - 3 attempts per session max so a fundamentally broken install doesn't
 //     thrash the API endlessly
+//   - PROBE_TIMEOUT_MS = 8000: real-rig photo 2026-05-22 showed a healthy
+//     /v1/health response took 4694ms on a cold cloud GPU rig (engine init
+//     warms slowly). The previous 2500ms timeout flagged that healthy API
+//     as down, triggering an unnecessary auto-restart. Match the probe
+//     interval so any response inside one cadence is "in time."
+//   - BOOT_GRACE_MS = 20_000: matches ApiHealthBanner; if we've never
+//     seen the API healthy AND we're inside the first 20s, skip
+//     auto-restart entirely. Cold imports + engine init can run 15-20s
+//     on a fresh cloud VM.
 const AUTO_RESTART_FAILURES_THRESHOLD = 3;
 const AUTO_RESTART_MIN_GAP_MS = 120_000;
 const AUTO_RESTART_MAX_ATTEMPTS = 3;
+const PROBE_TIMEOUT_MS = 8_000;
+const BOOT_GRACE_MS = 20_000;
 
 export default function SystemConsole() {
   const [collapsed, setCollapsed] = useState<boolean>(true);
@@ -99,6 +110,12 @@ export default function SystemConsole() {
   const apiFailuresRef = useRef<number>(0);
   const lastAutoRestartAtRef = useRef<number>(0);
   const autoRestartAttemptsRef = useRef<number>(0);
+  // Mount timestamp for the boot-grace window. Sticky-once-healthy: after
+  // the first healthy probe we ignore the grace window so a later outage
+  // restarts on the normal threshold rather than waiting for the grace
+  // window to expire again.
+  const mountedAtRef = useRef<number>(0);
+  const everHealthyRef = useRef<boolean>(false);
 
   // Restore last collapsed state.
   useEffect(() => {
@@ -112,9 +129,17 @@ export default function SystemConsole() {
   // self-heal.
   useEffect(() => {
     let cancelled = false;
+    mountedAtRef.current = Date.now();
 
     const maybeAutoRestart = async () => {
       const now = Date.now();
+      // Boot-grace: if we've never seen the API healthy AND we're still
+      // inside the first 20s, skip auto-restart. Cold cloud rigs can take
+      // 15-20s to finish importing FastAPI + warming the engine, and a
+      // healthy /v1/health response on those rigs can take ~5s (real-rig
+      // photo 2026-05-22 showed 4694ms). Restarting during that window
+      // would just reset the warmup clock for no benefit.
+      if (!everHealthyRef.current && now - mountedAtRef.current < BOOT_GRACE_MS) return;
       if (apiFailuresRef.current < AUTO_RESTART_FAILURES_THRESHOLD) return;
       if (now - lastAutoRestartAtRef.current < AUTO_RESTART_MIN_GAP_MS) return;
       if (autoRestartAttemptsRef.current >= AUTO_RESTART_MAX_ATTEMPTS) return;
@@ -142,7 +167,7 @@ export default function SystemConsole() {
       let apiOk = false;
       try {
         const ctl = new AbortController();
-        const t = setTimeout(() => ctl.abort(), 2500);
+        const t = setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS);
         const r = await fetch(`${API_BASE}/v1/health`, { signal: ctl.signal, cache: 'no-store' });
         clearTimeout(t);
         apiOk = r.ok;
@@ -155,6 +180,7 @@ export default function SystemConsole() {
         // Reset the failure streak on recovery so a later outage starts
         // counting fresh.
         apiFailuresRef.current = 0;
+        everHealthyRef.current = true;
       } else {
         apiFailuresRef.current += 1;
         void maybeAutoRestart();
@@ -162,7 +188,7 @@ export default function SystemConsole() {
 
       try {
         const ctl = new AbortController();
-        const t = setTimeout(() => ctl.abort(), 2500);
+        const t = setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS);
         const r = await fetch('http://localhost:11434/api/tags', { signal: ctl.signal, cache: 'no-store' });
         clearTimeout(t);
         if (!cancelled) setOllamaHealthy(r.ok);
