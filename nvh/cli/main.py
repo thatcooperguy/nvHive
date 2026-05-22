@@ -13614,7 +13614,15 @@ def services_start(
 
     Ollama → API → WebUI. If any step fails the rest are skipped and
     the failing step + reason is printed.
+
+    Rich Live progress table (2026-05-22): each service shows
+    "waiting → starting → healthy/failed" in place. The browser only
+    opens when every row reaches healthy — the user's first sight of
+    the WebUI is a fully working state, never a red API-offline banner.
     """
+    from rich.live import Live
+    from rich.table import Table
+
     from nvh.cli.services import snapshot, start_pipeline
     from nvh.integrations.workspace.storage import storage_layout
 
@@ -13626,23 +13634,73 @@ def services_start(
     log_dir = str(layout.logs_dir)
     layout.logs_dir.mkdir(parents=True, exist_ok=True)
 
-    def _on_step(label: str, ok: bool, reason: str) -> None:
-        if ok:
-            console.print(f"  [green]✓[/green] {label}: {reason}")
-        else:
-            console.print(f"  [red]✗[/red] {label}: {reason}")
+    # State for the Live table — three rows, mutated as the pipeline
+    # progresses. Statuses: "waiting", "starting", "healthy", "failed".
+    STATE: dict[str, dict[str, str]] = {
+        "Ollama": {"port": "11434", "status": "waiting", "detail": "queued"},
+        "API":    {"port": str(api_port),   "status": "waiting", "detail": "queued"},
+        "WebUI":  {"port": str(webui_port), "status": "waiting", "detail": "queued"},
+    }
+
+    def _render() -> Table:
+        table = Table(
+            title="nvHive bring-up",
+            title_style="bold",
+            show_header=True,
+            header_style="bold dim",
+        )
+        table.add_column("Service", style="bold")
+        table.add_column("Port")
+        table.add_column("Status", min_width=10)
+        table.add_column("Detail", overflow="fold")
+        for name, row in STATE.items():
+            status = row["status"]
+            if status == "healthy":
+                status_cell = "[green]✓ healthy[/green]"
+            elif status == "starting":
+                status_cell = "[cyan]⟳ starting[/cyan]"
+            elif status == "failed":
+                status_cell = "[red]✗ failed[/red]"
+            elif status == "skipped":
+                status_cell = "[yellow]– skipped[/yellow]"
+            else:
+                status_cell = "[dim]· waiting[/dim]"
+            table.add_row(name, row["port"], status_cell, row["detail"])
+        return table
 
     console.print("[bold]Starting service pipeline...[/bold]")
-    result = start_pipeline(
-        api_port=api_port,
-        webui_port=webui_port,
-        log_dir=log_dir,
-        open_browser=open_browser,
-        on_step=_on_step,
+    console.print(
+        f"[dim]Logs: {log_dir} · "
+        "Browser opens only when every service is verified healthy.[/dim]"
     )
 
-    console.print()
-    _services_render_console(snapshot(api_port=api_port, webui_port=webui_port))
+    with Live(_render(), console=console, refresh_per_second=4) as live:
+        def _on_begin(label: str) -> None:
+            STATE[label]["status"] = "starting"
+            STATE[label]["detail"] = "spawning + health probe…"
+            live.update(_render())
+
+        def _on_step(label: str, ok: bool, reason: str) -> None:
+            STATE[label]["status"] = "healthy" if ok else "failed"
+            STATE[label]["detail"] = reason
+            # Anything not yet attempted after a failure becomes "skipped".
+            if not ok:
+                order = ["Ollama", "API", "WebUI"]
+                idx = order.index(label)
+                for later in order[idx + 1:]:
+                    if STATE[later]["status"] == "waiting":
+                        STATE[later]["status"] = "skipped"
+                        STATE[later]["detail"] = "aborted (earlier step failed)"
+            live.update(_render())
+
+        result = start_pipeline(
+            api_port=api_port,
+            webui_port=webui_port,
+            log_dir=log_dir,
+            open_browser=open_browser,
+            on_step=_on_step,
+            on_step_begin=_on_begin,
+        )
 
     if not result.ok:
         skipped = ", ".join(result.skipped) if result.skipped else "(nothing)"
@@ -13652,6 +13710,15 @@ def services_start(
             f"  Logs:    {log_dir}"
         )
         raise typer.Exit(1)
+
+    # Success — final snapshot for the receipt.
+    console.print()
+    _services_render_console(snapshot(api_port=api_port, webui_port=webui_port))
+    if open_browser:
+        console.print(
+            f"\n[green]All services healthy.[/green] "
+            f"Browser → http://localhost:{webui_port}/setup"
+        )
 
 
 @services_app.command("restart")

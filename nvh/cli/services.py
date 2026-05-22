@@ -570,6 +570,7 @@ def start_pipeline(
     log_dir: str | None = None,
     open_browser: bool = True,
     on_step: Any = None,
+    on_step_begin: Any = None,
 ) -> StartResult:
     """Boot the full pipeline in order, aborting on the first hard failure.
 
@@ -581,13 +582,29 @@ def start_pipeline(
 
     If any step fails the rest are skipped and the result names the
     step + reason so ``nvh services start`` can render a clear error.
+
+    ``on_step_begin(label)`` fires when a step starts (so a Rich Live
+    table can flip the row to "starting"); ``on_step(label, ok, reason)``
+    fires when the step finishes. The two callbacks let a TTY caller
+    show a fluid status table instead of bursts of completed lines.
+
+    Owner contract (2026-05-22): the browser only opens when ALL THREE
+    services reported healthy. The pre-2026-05-22 behavior was to open
+    the browser as part of ``nvh webui`` regardless of API engine state,
+    which led to red "API offline" banners on the first page load on
+    cold cloud rigs. Now the browser launch is gated on the pipeline
+    actually reaching the end with ``failed is None``.
     """
     result = StartResult()
     if on_step is None:
         def on_step(label: str, ok: bool, reason: str) -> None:
             return None
+    if on_step_begin is None:
+        def on_step_begin(label: str) -> None:
+            return None
 
     # 1. Ollama
+    on_step_begin("Ollama")
     ok, reason = start_ollama(log_dir=log_dir)
     on_step("Ollama", ok, reason)
     if not ok:
@@ -598,6 +615,7 @@ def start_pipeline(
     result.started.append("Ollama")
 
     # 2. API
+    on_step_begin("API")
     ok, reason = start_api(port=api_port, log_dir=log_dir)
     on_step("API", ok, reason)
     if not ok:
@@ -608,6 +626,7 @@ def start_pipeline(
     result.started.append("API")
 
     # 3. WebUI
+    on_step_begin("WebUI")
     ok, reason = start_webui(port=webui_port, log_dir=log_dir)
     on_step("WebUI", ok, reason)
     if not ok:
@@ -616,6 +635,9 @@ def start_pipeline(
         return result
     result.started.append("WebUI")
 
+    # Only NOW open the browser. The "good and working state" contract:
+    # the user sees the WebUI for the first time when every service is
+    # already verified healthy, not before.
     if open_browser:
         url = f"http://localhost:{webui_port}/setup"
         try:
@@ -632,6 +654,7 @@ def restart_pipeline(
     log_dir: str | None = None,
     open_browser: bool = True,
     on_step: Any = None,
+    on_step_begin: Any = None,
 ) -> StartResult:
     """Graceful kill of all three services, then a fresh ``start_pipeline``.
 
@@ -652,6 +675,7 @@ def restart_pipeline(
         log_dir=log_dir,
         open_browser=open_browser,
         on_step=on_step,
+        on_step_begin=on_step_begin,
     )
 
 

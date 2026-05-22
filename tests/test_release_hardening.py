@@ -121,10 +121,19 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     assert 'MODEL="$DEFAULT_OLLAMA_MODEL"' in install
     assert "launch_webui_after_install" in install
     assert "NVH_INSTALL_LAUNCH" in install
-    assert "workstation --home-dir" in install
+    # As of 2026-05-22 the install launches the service pipeline via
+    # `nvh services start --open` (verified-bring-up with Rich Live
+    # table), not the old `nvh workstation --launch -y`. The new
+    # contract is enforced by test_install_sh_uses_services_start_for_verified_bringup.
+    assert "services start --open" in install
     assert "Pulling $MODEL in background" not in install
     assert "press s to skip" in install
-    assert "WebUI will show AI Wizard model download" in install
+    # The "WebUI will show…" deferral was removed in PR #82 when model
+    # pull became unconditional. The string still appears in a historical-
+    # narrative comment explaining the removal, so match the actual bash
+    # construct (echo statement) rather than the substring.
+    # See test_install_sh_installs_ollama_and_pulls_model_unconditionally.
+    assert 'echo -e "${B}WebUI will show AI Wizard model download' not in install
 
 
 def test_install_ollama_startup_has_health_wait_and_logging() -> None:
@@ -990,3 +999,95 @@ def test_debug_report_probe_timeout_matches_system_console() -> None:
     assert "timeoutMs = 3000" not in debug_route
     # Comment cross-references the SystemConsole + names the regression.
     assert "matches SystemConsole's PROBE_TIMEOUT_MS" in debug_route
+
+
+def test_install_sh_uses_services_start_for_verified_bringup() -> None:
+    """The owner-requested contract: "all services installed and verified
+    up and running via CLI view. Once everything is up and running then
+    launch the browser so it starts in a good and working state."
+
+    install.sh must call `nvh services start --open` at the end (not
+    `nvh workstation --launch -y`). `nvh services start` is the
+    Rich-Live-progress-table command that:
+      1. Brings up Ollama → API → WebUI in order
+      2. Health-gates each step before the next starts
+      3. Shows live per-service status (waiting → starting → healthy/failed)
+      4. Opens the browser ONLY when all three services are healthy
+
+    `workstation --launch` had no such gate — it opened the browser as
+    part of `nvh webui` regardless of API engine state, which led to
+    every "red API offline banner on first page load" failure mode
+    photographed in this cycle.
+    """
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+    # Find the launcher function body.
+    fn_block = install.split("launch_webui_after_install() {", 1)[1].split("\n}\n", 1)[0]
+
+    # Positive: the new bring-up-verified call is present.
+    assert '"$nvh_cmd" services start --open' in fn_block
+    # The user-facing copy reflects the new contract.
+    assert "Verifying all services up before opening the browser" in fn_block
+    assert "browser opens ONLY" in fn_block or "browser opens only" in fn_block.lower()
+
+    # Negative: the old foreground workstation --launch is no longer
+    # the install entry. `nvh workstation` is still a valid command for
+    # explicit invocation but the install no longer runs it.
+    assert '"$nvh_cmd" workstation --home-dir "$NVH_HOME" --launch -y' not in fn_block
+    # Failure path tells the user the retry command and doesn't deadend.
+    assert "services start" in fn_block.split("Service bring-up failed", 1)[1]
+
+
+def test_services_start_uses_rich_live_progress_table() -> None:
+    """The `nvh services start` command must show a Rich Live table with
+    per-service rows that update in place (waiting → starting → healthy
+    /failed). The owner asked for a "CLI view" — the table is the view.
+
+    Each row must support all four states so an install never leaves a
+    user staring at an ambiguous "starting…" forever (skipped states
+    must propagate when an earlier step fails).
+    """
+    cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
+    # Find the services_start command body.
+    body = cli.split("def services_start(", 1)[1].split("\n@services_app", 1)[0]
+
+    # Rich Live + Table imports / usage.
+    assert "from rich.live import Live" in body
+    assert "from rich.table import Table" in body
+    assert "with Live(" in body
+    assert "live.update(" in body
+
+    # The four canonical row states.
+    for status in ("waiting", "starting", "healthy", "failed", "skipped"):
+        assert status in body, f"missing status: {status}"
+
+    # Begin + complete callbacks so the row can show 'starting' mid-step.
+    assert "on_step_begin" in body
+    assert "_on_begin" in body
+
+    # Browser only opens on success — the failure path raises before
+    # the success-banner is printed.
+    assert "All services healthy" in body
+    assert "raise typer.Exit(1)" in body
+    # The success message references the actual webui port.
+    assert "Browser → http://localhost:" in body
+
+
+def test_start_pipeline_threads_on_step_begin_callback() -> None:
+    """`start_pipeline` must accept + invoke an `on_step_begin` callback
+    so the Rich Live table can render 'starting' state for the step
+    currently being attempted. Without this, the table would jump from
+    'waiting' straight to 'healthy/failed' with no visible in-progress
+    state — feels like a freeze on slow rigs where each step's health
+    wait can run 15-20s.
+    """
+    services_py = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
+
+    # The signature + propagation through restart_pipeline.
+    assert "on_step_begin: Any = None" in services_py
+    assert "on_step_begin(\"Ollama\")" in services_py
+    assert "on_step_begin(\"API\")" in services_py
+    assert "on_step_begin(\"WebUI\")" in services_py
+    # restart_pipeline must thread the same callback so the Live table
+    # works on restart too.
+    assert services_py.count("on_step_begin=on_step_begin") >= 1
