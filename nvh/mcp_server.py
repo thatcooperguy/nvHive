@@ -140,13 +140,20 @@ def create_server():
             "Then run: python -m nvh.mcp_server"
         )
 
-    mcp = FastMCP(
-        "nvhive",
-        description=(
-            "NVHive ��� Multi-LLM orchestration with smart routing, "
-            "council consensus, and throwdown analysis across 23 providers (63 models, 25 free)."
-        ),
+    # The FastMCP metadata kwarg differs across mcp SDK versions: current
+    # SDKs (e.g. 1.27+) take ``instructions=`` and raise TypeError on the
+    # removed ``description=``; older ones only know ``description=``.
+    # Try the modern form first, falling back so both work (2026-06-10
+    # audit: the hardcoded description= crashed `python -m nvh.mcp_server`
+    # on every fresh `pip install nvhive[mcp]`).
+    server_blurb = (
+        "NVHive — Multi-LLM orchestration with smart routing, "
+        "council consensus, and throwdown analysis across 23 providers (63 models, 25 free)."
     )
+    try:
+        mcp = FastMCP("nvhive", instructions=server_blurb)
+    except TypeError:
+        mcp = FastMCP("nvhive", description=server_blurb)
 
     # ------------------------------------------------------------------
     # Input validation helpers

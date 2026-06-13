@@ -478,7 +478,7 @@ function CouncilPageContent() {
                 <button
                   type="button"
                   onClick={() => setAutoAgents(!autoAgents)}
-                  className={`relative w-10 h-5 transition-colors ${autoAgents ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4]'}`}
+                  className={`relative w-10 h-5 transition-colors ${autoAgents ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4] dark:bg-[#3f3f46] dark:border-[#525252]'}`}
                 >
                   <span className={`absolute top-0.5 w-4 h-4 bg-white shadow transition-transform ${autoAgents ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>
@@ -562,7 +562,7 @@ function CouncilPageContent() {
                 <button
                   type="button"
                   onClick={() => setSynthesize(!synthesize)}
-                  className={`relative w-10 h-5 transition-colors ${synthesize ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4]'}`}
+                  className={`relative w-10 h-5 transition-colors ${synthesize ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4] dark:bg-[#3f3f46] dark:border-[#525252]'}`}
                 >
                   <span className={`absolute top-0.5 w-4 h-4 bg-white shadow transition-transform ${synthesize ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>

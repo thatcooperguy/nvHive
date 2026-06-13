@@ -1,5 +1,6 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
 /**
@@ -45,6 +46,16 @@ const API_BASE: string =
 
 const BOOT_GRACE_MS = 20_000;
 
+// Matches SystemConsole's PROBE_TIMEOUT_MS (and debug/report's probeService
+// default). 2026-06-10 audit: this banner still aborted at 3000ms after PR
+// #81 tuned the other two probe surfaces to 8000ms for cold cloud rigs
+// (real-rig photo 2026-05-22: a healthy /v1/health took 4694ms during
+// engine warmup). With the stale 3s abort the banner went red "API
+// offline" while the SystemConsole chip — probing the same endpoint with
+// 8s tolerance — showed green "API up". All probe surfaces must share the
+// same tolerance.
+const PROBE_TIMEOUT_MS = 8_000;
+
 type Status = 'unknown' | 'starting' | 'ok' | 'down';
 
 const readNoGraceFlag = (): boolean => {
@@ -57,6 +68,12 @@ const readNoGraceFlag = (): boolean => {
 };
 
 export default function ApiHealthBanner() {
+  // Chat (/) and setup (/setup*) have no 32px topbar (LayoutShell renders
+  // them as self-contained surfaces), so the SystemConsole sits at top:0
+  // there and we slot in right under its 24px collapsed bar. Mirror the
+  // console's bareSurface test so the two stay glued together.
+  const pathname = usePathname();
+  const bareSurface = pathname === '/' || (pathname?.startsWith('/setup') ?? false);
   const [status, setStatus] = useState<Status>('unknown');
   const [consecutiveFailures, setConsecutiveFailures] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -84,7 +101,7 @@ export default function ApiHealthBanner() {
     const probe = async (): Promise<boolean> => {
       try {
         const ctl = new AbortController();
-        const t = setTimeout(() => ctl.abort(), 3000);
+        const t = setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS);
         const r = await fetch(`${API_BASE}/v1/health`, {
           signal: ctl.signal,
           // Don't send cookies — health is anon, and CORS preflights are wasteful.
@@ -136,10 +153,17 @@ export default function ApiHealthBanner() {
   const retry = async () => {
     setRetrying(true);
     try {
+      // Same bounded timeout as the probe loop (2026-06-10 audit) — an
+      // un-aborted fetch against a hung API left the button stuck on
+      // "Retrying…" until the browser's own fetch timeout.
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), PROBE_TIMEOUT_MS);
       const r = await fetch(`${API_BASE}/v1/health`, {
+        signal: ctl.signal,
         credentials: 'omit',
         cache: 'no-store',
       });
+      clearTimeout(t);
       if (r.ok) {
         everOkRef.current = true;
         setStatus('ok');
@@ -186,13 +210,19 @@ export default function ApiHealthBanner() {
 
   return (
     <div
+      // Layering contract with SystemConsole (2026-06-10 audit): the
+      // banner renders at z-[60], BELOW the console's z-[65]. While the
+      // console is collapsed there is no overlap (its 24px bar ends
+      // exactly where we start), so the banner is fully visible; when
+      // the user expands the console its 280px panel deliberately covers
+      // us — the down-state copy below tells them to inspect the API tab,
+      // so the tabs must win the stacking fight, not the banner.
       className="fixed left-0 right-0 z-[60] border-b"
       style={{
-        // Sits under the 32px top status bar AND the 24px SystemConsole
-        // collapsed bar. The console always renders, so this offset is
-        // fixed regardless of console expanded state — when expanded, the
-        // console grows downward over the page content, not over us.
-        top: '56px',
+        // Sits under the SystemConsole's 24px collapsed bar: 32px topbar
+        // + 24px console on shell pages; no topbar on chat/setup (see
+        // bareSurface above).
+        ...(bareSurface ? { top: '24px' } : { top: '56px' }),
         background: palette.bg,
         borderColor: palette.border,
         color: palette.text,

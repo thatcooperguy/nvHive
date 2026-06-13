@@ -131,6 +131,15 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# 2026-06-10 audit: without this, a CI image (or dev env) missing
+# pytest-timeout silently drops the `timeout`/`timeout_method` options
+# below — pytest emits a yellow "Unknown config option: timeout"
+# warning and runs with NO per-test timeout, so a hung subprocess test
+# wedges the job for the full 6h GitHub ceiling instead of failing at
+# 120s. required_plugins makes that a hard startup error ("Missing
+# required plugins") everywhere, converting silent degradation into a
+# loud, obvious failure.
+required_plugins = ["pytest-timeout", "pytest-asyncio"]
 # Default per-test timeout. Any test that hangs longer than this
 # fails loudly with a clear "Timeout" message instead of wedging the
 # CI job for 30+ minutes. 120s is generous for the CLI subprocess

@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
+import PageHeader from '@/components/PageHeader';
 import QueryInput from '@/components/QueryInput';
 import ResponsePanel from '@/components/ResponsePanel';
 import CouncilPanel from '@/components/CouncilPanel';
@@ -248,26 +249,26 @@ function QueryPageInner() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase mb-0.5">Ask AI</div>
-          <h1 className="text-2xl font-bold text-[#0a0a0a] dark:text-[#fafafa]">Ask AI</h1>
-          <p className="text-xs font-mono text-[#737373] mt-1 dark:text-[#a3a3a3]">Ask your local model, or compare answers when you need a second opinion.</p>
-        </div>
-        <div className="flex flex-wrap gap-2 justify-end">
-          <Link href="/setup" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
-            Setup Local AI
-          </Link>
-          <Link href="/providers" className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
-            AI Connections
-          </Link>
-        </div>
-      </div>
+    <div>
+      <PageHeader
+        eyebrow="Workspace"
+        title="Ask AI"
+        subtitle="Ask your local model, or compare answers when you need a second opinion."
+        trailing={
+          <div className="flex flex-wrap gap-2 justify-end">
+            <Link href="/setup" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+              Setup Local AI
+            </Link>
+            <Link href="/providers" className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+              AI Connections
+            </Link>
+          </div>
+        }
+      />
+      <div className="p-6 space-y-6 max-w-6xl mx-auto">
 
       {healthyProviderCount === 0 && (
-        <div className="border border-[#d97706]/30 bg-[#fff7ed] px-4 py-3 text-xs text-[#7c2d12]">
+        <div className="border border-[#d97706]/30 bg-[#fff7ed] px-4 py-3 text-xs text-[#7c2d12] dark:bg-[#d97706]/10 dark:text-[#fbbf24]">
           No AI source is answering yet. Connect an API key or install the local runtime from Setup, then retry this page.
         </div>
       )}
@@ -298,7 +299,7 @@ function QueryPageInner() {
                 </div>
                 <button
                   onClick={() => setAutoAgents(!autoAgents)}
-                  className={`relative w-10 h-5 transition-colors ${autoAgents ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4]'}`}
+                  className={`relative w-10 h-5 transition-colors ${autoAgents ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4] dark:bg-[#3f3f46] dark:border-[#525252]'}`}
                 >
                   <span className={`absolute top-0.5 w-4 h-4 bg-white shadow transition-transform ${autoAgents ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>
@@ -355,7 +356,7 @@ function QueryPageInner() {
                 </div>
                 <button
                   onClick={() => setSynthesize(!synthesize)}
-                  className={`relative w-10 h-5 transition-colors ${synthesize ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4]'}`}
+                  className={`relative w-10 h-5 transition-colors ${synthesize ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4] dark:bg-[#3f3f46] dark:border-[#525252]'}`}
                 >
                   <span className={`absolute top-0.5 w-4 h-4 bg-white shadow transition-transform ${synthesize ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </button>
@@ -462,6 +463,7 @@ function QueryPageInner() {
           )}
         </div>
       </div>
+      </div>
     </div>
   );
 }
@@ -492,7 +494,7 @@ function CompareView({ result }: { result: CompareResult }) {
               </div>
             </div>
             <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 max-h-48 overflow-y-auto dark:bg-[#0a0a0a] dark:border-[#262626]">
-              <div className="text-xs text-[#262626] font-mono whitespace-pre-wrap leading-relaxed">
+              <div className="text-xs text-[#262626] font-mono whitespace-pre-wrap leading-relaxed dark:text-[#d4d4d4]">
                 {resp.content}
               </div>
             </div>
@@ -527,7 +529,7 @@ function CompareView({ result }: { result: CompareResult }) {
                   {resp.cache_hit ? (
                     <span className="text-[#76B900]">YES</span>
                   ) : (
-                    <span className="text-[#333333]">NO</span>
+                    <span className="text-[#333333] dark:text-[#737373]">NO</span>
                   )}
                 </td>
               </tr>

@@ -8044,7 +8044,14 @@ def workstation(
 @app.command(rich_help_panel="Infrastructure")
 def webui(
     install_only: bool = typer.Option(False, "--install", help="Install without launching"),
-    port: int = typer.Option(3000, "--port", help="Port for the web UI"),
+    # 0 is a sentinel meaning "auto-select" (2026-06-10 audit): the old
+    # default of 3000 made an EXPLICIT `--port 3000` indistinguishable
+    # from "no preference", so the smart cascade below could pick :80
+    # while callers like services.start_webui polled :3000 forever.
+    port: int = typer.Option(
+        0, "--port",
+        help="Port for the web UI (0 = auto-select: 80, 3000, 3001, 3002, 8080)",
+    ),
     uninstall: bool = typer.Option(
         False, "--uninstall",
         help="Remove the downloaded Web UI (NVH_WEB_HOME) and exit",
@@ -8756,9 +8763,14 @@ def webui(
         if ok and "localhost" not in msg:
             console.print("  [green]✓[/green] Hostname configured: nvhive")
 
-    # Step 2: Smart port selection — cascade through preferred ports
-    if port == 3000:
-        # Default: try 80 first (if we have access), then 3000, then fallbacks
+    # Step 2: Smart port selection — cascade through preferred ports.
+    # Only the 0 sentinel (the typer default) triggers the cascade; any
+    # explicitly passed port — including 3000 — is honored verbatim
+    # (2026-06-10 audit: `nvh services start` spawns `nvh webui --port
+    # 3000` and polls :3000, so a cascade onto :80 left the pipeline
+    # polling the wrong port and reporting a false failure).
+    if port == 0:
+        # Auto-select: try 80 first (if we have access), then 3000, then fallbacks
         preferred = [80, 3000, 3001, 3002, 8080]
         chosen_port = None
         for p in preferred:
@@ -8811,7 +8823,15 @@ def webui(
     # a stale broken instance (engine failed to initialize at startup, etc.).
     # If unhealthy we kill it and start fresh — otherwise we'd reuse a broken
     # API server forever and the WebUI would show "API offline" indefinitely.
-    if api_already_running:
+    #
+    # Guarded by --no-api (2026-06-10 audit): when the caller says the
+    # API is managed externally — services.start_webui passes --no-api
+    # precisely so this command can't touch the API it just brought up
+    # — we must never probe-and-kill it. The single 2s health probe can
+    # transiently fail during a Next.js cold boot on a loaded rig, and
+    # the old unguarded block then SIGTERM'd the pipeline's freshly
+    # health-gated API mid-bring-up.
+    if api_already_running and not no_api:
         healthy, reason = _api_healthy(api_port)
         if not healthy:
             console.print(
@@ -8847,8 +8867,12 @@ def webui(
     else:
         console.print(f"  [bold]Starting API server (nvh serve) on {api_port}...[/bold]")
         # Resolve the current nvh executable so we launch the same install.
+        # Basename check (2026-06-10 audit): the previous
+        # endswith("python") suffix test missed "python3"/"python3.12" —
+        # the usual sys.executable names — and spawned `python3 serve`,
+        # which dies instantly trying to run a script file named "serve".
         nvh_exe = shutil.which("nvh") or sys.executable
-        if nvh_exe.endswith("python.exe") or nvh_exe.endswith("python"):
+        if os.path.basename(nvh_exe).lower().startswith("python"):
             api_cmd = [nvh_exe, "-m", "nvh.cli.main", "serve", "--port", str(api_port)]
         else:
             api_cmd = [nvh_exe, "serve", "--port", str(api_port)]
@@ -13760,18 +13784,25 @@ def services_start(
     # healthy" even in this state — misleading.
     smoke_state = STATE.get("Smoke test", {}).get("status", "")
     smoke_detail = STATE.get("Smoke test", {}).get("detail", "")
+    # Print the degraded/healthy summary unconditionally (2026-06-10
+    # audit: it was gated on open_browser, so `--no-open` — the exact
+    # flag scripted/SSH runs use — silently dropped the degraded-mode
+    # warning). Only the trailing destination line varies.
     if open_browser:
-        if smoke_state == "degraded":
-            console.print(
-                f"\n[yellow]Services up, Wizard running in fallback mode.[/yellow]\n"
-                f"  Detail:  {smoke_detail}\n"
-                f"  Browser → http://localhost:{webui_port}/setup"
-            )
-        else:
-            console.print(
-                f"\n[green]All services healthy.[/green] "
-                f"Browser → http://localhost:{webui_port}/setup"
-            )
+        dest = f"Browser → http://localhost:{webui_port}/setup"
+    else:
+        dest = f"WebUI at http://localhost:{webui_port}/setup"
+    if smoke_state == "degraded":
+        console.print(
+            f"\n[yellow]Services up, Wizard running in fallback mode.[/yellow]\n"
+            f"  Detail:  {smoke_detail}\n"
+            f"  {dest}"
+        )
+    else:
+        console.print(
+            f"\n[green]All services healthy.[/green] "
+            f"{dest}"
+        )
 
 
 @services_app.command("restart")
@@ -13851,6 +13882,7 @@ def services_stop(
         OLLAMA_PORT,
         kill_stale_api,
         kill_stale_port,
+        pids_listening_on_port,
         port_listening,
     )
 
@@ -13858,24 +13890,54 @@ def services_stop(
     api_port = ports.get("api_port", 8000)
     webui_port = ports.get("webui_port", 3000)
 
+    def _verify_released(port: int) -> bool:
+        # 2026-06-10 audit: the ✓ used to print unconditionally right
+        # after the kill call — which is best-effort and a silent no-op
+        # when fuser/lsof are missing. Re-probe the port (up to ~3s for
+        # a graceful SIGTERM shutdown) so "stopped" means stopped.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if not port_listening(port):
+                return True
+            time.sleep(0.25)
+        return False
+
+    def _still_listening_warning(name: str, port: int) -> None:
+        pids = pids_listening_on_port(port)
+        pid_hint = f" (pid {', '.join(str(p) for p in pids)})" if pids else ""
+        console.print(
+            f"  [yellow]![/yellow] {name} on :{port} is still "
+            f"listening{pid_hint} — kill it manually "
+            f"(`kill <pid>`, or find it via `lsof -i :{port}` / `fuser {port}/tcp`)"
+        )
+
     console.print("[bold]Stopping nvHive services...[/bold]")
     # WebUI first (reverse dependency order).
     if port_listening(webui_port):
         kill_stale_port(webui_port)
-        console.print(f"  [green]✓[/green] WebUI on :{webui_port} stopped")
+        if _verify_released(webui_port):
+            console.print(f"  [green]✓[/green] WebUI on :{webui_port} stopped")
+        else:
+            _still_listening_warning("WebUI", webui_port)
     else:
         console.print(f"  [dim]·[/dim] WebUI on :{webui_port} was not running")
     # Then API.
     if port_listening(api_port):
         kill_stale_api(api_port)
-        console.print(f"  [green]✓[/green] API on :{api_port} stopped")
+        if _verify_released(api_port):
+            console.print(f"  [green]✓[/green] API on :{api_port} stopped")
+        else:
+            _still_listening_warning("API", api_port)
     else:
         console.print(f"  [dim]·[/dim] API on :{api_port} was not running")
     # Ollama only if explicitly requested.
     if ollama:
         if port_listening(OLLAMA_PORT):
             kill_stale_port(OLLAMA_PORT)
-            console.print(f"  [green]✓[/green] Ollama on :{OLLAMA_PORT} stopped")
+            if _verify_released(OLLAMA_PORT):
+                console.print(f"  [green]✓[/green] Ollama on :{OLLAMA_PORT} stopped")
+            else:
+                _still_listening_warning("Ollama", OLLAMA_PORT)
         else:
             console.print(f"  [dim]·[/dim] Ollama on :{OLLAMA_PORT} was not running")
     else:
@@ -13889,8 +13951,12 @@ def services_stop(
 @services_app.command("smoke-test")
 def services_smoke_test(
     ctx: typer.Context,
+    # 90s default (2026-06-10 audit): aligned with wizard_smoke_test's
+    # own default — the manual command used to allow only 45s while the
+    # identical pipeline check allowed 90s, so a cold first run could
+    # pass bring-up yet fail the manual re-check.
     timeout: float = typer.Option(
-        45.0, "--timeout",
+        90.0, "--timeout",
         help="Seconds to wait for the Wizard to answer (cold model load can run 30s+)",
     ),
 ) -> None:

@@ -75,12 +75,15 @@ VRAM >= 24 GB -> + video profile (Wan 2.2 5B)
 VRAM >= 40 GB -> + video-pro profile (Wan 2.2 14B i2v)
 ```
 
-These are all *staged* — the Wizard / WebUI / `nvh studio` is what
-actually pulls the models. Staging means: the install script writes
-a one-line marker telling the WebUI's setup page "you can offer
-these without asking the user where they came from", and the
-`nvh status` line will show "available on your GPU" instead of
-"not configured".
+These are all *staged*, not pulled. Staging means: the install
+script writes a one-line marker
+(`$NVH_HOME/state/capability/auto-enable.json`) recording the
+qualifying capability tokens and pack ids. The marker is written for
+a future WebUI/Wizard consumer — **nothing reads it yet**, so on its
+own `NVH_INSTALL_FULL_CAPABILITY=1` has no runtime effect beyond the
+file. The only knob with a runtime effect today is the companion
+`NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1`, which pulls the staged
+packs inline at install time.
 
 To force-pull everything inline at install time (slow, big disk
 hit, only for headless cloud images that won't have a browser

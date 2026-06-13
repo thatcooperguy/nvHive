@@ -1,5 +1,6 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
@@ -17,8 +18,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * Behaviour:
  *   - Collapsed (single 24px row) by default. Shows API + Ollama status
  *     chips + a "Logs" button to expand.
- *   - Expanded: 280px panel with source tabs (API / WebUI / Ollama /
- *     Install), live-tailing log content, action buttons.
+ *   - Expanded: 280px panel with source tabs (API / WebUI boot / WebUI
+ *     run / Ollama / Ollama setup / Install), live-tailing log content,
+ *     action buttons.
  *   - Persists collapsed/expanded state in localStorage.
  *   - Polls /api/logs every 4s while expanded, every 30s while collapsed.
  *
@@ -27,12 +29,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * which would make a FastAPI-hosted log viewer useless.
  */
 
-type Source = 'api' | 'webui' | 'ollama' | 'install';
+type Source = 'api' | 'webui' | 'webui-runtime' | 'ollama' | 'ollama-install' | 'install';
 
+// Keys must stay in sync with SOURCES in /api/logs/route.ts — that route
+// whitelists these names, so a tab without a matching route entry 400s.
+// 2026-06-10 audit added two previously reader-less logs:
+//   - webui.log: the Next.js production-server RUNTIME log (`nvh services
+//     start` pipes `nvh webui` stdout/stderr there). webui-bootstrap.log
+//     only carries bootstrap milestones, so runtime errors were invisible.
+//   - ollama-install.log: the rootless Ollama download/extract log, which
+//     bypasses install.log entirely (install.sh `: >` resets + appends it).
 const SOURCES: { key: Source; label: string; filename: string }[] = [
   { key: 'api', label: 'API', filename: 'api-server.log' },
-  { key: 'webui', label: 'WebUI', filename: 'webui-bootstrap.log' },
+  { key: 'webui', label: 'WebUI boot', filename: 'webui-bootstrap.log' },
+  { key: 'webui-runtime', label: 'WebUI run', filename: 'webui.log' },
   { key: 'ollama', label: 'Ollama', filename: 'ollama.log' },
+  { key: 'ollama-install', label: 'Ollama setup', filename: 'ollama-install.log' },
   { key: 'install', label: 'Install', filename: 'install.log' },
 ];
 
@@ -96,6 +108,15 @@ const PROBE_TIMEOUT_MS = 8_000;
 const BOOT_GRACE_MS = 20_000;
 
 export default function SystemConsole() {
+  // 2026-06-10 audit: LayoutShell only renders the 32px top status bar on
+  // the main-shell branch — chat (/) and setup (/setup*) are self-contained
+  // surfaces with no topbar. The old hardcoded top:32px left the console
+  // floating below a bar that doesn't exist there. Mirror LayoutShell's
+  // branch test so the console hugs the viewport top on bare surfaces and
+  // sits below the topbar everywhere else. ApiHealthBanner applies the
+  // same rule (its top = our top + the 24px collapsed bar).
+  const pathname = usePathname();
+  const bareSurface = pathname === '/' || (pathname?.startsWith('/setup') ?? false);
   const [collapsed, setCollapsed] = useState<boolean>(true);
   const [source, setSource] = useState<Source>('api');
   const [logs, setLogs] = useState<LogsResponse | null>(null);
@@ -316,9 +337,20 @@ export default function SystemConsole() {
 
   return (
     <div
-      className="fixed left-0 right-0 z-[55] border-b"
+      // Layering contract (2026-06-10 audit): the console renders at
+      // z-[65], ABOVE ApiHealthBanner's z-[60], so the expanded panel
+      // (whose tab row starts exactly where the banner sits) covers the
+      // banner instead of having its tabs click-blocked by it — the
+      // banner's own copy says "inspect the API tab". While collapsed
+      // the console is only 24px tall and ends where the banner starts,
+      // so the banner stays fully visible in that state. Stays below
+      // DebugReportButton (z-[80]) and modals (z-[100]+).
+      className="fixed left-0 right-0 z-[65] border-b"
       style={{
-        top: '32px', // anchored below the 32px top status bar
+        // 32px below the top status bar on shell pages; flush with the
+        // viewport top on chat/setup, which have no topbar (see the
+        // bareSurface comment above).
+        top: bareSurface ? '0px' : '32px',
         background: 'var(--bg-secondary, #0a0a0a)',
         borderColor: 'var(--border, #27272a)',
         color: 'var(--text-primary, #fafafa)',
@@ -358,6 +390,18 @@ export default function SystemConsole() {
               {ollamaChip.label}
             </span>
           </>
+        )}
+        {/* 2026-06-10 audit: actionMessage used to render only inside the
+            expanded panel, so auto-restart and Restart-API/Doctor feedback
+            was invisible in the default collapsed state (PR #87's D7
+            removed the collapsed-bar copy as a "dead conditional" — the
+            precedence analysis was inverted). Render it here whenever the
+            console is collapsed, in BOTH compact and non-compact modes;
+            the expanded panel keeps its own copy. */}
+        {collapsed && actionMessage && (
+          <span className="truncate min-w-0 opacity-80" title={actionMessage}>
+            {actionMessage}
+          </span>
         )}
         <div className="ml-auto flex items-center gap-2">
           {!compact && (

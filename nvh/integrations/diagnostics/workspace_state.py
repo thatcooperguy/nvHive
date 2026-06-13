@@ -8,6 +8,7 @@ repairs, or OS changes.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,34 @@ def _next_action(checks: list[dict[str, Any]], active_jobs: list[dict[str, Any]]
                     "description": str(check.get("summary") or "Run the recommended rootless action."),
                 }
     return None
+
+
+def _capabilities(home_dir: str | Path | None = None) -> dict[str, Any] | None:
+    """Read the install-time capability marker, if present.
+
+    install.sh's ``stage_full_capability_for_vram_tier`` writes
+    ``${NVH_STATE:-$NVH_HOME/state}/capability/auto-enable.json`` when
+    NVH_INSTALL_FULL_CAPABILITY=1 — until the 2026-06-10 audit the
+    marker was write-only (no consumer anywhere in nvh/ or web/).
+    Surfacing it in the workspace-state report makes this the canonical
+    reader so the WebUI/Wizard can offer the staged packs. Absence is
+    the normal case (the knob is opt-in) and is tolerated silently, as
+    is any unreadable/garbled marker.
+    """
+    try:
+        from nvh.integrations.workspace.storage import storage_layout
+
+        marker = (
+            storage_layout(home_dir=home_dir).state_dir
+            / "capability"
+            / "auto-enable.json"
+        )
+        if not marker.is_file():
+            return None
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 def _phase(checks: list[dict[str, Any]], active_jobs: list[dict[str, Any]]) -> str:
@@ -209,5 +238,8 @@ def workspace_state(home_dir: str | Path | None = None) -> dict[str, Any]:
             "counts": production.get("counts", {}),
             "next_actions": production.get("next_actions", []),
         },
+        # Install-time capability marker (auto-enable.json) — None when
+        # the opt-in NVH_INSTALL_FULL_CAPABILITY knob wasn't used.
+        "capabilities": _capabilities(home_dir),
         "rootless": True,
     }

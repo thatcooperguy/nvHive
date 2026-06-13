@@ -42,6 +42,24 @@ DOCKERFILE="${NVH_TEST_DOCKERFILE:-}"
 # Ollama itself installs + binds.
 NVH_TEST_SKIP_MODEL="${NVH_TEST_SKIP_MODEL:-0}"
 
+# Where the install lands inside the container. 2026-06-10 audit: the
+# script pinned this nowhere, so install.sh's mount-autopilot fell back
+# to $HOME/.nvh in the overlayfs container (df reports "/" for $HOME, so
+# no persistent-mount candidate scored high enough) while every assertion
+# hardcoded $HOME/nvhive — assertion 1 failed unconditionally even on a
+# clean install. Pin NVH_HOME so producer and asserter agree.
+CONTAINER_NVH_HOME="/home/kiosk/nvhive"
+
+# 2026-06-10 audit: the old `NVH_INSTALL_MODEL_DOWNLOAD="${NVH_TEST_SKIP_MODEL:+0}"`
+# was doubly wrong — `:+` tests set-AND-non-null, and NVH_TEST_SKIP_MODEL
+# defaults to the non-null string "0", so it ALWAYS expanded to "0" and the
+# model pull (the whole point of assertion 3) never ran. Map explicitly.
+if [ "$NVH_TEST_SKIP_MODEL" = "1" ]; then
+    MODEL_DOWNLOAD_ENV=0      # skip the pull
+else
+    MODEL_DOWNLOAD_ENV=auto   # let install.sh run its normal pull flow
+fi
+
 cleanup() {
     docker rm -f nvhive-test-rig >/dev/null 2>&1 || true
 }
@@ -90,65 +108,80 @@ DOCKERFILE
 echo "[1/4] Building test image (cached unless Ubuntu / repo changed)..."
 docker build -t "$IMAGE_TAG" -f "$BUILD_CTX/Dockerfile" "$REPO_ROOT" >/dev/null
 
-echo "[2/4] Running install.sh inside the container..."
-docker run --name nvhive-test-rig \
+# 2026-06-10 audit: start the container with a long-lived entrypoint and
+# drive the install via `docker exec`, instead of running the install AS
+# the container command and then `docker start`-ing it again for the
+# assertions — that second start re-ran the WHOLE install concurrently
+# with the asserts (a race + wasted minutes/GB). One run, one container.
+echo "[2/4] Starting container + running install.sh..."
+docker run -d --name nvhive-test-rig \
     -e NVH_INSTALL_LAUNCH=0 \
-    -e NVH_INSTALL_MODEL_DOWNLOAD="${NVH_TEST_SKIP_MODEL:+0}" \
+    -e NVH_HOME="$CONTAINER_NVH_HOME" \
+    -e NVH_INSTALL_MODEL_DOWNLOAD="$MODEL_DOWNLOAD_ENV" \
     "$IMAGE_TAG" \
-    bash -c "
-        set -e
-        cd /home/kiosk/nvHive-repo
-        # Run install.sh against the local clone so we don't hit
-        # github.com for the source — same code path otherwise.
-        NVH_REPO=/home/kiosk/nvHive-repo bash install.sh 2>&1 | tail -200
-    "
+    sleep infinity >/dev/null
+
+# install.sh git-clones its own source from GitHub (it reassigns NVH_REPO
+# to $NVH_HOME/repo unconditionally, so a pre-seeded local checkout is NOT
+# honored — the old `NVH_REPO=…` override here was dead code and its
+# "don't hit github.com" comment was false). The COPY in the image is kept
+# only so `bash install.sh` itself is present to launch.
+docker exec nvhive-test-rig bash -c '
+    set -e
+    cd /home/kiosk/nvHive-repo
+    bash install.sh 2>&1 | tail -200
+'
 
 echo "[3/4] Asserting post-install state..."
-docker start nvhive-test-rig >/dev/null
 
 # Assertion 1: Ollama binary exists as an executable FILE (not a dir).
-docker exec nvhive-test-rig bash -c '
+docker exec nvhive-test-rig bash -c "
     set -e
-    if [ ! -x "$HOME/nvhive/bin/ollama" ]; then
-        echo "FAIL: \$HOME/nvhive/bin/ollama is not an executable file"
-        ls -la "$HOME/nvhive/bin/" || true
+    bin=\"$CONTAINER_NVH_HOME/bin/ollama\"
+    if [ -d \"\$bin\" ]; then
+        echo \"FAIL: \$bin is a DIRECTORY (PR #79 regression)\"
         exit 1
     fi
-    if [ -d "$HOME/nvhive/bin/ollama" ]; then
-        echo "FAIL: \$HOME/nvhive/bin/ollama is a DIRECTORY (PR #79 regression)"
+    if [ ! -x \"\$bin\" ]; then
+        echo \"FAIL: \$bin is not an executable file\"
+        ls -la \"$CONTAINER_NVH_HOME/bin/\" || true
         exit 1
     fi
-    echo "  OK: \$HOME/nvhive/bin/ollama is a regular executable file"
-'
+    echo \"  OK: \$bin is a regular executable file\"
+"
 
-# Assertion 2: install.log captured the run + names the right steps.
-docker exec nvhive-test-rig bash -c '
+# Assertion 2: install.log captured the Ollama-install steps.
+docker exec nvhive-test-rig bash -c "
     set -e
-    log="$HOME/nvhive/logs/install.log"
-    if [ ! -s "$log" ]; then
-        echo "FAIL: $log missing or empty"
+    log=\"$CONTAINER_NVH_HOME/logs/install.log\"
+    if [ ! -s \"\$log\" ]; then
+        echo \"FAIL: \$log missing or empty\"
         exit 1
     fi
-    if ! grep -q "install_rootless_ollama_binary\|Downloading Ollama\|Installing Ollama\|Ollama " "$log"; then
-        echo "FAIL: install.log has no Ollama-install evidence"
-        tail -50 "$log"
+    if ! grep -q 'install_rootless_ollama_binary\|Downloading Ollama\|Installing Ollama\|Ollama ' \"\$log\"; then
+        echo 'FAIL: install.log has no Ollama-install evidence'
+        tail -50 \"\$log\"
         exit 1
     fi
-    echo "  OK: install.log captured Ollama install steps"
-'
+    echo '  OK: install.log captured Ollama install steps'
+"
 
-# Assertion 3 (skip-able): model-pull code path was hit.
+# Assertion 3 (skip-able): model-pull code path was actually hit.
+# 2026-06-10 audit: dropped bare 'moondream'/'llama3.2-vision' from the
+# pattern — install.sh logs those model NAMES unconditionally (tier
+# picker + size hints) even when nothing is pulled, so the old pattern
+# passed spuriously. Match pull-EVIDENCE only.
 if [ "$NVH_TEST_SKIP_MODEL" != "1" ]; then
-    docker exec nvhive-test-rig bash -c '
+    docker exec nvhive-test-rig bash -c "
         set -e
-        log="$HOME/nvhive/logs/install.log"
-        if ! grep -q "pull_nvwizard_model_cli\|Pulling.*model\|nvwizard_fallback_chain\|bootstrap_omni_via_hf\|moondream\|llama3.2-vision" "$log"; then
-            echo "FAIL: install.log has no model-pull evidence (the WebUI-deferred regression)"
-            tail -100 "$log"
+        log=\"$CONTAINER_NVH_HOME/logs/install.log\"
+        if ! grep -qE 'Downloading .* for AI Wizard|pull_nvwizard_model_cli|nvwizard_fallback_chain|bootstrap_omni_via_hf|model-pull\.log|Switching to a smaller model' \"\$log\"; then
+            echo 'FAIL: install.log has no model-pull evidence (the WebUI-deferred regression)'
+            tail -100 \"\$log\"
             exit 1
         fi
-        echo "  OK: install.log captured model-pull attempt"
-    '
+        echo '  OK: install.log captured model-pull attempt'
+    "
 fi
 
 echo "[4/4] All assertions passed."

@@ -129,7 +129,7 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
       </div>
 
       {memberOrder.length === 0 && (
-        <div className="text-center py-8 text-[#333333] text-xs font-mono">
+        <div className="text-center py-8 text-[#333333] text-xs font-mono dark:text-[#a3a3a3]">
           Connecting to council...
         </div>
       )}
@@ -152,7 +152,7 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
                   state.status === 'streaming' ? 'bg-[#76B900] animate-pulse' :
                   state.status === 'complete' ? 'bg-[#16a34a]' :
                   state.status === 'failed' ? 'bg-[#dc2626]' :
-                  'bg-[#333333]'
+                  'bg-[#333333] dark:bg-[#525252]'
                 }`}
               />
               <span className="text-xs font-mono font-bold" style={{ color }}>
@@ -169,7 +169,7 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
             </div>
             <div className="text-[11px] text-[#525252] font-mono whitespace-pre-wrap leading-relaxed max-h-28 overflow-y-auto dark:text-[#a3a3a3]">
               {state.status === 'waiting' && (
-                <span className="text-[#333333] italic">Waiting...</span>
+                <span className="text-[#333333] italic dark:text-[#737373]">Waiting...</span>
               )}
               {state.status === 'failed' && (
                 <span className="text-[#dc2626]">{state.error || 'Failed'}</span>
@@ -187,7 +187,7 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
       })}
 
       {synthesisStatus !== 'hidden' && (
-        <div className="border border-[#2563eb]/30 p-3 bg-[#eff6ff]">
+        <div className="border border-[#2563eb]/30 p-3 bg-[#eff6ff] dark:bg-[#2563eb]/10">
           <div className="text-[9px] font-mono text-[#2563eb] uppercase tracking-wider mb-2 flex items-center gap-1.5">
             <span className="h-2 w-2 bg-[#2563eb]" />
             <span>Synthesis</span>
@@ -195,7 +195,7 @@ function LiveCouncilPanel({ memberOrder, memberStates, synthesisContent, synthes
               <span className="animate-pulse">Generating...</span>
             )}
           </div>
-          <div className="text-[11px] text-[#262626] font-mono whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto">
+          <div className="text-[11px] text-[#262626] font-mono whitespace-pre-wrap leading-relaxed max-h-40 overflow-y-auto dark:text-[#d4d4d4]">
             {synthesisContent}
             {synthesisStatus === 'streaming' && (
               <span
@@ -292,7 +292,7 @@ function EmptyState({
                 <span className="text-[10px] font-mono uppercase tracking-[0.16em] text-[#737373] dark:text-[#a3a3a3]">
                   Try this
                 </span>
-                <span className="h-px w-8 bg-[#333333] transition-colors group-hover:bg-[#76B900]" />
+                <span className="h-px w-8 bg-[#333333] transition-colors group-hover:bg-[#76B900] dark:bg-[#525252]" />
               </div>
               <div className="text-sm leading-snug text-[#404040] group-hover:text-[#0a0a0a] dark:text-[#d4d4d4]">
                 {s}
@@ -610,6 +610,31 @@ export default function ChatPage() {
       conversations: prev.conversations.map(c => c.id === id ? { ...c, pinned: !c.pinned } : c),
     }));
   }, [updateStoredState]);
+
+  // Export a conversation from the sidebar context menu as a Markdown
+  // download. Uses locally cached messages (remote-only conversations are
+  // pulled into the cache the first time they're opened).
+  const handleExportConversation = useCallback((id: string) => {
+    const msgs = id === activeConvId && messages.length > 0
+      ? messages
+      : storedState.messages[id] ?? [];
+    if (msgs.length === 0) return;
+    const lastAssistant = msgs.slice().reverse().find(m => m.role === 'assistant');
+    const advisorLabel = lastAssistant?.model
+      ? `${lastAssistant.model}${lastAssistant.provider ? ` (${lastAssistant.provider})` : ''}`
+      : lastAssistant?.provider ?? 'assistant';
+    const md = exportConversationMarkdown(msgs, advisorLabel, new Date().toISOString().slice(0, 10));
+    const sourceConvs = remoteConvs.length > 0 ? remoteConvs : storedState.conversations;
+    const title = sourceConvs.find(c => c.id === id)?.title ?? 'conversation';
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'conversation';
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slug}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [activeConvId, messages, storedState, remoteConvs]);
 
   const resetCouncilState = useCallback(() => {
     setCouncilPhase('idle');
@@ -1187,6 +1212,7 @@ export default function ChatPage() {
           onRenameConversation={handleRenameConversation}
           onDeleteConversation={handleDeleteConversation}
           onPinConversation={handlePinConversation}
+          onExportConversation={handleExportConversation}
         />
       </div>
 
@@ -1209,7 +1235,7 @@ export default function ChatPage() {
             <span className="hidden sm:inline text-[10px] font-mono font-bold uppercase tracking-[0.22em] text-[#76B900]">
               NVHIVE
             </span>
-            <span className="hidden sm:inline text-[#333333]">/</span>
+            <span className="hidden sm:inline text-[#333333] dark:text-[#525252]">/</span>
             {activeConvId && (
               <span className="text-xs font-mono text-[#a3a3a3] truncate dark:text-[#737373]">
                 {allConversations.find(c => c.id === activeConvId)?.title ?? 'Chat'}

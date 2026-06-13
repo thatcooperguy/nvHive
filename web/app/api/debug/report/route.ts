@@ -37,6 +37,12 @@ const LOG_FILES = [
   { source: 'api', filename: 'api-server.log' },
   { source: 'webui', filename: 'webui-bootstrap.log' },
   { source: 'ollama', filename: 'ollama.log' },
+  // 2026-06-10 audit: the rootless Ollama download/extract log bypasses
+  // install.log entirely (install.sh `: >` resets + appends it), so an
+  // Ollama install failure left no trace in the photographed report —
+  // the install-log Traceback check stayed green while the root cause
+  // sat in a file nothing read.
+  { source: 'ollama-install', filename: 'ollama-install.log' },
   { source: 'install', filename: 'install.log' },
 ] as const;
 
@@ -157,8 +163,12 @@ async function tailLog(source: string, filename: string, maxLines: number): Prom
       try {
         const buf = Buffer.alloc(LOG_TAIL_CAP_BYTES);
         const offset = stat.size - LOG_TAIL_CAP_BYTES;
-        await fh.read(buf, 0, LOG_TAIL_CAP_BYTES, offset);
-        raw = buf.toString('utf8');
+        // 2026-06-10 audit: slice to bytesRead before toString. The old
+        // code converted the whole pre-allocated buffer, so a log
+        // truncated between stat and read (rotation / `: > file` resets)
+        // yielded up to 64KB of NUL bytes in the report instead of lines.
+        const { bytesRead } = await fh.read(buf, 0, LOG_TAIL_CAP_BYTES, offset);
+        raw = buf.subarray(0, bytesRead).toString('utf8');
         // The first line in the buffer may be a partial line (we
         // started mid-line). Drop it so we only return complete lines.
         const nl = raw.indexOf('\n');
@@ -280,6 +290,8 @@ function diagnose(
   const apiText = (apiLog?.lines || []).join('\n');
   const installLog = logs.find(l => l.source === 'install');
   const installText = (installLog?.lines || []).join('\n');
+  const ollamaInstallLog = logs.find(l => l.source === 'ollama-install');
+  const ollamaInstallText = (ollamaInstallLog?.lines || []).join('\n');
 
   const hints: { label: string; hit: boolean; suggestion: string }[] = [];
 
@@ -332,6 +344,21 @@ function diagnose(
     hit: !/Traceback|FATAL|fatal error/.test(installText),
     suggestion: /Traceback|FATAL|fatal error/.test(installText)
       ? 'Install captured an error. Open the System Console → Install tab for the full trace.'
+      : '',
+  });
+
+  // 2026-06-10 audit: Ollama download/extract failures land ONLY in
+  // ollama-install.log, so without this check the report's headline
+  // rootless-install failure surfaced as nothing but the secondary
+  // "Ollama reachable" miss.
+  const ollamaInstallFailed = /download failed|extraction failed|curl: \(\d+\)|Traceback/i.test(
+    ollamaInstallText,
+  );
+  hints.push({
+    label: 'No failures in Ollama setup log',
+    hit: !ollamaInstallFailed,
+    suggestion: ollamaInstallFailed
+      ? 'The rootless Ollama download/extract failed during install. Open the System Console → Ollama setup tab for the underlying curl/extract error.'
       : '',
   });
 
