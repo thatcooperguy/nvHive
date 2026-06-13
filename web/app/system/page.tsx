@@ -251,7 +251,7 @@ export default function SystemPage() {
             </div>
           ) : providers.length === 0 ? (
             <div className="card p-8 text-center">
-              <div className="text-3xl mb-3 text-[#333333] font-mono">AI</div>
+              <div className="text-3xl mb-3 text-[#333333] font-mono dark:text-[#525252]">AI</div>
               <div className="text-[#737373] font-mono text-sm mb-1 dark:text-[#a3a3a3]">NO ADVISORS AVAILABLE</div>
               <div className="text-xs text-[#a3a3a3] font-mono mb-4 dark:text-[#737373]">
                 {apiStatus === 'disconnected'
@@ -304,7 +304,7 @@ export default function SystemPage() {
                 >
                   <span style={{ color }}>{displayIcon}</span>
                   {displayLabel}
-                  <svg className="w-3 h-3 ml-auto text-[#333333]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <svg className="w-3 h-3 ml-auto text-[#333333] dark:text-[#525252]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
                   </svg>
                 </Link>
@@ -317,8 +317,8 @@ export default function SystemPage() {
 
       {/* Footer */}
       <div className="border-t border-[#e5e5e5] pt-4 flex items-center justify-between dark:border-[#262626]">
-        <div className="text-[10px] font-mono text-[#333333]">NVHIVE COMPUTER CHECK</div>
-        <div className="text-[10px] font-mono text-[#333333]">POWERED BY NVIDIA LOCAL AI</div>
+        <div className="text-[10px] font-mono text-[#333333] dark:text-[#737373]">NVHIVE COMPUTER CHECK</div>
+        <div className="text-[10px] font-mono text-[#333333] dark:text-[#737373]">POWERED BY NVIDIA LOCAL AI</div>
       </div>
       </div>
     </div>

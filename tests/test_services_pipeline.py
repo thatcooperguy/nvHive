@@ -40,7 +40,7 @@ class _Stub(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         return  # silence the per-request stderr line
 
-    def do_GET(self) -> None:  # noqa: N802
+    def _respond(self) -> None:
         route = self.ROUTES.get(self.path)
         if route is None:
             self.send_response(404)
@@ -62,6 +62,18 @@ class _Stub(BaseHTTPRequestHandler):
             self.wfile.write(payload)
         else:
             self.end_headers()
+
+    def do_GET(self) -> None:  # noqa: N802
+        self._respond()
+
+    def do_POST(self) -> None:  # noqa: N802
+        # Drain the request body so the client's send completes cleanly,
+        # then route by path exactly like GET. Used by wizard_smoke_test,
+        # which POSTs to /v1/wizard/chat.
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length:
+            self.rfile.read(length)
+        self._respond()
 
 
 def _free_port() -> int:
@@ -517,3 +529,235 @@ def test_services_app_registered_on_cli() -> None:
         c.name for c in cli_main.services_app.registered_commands
     }
     assert {"status", "start", "restart"}.issubset(command_names)
+
+
+# ---------------------------------------------------------------------------
+# wizard_smoke_test — behavioral coverage (2026-06-10 audit: the #84-#88
+# safety nets had only source-grep contract tests; these exercise the real
+# HTTP parsing against a stub server, the same pattern as api_healthy above).
+# ---------------------------------------------------------------------------
+
+
+def test_wizard_smoke_test_ok_when_mode_is_llm() -> None:
+    with _StubServer({
+        "/v1/wizard/chat": (200, {"status": "success", "data": {"answer": "hi there", "mode": "llm"}}),
+    }) as server:
+        ok, reason = services.wizard_smoke_test(api_port=server.port, timeout=5)
+    assert ok is True
+    assert reason == "ok: llm"
+
+
+def test_wizard_smoke_test_degraded_when_mode_is_deterministic() -> None:
+    # The load-bearing fix: a deterministic-fallback answer is NON-empty
+    # but must NOT be reported as healthy. ok=True (browser still opens)
+    # but the reason is "degraded:" so the Live table shows yellow.
+    with _StubServer({
+        "/v1/wizard/chat": (200, {
+            "status": "success",
+            "data": {"answer": "Open the Setup page.", "mode": "deterministic",
+                     "fallback_reason": "engine not initialized"},
+        }),
+    }) as server:
+        ok, reason = services.wizard_smoke_test(api_port=server.port, timeout=5)
+    assert ok is True
+    assert reason.startswith("degraded: deterministic (no LLM)")
+    assert "engine not initialized" in reason
+
+
+def test_wizard_smoke_test_caps_long_fallback_reason() -> None:
+    long_reason = "x" * 300
+    with _StubServer({
+        "/v1/wizard/chat": (200, {
+            "status": "success",
+            "data": {"answer": "canned", "mode": "deterministic", "fallback_reason": long_reason},
+        }),
+    }) as server:
+        ok, reason = services.wizard_smoke_test(api_port=server.port, timeout=5)
+    assert ok is True
+    # The 300-char reason is capped at 80 chars in the status row.
+    assert ("x" * 80) in reason
+    assert ("x" * 81) not in reason
+
+
+def test_wizard_smoke_test_rejects_empty_answer() -> None:
+    with _StubServer({
+        "/v1/wizard/chat": (200, {"status": "success", "data": {"answer": "   ", "mode": "llm"}}),
+    }) as server:
+        ok, reason = services.wizard_smoke_test(api_port=server.port, timeout=5)
+    assert ok is False
+    assert reason == "wizard returned empty answer"
+
+
+def test_wizard_smoke_test_accepts_flat_unwrapped_body() -> None:
+    # Some response shapes are flat ({answer, mode} at top level, no data:).
+    with _StubServer({
+        "/v1/wizard/chat": (200, {"answer": "flat hello", "mode": "llm"}),
+    }) as server:
+        ok, reason = services.wizard_smoke_test(api_port=server.port, timeout=5)
+    assert ok is True
+    assert reason == "ok: llm"
+
+
+def test_wizard_smoke_test_reports_http_500() -> None:
+    with _StubServer({"/v1/wizard/chat": (500, "boom")}) as server:
+        ok, reason = services.wizard_smoke_test(api_port=server.port, timeout=5)
+    assert ok is False
+    assert reason == "HTTP 500"
+
+
+def test_wizard_smoke_test_401_spells_out_the_fix() -> None:
+    with _StubServer({"/v1/wizard/chat": (401, "unauthorized")}) as server:
+        ok, reason = services.wizard_smoke_test(api_port=server.port, timeout=5)
+    assert ok is False
+    assert "HTTP 401" in reason
+    assert "HIVE_API_KEY" in reason
+
+
+def test_wizard_smoke_test_attaches_api_key_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    # When HIVE_API_KEY is set, the probe must send X-Hive-API-Key so an
+    # auth-gated API doesn't 401 its own smoke test.
+    seen_headers: dict[str, str] = {}
+
+    class _AuthStub(_Stub):
+        ROUTES = {"/v1/wizard/chat": (200, {"status": "success", "data": {"answer": "ok", "mode": "llm"}})}
+
+        def do_POST(self) -> None:  # noqa: N802
+            for k, v in self.headers.items():
+                seen_headers[k.lower()] = v
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            if length:
+                self.rfile.read(length)
+            self._respond()
+
+    port = _free_port()
+    server = HTTPServer(("127.0.0.1", port), _AuthStub)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("HIVE_API_KEY", "secret-token-123")
+        ok, _ = services.wizard_smoke_test(api_port=port, timeout=5)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert ok is True
+    assert seen_headers.get("x-hive-api-key") == "secret-token-123"
+
+
+# ---------------------------------------------------------------------------
+# read_log_tail — failure-context helper attached to StartResult.
+# ---------------------------------------------------------------------------
+
+
+def test_read_log_tail_missing_file_returns_empty() -> None:
+    assert services.read_log_tail("/no/such/path/nope.log") == []
+    assert services.read_log_tail(None) == []
+
+
+def test_read_log_tail_returns_last_n_lines(tmp_path) -> None:
+    log = tmp_path / "api-server.log"
+    log.write_text("\n".join(f"line {i}" for i in range(100)), encoding="utf-8")
+    tail = services.read_log_tail(str(log), lines=10)
+    assert tail == [f"line {i}" for i in range(90, 100)]
+
+
+def test_read_log_tail_short_file_returns_all() -> None:
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
+        fh.write("only one line")
+        name = fh.name
+    assert services.read_log_tail(name, lines=25) == ["only one line"]
+
+
+# ---------------------------------------------------------------------------
+# _preload_default_model — opt-out short-circuit.
+# ---------------------------------------------------------------------------
+
+
+def test_preload_default_model_optout_makes_no_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    # NVH_OLLAMA_PRELOAD=0 must return before kicking any warmup work —
+    # no /api/generate POST attempted. Patch urlopen to fail loud if the
+    # opt-out is ever bypassed (it runs in a daemon thread, so give it a
+    # beat to fire before asserting).
+    import time as _time
+
+    monkeypatch.setenv("NVH_OLLAMA_PRELOAD", "0")
+    calls: list[Any] = []
+
+    def _boom(*args: Any, **kwargs: Any) -> Any:
+        calls.append((args, kwargs))
+        raise AssertionError("preload made an HTTP request despite opt-out")
+
+    monkeypatch.setattr(services.urllib.request, "urlopen", _boom)
+    services._preload_default_model()
+    _time.sleep(0.2)  # a real warmup thread would have fired by now
+    assert calls == [], "preload must not POST /api/generate when opted out"
+
+
+# ---------------------------------------------------------------------------
+# `nvh services stop` — reverse-order kill + Ollama preservation (new command
+# in this cycle, previously zero behavioral coverage).
+# ---------------------------------------------------------------------------
+
+
+def test_services_stop_kills_webui_before_api_and_spares_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typer.testing import CliRunner
+
+    from nvh.cli import main as cli_main
+
+    order: list[int] = []
+    # Ports start "listening"; a kill marks them released so the verify
+    # re-probe passes.
+    released: set[int] = set()
+
+    def fake_port_listening(port: int, *_a: Any, **_k: Any) -> bool:
+        return port not in released
+
+    def fake_kill_port(port: int) -> None:
+        order.append(port)
+        released.add(port)
+
+    def fake_kill_api(port: int = 8000) -> None:
+        order.append(port)
+        released.add(port)
+
+    monkeypatch.setattr(services, "port_listening", fake_port_listening)
+    monkeypatch.setattr(services, "kill_stale_port", fake_kill_port)
+    monkeypatch.setattr(services, "kill_stale_api", fake_kill_api)
+
+    result = CliRunner().invoke(cli_main.services_app, ["stop"])
+    assert result.exit_code == 0, result.output
+    # WebUI (3000) killed before API (8000); Ollama (11434) never touched.
+    assert order == [3000, 8000]
+    assert services.OLLAMA_PORT not in order
+
+
+def test_services_stop_with_ollama_flag_also_stops_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from typer.testing import CliRunner
+
+    from nvh.cli import main as cli_main
+
+    order: list[int] = []
+    released: set[int] = set()
+
+    monkeypatch.setattr(
+        services, "port_listening",
+        lambda port, *a, **k: port not in released,
+    )
+    monkeypatch.setattr(
+        services, "kill_stale_port",
+        lambda port: (order.append(port), released.add(port)),
+    )
+    monkeypatch.setattr(
+        services, "kill_stale_api",
+        lambda port=8000: (order.append(port), released.add(port)),
+    )
+
+    result = CliRunner().invoke(cli_main.services_app, ["stop", "--ollama"])
+    assert result.exit_code == 0, result.output
+    assert services.OLLAMA_PORT in order
+    # Ollama is stopped last (after WebUI + API).
+    assert order[-1] == services.OLLAMA_PORT

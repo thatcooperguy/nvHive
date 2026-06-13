@@ -100,7 +100,22 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.json
       - name: Lint
-        run: npm run lint || echo "::warning::webui lint produced warnings"
+        # 2026-06-10 audit: the old `npm run lint || echo warning` swallowed
+        # ESLint CRASHES (exit 2: bad config / version incompatibility) exactly
+        # like lint findings (exit 1), so a totally broken linter showed a green
+        # check while linting nothing — which would have hidden the ESLint 10 /
+        # eslint-config-next incompatibility. Keep findings non-blocking, but
+        # FAIL the job when the tool itself crashes. (errexit-safe capture: the
+        # job shell runs with -e, so `|| rc=$?` must catch before any test.)
+        run: |
+          rc=0
+          npm run lint || rc=$?
+          if [ "$rc" -ge 2 ]; then
+            echo "::error::eslint crashed (exit $rc) — no linting was performed"
+            exit "$rc"
+          elif [ "$rc" -ne 0 ]; then
+            echo "::warning::webui lint produced warnings (exit $rc)"
+          fi
       - name: Build
         run: npm run build
 

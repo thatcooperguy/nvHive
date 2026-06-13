@@ -220,7 +220,7 @@ function ConvItem({ conv, active, onClick, onContextMenu, collapsed }: ConvItemP
         {modeIcon(conv.mode)}
       </span>
       <div className="flex-1 min-w-0">
-        <div className={`text-xs truncate leading-snug ${active ? 'text-[#0a0a0a] font-medium' : 'text-[#404040] group-hover:text-[#0a0a0a]'}`}>
+        <div className={`text-xs truncate leading-snug ${active ? 'text-[#0a0a0a] font-medium dark:text-[#fafafa]' : 'text-[#404040] group-hover:text-[#0a0a0a] dark:text-[#d4d4d4] dark:group-hover:text-[#fafafa]'}`}>
           {conv.title}
         </div>
         <div className="text-[9px] font-mono text-[#a3a3a3] mt-0.5 flex items-center gap-1.5 dark:text-[#737373]">
@@ -245,6 +245,7 @@ interface SidebarProps {
   onRenameConversation?: (id: string, newTitle: string) => void;
   onDeleteConversation?: (id: string) => void;
   onPinConversation?: (id: string) => void;
+  onExportConversation?: (id: string) => void;
   topOffset?: boolean;
 }
 
@@ -269,6 +270,7 @@ export default function Sidebar({
   onRenameConversation,
   onDeleteConversation,
   onPinConversation,
+  onExportConversation,
   topOffset = true,
 }: SidebarProps) {
   const pathname = usePathname();
@@ -546,7 +548,6 @@ export default function Sidebar({
           {[
             {
               label: 'Rename',
-              icon: 'rename',
               action: () => {
                 const conv = conversations.find(c => c.id === contextMenu.conversationId);
                 setRenameValue(conv?.title ?? '');
@@ -556,7 +557,6 @@ export default function Sidebar({
             },
             {
               label: conversations.find(c => c.id === contextMenu.conversationId)?.pinned ? 'Unpin' : 'Pin',
-              icon: 'pin',
               action: () => {
                 onPinConversation?.(contextMenu.conversationId);
                 setContextMenu(null);
@@ -564,15 +564,14 @@ export default function Sidebar({
             },
             {
               label: 'Export',
-              icon: 'export',
               action: () => {
+                onExportConversation?.(contextMenu.conversationId);
                 setContextMenu(null);
               },
             },
             { separator: true },
             {
               label: 'Delete',
-              icon: 'delete',
               danger: true,
               action: () => {
                 onDeleteConversation?.(contextMenu.conversationId);
@@ -583,7 +582,7 @@ export default function Sidebar({
             if ('separator' in item && item.separator) {
               return <div key={i} className="border-t border-[#eeeeee] my-1 dark:border-[#1f1f1f]" />;
             }
-            const menuItem = item as { label: string; icon: string; action: () => void; danger?: boolean };
+            const menuItem = item as { label: string; action: () => void; danger?: boolean };
             return (
               <button
                 key={i}
@@ -594,7 +593,6 @@ export default function Sidebar({
                     : 'text-[#404040] hover:text-[#0a0a0a] hover:bg-[#f5f5f5] dark:text-[#d4d4d4] dark:hover:text-[#fafafa] dark:hover:bg-[#141414]'
                 }`}
               >
-                <span className="text-[10px]">{menuItem.icon}</span>
                 {menuItem.label}
               </button>
             );

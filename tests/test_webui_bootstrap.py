@@ -200,6 +200,29 @@ def test_webui_launch_opens_setup_in_browser(tmp_path, monkeypatch):
     def fake_create_connection(*_args, **_kwargs):
         return _FakeConnection()
 
+    # 2026-06-10: webui() now port-availability-checks an EXPLICIT --port
+    # via socket.socket().bind() (the cascade only triggers on the 0
+    # sentinel). Make that bind a deterministic no-op so the launch-path
+    # assertions below don't depend on whether :3000 happens to be free
+    # on the machine running the suite (a leftover dev server would
+    # otherwise make webui() raise typer.Exit(1) before opening the
+    # browser). socket.socket is used nowhere else in this code path.
+    class _FreePortSocket:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def bind(self, *_a, **_k):
+            return None
+
+        def setsockopt(self, *_a, **_k):
+            return None
+
     class _FakePopen:
         def __init__(self, cmd, **_kwargs):
             popen_calls.append(list(cmd))
@@ -214,6 +237,7 @@ def test_webui_launch_opens_setup_in_browser(tmp_path, monkeypatch):
     monkeypatch.setenv("NVH_FIREFOX_AUTO_INSTALL", "0")
     monkeypatch.setattr(shutil, "which", fake_which)
     monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(socket, "socket", lambda *_a, **_k: _FreePortSocket())
     monkeypatch.setattr(subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(
         subprocess,
@@ -310,6 +334,25 @@ def test_webui_launch_prefers_rootless_firefox(tmp_path, monkeypatch):
     def fake_create_connection(*_args, **_kwargs):
         return _FakeConnection()
 
+    # See the matching note in test_webui_launch_opens_setup_in_browser:
+    # make the explicit-port bind check a deterministic no-op so this
+    # launch-path test doesn't depend on :3000 being free on the host.
+    class _FreePortSocket:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def bind(self, *_a, **_k):
+            return None
+
+        def setsockopt(self, *_a, **_k):
+            return None
+
     class _FakePopen:
         def __init__(self, cmd, **_kwargs):
             popen_calls.append(list(cmd))
@@ -323,6 +366,7 @@ def test_webui_launch_prefers_rootless_firefox(tmp_path, monkeypatch):
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setattr(shutil, "which", fake_which)
     monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(socket, "socket", lambda *_a, **_k: _FreePortSocket())
     monkeypatch.setattr(subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(
         subprocess,

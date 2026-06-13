@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs';
+import { existsSync, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -25,8 +25,32 @@ import path from 'node:path';
  * candidate to be a regular file via fs.stat, not just X_OK-accessible.
  */
 
+/**
+ * Resolve $NVH_HOME for the bridge routes.
+ *
+ * 2026-06-10 audit: the old one-liner fell back to ~/nvhive and (in the
+ * logs route copy) claimed that matched "install.sh + storage.py default"
+ * — it doesn't. install.sh defaults NVH_HOME to $HOME/.nvh (so does
+ * storage.py); ~/nvhive is what the mount-autopilot picks on
+ * persistent-$HOME rigs. When the Next.js server runs without NVH_HOME
+ * exported (manual dev server, shell without nvh-env.sh sourced), the
+ * bridges resolved binaries + logs under a directory the default install
+ * never creates.
+ *
+ * Resolution order:
+ *   1. NVH_HOME env — exported by install.sh / nvh-env.sh.
+ *   2. ~/nvhive, if it exists — mount-autopilot persistent-home installs.
+ *   3. ~/.nvh, if it exists — install.sh + storage.py default.
+ *   4. ~/nvhive — last-resort fallback so error messages still name the
+ *      canonical persistent-home path on machines with no install at all.
+ */
 export function nvhHome(): string {
-  return process.env.NVH_HOME || path.join(os.homedir(), 'nvhive');
+  if (process.env.NVH_HOME) return process.env.NVH_HOME;
+  const persistentHome = path.join(os.homedir(), 'nvhive');
+  if (existsSync(persistentHome)) return persistentHome;
+  const dotNvh = path.join(os.homedir(), '.nvh');
+  if (existsSync(dotNvh)) return dotNvh;
+  return persistentHome;
 }
 
 export function nvhLogsDir(): string {

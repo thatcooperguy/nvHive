@@ -351,8 +351,18 @@ tags: [troubleshooting, support, setup]
 
 If `curl … install.sh | bash` finished but something doesn't work, this
 note is the first stop. Most "broken install" reports turn out to be
-one of the five issues below. Each entry says what you'll see, what's
+one of the six issues below. Each entry says what you'll see, what's
 going on under the hood, and the smallest command that resolves it.
+
+The universal first move is the services CLI — it encodes the boot
+order and health gates from [[Service Order]]:
+
+```bash
+nvh services status      # which of the three services is unhealthy?
+nvh services restart     # recycle API + WebUI (Ollama keeps its cache)
+nvh services smoke-test  # "can the Wizard actually answer?"
+nvh services stop        # take the stack down cleanly (--ollama for all)
+```
 
 Pairs with [[Support Report Flow]] for capturing a fresh report and
 [[Pilot Test Checklist]] for the upstream gate.
@@ -371,15 +381,16 @@ so the WebUI assumes "API up" — but every health probe returns 500.
 **Fix:**
 
 ```bash
-# Newer nvh detects + restarts stale APIs automatically — just rerun:
-nvh webui
-# If that doesn't clear it, kill the orphan + relaunch:
+# The canonical recovery — kills the stale API, restarts it with a
+# health gate, and re-runs the end-to-end Wizard check:
+nvh services restart
+# Only if nvh itself is broken, do it by hand:
 fuser -k 8000/tcp 2>/dev/null || lsof -nP -iTCP:8000 -sTCP:LISTEN -t | xargs kill -TERM
 nvh serve --port 8000
 ```
 
-The install script's `_api_healthy` probe now does this dance on every
-`nvh webui` launch.
+The `api_healthy` probe in `nvh/cli/services.py` does this stale-check
+dance on every `nvh webui` launch too.
 
 ## 2. WebUI shows amber "Starting up…" banner
 
@@ -407,10 +418,16 @@ ready. The orphan also died with the script in some shells.
 **Fix:**
 
 ```bash
-# Start Ollama with the same health-wait the install now uses:
+# The pipeline re-spawns Ollama with a real health-wait, then boots
+# the API + WebUI in order:
+nvh services start
+```
+
+Manual fallback if `nvh` itself is broken:
+
+```bash
 source $NVH_HOME/nvh-env.sh
 nohup $NVH_HOME/bin/ollama serve > $NVH_HOME/logs/ollama.log 2>&1 &
-# Then wait for it:
 until curl -sf http://localhost:11434/api/tags >/dev/null; do sleep 1; done
 nvh webui
 ```
@@ -443,14 +460,14 @@ NVH_PORT_CONFLICT_KILL_FOREIGN=1 bash install.sh
 then nothing visible happens.
 
 **What's happening (older installs):** the auto-open chain tried to
-download a rootless Firefox before checking whether Chromium was
-already installed. On rigs where Firefox isn't present and the
-download is slow/blocked, the WebUI server came up but no browser
-window showed.
+download a rootless Firefox before checking whether any browser was
+already installed. On rigs where the download is slow/blocked, the
+WebUI server came up but no browser window showed.
 
-**Fix:** newer installs probe Chromium / Chrome / Brave / Edge first
-and only fall back to Firefox download if nothing's installed. On
-older installs:
+**Fix:** newer installs probe pre-installed browsers first —
+`NVH_BROWSER` override, then an existing rootless Firefox, then system
+Firefox, then Chromium / Chrome / Brave / Edge — and download a
+rootless Firefox only as a last resort. On older installs:
 
 ```bash
 # Manually point your installed browser at the running WebUI:
@@ -643,49 +660,65 @@ tags: [decision, setup, product]
 # GPU Capability Matrix
 
 Different rigs run different capabilities. The installer probes VRAM
-once and auto-stages the right pack so users on a 6 GB laptop don't get
+once and picks the right defaults so users on a 6 GB laptop don't get
 a 40 GB ComfyUI download and users on a 48 GB RTX 6000 Ada don't end up
 on `moondream`. The canonical matrix lives in
-`docs/GPU_TIER_MATRIX.md`; this note explains the *intent* the matrix
-encodes so the [[AI Wizard]] and [[Multi-Expert Council]] can reason
-about it.
+`docs/GPU_TIER_MATRIX.md` — when in doubt, that file wins over this
+note. This note explains the *intent* the matrix encodes so the
+[[AI Wizard]] and [[Multi-Expert Council]] can reason about it.
 
-## VRAM tiers and defaults
+## VRAM tiers and the default Wizard model
 
-- **40 GB+**: `nemotron-omni` (NVIDIA Nemotron Omni, multimodal LLM),
-  ComfyUI SDXL + Flux dev, WhisperX large-v3, optional video.
-- **24–40 GB**: `nemotron-3-nano-omni`, ComfyUI SDXL, WhisperX
-  medium, faster-whisper, optional ComfyUI portrait workflow.
-- **16–24 GB**: `llama3.2-vision`, ComfyUI SD 1.5 + SDXL turbo,
-  WhisperX small, Piper TTS.
-- **12–16 GB**: `minicpm-v`, ComfyUI SD 1.5, WhisperX small, Piper TTS.
-- **6–12 GB**: `moondream` (multimodal, ~2 GB), text-only generation,
-  Piper TTS only — no diffusion image gen by default.
-- **< 6 GB / CPU-only**: still installs `moondream`. The Wizard works
-  via cloud providers for anything visual.
+Every install lands a vision-capable chat model — that part needs no
+opt-in:
+
+- **40 GB+**: `nemotron-omni` (NVIDIA Nemotron Omni, multimodal flagship).
+- **24–40 GB**: `nemotron-3-nano-omni` (30B MoE, 3B active, multimodal).
+- **16–24 GB**: `llama3.2-vision` (11B, multimodal).
+- **12–16 GB**: `minicpm-v` (small multimodal).
+- **< 12 GB / CPU-only**: `moondream` (tiny multimodal, ~2 GB; runs
+  usefully on CPU). The Wizard works via cloud providers for anything
+  heavier.
+
+## What stages beyond chat (opt-in only)
+
+Image, video, speech, and music packs are **never staged by default**
+— they're gated behind `NVH_INSTALL_FULL_CAPABILITY=1` because they
+cumulatively download tens of gigabytes. With the knob set, staging is
+strictly VRAM-tiered:
+
+- **8 GB+**: image generation starter (ComfyUI + Z-Image-Turbo).
+- **12 GB+**: + image editing (Qwen Image Edit 2509).
+- **16 GB+**: + image control (FLUX.1 ControlNet).
+- **24 GB+**: + video (Wan 2.2 5B), local speech (WhisperX +
+  faster-whisper via the music-producer-lab pack), music (ACE-Step).
+- **40 GB+**: + video pro (Wan 2.2 14B i2v).
+
+There is no CPU-only override: the staging step only runs when a GPU
+is detected, and a small GPU stages only what its tier qualifies for.
+There is also no Piper TTS pack and no local TTS gated by VRAM — the
+default voice path is Edge TTS (cloud, free) for TTS and Groq Whisper
+(cloud, free with a key) for STT, which work on any rig including
+no-GPU ones.
 
 ## What "Omni" means here (and what it doesn't)
 
 NVIDIA Nemotron Omni is a **multimodal LLM** — vision + text in, text
 out. It is *not* an image generator (use ComfyUI + diffusion for that)
-and it is *not* a speech model (use WhisperX / Piper / XTTS for that).
+and it is *not* a speech model (use WhisperX / XTTS for that).
 Image gen and speech are separately VRAM-gated capabilities, not part
 of "Omni."
 
-## Opting in to bigger capability bundles
+## How the staging marker works today
 
-`NVH_INSTALL_FULL_CAPABILITY=1` before running the installer skips the
-"small rig" check and stages the speech + video + ComfyUI packs even on
-a CPU-only / small-GPU box. Useful when a user knows they'll be running
-heavy workloads on a remote rig but installing on their laptop first.
-
-## How this gets enforced at runtime
-
-The installer writes `auto-enable.json` under `NVH_HOME/state/`
-recording which capabilities the rig qualifies for. The Wizard reads
-this on every WebUI launch and decorates feature panels with a green
-"Available on this rig" / amber "Requires upgrade" badge. The /setup
-page consumes the same file to gate downloads.
+With `NVH_INSTALL_FULL_CAPABILITY=1`, the installer writes
+`auto-enable.json` under `$NVH_HOME/state/capability/` recording which
+capabilities and pack ids the rig qualifies for. The marker is written
+for a future WebUI/Wizard consumer — **nothing reads it yet**, so the
+knob alone has no runtime effect. The companion
+`NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1` is what actually pulls the
+qualifying packs inline at install time (meant for headless cloud
+images that won't have a browser later).
 
 ## Related
 
@@ -701,11 +734,12 @@ tags: [playbook, setup]
 ---
 # Service Order
 
-The install + launch path runs four services in a specific dependency
-order. When something looks broken, this note tells you which one *was*
-supposed to come up first and where to look in the logs. Canonical
-contract lives in `docs/SERVICE_ORDER.md`; this note is the on-rig
-mirror so [[AI Wizard]] support reports can deep-link to it.
+The install + launch path runs three services plus a final end-to-end
+check, in a specific dependency order. When something looks broken,
+this note tells you which step *was* supposed to come up first and
+where to look in the logs. Canonical contract lives in
+`docs/SERVICE_ORDER.md`; this note is the on-rig mirror so
+[[AI Wizard]] support reports can deep-link to it.
 
 ## Boot sequence
 
@@ -721,8 +755,13 @@ mirror so [[AI Wizard]] support reports can deep-link to it.
    Polls the API health endpoint before showing panels; until then,
    surfaces the amber "Starting up…" banner from
    `web/components/ApiHealthBanner.tsx`.
-4. **Optional providers** (ComfyUI, browser auto-open, etc.) — fire
-   only after WebUI binds.
+4. **Wizard smoke test** — `POST /v1/wizard/chat` with a tiny real
+   question (90s budget; cold first runs can spend 30-60s warming
+   imports). `mode: "llm"` is fully healthy; a `deterministic` mode
+   means **degraded** — the Wizard answers via its fallback because no
+   local LLM is loaded yet. The browser only opens after this step:
+   green and degraded both open it (degraded shows a yellow row with
+   the fallback reason), hard failures don't.
 
 ## Env knobs
 
@@ -730,6 +769,8 @@ mirror so [[AI Wizard]] support reports can deep-link to it.
 - `NVH_API_BOOT_TIMEOUT=45` — wait longer for the FastAPI engine to
   initialize (cold imports + model warm-up can run 20-30s).
 - `NVH_WEBUI_BOOT_TIMEOUT=30` — Next.js dev server bind window.
+- `NVH_OLLAMA_PRELOAD=0` — skip the post-boot warmup of the default
+  model (on by default so the first chat turn isn't a cold load).
 - `NVH_PORTS_TO_CHECK="3000 3001 3002 8000 11434"` — ports the
   install-time conflict detector probes.
 - `NVH_PORT_CONFLICT_KILL_FOREIGN=1` — let the installer kill a
@@ -746,16 +787,31 @@ these module-level helpers in `nvh/cli/services.py`:
 - `ollama_healthy(port)` → HTTP probe `/api/tags`, require 200.
 - `webui_port_listening(port)` → TCP `connect()` only (the Next.js
   dev server doesn't expose a JSON health endpoint).
+- `wizard_smoke_test(port)` → POST `/v1/wizard/chat`, require a
+  non-empty answer; reports `mode` so degraded is visible.
 - `kill_stale_api(port)` → `fuser -k <port>/tcp` on Linux,
   `lsof + kill -TERM` on macOS.
+
+## Recovery commands
+
+- `nvh services status` — live table of all three services.
+- `nvh services start` — boot everything in order; browser opens only
+  when every gate is green.
+- `nvh services restart` — recycle API + WebUI (Ollama keeps its warm
+  model cache).
+- `nvh services stop` — stop WebUI + API; add `--ollama` to stop
+  Ollama too.
+- `nvh services smoke-test` — re-run the end-to-end Wizard check on
+  its own (default 45s budget, `--timeout` to extend).
 
 ## What goes wrong + where to look
 
 | Symptom | Most likely cause | Log path |
 | --- | --- | --- |
-| Red "API offline" banner | Stale `nvh serve` engine failed init | `$NVH_HOME/logs/api.log` |
-| Amber "Starting up…" lingers >20s | API still warming the engine | `$NVH_HOME/logs/api.log` |
+| Red "API offline" banner | Stale `nvh serve` engine failed init | `$NVH_HOME/logs/api-server.log` |
+| Amber "Starting up…" lingers >20s | API still warming the engine | `$NVH_HOME/logs/api-server.log` |
 | Wizard falls back to cloud | Ollama bind raced timeout | `$NVH_HOME/logs/ollama.log` |
+| Smoke test degraded (deterministic) | No local LLM loaded yet | finish the download from /setup, then `nvh services smoke-test` |
 | Install aborts "FOREIGN port" | Non-nvh process on stack port | run `lsof -nP -iTCP:<port>` |
 | WebUI never opens | Browser-open chain failed | `$NVH_HOME/logs/webui.log` |
 

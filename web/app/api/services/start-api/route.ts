@@ -60,8 +60,9 @@ export async function POST(request: Request) {
   const nvhBin = await resolveNvhBinary();
   // resolveNvhBinary() never returns null — it falls through to the bare
   // string "nvh" so the spawn below can use PATH lookup. If even PATH
-  // doesn't have it, the spawn call below surfaces ENOENT to the user
-  // via the catch block.
+  // doesn't have it, the spawn()'s async 'error' event surfaces ENOENT
+  // to the user via the spawn-vs-error race below (NOT via try/catch —
+  // see the comment at the race).
 
   // Append a separator so the user can tell this start from previous ones.
   const stamp = new Date().toISOString();
@@ -107,6 +108,23 @@ export async function POST(request: Request) {
         NVH_HOME: nvhHome(),
       },
     });
+    // 2026-06-10 audit: spawn() does NOT throw on a missing binary — it
+    // returns a ChildProcess and emits an async 'error' event (ENOENT),
+    // so the try/catch alone never fired for the advertised "nvh not on
+    // PATH" case. The route returned 202 {started:true, pid:undefined}
+    // ("API spawning (pid undefined)" in the SystemConsole) and the
+    // unhandled 'error' event could then crash the Next.js process — the
+    // one component still working. Race 'spawn' vs 'error' before
+    // responding so spawn failure is a real 500 with the actual reason.
+    const spawnErr = await new Promise<Error | null>(resolve => {
+      child.once('spawn', () => resolve(null));
+      child.once('error', err => resolve(err));
+    });
+    if (spawnErr || child.pid === undefined) {
+      // Throw into the existing catch so the fd cleanup + 500 response
+      // live in exactly one place.
+      throw spawnErr ?? new Error('spawn reported success but child.pid is undefined');
+    }
     child.unref();
     // Close the parent's reference to logFd now that the child has
     // dup'd it via `stdio`. Without this we'd leak one fd per

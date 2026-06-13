@@ -132,9 +132,20 @@ class TestCLIDoctor:
 class TestCLIQuery:
     """These tests require at least LLM7 to be reachable."""
 
+    # 2026-06-10 audit: these three spawn `nvh` against live LLM providers
+    # over the network with a hard 45s subprocess timeout. On a slow or
+    # offline CI runner the provider call hangs past 45s, TimeoutExpired
+    # propagates uncaught, and the test ERRORs — the documented flake that
+    # randomly reddened one matrix leg on half the dependabot PRs. Skip on
+    # timeout (same pattern as test_status above): zero behavior change when
+    # providers are healthy, deterministic skip when the network isn't.
+
     def test_bare_prompt(self):
         """nvh 'question' should work."""
-        r = run_nvh("What is 2+2? Answer with just the number.", timeout=45)
+        try:
+            r = run_nvh("What is 2+2? Answer with just the number.", timeout=45)
+        except subprocess.TimeoutExpired:
+            pytest.skip("provider unreachable/slow — network-dependent test")
         # May succeed or fail depending on provider availability
         if r.returncode == 0:
             assert len(r.stdout) > 0
@@ -143,12 +154,18 @@ class TestCLIQuery:
             assert "error" in r.stderr.lower() or "provider" in r.stderr.lower() or len(r.stderr) > 0
 
     def test_ask_command(self):
-        r = run_nvh("ask", "Say hello", timeout=45)
+        try:
+            r = run_nvh("ask", "Say hello", timeout=45)
+        except subprocess.TimeoutExpired:
+            pytest.skip("provider unreachable/slow — network-dependent test")
         if r.returncode == 0:
             assert len(r.stdout) > 0
 
     def test_quick_command(self):
-        r = run_nvh("quick", "Say hi", timeout=45)
+        try:
+            r = run_nvh("quick", "Say hi", timeout=45)
+        except subprocess.TimeoutExpired:
+            pytest.skip("provider unreachable/slow — network-dependent test")
         if r.returncode == 0:
             assert len(r.stdout) > 0
 

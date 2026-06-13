@@ -2,10 +2,41 @@
 
 ## [Unreleased]
 
+The post-0.39.0 hardening cycle (~30 PRs, #49–#88). One promise drove
+all of it: `curl … install.sh | bash` ends in a browser tab where the
+Wizard actually answers — verified bring-up, self-healing services,
+in-browser diagnostics, and a CLI to drive the whole stack.
+
 ### Added
 
-- **GPU capability matrix in `install.sh`.** Every GPU install now
-  prints what the detected VRAM tier can actually run — not just
+- **CLI-verified bring-up.** `install.sh` now finishes with
+  `nvh services start --open`: a Rich Live "nvHive bring-up" table
+  walks Ollama → API → WebUI from waiting → starting → healthy, and
+  the browser opens **only when every gate is green** — never onto a
+  red "API offline" banner (#84). The final gate is an end-to-end
+  **Wizard smoke test** that POSTs a real `/v1/wizard/chat` request,
+  so "three ports listening" can no longer masquerade as "the Wizard
+  works" (#85). A deterministic-fallback answer (no local LLM yet)
+  shows as a yellow *degraded* row but still opens the browser (#86).
+- **`nvh services` CLI** (#70) — `status` / `start` / `restart` /
+  `stop` (preserves Ollama's warm model cache unless `--ollama`) /
+  `smoke-test`, built on module-level health probes
+  (`ollama_healthy`, `api_healthy`, `webui_port_listening`) shared
+  with `nvh webui`. The startup contract that previously lived
+  implicitly across six PRs is now explicit in
+  `docs/SERVICE_ORDER.md`.
+- **Out-of-the-box self-heal** (#80). `nvh webui` daemonizes the API
+  so it survives terminal close, silently auto-recovers an unhealthy
+  API, and the Wizard proactively offers repair when it detects a
+  broken state.
+- **In-browser System Console** with rootless CLI bridges (#77) and a
+  one-click **Debug Report** button designed for phone-photo sharing
+  from a streamed cloud desktop (#78).
+- **`/agents` discovery page** + sidebar nav entry (#68).
+- **"Convene council" handoff**: the WizardChat composer deep-links
+  into the `/council` page with the current draft pre-filled (#71).
+- **GPU capability matrix in `install.sh`** (#72). Every GPU install
+  now prints what the detected VRAM tier can actually run — not just
   Wizard chat. The matrix covers image generation (ComfyUI starter
   / edit / control), video generation (Wan 2.2 5B and 14B), local
   speech (WhisperX, faster-whisper), and music generation
@@ -13,18 +44,82 @@
   `8 GB → image-gen-starter`, `12 GB → image-edit`,
   `16 GB → image-control`, `24 GB → video-gen + speech-lab + music-gen`,
   `40 GB → video-gen-pro`.
-- **`NVH_INSTALL_FULL_CAPABILITY=1`** opt-in env knob. When set, the
-  installer writes a marker file under `$NVH_HOME/state/capability/`
-  that the Wizard / WebUI / `nvh studio` reads to auto-offer the
-  matching packs on first launch. The companion knob
-  `NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1` force-pulls those packs
-  inline at install time (useful for headless cloud images that
-  won't have a browser later). Default for both is OFF so a school
-  Wi-Fi student isn't surprised by a 60 GB pull.
-- **`docs/GPU_TIER_MATRIX.md`.** Canonical reference for the table
-  above, including a frank "what Nemotron Omni is and isn't"
+- **`NVH_INSTALL_FULL_CAPABILITY=1`** opt-in env knob (#72). When
+  set, the installer writes a marker file
+  (`$NVH_HOME/state/capability/auto-enable.json`) recording which
+  packs the rig qualifies for. The marker is written for a future
+  WebUI/Wizard consumer — nothing reads it yet, so on its own the
+  knob only stages. For a runtime effect today, add the companion
+  knob `NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1`, which force-pulls
+  the matching packs inline at install time (useful for headless
+  cloud images that won't have a browser later). Default for both is
+  OFF so a school Wi-Fi student isn't surprised by a 60 GB pull.
+- **`docs/GPU_TIER_MATRIX.md`** (#72). Canonical reference for the
+  table above, including a frank "what Nemotron Omni is and isn't"
   section — Omni is a multimodal LLM (it gives the Wizard
   *vision*), not an image generator or speech synthesizer.
+- **Vault seed notes for the hardening cycle**: Common Install
+  Issues under Troubleshooting/ (#75); Service Order, GPU Capability
+  Matrix, and Headless QA Loop (#76).
+- **PhantomInput** trusted-input bridge for WebRTC remote-desktop
+  streams — the backbone of the headless QA loop (#57).
+- **Composer controls + cross-tab coherence**: tool-budget slider,
+  session pill, proactive nudge, provider tooltip, PageHeader rollout
+  (#51); per-profile cost ceilings + ComfyUI portrait workflow (#50);
+  agent depth, onboarding tour, `.env` bulk import, snapshot URL
+  (#49).
+
+### Changed
+
+- **NVIDIA Nemotron Omni is the Wizard default at every VRAM tier**
+  (#60): `nemotron-omni` at 40 GB+, `nemotron-3-nano-omni` at 24 GB+,
+  then `llama3.2-vision` / `minicpm-v` / `moondream` down the tiers.
+  Since the Ollama library doesn't publish the Omni tags yet, the
+  installer bootstraps them from HuggingFace GGUF + vision projector
+  via an Ollama Modelfile (#62), with a soft fallback chain so the
+  Wizard stays multimodal even when the bootstrap fails.
+- **Browser auto-open prefers installed browsers** over the slow
+  rootless-Firefox download: `NVH_BROWSER` override → existing
+  rootless Firefox → system Firefox → Chromium / Chrome / Brave /
+  Edge → download as last resort (#58).
+- **ApiHealthBanner shows amber "Starting up…"** during a 20s boot
+  grace window instead of flashing red while a cold API warms up
+  (#67).
+- **Cold-rig tuning**: longer probe timeout, boot grace, doctor exit
+  handling, clearer daemon message (#81); Debug Report probe timeout
+  matched to the System Console's (3s → 8s) (#83).
+- **Complete dark-mode coverage** for WebUI panels that still showed
+  light backgrounds (#73).
+- **Legal hygiene**: NVIDIA-green visuals, benchmark caveat, DCO,
+  trademark tone-down (#52).
+
+### Fixed
+
+- **Install actually works on cloud GPU rigs** — root-cause fixes
+  rather than patches (#82); Ollama install failures are now visible
+  and the binary lookup is defensive (#88).
+- **Port conflicts detected + resolved before services start.**
+  `install.sh` probes the whole stack-port set (3000/3001/3002/8000/
+  11434), classifies each listener OK / STALE / FOREIGN, kills only
+  processes that look like ours, and refuses to silently cascade to
+  another port when a foreign process is in the way (#74).
+- **Racy `ollama serve &>/dev/null & sleep N`** replaced with a real
+  health-wait + log in `install.sh` (#66); extended Ollama startup
+  wait + daemon state surfaced in `nvh webui` (#59).
+- **Stale-API detection**: `nvh webui` HTTP-probes an existing API on
+  :8000 and restarts it when unhealthy instead of trusting the TCP
+  listener (#65).
+- **`config.yaml` corruption on Omni reinstalls** (#63), plus
+  recovery from previously-corrupted configs via whole-line
+  replacement (#64).
+- **EACCES when the WebUI bridge resolves the rootless `nvh` binary**
+  (#79).
+- **16 findings from the multi-agent audits** — 8 deep-dive
+  correctness fixes (#86) and 8 UX / code-review fixes (#87),
+  including the degraded smoke-test state, log tails shown inline on
+  bring-up failure, outcome-oriented bring-up row labels, and the
+  `nvh services stop` command that install copy referenced before it
+  existed.
 
 ## [0.39.0] - 2026-05-15
 

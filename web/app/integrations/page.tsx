@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import PageHeader from "@/components/PageHeader";
 
 /* ---------- Types ---------- */
 
@@ -316,20 +317,15 @@ export default function IntegrationsPage() {
   const hasUnconfigured = platforms.some((p) => p.detected && !p.already_configured);
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-10">
-      {/* --- Page Header --- */}
-      <div className="mb-10">
-        <div className="h-[2px] bg-gradient-to-r from-[#76B900] to-transparent mb-6" />
-        <p className="section-label text-[#76B900] font-mono text-xs uppercase tracking-[0.2em] mb-2">
-          Developer Tools
-        </p>
-        <h1 className="text-2xl font-semibold text-[--text-primary] mb-2">
-          Connect developer tools to nvHive
-        </h1>
-        <p className="text-sm text-[--text-secondary]">
-          Use nvHive inside coding tools after the core local AI setup is working.
-        </p>
-      </div>
+    <div>
+      <PageHeader
+        eyebrow="Developer Tools"
+        title="Connect developer tools to nvHive"
+        subtitle="Use nvHive inside coding tools after the core local AI setup is working."
+      />
+      {/* Narrow-form content: platform rows + manual-setup snippets read best
+          single-column, so this page intentionally keeps max-w-3xl. */}
+      <div className="max-w-3xl mx-auto p-6">
 
       {/* --- Scan & Connect All --- */}
       {!loading && (
@@ -540,6 +536,7 @@ claude mcp add nvhive nvhive-mcp`}
           </p>
         </div>
       </details>
+      </div>
     </div>
   );
 }

@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -77,13 +78,21 @@ def api_boot_timeout() -> int:
     return _env_int("NVH_API_BOOT_TIMEOUT", 20)
 
 
-def webui_boot_timeout() -> int:
+def webui_boot_timeout(first_run: bool = False) -> int:
     """How long to wait for the WebUI port to start listening.
 
     ``npm run start`` cold-boots Next.js in 5-15s; ``npm run dev`` can
     take 30s+ on a fresh checkout. 30s is the conservative default.
+
+    ``first_run=True`` (2026-06-10 audit): when no web/ checkout has
+    node_modules + a completed build, the spawned ``nvh webui`` child
+    runs npm install + ``next build`` first — minutes, not seconds.
+    The flat 30s gate deterministically reported failure while the
+    detached build kept going and bound the port later, contradicting
+    the error the user was just shown. First runs get 600s. An
+    explicit NVH_WEBUI_BOOT_TIMEOUT still overrides both cases.
     """
-    return _env_int("NVH_WEBUI_BOOT_TIMEOUT", 30)
+    return _env_int("NVH_WEBUI_BOOT_TIMEOUT", 600 if first_run else 30)
 
 
 # ---------------------------------------------------------------------------
@@ -214,10 +223,21 @@ def wizard_smoke_test(
     """
     url = f"http://127.0.0.1:{api_port}/v1/wizard/chat"
     payload = json.dumps({"question": "hi", "history": []}).encode("utf-8")
+    headers = {"content-type": "application/json"}
+    # 2026-06-10 audit: /v1/wizard/chat is auth-gated (require_auth in
+    # nvh/api/server.py reads HIVE_API_KEY from the environment only,
+    # and accepts either `Authorization: Bearer` or `X-Hive-API-Key`).
+    # start_api spawns `nvh serve` with env=os.environ.copy(), so when
+    # the user exported the key the API enforces it — and this probe
+    # runs in the very process that HAS the key. Attach it; without
+    # this, every keyed config hard-failed bring-up with HTTP 401.
+    api_key = os.environ.get("HIVE_API_KEY")
+    if api_key:
+        headers["X-Hive-API-Key"] = api_key
     req = urllib.request.Request(
         url,
         data=payload,
-        headers={"content-type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
@@ -226,6 +246,15 @@ def wizard_smoke_test(
                 return False, f"HTTP {resp.status}"
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            # Spell out the fix instead of a bare "HTTP 401" — the
+            # server wants a key this process didn't have (or had a
+            # stale one for).
+            return False, (
+                "API requires auth (HTTP 401); set HIVE_API_KEY in the "
+                "environment running `nvh services start` so the smoke "
+                "test can authenticate"
+            )
         return False, f"HTTP {exc.code}"
     except (urllib.error.URLError, OSError) as exc:
         return False, f"unreachable ({exc})"
@@ -257,6 +286,87 @@ def wizard_smoke_test(
 # ---------------------------------------------------------------------------
 
 
+def pids_listening_on_port(port: int) -> list[int]:
+    """Best-effort: pids of processes LISTENing on ``port``.
+
+    Added 2026-06-10 audit: minimal Ubuntu/Debian cloud images ship
+    neither ``fuser`` (psmisc) nor ``lsof``, which made kill_stale_port
+    a silent no-op on exactly the rented-GPU rigs nvHive targets. On
+    Linux this walks /proc directly (no external tools): the LISTEN
+    rows of /proc/net/tcp{,6} give the socket inode for the port, and
+    /proc/<pid>/fd symlinks map inodes back to pids. Elsewhere it
+    shells out to ``lsof`` (always present on macOS). Returns [] when
+    nothing is found or the lookup isn't possible — callers treat
+    this as best-effort, same as the kill helpers themselves.
+    """
+    pids: list[int] = []
+    if sys.platform.startswith("linux"):
+        inodes: set[str] = set()
+        for proc_file in ("/proc/net/tcp", "/proc/net/tcp6"):
+            try:
+                with open(proc_file, encoding="ascii", errors="replace") as fh:
+                    rows = fh.read().splitlines()[1:]
+            except OSError:
+                continue
+            for row in rows:
+                fields = row.split()
+                if len(fields) < 10:
+                    continue
+                # fields: sl local_address rem_address st ... inode
+                # st 0A == TCP_LISTEN; local port is hex after the ':'.
+                if fields[3] != "0A":
+                    continue
+                try:
+                    if int(fields[1].rsplit(":", 1)[1], 16) != port:
+                        continue
+                except (IndexError, ValueError):
+                    continue
+                inodes.add(fields[9])
+        if inodes:
+            targets = {f"socket:[{inode}]" for inode in inodes}
+            try:
+                entries = os.listdir("/proc")
+            except OSError:
+                entries = []
+            for entry in entries:
+                if not entry.isdigit():
+                    continue
+                fd_dir = f"/proc/{entry}/fd"
+                try:
+                    fds = os.listdir(fd_dir)
+                except OSError:
+                    continue  # permission denied / process exited
+                for fd in fds:
+                    try:
+                        if os.readlink(os.path.join(fd_dir, fd)) in targets:
+                            pids.append(int(entry))
+                            break
+                    except OSError:
+                        continue
+    else:
+        try:
+            out = subprocess.run(
+                ["lsof", "-nP", "-iTCP:" + str(port), "-sTCP:LISTEN", "-t"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            pids.extend(int(p) for p in out.stdout.split() if p.isdigit())
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+    return pids
+
+
+def _terminate_pids(pids: list[int]) -> None:
+    """SIGTERM each pid, swallowing already-gone/permission errors."""
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+
+
 def kill_stale_api(port: int = API_PORT_DEFAULT) -> None:
     """Best-effort: free ``port`` by killing whatever's listening.
 
@@ -274,10 +384,18 @@ def kill_stale_api(port: int = API_PORT_DEFAULT) -> None:
     ``--port 80001 --log-port 8000`` which would falsely match port
     8000. Anchored form ``"-port[ =]<port>(\\s|$)"`` matches only the
     actual --port argument the spawn supplied.
+
+    Regex widened 2026-06-10 audit: ``_nvh_binary`` can spawn the API
+    as ``python3 -m nvh.cli.main serve --port N`` (nvh not on PATH),
+    whose cmdline lacks the literal "nvh serve" — the old pattern
+    never matched that form. The ``(nvh|nvh\\.cli\\.main) serve``
+    alternation covers both spawn shapes, keeping the anchored --port
+    tail. A dependency-free /proc fallback (pids_listening_on_port)
+    backs up both tools on minimal images that ship neither.
     """
     for cmd in (
         ["fuser", "-k", f"{port}/tcp"],
-        ["pkill", "-f", rf"nvh serve.*--port[= ]{port}(\s|$)"],
+        ["pkill", "-f", rf"(nvh|nvh\.cli\.main) serve.*--port[= ]{port}(\s|$)"],
     ):
         try:
             subprocess.run(cmd, capture_output=True, timeout=5, check=False)
@@ -301,14 +419,29 @@ def kill_stale_api(port: int = API_PORT_DEFAULT) -> None:
                     pass
         except FileNotFoundError:
             pass
+    elif port_listening(port):
+        # 2026-06-10 audit: fuser/pkill absent or ineffective (minimal
+        # images, python -m cmdline shapes) — dependency-free /proc walk.
+        _terminate_pids(pids_listening_on_port(port))
     time.sleep(0.5)
 
 
 def kill_stale_port(port: int) -> None:
     """Generic version of ``kill_stale_api`` for any port.
 
-    Used by ``nvh services restart`` to take down Ollama and the WebUI
-    along with the API. Mirrors the same Linux/macOS branches.
+    Used by ``nvh services restart``/``stop`` to take down Ollama and
+    the WebUI along with the API. Mirrors the same Linux/macOS branches.
+
+    2026-06-10 audit: the only Linux mechanism used to be ``fuser -k``,
+    which ships in psmisc — absent from minimal Ubuntu/Debian cloud
+    images. There this function was a silent no-op: ``nvh services
+    stop`` printed "stopped" while the WebUI kept running, and
+    start_ollama's wedged-daemon recovery never freed :11434. The
+    dependency-free /proc walk (pids_listening_on_port) now backs up
+    the fuser attempt, mirroring kill_stale_api's multi-strategy shape
+    — by pid-by-port lookup rather than a cmdline regex, since the
+    processes on these ports (next-server, ollama) have no stable
+    cmdline to anchor on.
     """
     for cmd in (["fuser", "-k", f"{port}/tcp"],):
         try:
@@ -333,6 +466,9 @@ def kill_stale_port(port: int) -> None:
                     pass
         except FileNotFoundError:
             pass
+    elif port_listening(port):
+        # fuser missing or ineffective — fall back to the /proc walk.
+        _terminate_pids(pids_listening_on_port(port))
     time.sleep(0.5)
 
 
@@ -510,13 +646,17 @@ def _ollama_binary() -> str | None:
 
     Resolution order (same defensive layering as nvh-bridge.ts's
     resolveNvhBinary, hardened 2026-05-22 after a real-rig install
-    failed because the subprocess didn't inherit PATH cleanly):
+    failed because the subprocess didn't inherit PATH cleanly;
+    fallback paths corrected 2026-06-10 audit — install.sh's DEFAULT
+    home is ~/.nvh, while ~/nvhive is the persistent-mount
+    auto-detect home, so both must be checked):
 
       1. NVH_OLLAMA_BIN env var (explicit file override)
       2. $NVH_BIN/ollama                (install.sh's canonical location)
       3. $NVH_HOME/bin/ollama           (when NVH_BIN isn't exported)
-      4. ~/nvhive/bin/ollama            (default install path)
-      5. shutil.which("ollama")         (PATH lookup, last resort)
+      4. ~/nvhive/bin/ollama            (persistent-mount install path)
+      5. ~/.nvh/bin/ollama              (install.sh's default home)
+      6. shutil.which("ollama")         (PATH lookup, last resort)
     """
     explicit = os.environ.get("NVH_OLLAMA_BIN")
     if explicit and os.access(explicit, os.X_OK):
@@ -532,6 +672,7 @@ def _ollama_binary() -> str | None:
         candidates.append(os.path.join(nvh_home, "bin", "ollama"))
     home = os.path.expanduser("~")
     candidates.append(os.path.join(home, "nvhive", "bin", "ollama"))
+    candidates.append(os.path.join(home, ".nvh", "bin", "ollama"))
     for candidate in candidates:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
@@ -541,7 +682,12 @@ def _ollama_binary() -> str | None:
 def _nvh_binary() -> list[str]:
     """Return the argv prefix that invokes the current nvh install."""
     nvh_exe = shutil.which("nvh") or sys.executable
-    if nvh_exe.endswith("python.exe") or nvh_exe.endswith("python"):
+    # Basename check (2026-06-10 audit): the previous endswith("python")
+    # suffix test missed "python3" / "python3.12" — the names
+    # sys.executable usually carries — so start_api spawned
+    # `python3 serve --port N`, which tries to execute a script file
+    # named "serve" and dies instantly.
+    if os.path.basename(nvh_exe).lower().startswith("python"):
         return [nvh_exe, "-m", "nvh.cli.main"]
     return [nvh_exe]
 
@@ -562,6 +708,12 @@ def start_ollama(log_dir: str | None = None) -> tuple[bool, str]:
     """
     ok, reason = ollama_healthy(OLLAMA_PORT, timeout=1.0)
     if ok:
+        # Warm-restart preload (2026-06-10 audit): previously only a
+        # fresh spawn preloaded, so `nvh services start` on a rig where
+        # install.sh had already booted Ollama still hit the slow cold
+        # first turn the preload exists to remove. Fire-and-forget +
+        # NVH_OLLAMA_PRELOAD=0 opt-out, same as the spawn path below.
+        _preload_default_model()
         return True, f"already running ({reason})"
     # Port is held but unhealthy → kill the stale process so the new
     # spawn can bind. Same pattern as start_api below.
@@ -580,10 +732,22 @@ def start_ollama(log_dir: str | None = None) -> tuple[bool, str]:
         # install_rootless_ollama_binary had failed silently. Point
         # the user at the install log so they can see the actual
         # download/extract error.
-        nvh_home = os.environ.get("NVH_HOME") or os.path.expanduser("~/nvhive")
-        log_hint = os.path.join(nvh_home, "logs", "ollama-install.log")
+        #
+        # 2026-06-10 audit: the hint used to default to ~/nvhive, but
+        # install.sh's default NVH_HOME is ~/.nvh (~/nvhive only on
+        # persistent-mount auto-detect installs) — name both so the
+        # user isn't sent to a path that doesn't exist.
+        nvh_home = os.environ.get("NVH_HOME")
+        if nvh_home:
+            log_hint = os.path.join(nvh_home, "logs", "ollama-install.log")
+        else:
+            log_hint = (
+                os.path.expanduser("~/.nvh/logs/ollama-install.log")
+                + " (or ~/nvhive/logs/ollama-install.log on persistent-mount installs)"
+            )
         return False, (
-            f"ollama binary not found at $NVH_HOME/bin/ollama. "
+            f"ollama binary not found at $NVH_HOME/bin/ollama "
+            f"(also checked ~/nvhive/bin/ollama, ~/.nvh/bin/ollama, and PATH). "
             f"install.sh's Ollama download likely failed — see {log_hint} "
             f"for the underlying error, then re-run "
             f"`curl -fsSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash`"
@@ -601,12 +765,27 @@ def start_ollama(log_dir: str | None = None) -> tuple[bool, str]:
         except OSError:
             log_handle = None
 
+    # 2026-06-10 audit: install.sh's start_ollama_with_health_wait spawns
+    # with OLLAMA_MODELS="$models_dir" ($NVH_MODELS/ollama), but this
+    # mirror passed only os.environ. From a shell that never sourced
+    # nvh-env.sh (e.g. install.sh's printed retry hint), the daemon then
+    # defaulted to ~/.ollama/models and /api/tags showed 0 models even
+    # though install.sh just pulled them. setdefault keeps any explicit
+    # user override; the layout already honors a pre-set OLLAMA_MODELS.
+    spawn_env = os.environ.copy()
+    try:
+        from nvh.integrations.workspace.storage import storage_layout
+        spawn_env.setdefault(
+            "OLLAMA_MODELS", str(storage_layout().ollama_models_dir)
+        )
+    except Exception:
+        pass  # best-effort — fall back to the daemon's own default
     try:
         subprocess.Popen(
             [ollama_bin, "serve"],
             stdout=log_handle or subprocess.DEVNULL,
             stderr=subprocess.STDOUT if log_handle else subprocess.DEVNULL,
-            env=os.environ.copy(),
+            env=spawn_env,
             start_new_session=True,
         )
     except OSError as exc:
@@ -644,18 +823,28 @@ def _preload_default_model() -> None:
         # correctness guarantee.
         try:
             from nvh.integrations.workspace.storage import storage_layout
-            config_path = storage_layout().home / "config" / "config.yaml"
+            # config_dir honors the HIVE_CONFIG_HOME override install.sh
+            # exports (2026-06-10 audit — the old hardcoded home/"config"
+            # path never found an overridden config).
+            config_path = storage_layout().config_dir / "config.yaml"
             if config_path.exists():
                 text = config_path.read_text(encoding="utf-8", errors="replace")
-                # Cheap inline scan; we don't want to import pyyaml just for this.
+                # Cheap inline scan; we don't want to import pyyaml just
+                # for this. Only an `ollama/...` default may be preloaded
+                # (2026-06-10 audit): the config has one default_model
+                # per advisor section, and the old first-match-wins scan
+                # grabbed whichever came first — e.g. openai's gpt-4o —
+                # then POSTed it to Ollama's /api/generate, where the 404
+                # was silently swallowed and the preload never happened.
                 for line in text.splitlines():
                     stripped = line.strip()
-                    if stripped.startswith("default_model:"):
-                        candidate = stripped.split(":", 1)[1].strip().strip("\"'")
-                        if candidate.startswith("ollama/"):
-                            candidate = candidate.split("/", 1)[1]
-                        model = candidate
+                    if not stripped.startswith("default_model:"):
+                        continue
+                    candidate = stripped.split(":", 1)[1].strip().strip("\"'")
+                    if candidate.startswith("ollama/"):
+                        model = candidate.split("/", 1)[1]
                         break
+                    # Non-Ollama advisor default — keep scanning.
         except Exception:
             return
     if not model:
@@ -742,6 +931,48 @@ def start_api(
     return False, f"did not become healthy in {timeout}s ({reason})"
 
 
+def _webui_first_run() -> bool:
+    """Detect whether the spawned ``nvh webui`` faces a first-run build.
+
+    Mirrors webui()'s web_dir candidate resolution in nvh/cli/main.py:
+    the first candidate with a package.json is the one the child will
+    use. If that candidate lacks node_modules or a completed Next.js
+    build (.next/BUILD_ID) — or no candidate exists at all — the child
+    runs npm install + ``next build`` (or a full download) before it
+    can bind the port, which takes minutes (2026-06-10 audit).
+    Best-effort: any error means "assume warm start" so we never
+    inflate the boot timeout spuriously.
+    """
+    try:
+        from nvh.integrations.workspace.storage import storage_layout
+        layout = storage_layout()
+        package_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        candidates = [
+            os.path.join(package_root, "web"),
+            str(layout.home / "repo" / "web"),
+            os.path.expanduser("~/nvh/repo/web"),
+            str(layout.webui_dir),
+            os.path.join(os.getcwd(), "web"),
+        ]
+        web_dir = None
+        for candidate in candidates:
+            if os.path.isdir(candidate) and os.path.isfile(
+                os.path.join(candidate, "package.json")
+            ):
+                web_dir = candidate
+                break
+        if web_dir is None:
+            return True  # web/ must be downloaded + installed + built
+        return not (
+            os.path.isdir(os.path.join(web_dir, "node_modules"))
+            and os.path.isfile(os.path.join(web_dir, ".next", "BUILD_ID"))
+        )
+    except Exception:
+        return False
+
+
 def start_webui(
     port: int = WEBUI_PORT_DEFAULT, log_dir: str | None = None
 ) -> tuple[bool, str]:
@@ -788,12 +1019,24 @@ def start_webui(
     except OSError as exc:
         return False, f"failed to spawn nvh webui: {exc}"
 
-    timeout = webui_boot_timeout()
+    # Adaptive gate (2026-06-10 audit): a first-run WebUI (npm install
+    # + next build) takes minutes; the flat 30s timeout deterministically
+    # reported failure while the detached build kept going and bound the
+    # port later, contradicting the error the user was just shown.
+    first_run = _webui_first_run()
+    timeout = webui_boot_timeout(first_run=first_run)
     ok, reason = _wait_for(
         lambda: webui_port_listening(port), timeout, poll_every=0.5
     )
     if ok:
         return True, f"listening after wait ({reason})"
+    if first_run:
+        return False, (
+            f"did not bind {port} in {timeout}s — first-run WebUI build "
+            f"(npm install + next build) is likely still in progress in "
+            f"the background; retry `nvh services start` in a few minutes "
+            f"({reason})"
+        )
     return False, f"did not bind {port} in {timeout}s ({reason})"
 
 

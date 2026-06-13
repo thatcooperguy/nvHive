@@ -231,6 +231,76 @@ refresh_desktop_launchers() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# Stop running nvHive services before deleting the directories they run from.
+#
+# `nvh webui` and `nvh services start` daemonize the API (:8000) and the WebUI
+# (:3000) with their own sessions, so they outlive the terminal — and they
+# would keep answering on localhost after an uninstall (deleted files stay
+# alive via open inodes) until reboot. Rootless and conservative, mirroring
+# install.sh's _pid_looks_like_ours: a listener is only killed when its
+# command line looks like one of OUR processes. A user's unrelated dev server
+# on :3000 (Grafana, Storybook, another Next app) is left alone.
+# ---------------------------------------------------------------------------
+
+port_listener_pids() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true
+    elif command -v fuser >/dev/null 2>&1; then
+        # fuser prints the "<port>/tcp:" label on stderr and PIDs on stdout.
+        fuser "$port"/tcp 2>/dev/null | tr -s ' \t' '\n' || true
+    fi
+}
+
+pid_looks_like_nvhive() {
+    # Same patterns as install.sh's _pid_looks_like_ours, plus "anything
+    # running out of NVH_HOME" — at uninstall time, a process whose command
+    # line points into the directory we are about to delete is ours.
+    local pid="$1" cmd=""
+    [ -n "$pid" ] || return 1
+    if command -v ps >/dev/null 2>&1; then
+        cmd="$(ps -o command= -p "$pid" 2>/dev/null || ps -p "$pid" -o args= 2>/dev/null || true)"
+    fi
+    [ -n "$cmd" ] || return 1
+    case "$cmd" in
+        *nvh\ serve*|*nvh.cli*|*nvh\ webui*|*nvh\ workstation*) return 0 ;;
+        *ollama\ serve*|*"$NVH_BIN/ollama"*) return 0 ;;
+        *next\ start*|*next\ dev*|*next-server*|*node*next*) return 0 ;;
+        *"$NVH_HOME"/*) return 0 ;;
+    esac
+    return 1
+}
+
+stop_nvhive_services() {
+    # Same port set install.sh's detect_port_conflicts owns:
+    # API :8000, WebUI :3000 (+ cascade 3001/3002), Ollama :11434.
+    local ports="8000 3000 3001 3002 11434"
+    local port pid pids stopped=false
+    for port in $ports; do
+        pids="$(port_listener_pids "$port")"
+        [ -n "$pids" ] || continue
+        for pid in $pids; do
+            pid_looks_like_nvhive "$pid" || continue
+            echo -e "${D}Stopping nvHive process $pid on :$port${N}"
+            run_or_print kill -TERM "$pid" 2>/dev/null || true
+            stopped=true
+        done
+    done
+    [ "$DRY_RUN" = "true" ] && return 0
+    [ "$stopped" = "true" ] || return 0
+    # Give them a moment to exit cleanly, then SIGKILL any stragglers.
+    sleep 1
+    for port in $ports; do
+        pids="$(port_listener_pids "$port")"
+        [ -n "$pids" ] || continue
+        for pid in $pids; do
+            pid_looks_like_nvhive "$pid" || continue
+            kill -KILL "$pid" 2>/dev/null || true
+        done
+    done
+}
+
 clean_shell_rc() {
     local rc tmp
     for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
@@ -280,6 +350,9 @@ if [ "$ASSUME_YES" != "true" ] && [ "$DRY_RUN" != "true" ]; then
         *) echo "Cancelled."; exit 0 ;;
     esac
 fi
+
+# Stop the daemonized API / WebUI / Ollama before removing their files.
+stop_nvhive_services
 
 if [ -x "$NVH_BIN/ollama" ] && command -v pkill >/dev/null 2>&1; then
     run_or_print pkill -f "$NVH_BIN/ollama serve" 2>/dev/null || true

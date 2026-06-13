@@ -57,7 +57,7 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
     <button
       type="button"
       onClick={() => onChange(!value)}
-      className={`relative w-11 h-6 transition-colors ${value ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4]'}`}
+      className={`relative w-11 h-6 transition-colors ${value ? 'bg-[#76B900]' : 'bg-[#e5e5e5] border border-[#d4d4d4] dark:bg-[#3f3f46] dark:border-[#525252]'}`}
     >
       <span className={`absolute top-1 w-4 h-4 bg-white shadow transition-transform ${value ? 'translate-x-6' : 'translate-x-1'}`} />
     </button>
@@ -144,7 +144,7 @@ export default function SettingsPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Preferences"
+        eyebrow="Workspace"
         title="Preferences"
         subtitle="Choose simple defaults first. Advanced routing and cache controls stay below."
         trailing={

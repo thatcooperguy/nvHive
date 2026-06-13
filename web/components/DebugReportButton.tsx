@@ -79,8 +79,13 @@ function formatReport(report: DebugReport, pageUrl: string): string {
   lines.push(bar());
   lines.push(`  Generated: ${report.generatedAt}`);
   lines.push(`  Page:      ${pageUrl}`);
+  // 2026-06-10 audit: the header used to print NVH_HOME under the
+  // "Node:" label — actively misleading on a report whose whole job is
+  // being triaged from a (often header-cropped) phone photo. Each value
+  // now sits under its own label; the ENV section below repeats them.
   lines.push(`  Platform:  ${report.env.platform}`);
-  lines.push(`  Node:      ${report.env.nvhHome}`);
+  lines.push(`  NVH_HOME:  ${report.env.nvhHome}`);
+  lines.push(`  Node:      ${report.env.nodeVersion}`);
 
   lines.push(sect('SUMMARY'));
   for (const h of report.diagnostics) {

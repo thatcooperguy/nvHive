@@ -250,7 +250,10 @@ install_shell_hook() {
     cat >> "$tmp" << RCEOF
 
 # >>> nvhive rootless env >>>
-source "$NVH_HOME/nvh-env.sh"
+# Guarded source (2026-06-10 audit): on ephemeral cloud desktops the
+# persistent mount can be detached; an unguarded source made EVERY
+# interactive shell print an error at login until reinstall.
+[ -f "$NVH_HOME/nvh-env.sh" ] && source "$NVH_HOME/nvh-env.sh"
 # Auto-start Ollama on shell login if it's not already running AND no
 # other shell is mid-spawn. Previously this used a curl probe ONLY,
 # which on a slow daemon false-negatived — so every new terminal during
@@ -301,6 +304,11 @@ if [ -f "\$NVH_ENV" ]; then
 fi
 if [ -x "$NVH_VENV/bin/nvh" ]; then
     exec "$NVH_VENV/bin/nvh" "\$@"
+fi
+# Last resort (2026-06-10 audit): prefer python3 — the Debian/Ubuntu GPU
+# rigs this targets ship python3 only; bare \`python\` rarely exists.
+if command -v python3 >/dev/null 2>&1; then
+    exec python3 -m nvh.cli.main "\$@"
 fi
 exec python -m nvh.cli.main "\$@"
 SHIMEOF
@@ -888,8 +896,13 @@ stage_full_capability_for_vram_tier() {
         1|true|True|yes|Yes|on|On)
             if [ -n "$pack_ids" ] && [ -x "$NVH_VENV/bin/nvh" ]; then
                 echo -e "${B}NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1: pulling $pack_ids inline...${N}"
-                # shellcheck disable=SC2086
-                "$NVH_VENV/bin/nvh" studio --install $pack_ids -y || \
+                # 2026-06-10 audit: `--install` is a single-value typer
+                # option — passing the ids as separate argv words made
+                # click abort with "Got unexpected extra arguments" on
+                # every >=24 GB tier (3 packs), so nothing got installed.
+                # expand_pack_ids splits on commas; comma-join them.
+                local pack_ids_csv="${pack_ids// /,}"
+                "$NVH_VENV/bin/nvh" studio --install "$pack_ids_csv" -y || \
                     echo -e "${Y}Inline pack install reported errors; check 'nvh studio status'.${N}"
             else
                 echo -e "${Y}NVH_INSTALL_FULL_CAPABILITY_DOWNLOAD=1 set but 'nvh' is not on PATH yet — staging only.${N}"
@@ -1093,11 +1106,21 @@ install_rootless_ollama_binary() {
         echo -e "${B}Installing Ollama (local AI)...${N}"
     fi
 
+    # 2026-06-10 audit: truncate the install log BEFORE any failure exit.
+    # The early curl/arch failures below used to return before the
+    # truncation (which sat at the download stage), so the failure handler
+    # that tails this log surfaced STALE content from a previous run —
+    # actively misleading diagnosis. Log the early-exit reasons too so the
+    # tail always reflects what THIS run did.
+    : >"$NVH_LOGS/ollama-install.log"
+
     if ! command -v curl >/dev/null 2>&1; then
+        echo "curl missing — cannot download Ollama rootlessly." >>"$NVH_LOGS/ollama-install.log"
         echo -e "${R}curl is required to install Ollama without root.${N}"
         return 1
     fi
     if ! arch="$(ollama_arch)"; then
+        echo "Unsupported Ollama Linux architecture: $(uname -m 2>/dev/null || printf unknown)" >>"$NVH_LOGS/ollama-install.log"
         echo -e "${R}Unsupported Ollama Linux architecture: $(uname -m 2>/dev/null || printf unknown)${N}"
         return 1
     fi
@@ -1105,7 +1128,6 @@ install_rootless_ollama_binary() {
     stage="$NVH_CACHE/bootstrap/ollama-${arch}"
     rm -rf "$stage"
     mkdir -p "$stage" "$NVH_BIN" "$NVH_HOME/lib"
-    : >"$NVH_LOGS/ollama-install.log"
 
     downloaded=false
     while IFS='|' read -r candidate_type candidate_url; do
@@ -1139,11 +1161,47 @@ install_rootless_ollama_binary() {
     return 0
 }
 
+# Shared failure handler for both install_rootless_ollama_binary call
+# sites. 2026-05-22 real-rig regression: `install_rootless_ollama_binary
+# || OLLAMA_BIN=""` swallowed errors silently, so the bring-up pipeline
+# aborted at the very end with the confusing "ollama binary not found
+# (run install.sh first)" message — but install.sh HAD just run. Surface
+# the install-log tail INLINE so the user sees the real cause (download
+# 404, extract failure, missing libc, whatever) AND continue with a
+# clear warning instead of pretending Ollama is installed.
+# 2026-06-10 audit: factored into a function — the reconnect/fast path
+# had NO failure handler at all, so a failed binary install on reinstall
+# was completely silent. Both paths now report identically.
+report_ollama_install_failure() {
+    echo ""
+    echo -e "${R}Ollama binary install failed.${N}"
+    echo -e "${Y}install.sh will continue (API + WebUI can still come up on cloud providers),${N}"
+    echo -e "${Y}but the local Wizard won't work until Ollama is installed.${N}"
+    if [ -s "$NVH_LOGS/ollama-install.log" ]; then
+        echo -e "${D}--- ollama-install.log tail (last 20 lines) ---${N}"
+        tail -n 20 "$NVH_LOGS/ollama-install.log" | sed "s/^/  /"
+        echo -e "${D}--- end tail ---${N}"
+        echo -e "${D}Full log: $NVH_LOGS/ollama-install.log${N}"
+    fi
+    echo ""
+}
+
 ollama_model_installed() {
     local model="$1"
     [ -n "${OLLAMA_BIN:-}" ] || return 1
     [ -x "$OLLAMA_BIN" ] || return 1
-    "$OLLAMA_BIN" list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq "$model"
+    # 2026-06-10 audit: `ollama list` prints names WITH tags (e.g.
+    # "moondream:latest") while every caller passes the bare
+    # DEFAULT_OLLAMA_MODEL name, so the old exact-line `grep -Fxq` could
+    # never match — the idempotency shortcut was dead code and every
+    # reinstall re-ran the countdown + a network `ollama pull`. Match the
+    # first column exactly OR with any tag stripped, mirroring the
+    # _tags_match contract in nvh/utils/ollama.py (a bare required name
+    # accepts any installed tag). awk instead of grep avoids regex-
+    # metacharacter surprises with dotted names like llama3.2-vision.
+    "$OLLAMA_BIN" list 2>/dev/null | awk -v m="$model" '
+        NR > 1 { base=$1; sub(/:.*$/, "", base); if ($1 == m || base == m) found=1 }
+        END { exit !found }'
 }
 
 # Rough size estimates for the AI Wizard models we ship. Sourced from
@@ -1187,7 +1245,21 @@ nvwizard_model_download_countdown() {
     echo -e "${D}  This is the model the Wizard chats with. Smaller models load fast on CPU;${N}"
     echo -e "${D}  bigger ones are stronger on GPU. You can change it later from the WebUI.${N}"
 
-    if [ -r /dev/tty ] && [ -w /dev/tty ] && [ "${NVH_INSTALL_MODEL_DOWNLOAD:-auto}" = "auto" ]; then
+    # 2026-06-10 audit: the old probe was `[ -r /dev/tty ] && [ -w /dev/tty ]`,
+    # which checks permission bits via access(2) on the 0666 device node — it
+    # does NOT verify the process has a controlling terminal. Daemon-ish runs
+    # (cloud-init userdata, systemd units, cron) passed the test, then every
+    # `>/dev/tty` redirect in the loop failed with "No such device or
+    # address" — ~21 stderr lines per unattended install captured into
+    # install.log, and the headless hint below never showed. Actually OPEN
+    # the device instead: the `:` no-op with a redirect fails cleanly with
+    # ENXIO when there is no controlling TTY, and its stderr is swallowed.
+    local tty_usable=false
+    if { : </dev/tty; } 2>/dev/null && { : >/dev/tty; } 2>/dev/null; then
+        tty_usable=true
+    fi
+
+    if [ "$tty_usable" = "true" ] && [ "${NVH_INSTALL_MODEL_DOWNLOAD:-auto}" = "auto" ]; then
         echo -e "${D}  Press [s] to skip; download starts in 10s (you can grab it later from /setup).${N}"
         while [ "$delay" -gt 0 ]; do
             printf "\r  Starting in %ss... press [s] to skip " "$delay" >/dev/tty
@@ -1203,8 +1275,16 @@ nvwizard_model_download_countdown() {
             delay=$((delay - 1))
         done
         printf "\n" >/dev/tty
+    elif [ "${NVH_INSTALL_MODEL_DOWNLOAD:-auto}" != "auto" ]; then
+        # 2026-06-10 audit: an explicit NVH_INSTALL_MODEL_DOWNLOAD=1 on a
+        # real TTY used to fall through to the else branch and print
+        # "Headless install — running with no TTY", wrong on both counts.
+        # Explicit truthy values (the falsy spellings already returned at
+        # the top of this function) mean "download now, no countdown" —
+        # say exactly that.
+        echo -e "${D}  NVH_INSTALL_MODEL_DOWNLOAD=${NVH_INSTALL_MODEL_DOWNLOAD} set — starting the download without the skip countdown.${N}"
     else
-        # Headless / piped install — no /dev/tty available. Surface the
+        # Headless / piped install — no usable /dev/tty. Surface the
         # opt-out hint inline so users running via `ssh host 'bash -s' <
         # install.sh` or cloud-init userdata don't get hit with a
         # multi-GB pull they didn't expect.
@@ -1626,9 +1706,19 @@ heal_venv() {
 
     # Reinstall nvhive
     activate_nvh_python_env
-    pip install -q --upgrade pip 2>/dev/null
+    # 2026-06-10 audit: both pip calls below were unguarded under
+    # `set -euo pipefail` — a transient PyPI failure (egress-restricted
+    # cloud rig, captive network) killed the whole reinstall with stderr
+    # discarded and no message. The pip self-upgrade is best-effort
+    # (matching the identical call in create_rootless_venv); the editable
+    # install names its log and returns 1 so the caller's `command -v nvh`
+    # fallback can take over.
+    pip install -q --upgrade pip 2>/dev/null || true
     if [ -d "$NVH_REPO" ]; then
-        pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log"
+        pip install -q -e "$NVH_REPO[serve,nvidia]" 2>"$NVH_LOGS/pip-install.log" || {
+            echo -e "${Y}Reinstall during venv heal failed. Log: $NVH_LOGS/pip-install.log${N}"
+            return 1
+        }
     fi
 
     echo -e "${G}Venv healed.${N}"
@@ -1639,7 +1729,11 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
     refresh_nvh_repo || echo -e "${Y}Could not refresh source; continuing with local repo.${N}"
 
     # Existing install found - heal if needed, then activate
-    heal_venv
+    # 2026-06-10 audit: heal_venv was called bare under `set -euo pipefail`,
+    # so any non-zero return (venv recreate or pip failure) aborted the
+    # reconnect silently. Soft-fail: the `command -v nvh` verification
+    # below has its own reinstall fallback.
+    heal_venv || echo -e "${Y}Venv heal incomplete; continuing — the 'nvh' verification below will retry.${N}"
     activate_nvh_python_env
 
     # Reinstall after source refresh so existing tarball-based installs do not stay stale.
@@ -1657,12 +1751,27 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
     fi
 
     # Ensure the rootless local runtime is present and runnable before the UI opens.
-    if [ -n "$GPU_NAME" ]; then
-        OLLAMA_BIN="$NVH_BIN/ollama"
-        install_rootless_ollama_binary || OLLAMA_BIN=""
-        if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-            start_ollama_with_health_wait "$OLLAMA_BIN" "$OLLAMA_MODELS"
-        fi
+    # 2026-06-10 audit: this reconnect/fast path still gated Ollama setup on
+    # `[ -n "$GPU_NAME" ]` — the exact gate the fresh path below removed
+    # (see the "ALWAYS, on every Linux install" rationale there). On rigs
+    # where nvidia-smi is off PATH (common on cloud GPU desktops), GPU_NAME
+    # is empty, so a reconnect never installed or repaired the binary and
+    # `nvh services start` aborted with "ollama binary not found".
+    # Unconditional now, with the same loud failure handler as fresh path.
+    OLLAMA_BIN="$NVH_BIN/ollama"
+    if ! install_rootless_ollama_binary; then
+        OLLAMA_BIN=""
+        report_ollama_install_failure
+    fi
+    if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
+        # 2026-06-10 audit: under `set -euo pipefail` a bare call here meant
+        # a boot timeout (return 1 — common on cold GPU rigs that need
+        # 5-15s against a 15s default budget) aborted the ENTIRE install,
+        # skipping the shims, config sync, shell hook, and launch below.
+        # Soft-fail: `nvh services start` re-runs the Ollama health gate
+        # with its own stale-process recovery.
+        start_ollama_with_health_wait "$OLLAMA_BIN" "$OLLAMA_MODELS" \
+            || echo -e "${Y}Continuing without a verified Ollama daemon; 'nvh services start' will retry the bring-up.${N}"
     fi
 
     export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:$PATH"
@@ -1840,27 +1949,25 @@ OLLAMA_BIN="$NVH_BIN/ollama"
 # the bring-up pipeline aborted at the very end with the confusing
 # "ollama binary not found (run install.sh first)" message — but
 # install.sh HAD just run. Fix: surface the install-log tail INLINE on
-# failure so the user can see exactly what went wrong (download 404,
-# extract failure, missing libc, whatever) AND continue with a clear
-# warning instead of pretending Ollama is installed.
+# failure (see report_ollama_install_failure, shared with the fast path
+# since the 2026-06-10 audit) AND continue with a clear warning instead
+# of pretending Ollama is installed.
 if ! install_rootless_ollama_binary; then
     OLLAMA_BIN=""
-    echo ""
-    echo -e "${R}Ollama binary install failed.${N}"
-    echo -e "${Y}install.sh will continue (API + WebUI can still come up on cloud providers),${N}"
-    echo -e "${Y}but the local Wizard won't work until Ollama is installed.${N}"
-    if [ -s "$NVH_LOGS/ollama-install.log" ]; then
-        echo -e "${D}--- ollama-install.log tail (last 20 lines) ---${N}"
-        tail -n 20 "$NVH_LOGS/ollama-install.log" | sed "s/^/  /"
-        echo -e "${D}--- end tail ---${N}"
-        echo -e "${D}Full log: $NVH_LOGS/ollama-install.log${N}"
-    fi
-    echo ""
+    report_ollama_install_failure
 fi
 
 # Start Ollama
 if [ -n "$OLLAMA_BIN" ] && ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
-    start_ollama_with_health_wait "$OLLAMA_BIN" "$OLLAMA_MODELS"
+    # 2026-06-10 audit: under `set -euo pipefail` a bare call here meant a
+    # boot timeout (return 1 — common on cold GPU rigs that need 5-15s
+    # against a 15s default budget) aborted the ENTIRE install: no model
+    # pull, no capability summary, no "NVHive is ready!" block, no launch.
+    # Soft-fail instead — the model-pull block below is already gated on a
+    # live /api/tags probe, and `nvh services start` re-runs the Ollama
+    # health gate with its own stale-process recovery.
+    start_ollama_with_health_wait "$OLLAMA_BIN" "$OLLAMA_MODELS" \
+        || echo -e "${Y}Continuing without a verified Ollama daemon; 'nvh services start' will retry the bring-up.${N}"
 fi
 
 # First-run model pull. Previously deferred to the WebUI on launch-mode

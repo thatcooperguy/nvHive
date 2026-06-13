@@ -96,8 +96,8 @@ type SetupCheckState = 'ready' | 'warn' | 'fix' | 'checking';
 
 const CHECK_TONES: Record<SetupCheckState, { dot: string; text: string; border: string; bg: string; label: string }> = {
   ready: { dot: 'bg-[#76B900]', text: 'text-[#76B900]', border: 'border-[#76B900]/30', bg: 'bg-[#76B900]/5', label: 'Ready' },
-  warn: { dot: 'bg-[#d97706]', text: 'text-[#d97706]', border: 'border-[#d97706]/30', bg: 'bg-[#fff7ed]', label: 'Review' },
-  fix: { dot: 'bg-[#d97706]', text: 'text-[#d97706]', border: 'border-[#d97706]/30', bg: 'bg-[#fff7ed]', label: 'Fix queued' },
+  warn: { dot: 'bg-[#d97706]', text: 'text-[#d97706]', border: 'border-[#d97706]/30', bg: 'bg-[#fff7ed] dark:bg-[#d97706]/10', label: 'Review' },
+  fix: { dot: 'bg-[#d97706]', text: 'text-[#d97706]', border: 'border-[#d97706]/30', bg: 'bg-[#fff7ed] dark:bg-[#d97706]/10', label: 'Fix queued' },
   checking: { dot: 'bg-[#a3a3a3]', text: 'text-[#737373]', border: 'border-[#e5e5e5] dark:border-[#262626]', bg: 'bg-[#fafafa] dark:bg-[#141414]', label: 'Checking' },
 };
 
@@ -509,6 +509,10 @@ export default function SetupPage() {
   const [jobsError, setJobsError] = useState<string | null>(null);
   const [cancelingJobId, setCancelingJobId] = useState<string | null>(null);
   const [advancedSetupOpen, setAdvancedSetupOpen] = useState(false);
+  // Collapses the verbose half of the combined Launch Check / System Check
+  // status card on the welcome step (repair trail, checklist tiles, advisor,
+  // support report). Chips + the primary button row stay always visible.
+  const [statusDetailsOpen, setStatusDetailsOpen] = useState(false);
   const [selectedWizardProfile, setSelectedWizardProfile] = useState<WizardProfile>('student');
   const [startupCountdown, setStartupCountdown] = useState<number | null>(null);
   const [startupAutopilotSkipped, setStartupAutopilotSkipped] = useState(false);
@@ -1879,11 +1883,11 @@ export default function SetupPage() {
     compatibilityIssueCount +
     bootChangeCount;
   const showAdvancedSetup = advancedSetupOpen && step !== 'welcome';
+  // Only surface the Install Jobs panel while a job is actually active (or
+  // when Advanced Details is open and there is history worth showing) —
+  // finished-job event residue should not pin a full panel to the page.
   const showInstallJobs =
     activeInstallJobs.length > 0 ||
-    modelEvents.length > 0 ||
-    studioEvents.length > 0 ||
-    comfyEvents.length > 0 ||
     (showAdvancedSetup && (visibleInstallJobs.length > 0 || jobsError));
   const anyInstallRunning = Boolean(activeWizardBuild) || studioInstalling || modelsInstalling || comfyInstalling;
   const topHelperAction = coreHelperActions[0] ?? null;
@@ -2624,7 +2628,7 @@ export default function SetupPage() {
                       isActive
                         ? 'border-[#76B900] bg-[#76B900] text-black'
                         : isComplete
-                          ? 'border-[#76B900]/40 text-[#76B900] bg-[#f7fdf0]'
+                          ? 'border-[#76B900]/40 text-[#76B900] bg-[#f7fdf0] dark:bg-[#76B900]/10'
                           : 'border-[#d4d4d4] text-[#525252] bg-white hover:border-[#76B900]/50 hover:text-[#0a0a0a] dark:border-[#404040] dark:text-[#a3a3a3] dark:bg-[#0a0a0a] dark:hover:text-[#fafafa]'
                     }`}
                   >
@@ -2645,7 +2649,7 @@ export default function SetupPage() {
                       onClick={() => setStep(groupStep)}
                       className={`flex items-center gap-1.5 border px-2 py-1 text-[9px] font-mono uppercase tracking-wider rounded ${
                         isActive
-                          ? 'border-[#76B900] text-[#0a0a0a] bg-[#f7fdf0]'
+                          ? 'border-[#76B900] text-[#0a0a0a] bg-[#f7fdf0] dark:text-[#fafafa] dark:bg-[#76B900]/10'
                           : 'border-[#e5e5e5] text-[#737373] bg-white hover:text-[#0a0a0a] dark:border-[#262626] dark:text-[#a3a3a3] dark:bg-[#0a0a0a] dark:hover:text-[#fafafa]'
                       }`}
                       title={detail?.essential ? 'Essential step — required to use nvHive' : 'Optional — visit anytime'}
@@ -2666,7 +2670,7 @@ export default function SetupPage() {
       </div>
 
       {step !== 'welcome' && (
-        <div className="border border-[#76B900]/30 bg-[#f7fdf0] p-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+        <div className="border border-[#76B900]/30 bg-[#f7fdf0] p-3 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3 dark:bg-[#76B900]/10">
           <div className="min-w-0">
             <div className="section-label">Workspace</div>
             <div className="text-[10px] text-[#525252] mt-1 break-all dark:text-[#a3a3a3]">
@@ -2801,7 +2805,7 @@ export default function SetupPage() {
                     />
                   </div>
                   {maybeStalled && (
-                    <div className="mt-2 border border-[#d97706]/30 bg-[#fff7ed] px-2 py-1 text-[10px] font-mono text-[#92400e]">
+                    <div className="mt-2 border border-[#d97706]/30 bg-[#fff7ed] px-2 py-1 text-[10px] font-mono text-[#92400e] dark:bg-[#d97706]/10 dark:text-[#fbbf24]">
                       No job update for {formatJobSilentFor(job)}. Large downloads can be quiet, but this is worth watching.
                     </div>
                   )}
@@ -2854,7 +2858,7 @@ export default function SetupPage() {
                 </span>
                 <span className={`border px-2 py-1 text-[9px] font-mono uppercase ${
                   serviceHealth.ports.conflict_count
-                    ? 'border-[#d97706]/40 bg-[#fff7ed] text-[#d97706]'
+                    ? 'border-[#d97706]/40 bg-[#fff7ed] text-[#d97706] dark:bg-[#d97706]/10'
                     : 'border-[#76B900]/30 bg-[#76B900]/5 text-[#76B900]'
                 }`}>
                   {serviceHealth.ports.conflict_count ? `${serviceHealth.ports.conflict_count} port conflict` : 'ports clear'}
@@ -2888,7 +2892,7 @@ export default function SetupPage() {
               const tone = service.ready
                 ? 'border-[#76B900]/30 bg-[#76B900]/5 text-[#76B900]'
                 : service.installed
-                  ? 'border-[#d97706]/30 bg-[#fff7ed] text-[#d97706]'
+                  ? 'border-[#d97706]/30 bg-[#fff7ed] text-[#d97706] dark:bg-[#d97706]/10'
                   : 'border-[#e5e5e5] bg-[#fafafa] text-[#737373] dark:border-[#262626] dark:bg-[#141414] dark:text-[#a3a3a3]';
               const actionKey = `${service.id}:${service.next_action_id ?? 'refresh'}`;
               const isRunning = serviceActionRunning === actionKey;
@@ -3656,7 +3660,7 @@ export default function SetupPage() {
               before any technical questions. This banner sits above the
               build-status output so it's the first thing they read.
             */}
-            <div className="rounded-lg border border-[#76B900]/30 bg-[#f7fdf0] p-4">
+            <div className="rounded-lg border border-[#76B900]/30 bg-[#f7fdf0] p-4 dark:bg-[#76B900]/10">
               <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.18em] text-[#76B900]">
                 <span className="h-1.5 w-1.5 rounded-full bg-[#76B900]" />
                 Start here
@@ -3675,467 +3679,8 @@ export default function SetupPage() {
             </div>
 
             {wizardBuildMessage && (
-              <div className="border border-[#76B900]/25 bg-[#f7fdf0] px-3 py-2 text-xs text-[#315f00]">
+              <div className="border border-[#76B900]/25 bg-[#f7fdf0] px-3 py-2 text-xs text-[#315f00] dark:bg-[#76B900]/10 dark:text-[#a3d977]">
                 {wizardBuildMessage}
-              </div>
-            )}
-
-            <div className="border border-[#76B900]/30 bg-[#f8fff0] p-3 space-y-3">
-              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="section-label">AI Wizard Launch Check</div>
-                    <span className={`text-[10px] font-mono font-bold uppercase ${
-                      startupAutopilotReady ? 'text-[#76B900]' : activeInstallJobs.length > 0 ? 'text-[#d97706]' : 'text-[#0a0a0a]'
-                    }`}>
-                      {startupAutopilotPhase}
-                    </span>
-                    {startupCountdown !== null && (
-                      <span className="text-[10px] font-mono text-[#d97706] uppercase border border-[#d97706]/40 bg-[#fff7ed] px-2 py-1">
-                        Download starts in {startupCountdown}s
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[10px] text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
-                    {workspaceStateSummary}
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {!localAiReady && (
-                    <button
-                      type="button"
-                      onClick={() => handleInstallStudioPacks(['rootless-ollama'])}
-                      disabled={!storageReady || apiDisconnected || studioInstalling}
-                      className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                    >
-                      {studioInstalling ? 'Installing Runtime' : 'Install Runtime'}
-                    </button>
-                  )}
-                  {recommendedMissingIds.length > 0 && !activeModelJob && startupCountdown === null && (
-                    <button
-                      type="button"
-                      onClick={() => handleInstallStudioModels(recommendedMissingIds)}
-                      disabled={!storageReady || apiDisconnected || modelsInstalling}
-                      className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                    >
-                      Download Models
-                    </button>
-                  )}
-                  {activeModelJob && (
-                    <button
-                      type="button"
-                      onClick={() => void handleCancelInstallJob(activeModelJob.id)}
-                      disabled={cancelingJobId === activeModelJob.id}
-                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                    >
-                      {cancelingJobId === activeModelJob.id ? 'Canceling' : 'Cancel Download'}
-                    </button>
-                  )}
-                  {startupCountdown !== null && (
-                    <button
-                      type="button"
-                      onClick={skipStartupAutopilot}
-                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
-                    >
-                      Skip Model Download
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void handleRepairWorkspace()}
-                    disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
-                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                  >
-                    {workspaceRepairing ? 'Fixing' : 'Fix Setup'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleSupportSnapshot()}
-                    disabled={supportSnapshotLoading || apiDisconnected}
-                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                  >
-                    {supportSnapshotLoading ? 'Saving Report' : 'Copy Support Report'}
-                  </button>
-                </div>
-              </div>
-
-              {supportSnapshotMessage && (
-                <div className="border border-[#76B900]/30 bg-white px-3 py-2 text-[10px] font-mono text-[#315f00] break-all dark:bg-[#0a0a0a]">
-                  {supportSnapshotMessage}
-                </div>
-              )}
-
-              {repairTrail.length > 0 && (
-                <div className="border border-[#e5e5e5] bg-white p-3 space-y-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="section-label">Repair Status</div>
-                    <span className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">
-                      {workspaceRepairing ? 'working' : 'latest run'}
-                    </span>
-                  </div>
-                  <div className="grid gap-2 md:grid-cols-3">
-                    {repairTrail.slice(0, 6).map(item => {
-                      const tone =
-                        item.state === 'done' ? CHECK_TONES.ready :
-                        item.state === 'error' ? CHECK_TONES.fix :
-                        item.state === 'skip' ? CHECK_TONES.warn :
-                        item.state === 'running' ? CHECK_TONES.checking :
-                        CHECK_TONES.warn;
-                      return (
-                        <div key={item.id} className={`border ${tone.border} ${tone.bg} px-2 py-2 min-w-0`}>
-                          <div className="flex items-center gap-1.5">
-                            <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                            <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.state}</span>
-                          </div>
-                          <div className={`text-[10px] font-mono mt-1 truncate ${tone.text}`} title={item.label}>
-                            {item.label}
-                          </div>
-                          <div className="text-[10px] text-[#737373] mt-1 line-clamp-2 dark:text-[#a3a3a3]" title={item.detail}>
-                            {item.detail}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
-                {startupChecklist.map(item => {
-                  const tone = CHECK_TONES[item.state];
-                  return (
-                    <div key={item.label} className={`border ${tone.border} ${tone.bg} px-2 py-2 min-w-0`}>
-                      <div className="flex items-center gap-1.5">
-                        <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                        <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.label}</span>
-                      </div>
-                      <div className={`text-[10px] font-mono truncate mt-1 ${tone.text}`} title={item.value}>
-                        {item.value}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {(activeModelJob || activeRuntimeJob || modelsInstalling) && (
-                <div className="border border-[#e5e5e5] bg-white px-3 py-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="text-[10px] font-mono font-bold text-[#0a0a0a] uppercase dark:text-[#fafafa]">
-                        {activeModelJob?.title ?? activeRuntimeJob?.title ?? 'Preparing local AI'}
-                      </div>
-                      <div className="text-[10px] font-mono text-[#525252] mt-1 truncate dark:text-[#a3a3a3]">
-                        {activeModelJob?.message ?? activeRuntimeJob?.message ?? modelEvents[modelEvents.length - 1]?.message ?? 'Working in the background'}
-                      </div>
-                    </div>
-                    <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5 dark:border-[#404040] dark:text-[#a3a3a3]">
-                      {activeModelJob?.status ?? activeRuntimeJob?.status ?? 'running'}
-                    </span>
-                  </div>
-                  <div className="mt-2 h-1.5 bg-[#e5e5e5] overflow-hidden">
-                    <div
-                      className="h-full bg-[#76B900] transition-all"
-                      style={{ width: `${Math.max(8, Math.min(100, activeModelJob?.progress ?? activeRuntimeJob?.progress ?? 20))}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="border border-[#e5e5e5] bg-white p-3 space-y-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
-              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="section-label">System Check</div>
-                    <div className="text-xs font-bold text-[#0a0a0a] dark:text-[#fafafa]">
-                      {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready to install without sudo'}
-                    </div>
-                  </div>
-                  <div className="text-[10px] text-[#525252] mt-1 dark:text-[#a3a3a3]">
-                    {workspaceFreeText} on persistent storage; {workspaceReceipts} receipt{workspaceReceipts === 1 ? '' : 's'}; {workspaceActiveJobs} active job{workspaceActiveJobs === 1 ? '' : 's'}.
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {topHelperAction && (
-                    <button
-                      type="button"
-                      onClick={() => runHelperAction(topHelperAction.id)}
-                      disabled={apiDisconnected || anyInstallRunning || helperActionDisabled(topHelperAction.id)}
-                      className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                    >
-                      {helperActionLabel(topHelperAction.id)}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => void handleBootRecheck()}
-                    disabled={apiDisconnected}
-                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                  >
-                    Recheck
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleQuickDiagnosis}
-                    disabled={assistantLoading || apiDisconnected}
-                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                  >
-                    {assistantLoading ? 'Thinking' : 'Ask AI Wizard'}
-                  </button>
-                  {setupConcernCount > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => askWizardAbout('these system check items')}
-                      disabled={apiDisconnected}
-                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                      title="Open the full AI Wizard chat with the current diagnostic findings pre-loaded"
-                    >
-                      Open in Wizard →
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {systemCheckItems.map(item => {
-                  const tone = CHECK_TONES[item.state];
-                  return (
-                    <button
-                      key={item.label}
-                      type="button"
-                      onClick={() => handleSystemCheckClick(item.label)}
-                      className={`inline-flex items-center gap-1.5 border ${tone.border} ${tone.bg} px-2 py-1 min-w-0 transition-colors hover:border-[#76B900]`}
-                      title={`${item.label}: ${item.value}`}
-                    >
-                      <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                      <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.label}</span>
-                      <span className={`text-[10px] font-mono truncate max-w-[11rem] ${tone.text}`}>{item.value}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 dark:bg-[#141414] dark:border-[#262626]">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">AI Wizard Advisor</span>
-                    <span className="text-[9px] font-mono text-[#76B900] uppercase border border-[#76B900]/40 px-1.5 py-0.5">
-                      {advisorModeLabel}
-                    </span>
-                    <span className={`text-[9px] font-mono uppercase border px-1.5 py-0.5 ${
-                      localChatReady
-                        ? 'text-[#76B900] border-[#76B900]/40'
-                        : 'text-[#d97706] border-[#d97706]/40 bg-[#fff7ed]'
-                    }`}>
-                      {advisorReadinessLabel}
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
-                    {advisorSummary}
-                  </div>
-                </div>
-                {setupConcernCount > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => void handleRepairWorkspace()}
-                    disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
-                    className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40 flex-shrink-0"
-                  >
-                    {workspaceRepairing ? 'Repairing' : 'Fix Issues'}
-                  </button>
-                )}
-              </div>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  value={assistantQuestion}
-                  onChange={event => setAssistantQuestion(event.target.value)}
-                  onKeyDown={event => { if (event.key === 'Enter') void handleAskAssistant(); }}
-                  placeholder="Ask AI Wizard what to fix, why something failed, or what to install next"
-                  className="input-base flex-1 px-3 py-2 text-xs font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={() => void handleAskAssistant()}
-                  disabled={assistantLoading || !assistantQuestion.trim() || apiDisconnected}
-                  className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                >
-                  {assistantLoading ? 'Thinking' : 'Ask AI Wizard'}
-                </button>
-              </div>
-              {(assistantLoading || assistantError || assistantReply) && (
-                <div className="border border-[#d4d4d4] bg-white p-3 space-y-2 dark:bg-[#0a0a0a] dark:border-[#404040]">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div>
-                      <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">AI Wizard Chat</div>
-                      <div className="text-[10px] text-[#737373] mt-0.5 dark:text-[#a3a3a3]">
-                        Works immediately from local setup state, jobs, receipts, and redacted logs. The local model takes over when it is healthy.
-                      </div>
-                    </div>
-                    {assistantReply?.diagnostics_report_id && (
-                      <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/40 px-1.5 py-0.5 uppercase">
-                        {assistantReply.diagnostics_report_id}
-                      </span>
-                    )}
-                  </div>
-                  {assistantError && (
-                    <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
-                      {assistantError}
-                    </div>
-                  )}
-                  {assistantLoading && !assistantReply && (
-                    <div className="grid gap-2 sm:grid-cols-3">
-                      {[
-                        ['Checking jobs', 'Reading active and recent setup jobs.'],
-                        ['Reading logs', 'Scanning redacted installer and runtime clues.'],
-                        ['Finding repairs', 'Matching issues to rootless buttons.'],
-                      ].map(([label, detail]) => (
-                        <div key={label} className="border border-[#d97706]/30 bg-[#fff7ed] px-2 py-2">
-                          <div className="flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 bg-[#d97706] animate-pulse" style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
-                            <span className="text-[9px] font-mono text-[#7c2d12] uppercase">{label}</span>
-                          </div>
-                          <div className="text-[10px] text-[#7c2d12] mt-1">{detail}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {assistantReply && (
-                    <>
-                      <div className="text-xs text-[#0a0a0a] leading-relaxed dark:text-[#fafafa]">
-                        {assistantReply.answer}
-                      </div>
-                      {((assistantReply.debug_findings?.length ?? 0) > 0 || (assistantReply.log_highlights?.length ?? 0) > 0) && (
-                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2 dark:bg-[#141414] dark:border-[#262626]">
-                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
-                            Debug evidence
-                          </summary>
-                          <div className="mt-2 space-y-1">
-                            {assistantReply.debug_findings?.slice(0, 3).map(finding => (
-                              <div key={finding} className="text-[10px] font-mono text-[#525252] leading-relaxed dark:text-[#a3a3a3]">
-                                {finding}
-                              </div>
-                            ))}
-                            {assistantReply.log_highlights?.slice(0, 4).map(line => (
-                              <div key={line} className="text-[10px] font-mono text-[#525252] leading-relaxed break-all dark:text-[#a3a3a3]">
-                                {line}
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      )}
-                      {((assistantReply.official_urls?.length ?? 0) > 0 || (assistantReply.web_search_queries?.length ?? 0) > 0) && (
-                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2 dark:bg-[#141414] dark:border-[#262626]">
-                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
-                            Research hints
-                          </summary>
-                          <div className="mt-2 space-y-2">
-                            {(assistantReply.official_urls?.length ?? 0) > 0 && (
-                              <div className="space-y-1">
-                                <div className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">Official sources</div>
-                                {assistantReply.official_urls?.slice(0, 4).map(url => (
-                                  <a
-                                    key={url}
-                                    href={url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="block text-[10px] font-mono text-[#166534] break-all hover:underline"
-                                  >
-                                    {url}
-                                  </a>
-                                ))}
-                              </div>
-                            )}
-                            {(assistantReply.web_search_queries?.length ?? 0) > 0 && (
-                              <div className="space-y-1">
-                                <div className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">Search if internet is available</div>
-                                {assistantReply.web_search_queries?.slice(0, 3).map(query => (
-                                  <div key={query} className="text-[10px] font-mono text-[#525252] break-all dark:text-[#a3a3a3]">
-                                    {query}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </details>
-                      )}
-                      {assistantActions.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {assistantActions.slice(0, 3).map(action => (
-                            <button
-                              key={action.id}
-                              type="button"
-                              onClick={() => runHelperAction(action.id)}
-                              disabled={helperActionDisabled(action.id)}
-                              title={action.title}
-                              className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                            >
-                              {helperActionLabel(action.id)}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {assistantReply.commands.length > 0 && (
-                        <details>
-                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
-                            Manual overrides
-                          </summary>
-                          <div className="space-y-1 mt-2">
-                            {assistantReply.commands.map(command => (
-                              <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
-                                {command}
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {advancedSetupOpen && (
-              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="section-label">Advanced Details</div>
-                    <div className="text-xs text-[#525252] mt-1 dark:text-[#a3a3a3]">
-                      Use the tabs above for storage, hardware, apps, accounts, and tests. The main install choices stay below.
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleRepairWorkspace()}
-                      disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
-                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                    >
-                      {workspaceRepairing ? 'Repairing' : 'Fix My Setup'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleSupportSnapshot()}
-                      disabled={supportSnapshotLoading || apiDisconnected}
-                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                    >
-                      {supportSnapshotLoading ? 'Saving' : 'Support Snapshot'}
-                    </button>
-                  </div>
-                </div>
-                {supportSnapshotMessage && (
-                  <div className="text-[10px] font-mono text-[#76B900] mt-2 break-all">{supportSnapshotMessage}</div>
-                )}
-                <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
-                  {[
-                    ['Storage', storageReady ? 'Ready' : storageBeginnerLabel],
-                    ['Compatibility', compatibilityIssueCount ? `${compatibilityIssueCount} issues` : 'Clear'],
-                    ['Boot Changes', bootChangeCount ? `${bootChangeCount} found` : 'None'],
-                    ['Logs', diagnosticsLogLineCount ? `${diagnosticsLogLineCount} lines` : 'Quiet'],
-                  ].map(([label, value]) => (
-                    <div key={label} className="border border-[#e5e5e5] bg-white p-2 min-w-0 dark:bg-[#0a0a0a] dark:border-[#262626]">
-                      <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{label}</div>
-                      <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 truncate dark:text-[#fafafa]">{value}</div>
-                    </div>
-                  ))}
-                </div>
               </div>
             )}
 
@@ -4318,6 +3863,468 @@ export default function SetupPage() {
                   })}
               </div>
             </div>
+
+            <div className="border border-[#76B900]/30 bg-[#f8fff0] p-3 space-y-3 dark:bg-[#76B900]/5">
+              <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="section-label">AI Wizard Launch Check</div>
+                    <span className={`text-[10px] font-mono font-bold uppercase ${
+                      startupAutopilotReady ? 'text-[#76B900]' : activeInstallJobs.length > 0 ? 'text-[#d97706]' : 'text-[#0a0a0a] dark:text-[#fafafa]'
+                    }`}>
+                      {startupAutopilotPhase}
+                    </span>
+                    {startupCountdown !== null && (
+                      <span className="text-[10px] font-mono text-[#d97706] uppercase border border-[#d97706]/40 bg-[#fff7ed] px-2 py-1 dark:bg-[#d97706]/10">
+                        Download starts in {startupCountdown}s
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[10px] text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
+                    {workspaceStateSummary}
+                  </div>
+                  <div className="text-[10px] text-[#525252] mt-1 dark:text-[#a3a3a3]">
+                    {setupConcernCount ? `${setupConcernCount} item${setupConcernCount === 1 ? '' : 's'} need attention` : 'Ready to install without sudo'} — {workspaceFreeText} on persistent storage; {workspaceReceipts} receipt{workspaceReceipts === 1 ? '' : 's'}; {workspaceActiveJobs} active job{workspaceActiveJobs === 1 ? '' : 's'}.
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {!localAiReady && (
+                    <button
+                      type="button"
+                      onClick={() => handleInstallStudioPacks(['rootless-ollama'])}
+                      disabled={!storageReady || apiDisconnected || studioInstalling}
+                      className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {studioInstalling ? 'Installing Runtime' : 'Install Runtime'}
+                    </button>
+                  )}
+                  {recommendedMissingIds.length > 0 && !activeModelJob && startupCountdown === null && (
+                    <button
+                      type="button"
+                      onClick={() => handleInstallStudioModels(recommendedMissingIds)}
+                      disabled={!storageReady || apiDisconnected || modelsInstalling}
+                      className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      Download Models
+                    </button>
+                  )}
+                  {activeModelJob && (
+                    <button
+                      type="button"
+                      onClick={() => void handleCancelInstallJob(activeModelJob.id)}
+                      disabled={cancelingJobId === activeModelJob.id}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {cancelingJobId === activeModelJob.id ? 'Canceling' : 'Cancel Download'}
+                    </button>
+                  )}
+                  {startupCountdown !== null && (
+                    <button
+                      type="button"
+                      onClick={skipStartupAutopilot}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                    >
+                      Skip Model Download
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void handleRepairWorkspace()}
+                    disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {workspaceRepairing ? 'Fixing' : 'Fix Setup'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleQuickDiagnosis}
+                    disabled={assistantLoading || apiDisconnected}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                  >
+                    {assistantLoading ? 'Thinking' : 'Ask AI Wizard'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStatusDetailsOpen(prev => !prev)}
+                    className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider"
+                  >
+                    {statusDetailsOpen ? 'Hide Details' : 'Details'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {systemCheckItems.map(item => {
+                  const tone = CHECK_TONES[item.state];
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => handleSystemCheckClick(item.label)}
+                      className={`inline-flex items-center gap-1.5 border ${tone.border} ${tone.bg} px-2 py-1 min-w-0 transition-colors hover:border-[#76B900]`}
+                      title={`${item.label}: ${item.value}`}
+                    >
+                      <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                      <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.label}</span>
+                      <span className={`text-[10px] font-mono truncate max-w-[11rem] ${tone.text}`}>{item.value}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {(activeModelJob || activeRuntimeJob || modelsInstalling) && (
+                <div className="border border-[#e5e5e5] bg-white px-3 py-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-mono font-bold text-[#0a0a0a] uppercase dark:text-[#fafafa]">
+                        {activeModelJob?.title ?? activeRuntimeJob?.title ?? 'Preparing local AI'}
+                      </div>
+                      <div className="text-[10px] font-mono text-[#525252] mt-1 truncate dark:text-[#a3a3a3]">
+                        {activeModelJob?.message ?? activeRuntimeJob?.message ?? modelEvents[modelEvents.length - 1]?.message ?? 'Working in the background'}
+                      </div>
+                    </div>
+                    <span className="text-[9px] font-mono text-[#737373] uppercase border border-[#d4d4d4] px-1.5 py-0.5 dark:border-[#404040] dark:text-[#a3a3a3]">
+                      {activeModelJob?.status ?? activeRuntimeJob?.status ?? 'running'}
+                    </span>
+                  </div>
+                  <div className="mt-2 h-1.5 bg-[#e5e5e5] overflow-hidden">
+                    <div
+                      className="h-full bg-[#76B900] transition-all"
+                      style={{ width: `${Math.max(8, Math.min(100, activeModelJob?.progress ?? activeRuntimeJob?.progress ?? 20))}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {(assistantLoading || assistantError || assistantReply) && (
+                <div className="border border-[#d4d4d4] bg-white p-3 space-y-2 dark:bg-[#0a0a0a] dark:border-[#404040]">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div>
+                      <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">AI Wizard Chat</div>
+                      <div className="text-[10px] text-[#737373] mt-0.5 dark:text-[#a3a3a3]">
+                        Works immediately from local setup state, jobs, receipts, and redacted logs. The local model takes over when it is healthy.
+                      </div>
+                    </div>
+                    {assistantReply?.diagnostics_report_id && (
+                      <span className="text-[9px] font-mono text-[#76B900] border border-[#76B900]/40 px-1.5 py-0.5 uppercase">
+                        {assistantReply.diagnostics_report_id}
+                      </span>
+                    )}
+                  </div>
+                  {assistantError && (
+                    <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-2 text-[10px] font-mono text-[#dc2626]">
+                      {assistantError}
+                    </div>
+                  )}
+                  {assistantLoading && !assistantReply && (
+                    <div className="grid gap-2 sm:grid-cols-3">
+                      {[
+                        ['Checking jobs', 'Reading active and recent setup jobs.'],
+                        ['Reading logs', 'Scanning redacted installer and runtime clues.'],
+                        ['Finding repairs', 'Matching issues to rootless buttons.'],
+                      ].map(([label, detail]) => (
+                        <div key={label} className="border border-[#d97706]/30 bg-[#fff7ed] px-2 py-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 bg-[#d97706] animate-pulse" style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                            <span className="text-[9px] font-mono text-[#7c2d12] uppercase">{label}</span>
+                          </div>
+                          <div className="text-[10px] text-[#7c2d12] mt-1">{detail}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {assistantReply && (
+                    <>
+                      <div className="text-xs text-[#0a0a0a] leading-relaxed dark:text-[#fafafa]">
+                        {assistantReply.answer}
+                      </div>
+                      {((assistantReply.debug_findings?.length ?? 0) > 0 || (assistantReply.log_highlights?.length ?? 0) > 0) && (
+                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2 dark:bg-[#141414] dark:border-[#262626]">
+                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
+                            Debug evidence
+                          </summary>
+                          <div className="mt-2 space-y-1">
+                            {assistantReply.debug_findings?.slice(0, 3).map(finding => (
+                              <div key={finding} className="text-[10px] font-mono text-[#525252] leading-relaxed dark:text-[#a3a3a3]">
+                                {finding}
+                              </div>
+                            ))}
+                            {assistantReply.log_highlights?.slice(0, 4).map(line => (
+                              <div key={line} className="text-[10px] font-mono text-[#525252] leading-relaxed break-all dark:text-[#a3a3a3]">
+                                {line}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                      {((assistantReply.official_urls?.length ?? 0) > 0 || (assistantReply.web_search_queries?.length ?? 0) > 0) && (
+                        <details className="border border-[#e5e5e5] bg-[#fafafa] p-2 dark:bg-[#141414] dark:border-[#262626]">
+                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
+                            Research hints
+                          </summary>
+                          <div className="mt-2 space-y-2">
+                            {(assistantReply.official_urls?.length ?? 0) > 0 && (
+                              <div className="space-y-1">
+                                <div className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">Official sources</div>
+                                {assistantReply.official_urls?.slice(0, 4).map(url => (
+                                  <a
+                                    key={url}
+                                    href={url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="block text-[10px] font-mono text-[#166534] break-all hover:underline"
+                                  >
+                                    {url}
+                                  </a>
+                                ))}
+                              </div>
+                            )}
+                            {(assistantReply.web_search_queries?.length ?? 0) > 0 && (
+                              <div className="space-y-1">
+                                <div className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">Search if internet is available</div>
+                                {assistantReply.web_search_queries?.slice(0, 3).map(query => (
+                                  <div key={query} className="text-[10px] font-mono text-[#525252] break-all dark:text-[#a3a3a3]">
+                                    {query}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      )}
+                      {assistantActions.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {assistantActions.slice(0, 3).map(action => (
+                            <button
+                              key={action.id}
+                              type="button"
+                              onClick={() => runHelperAction(action.id)}
+                              disabled={helperActionDisabled(action.id)}
+                              title={action.title}
+                              className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                            >
+                              {helperActionLabel(action.id)}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {assistantReply.commands.length > 0 && (
+                        <details>
+                          <summary className="cursor-pointer text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">
+                            Manual overrides
+                          </summary>
+                          <div className="space-y-1 mt-2">
+                            {assistantReply.commands.map(command => (
+                              <div key={command} className="text-[10px] font-mono text-[#525252] bg-[#f5f5f5] border border-[#e5e5e5] px-2 py-1 break-all dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
+                                {command}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {statusDetailsOpen && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    {topHelperAction && (
+                      <button
+                        type="button"
+                        onClick={() => runHelperAction(topHelperAction.id)}
+                        disabled={apiDisconnected || anyInstallRunning || helperActionDisabled(topHelperAction.id)}
+                        className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                      >
+                        {helperActionLabel(topHelperAction.id)}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void handleBootRecheck()}
+                      disabled={apiDisconnected}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      Recheck
+                    </button>
+                    {setupConcernCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => askWizardAbout('these system check items')}
+                        disabled={apiDisconnected}
+                        className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                        title="Open the full AI Wizard chat with the current diagnostic findings pre-loaded"
+                      >
+                        Open in Wizard →
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void handleSupportSnapshot()}
+                      disabled={supportSnapshotLoading || apiDisconnected}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {supportSnapshotLoading ? 'Saving Report' : 'Copy Support Report'}
+                    </button>
+                  </div>
+
+                  {supportSnapshotMessage && (
+                    <div className="border border-[#76B900]/30 bg-white px-3 py-2 text-[10px] font-mono text-[#315f00] break-all dark:bg-[#0a0a0a] dark:text-[#a3d977]">
+                      {supportSnapshotMessage}
+                    </div>
+                  )}
+
+                  {repairTrail.length > 0 && (
+                    <div className="border border-[#e5e5e5] bg-white p-3 space-y-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="section-label">Repair Status</div>
+                        <span className="text-[9px] font-mono uppercase text-[#737373] dark:text-[#a3a3a3]">
+                          {workspaceRepairing ? 'working' : 'latest run'}
+                        </span>
+                      </div>
+                      <div className="grid gap-2 md:grid-cols-3">
+                        {repairTrail.slice(0, 6).map(item => {
+                          const tone =
+                            item.state === 'done' ? CHECK_TONES.ready :
+                            item.state === 'error' ? CHECK_TONES.fix :
+                            item.state === 'skip' ? CHECK_TONES.warn :
+                            item.state === 'running' ? CHECK_TONES.checking :
+                            CHECK_TONES.warn;
+                          return (
+                            <div key={item.id} className={`border ${tone.border} ${tone.bg} px-2 py-2 min-w-0`}>
+                              <div className="flex items-center gap-1.5">
+                                <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                                <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.state}</span>
+                              </div>
+                              <div className={`text-[10px] font-mono mt-1 truncate ${tone.text}`} title={item.label}>
+                                {item.label}
+                              </div>
+                              <div className="text-[10px] text-[#737373] mt-1 line-clamp-2 dark:text-[#a3a3a3]" title={item.detail}>
+                                {item.detail}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-2">
+                    {startupChecklist.map(item => {
+                      const tone = CHECK_TONES[item.state];
+                      return (
+                        <div key={item.label} className={`border ${tone.border} ${tone.bg} px-2 py-2 min-w-0`}>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`w-1.5 h-1.5 flex-shrink-0 ${tone.dot}`} style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+                            <span className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{item.label}</span>
+                          </div>
+                          <div className={`text-[10px] font-mono truncate mt-1 ${tone.text}`} title={item.value}>
+                            {item.value}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="border border-[#e5e5e5] bg-[#fafafa] px-3 py-2 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 dark:bg-[#141414] dark:border-[#262626]">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">AI Wizard Advisor</span>
+                        <span className="text-[9px] font-mono text-[#76B900] uppercase border border-[#76B900]/40 px-1.5 py-0.5">
+                          {advisorModeLabel}
+                        </span>
+                        <span className={`text-[9px] font-mono uppercase border px-1.5 py-0.5 ${
+                          localChatReady
+                            ? 'text-[#76B900] border-[#76B900]/40'
+                            : 'text-[#d97706] border-[#d97706]/40 bg-[#fff7ed] dark:bg-[#d97706]/10'
+                        }`}>
+                          {advisorReadinessLabel}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-[#525252] mt-1 leading-relaxed dark:text-[#a3a3a3]">
+                        {advisorSummary}
+                      </div>
+                    </div>
+                    {setupConcernCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void handleRepairWorkspace()}
+                        disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
+                        className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40 flex-shrink-0"
+                      >
+                        {workspaceRepairing ? 'Repairing' : 'Fix Issues'}
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      value={assistantQuestion}
+                      onChange={event => setAssistantQuestion(event.target.value)}
+                      onKeyDown={event => { if (event.key === 'Enter') void handleAskAssistant(); }}
+                      placeholder="Ask AI Wizard what to fix, why something failed, or what to install next"
+                      className="input-base flex-1 px-3 py-2 text-xs font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void handleAskAssistant()}
+                      disabled={assistantLoading || !assistantQuestion.trim() || apiDisconnected}
+                      className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {assistantLoading ? 'Thinking' : 'Ask AI Wizard'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {advancedSetupOpen && (
+              <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 dark:bg-[#141414] dark:border-[#262626]">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="section-label">Advanced Details</div>
+                    <div className="text-xs text-[#525252] mt-1 dark:text-[#a3a3a3]">
+                      Use the tabs above for storage, hardware, apps, accounts, and tests. The main install choices stay below.
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleRepairWorkspace()}
+                      disabled={workspaceRepairing || apiDisconnected || anyInstallRunning}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {workspaceRepairing ? 'Repairing' : 'Fix My Setup'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleSupportSnapshot()}
+                      disabled={supportSnapshotLoading || apiDisconnected}
+                      className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
+                    >
+                      {supportSnapshotLoading ? 'Saving' : 'Support Snapshot'}
+                    </button>
+                  </div>
+                </div>
+                {supportSnapshotMessage && (
+                  <div className="text-[10px] font-mono text-[#76B900] mt-2 break-all">{supportSnapshotMessage}</div>
+                )}
+                <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+                  {[
+                    ['Storage', storageReady ? 'Ready' : storageBeginnerLabel],
+                    ['Compatibility', compatibilityIssueCount ? `${compatibilityIssueCount} issues` : 'Clear'],
+                    ['Boot Changes', bootChangeCount ? `${bootChangeCount} found` : 'None'],
+                    ['Logs', diagnosticsLogLineCount ? `${diagnosticsLogLineCount} lines` : 'Quiet'],
+                  ].map(([label, value]) => (
+                    <div key={label} className="border border-[#e5e5e5] bg-white p-2 min-w-0 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                      <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{label}</div>
+                      <div className="text-[10px] font-mono text-[#0a0a0a] mt-1 truncate dark:text-[#fafafa]">{value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
           </div>
         )}

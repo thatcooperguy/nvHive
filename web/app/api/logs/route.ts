@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { promises as fs } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { nvhLogsDir } from '@/lib/nvh-bridge';
 
 /**
  * Server-side log tail route.
@@ -15,7 +15,8 @@ import path from 'node:path';
  * not just when it's alive.
  *
  * Query params:
- *   source = api | webui | ollama | install     (default: api)
+ *   source = api | webui | webui-runtime | ollama | ollama-install
+ *            | install                          (default: api)
  *   lines  = N                                  (default: 200, max: 2000)
  *
  * Response:
@@ -29,21 +30,29 @@ import path from 'node:path';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Must stay in sync with SOURCES in SystemConsole.tsx — its tabs query
+// this route by key. 2026-06-10 audit added two previously reader-less
+// logs the standard install pipeline writes:
+//   - webui-runtime: webui.log is the Next.js production-server RUNTIME
+//     log (`nvh services start` pipes `nvh webui` stdout/stderr there);
+//     webui-bootstrap.log only carries bootstrap milestones, so runtime
+//     errors were invisible from the WebUI.
+//   - ollama-install: the rootless Ollama download/extract log, which
+//     bypasses install.log entirely.
 const SOURCES: Record<string, string> = {
   api: 'api-server.log',
   webui: 'webui-bootstrap.log',
+  'webui-runtime': 'webui.log',
   ollama: 'ollama.log',
+  'ollama-install': 'ollama-install.log',
   install: 'install.log',
 };
 
-function nvhLogsDir(): string {
-  const explicitLogs = process.env.NVH_LOGS;
-  if (explicitLogs) return explicitLogs;
-  const home = process.env.NVH_HOME;
-  if (home) return path.join(home, 'logs');
-  // Final fallback — same convention as install.sh + storage.py default.
-  return path.join(os.homedir(), 'nvhive', 'logs');
-}
+// Logs-dir resolution (NVH_LOGS → $NVH_HOME/logs → existing-install
+// probe) is shared with the other bridge routes via @/lib/nvh-bridge.
+// 2026-06-10 audit: the local copy fell back to ~/nvhive/logs and
+// claimed that matched install.sh's default — the real default is
+// ~/.nvh; see nvhHome() in the shared module for the corrected order.
 
 async function readTail(filePath: string, maxLines: number): Promise<string[]> {
   // Simple "read whole file, slice tail" — sufficient for the log sizes

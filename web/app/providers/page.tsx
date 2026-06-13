@@ -434,7 +434,7 @@ export default function ProvidersPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="AI Connections"
+        eyebrow="Local & Cloud"
         title="AI Connections"
         subtitle={
           providers.length > 0
@@ -709,7 +709,7 @@ export default function ProvidersPage() {
             </div>
           ) : providers.length === 0 ? (
             <div className="card p-10 text-center">
-              <div className="text-4xl mb-4 text-[#333333]">▣</div>
+              <div className="text-4xl mb-4 text-[#333333] dark:text-[#525252]">▣</div>
               <div className="text-base font-mono font-bold text-[#737373] mb-2 uppercase dark:text-[#a3a3a3]">No AI Connections Yet</div>
               <div className="text-xs font-mono text-[#a3a3a3] max-w-md mx-auto mb-6 dark:text-[#737373]">
                 Start with the recommended local GPU model. Cloud keys can stay optional until you need them.
@@ -824,7 +824,7 @@ export default function ProvidersPage() {
                   </div>
                 ) : (
                   <div className="card p-6 text-center">
-                    <div className="text-2xl mb-2 text-[#333333]">▣</div>
+                    <div className="text-2xl mb-2 text-[#333333] dark:text-[#525252]">▣</div>
                     <div className="text-xs font-mono text-[#a3a3a3] uppercase mb-1 dark:text-[#737373]">No NVIDIA GPU Detected</div>
                     <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
                       CPU mode — local models will run on CPU (slower). Cloud providers work normally.
@@ -1032,7 +1032,7 @@ export default function ProvidersPage() {
             </div>
           ) : (cloudModels.length === 0 && localModels.length === 0) ? (
             <div className="card p-8 text-center">
-              <div className="text-2xl mb-3 text-[#333333]">◎</div>
+              <div className="text-2xl mb-3 text-[#333333] dark:text-[#525252]">◎</div>
               <div className="text-xs font-mono text-[#a3a3a3] uppercase dark:text-[#737373]">
                 {modelSearch ? 'No models match your search' : 'No models available'}
               </div>
