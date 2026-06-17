@@ -84,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           # Node 22 is the current LTS line (until April 2027). Matches
           # NODE_MAJOR_VERSION in nvh/integrations/installs/node_runtime.py,
