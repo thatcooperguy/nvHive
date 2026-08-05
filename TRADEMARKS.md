@@ -8,7 +8,8 @@ law and are geographically limited to the markets of use.
 
 This policy explains how the nvHive name and brand may be used. It is
 intended to prevent confusion between official releases and third-party
-forks while keeping the source code open under the MIT License.
+forks of noncommercial use permitted by the PolyForm Noncommercial
+License 1.0.0 (versions 0.40.0 and earlier remain MIT).
 
 ## What is covered
 
@@ -24,13 +25,15 @@ The following identify the official nvHive project:
 - The official PyPI distribution:
   https://pypi.org/project/nvhive/
 
-**The MIT License grants broad rights to the source code. It does not
+**The source-code license grants rights to the code for noncommercial
+use. It does not
 grant trademark rights, branding rights, endorsement rights, or PyPI
 publishing rights to the `nvhive` distribution name.**
 
 ## What you can do without asking
 
-- Use, fork, modify, and redistribute the source code under the MIT License.
+- Use, fork, modify, and redistribute the source code for noncommercial
+  purposes under the PolyForm Noncommercial License 1.0.0.
 - Truthfully describe your project as based on, derived from, compatible
   with, or originally forked from nvHive (nominative fair use).
 - Link to the official repository or PyPI package.
@@ -77,7 +80,7 @@ marks belong to their respective owners.
 - It does not reserve domains, social media handles, or marketplace
   listings beyond those listed under "What is covered" above. Common-law
   trademark rights do not extend to those by default.
-- It does not waive or modify the MIT License grant on existing source
+- It does not waive or modify the license grant on existing source
   code, which remains in force.
 
 ## Questions

@@ -2,7 +2,12 @@
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- **License: MIT → PolyForm Noncommercial 1.0.0.** nvHive is now a
+  proprietary noncommercial stack: use, modification, and redistribution
+  remain free for any noncommercial purpose; commercial use and sale are
+  not permitted. Versions 0.40.0 and earlier were published under MIT and
+  remain MIT. (Owner directive, 2026-08-05.)
 
 ## [0.40.0] - 2026-07-22
 

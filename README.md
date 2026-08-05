@@ -3,7 +3,7 @@
 **One curl command turns a rented Linux GPU desktop — GeForce NOW, RunPod, Lambda, Vast — into a working AI lab. No root, no Docker, survives reconnects.**
 
 [![PyPI](https://img.shields.io/pypi/v/nvhive)](https://pypi.org/project/nvhive/)
-[![License](https://img.shields.io/pypi/l/nvhive?color=blue)](LICENSE)
+[![License: PolyForm NC](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](LICENSE)
 [![CI](https://github.com/thatcooperguy/nvHive/actions/workflows/ci.yml/badge.svg)](https://github.com/thatcooperguy/nvHive/actions/workflows/ci.yml)
 
 ```bash
@@ -17,13 +17,13 @@ That one command gives you:
 - **A multi-LLM router** across 23 providers (Ollama, Groq, Gemini, NVIDIA NIM, OpenAI, Anthropic, ...) — many with free tiers
 - **Persistent storage layout** under `NVH_HOME`, so models and chats survive when the cloud desktop resets
 
-Renting the GPU by the hour? nvHive installs into user-owned paths on the persistent volume and verifies every service is healthy before it opens your browser. You pay for GPU time, not for debugging time.
+Everything installs to user-owned paths on the persistent volume, and the browser only opens after every service passes a health check. You pay for GPU time, not debugging time.
 
 ---
 
 ## What happens when you run it
 
-The installer detects your GPU and persistent storage, then walks through a visible, skippable flow:
+Three visible steps — nothing hidden, everything skippable:
 
 **1. Model download countdown.** You're told what's downloading, how big it is, and how to skip:
 
@@ -173,4 +173,6 @@ Full reference: [docs/COMMANDS.md](docs/COMMANDS.md)
 
 ## License
 
-MIT — see [LICENSE](LICENSE) and [NOTICE](NOTICE.md). The MIT license does not grant rights to the nvHive name, logos, or publishing identities; forks should use distinct names and channels. See [TRADEMARKS](TRADEMARKS.md).
+**PolyForm Noncommercial 1.0.0** — you can use, modify, and share nvHive freely for any noncommercial purpose. **Selling this code or using it commercially is not permitted.** See [LICENSE](LICENSE) and [NOTICE](NOTICE.md). (Versions 0.40.0 and earlier were released under MIT and remain MIT.)
+
+The license does not grant rights to the nvHive name or logos; forks should use distinct names and channels. See [TRADEMARKS](TRADEMARKS.md).
