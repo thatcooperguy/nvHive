@@ -30,7 +30,7 @@ design pass. This is the build plan for bringing the stack to life.
 | MCP client support (attach external MCP tool servers to chat/wizard) | Open WebUI (MCP + MCPO integration, plus OpenAPI tool servers) | missing | medium |
 | Chat history sidebar (browse, resume, pin past conversations in the web UI) | Both — LibreChat and AnythingLLM have full conversation history UIs; it's table-stakes in every ChatGPT-class product | present-but-hidden | small |
 | MCP client — connect external MCP servers as agent tools | Both — LibreChat has dynamic MCP server management from the UI with lazy tool loading; AnythingLLM is MCP-compatible for agent skills | missing | medium |
-| In-app model browser/downloader UI (search catalog, one-click pull with size/VRAM-fit preview and live progress) | LM Studio (Hugging Face GGUF/MLX browser showing size, quant level, and estimated VRAM before download); Jan (in-app Hub with hardware-fit labels) | present-but-hidden | medium |
+| ~~In-app model browser/downloader UI (search catalog, one-click pull with size/VRAM-fit preview and live progress)~~ **SHIPPED (Model Manager, 0.41.0)** | LM Studio (Hugging Face GGUF/MLX browser showing size, quant level, and estimated VRAM before download); Jan (in-app Hub with hardware-fit labels) | **shipped** | medium |
 | Community/third-party app catalog with publishable install scripts | Pinokio (searchable directory of community-built AI apps/agents, hundreds of one-click scripts anyone can publish; 31k Windows installs in one week of v8.0.40); Harbor (100+ pre-wired services: 10+ frontends, 15+ backends, 90+ satellites) | missing | large |
 
 ### High — differentiators worth building next

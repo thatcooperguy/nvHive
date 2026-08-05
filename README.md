@@ -72,6 +72,17 @@ A streaming, tool-using assistant that reads live workspace state. It can refres
 
 One interface over 23 providers and 63 models. Requests are scored on capability, cost, latency, and provider health, then routed — free tiers first when you have no keys, your GPU first when you do have one. Add keys with `nvh setup`. [Provider guide](docs/PROVIDERS.md)
 
+### Model Manager
+
+nvHive detected your GPU at install, so the **Models** page shows whether each catalog model fits your VRAM and how much disk it needs *before* you download — then installs it with one click and live progress. Same thing from the terminal:
+
+```bash
+nvh models list --all               # fit-ranked catalog for your GPU
+nvh models pull gemma3:4b           # install with live progress
+```
+
+[Model Manager guide](docs/MODELS.md)
+
 ### Agents and council mode
 
 An **Agent Library of 100+ profiles** across 38 categories (coding, research, creative, GPU media, ops, education, …) plus six core built-ins — each mappable to a local or cloud model; your own profiles live in `$NVH_HOME/agent-profiles/`. Council mode runs one question through multiple models in parallel and synthesizes the answers:

@@ -1740,3 +1740,136 @@ export function streamCouncil(
 
   return ws;
 }
+
+// ─── Model Manager (roadmap: in-app model browser/downloader) ────────────────
+
+export interface ModelFitEntry {
+  /** Catalog id, e.g. "gemma3-4b". */
+  id: string;
+  /** Human title, e.g. "Gemma 3 4B". */
+  title: string;
+  /** Ollama pull target, e.g. "gemma3:4b" — this is what we install. */
+  install_target: string;
+  provider?: string;
+  category?: string;
+  use_case?: string;
+  use_case_label?: string;
+  capabilities?: string[];
+  installed?: boolean;
+  recommended?: boolean;
+  fits_vram?: boolean;
+  estimated_disk_gb?: number | null;
+  recommended_vram_gb?: number | null;
+  fit_score?: number;
+  fit_reasons?: string[];
+}
+
+export interface ModelFitReport {
+  models?: ModelFitEntry[];
+  ranked?: ModelFitEntry[];
+  detected_vram_gb?: number | null;
+  vram_gb?: number | null;
+  free_gb?: number | null;
+  summary?: string;
+}
+
+export interface InstalledModel {
+  name: string;
+  size_bytes: number;
+  size_gb: number;
+  digest: string;
+  modified_at: string;
+  details?: Record<string, unknown>;
+}
+
+/** Fit-ranked catalog for the detected GPU/disk (drives the browser). */
+export async function getModelFit(homeDir?: string): Promise<ModelFitReport> {
+  const qs = homeDir ? `?home_dir=${encodeURIComponent(homeDir)}` : '';
+  return apiGet<ModelFitReport>(`/v1/setup/model-fit${qs}`);
+}
+
+/** Installed Ollama models with on-disk sizes. */
+export async function getInstalledModels(): Promise<{ models: InstalledModel[]; count: number }> {
+  return apiGet<{ models: InstalledModel[]; count: number }>('/v1/ollama/models');
+}
+
+/** Delete an installed model, reclaiming disk. */
+export async function deleteModel(name: string): Promise<{ deleted: boolean; model: string }> {
+  const envelope = await apiFetch<ApiEnvelope<{ deleted: boolean; model: string }>>(
+    `/v1/ollama/models/${encodeURIComponent(name)}`,
+    { method: 'DELETE' },
+  );
+  return envelope.data;
+}
+
+export interface PullProgress {
+  status: string;
+  model?: string;
+  completed?: number;
+  total?: number;
+  percent?: number | null;
+}
+
+/**
+ * Stream an Ollama model pull. Parses the SSE the backend emits
+ * (event: progress / complete / error). Returns an abort function.
+ */
+export function pullModelStream(
+  model: string,
+  cb: {
+    onProgress?: (p: PullProgress) => void;
+    onComplete?: (model: string) => void;
+    onError?: (message: string) => void;
+  },
+): () => void {
+  const controller = new AbortController();
+  const base = getApiBase();
+  void (async () => {
+    try {
+      const res = await fetch(`${base}/v1/ollama/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getApiAuthHeaders() },
+        body: JSON.stringify({ model }),
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        cb.onError?.(`Pull request failed (HTTP ${res.status})`);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // SSE frames are separated by a blank line.
+        const frames = buffer.split('\n\n');
+        buffer = frames.pop() ?? '';
+        for (const frame of frames) {
+          let event = 'message';
+          let data = '';
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) data += line.slice(5).trim();
+          }
+          if (!data) continue;
+          let parsed: PullProgress & { error?: string };
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            continue;
+          }
+          if (event === 'error') cb.onError?.(parsed.error ?? 'pull failed');
+          else if (event === 'complete') cb.onComplete?.(parsed.model ?? model);
+          else cb.onProgress?.(parsed);
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        cb.onError?.(err instanceof Error ? err.message : String(err));
+      }
+    }
+  })();
+  return () => controller.abort();
+}
