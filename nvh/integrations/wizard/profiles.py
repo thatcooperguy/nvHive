@@ -22,6 +22,7 @@ users who want to tweak one save a copy under a new name.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -57,6 +58,12 @@ class AgentProfile:
     # expensive cloud model behind a Researcher profile without surprise
     # bills. None / 0 = no limit (inherit engine-level budget guards).
     max_cost_usd_per_turn: float | None = None
+    # Grouping label for the Agent Library (2026-08-05): the packaged
+    # 100-profile library organizes by category ("Coding", "Music
+    # Production", …) so the /agents page and the composer picker can
+    # group instead of rendering a 100-row flat list. Empty for the six
+    # core built-ins and for user profiles that don't set one.
+    category: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -200,16 +207,77 @@ def _profiles_dir(home_dir: str | Path | None = None) -> Path:
     return out
 
 
-def list_profiles(home_dir: str | Path | None = None) -> list[AgentProfile]:
-    """Return built-in profiles + any user profiles saved under NVH_HOME.
+def _load_library_profiles() -> list[AgentProfile]:
+    """Load the packaged Agent Library (nvh/catalog/agent-library.json).
 
-    Built-ins always appear first, then user-defined (sorted by name). If a
-    user profile has the same name as a built-in, the user version wins —
-    that's the override path.
+    2026-08-05: 100 original, in-house-authored profiles across ~38
+    categories (coding, research, creative/GPU-media, ops, education, …),
+    designed from a survey of what tops GitHub agent/skill collections —
+    inspired by the categories users actually reach for, never copied.
+    They ship as ``built_in=True`` (read-only; users copy-and-edit into
+    ``$NVH_HOME/agent-profiles/`` like the six core built-ins) and carry a
+    ``category`` so UIs can group instead of rendering a 100-row list.
+
+    Failure-tolerant: a missing/corrupt catalog logs one warning and
+    returns [] — the six core built-ins keep the product working.
+    """
+    from importlib import resources
+
+    try:
+        raw = (
+            resources.files("nvh.catalog")
+            .joinpath("agent-library.json")
+            .read_text(encoding="utf-8")
+        )
+        data = json.loads(raw)
+    except Exception as exc:  # missing from a broken wheel, bad JSON, …
+        logger.warning("agent library catalog unavailable: %s", exc)
+        return []
+
+    out: list[AgentProfile] = []
+    for entry in data.get("profiles", []):
+        try:
+            out.append(
+                AgentProfile(
+                    name=entry["name"],
+                    title=entry.get("title", entry["name"]),
+                    description=entry.get("description", ""),
+                    system_prompt=entry.get("system_prompt", ""),
+                    provider=entry.get("provider", ""),
+                    model=entry.get("model", ""),
+                    temperature=entry.get("temperature"),
+                    tools_allowed=entry.get("tools_allowed"),
+                    built_in=True,
+                    tags=list(entry.get("tags", [])),
+                    avatar=_avatar_url_for(entry["name"]),
+                    category=entry.get("category", ""),
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "agent library entry %r failed to load: %s",
+                entry.get("name", "?"), exc,
+            )
+    return out
+
+
+def list_profiles(home_dir: str | Path | None = None) -> list[AgentProfile]:
+    """Return core built-ins + the packaged Agent Library + user profiles.
+
+    Ordering contract (UIs depend on it):
+      1. The six core built-ins, in their original order.
+      2. The Agent Library, sorted by (category, name).
+      3. User-defined profiles, sorted by name.
+
+    A user profile with the same ``name`` as a built-in OR a library
+    profile wins — that's the copy-and-edit override path.
     """
     import yaml
 
+    library = _load_library_profiles()
     by_name: dict[str, AgentProfile] = {p.name: p for p in BUILT_IN_PROFILES}
+    for p in library:
+        by_name.setdefault(p.name, p)
     pdir = _profiles_dir(home_dir)
     for path in sorted(pdir.glob("*.yaml")):
         try:
@@ -223,12 +291,20 @@ def list_profiles(home_dir: str | Path | None = None) -> list[AgentProfile]:
             by_name[data["name"]] = AgentProfile(**data)
         except Exception as exc:
             logger.warning("agent profile %s failed to load: %s", path.name, exc)
-    # Sort: built-ins by their original order, then user profiles by name.
+    # 1. Core built-ins in original order.
     builtin_order = [p.name for p in BUILT_IN_PROFILES]
     ordered: list[AgentProfile] = []
     for name in builtin_order:
         if name in by_name:
             ordered.append(by_name.pop(name))
+    # 2. Library profiles (whatever wasn't overridden-and-popped above),
+    #    grouped by category then name.
+    library_names = [p.name for p in library if p.name in by_name]
+    for name in sorted(
+        library_names, key=lambda n: (by_name[n].category, n)
+    ):
+        ordered.append(by_name.pop(name))
+    # 3. User profiles by name.
     for name in sorted(by_name.keys()):
         ordered.append(by_name[name])
     return ordered

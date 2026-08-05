@@ -34,6 +34,35 @@ function sortProfiles(profiles: AgentProfileSchema[]): AgentProfileSchema[] {
   return sorted;
 }
 
+/**
+ * Group profiles for sectioned rendering (Agent Library, 2026-08-05):
+ *   1. "Core" — the built-ins with no category (the original six).
+ *   2. One section per library category, alphabetically.
+ *   3. "Custom" — user-defined profiles, last.
+ * A 100+ profile flat grid is unscannable; category sections with
+ * counts keep the page navigable without any new dependencies.
+ */
+function groupProfiles(
+  profiles: AgentProfileSchema[],
+): { label: string; items: AgentProfileSchema[] }[] {
+  const core = profiles.filter(p => p.built_in && !p.category);
+  const custom = profiles.filter(p => !p.built_in);
+  const byCategory = new Map<string, AgentProfileSchema[]>();
+  for (const p of profiles) {
+    if (!p.built_in || !p.category) continue;
+    const list = byCategory.get(p.category) ?? [];
+    list.push(p);
+    byCategory.set(p.category, list);
+  }
+  const groups: { label: string; items: AgentProfileSchema[] }[] = [];
+  if (core.length) groups.push({ label: 'Core', items: core });
+  for (const cat of [...byCategory.keys()].sort((a, b) => a.localeCompare(b))) {
+    groups.push({ label: cat, items: byCategory.get(cat)! });
+  }
+  if (custom.length) groups.push({ label: 'Custom', items: custom });
+  return groups;
+}
+
 function formatTemperature(value: number | null | undefined): string | null {
   if (value === null || value === undefined) return null;
   if (!Number.isFinite(value)) return null;
@@ -228,9 +257,21 @@ export default function AgentsPage() {
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {profiles.map(profile => (
-              <AgentCard key={profile.name} profile={profile} />
+          <div className="space-y-8">
+            {groupProfiles(profiles).map(group => (
+              <section key={group.label}>
+                <h2 className="mb-3 flex items-baseline gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#525252] dark:text-[#a3a3a3]">
+                  {group.label}
+                  <span className="text-[10px] font-normal text-[#a3a3a3] dark:text-[#737373]">
+                    {group.items.length}
+                  </span>
+                </h2>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {group.items.map(profile => (
+                    <AgentCard key={profile.name} profile={profile} />
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         )}
