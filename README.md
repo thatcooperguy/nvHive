@@ -66,7 +66,7 @@ nvh safe "review this contract"     # local only — nothing leaves the machine
 
 ### AI Wizard
 
-A streaming, tool-using assistant that reads live workspace state. It can refresh models, repair the workspace, RAG over files you drag into the chat (PDFs included), and search the web — citing sources and showing cost and latency per response. Slash commands in chat: `/help`, `/save`, `/pin`, `/clear`, `/tools`.
+A streaming, tool-using assistant that reads live workspace state. It can refresh models, repair the workspace, RAG over files you drag into the chat (PDFs included), and search the web — citing sources and showing cost and latency per response. Attach external [MCP tool servers](docs/MCP.md) and their tools join the Wizard's toolset too. Slash commands in chat: `/help`, `/save`, `/pin`, `/clear`, `/tools`.
 
 ### Multi-provider routing
 
@@ -74,7 +74,7 @@ One interface over 23 providers and 63 models. Requests are scored on capability
 
 ### Agents and council mode
 
-Six built-in agent profiles (Wizard, Coder, Researcher, Writer, Ops, Vault-RAG), each mappable to a local or cloud model; your own profiles live in `$NVH_HOME/agent-profiles/`. Council mode runs one question through multiple models in parallel and synthesizes the answers:
+An **Agent Library of 100+ profiles** across 38 categories (coding, research, creative, GPU media, ops, education, …) plus six core built-ins — each mappable to a local or cloud model; your own profiles live in `$NVH_HOME/agent-profiles/`. Council mode runs one question through multiple models in parallel and synthesizes the answers:
 
 ```bash
 nvh convene "Redis or Postgres for session storage?"   # multi-model deliberation

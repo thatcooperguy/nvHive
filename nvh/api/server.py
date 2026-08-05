@@ -329,6 +329,17 @@ async def lifespan(app: FastAPI):
         enabled = await _engine.initialize()
         logger.info("Hive API: engine ready. Advisors: %s", ", ".join(enabled) or "none")
         boot_task = asyncio.create_task(_run_boot_preflight_on_startup(app))
+        # MCP tools cache warm-up (2026-08-05): refresh in the background so
+        # configured MCP servers' tools appear in the Wizard registry without
+        # the user running `nvh mcp refresh` first. Fire-and-forget — a dead
+        # server records its error in the cache and never delays startup.
+        try:
+            from nvh.integrations.mcp_client import load_mcp_config, refresh_all_tools
+
+            if load_mcp_config():
+                asyncio.create_task(refresh_all_tools())
+        except Exception as exc:
+            logger.debug("mcp cache warm-up skipped: %s", exc)
         yield
     except Exception as exc:
         logger.error("Hive API: engine initialization error: %s", exc)
@@ -1699,6 +1710,42 @@ async def wizard_chat_stream_endpoint(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/v1/mcp/servers", summary="List configured MCP servers + cached tool status")
+async def mcp_servers_list(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Status of every configured external MCP tool server.
+
+    Reads config (``$NVH_HOME/config/mcp-servers.json``) + the tools cache;
+    never connects to servers (that's ``POST /v1/mcp/refresh``). An empty
+    list with ``configured: false`` means the feature is simply unused.
+    """
+    from nvh.integrations.mcp_client import load_mcp_config, servers_status
+
+    servers = servers_status(home_dir=home_dir)
+    return _response_envelope({
+        "configured": bool(load_mcp_config(home_dir=home_dir)),
+        "servers": servers,
+    })
+
+
+@app.post("/v1/mcp/refresh", summary="Reconnect to MCP servers and refresh the tools cache")
+async def mcp_refresh(
+    home_dir: str | None = None,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Connect to each enabled MCP server, list tools, rewrite the cache.
+
+    Per-server failures land in the cache as ``ok: false`` + error rather
+    than failing the request — one dead server must not hide the rest.
+    """
+    from nvh.integrations.mcp_client import refresh_all_tools, servers_status
+
+    await refresh_all_tools(home_dir=home_dir)
+    return _response_envelope({"servers": servers_status(home_dir=home_dir)})
 
 
 @app.get("/v1/wizard/profiles", summary="List Wizard agent profiles (built-in + user-defined)")

@@ -60,7 +60,11 @@ nvidia = [
     "nvidia-ml-py3>=7.352.0",
 ]
 mcp = [
-    "mcp[cli]>=1.0",
+    # 1.x family only: mcp 2.x moved/removed mcp.server.fastmcp and broke
+    # the 1.x client API surface; litellm pins mcp<2 as well. Bump both
+    # nvh/mcp_server.py + nvh/integrations/mcp_client.py together when
+    # migrating to 2.x (tracked in docs/ROADMAP.md).
+    "mcp[cli]>=1.0,<2",
 ]
 dev = [
     "pytest>=8.0",
@@ -77,6 +81,12 @@ dev = [
     "nvidia-ml-py3>=7.352.0",
     "python-multipart>=0.0.6",
     "pypdf>=4.0",
+    # MCP client tests (test_mcp_client.py) run a real stdio server. The
+    # SDK arrived transitively via litellm before; pin it explicitly so a
+    # litellm dep-tree change can't silently skip the end-to-end test.
+    # <2: mcp 2.x removed mcp.server.fastmcp (CI proved it 2026-08-05);
+    # keep in lock-step with the [mcp] extra above.
+    "mcp[cli]>=1.0,<2",
 ]
 vision = [
     "pyautogui>=0.9.54",
@@ -96,7 +106,7 @@ all = [
     "uvicorn[standard]>=0.20",
     "passlib[bcrypt]>=1.7",
     "nvidia-ml-py3>=7.352.0",
-    "mcp[cli]>=1.0",
+    "mcp[cli]>=1.0,<2",
     "pyautogui>=0.9.54",
     "python-xlib>=0.33; sys_platform == 'linux'",
     "Pillow>=10.0",

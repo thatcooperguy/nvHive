@@ -536,7 +536,111 @@ claude mcp add nvhive nvhive-mcp`}
           </p>
         </div>
       </details>
+
+      {/* --- External MCP tool servers (roadmap critical #1, 2026-08-05) ---
+          The reverse direction of the section above: instead of exposing
+          nvHive AS an MCP server to coding tools, attach EXTERNAL MCP
+          servers so their tools appear in the Wizard's toolset. */}
+      <McpServersSection />
       </div>
+    </div>
+  );
+}
+
+interface McpServerStatus {
+  name: string;
+  command: string;
+  auto_approve: string[];
+  cached: boolean;
+  ok: boolean;
+  error: string | null;
+  refreshed_at: string | null;
+  tool_count: number;
+  tools: string[];
+}
+
+function McpServersSection() {
+  const [servers, setServers] = useState<McpServerStatus[] | null>(null);
+  const [configured, setConfigured] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await apiGet<{ configured: boolean; servers: McpServerStatus[] }>(
+        "/v1/mcp/servers",
+      );
+      setConfigured(data.configured);
+      setServers(data.servers);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setServers([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await apiPost<{ servers: McpServerStatus[] }>("/v1/mcp/refresh", {});
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  return (
+    <div className="mt-8 p-6 border border-[--border] bg-white dark:bg-[#0a0a0a]">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="font-medium text-[--text-primary]">External MCP tool servers</h2>
+        {configured && (
+          <button
+            onClick={() => void refresh()}
+            disabled={refreshing}
+            className="text-xs font-mono px-2 py-1 border border-[--border] text-[--text-muted] hover:text-[--text-primary] disabled:opacity-40"
+          >
+            {refreshing ? "Refreshing…" : "Refresh tools"}
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-[--text-muted] mb-4">
+        Attach external Model Context Protocol servers and their tools appear in the
+        AI Wizard&apos;s toolset (named <code className="font-mono">mcp_&lt;server&gt;_&lt;tool&gt;</code>,
+        confirm-before-run by default). Config lives at{" "}
+        <code className="font-mono">$NVH_HOME/config/mcp-servers.json</code> — same
+        <code className="font-mono"> mcpServers</code> format as Claude Desktop.
+      </p>
+      {error && (
+        <p className="text-xs font-mono text-[#dc2626]">{error}</p>
+      )}
+      {servers !== null && !configured && !error && (
+        <p className="text-xs font-mono text-[--text-muted]">
+          No servers configured yet. Create the config file, then run{" "}
+          <code>nvh mcp refresh</code> or click Refresh tools.
+        </p>
+      )}
+      {servers?.map(s => (
+        <div key={s.name} className="mb-2 flex items-baseline gap-3 text-xs font-mono">
+          <StatusDot status={s.ok ? "connected" : s.cached ? "error" : "available"} />
+          <span className="font-bold text-[--text-primary]">{s.name}</span>
+          <span className="text-[--text-muted]">{s.command}</span>
+          {s.ok ? (
+            <span className="text-[--text-muted]">
+              {s.tool_count} tools{s.auto_approve.length ? ` (${s.auto_approve.length} auto-approved)` : ""}
+            </span>
+          ) : s.cached ? (
+            <span className="text-[#dc2626] truncate" title={s.error ?? ""}>{s.error}</span>
+          ) : (
+            <span className="text-[--text-muted]">not refreshed yet</span>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
