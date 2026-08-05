@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- **MCP client support** (roadmap critical #1): attach external Model
+  Context Protocol servers as Wizard tools. Claude-Desktop-compatible
+  config at `$NVH_HOME/config/mcp-servers.json`; tools appear as
+  `mcp_<server>_<tool>`, confirm-before-run by default with per-server
+  `auto_approve`; hard connect/call timeouts; `nvh mcp list|refresh`;
+  `/v1/mcp/servers` + `/v1/mcp/refresh` API; Integrations-page status
+  cards; automatic cache warm-up on API start. Docs: docs/MCP.md.
+- **Agent Library**: 100 original agent profiles across 38 categories,
+  bundled in the package, grouped on /agents and in the composer picker.
+
 ### Changed
 - **License: MIT → PolyForm Noncommercial 1.0.0.** nvHive is now a
   proprietary noncommercial stack: use, modification, and redistribution

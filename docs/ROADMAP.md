@@ -136,6 +136,12 @@ Design-inspiration only — nvHive implements its own versions; nothing is copie
 
 ## Shipped from this plan
 
+- **MCP client support (2026-08-05)** — attach external MCP tool servers
+  via `$NVH_HOME/config/mcp-servers.json` (Claude-Desktop-compatible
+  format); tools register as `mcp_<server>_<tool>` in the Wizard,
+  confirm-by-default with per-server auto-approve. `nvh mcp list|refresh`,
+  `/v1/mcp/*` API, Integrations-page cards. See docs/MCP.md.
+
 - **Agent Library (2026-08-05)** — 100 original agent profiles across 38
   categories, bundled in the package (`nvh/catalog/agent-library.json`),
   grouped on /agents and in the composer picker. Copy-and-edit into

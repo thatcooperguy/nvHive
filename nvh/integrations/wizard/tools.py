@@ -563,4 +563,16 @@ def default_registry() -> WizardToolRegistry:
     _load_entry_point_tools(reg)
     _load_workspace_plugin_tools(reg)
 
+    # External MCP tool servers (2026-08-05, roadmap critical #1): tools
+    # cached by `nvh mcp refresh` register as mcp_<server>_<tool>, confirm-
+    # class by default (arbitrary third-party subprocesses), auto only via
+    # the server's auto_approve allowlist. Cache-read only — never spawns
+    # servers on the chat-turn path. Best-effort like the other passes.
+    try:
+        from nvh.integrations.mcp_client import register_mcp_tools
+
+        register_mcp_tools(reg)
+    except Exception as exc:
+        logger.warning("mcp tool registration skipped: %s", exc)
+
     return reg

@@ -13583,6 +13583,94 @@ services_app = typer.Typer(
 )
 app.add_typer(services_app, name="services", rich_help_panel="Infrastructure")
 
+# ---------------------------------------------------------------------------
+# nvh mcp — external MCP tool servers (roadmap critical #1, 2026-08-05)
+# ---------------------------------------------------------------------------
+
+mcp_app = typer.Typer(
+    help="Attach external MCP tool servers to the AI Wizard (config: $NVH_HOME/config/mcp-servers.json).",
+)
+app.add_typer(mcp_app, name="mcp", rich_help_panel="Infrastructure")
+
+
+@mcp_app.command("list")
+def mcp_list() -> None:
+    """Show configured MCP servers + their cached tool status."""
+    from nvh.integrations.mcp_client import (
+        load_mcp_config,
+        mcp_config_path,
+        servers_status,
+    )
+
+    config = load_mcp_config()
+    if not config:
+        console.print(
+            f"No MCP servers configured. Create [bold]{mcp_config_path()}[/bold] "
+            "with a Claude-Desktop-style mcpServers object, e.g.:\n"
+        )
+        console.print(
+            '  {\n    "mcpServers": {\n      "filesystem": {\n'
+            '        "command": "npx",\n'
+            '        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"],\n'
+            '        "auto_approve": ["read_file", "list_directory"]\n'
+            "      }\n    }\n  }\n"
+        )
+        console.print("Then run [bold]nvh mcp refresh[/bold] to connect + cache tools.")
+        return
+    for s in servers_status():
+        if s["cached"] and s["ok"]:
+            state = f"[green]✓[/green] {s['tool_count']} tools (refreshed {s['refreshed_at']})"
+        elif s["cached"]:
+            state = f"[red]✗[/red] {s['error']}"
+        else:
+            state = "[yellow]not refreshed — run `nvh mcp refresh`[/yellow]"
+        console.print(f"  [bold]{s['name']}[/bold] ({s['command']}): {state}")
+        if s["ok"] and s["tools"]:
+            auto = set(s["auto_approve"])
+            for t in s["tools"]:
+                marker = "[green]auto[/green]" if t in auto else "[yellow]confirm[/yellow]"
+                console.print(f"      {t} ({marker})")
+
+
+@mcp_app.command("refresh")
+def mcp_refresh_cmd() -> None:
+    """Connect to each enabled server, list its tools, rewrite the cache.
+
+    The Wizard picks the refreshed tools up on its next chat turn (the
+    registry reads the cache on every build). The API server also warms
+    this cache automatically on startup.
+    """
+    import asyncio as _asyncio
+
+    from nvh.integrations.mcp_client import (
+        MISSING_SDK_HINT,
+        load_mcp_config,
+        refresh_all_tools,
+    )
+
+    if not load_mcp_config():
+        console.print("No MCP servers configured — see [bold]nvh mcp list[/bold] for the format.")
+        raise typer.Exit(1)
+    try:
+        import mcp as _mcp  # noqa: F401
+    except ImportError:
+        console.print(f"[red]{MISSING_SDK_HINT}[/red]")
+        raise typer.Exit(1)
+
+    console.print("[bold]Refreshing MCP server tools...[/bold]")
+    cache = _asyncio.run(refresh_all_tools())
+    failed = 0
+    for name, entry in cache.items():
+        if entry.get("ok"):
+            console.print(
+                f"  [green]✓[/green] {name}: {len(entry.get('tools', []))} tools"
+            )
+        else:
+            failed += 1
+            console.print(f"  [red]✗[/red] {name}: {entry.get('error')}")
+    if failed:
+        raise typer.Exit(1)
+
 
 def _services_render_console(snap: Any) -> None:
     """Render a service snapshot using the project's Rich console."""
