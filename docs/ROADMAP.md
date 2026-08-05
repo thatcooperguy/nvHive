@@ -134,6 +134,13 @@ Design-inspiration only — nvHive implements its own versions; nothing is copie
 - **danielmiessler/Fabric** — The strongest non-persona pattern: a TASK library orthogonal to personas. nvHive should adopt (a) verb_noun naming convention and (b) pattern-per-markdown-file in $NVH_HOME/patterns/, runnable via CLI pipe and from the Wizard — perfect fit for a terminal-first GPU workspace.
 - **wshobson/agents** — Two direct adoptions: (1) per-agent model TIERING — nvHive's router should let a profile declare a tier (e.g. 'local-VRAM', 'cheap-cloud', 'frontier') instead of a hardcoded model, mapped through the GPU tier matrix; (2) 'orchestrator' as a distinct profile type that composes other profiles — a generalization of council mode.
 
+## Known follow-ups
+
+- **mcp SDK 2.x migration** — all mcp pins are `>=1.0,<2`: the 2.x SDK
+  removed `mcp.server.fastmcp` and reshaped the client API (CI proved it
+  2026-08-05). Migrate `nvh/mcp_server.py` + `nvh/integrations/mcp_client.py`
+  together, then lift the pins.
+
 ## Shipped from this plan
 
 - **MCP client support (2026-08-05)** — attach external MCP tool servers
