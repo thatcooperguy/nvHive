@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import ChatMessage, { exportConversationMarkdown } from '@/components/ChatMessage';
 import ChatInput, { type ChatInputAttachment } from '@/components/ChatInput';
@@ -18,8 +19,12 @@ import {
   getBudgetStatus,
   getConversations,
   getConversation,
+  deleteConversation,
+  pinConversation,
+  renameConversation,
   streamCouncil,
 } from '@/lib/api';
+import { exportConversationById } from '@/lib/exportConversation';
 import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
   ChatMessage as ChatMessageType,
@@ -317,6 +322,7 @@ function EmptyState({
 // ─── Main chat page ───────────────────────────────────────────────────────────
 
 export default function ChatPage() {
+  const router = useRouter();
   // Persisted state
   const [storedState, setStoredState] = useState<StoredState>({ conversations: [], messages: {} });
   const [hydrated, setHydrated] = useState(false);
@@ -451,11 +457,19 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Merge local + remote conversations for sidebar
+  // Merge local + remote conversations for the sidebar. Remote metadata wins
+  // for conversations the server knows about (wizard chats live only there);
+  // purely-local chats — this browser's localStorage history that was never
+  // persisted server-side — are kept, not clobbered. Newest first; the
+  // Sidebar handles pinned grouping.
   const allConversations: ConversationSummary[] = (() => {
-    // If we have remote data, prefer it; otherwise use local storage
-    if (remoteConvs.length > 0) return remoteConvs;
-    return storedState.conversations;
+    const byId = new Map<string, ConversationSummary>();
+    for (const c of storedState.conversations) byId.set(c.id, c);
+    for (const c of remoteConvs) {
+      const local = byId.get(c.id);
+      byId.set(c.id, { ...local, ...c, pinned: c.pinned || local?.pinned });
+    }
+    return [...byId.values()].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   })();
 
   // Persist state changes
@@ -542,6 +556,20 @@ export default function ChatPage() {
       setMessages([]);
       return;
     }
+    // Wizard chats resume on their own surface — this page's message shapes
+    // (council data, member streams) don't apply to a wizard thread. Tear
+    // down any in-flight stream first (same as the normal path below), and
+    // replace() so Back doesn't bounce through /?c= into a redirect loop.
+    const remoteMeta = remoteConvs.find(c => c.id === id);
+    if (remoteMeta?.mode === 'wizard') {
+      stopStreamRef.current?.();
+      stopStreamRef.current = null;
+      wsRef.current?.close();
+      wsRef.current = null;
+      setStreaming(false);
+      router.replace(`/wizard?conversation=${encodeURIComponent(id)}`);
+      return;
+    }
     stopStreamRef.current?.();
     setStreaming(false);
     setActiveConvId(id);
@@ -558,6 +586,13 @@ export default function ChatPage() {
 
     if (msgs.length === 0) {
       const remote = await getConversation(id);
+      // Deep-linked wizard chat before the remote list loaded — re-route.
+      // replace(), not push(): Back from /wizard must not land on /?c=,
+      // which would re-run this redirect and trap the Back button.
+      if (remote?.mode === 'wizard') {
+        router.replace(`/wizard?conversation=${encodeURIComponent(id)}`);
+        return;
+      }
       if (remote?.messages?.length) {
         const mapped: ChatMessageType[] = remote.messages
           .filter(m => m.role !== 'system')
@@ -584,32 +619,58 @@ export default function ChatPage() {
         }));
       }
     }
-  }, [storedState.messages, updateStoredState]);
+  }, [storedState.messages, updateStoredState, remoteConvs, router]);
 
+  // Rename/delete/pin update local state immediately, and sync the server
+  // copy for conversations the server knows about (wizard chats and anything
+  // persisted). Purely-local chats live in localStorage only — no phantom
+  // API calls for ids the server never had.
   const handleRenameConversation = useCallback((id: string, title: string) => {
     updateStoredState(prev => ({
       ...prev,
       conversations: prev.conversations.map(c => c.id === id ? { ...c, title } : c),
     }));
-  }, [updateStoredState]);
+    setRemoteConvs(prev => prev.map(c => c.id === id ? { ...c, title } : c));
+    if (remoteConvs.some(c => c.id === id)) void renameConversation(id, title);
+  }, [updateStoredState, remoteConvs]);
 
   const handleDeleteConversation = useCallback((id: string) => {
     updateStoredState(prev => ({
       conversations: prev.conversations.filter(c => c.id !== id),
       messages: Object.fromEntries(Object.entries(prev.messages).filter(([k]) => k !== id)),
     }));
+    if (remoteConvs.some(c => c.id === id)) void deleteConversation(id);
+    setRemoteConvs(prev => prev.filter(c => c.id !== id));
     if (activeConvId === id) {
       setActiveConvId(null);
       setMessages([]);
     }
-  }, [activeConvId, updateStoredState]);
+  }, [activeConvId, updateStoredState, remoteConvs]);
 
   const handlePinConversation = useCallback((id: string) => {
+    const current = remoteConvs.find(c => c.id === id)
+      ?? storedState.conversations.find(c => c.id === id);
+    const nextPinned = !current?.pinned;
     updateStoredState(prev => ({
       ...prev,
-      conversations: prev.conversations.map(c => c.id === id ? { ...c, pinned: !c.pinned } : c),
+      conversations: prev.conversations.map(c => c.id === id ? { ...c, pinned: nextPinned } : c),
     }));
-  }, [updateStoredState]);
+    setRemoteConvs(prev => prev.map(c => c.id === id ? { ...c, pinned: nextPinned } : c));
+    if (remoteConvs.some(c => c.id === id)) void pinConversation(id, nextPinned);
+  }, [remoteConvs, storedState.conversations, updateStoredState]);
+
+  // Deep-link: /?c=<id> opens a conversation directly (the shared sidebar on
+  // other pages navigates here with it). window.location instead of
+  // useSearchParams so the static prerender doesn't need a Suspense boundary.
+  const deepLinkHandledRef = useRef(false);
+  useEffect(() => {
+    if (!hydrated || deepLinkHandledRef.current) return;
+    if (typeof window === 'undefined') return;
+    const target = new URLSearchParams(window.location.search).get('c');
+    if (!target) return;
+    deepLinkHandledRef.current = true;
+    void handleSelectConversation(target);
+  }, [hydrated, handleSelectConversation]);
 
   // Export a conversation from the sidebar context menu as a Markdown
   // download. Uses locally cached messages (remote-only conversations are
@@ -618,7 +679,12 @@ export default function ChatPage() {
     const msgs = id === activeConvId && messages.length > 0
       ? messages
       : storedState.messages[id] ?? [];
-    if (msgs.length === 0) return;
+    if (msgs.length === 0) {
+      // Server-only conversation (e.g. a wizard chat in the merged sidebar)
+      // — export from the server copy instead of silently doing nothing.
+      void exportConversationById(id);
+      return;
+    }
     const lastAssistant = msgs.slice().reverse().find(m => m.role === 'assistant');
     const advisorLabel = lastAssistant?.model
       ? `${lastAssistant.model}${lastAssistant.provider ? ` (${lastAssistant.provider})` : ''}`

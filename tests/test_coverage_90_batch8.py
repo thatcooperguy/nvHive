@@ -151,11 +151,15 @@ class TestConversations:
 
     def test_list_empty(self, test_client):
         r = test_client.get("/v1/conversations")
-        assert r.status_code == 200 and isinstance(r.json()["data"], list)
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert isinstance(data["conversations"], list)
+        assert data["count"] == len(data["conversations"])
 
     def test_query_missing_conv(self, test_client):
+        # Unknown conversation id is a client error (404), not a 500.
         r = test_client.post("/v1/conversations/no-conv/query", json={"prompt": "Hi"})
-        assert r.status_code == 500
+        assert r.status_code == 404
 
 class TestAutoSetup:
     def test_no_gpus(self, test_client):

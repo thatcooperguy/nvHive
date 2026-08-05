@@ -39,6 +39,10 @@ class Conversation(Base):
     title: Mapped[str] = mapped_column(String(255), default="")
     provider: Mapped[str] = mapped_column(String(64), default="")
     model: Mapped[str] = mapped_column(String(128), default="")
+    # Which chat surface produced this conversation: 'single' | 'council' |
+    # 'compare' | 'wizard'. Drives sidebar navigation (a wizard chat resumes
+    # on /wizard, a council chat on /). Empty string on legacy rows.
+    mode: Mapped[str] = mapped_column(String(16), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
     message_count: Mapped[int] = mapped_column(Integer, default=0)

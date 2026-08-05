@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- **Chat history polish** (roadmap critical): past conversations are now
+  browsable, resumable, and pinnable from the sidebar on every page.
+  Wizard chats persist server-side turn by turn and resume on `/wizard`
+  after a reload or reconnect (the URL carries the conversation id);
+  main-page single/council chats remain browser-local but join the shared
+  sidebar everywhere, with rename/pin/delete/export applied to whichever
+  store owns the chat. Pinned conversations are always included in the
+  list response, even past the recency window.
+  New API: `POST /v1/conversations` (create), `PATCH /v1/conversations/{id}`
+  (rename), `GET /v1/conversations/search?q=` (full-text over message
+  content); the list endpoint now returns `{conversations, count}` with
+  epoch-ms timestamps plus `pinned` and `mode` on every summary. A SQLite
+  column auto-migration keeps databases from older releases working.
+  Fixed: the WebUI's lazy conversation-create had been 405ing silently
+  (endpoint didn't exist), so no Wizard turn was ever persisted; unknown
+  conversation ids on `/{id}/query` now 404 instead of 500.
 - **Model Manager** (roadmap critical): an in-app model browser at
   `/models` and a `nvh models` CLI. Every catalog row shows whether the
   model fits the detected GPU's VRAM and how much disk it needs *before*

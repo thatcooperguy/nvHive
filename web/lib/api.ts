@@ -19,6 +19,8 @@ import type {
   WsQueryMessage,
   WsCouncilMessage,
   WsCouncilStart,
+  ConversationSummary,
+  ConversationMode,
   WsMemberStart,
   WsMemberChunk,
   WsMemberComplete,
@@ -963,17 +965,9 @@ export async function analyzeAgents(
 
 // ─── Conversations ────────────────────────────────────────────────────────────
 
-export interface ConversationSummary {
-  id: string;
-  title: string;
-  model?: string;
-  provider?: string;
-  mode: 'single' | 'council' | 'compare';
-  message_count: number;
-  created_at: number;
-  updated_at: number;
-  pinned?: boolean;
-}
+// Canonical summary type lives in types.ts (the Sidebar imports it from
+// there); re-export so existing `from '@/lib/api'` imports keep working.
+export type { ConversationSummary } from './types';
 
 export interface ConversationMessage {
   id: string;
@@ -996,14 +990,19 @@ export interface ConversationMessage {
 export interface ConversationDetail {
   id: string;
   title: string;
+  mode?: ConversationMode;
+  pinned?: boolean;
   messages: ConversationMessage[];
   created_at: number;
   updated_at: number;
 }
 
-export async function getConversations(): Promise<ConversationSummary[]> {
+export async function getConversations(limit = 100): Promise<ConversationSummary[]> {
   try {
-    const data = await apiGet<{ conversations: ConversationSummary[] }>('/v1/conversations');
+    // The server always appends pinned conversations even past this window.
+    const data = await apiGet<{ conversations: ConversationSummary[] }>(
+      `/v1/conversations?limit=${limit}`
+    );
     return data.conversations ?? [];
   } catch {
     // Endpoint might not exist yet — return empty array gracefully
@@ -1019,9 +1018,16 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
   }
 }
 
-export async function createConversation(title?: string): Promise<ConversationSummary | null> {
+/**
+ * Create an empty server-side conversation. Pass an empty title to let the
+ * backend auto-title it from the first persisted user message.
+ */
+export async function createConversation(
+  title = '',
+  mode: ConversationMode | '' = ''
+): Promise<ConversationSummary | null> {
   try {
-    return await apiPost<ConversationSummary>('/v1/conversations', { title: title ?? 'New Chat' });
+    return await apiPost<ConversationSummary>('/v1/conversations', { title, mode });
   } catch {
     return null;
   }

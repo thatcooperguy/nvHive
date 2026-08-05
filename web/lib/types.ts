@@ -1468,6 +1468,10 @@ export interface RecentQuery {
 
 export type ChatMode = 'single' | 'council' | 'compare';
 
+/** Which surface a stored conversation belongs to. Superset of ChatMode:
+ * 'wizard' chats resume on /wizard, everything else on the main chat. */
+export type ConversationMode = ChatMode | 'wizard';
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'error';
@@ -1508,7 +1512,7 @@ export interface ConversationSummary {
   title: string;
   model?: string;
   provider?: string;
-  mode: ChatMode;
+  mode: ConversationMode;
   message_count: number;
   created_at: number;
   updated_at: number;

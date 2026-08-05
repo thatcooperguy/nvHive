@@ -29,6 +29,27 @@ preferred port is already occupied.
 | **Settings** | API URL, defaults, budget limits, theme, and council strategy |
 | **Setup Wizard** | Step-by-step onboarding: GPU detection, local AI, cloud providers |
 
+## Chat history
+
+Past conversations live in the sidebar on every page, grouped by date
+(Pinned / Today / Yesterday / Previous 7 Days / Older) with search, inline
+rename, and a right-click menu (Pin, Rename, Export as Markdown, Delete).
+
+- **Resume anywhere** — clicking a conversation reopens it on the surface
+  that produced it: Wizard chats resume on `/wizard`, chat/council threads
+  on the main page.
+- **Wizard persistence** — every Wizard turn is saved server-side
+  (SQLite at `$NVH_HOME/state/nvhive.db`), so a page reload or a
+  reconnect to the same workspace picks the thread back up.
+- **Pin** a conversation (right-click, or `/pin` in Wizard chat) to keep
+  it at the top of the sidebar and surface it on reconnect.
+- **Search across history** — the sidebar filter matches titles;
+  `GET /v1/conversations/search?q=` matches full message content.
+- **Two stores, one sidebar** — Wizard chats persist server-side; main-page
+  single/council chats stay in this browser (localStorage) and still appear
+  in the shared sidebar everywhere. Rename, pin, delete, and Export apply
+  to whichever store owns the chat.
+
 ## Design
 
 - NVIDIA-inspired dark theme with green (#76B900) accents

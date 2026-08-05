@@ -76,6 +76,26 @@ async def init_db(db_path: Path | None = None) -> None:
         # Enable WAL mode for concurrent read/write performance
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA busy_timeout=5000"))
+        await _ensure_conversation_columns(conn)
+
+
+# Columns added to `conversations` after the table first shipped.
+# `Base.metadata.create_all` never ALTERs existing tables, so a database
+# created before one of these columns existed would break every query that
+# references it. Applied idempotently on startup; SQLite ADD COLUMN is O(1).
+_CONVERSATION_COLUMN_MIGRATIONS: dict[str, str] = {
+    "pinned": "ALTER TABLE conversations ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0",
+    "mode": "ALTER TABLE conversations ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT ''",
+}
+
+
+async def _ensure_conversation_columns(conn) -> None:
+    """Add any missing `conversations` columns on an existing database."""
+    result = await conn.execute(text("PRAGMA table_info(conversations)"))
+    existing = {row[1] for row in result.fetchall()}
+    for column, ddl in _CONVERSATION_COLUMN_MIGRATIONS.items():
+        if column not in existing:
+            await conn.execute(text(ddl))
 
 
 async def close_db() -> None:
@@ -102,13 +122,38 @@ async def create_conversation(
     provider: str = "",
     model: str = "",
     title: str = "",
+    mode: str = "",
 ) -> Conversation:
     async with get_session() as session:
-        conv = Conversation(provider=provider, model=model, title=title)
+        conv = Conversation(provider=provider, model=model, title=title, mode=mode)
         session.add(conv)
         await session.commit()
         await session.refresh(conv)
         return conv
+
+
+async def set_conversation_title(conversation_id: str, title: str) -> bool:
+    """Rename a conversation. Returns True on success, False if missing.
+
+    Renaming is metadata editing, not activity: ``updated_at`` is preserved
+    so the sidebar's recency ordering and Today/Yesterday grouping don't
+    teleport a weeks-old conversation to the top. (A Core UPDATE that pins
+    updated_at explicitly, because the column's ``onupdate`` fires on any
+    ORM flush of the row.)
+    """
+    from sqlalchemy import update
+
+    async with get_session() as session:
+        conv = await session.get(Conversation, conversation_id)
+        if conv is None:
+            return False
+        await session.execute(
+            update(Conversation)
+            .where(Conversation.id == conversation_id)
+            .values(title=title[:255], updated_at=conv.updated_at)
+        )
+        await session.commit()
+        return True
 
 
 async def get_conversation(conversation_id: str) -> Conversation | None:
@@ -239,13 +284,17 @@ async def search_conversations(
     ~200-character excerpt from the first matching message, trimmed to whole
     words where possible.
     """
+    limit = max(limit, 1)
     async with get_session() as session:
         # Find messages whose content contains the query (case-insensitive via
         # SQLite's default LIKE behaviour which is case-insensitive for ASCII).
-        like_pattern = f"%{query}%"
+        # LIKE metacharacters in the user's query are escaped so "total_cost"
+        # matches literally instead of treating _ as a single-char wildcard.
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like_pattern = f"%{escaped}%"
         msg_result = await session.execute(
             select(ConversationMessage)
-            .where(ConversationMessage.content.ilike(like_pattern))
+            .where(ConversationMessage.content.ilike(like_pattern, escape="\\"))
             .order_by(ConversationMessage.created_at.desc())
             .limit(limit * 5)  # over-fetch to allow dedup by conversation
         )
