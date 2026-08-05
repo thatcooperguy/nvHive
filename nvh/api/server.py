@@ -31,6 +31,7 @@ from fastapi import (
     File,
     HTTPException,
     Path,
+    Query,
     Request,
     UploadFile,
     WebSocket,
@@ -4511,17 +4512,36 @@ async def check_conflicts(
 # Part 3: Conversations management endpoints
 # ---------------------------------------------------------------------------
 
+def _epoch_ms(dt: Any) -> int:
+    """Datetime → epoch milliseconds (0 when unset).
+
+    The WebUI sidebar does date-group arithmetic (Today / Yesterday / 7 days)
+    directly on these numbers, so the wire format is epoch ms, not ISO.
+    SQLite returns naive datetimes for timezone-aware columns; treat naive
+    values as UTC rather than local time.
+    """
+    if not dt:
+        return 0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return int(dt.timestamp() * 1000)
+
+
 def _serialize_conversation(conv: Any) -> dict[str, Any]:
     return {
         "id": conv.id,
         "title": conv.title,
         "provider": conv.provider,
         "model": conv.model,
+        # Legacy rows predate the mode column; the main chat surface is the
+        # sensible default so they group and route like normal chats.
+        "mode": getattr(conv, "mode", "") or "single",
+        "pinned": bool(getattr(conv, "pinned", False)),
         "message_count": conv.message_count,
         "total_tokens": conv.total_tokens,
         "total_cost_usd": str(conv.total_cost_usd),
-        "created_at": conv.created_at.isoformat() if conv.created_at else None,
-        "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
+        "created_at": _epoch_ms(conv.created_at),
+        "updated_at": _epoch_ms(conv.updated_at),
     }
 
 
@@ -4536,9 +4556,10 @@ def _serialize_message(msg: Any) -> dict[str, Any]:
         "model": msg.model,
         "input_tokens": msg.input_tokens,
         "output_tokens": msg.output_tokens,
+        "tokens": (msg.input_tokens or 0) + (msg.output_tokens or 0),
         "cost_usd": str(msg.cost_usd),
         "latency_ms": msg.latency_ms,
-        "created_at": msg.created_at.isoformat() if msg.created_at else None,
+        "timestamp": _epoch_ms(msg.created_at),
     }
 
 
@@ -4551,6 +4572,25 @@ class ConversationQueryRequest(BaseModel):
     max_tokens: int | None = Field(default=None, gt=0)
 
 
+class ConversationCreateRequest(BaseModel):
+    title: str = Field(default="", max_length=255)
+    mode: str = Field(default="", max_length=16)
+    provider: str = Field(default="", max_length=64)
+    model: str = Field(default="", max_length=128)
+
+
+class ConversationRenameRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+
+    @field_validator("title")
+    @classmethod
+    def _strip_and_require_content(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("title must contain non-whitespace characters")
+        return stripped
+
+
 from nvh.storage import (
     repository as repo,  # noqa: E402 — after middleware setup to avoid circular import
 )
@@ -4561,15 +4601,98 @@ async def list_conversations(
     limit: int = 20,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Return recent conversations ordered by last update, newest first."""
+    """Return recent conversations ordered by last update, newest first.
+
+    Pinned conversations are always included, even when they've aged past
+    the recency window — pinning is a promise the sidebar keeps.
+    """
     try:
-        convs = await repo.list_conversations(limit=min(limit, 200))
+        convs = await repo.list_conversations(limit=min(max(limit, 1), 200))
+        pinned = await repo.list_pinned_conversations(limit=50)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(exc),
         )
-    return _response_envelope([_serialize_conversation(c) for c in convs])
+    seen = {c.id for c in convs}
+    convs.extend(p for p in pinned if p.id not in seen)
+    serialized = [_serialize_conversation(c) for c in convs]
+    return _response_envelope({"conversations": serialized, "count": len(serialized)})
+
+
+@app.post("/v1/conversations", summary="Create a conversation")
+async def create_conversation(
+    request: ConversationCreateRequest,
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Create an empty conversation and return its summary.
+
+    The WebUI calls this lazily on the first message of a chat so slash
+    commands (/pin) and turn persistence have an id to attach to. An empty
+    ``title`` is auto-filled from the first user message on persist.
+    """
+    try:
+        conv = await repo.create_conversation(
+            provider=request.provider,
+            model=request.model,
+            title=request.title.strip(),
+            mode=request.mode.strip(),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+    return _response_envelope(_serialize_conversation(conv))
+
+
+@app.get("/v1/conversations/search", summary="Search conversations by message content")
+async def search_conversations(
+    q: str = Query(..., min_length=1, max_length=500),
+    limit: int = Query(20, ge=1, le=100),
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Full-text search across message content; newest conversations first.
+
+    Each result is a conversation summary plus a ``snippet`` excerpt around
+    the first match. (Declared before the /{conversation_id} route so the
+    literal path segment wins.)
+    """
+    try:
+        pairs = await repo.search_conversations(q, limit=min(limit, 100))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+    results = []
+    for conv, snippet in pairs:
+        entry = _serialize_conversation(conv)
+        entry["snippet"] = snippet
+        results.append(entry)
+    return _response_envelope({"results": results, "count": len(results)})
+
+
+@app.patch("/v1/conversations/{conversation_id}", summary="Rename a conversation")
+async def rename_conversation(
+    request: ConversationRenameRequest,
+    conversation_id: str = Path(..., description="Conversation UUID"),
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Update a conversation's title."""
+    try:
+        renamed = await repo.set_conversation_title(conversation_id, request.title.strip())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+    if not renamed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Conversation '{conversation_id}' not found.",
+        )
+    return _response_envelope({"renamed": True, "conversation_id": conversation_id})
 
 
 @app.get("/v1/conversations/{conversation_id}", summary="Get a single conversation with all messages")
@@ -4640,9 +4763,8 @@ async def conversation_query(
     """Send a new user message to an existing conversation and return the
     assistant response.  The full conversation history is included as context.
 
-    If the ``conversation_id`` does not yet exist in the database it will be
-    created automatically (useful for the UI which may generate the ID
-    client-side before the first message).
+    The conversation must already exist — create one first with
+    ``POST /v1/conversations``.  An unknown id returns 404.
     """
     engine = get_engine()
 
@@ -4659,6 +4781,10 @@ async def conversation_query(
         )
     except BudgetExceededError as exc:
         raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc))
+    except ValueError as exc:
+        # ConversationManager raises for a supplied-but-unknown conversation
+        # id; that's a client error, not a server fault.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except ProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
     except Exception as exc:

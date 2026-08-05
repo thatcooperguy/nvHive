@@ -25,6 +25,7 @@ import CreateAgentModal from '@/components/CreateAgentModal';
 import {
   createConversation,
   executeWizardTool,
+  getConversation,
   listAgentProfiles,
   listWizardTools,
   pinConversation,
@@ -37,6 +38,8 @@ import {
   type WizardStreamEvent,
   type WizardToolSchema,
 } from '@/lib/api';
+import { announceConversationsChanged } from '@/lib/localChats';
+import { metaNumber, parseWizardMeta } from '@/lib/wizardMeta';
 
 interface Message {
   id: string;
@@ -145,6 +148,16 @@ export default function WizardChat() {
         abortRef.current?.abort();
         setMessages([]);
         setConversationId(null);
+        // Drop the resume param so a reload starts fresh instead of
+        // resurrecting the thread the user just cleared — and re-arm the
+        // resume guard so re-selecting the same chat from the sidebar
+        // hydrates again.
+        resumeHandledRef.current = null;
+        if (typeof window !== 'undefined') {
+          const url = new URL(window.location.href);
+          url.searchParams.delete('conversation');
+          window.history.replaceState(null, '', url.toString());
+        }
         return true;
       case 'tools': {
         const names = Array.from(tools.values())
@@ -159,6 +172,7 @@ export default function WizardChat() {
           return true;
         }
         const ok = await pinConversation(conversationId, true);
+        if (ok) announceConversationsChanged();
         announce(ok ? '✓ Pinned this chat. It will surface on next reconnect.' : 'Could not pin (server unavailable).');
         return true;
       }
@@ -299,6 +313,59 @@ export default function WizardChat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // Resume a persisted conversation: /wizard?conversation=<id> (the shared
+  // sidebar routes wizard-mode chats here). Hydrates the visible thread from
+  // the server and re-arms conversationId so new turns append to the same
+  // conversation.
+  //
+  // The handled-guard is set only AFTER hydration commits: under React
+  // StrictMode's double-invoked effects the first run's fetch is discarded
+  // by its cleanup, so marking the id handled up front would leave the
+  // second run skipping and the chat permanently empty in dev.
+  const resumeHandledRef = useRef<string | null>(null);
+  useEffect(() => {
+    const resumeId = searchParams?.get('conversation');
+    if (!resumeId || resumeHandledRef.current === resumeId) return;
+    let cancelled = false;
+    void (async () => {
+      const detail = await getConversation(resumeId);
+      if (cancelled) return;
+      // 404/offline: leave the guard unset so a later re-select retries.
+      if (!detail) return;
+      resumeHandledRef.current = resumeId;
+      abortRef.current?.abort();
+      // A zero-message conversation (created lazily, tab closed before the
+      // first turn persisted) still becomes the ACTIVE thread — replying
+      // must append to the conversation the user clicked, not fork a new one.
+      const hydrated: Message[] = (detail.messages ?? [])
+        .filter(m => m.role !== 'system')
+        .map(m => {
+          if (m.role === 'user') {
+            return { id: m.id, role: 'user' as const, content: m.content };
+          }
+          const { text, meta } = parseWizardMeta(m.content);
+          return {
+            id: m.id,
+            role: 'assistant' as const,
+            content: text,
+            // Restore the meter footer: persisted rows carry provider/model
+            // on the message and cost/latency in the meta tail.
+            mode: (meta?.mode === 'deterministic' ? 'deterministic' : 'llm') as Message['mode'],
+            usedProvider: m.provider || undefined,
+            usedModel: m.model || undefined,
+            iterations: metaNumber(meta?.iterations),
+            costUsd: metaNumber(meta?.cost_usd),
+            latencyMs: metaNumber(meta?.latency_ms),
+          };
+        });
+      setMessages(hydrated);
+      setConversationId(resumeId);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams]);
+
   const runTool = async (
     messageId: string,
     call: WizardChatToolCall,
@@ -419,10 +486,24 @@ export default function WizardChat() {
     // works without persistence.
     let convId = conversationId;
     if (!convId) {
-      const conv = await createConversation('Wizard chat');
+      // Empty title → the backend auto-titles from this first message.
+      const conv = await createConversation('', 'wizard');
       if (conv?.id) {
         convId = conv.id;
         setConversationId(conv.id);
+        // Stamp the URL so a reload resumes this thread. replaceState (not
+        // router.replace) so the resume effect doesn't re-fire and hydrate
+        // over the live in-memory messages; belt-and-braces, also mark the
+        // id as handled.
+        resumeHandledRef.current = conv.id;
+        if (typeof window !== 'undefined') {
+          const url = new URL(window.location.href);
+          url.searchParams.set('conversation', conv.id);
+          window.history.replaceState(null, '', url.toString());
+        }
+        // Refresh mounted sidebars so the new thread appears without a
+        // navigation (the LayoutShell listener refetches on this event).
+        announceConversationsChanged();
       }
     }
 

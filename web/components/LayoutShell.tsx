@@ -1,6 +1,7 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
+import { useCallback, useEffect, useState } from 'react';
 import ApiHealthBanner from '@/components/ApiHealthBanner';
 import DebugReportButton from '@/components/DebugReportButton';
 import Sidebar from '@/components/Sidebar';
@@ -10,6 +11,19 @@ import SystemConsole from '@/components/SystemConsole';
 import ThemeToggle from '@/components/ThemeToggle';
 import WelcomeBackPanel from '@/components/WelcomeBackPanel';
 import { UIShellProvider, useUIShell } from '@/components/UIShellProvider';
+import {
+  deleteConversation,
+  getConversations,
+  pinConversation,
+  renameConversation,
+} from '@/lib/api';
+import { exportConversationById } from '@/lib/exportConversation';
+import {
+  CONVERSATIONS_CHANGED_EVENT,
+  mutateStoredChats,
+  readStoredChats,
+} from '@/lib/localChats';
+import type { ConversationSummary } from '@/lib/types';
 import { NVHIVE_VERSION } from '@/lib/version';
 
 /**
@@ -30,6 +44,120 @@ function InnerShell({ children }: { children: React.ReactNode }) {
   const isChatPage = pathname === '/';
   const isSetupPage = pathname?.startsWith('/setup');
   const { openCommandPalette } = useUIShell();
+
+  // Chat history for the shared sidebar, so past conversations are browsable
+  // from every page — not just the root chat. Two sources merged: the server
+  // (wizard chats + anything persisted) and the browser-local store (main-page
+  // single/council chats, which stay client-side). Refreshed on navigation
+  // and whenever a component announces a change (e.g. a wizard turn just
+  // created a conversation on this very page).
+  const [serverConvs, setServerConvs] = useState<ConversationSummary[]>([]);
+  const [localConvs, setLocalConvs] = useState<ConversationSummary[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  const refreshConversations = useCallback(() => {
+    getConversations().then(setServerConvs).catch(() => {});
+    setLocalConvs(readStoredChats().conversations);
+  }, []);
+
+  useEffect(() => {
+    if (isChatPage || isSetupPage) return; // those surfaces manage their own
+    refreshConversations();
+    // Highlight the open conversation (both surfaces carry it in the URL:
+    // /wizard?conversation=<id>, /?c=<id>). usePathname excludes the query,
+    // so read it off location once navigation has committed.
+    try {
+      const params = new URLSearchParams(window.location.search);
+      setActiveId(params.get('conversation') ?? params.get('c'));
+    } catch {
+      setActiveId(null);
+    }
+    const onChanged = () => refreshConversations();
+    window.addEventListener(CONVERSATIONS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(CONVERSATIONS_CHANGED_EVENT, onChanged);
+  }, [pathname, isChatPage, isSetupPage, refreshConversations]);
+
+  // Merge: server metadata wins for ids it knows; local-only chats are kept.
+  const conversations: ConversationSummary[] = (() => {
+    const byId = new Map<string, ConversationSummary>();
+    for (const c of localConvs) byId.set(c.id, c);
+    for (const c of serverConvs) {
+      const local = byId.get(c.id);
+      byId.set(c.id, { ...local, ...c, pinned: c.pinned || local?.pinned });
+    }
+    return [...byId.values()].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  })();
+
+  const isServerConv = useCallback(
+    (id: string) => serverConvs.some(c => c.id === id),
+    [serverConvs],
+  );
+
+  // A conversation resumes on the surface that produced it.
+  const handleSelectConversation = useCallback((id: string) => {
+    if (!id) {
+      router.push('/');
+      return;
+    }
+    const conv = conversations.find(c => c.id === id);
+    if (conv?.mode === 'wizard') {
+      router.push(`/wizard?conversation=${encodeURIComponent(id)}`);
+    } else {
+      router.push(`/?c=${encodeURIComponent(id)}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverConvs, localConvs, router]);
+
+  // Rename/delete/pin: server-known conversations sync to the API; local-only
+  // ones write through to the browser store the chat page reads on mount.
+  const handleRenameConversation = useCallback((id: string, title: string) => {
+    setServerConvs(prev => prev.map(c => c.id === id ? { ...c, title } : c));
+    setLocalConvs(prev => prev.map(c => c.id === id ? { ...c, title } : c));
+    if (isServerConv(id)) {
+      void renameConversation(id, title);
+    } else {
+      mutateStoredChats(prev => ({
+        ...prev,
+        conversations: prev.conversations.map(c => c.id === id ? { ...c, title } : c),
+      }));
+    }
+  }, [isServerConv]);
+
+  const handleDeleteConversation = useCallback((id: string) => {
+    setServerConvs(prev => prev.filter(c => c.id !== id));
+    setLocalConvs(prev => prev.filter(c => c.id !== id));
+    if (isServerConv(id)) {
+      void deleteConversation(id);
+    } else {
+      mutateStoredChats(prev => ({
+        conversations: prev.conversations.filter(c => c.id !== id),
+        messages: Object.fromEntries(
+          Object.entries(prev.messages).filter(([k]) => k !== id)
+        ),
+      }));
+    }
+  }, [isServerConv]);
+
+  const handlePinConversation = useCallback((id: string) => {
+    const current = conversations.find(c => c.id === id);
+    const nextPinned = !current?.pinned;
+    setServerConvs(prev => prev.map(c => c.id === id ? { ...c, pinned: nextPinned } : c));
+    setLocalConvs(prev => prev.map(c => c.id === id ? { ...c, pinned: nextPinned } : c));
+    if (isServerConv(id)) {
+      void pinConversation(id, nextPinned);
+    } else {
+      mutateStoredChats(prev => ({
+        ...prev,
+        conversations: prev.conversations.map(c => c.id === id ? { ...c, pinned: nextPinned } : c),
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverConvs, localConvs, isServerConv]);
+
+  const handleExportConversation = useCallback((id: string) => {
+    // Shared helper: server copy first (meta tails stripped), local fallback.
+    void exportConversationById(id);
+  }, []);
 
   if (isChatPage || isSetupPage) {
     // Chat and setup are self-contained surfaces — but they still want the
@@ -101,7 +229,16 @@ function InnerShell({ children }: { children: React.ReactNode }) {
       </div>
       {/* Offset for top bar (32px) + SystemConsole collapsed bar (24px) = 56px */}
       <div className="pt-14 layout-with-sidebar">
-        <Sidebar onNewChat={() => router.push('/')} />
+        <Sidebar
+          onNewChat={() => router.push('/')}
+          conversations={conversations}
+          activeConversationId={activeId}
+          onSelectConversation={handleSelectConversation}
+          onRenameConversation={handleRenameConversation}
+          onDeleteConversation={handleDeleteConversation}
+          onPinConversation={handlePinConversation}
+          onExportConversation={handleExportConversation}
+        />
         <main className="flex-1 min-w-0 overflow-auto">
           {/* Reconnect awareness — render on /vault, /wizard, /settings, etc.
               so users coming back to a non-chat surface still see what changed
