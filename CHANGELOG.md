@@ -3,6 +3,16 @@
 ## [Unreleased]
 
 ### Added
+- **Model Manager** (roadmap critical): an in-app model browser at
+  `/models` and a `nvh models` CLI. Every catalog row shows whether the
+  model fits the detected GPU's VRAM and how much disk it needs *before*
+  you download — the LM Studio / Jan experience, on the rented GPU
+  desktop nvHive provisions. One-click install streams live pull
+  progress over SSE; installed models list their on-disk size and can be
+  removed to reclaim space. CLI: `nvh models list [--all]`,
+  `nvh models pull <name>`, `nvh models rm <name>`. Surfaces existing
+  backend endpoints (`/v1/setup/model-fit`, `/v1/ollama/models`,
+  `/v1/ollama/pull`, `DELETE /v1/ollama/models/{name}`). Docs: docs/MODELS.md.
 - **MCP client support** (roadmap critical #1): attach external Model
   Context Protocol servers as Wizard tools. Claude-Desktop-compatible
   config at `$NVH_HOME/config/mcp-servers.json`; tools appear as

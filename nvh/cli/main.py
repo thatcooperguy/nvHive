@@ -13584,6 +13584,125 @@ services_app = typer.Typer(
 app.add_typer(services_app, name="services", rich_help_panel="Infrastructure")
 
 # ---------------------------------------------------------------------------
+# nvh models — local model manager (roadmap critical: in-app model browser)
+# ---------------------------------------------------------------------------
+
+models_app = typer.Typer(
+    help="Browse, install, and remove local Ollama models with VRAM-fit guidance.",
+)
+app.add_typer(models_app, name="models", rich_help_panel="Infrastructure")
+
+
+@models_app.command("list")
+def models_list(
+    all_catalog: bool = typer.Option(
+        False, "--all", help="Show the full catalog, not just installed models",
+    ),
+) -> None:
+    """Show installed models (and, with --all, the fit-ranked catalog).
+
+    Reads the same VRAM-fit report the WebUI Model Manager uses, so the
+    CLI and dashboard agree on what fits the detected GPU.
+    """
+    from nvh.integrations.diagnostics.model_fit import model_fit_report
+
+    report = model_fit_report()
+    vram = report.get("detected_vram_gb") or report.get("vram_gb")
+    models = report.get("models", report.get("ranked", []))
+    installed = [m for m in models if m.get("installed")]
+
+    def _label(m: dict[str, Any]) -> str:
+        target = m.get("install_target") or m.get("id") or "?"
+        title = m.get("title")
+        return f"{title} ({target})" if title and title != target else str(target)
+
+    if installed:
+        console.print(f"[bold]Installed models[/bold] (detected VRAM: {vram or '?'} GB)")
+        for m in installed:
+            disk = m.get("estimated_disk_gb") or m.get("size_gb") or "?"
+            console.print(f"  [green]✓[/green] {_label(m)} (~{disk} GB)")
+    else:
+        console.print("[dim]No local models installed yet.[/dim]")
+
+    if all_catalog:
+        console.print("\n[bold]Catalog[/bold] (best fit first):")
+        for m in models:
+            if m.get("installed"):
+                continue
+            fits = m.get("fits_vram")
+            mark = "[green]fits[/green]" if fits else "[yellow]tight[/yellow]"
+            disk = m.get("estimated_disk_gb") or "?"
+            console.print(
+                f"  {_label(m)} — {m.get('use_case_label', m.get('category', ''))}"
+                f" · ~{disk} GB · {mark}"
+            )
+    else:
+        console.print("\n[dim]Run `nvh models list --all` for the full catalog, "
+                      "or `nvh models pull <name>` to install one.[/dim]")
+
+
+@models_app.command("pull")
+def models_pull(
+    name: str = typer.Argument(..., help="Model name, e.g. llama3.2-vision"),
+) -> None:
+    """Download a model into the local Ollama store with live progress.
+
+    Runs `ollama pull` against the rootless Ollama binary and streams its
+    progress. The Wizard picks the new model up on its next turn; the
+    WebUI Model Manager drives the same pull over SSE.
+    """
+    import subprocess
+
+    from nvh.integrations.installs.studio_packs import _ollama_binary
+
+    binary = _ollama_binary()
+    if not binary:
+        console.print(
+            "[red]Ollama binary not found.[/red] Install it first: "
+            "[bold]nvh workstation --with-local-ai -y[/bold]"
+        )
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Pulling {name}...[/bold] [dim](Ctrl+C to cancel)[/dim]")
+    try:
+        proc = subprocess.run([binary, "pull", name], check=False)
+    except FileNotFoundError:
+        console.print(f"[red]Could not run {binary} pull.[/red]")
+        raise typer.Exit(1)
+    if proc.returncode == 0:
+        console.print(f"[green]✓[/green] {name} ready.")
+    else:
+        console.print(
+            f"[red]✗[/red] {name} did not install cleanly "
+            f"(exit {proc.returncode}). Try `nvh models list --all` for names that fit."
+        )
+        raise typer.Exit(1)
+
+
+@models_app.command("rm")
+def models_rm(
+    name: str = typer.Argument(..., help="Installed model name to remove"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation"),
+) -> None:
+    """Remove an installed model and reclaim its disk."""
+    import httpx
+
+    if not yes and not typer.confirm(f"Delete model '{name}' and reclaim its disk?"):
+        raise typer.Exit(0)
+    base = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+    try:
+        resp = httpx.request("DELETE", f"{base}/api/delete", json={"name": name}, timeout=30.0)
+        if resp.status_code == 404:
+            console.print(f"[yellow]Model '{name}' not found.[/yellow]")
+            raise typer.Exit(1)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        console.print(f"[red]Could not reach Ollama: {exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]✓[/green] Removed {name}.")
+
+
+# ---------------------------------------------------------------------------
 # nvh mcp — external MCP tool servers (roadmap critical #1, 2026-08-05)
 # ---------------------------------------------------------------------------
 
