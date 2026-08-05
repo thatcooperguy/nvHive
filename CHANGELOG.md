@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-05
+
+The bring-to-life release — and the first under the PolyForm
+Noncommercial 1.0.0 license. Four features close the competitive gaps a
+56-item roadmap audit ranked most critical: a 100-profile Agent Library,
+MCP client support, an in-app Model Manager, and real chat history.
+
 ### Added
 - **Chat history polish** (roadmap critical): past conversations are now
   browsable, resumable, and pinnable from the sidebar on every page.
