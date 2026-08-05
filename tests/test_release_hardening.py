@@ -1624,3 +1624,24 @@ def test_install_sh_extract_heredoc_uses_correct_studio_packs_path() -> None:
     # We anchor with the import statement to avoid matching narrative
     # comment text that may reference the historical bug.
     assert "from nvh.integrations.studio_packs import" not in install
+
+
+def test_webui_version_matches_package() -> None:
+    """The WebUI top bar renders NVHIVE_VERSION from web/lib/version.ts.
+    Found during the v0.40.0 release prep showing 0.35.1 while the
+    package was at 0.39.0 — five releases of user-visible drift, because
+    nothing bound the two. This does. (The release workflow's tag-parity
+    gate covers pyproject + nvh.__version__; this extends the invariant
+    to the WebUI.)
+    """
+    import re
+
+    init_text = (ROOT / "nvh" / "__init__.py").read_text(encoding="utf-8")
+    pkg_version = init_text.split('__version__ = "', 1)[1].split('"', 1)[0]
+    ts_text = (ROOT / "web" / "lib" / "version.ts").read_text(encoding="utf-8")
+    match = re.search(r"NVHIVE_VERSION = '([^']+)'", ts_text)
+    assert match, "web/lib/version.ts must define NVHIVE_VERSION"
+    assert match.group(1) == pkg_version, (
+        f"WebUI shows v{match.group(1)} but the package is {pkg_version} — "
+        "bump web/lib/version.ts in the same commit as the version bump"
+    )

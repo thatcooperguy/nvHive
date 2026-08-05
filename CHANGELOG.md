@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.40.0] - 2026-07-22
+
 The post-0.39.0 hardening cycle (~30 PRs, #49–#88). One promise drove
 all of it: `curl … install.sh | bash` ends in a browser tab where the
 Wizard actually answers — verified bring-up, self-healing services,
