@@ -8,7 +8,11 @@ version = "0.40.0"
 description = "NVHive — Multi-LLM orchestration platform with intelligent routing, hive consensus, and auto-agent generation"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
+# Relicensed 2026-08-05 (owner directive: proprietary stack, no commercial
+# use). Versions <= 0.40.0 were published under MIT and remain MIT; this
+# governs 0.41.0+. PolyForm NC permits use, modification, and distribution
+# for any noncommercial purpose only.
+license = "PolyForm-Noncommercial-1.0.0"
 authors = [{ name = "thatcooperguy and nvHive Contributors" }]
 maintainers = [{ name = "thatcooperguy" }]
 keywords = ["llm", "ai", "nvidia", "gpu", "orchestration", "multi-model", "agents", "ollama", "nemotron"]
