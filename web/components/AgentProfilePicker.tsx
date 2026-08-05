@@ -64,12 +64,41 @@ export default function AgentProfilePicker({ value, onChange, onCreateNew }: Pro
           color: 'var(--text-primary)',
         }}
       >
-        {profiles.map(p => (
-          <option key={p.name} value={p.name}>
-            {p.title}
-            {p.built_in ? '' : ' (custom)'}
-          </option>
-        ))}
+        {/* Agent Library (2026-08-05): 100+ profiles need grouping —
+            Core built-ins first, then one optgroup per library
+            category, then Custom user profiles. */}
+        {(() => {
+          const core = profiles.filter(p => p.built_in && !p.category);
+          const custom = profiles.filter(p => !p.built_in);
+          const cats = new Map<string, typeof profiles>();
+          for (const p of profiles) {
+            if (!p.built_in || !p.category) continue;
+            const list = cats.get(p.category) ?? [];
+            list.push(p);
+            cats.set(p.category, list);
+          }
+          return (
+            <>
+              {core.map(p => (
+                <option key={p.name} value={p.name}>{p.title}</option>
+              ))}
+              {[...cats.keys()].sort((a, b) => a.localeCompare(b)).map(cat => (
+                <optgroup key={cat} label={cat}>
+                  {cats.get(cat)!.map(p => (
+                    <option key={p.name} value={p.name}>{p.title}</option>
+                  ))}
+                </optgroup>
+              ))}
+              {custom.length > 0 && (
+                <optgroup label="Custom">
+                  {custom.map(p => (
+                    <option key={p.name} value={p.name}>{p.title}</option>
+                  ))}
+                </optgroup>
+              )}
+            </>
+          );
+        })()}
       </select>
       {onCreateNew && (
         <button

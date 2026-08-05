@@ -1286,6 +1286,9 @@ export interface AgentProfileSchema {
   // route to potentially-expensive cloud models — surfaced on the /agents
   // discovery cards so users can see the guard before they pick.
   max_cost_usd_per_turn?: number | null;
+  // Agent Library grouping label ("Coding", "Music Production", …).
+  // Empty/absent for the six core built-ins and ungrouped user profiles.
+  category?: string;
 }
 
 /** Build a renderable URL given a profile's avatar field. Returns null when
