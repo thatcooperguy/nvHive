@@ -31,6 +31,16 @@ class CouncilMember:
     persona: str = ""        # role name, e.g. "Software Architect"
     system_prompt: str = ""  # persona-specific system prompt
 
+    @property
+    def label(self) -> str:
+        """Key used for member_responses/failed_members/label_weights maps.
+
+        Every path that keys results by member must use this — an inline
+        copy of the expression once drifted and crashed the streaming
+        timeout handler.
+        """
+        return f"{self.provider}:{self.persona}" if self.persona else self.provider
+
 
 @dataclass
 class CouncilResponse:
@@ -372,10 +382,7 @@ class CouncilOrchestrator:
         for member in members:
             # Use persona system prompt if assigned, otherwise fall back to user's system prompt
             member_system = member.system_prompt or system_prompt
-            base_label = (
-                f"{member.provider}:{member.persona}"
-                if member.persona else member.provider
-            )
+            base_label = member.label
             # Ensure unique labels when same provider appears twice
             label = base_label
             suffix = 2
@@ -574,7 +581,7 @@ class CouncilOrchestrator:
 
         async def _stream_member(member: CouncilMember) -> None:
             member_system = member.system_prompt or system_prompt
-            label = f"{member.provider}:{member.persona}" if member.persona else member.provider
+            label = member.label
 
             await on_event({
                 "type": "member_start",
@@ -655,9 +662,9 @@ class CouncilOrchestrator:
                 timeout=council_timeout + 5,
             )
         except TimeoutError:
-            for label in [m.label for m in members]:
-                if label not in member_responses and label not in failed_members:
-                    failed_members[label] = "timed out"
+            for m in members:
+                if m.label not in member_responses and m.label not in failed_members:
+                    failed_members[m.label] = "timed out"
 
         total_elapsed = int((time.monotonic() - start) * 1000)
         quorum_met = len(member_responses) >= quorum
@@ -701,8 +708,7 @@ class CouncilOrchestrator:
                 # Build synthesis prompt (reuse _weighted_synthesis logic)
                 label_weights: dict[str, float] = {}
                 for m in members:
-                    lbl = f"{m.provider}:{m.persona}" if m.persona else m.provider
-                    label_weights[lbl] = m.weight
+                    label_weights[m.label] = m.weight
 
                 has_personas = any(m.persona for m in members)
                 if has_personas:
@@ -1016,8 +1022,7 @@ class CouncilOrchestrator:
         # Build label -> weight map
         label_weights: dict[str, float] = {}
         for m in members:
-            label = f"{m.provider}:{m.persona}" if m.persona else m.provider
-            label_weights[label] = m.weight
+            label_weights[m.label] = m.weight
 
         has_personas = any(m.persona for m in members)
 

@@ -220,6 +220,11 @@ class ToolRegistry:
                 output += f"\nSTDERR:\n{result.stderr}"
             if result.timed_out:
                 output += "\n(execution timed out)"
+            if result.isolation == "subprocess":
+                output += (
+                    "\n[isolation: subprocess — Docker unavailable, "
+                    "no network/memory isolation]"
+                )
             return output
 
         async def shell(command: str) -> str:

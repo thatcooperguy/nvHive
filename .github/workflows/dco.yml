@@ -2,12 +2,13 @@ name: DCO
 
 # Developer Certificate of Origin (DCO) sign-off check.
 #
-# Why this exists: nvHive ships under MIT today. To preserve the option to
-# relicense future versions (BUSL-1.1 + 4-year conversion to Apache-2.0, for
-# example) we need every external contribution to carry a signed-off-by line
-# that incorporates DCO 1.1 (https://developercertificate.org/). A signed PR
-# means the contributor licenses their contribution under the same terms as
-# the project and has the right to do so.
+# Why this exists: nvHive ships under PolyForm Noncommercial 1.0.0 today
+# (0.41.0+; versions <= 0.40.0 remain MIT). To preserve the option to
+# relicense future versions we need every external contribution to carry a
+# signed-off-by line that incorporates DCO 1.1
+# (https://developercertificate.org/). A signed PR means the contributor
+# licenses their contribution under the same terms as the project and has
+# the right to do so.
 #
 # Internal authors (the founder) can pass by simply using `git commit -s`.
 # External contributors get a clear "please add Signed-off-by" comment on

@@ -2,6 +2,61 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Streaming council timeout crash**: `run_council_streaming`'s overall
+  timeout handler read `m.label` from `CouncilMember`, a field that never
+  existed, so a council-wide timeout raised `AttributeError` instead of
+  marking members failed. `CouncilMember.label` is now a real property and
+  every path that keys results by member (streaming, timeout, both
+  `label_weights` maps, the non-streaming dedup) uses it.
+- **MCP cabinet drift**: `nvh.mcp_server` hardcoded 12 valid cabinets while
+  `nvh.core.agents.COUNCIL_PRESETS` defines 13 — `product_resilience` worked
+  everywhere except via MCP. The valid set is now derived from the preset
+  registry, preset descriptions moved to `agents.PRESET_DESCRIPTIONS` beside
+  it, and a drift-guard test pins both in lockstep.
+- **`nvh.complete()` conversation history**: the advertised OpenAI drop-in
+  silently discarded every turn except the last user message. `Engine.query`
+  gained a `history` parameter (threaded through routing, budget, cache,
+  fallback, and privacy mode) and `complete()` now forwards the transcript
+  up to the final user message in caller order. Multiple system messages are
+  joined into one system prompt; messages after the last user turn (e.g. an
+  assistant prefill) are still dropped rather than reordered — the engine
+  appends the prompt last, and an inverted conversation is worse (Anthropic
+  rejects assistant-first outright) than the old drop-it behavior.
+- **`init_db()` engine churn**: several DAO functions call `init_db()` on
+  every invocation, and each call rebuilt the SQLAlchemy engine and leaked
+  the previous pool. Re-init is now a no-op when the engine already points
+  at the target path (with an existence check preserving the old self-healing
+  of an externally wiped DB file), a re-point disposes the old engine only
+  after the replacement is fully initialized, and a failed re-init leaves the
+  previous engine/path state untouched instead of half-swapped.
+- **Sandbox isolation visibility**: when Docker is absent, LLM-generated
+  code silently fell back to an unisolated subprocess with only a log-file
+  warning. `ExecutionResult.isolation` now records which mode ran
+  ("docker"/"subprocess"), the `run_code`/`shell` tools append a visible
+  notice on fallback, `/v1/sandbox/execute` returns the field, and
+  `/v1/sandbox/status` reports a three-way mode (docker/refused/subprocess).
+  New opt-in fail-closed mode: `NVH_SANDBOX_REQUIRE_DOCKER=1` (also
+  `true`/`yes`, matching `NVH_SANDBOX`) refuses execution instead of falling
+  back; workflow shell steps treat that refusal as a step failure rather
+  than saving it as command output. Default behavior is unchanged — the
+  primary rootless target has no Docker.
+- **Shell completions actually work**: `nvh completions` still shelled out
+  to the pre-rename `hive` binary and a nonexistent `council.cli.main`
+  module, so it always emitted a dead fallback snippet that itself invoked
+  `hive`. It now drives the real `nvh` script (`_NVH_COMPLETE`), generates
+  the script in-process via Click when the console script isn't usable
+  (not on PATH, broken shim), and installs `# nvh completion` blocks /
+  `nvh.fish`. `main()` hands completion requests (`_NVH_COMPLETE` /
+  `_NVHIVE_COMPLETE` with a `{shell}_source`/`{shell}_complete` value)
+  straight to Typer before the REPL/setup dispatcher can swallow them.
+
+### Changed
+- **License texts caught up with the 0.41.0 relicense**: CONTRIBUTING.md
+  claimed MIT inbound licensing and dco.yml's comment said the project
+  "ships under MIT today"; both now state PolyForm Noncommercial 1.0.0
+  (versions ≤ 0.40.0 remain MIT).
+
 ## [0.41.0] - 2026-08-05
 
 The bring-to-life release — and the first under the PolyForm

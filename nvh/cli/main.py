@@ -11084,7 +11084,7 @@ def workflow_show(
 
 
 # ---------------------------------------------------------------------------
-# hive completions
+# nvh completions
 # ---------------------------------------------------------------------------
 
 @app.command(rich_help_panel="Admin")
@@ -11117,7 +11117,7 @@ def completions(
         # Print the script so the user can inspect or pipe it
         console.print(script, highlight=False)
         console.print(
-            f"\n[dim]Tip: run `hive completions {shell} --install` to install automatically.[/dim]"
+            f"\n[dim]Tip: run `nvh completions {shell} --install` to install automatically.[/dim]"
         )
 
 
@@ -13450,6 +13450,17 @@ def main():
     nvh "what is AI?"       → bare prompt → LLM
     nvh ask "question"      → subcommand
     """
+    # Shell completion requests invoke `nvh` (or the `nvhive` alias, whose
+    # Click env var is _NVHIVE_COMPLETE) with no argv, which would otherwise
+    # fall through to the REPL/guided setup below. Click handles the env var
+    # inside app(), so hand off before any dispatching — but only for values
+    # shaped like Click instructions ({shell}_source / {shell}_complete), so
+    # a stray exported variable can't hijack normal invocations.
+    for _complete_var in ("_NVH_COMPLETE", "_NVHIVE_COMPLETE"):
+        if os.environ.get(_complete_var, "").endswith(("_source", "_complete")):
+            app()
+            return
+
     args = sys.argv[1:]
 
     # Load API keys from keyring / ~/.hive/.env before config interpolation

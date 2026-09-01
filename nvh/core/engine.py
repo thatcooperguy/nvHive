@@ -534,8 +534,14 @@ class Engine:
         privacy: bool = False,
         escalate: bool = False,
         verify: bool = False,
+        history: list[Message] | None = None,
     ) -> CompletionResponse:
         """Execute a single query with routing, fallback, caching, and budget enforcement.
+
+        *history* supplies prior conversation turns, inserted after the
+        system prompt and before the final user message. Ignored when
+        stored conversation context (*conversation_id*/*continue_last*)
+        is used.
 
         When *privacy* is ``True``, cache reads/writes, query logging, and
         conversation persistence are all skipped so no data is stored.
@@ -564,6 +570,7 @@ class Engine:
                 conversation_id=conversation_id,
                 continue_last=continue_last,
                 privacy=privacy,
+                history=history,
             )
             # Attach escalation metadata
             resp.metadata.update(meta)
@@ -647,21 +654,18 @@ class Engine:
         if self.orchestrator.is_active:
             _optimized_prompt = await self.orchestrator.optimize_prompt(prompt, decision.provider)
 
-        # Build messages (with conversation context if continuing, unless privacy mode)
-        if privacy:
-            messages: list[Message] = []
-            if sys_prompt:
-                messages.append(Message(role="system", content=sys_prompt))
-            messages.append(Message(role="user", content=_optimized_prompt))
-        else:
-            messages = await self._build_messages(
-                prompt=_optimized_prompt,
-                conversation_id=conversation_id,
-                continue_last=continue_last,
-                system_prompt=sys_prompt,
-                provider=decision.provider,
-                model=decision.model,
-            )
+        # Build messages (with conversation context if continuing, unless
+        # privacy mode — privacy skips the stored-conversation lookup but
+        # keeps caller-supplied history, which is request content)
+        messages = await self._build_messages(
+            prompt=_optimized_prompt,
+            conversation_id=None if privacy else conversation_id,
+            continue_last=False if privacy else continue_last,
+            system_prompt=sys_prompt,
+            provider=decision.provider,
+            model=decision.model,
+            history=history,
+        )
 
         # Cache check (skipped in privacy mode)
         if not privacy and use_cache and self.config.cache.enabled and temp == 0:
@@ -1155,8 +1159,13 @@ class Engine:
         system_prompt: str | None,
         provider: str,
         model: str,
+        history: list[Message] | None = None,
     ) -> list[Message]:
-        """Build the message list, including conversation history if applicable."""
+        """Build the message list, including conversation history if applicable.
+
+        Caller-supplied *history* is ignored when stored conversation
+        context is used — the persisted turns already cover it.
+        """
         if conversation_id or continue_last:
             conv_id = await self.context.get_or_create_conversation(
                 conversation_id=conversation_id,
@@ -1171,6 +1180,8 @@ class Engine:
         messages: list[Message] = []
         if system_prompt:
             messages.append(Message(role="system", content=system_prompt))
+        if history:
+            messages.extend(history)
         messages.append(Message(role="user", content=prompt))
         return messages
 

@@ -32,6 +32,7 @@ except ImportError:
 
 _engine = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+_db_path: Path | None = None
 
 
 def _default_db_path() -> Path:
@@ -54,29 +55,50 @@ def _legacy_db_path() -> Path:
 
 async def init_db(db_path: Path | None = None) -> None:
     """Initialize the database engine and create tables."""
-    global _engine, _session_factory
+    global _engine, _session_factory, _db_path
     if db_path is None:
         db_path = _default_db_path()
         legacy_path = _legacy_db_path()
         if db_path != legacy_path and legacy_path.exists() and not db_path.exists():
             db_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(legacy_path, db_path)
+
+    # Several DAO functions call init_db() on every invocation, so this must
+    # be a no-op when the engine already points at the target path. The
+    # exists() check keeps the old per-call self-healing: an externally
+    # deleted DB file triggers a full re-init instead of "no such table".
+    if _engine is not None and db_path == _db_path and db_path.exists():
+        return
+
     db_path.parent.mkdir(parents=True, exist_ok=True)
     url = f"sqlite+aiosqlite:///{db_path}"
     db_timeout = float(os.environ.get("NVH_DB_TIMEOUT", "5"))
-    _engine = create_async_engine(
+    engine = create_async_engine(
         url,
         echo=False,
         connect_args={"timeout": db_timeout},
         pool_pre_ping=False,
     )
-    _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
-    async with _engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # Enable WAL mode for concurrent read/write performance
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
-        await conn.execute(text("PRAGMA busy_timeout=5000"))
-        await _ensure_conversation_columns(conn)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            # Enable WAL mode for concurrent read/write performance
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA busy_timeout=5000"))
+            await _ensure_conversation_columns(conn)
+    except BaseException:
+        # Leave the previous engine/path in place — a half-initialized
+        # engine must never become the module state.
+        await engine.dispose()
+        raise
+
+    if _engine is not None:
+        # Re-pointing (e.g. tests moving NVH_HOME): dispose the old pool
+        # only after the replacement is fully ready, so it doesn't leak.
+        await _engine.dispose()
+    _engine = engine
+    _session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    _db_path = db_path
 
 
 # Columns added to `conversations` after the table first shipped.
@@ -100,11 +122,12 @@ async def _ensure_conversation_columns(conn) -> None:
 
 async def close_db() -> None:
     """Dispose of the database engine and reset module state."""
-    global _engine, _session_factory
+    global _engine, _session_factory, _db_path
     if _engine:
         await _engine.dispose()
     _engine = None
     _session_factory = None
+    _db_path = None
 
 
 def get_session() -> AsyncSession:

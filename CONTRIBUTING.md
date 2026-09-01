@@ -56,7 +56,8 @@ force-push.
 ## Inbound License and Project Identity
 
 By submitting a contribution, you agree that your contribution is licensed under
-the MIT License used by this repository.
+the PolyForm Noncommercial License 1.0.0 used by this repository (see `LICENSE`;
+versions 0.40.0 and earlier were published under MIT and remain MIT).
 
 The official nvHive project is maintained at
 https://github.com/thatcooperguy/nvHive and distributed on PyPI as `nvhive`.

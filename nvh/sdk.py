@@ -295,6 +295,15 @@ async def complete(
     ``nvh.complete()`` and get multi-provider routing, failover, and
     budget enforcement for free.
 
+    The transcript up to the final user message is forwarded to the
+    provider in caller order; the final user message doubles as the
+    routing prompt. Messages *after* the last user turn (e.g. an
+    assistant prefill) are not forwarded — the engine appends the user
+    prompt last, so including them would reorder the conversation.
+    Multiple system messages are joined (in order) into one system
+    prompt. When ``conversation_id`` is passed through ``kwargs``, the
+    stored conversation context supersedes the supplied transcript.
+
     Args:
         messages: List of message dicts (``{"role": "...", "content": "..."}``).
         provider: Pin to a specific provider. ``None`` = auto-route.
@@ -319,14 +328,19 @@ async def complete(
     engine = await _get_engine()
     internal_msgs = _messages_to_internal(messages)
 
-    # Extract the user prompt (last user message) for routing
-    user_prompt = ""
-    system_prompt = None
-    for msg in reversed(internal_msgs):
-        if msg.role == "user" and not user_prompt:
-            user_prompt = msg.content
-        if msg.role == "system" and system_prompt is None:
-            system_prompt = msg.content
+    system_parts = [m.content for m in internal_msgs if m.role == "system"]
+    system_prompt = "\n\n".join(system_parts) if system_parts else None
+    non_system = [m for m in internal_msgs if m.role != "system"]
+
+    # The last user turn is the routing prompt; earlier turns travel as
+    # history. The engine re-appends the prompt last, so anything after the
+    # last user turn (assistant prefill) is dropped rather than reordered.
+    prompt_index = next(
+        (i for i in range(len(non_system) - 1, -1, -1) if non_system[i].role == "user"),
+        None,
+    )
+    user_prompt = non_system[prompt_index].content if prompt_index is not None else ""
+    history = non_system[:prompt_index] if prompt_index is not None else []
 
     return await engine.query(
         prompt=user_prompt,
@@ -336,6 +350,7 @@ async def complete(
         temperature=temperature,
         max_tokens=max_tokens,
         stream=False,
+        history=history or None,
         **kwargs,
     )
 

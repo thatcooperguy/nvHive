@@ -4416,7 +4416,9 @@ async def sandbox_execute(
     - Memory is capped at 512 MB
     - Execution is time-limited to 30 s
     - Container runs as uid 1000, read-only filesystem with a small /tmp tmpfs
-    - Falls back to a plain subprocess if Docker is unavailable
+    - Falls back to a plain subprocess if Docker is unavailable (the
+      ``isolation`` field in the response says which mode actually ran;
+      with NVH_SANDBOX_REQUIRE_DOCKER set the fallback is refused instead)
     """
     sandbox = _get_sandbox()
 
@@ -4440,6 +4442,7 @@ async def sandbox_execute(
         "timed_out": result.timed_out,
         "error": result.error,
         "files_created": result.files_created,
+        "isolation": result.isolation,
     })
 
 
@@ -4448,16 +4451,25 @@ async def sandbox_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     """Return whether Docker is available for sandboxed execution and the active config."""
     sandbox = _get_sandbox()
     docker_available = await sandbox._check_docker()
+    if docker_available:
+        isolation_mode = "docker"
+    elif sandbox.config.require_docker:
+        # execute() refuses the subprocess fallback in this state — report
+        # that instead of implying execution would fall back and run
+        isolation_mode = "refused"
+    else:
+        isolation_mode = "subprocess"
 
     return _response_envelope({
         "docker_available": docker_available,
-        "isolation_mode": "docker" if docker_available else "subprocess",
+        "isolation_mode": isolation_mode,
         "config": {
             "timeout_seconds": sandbox.config.timeout_seconds,
             "memory_limit_mb": sandbox.config.memory_limit_mb,
             "network_enabled": sandbox.config.network_enabled,
             "max_output_bytes": sandbox.config.max_output_bytes,
             "allowed_languages": sandbox.config.allowed_languages,
+            "require_docker": sandbox.config.require_docker,
         },
     })
 

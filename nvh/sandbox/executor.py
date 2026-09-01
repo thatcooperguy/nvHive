@@ -18,9 +18,16 @@ Two execution modes:
 Docker mode is strongly recommended for production deployments.
 The subprocess fallback is intended for development and trusted
 environments where Docker is not available.
+
+ExecutionResult.isolation records which mode actually ran ("docker" or
+"subprocess"). Set NVH_SANDBOX_REQUIRE_DOCKER=1 (or
+SandboxConfig.require_docker) to fail closed instead of falling back.
 """
 
+from __future__ import annotations
+
 import asyncio
+import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +42,7 @@ class ExecutionResult:
     files_created: list[str] = field(default_factory=list)
     timed_out: bool = False
     error: str = ""
+    isolation: str = ""  # "docker", "subprocess", or "" if nothing executed
 
 @dataclass
 class SandboxConfig:
@@ -43,6 +51,16 @@ class SandboxConfig:
     network_enabled: bool = False
     max_output_bytes: int = 1_000_000  # 1MB output limit
     allowed_languages: list[str] = field(default_factory=lambda: ["python", "javascript", "bash"])
+    # Fail closed instead of falling back to an unisolated subprocess when
+    # Docker is unavailable. Off by default: the primary deployment target
+    # is rootless Linux boxes without Docker.
+    # Truthy set matches docker_sandbox.sandbox_enabled — "yes" silently
+    # failing open here would defeat the whole flag.
+    require_docker: bool = field(
+        default_factory=lambda: os.environ.get(
+            "NVH_SANDBOX_REQUIRE_DOCKER", ""
+        ).strip().lower() in ("1", "true", "yes")
+    )
 
 class SandboxExecutor:
     """Execute code in a sandboxed environment."""
@@ -87,15 +105,29 @@ class SandboxExecutor:
                 exit_code=1, execution_time_ms=0, error=f"Language '{language}' not allowed"
             )
 
-        if await self._check_docker():
-            return await self._execute_docker(code, language, files)
-        else:
+        docker = await self._check_docker()
+
+        if not docker and self.config.require_docker:
+            msg = (
+                "Docker is unavailable and NVH_SANDBOX_REQUIRE_DOCKER is set — "
+                "refusing subprocess fallback, nothing was executed"
+            )
+            return ExecutionResult(
+                stdout="", stderr=msg,
+                exit_code=-1, execution_time_ms=0, error=msg,
+            )
+
+        if not docker:
             import logging
             logging.getLogger(__name__).warning(
                 "Docker unavailable — using subprocess fallback "
                 "(no network/memory/user isolation)"
             )
-            return await self._execute_subprocess(code, language, files)
+
+        runner = self._execute_docker if docker else self._execute_subprocess
+        result = await runner(code, language, files)
+        result.isolation = "docker" if docker else "subprocess"
+        return result
 
     async def _execute_docker(
         self, code: str, language: str, files: dict[str, str] | None

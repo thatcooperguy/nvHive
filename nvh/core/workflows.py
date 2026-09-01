@@ -193,6 +193,11 @@ async def run_workflow(
                 from nvh.sandbox.executor import SandboxExecutor
                 sandbox = SandboxExecutor()
                 exec_result = await sandbox.execute(code=prompt, language="bash")
+                # error with no isolation means the sandbox refused to run
+                # anything (require_docker, disallowed language) — that must
+                # fail the step, not flow downstream as command output
+                if exec_result.error and not exec_result.isolation:
+                    raise RuntimeError(exec_result.error)
                 result_text = exec_result.stdout
                 if exec_result.stderr:
                     result_text += f"\nSTDERR: {exec_result.stderr}"

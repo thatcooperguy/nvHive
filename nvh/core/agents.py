@@ -550,6 +550,27 @@ COUNCIL_PRESETS: dict[str, list[PersonaTemplate]] = {
 }
 
 
+# Human-readable blurb per preset, kept beside COUNCIL_PRESETS so surfaces
+# that list presets (MCP list_cabinets, docs) can't drift from the registry.
+PRESET_DESCRIPTIONS: dict[str, str] = {
+    "executive": "CEO, CTO, CFO, CMO, COO — strategic decisions",
+    "engineering": "Architect, Backend, Frontend, DevOps, QA — technical decisions",
+    "security_review": "Security analysts — vulnerability assessment",
+    "code_review": "Senior engineers — code quality review",
+    "product": "Product managers, designers, analysts — product decisions",
+    "product_resilience": (
+        "Student advocate, PM, UX, SRE, QA, ML — onboarding and failure-mode review"
+    ),
+    "data": "Data scientists, ML engineers — data analysis",
+    "full_board": "All expert personas",
+    "homework_help": "Tutors across subjects — student help",
+    "code_tutor": "Programming mentors — learn to code",
+    "essay_review": "Writing coaches — improve essays",
+    "study_group": "Study partners — exam prep",
+    "exam_prep": "Test prep specialists — practice questions",
+}
+
+
 def get_preset_agents(preset_name: str, query: str) -> list[AgentPersona]:
     """Get agent personas from a named preset."""
     templates = COUNCIL_PRESETS.get(preset_name, [])

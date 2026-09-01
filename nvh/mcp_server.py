@@ -130,6 +130,13 @@ def _format_council_response(result: Any) -> str:
     return "".join(parts)
 
 
+def _valid_cabinets() -> set[str]:
+    """Cabinet names accepted by council/throwdown — derived from the preset
+    registry in nvh.core.agents so the MCP surface can't drift from it."""
+    from nvh.core.agents import list_presets
+    return set(list_presets())
+
+
 def create_server():
     """Create and configure the MCP server with nvHive tools."""
     try:
@@ -160,11 +167,7 @@ def create_server():
     # ------------------------------------------------------------------
 
     valid_strategies = {"weighted_consensus", "majority_vote", "best_of"}
-    valid_cabinets = {
-        "executive", "engineering", "security_review", "code_review",
-        "product", "data", "full_board", "homework_help", "code_tutor",
-        "essay_review", "study_group", "exam_prep",
-    }
+    valid_cabinets = _valid_cabinets()
 
     def _validate_prompt(prompt: str) -> str:
         prompt = prompt.strip()
@@ -344,9 +347,8 @@ def create_server():
             num_members: Number of council members (2-10). Default 3.
             strategy: Consensus strategy: "weighted_consensus", "majority_vote",
                      "best_of". Leave empty for default.
-            cabinet: Agent cabinet preset: "executive", "engineering",
-                    "security_review", "code_review", "product", "data",
-                    "homework_help", "code_tutor", "essay_review".
+            cabinet: Agent cabinet preset (e.g. "executive", "engineering").
+                    Use the list_cabinets tool for the full list.
                     Leave empty for auto-generated agents.
         """
         try:
@@ -520,30 +522,15 @@ def create_server():
         Cabinets are predefined groups of expert personas
         optimized for specific tasks.
         """
-        from nvh.core.agents import list_presets
+        from nvh.core.agents import PRESET_DESCRIPTIONS, list_presets
 
         presets = list_presets()
         lines = ["## Agent Cabinets\n"]
         lines.append("| Cabinet | Description |")
         lines.append("|---------|-------------|")
 
-        cabinet_descriptions = {
-            "executive": "CEO, CTO, CFO, CMO, COO — strategic decisions",
-            "engineering": "Architect, Backend, Frontend, DevOps, QA — technical decisions",
-            "security_review": "Security analysts — vulnerability assessment",
-            "code_review": "Senior engineers — code quality review",
-            "product": "Product managers, designers, analysts — product decisions",
-            "data": "Data scientists, ML engineers — data analysis",
-            "full_board": "All expert personas",
-            "homework_help": "Tutors across subjects — student help",
-            "code_tutor": "Programming mentors — learn to code",
-            "essay_review": "Writing coaches — improve essays",
-            "study_group": "Study partners — exam prep",
-            "exam_prep": "Test prep specialists — practice questions",
-        }
-
-        for preset in presets:
-            desc = cabinet_descriptions.get(preset, "Expert persona group")
+        for preset, roles in presets.items():
+            desc = PRESET_DESCRIPTIONS.get(preset) or ", ".join(roles)
             lines.append(f"| {preset} | {desc} |")
 
         return "\n".join(lines)
