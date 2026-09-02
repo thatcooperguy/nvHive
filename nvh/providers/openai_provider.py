@@ -108,12 +108,12 @@ def _build_messages(
 def _calc_cost(model: str, usage: Usage) -> Decimal:
     """Calculate cost using LiteLLM's cost tracking."""
     try:
-        cost = litellm.completion_cost(
+        prompt_cost, completion_cost = litellm.cost_per_token(
             model=model,
             prompt_tokens=usage.input_tokens,
             completion_tokens=usage.output_tokens,
         )
-        return Decimal(str(round(cost, 6)))
+        return Decimal(str(round(prompt_cost + completion_cost, 6)))
     except Exception:
         return Decimal("0")
 
@@ -124,8 +124,8 @@ class OpenAIProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "gpt-4o",
-        fallback_model: str = "gpt-4o-mini",
+        default_model: str = "gpt-5.6-terra",
+        fallback_model: str = "gpt-5.6-luna",
         base_url: str | None = None,
         provider_name: str = "openai",
         timeout: int = 120,

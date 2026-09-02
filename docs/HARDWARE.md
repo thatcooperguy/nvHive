@@ -14,7 +14,7 @@ NVIDIA GPU recommended but NOT required. Without a GPU, NVHive uses cloud AI pro
 
 | GPU | VRAM | Best Local Model | tok/s (approx) | Notes |
 |-----|------|-------------------|-----------------|-------|
-| No GPU | — | Cloud only | N/A | Free tiers: LLM7, Groq, GitHub Models |
+| No GPU | — | Cloud only | N/A | Free tiers: LLM7, Groq, Google Gemini |
 | GTX 1660 / RTX 2060 | 6 GB | gemma3:4b + moondream | varies | Basic local AI |
 | RTX 3060 | 12 GB | qwen3:8b + minicpm-v | varies | Good for students |
 | RTX 3070 / 3080 | 8-10 GB | qwen3:8b + compact vision | varies | Great balance |
@@ -39,7 +39,6 @@ NVIDIA GPU recommended but NOT required. Without a GPU, NVHive uses cloud AI pro
 NVHive works WITHOUT a GPU using free cloud providers:
 - LLM7: anonymous, no signup, 30 RPM
 - Groq: free tier, ultra-fast
-- GitHub Models: free GPT-4o (50/day)
 - Google Gemini: free tier, 15 RPM
 
 Set up with: `nvh setup`

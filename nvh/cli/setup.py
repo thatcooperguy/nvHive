@@ -11,7 +11,9 @@ Uses Rich for terminal UI (consistent with the rest of the CLI).
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -19,6 +21,7 @@ from rich.table import Table
 from rich.text import Text
 
 from nvh.config.settings import DEFAULT_CONFIG_DIR
+from nvh.providers.registry import RETIRED_PROVIDERS
 
 # ---------------------------------------------------------------------------
 # Provider definitions — the four core providers plus Ollama
@@ -32,17 +35,177 @@ CORE_PROVIDERS = [
     ("google", "Google Gemini", "GOOGLE_API_KEY", "https://aistudio.google.com/apikey"),
 ]
 
+# Secondary env var names some providers accept (config.yaml templates use
+# ${PRIMARY:-${ALIAS}}); the primary is always <NAME>_API_KEY.
+_ENV_VAR_ALIASES: dict[str, tuple[str, ...]] = {
+    "grok": ("XAI_API_KEY",),
+    "google": ("GEMINI_API_KEY",),
+    "cohere": ("CO_API_KEY",),
+    "together": ("TOGETHERAI_API_KEY",),
+    "huggingface": ("HF_TOKEN",),
+    "nvidia": ("NIM_API_KEY",),
+}
+
+# ---------------------------------------------------------------------------
+# Retired model IDs, keyed provider -> {old_id: new_id} — verified against
+# provider catalogs 2026-09-01 (0.41.1). A bare ID only means the retired
+# model inside its own provider's block (llm7 also served "gpt-4o-mini").
+# `nvh config migrate` rewrites these in the user's config.yaml; `nvh doctor`
+# suggests it when a configured model is in this table.
+# ---------------------------------------------------------------------------
+
+RETIRED_MODEL_RENAMES: dict[str, dict[str, str]] = {
+    "openai": {
+        "gpt-4o": "gpt-5.6-terra",
+        "gpt-4o-mini": "gpt-5.6-luna",
+    },
+    "google": {
+        "gemini/gemini-2.0-flash": "gemini/gemini-3.7-flash",
+        "gemini/gemini-2.0-flash-lite": "gemini/gemini-3.5-flash-lite",
+    },
+    "groq": {
+        "groq/llama-3.3-70b-versatile": "groq/openai/gpt-oss-120b",
+        "groq/llama-3.1-8b-instant": "groq/openai/gpt-oss-20b",
+    },
+    "grok": {
+        "xai/grok-2": "xai/grok-4.6",
+    },
+    "cohere": {
+        "command-r-plus": "command-a-03-2025",
+        "command-r": "command-r-08-2024",
+    },
+    "deepseek": {
+        "deepseek/deepseek-chat": "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-reasoner": "deepseek/deepseek-v4-pro",
+    },
+    "perplexity": {
+        "perplexity/llama-3.1-sonar-large-128k-online": "perplexity/sonar-pro",
+        "perplexity/llama-3.1-sonar-small-128k-online": "perplexity/sonar",
+    },
+    "together": {
+        "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": "together_ai/openai/gpt-oss-120b",
+        "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": "together_ai/openai/gpt-oss-20b",
+    },
+    "fireworks": {
+        "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct":
+            "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
+        "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct":
+            "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
+    },
+    "openrouter": {
+        "openrouter/meta-llama/llama-3.1-70b-instruct": "openrouter/openai/gpt-oss-120b",
+        "openrouter/meta-llama/llama-3.1-8b-instruct": "openrouter/openai/gpt-oss-20b",
+    },
+    "cerebras": {
+        "cerebras/llama3.1-70b": "cerebras/gpt-oss-120b",
+        "cerebras/llama3.1-8b": "cerebras/gpt-oss-120b",
+    },
+    "sambanova": {
+        "sambanova/Meta-Llama-3.1-70B-Instruct": "sambanova/Meta-Llama-3.3-70B-Instruct",
+        "sambanova/Meta-Llama-3.1-8B-Instruct": "sambanova/gpt-oss-120b",
+    },
+    "huggingface": {
+        "huggingface/meta-llama/Meta-Llama-3-8B-Instruct": "huggingface/openai/gpt-oss-120b",
+        "huggingface/mistralai/Mistral-7B-Instruct-v0.3": "huggingface/openai/gpt-oss-20b",
+    },
+    "ai21": {
+        "jamba-1.5-large": "ai21_chat/jamba-large-1.7",
+        "jamba-1.5-mini": "ai21_chat/jamba-mini-2",
+    },
+    "nvidia": {
+        "meta/llama-3.1-70b-instruct": "nvidia_nim/meta/llama-3.3-70b-instruct",
+        "meta/llama-3.1-8b-instruct": "nvidia_nim/meta/llama-3.1-8b-instruct",
+    },
+    "llm7": {
+        "gpt-4o": "gpt-oss",
+        "gpt-4o-mini": "gpt-oss",
+        "llama-3.3-70b": "minimax-m2.7",
+        "deepseek-r1-0528": "gpt-oss",
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def load_env_keys() -> None:
-    """Load API keys from keyring and HIVE_CONFIG_HOME/.env into os.environ.
+def _layout_config_dir() -> Path:
+    # Mirrors nvh.integrations.workspace.storage.storage_layout().config_dir
+    # (HIVE_CONFIG_HOME, else <NVH_HOME | NVHIVE_HOME | ~/.nvh>/config) without
+    # importing nvh.integrations, which costs every CLI invocation ~160 ms.
+    explicit = os.environ.get("HIVE_CONFIG_HOME")
+    if explicit:
+        return Path(os.path.expandvars(explicit)).expanduser()
+    home = os.environ.get("NVH_HOME") or os.environ.get("NVHIVE_HOME")
+    if home:
+        return Path(os.path.expandvars(home)).expanduser() / "config"
+    return Path.home() / ".nvh" / "config"
 
-    Checks keyring first (primary storage), then falls back to .env file
-    (headless fallback). Keys are set in os.environ so that config YAML
-    ``${VAR}`` interpolation can resolve them without warnings.
+
+def _env_key_files() -> list[Path]:
+    """``.env`` files to load, in load order.
+
+    ``DEFAULT_CONFIG_DIR/.env`` (~/.hive or HIVE_CONFIG_HOME) is where
+    ``nvh setup`` writes; the storage layout's ``config_dir/.env`` is where the
+    web wizard's save-key path writes. They are the same file only when
+    HIVE_CONFIG_HOME is exported, so both are read.
+    """
+    files = [DEFAULT_CONFIG_DIR / ".env"]
+    try:
+        layout_env = _layout_config_dir() / ".env"
+        if layout_env.resolve() != files[0].resolve():
+            files.append(layout_env)
+    except Exception:
+        pass
+    return files
+
+
+def provider_config_files() -> list[Path]:
+    """``config.yaml`` files a provider stanza may live in.
+
+    ``nvh setup`` writes DEFAULT_CONFIG_PATH; the web wizard's save-key path
+    (and the API server generally) writes the storage layout's
+    ``config_dir/config.yaml``, appended when it exists as a distinct file.
+    """
+    from nvh.config.settings import DEFAULT_CONFIG_PATH
+
+    files = [DEFAULT_CONFIG_PATH]
+    try:
+        layout_cfg = _layout_config_dir() / "config.yaml"
+        if layout_cfg.exists() and layout_cfg.resolve() != DEFAULT_CONFIG_PATH.resolve():
+            files.append(layout_cfg)
+    except Exception:
+        pass
+    return files
+
+
+def _load_env_file(env_file: Path) -> None:
+    """Merge ``KEY=VALUE`` lines into os.environ without overriding set vars."""
+    try:
+        if not env_file.exists():
+            return
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            var, _, val = line.partition("=")
+            var = var.strip()
+            val = val.strip()
+            # Don't overwrite existing env vars (keyring or an earlier file may have set them)
+            if var and val and not os.environ.get(var):
+                os.environ[var] = val
+    except Exception:
+        pass
+
+
+def load_env_keys(use_keyring: bool = True) -> None:
+    """Load API keys from keyring and the ``.env`` files into os.environ.
+
+    Checks keyring first (primary storage), then falls back to the .env
+    files (headless fallback + web wizard save-key). Keys are set in
+    os.environ so that config YAML ``${VAR}`` interpolation can resolve
+    them without warnings. ``use_keyring=False`` skips the four synchronous
+    keyring round-trips (the API lifespan keeps keyring opt-in).
     """
     # --- Keyring: load all known provider keys into os.environ -----------
     _KEYRING_KEYS = [
@@ -51,33 +214,20 @@ def load_env_keys() -> None:
         ("anthropic", "ANTHROPIC_API_KEY"),
         ("google", "GOOGLE_API_KEY"),
     ]
-    try:
-        import keyring
-        for name, env_var in _KEYRING_KEYS:
-            if not os.environ.get(env_var):
-                val = keyring.get_password("nvhive", f"{name}_api_key")
-                if val:
-                    os.environ[env_var] = val
-    except Exception:
-        pass
+    if use_keyring:
+        try:
+            import keyring
+            for name, env_var in _KEYRING_KEYS:
+                if not os.environ.get(env_var):
+                    val = keyring.get_password("nvhive", f"{name}_api_key")
+                    if val:
+                        os.environ[env_var] = val
+        except Exception:
+            pass
 
-    # --- .env file: fallback for headless servers without keyring --------
-    try:
-        env_file = DEFAULT_CONFIG_DIR / ".env"
-        if not env_file.exists():
-            return
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            var, _, val = line.partition("=")
-            var = var.strip()
-            val = val.strip()
-            # Don't overwrite existing env vars (keyring may have set them above)
-            if var and val and not os.environ.get(var):
-                os.environ[var] = val
-    except Exception:
-        pass
+    # --- .env files: fallback for headless servers without keyring -------
+    for env_file in _env_key_files():
+        _load_env_file(env_file)
 
 
 def _check_provider_key(name: str, env_var: str) -> str | None:
@@ -136,6 +286,198 @@ def _store_key(name: str, env_var: str, key: str) -> bool:
     except Exception:
         pass
     return False
+
+
+def provider_env_vars(name: str) -> list[str]:
+    """Env var names a provider's key may be stored under (primary first)."""
+    return [f"{name.upper()}_API_KEY", *_ENV_VAR_ALIASES.get(name, ())]
+
+
+def remove_key(name: str) -> dict[str, Any]:
+    """Delete a provider key everywhere _store_key or the web wizard may have put it.
+
+    Returns ``{"keyring": bool, "env_file": [vars removed], "env_paths": [files changed]}``.
+    """
+    result: dict[str, Any] = {"keyring": False, "env_file": [], "env_paths": []}
+    try:
+        import keyring
+        keyring.delete_password("nvhive", f"{name}_api_key")
+        result["keyring"] = True
+    except Exception:
+        pass
+
+    env_vars = provider_env_vars(name)
+    for env_file in _env_key_files():
+        try:
+            if not env_file.exists():
+                continue
+            kept: list[str] = []
+            removed: list[str] = []
+            for line in env_file.read_text().splitlines():
+                var = line.partition("=")[0].strip()
+                if var in env_vars:
+                    removed.append(var)
+                    continue
+                kept.append(line)
+            if removed:
+                env_file.write_text("\n".join(kept) + ("\n" if kept else ""))
+                result["env_file"] += [v for v in removed if v not in result["env_file"]]
+                result["env_paths"].append(env_file)
+        except OSError:
+            pass
+
+    for var in env_vars:
+        os.environ.pop(var, None)
+    return result
+
+
+def _provider_sections(data: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """(dotted path, block map) for every advisors/providers mapping in a raw config."""
+    sections: list[tuple[str, dict[str, Any]]] = []
+    for key in ("advisors", "providers"):
+        if isinstance(data.get(key), dict):
+            sections.append((key, data[key]))
+    profiles = data.get("profiles")
+    if isinstance(profiles, dict):
+        for pname, profile in profiles.items():
+            if not isinstance(profile, dict):
+                continue
+            for key in ("advisors", "providers"):
+                if isinstance(profile.get(key), dict):
+                    sections.append((f"profiles.{pname}.{key}", profile[key]))
+    return sections
+
+
+def disable_provider_in_config(path: Path, name: str) -> bool:
+    """Set ``enabled: false`` and drop ``api_key`` for *name* in a raw config.yaml.
+
+    Works on the raw YAML (no ``${VAR}`` interpolation) so secrets never get
+    written back in plain text. Returns True if the file changed (the previous
+    contents are kept in ``.yaml.bak``).
+    """
+    import shutil
+
+    import yaml
+
+    if not path.exists():
+        return False
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError:
+        return False
+    if not isinstance(data, dict):
+        return False
+
+    changed = False
+    for _section_path, blocks in _provider_sections(data):
+        block = blocks.get(name)
+        if not isinstance(block, dict):
+            continue
+        if block.get("enabled", True) is not False:
+            block["enabled"] = False
+            changed = True
+        if "api_key" in block:
+            block.pop("api_key")
+            changed = True
+    if changed:
+        shutil.copy2(path, path.with_suffix(".yaml.bak"))
+        path.write_text(yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
+    return changed
+
+
+def rename_retired_model(provider: str, model: str) -> str | None:
+    """Replacement ID for a retired *model* configured under *provider*, else None."""
+    return RETIRED_MODEL_RENAMES.get(provider, {}).get(model)
+
+
+def _retired_provider_note(name: str) -> str:
+    return f"{name} provider retired {RETIRED_PROVIDERS[name]} — removed"
+
+
+def migrate_config_data(data: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Return a migrated copy of a raw config mapping plus human-readable changes.
+
+    Rewrites retired model IDs per provider block (top-level and per-profile),
+    drops retired provider stanzas, and scrubs references to them from
+    ``defaults`` and ``council``. Input is never mutated.
+    """
+    import copy
+
+    out = copy.deepcopy(data)
+    changes: list[str] = []
+
+    for section_path, blocks in _provider_sections(out):
+        for name in list(blocks):
+            if name in RETIRED_PROVIDERS:
+                del blocks[name]
+                changes.append(f"{section_path}.{name}: {_retired_provider_note(name)}")
+                continue
+            block = blocks[name]
+            if not isinstance(block, dict):
+                continue
+            for field in ("default_model", "fallback_model"):
+                old = block.get(field)
+                if not isinstance(old, str):
+                    continue
+                new = rename_retired_model(name, old)
+                if new:
+                    block[field] = new
+                    changes.append(f"{section_path}.{name}.{field}: {old} → {new}")
+
+    defaults = out.get("defaults")
+    if isinstance(defaults, dict):
+        provider = defaults.get("provider") or ""
+        if provider in RETIRED_PROVIDERS:
+            defaults["provider"] = ""
+            changes.append(f"defaults.provider: {_retired_provider_note(provider)}")
+            provider = ""
+        model = defaults.get("model")
+        if isinstance(model, str) and model:
+            new = rename_retired_model(provider, model)
+            if new:
+                defaults["model"] = new
+                changes.append(f"defaults.model: {model} → {new}")
+
+    council = out.get("council")
+    if isinstance(council, dict):
+        weights = council.get("default_weights")
+        if isinstance(weights, dict):
+            for retired in [p for p in weights if p in RETIRED_PROVIDERS]:
+                del weights[retired]
+                changes.append(f"council.default_weights.{retired}: removed")
+        order = council.get("fallback_order")
+        if isinstance(order, list):
+            dropped = [p for p in order if p in RETIRED_PROVIDERS]
+            if dropped:
+                council["fallback_order"] = [p for p in order if p not in RETIRED_PROVIDERS]
+                changes.append(f"council.fallback_order: removed {', '.join(dropped)}")
+
+    return out, changes
+
+
+def stale_default_models(providers: Mapping[str, Any]) -> list[tuple[str, str, str]]:
+    """(provider, field, model) for enabled providers whose configured model is retired.
+
+    Accepts ProviderConfig objects or raw dict blocks. An enabled stanza for a
+    retired provider is reported as ``(name, "provider", name)``.
+    """
+    def _get(block: Any, key: str, default: Any = "") -> Any:
+        if isinstance(block, Mapping):
+            return block.get(key, default)
+        return getattr(block, key, default)
+
+    stale: list[tuple[str, str, str]] = []
+    for name, block in providers.items():
+        if not _get(block, "enabled", True):
+            continue
+        if name in RETIRED_PROVIDERS:
+            stale.append((name, "provider", name))
+            continue
+        for field in ("default_model", "fallback_model"):
+            model = _get(block, field, "") or ""
+            if model and rename_retired_model(name, model):
+                stale.append((name, field, model))
+    return stale
 
 
 def _detect_gpu_info() -> tuple[list, float, str, str]:
@@ -813,23 +1155,23 @@ def _write_config(
     advisor_defs = {
         "groq": {
             "env": "GROQ_API_KEY",
-            "model": "groq/llama-3.3-70b-versatile",
-            "fallback": "groq/llama-3.1-8b-instant",
+            "model": "groq/openai/gpt-oss-120b",
+            "fallback": "groq/openai/gpt-oss-20b",
         },
         "openai": {
             "env": "OPENAI_API_KEY",
-            "model": "gpt-4o",
-            "fallback": "gpt-4o-mini",
+            "model": "gpt-5.6-terra",
+            "fallback": "gpt-5.6-luna",
         },
         "anthropic": {
             "env": "ANTHROPIC_API_KEY",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "fallback": "claude-haiku-4-5-20251001",
         },
         "google": {
             "env": "GOOGLE_API_KEY",
-            "model": "gemini/gemini-2.0-flash",
-            "fallback": "gemini/gemini-2.0-flash",
+            "model": "gemini/gemini-3.7-flash",
+            "fallback": "gemini/gemini-3.5-flash-lite",
         },
         "ollama": {
             "env": None,

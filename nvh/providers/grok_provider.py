@@ -33,15 +33,15 @@ _XAI_BASE_URL = "https://api.x.ai/v1"
 class GrokProvider:
     """xAI Grok adapter using LiteLLM.
 
-    Models use the ``xai/`` prefix (e.g. ``xai/grok-2``).
+    Models use the ``xai/`` prefix (e.g. ``xai/grok-4.6``).
     Set the ``XAI_API_KEY`` environment variable or pass ``api_key`` directly.
     """
 
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "xai/grok-2",
-        fallback_model: str = "xai/grok-2",
+        default_model: str = "xai/grok-4.6",
+        fallback_model: str = "xai/grok-4.3",
         base_url: str | None = None,
         provider_name: str = "grok",
     ):

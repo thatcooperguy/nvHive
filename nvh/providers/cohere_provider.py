@@ -1,6 +1,6 @@
 """Cohere provider adapter via LiteLLM.
 
-Cohere models (Command R+, Command R) are accessed directly by model name
+Cohere models (Command A, Command R) are accessed directly by model name
 in LiteLLM — no provider prefix is required.
 """
 
@@ -32,7 +32,7 @@ class CohereProvider:
     """Cohere adapter using LiteLLM.
 
     Cohere models are referenced without a prefix in LiteLLM
-    (e.g. ``command-r-plus``, ``command-r``).
+    (e.g. ``command-a-03-2025``, ``command-r-08-2024``).
     Set ``COHERE_API_KEY`` or ``CO_API_KEY`` in the environment, or pass
     ``api_key`` directly.
     """
@@ -40,8 +40,8 @@ class CohereProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "command-r-plus",
-        fallback_model: str = "command-r",
+        default_model: str = "command-a-03-2025",
+        fallback_model: str = "command-r-08-2024",
         base_url: str | None = None,
         provider_name: str = "cohere",
     ):

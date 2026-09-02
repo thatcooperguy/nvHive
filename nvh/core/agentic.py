@@ -13,9 +13,9 @@ Scales automatically based on detected GPU VRAM:
   Tier 0 (<24 GB / no GPU):     fully cloud
 
 Usage (CLI):
-    nvh agent "Fix the streaming hang bug in council.py"
-    nvh agent "Add tests for the auth middleware" --tier 3
-    nvh agent "Refactor the router to use health scores" --dir /d/GitHub/project
+    nvh agent run "Fix the streaming hang bug in council.py"
+    nvh agent run "Add tests for the auth middleware" --tier 3
+    nvh agent run "Refactor the router to use health scores" --dir /d/GitHub/project
 
 Usage (SDK):
     from nvh.core.agentic import run_coding_agent, auto_detect_config

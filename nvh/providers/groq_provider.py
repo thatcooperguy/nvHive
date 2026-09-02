@@ -31,15 +31,15 @@ from nvh.providers.openai_provider import (
 class GroqProvider:
     """Groq adapter using LiteLLM.
 
-    Models use the ``groq/`` prefix (e.g. ``groq/llama-3.3-70b-versatile``).
+    Models use the ``groq/`` prefix (e.g. ``groq/openai/gpt-oss-120b``).
     Set the ``GROQ_API_KEY`` environment variable or pass ``api_key`` directly.
     """
 
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "groq/llama-3.3-70b-versatile",
-        fallback_model: str = "groq/llama-3.1-8b-instant",
+        default_model: str = "groq/openai/gpt-oss-120b",
+        fallback_model: str = "groq/openai/gpt-oss-20b",
         base_url: str | None = None,
         provider_name: str = "groq",
         timeout: int = 120,

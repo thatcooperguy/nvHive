@@ -126,7 +126,7 @@ async def _analyze_with_ollama(image_data: str, question: str, model: str) -> st
 
 
 async def _analyze_with_cloud(image_data: str, mime: str, question: str) -> str | None:
-    """Fall back to cloud vision LLM via litellm (GPT-4o, Gemini, Claude)."""
+    """Fall back to cloud vision LLM via litellm (GPT-5.6, Gemini, Claude)."""
     try:
         import litellm
 
@@ -140,15 +140,15 @@ async def _analyze_with_cloud(image_data: str, mime: str, question: str) -> str 
             ],
         }]
 
-        # Try providers in order: GPT-4o (best spatial accuracy), Gemini, Claude
+        # Try providers in order: GPT-5.6 Terra (best spatial accuracy), Gemini, Claude
         import os
         models_to_try = []
         if os.environ.get("OPENAI_API_KEY"):
-            models_to_try.append("gpt-4o")
+            models_to_try.append("gpt-5.6-terra")
         if os.environ.get("GOOGLE_API_KEY"):
-            models_to_try.append("gemini/gemini-2.0-flash")
+            models_to_try.append("gemini/gemini-3.7-flash")
         if os.environ.get("ANTHROPIC_API_KEY"):
-            models_to_try.append("claude-sonnet-4-6")
+            models_to_try.append("claude-sonnet-5")
 
         for model in models_to_try:
             try:

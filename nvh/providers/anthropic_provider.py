@@ -26,7 +26,7 @@ class AnthropicProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "claude-sonnet-4-6",
+        default_model: str = "claude-sonnet-5",
         fallback_model: str = "claude-haiku-4-5-20251001",
         base_url: str | None = None,
         provider_name: str = "anthropic",

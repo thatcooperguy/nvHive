@@ -63,8 +63,8 @@ ollama serve &
 ollama pull llama3.3:70b             # ~40 GB, main coder
 ollama pull qwen2.5-coder:32b       # ~34 GB, reviewer
 
-# Or use nvh agent --setup (does the same thing)
-nvh agent --setup
+# Or use nvh agent run --setup (does the same thing)
+nvh agent run --setup
 ```
 
 Models are stored in `~/.ollama/models/` by default, no root needed. On cloud
@@ -84,7 +84,6 @@ keys saved via `nvh setup` won't persist across reboots.
 # Add to ~/.bashrc or ~/.profile
 export GROQ_API_KEY=gsk_...
 export OPENAI_API_KEY=sk-...
-export GITHUB_TOKEN=ghp_...
 export GOOGLE_API_KEY=AI...
 
 # Or use a .env file in your project
@@ -150,10 +149,10 @@ with Llama 70B coder + Qwen 32B reviewer, both running locally:
 
 ```bash
 # One-time setup
-nvh agent --setup
+nvh agent run --setup
 
 # Run a coding task
-nvh agent "Add retry logic to the API client" --dir ~/myproject
+nvh agent run "Add retry logic to the API client" --dir ~/myproject
 
 # Code review with multi-model cross-verification
 nvh review --mode multi

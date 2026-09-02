@@ -22,9 +22,10 @@ Model routing:
   "safe"                      → local Ollama only
   "council" or "council:N"    → N-model consensus (default 3)
   "throwdown"                 → two-pass deep analysis
-  "gpt-4o", "gpt-4o-mini"    → OpenAI provider
+  "gpt-5.6-*", "gpt-4o"      → OpenAI provider
   "claude-*"                  → Anthropic provider
   "gemini-*"                  → Google provider
+  "grok-*"                    → xAI provider
   "llama-*", "mixtral-*"     → Groq/local provider
   any other known model name  → routed by NVHive
 
@@ -51,6 +52,9 @@ from typing import Any
 
 # Maps model name prefixes/exact matches to NVHive provider names
 _MODEL_TO_PROVIDER: dict[str, str] = {
+    "gpt-5.6-terra": "openai",
+    "gpt-5.6-luna": "openai",
+    "gpt-5": "openai",
     "gpt-4o": "openai",
     "gpt-4o-mini": "openai",
     "gpt-4-turbo": "openai",
@@ -66,12 +70,18 @@ _MODEL_TO_PROVIDER: dict[str, str] = {
     "claude-3-opus": "anthropic",
     "claude-3-sonnet": "anthropic",
     "claude-3-haiku": "anthropic",
+    "claude-sonnet-5": "anthropic",
     "claude-sonnet-4": "anthropic",
     "claude-opus-4": "anthropic",
+    "claude-haiku-4": "anthropic",
+    "gemini-3": "google",
+    "gemini-2.5": "google",
     "gemini-2.0": "google",
     "gemini-1.5-pro": "google",
     "gemini-1.5-flash": "google",
     "gemini-pro": "google",
+    "grok-4": "grok",
+    "grok-3": "grok",
     "llama-3.3": "groq",
     "llama-3.1": "groq",
     "llama-3": "groq",
@@ -80,6 +90,7 @@ _MODEL_TO_PROVIDER: dict[str, str] = {
     "mistral-large": "mistral",
     "mistral-medium": "mistral",
     "mistral-small": "mistral",
+    "deepseek-v4": "deepseek",
     "deepseek-chat": "deepseek",
     "deepseek-coder": "deepseek",
 }

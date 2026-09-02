@@ -11,7 +11,7 @@
 #
 # IMPORTANT: Make sure providers are set up first:
 #   nvh health  (verify providers are live)
-#   nvh agent --setup  (pull local models if on GPU)
+#   nvh agent run --setup  (pull local models if on GPU)
 
 # Slow typing effect (same as demo-terminal.sh)
 type_slow() {
@@ -42,16 +42,16 @@ pause 2
 echo ""
 echo "  ── GPU Tier Detection ──"
 echo ""
-type_slow "nvh agent --setup"
-nvh agent --setup 2>/dev/null
+type_slow "nvh agent run --setup"
+nvh agent run --setup 2>/dev/null
 pause 3
 
 # 2. Agent coding task
 echo ""
 echo "  ── Agentic Coding ──"
 echo ""
-type_slow 'nvh agent "Add a /v1/ping endpoint that returns pong" -y'
-nvh agent "Add a /v1/ping endpoint that returns pong" -y 2>/dev/null
+type_slow 'nvh agent run "Add a /v1/ping endpoint that returns pong" -y'
+nvh agent run "Add a /v1/ping endpoint that returns pong" -y 2>/dev/null
 pause 4
 
 # 3. Code review

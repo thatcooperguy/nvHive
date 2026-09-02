@@ -35,8 +35,8 @@ class CerebrasProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "cerebras/llama3.1-70b",
-        fallback_model: str = "cerebras/llama3.1-8b",
+        default_model: str = "cerebras/gpt-oss-120b",
+        fallback_model: str = "cerebras/gpt-oss-120b",
         base_url: str | None = None,
         provider_name: str = "cerebras",
     ):

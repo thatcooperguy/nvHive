@@ -1,7 +1,8 @@
 """AI21 Labs provider adapter via LiteLLM.
 
 AI21 Labs offers Jamba models with very long context windows (up to 256K tokens).
-LiteLLM prefix: ai21/ (or bare model name for Jamba models)
+LiteLLM prefix: ai21_chat/ (the legacy ai21/ prefix routes to the retired
+completion API, and bare names fail provider detection for newer Jamba models)
 """
 
 from __future__ import annotations
@@ -27,15 +28,16 @@ from nvh.providers.openai_provider import _build_messages, _calc_cost, _map_erro
 class AI21Provider:
     """AI21 Labs adapter using LiteLLM.
 
-    AI21 Labs specializes in long-context models. The Jamba 1.5 series supports
-    up to 256K token context windows. Set AI21_API_KEY to authenticate.
+    AI21 Labs specializes in long-context models. The Jamba Large 1.7 and
+    Jamba Mini 2 series support 256K token context windows.
+    Set AI21_API_KEY to authenticate.
     """
 
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "jamba-1.5-large",
-        fallback_model: str = "jamba-1.5-mini",
+        default_model: str = "ai21_chat/jamba-large-1.7",
+        fallback_model: str = "ai21_chat/jamba-mini-2",
         base_url: str | None = None,
         provider_name: str = "ai21",
     ):

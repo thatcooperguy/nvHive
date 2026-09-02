@@ -357,7 +357,7 @@ council provider test <provider>
 
 ```bash
 OPENAI_API_KEY=<key> council provider test openai
-council query "Say hello" --provider openai --model gpt-4o-mini
+council query "Say hello" --provider openai --model gpt-5.6-luna
 ```
 
 **Expected:** Response from GPT model. Metadata shows `Provider: openai`.

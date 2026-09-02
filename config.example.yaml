@@ -12,20 +12,20 @@ defaults:
 advisors:
   openai:
     api_key: ${OPENAI_API_KEY}
-    default_model: gpt-4o
-    fallback_model: gpt-4o-mini
+    default_model: gpt-5.6-terra
+    fallback_model: gpt-5.6-luna
     enabled: true
 
   anthropic:
     api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-sonnet-4-6
+    default_model: claude-sonnet-5
     fallback_model: claude-haiku-4-5-20251001
     enabled: true
 
   google:
     api_key: ${GOOGLE_API_KEY}
-    default_model: gemini/gemini-2.0-flash
-    fallback_model: gemini/gemini-2.0-flash
+    default_model: gemini/gemini-3.7-flash
+    fallback_model: gemini/gemini-3.5-flash-lite
     enabled: false
 
   ollama:
@@ -78,7 +78,7 @@ profiles:
       provider: openai
     providers:
       openai:
-        default_model: gpt-4o-mini
+        default_model: gpt-5.6-luna
       anthropic:
         default_model: claude-haiku-4-5-20251001
 

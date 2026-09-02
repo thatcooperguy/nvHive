@@ -27,7 +27,7 @@ Usage in OpenClaw:
     }
 
 Then any OpenClaw agent can use nvHive tools:
-    - ask: Smart-routed LLM query across 22 providers
+    - ask: Smart-routed LLM query across every configured provider
     - ask_safe: Local-only (Ollama) query
     - council: Multi-model consensus
     - throwdown: Two-pass deep analysis

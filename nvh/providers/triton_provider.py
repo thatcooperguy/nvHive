@@ -69,15 +69,9 @@ def _get_base_url() -> str:
 
 def _calc_cost(model: str, usage: Usage) -> Decimal:
     """Cost calculation — Triton is self-hosted so cost is effectively zero."""
-    try:
-        cost = litellm.completion_cost(
-            model=model,
-            prompt_tokens=usage.input_tokens,
-            completion_tokens=usage.output_tokens,
-        )
-        return Decimal(str(round(cost, 6)))
-    except Exception:
-        return Decimal("0")
+    from nvh.providers.openai_provider import _calc_cost as _openai_calc_cost
+
+    return _openai_calc_cost(model, usage)
 
 
 class TritonProvider:

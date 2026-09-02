@@ -55,7 +55,7 @@ nvh serve
 ```
 
 nvHive decides per-query:
-- Simple queries → free providers (Groq, GitHub Models, LLM7) at $0
+- Simple queries → free providers (Groq, LLM7) at $0
 - Code questions → routes to whichever provider the learning loop has
   measured as best for code (could be Claude, could be Groq/Llama)
 - Complex reasoning → premium provider when quality requires it
@@ -81,7 +81,7 @@ openshell inference set --provider nvhive --model auto
 ```
 
 NemoClaw agents get access to:
-- 23 providers with automatic failover
+- Every configured provider, with automatic failover
 - Local GPU inference (Ollama/Nemotron)
 - Council consensus (3+ models collaborating)
 - Privacy routing (`x-nvhive-privacy: local-only` header)
@@ -105,7 +105,7 @@ This gives Claude Code access to nvHive tools: `ask`, `council`,
 ## What nvHive Does and Doesn't Do
 
 **Does:**
-- Route queries across 23 providers based on task type and quality
+- Route queries across every configured provider based on task type and quality
 - Learn which providers work best for your specific queries over time
 - Fail over automatically when a provider is down or rate-limited
 - Run inference locally on your GPU for free, private queries

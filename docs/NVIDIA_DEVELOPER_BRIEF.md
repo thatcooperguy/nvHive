@@ -2,11 +2,11 @@
 
 ## Executive Summary
 
-nvHive is an open-source multi-LLM orchestration platform that drives developer adoption of NVIDIA GPU inference. It routes AI queries across 23 providers — with a **local-first architecture that prioritizes NVIDIA hardware**: Ollama with Nemotron models, NVIDIA NIM, and Triton Inference Server.
+nvHive is an open-source multi-LLM orchestration platform that drives developer adoption of NVIDIA GPU inference. It routes AI queries across local and cloud providers — with a **local-first architecture that prioritizes NVIDIA hardware**: Ollama with Nemotron models, NVIDIA NIM, and Triton Inference Server.
 
 When a developer installs nvHive, their NVIDIA GPU becomes the default inference engine. Cloud APIs are the fallback, not the primary path. This inverts the industry norm where cloud is default and local is an afterthought.
 
-**Key metrics:** MIT licensed, on PyPI (`pip install nvhive`), 63 models, 25 free providers, 225 tests passing, CLI + WebUI + SDK + API.
+**Key metrics:** PolyForm Noncommercial licensed, on PyPI (`pip install nvhive`), local and cloud providers with free tiers, a ~2,300-test suite, CLI + WebUI + SDK + API.
 
 ---
 
@@ -179,8 +179,8 @@ nvh bench
 ## Traction
 
 - **PyPI**: Canonical distribution, `pip install nvhive`, published by `thatcooperguy/nvHive`
-- **Testing**: 225 tests, CI clean (Python 3.11 + 3.12)
-- **Providers**: 23 integrated, 25 free tiers
+- **Testing**: ~2,300 tests, CI clean (Python 3.11 + 3.12)
+- **Providers**: local Ollama, NVIDIA NIM and Triton plus the cloud providers in `nvh/providers/`, most with free tiers
 - **CLI**: 50+ commands
 - **WebUI**: 9-page dashboard
 - **Integrations**: Claude Code, Cursor, NemoClaw, OpenClaw

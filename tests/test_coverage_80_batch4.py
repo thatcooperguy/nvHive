@@ -237,17 +237,3 @@ class TestLLM7Provider:
         from nvh.providers.llm7_provider import LLM7Provider
         p = LLM7Provider()
         assert p.estimate_tokens("hello world") >= 1
-
-
-class TestGitHubProvider:
-    def test_construct(self):
-        from nvh.providers.github_provider import GitHubProvider
-        p = GitHubProvider()
-        assert p.name == "github"
-
-    @pytest.mark.asyncio
-    async def test_list_models(self):
-        from nvh.providers.github_provider import GitHubProvider
-        p = GitHubProvider()
-        models = await p.list_models()
-        assert isinstance(models, list)

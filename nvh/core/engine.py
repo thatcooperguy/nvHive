@@ -430,7 +430,6 @@ class Engine:
         # Check for API keys in environment AND keyring
         env_providers = {
             "GROQ_API_KEY": ("groq", "nvh.providers.groq_provider", "GroqProvider"),
-            "GITHUB_TOKEN": ("github", "nvh.providers.github_provider", "GitHubProvider"),
             "GOOGLE_API_KEY": ("google", "nvh.providers.google_provider", "GoogleProvider"),
             "OPENAI_API_KEY": ("openai", "nvh.providers.openai_provider", "OpenAIProvider"),
             "ANTHROPIC_API_KEY": (

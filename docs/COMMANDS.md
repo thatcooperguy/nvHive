@@ -61,6 +61,7 @@ Complete reference for all nvHive CLI commands.
 | `nvh serve` | Start the API server |
 | `nvh serve --daemon` | Install as persistent background service |
 | `nvh mcp` | Start MCP server (Claude Code, Cursor, OpenClaw) |
+| `nvh mcp servers list` / `nvh mcp servers refresh` | Show or reconnect attached external MCP tool servers |
 | `nvh openclaw` | OpenClaw integration setup guide |
 | `nvh nemoclaw` | NemoClaw integration setup guide |
 
@@ -69,7 +70,7 @@ Complete reference for all nvHive CLI commands.
 | Command | Description |
 |---------|-------------|
 | `nvh advisor` | Manage advisor profiles and routing weights |
-| `nvh agent` | Manage auto-generated expert agents and cabinets |
+| `nvh agent` | Coding agent (`run`) and the expert personas it draws on (`presets`, `analyze`) |
 | `nvh config` | View and edit configuration |
 | `nvh conversation` | List, export, or resume conversations |
 | `nvh budget` | Set and monitor spending limits |
@@ -96,7 +97,7 @@ nvh google "question"       # Route to Gemini
 nvh ollama "question"       # Route to local Ollama
 ```
 
-Works for all 23 providers. Run `nvh <provider>` with no question to launch that provider's setup.
+Works for every configured provider. Run `nvh <provider>` with no question to launch that provider's setup.
 
 ---
 

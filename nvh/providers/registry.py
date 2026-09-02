@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -9,6 +10,40 @@ import yaml
 
 from nvh.config.settings import CouncilConfig
 from nvh.providers.base import ModelInfo, Provider
+
+logger = logging.getLogger(__name__)
+
+# provider name -> (module path, class name) for every shipped adapter
+PROVIDER_SPECS: dict[str, tuple[str, str]] = {
+    "openai": ("nvh.providers.openai_provider", "OpenAIProvider"),
+    "anthropic": ("nvh.providers.anthropic_provider", "AnthropicProvider"),
+    "google": ("nvh.providers.google_provider", "GoogleProvider"),
+    "ollama": ("nvh.providers.ollama_provider", "OllamaProvider"),
+    "groq": ("nvh.providers.groq_provider", "GroqProvider"),
+    "grok": ("nvh.providers.grok_provider", "GrokProvider"),
+    "mistral": ("nvh.providers.mistral_provider", "MistralProvider"),
+    "cohere": ("nvh.providers.cohere_provider", "CohereProvider"),
+    "deepseek": ("nvh.providers.deepseek_provider", "DeepSeekProvider"),
+    "mock": ("nvh.providers.mock_provider", "MockProvider"),
+    "perplexity": ("nvh.providers.perplexity_provider", "PerplexityProvider"),
+    "together": ("nvh.providers.together_provider", "TogetherProvider"),
+    "fireworks": ("nvh.providers.fireworks_provider", "FireworksProvider"),
+    "openrouter": ("nvh.providers.openrouter_provider", "OpenRouterProvider"),
+    "cerebras": ("nvh.providers.cerebras_provider", "CerebrasProvider"),
+    "sambanova": ("nvh.providers.sambanova_provider", "SambaNovProvider"),
+    "huggingface": ("nvh.providers.huggingface_provider", "HuggingFaceProvider"),
+    "ai21": ("nvh.providers.ai21_provider", "AI21Provider"),
+    "nvidia": ("nvh.providers.nvidia_provider", "NvidiaProvider"),
+    "siliconflow": ("nvh.providers.siliconflow_provider", "SiliconFlowProvider"),
+    "llm7": ("nvh.providers.llm7_provider", "LLM7Provider"),
+    "triton": ("nvh.providers.triton_provider", "TritonProvider"),
+}
+
+# provider name -> date its service shut down. Stanzas left in a user's
+# config are skipped here and removed by `nvh config migrate`.
+RETIRED_PROVIDERS: dict[str, str] = {
+    "github": "2026-07-30",
+}
 
 
 class ProviderRegistry:
@@ -77,35 +112,16 @@ class ProviderRegistry:
         from nvh.providers.lazy_provider import LazyProvider
 
         enabled = []
-
-        provider_specs: dict[str, tuple[str, str]] = {
-            "openai": ("nvh.providers.openai_provider", "OpenAIProvider"),
-            "anthropic": ("nvh.providers.anthropic_provider", "AnthropicProvider"),
-            "google": ("nvh.providers.google_provider", "GoogleProvider"),
-            "ollama": ("nvh.providers.ollama_provider", "OllamaProvider"),
-            "groq": ("nvh.providers.groq_provider", "GroqProvider"),
-            "grok": ("nvh.providers.grok_provider", "GrokProvider"),
-            "mistral": ("nvh.providers.mistral_provider", "MistralProvider"),
-            "cohere": ("nvh.providers.cohere_provider", "CohereProvider"),
-            "deepseek": ("nvh.providers.deepseek_provider", "DeepSeekProvider"),
-            "mock": ("nvh.providers.mock_provider", "MockProvider"),
-            "perplexity": ("nvh.providers.perplexity_provider", "PerplexityProvider"),
-            "together": ("nvh.providers.together_provider", "TogetherProvider"),
-            "fireworks": ("nvh.providers.fireworks_provider", "FireworksProvider"),
-            "openrouter": ("nvh.providers.openrouter_provider", "OpenRouterProvider"),
-            "cerebras": ("nvh.providers.cerebras_provider", "CerebrasProvider"),
-            "sambanova": ("nvh.providers.sambanova_provider", "SambaNovProvider"),
-            "huggingface": ("nvh.providers.huggingface_provider", "HuggingFaceProvider"),
-            "ai21": ("nvh.providers.ai21_provider", "AI21Provider"),
-            "github": ("nvh.providers.github_provider", "GitHubProvider"),
-            "nvidia": ("nvh.providers.nvidia_provider", "NvidiaProvider"),
-            "siliconflow": ("nvh.providers.siliconflow_provider", "SiliconFlowProvider"),
-            "llm7": ("nvh.providers.llm7_provider", "LLM7Provider"),
-            "triton": ("nvh.providers.triton_provider", "TritonProvider"),
-        }
+        provider_specs = PROVIDER_SPECS
 
         for name, pconfig in config.providers.items():
             if not pconfig.enabled:
+                continue
+            if name in RETIRED_PROVIDERS:
+                logger.warning(
+                    "provider %s was retired on %s — remove it or run `nvh config migrate`",
+                    name, RETIRED_PROVIDERS[name],
+                )
                 continue
 
             # Resolve API key: config value, then env var fallback

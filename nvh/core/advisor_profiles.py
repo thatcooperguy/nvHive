@@ -662,39 +662,6 @@ ADVISOR_PROFILES: dict[str, AdvisorProfile] = {
         long_context=True,
     ),
 
-    "github": AdvisorProfile(
-        name="github",
-        display_name="GitHub Models",
-        quality_weight=0.88,
-        speed_weight=0.70,
-        cost_weight=1.00,
-        reliability_weight=0.85,
-        strengths=[
-            "Access to frontier models (GPT-4o, o3) completely free",
-            "No credit card needed — just a GitHub account",
-            "Students already have GitHub accounts",
-            "Reliable Microsoft/Azure infrastructure",
-        ],
-        best_for=[
-            "Students who need frontier quality for free",
-            "Prototyping with GPT-4o without paying",
-            "When you need better quality than local models",
-        ],
-        weaknesses=[
-            "Very low rate limits (50 req/day on big models)",
-            "8K context limit on some models",
-            "Can't use for batch/volume processing",
-        ],
-        avoid_for=[
-            "High-volume usage (50 req/day max)",
-            "Long context tasks (8K limit)",
-            "Production workloads",
-        ],
-        cost_tier="free",
-        has_free_tier=True,
-        free_tier_limits="Free: 50-150 req/day, all GitHub users",
-    ),
-
     "nvidia": AdvisorProfile(
         name="nvidia",
         display_name="NVIDIA NIM",

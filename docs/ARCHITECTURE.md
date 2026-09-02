@@ -17,7 +17,7 @@ nvh CLI / Web UI / SDK
   ├── Providers (22)
   │     ├── Local: Ollama (Nemotron, CodeLlama, Llama3)
   │     ├── Cloud: OpenAI, Anthropic, Google, Groq, ...
-  │     └── Free: LLM7, GitHub Models, NVIDIA NIM, ...
+  │     └── Free: LLM7, Groq, NVIDIA NIM, ...
   │
   ├── Agent System
   │     ├── Auto-generation from query analysis
@@ -59,7 +59,7 @@ graph TB
     subgraph Providers
         LOCAL[Ollama / Nemotron]
         CLOUD[OpenAI / Anthropic / Google]
-        FREE[Groq / LLM7 / GitHub]
+        FREE[Groq / LLM7 / NVIDIA NIM]
     end
 
     CLI --> API

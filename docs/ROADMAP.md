@@ -9,7 +9,7 @@ design pass. This is the build plan for bringing the stack to life.
 ## Where nvHive already wins
 
 - One-curl rootless install on a rented GPU desktop with VRAM-tiered model selection — Open WebUI assumes you already have Docker/pip and a running Ollama; nvHive provisions the whole lab (install.sh, GPU tier matrix, Ollama health-wait, port-conflict detection) without root
-- Smart multi-provider routing with learned quality: 23 providers, RoutingOutcome/LearnedScore/QualityBenchmarkLog tables drive cost- and quality-aware model choice — Open WebUI connects many APIs but makes the user pick the model every time
+- Smart multi-provider routing with learned quality: every provider in nvh/providers/, RoutingOutcome/LearnedScore/QualityBenchmarkLog tables drive cost- and quality-aware model choice — Open WebUI connects many APIs but makes the user pick the model every time
 - Council mode: 23-persona multi-model deliberation with synthesis — Open WebUI's multi-model chat is side-by-side comparison with no deliberation or synthesized verdict
 - Snapshot/reconnect survival built for ephemeral rented rigs (reconnect-resume card, pinned conversations surviving eviction, reconnect_survived telemetry event) — Open WebUI has no concept of a workspace that dies out from under you
 - Self-healing AI Wizard that operates the workspace itself: repair_workspace, refresh_models, validate/save provider keys as chat tools — OWUI's assistant chats, it doesn't fix the deployment
@@ -125,14 +125,51 @@ Design-inspiration only — nvHive implements its own versions; nothing is copie
 - **vercel-labs/skills (npx skills / skills.sh)** — nvHive already owns a one-curl install story; it should own a one-command *skill* story too. Ship `nvh skill add <source>` with the same resolver grammar (owner/repo, tree-path, local dir) writing into $NVH_HOME/agent-profiles/. Two details worth copying verbatim in spirit: the symlink-by-default/`--copy`-opt-out choice (keeps skills updatable in place, which matters for nvHive's snapshot/reconnect survival), and the non-interactive `-y` path so skill installs can ride inside install.sh unattended.
 - **addyosmani/agent-skills** — The lifecycle-command-as-entry-point pattern is a better discovery UX than nvHive's current flat profile picker. A user does not know they want the 'Code Reviewer' profile; they know they want to ship. Map nvHive's existing tools (repair_workspace, validate_provider_key, rag_ingest, refresh_models) onto a small set of verbs in the WebUI Wizard, and let the verb select the profile rather than making the user pick a persona cold. Also note the explicit 'one approval, then autonomous, pauses on risk' contract — a clean model for nvHive's per-turn cost ceiling (max_cost_usd_per_turn) to plug into.
 - **kepano/obsidian-skills** — The closest structural analog to a feature nvHive already ships. nvHive has a Markdown vault plus rag_ask_vault, but the vault is currently reachable only through RAG retrieval — the agent can *ask* the vault but cannot *operate* it. Adopt the pattern of vault-manipulation skills (create note, link notes, restructure, canvas/graph views over the vault) so the vault becomes a workspace rather than a corpus. The open-formats-first stance also matters: it is why these skills port across harnesses, and nvHive's vault is already Markdown, so the port cost is near zero.
-- **K-Dense-AI/scientific-agent-skills** — Three transferable moves. (1) The **unified-lookup skill** — one skill fronting 78 databases beats 78 skills, which is exactly how nvHive should expose its 23 providers to the model rather than enumerating them. (2) **Version-aware package skills** — skills that pin and check library versions, directly applicable to nvHive's CUDA/driver/VRAM tier matrix where version drift is the top failure mode. (3) **CI that tests skills**, not just code — nvHive should gate profile changes on a skill-test workflow the same way it gates version parity.
-- **Skill security scanning (snyk/agent-scan + VoltAgent security notice)** — If nvHive adds `nvh skill add <source>`, it inherits an arbitrary-instruction-execution surface pointed at a machine that already holds the user's 23 provider API keys in the vault. Non-negotiable design requirements before shipping any skill installer: (a) scan/quarantine on install with a diff shown to the user, (b) pin by commit SHA not branch — the 'maintainer mutates after listing' failure mode is the real one, (c) honour `allowed-tools` as an enforced deny-by-default whitelist wired into nvHive's existing tools_allowed rather than an advisory hint, and (d) never let an installed skill reach save_provider_key or validate_provider_key without an explicit user grant. VoltAgent's four quality criteria (third-person descriptions, progressive disclosure, no absolute paths, scoped tools — 'avoid blanket tools: ["*"]') are a ready-made lint rule set.
+- **K-Dense-AI/scientific-agent-skills** — Three transferable moves. (1) The **unified-lookup skill** — one skill fronting 78 databases beats 78 skills, which is exactly how nvHive should expose its providers to the model rather than enumerating them. (2) **Version-aware package skills** — skills that pin and check library versions, directly applicable to nvHive's CUDA/driver/VRAM tier matrix where version drift is the top failure mode. (3) **CI that tests skills**, not just code — nvHive should gate profile changes on a skill-test workflow the same way it gates version parity.
+- **Skill security scanning (snyk/agent-scan + VoltAgent security notice)** — If nvHive adds `nvh skill add <source>`, it inherits an arbitrary-instruction-execution surface pointed at a machine that already holds the user's provider API keys in the vault. Non-negotiable design requirements before shipping any skill installer: (a) scan/quarantine on install with a diff shown to the user, (b) pin by commit SHA not branch — the 'maintainer mutates after listing' failure mode is the real one, (c) honour `allowed-tools` as an enforced deny-by-default whitelist wired into nvHive's existing tools_allowed rather than an advisory hint, and (d) never let an installed skill reach save_provider_key or validate_provider_key without an explicit user grant. VoltAgent's four quality criteria (third-person descriptions, progressive disclosure, no absolute paths, scoped tools — 'avoid blanket tools: ["*"]') are a ready-made lint rule set.
 - **anthropics skill-creator (+ yusufkaraaslan/Skill_Seekers)** — nvHive's Wizard is already tool-using with rag_ingest and rag_ask_vault — it is one step from generating skills instead of only consuming them. Two moves: (1) a `create_profile`/`create_skill` Wizard tool so users author personas conversationally rather than hand-editing YAML, and (2) point rag_ingest's existing doc pipeline at skill *generation* — nvHive can already ingest a docs site, so emitting a spec-valid SKILL.md from that corpus is mostly plumbing. The eval-viewer is the part most people skip and shouldn't: without a way to measure whether a persona actually triggers, a 23-persona council is unfalsifiable.
 - **f/prompts.chat (f.k.a. awesome-chatgpt-prompts)** — Two lessons: (1) the winning UX arc is README -> searchable card gallery with one-click copy/use -> self-hostable app; nvHive's dashboard should render agent profiles as a searchable card gallery, not a YAML directory. (2) The evergreen archetypes are translator, tutor, interviewer, coach, tool-simulator.
-- **Shubhamsaboo/awesome-llm-apps** — Best-in-class gallery taxonomy: organize by capability tier (starter -> advanced -> team -> always-on), and always offer 'Local & Cloud' variants — that maps exactly to nvHive's Ollama-vs-23-provider router. Also validates 'agent team preset' as a first-class shippable unit alongside single profiles.
+- **Shubhamsaboo/awesome-llm-apps** — Best-in-class gallery taxonomy: organize by capability tier (starter -> advanced -> team -> always-on), and always offer 'Local & Cloud' variants — that maps exactly to nvHive's Ollama-vs-cloud router. Also validates 'agent team preset' as a first-class shippable unit alongside single profiles.
 - **PlexPt/awesome-chatgpt-prompts-zh** — A localized fork alone earned 61k stars: persona packs are language/culture-sensitive. Low-cost win: make nvHive persona text a locale-swappable field rather than hardcoded English.
 - **danielmiessler/Fabric** — The strongest non-persona pattern: a TASK library orthogonal to personas. nvHive should adopt (a) verb_noun naming convention and (b) pattern-per-markdown-file in $NVH_HOME/patterns/, runnable via CLI pipe and from the Wizard — perfect fit for a terminal-first GPU workspace.
 - **wshobson/agents** — Two direct adoptions: (1) per-agent model TIERING — nvHive's router should let a profile declare a tier (e.g. 'local-VRAM', 'cheap-cloud', 'frontier') instead of a hardcoded model, mapped through the GPU tier matrix; (2) 'orchestrator' as a distinct profile type that composes other profiles — a generalization of council mode.
+
+## Non-goals
+
+The operating envelope is fixed: single user, single VM, SQLite only,
+API-key auth, noncommercial (PolyForm-NC). Rows in the tables above that
+fall outside it are declined, not deferred.
+
+- **Enterprise and multi-tenant** (SSO/OIDC/LDAP/SCIM, team channels,
+  multi-user login/RBAC/admin panel, embeddable widget,
+  Kubernetes/Helm/Postgres/S3/Redis/OpenTelemetry, pluggable vector DBs) —
+  the license forbids the buyer, the product runs on one renter's VM, and
+  the SQLite/rootless wins listed above are exactly what these would undo.
+- **Alternative inference backends, native desktop apps, i18n** — nvHive
+  is a router over Ollama + NIM; extra backends compete for the same VRAM
+  budget, `install.ps1`/`install-mac.sh` stay best-effort, and the LLM
+  already answers in the user's language.
+- **Marketplace surfaces** (community app catalog, agent marketplace,
+  preset hub, in-UI tool editor, vertical packs, patterns dir, the full
+  SKILL.md restructure) — the scan/quarantine/SHA-pin/key-deny moderation
+  this document itself requires is more than a solo maintainer can carry;
+  `nvh agents export/import <url>` for one YAML profile is the ceiling.
+- **Docker/compose as a supported deployment path** — README says "No
+  Docker" twice, nothing in CI builds the images, and the compose files
+  reference directories that do not exist. One installer plus
+  `pip install nvhive`.
+- **Hand-typed model facts** (pricing, context windows, capability flags,
+  default-model tables, marketing counts, command docs) — every one drifted
+  within five months; anything derivable from litellm, provider `/models`,
+  the Typer registry or the spec tables is generated and parity-tested.
+- **New parallel implementations** (another memory store, agent dataclass,
+  sandbox, tool protocol, chat store, or `~/.something` home) — every
+  high-impact defect in the audit was a CLI/API/Wizard triple copy that had
+  already drifted; new features plug into the single instance or are
+  declined.
+
+The full deletion/refresh/add plan with evidence is
+[docs/proposals/SIMPLIFICATION_PLAN_2026-09.md](proposals/SIMPLIFICATION_PLAN_2026-09.md).
 
 ## Known follow-ups
 
@@ -140,13 +177,19 @@ Design-inspiration only — nvHive implements its own versions; nothing is copie
   removed `mcp.server.fastmcp` and reshaped the client API (CI proved it
   2026-08-05). Migrate `nvh/mcp_server.py` + `nvh/integrations/mcp_client.py`
   together, then lift the pins.
+- **Perplexity Chat Completions sunset (2026-09-27)** — Perplexity retires
+  its Chat Completions API on that date and
+  `nvh/providers/perplexity_provider.py` still goes through LiteLLM's chat
+  path. Before then, verify LiteLLM's Perplexity route on the pinned version
+  (`litellm>=1.99`) or move web-grounded queries to
+  `nvh/integrations/web_search/`.
 
 ## Shipped from this plan
 
 - **MCP client support (2026-08-05)** — attach external MCP tool servers
   via `$NVH_HOME/config/mcp-servers.json` (Claude-Desktop-compatible
   format); tools register as `mcp_<server>_<tool>` in the Wizard,
-  confirm-by-default with per-server auto-approve. `nvh mcp list|refresh`,
+  confirm-by-default with per-server auto-approve. `nvh mcp servers list|refresh`,
   `/v1/mcp/*` API, Integrations-page cards. See docs/MCP.md.
 
 - **Agent Library (2026-08-05)** — 100 original agent profiles across 38

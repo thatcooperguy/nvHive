@@ -1869,33 +1869,28 @@ advisors:
     enabled: true
 
   llm7:
-    default_model: deepseek-r1-0528
+    default_model: gpt-oss
     type: llm7
     enabled: true
 
   groq:
     api_key: ${GROQ_API_KEY}
-    default_model: groq/llama-3.3-70b-versatile
+    default_model: groq/openai/gpt-oss-120b
     enabled: false
 
   openai:
     api_key: ${OPENAI_API_KEY}
-    default_model: gpt-4o
+    default_model: gpt-5.6-terra
     enabled: false
 
   anthropic:
     api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-sonnet-4-6
+    default_model: claude-sonnet-5
     enabled: false
 
   google:
     api_key: ${GOOGLE_API_KEY}
-    default_model: gemini/gemini-2.5-flash
-    enabled: false
-
-  github:
-    api_key: ${GITHUB_TOKEN}
-    default_model: gpt-4o-mini
+    default_model: gemini/gemini-3.7-flash
     enabled: false
 
 budget:

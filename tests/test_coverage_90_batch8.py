@@ -235,7 +235,6 @@ _PROVIDERS = [
     ("nvh.providers.cohere_provider", "CohereProvider"),
     ("nvh.providers.deepseek_provider", "DeepSeekProvider"),
     ("nvh.providers.fireworks_provider", "FireworksProvider"),
-    ("nvh.providers.github_provider", "GitHubProvider"),
     ("nvh.providers.google_provider", "GoogleProvider"),
     ("nvh.providers.grok_provider", "GrokProvider"),
     ("nvh.providers.groq_provider", "GroqProvider"),
@@ -260,7 +259,7 @@ def _litellm_resp():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mod_path,cls_name", _PROVIDERS, ids=[p[1] for p in _PROVIDERS])
 async def test_provider_health_check_success(mod_path, cls_name):
-    """All 20 litellm providers return healthy=True when acompletion succeeds."""
+    """Every litellm provider returns healthy=True when acompletion succeeds."""
     provider = getattr(importlib.import_module(mod_path), cls_name)()
     with patch("litellm.acompletion", new_callable=AsyncMock, return_value=_litellm_resp()):
         result = await provider.health_check()

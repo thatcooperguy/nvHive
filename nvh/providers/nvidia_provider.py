@@ -7,8 +7,13 @@ Free tier: 1000+ API credits on signup (NVIDIA Developer Program).
 Supports 100+ models including Llama 405B, domain-specific models,
 and models optimized for NVIDIA hardware.
 
-Default model : meta/llama-3.1-70b-instruct
-Fallback model: meta/llama-3.1-8b-instruct
+Default model : nvidia_nim/meta/llama-3.3-70b-instruct
+Fallback model: nvidia_nim/meta/llama-3.1-8b-instruct
+
+Model IDs are sent with the ``nvidia_nim/`` LiteLLM prefix (``_kwargs`` adds
+it when missing): without it LiteLLM parses ``meta/...`` as its Llama-API
+provider and ``openai/...`` as OpenAI, sending the wrong model string to
+integrate.api.nvidia.com.
 
 Env vars: NVIDIA_API_KEY or NIM_API_KEY
 """
@@ -59,15 +64,8 @@ def _build_messages(
 
 def _calc_cost(model: str, usage: Usage) -> Decimal:
     """Cost calculation — credits are consumed but tracked separately by NVIDIA."""
-    try:
-        cost = litellm.completion_cost(
-            model=model,
-            prompt_tokens=usage.input_tokens,
-            completion_tokens=usage.output_tokens,
-        )
-        return Decimal(str(round(cost, 6)))
-    except Exception:
-        return Decimal("0")
+    from nvh.providers.openai_provider import _calc_cost as _openai_calc_cost
+    return _openai_calc_cost(model, usage)
 
 
 class NvidiaProvider:
@@ -78,8 +76,8 @@ class NvidiaProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "meta/llama-3.1-70b-instruct",
-        fallback_model: str = "meta/llama-3.1-8b-instruct",
+        default_model: str = "nvidia_nim/meta/llama-3.3-70b-instruct",
+        fallback_model: str = "nvidia_nim/meta/llama-3.1-8b-instruct",
         base_url: str | None = None,
         provider_name: str = "nvidia",
     ):
@@ -104,7 +102,8 @@ class NvidiaProvider:
         return model or self._default_model
 
     def _kwargs(self, model: str) -> dict[str, Any]:
-        kw: dict[str, Any] = {"model": model}
+        litellm_model = model if model.startswith("nvidia_nim/") else f"nvidia_nim/{model}"
+        kw: dict[str, Any] = {"model": litellm_model}
         if self._api_key:
             kw["api_key"] = self._api_key
         kw["api_base"] = self._base_url

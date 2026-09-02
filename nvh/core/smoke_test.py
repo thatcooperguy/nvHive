@@ -78,10 +78,6 @@ def _soft_fail_reason(error: str) -> tuple[bool, str]:
     e = error.lower()
     if "rate" in e or "429" in e:
         return True, "rate limited (transient)"
-    # GitHub Models free tier requires a token with the 'models' scope;
-    # a valid-but-underscoped PAT is a config issue, not a product bug.
-    if "models" in e and "permission" in e:
-        return True, "token missing 'models' scope (config)"
     if "insufficient_quota" in e or "quota" in e and "exceed" in e:
         return True, "quota exceeded (config)"
     return False, ""

@@ -1,6 +1,6 @@
 """Parameterized smoke tests for every litellm-backed provider.
 
-The 22 cloud provider adapters in nvh/providers/ all wrap litellm with
+The cloud provider adapters in nvh/providers/ all wrap litellm with
 the same shape (complete + stream + list_models + health_check). They
 were 100% untested before this file — collectively ~1800 lines at 0%
 coverage. A single mock-litellm test exercised against every adapter
@@ -48,7 +48,6 @@ PROVIDER_SPECS: list[tuple[str, str]] = [
     ("nvh.providers.cohere_provider", "CohereProvider"),
     ("nvh.providers.deepseek_provider", "DeepSeekProvider"),
     ("nvh.providers.fireworks_provider", "FireworksProvider"),
-    ("nvh.providers.github_provider", "GitHubProvider"),
     ("nvh.providers.google_provider", "GoogleProvider"),
     ("nvh.providers.grok_provider", "GrokProvider"),
     ("nvh.providers.groq_provider", "GroqProvider"),
@@ -244,3 +243,82 @@ class TestProviderContract:
         # Cost should be Decimal-like (or None for free providers)
         if final.cost_usd is not None:
             assert isinstance(final.cost_usd, Decimal)
+
+
+# ---------------------------------------------------------------------------
+# Registry / catalog sync
+# ---------------------------------------------------------------------------
+#
+# The router resolves capability scores by looking the adapter's model ID up
+# in capabilities.yaml, so every shipped default must be a catalog key. mock,
+# ollama and triton pick models dynamically and are excluded.
+# ---------------------------------------------------------------------------
+
+_DYNAMIC_PROVIDERS = {"mock", "ollama", "triton"}
+
+
+def _registry_cloud_specs() -> list[tuple[str, tuple[str, str]]]:
+    from nvh.providers.registry import PROVIDER_SPECS as REGISTRY_SPECS
+
+    return [(n, s) for n, s in REGISTRY_SPECS.items() if n not in _DYNAMIC_PROVIDERS]
+
+
+def test_registry_specs_are_covered_by_contract_tests():
+    expected = {spec for _name, spec in _registry_cloud_specs()}
+    assert expected == set(PROVIDER_SPECS)
+
+
+@pytest.mark.parametrize(
+    "name,spec",
+    _registry_cloud_specs(),
+    ids=lambda v: v if isinstance(v, str) else v[1],
+)
+def test_default_and_fallback_models_are_catalog_keys(name, spec):
+    from nvh.providers.registry import ProviderRegistry
+
+    registry = ProviderRegistry()
+    registry.load_capabilities()
+    provider = _load(spec)()
+    for model_id in {provider._default_model, provider._fallback_model}:
+        info = registry.get_model_info(model_id)
+        assert info is not None, f"{name}: '{model_id}' is not a capabilities.yaml key"
+        assert info.provider == name, (
+            f"{name}: '{model_id}' row is keyed to provider '{info.provider}'"
+        )
+
+
+_SILICONFLOW = ("nvh.providers.siliconflow_provider", "SiliconFlowProvider")
+_LLM7 = ("nvh.providers.llm7_provider", "LLM7Provider")
+_NVIDIA = ("nvh.providers.nvidia_provider", "NvidiaProvider")
+
+
+@pytest.mark.parametrize(
+    "spec,model,expected",
+    [
+        (_SILICONFLOW, "Qwen/Qwen2.5-7B-Instruct", "openai/Qwen/Qwen2.5-7B-Instruct"),
+        (_SILICONFLOW, "openai/Qwen/Qwen3-8B", "openai/Qwen/Qwen3-8B"),
+        (_LLM7, "gpt-oss", "openai/gpt-oss"),
+        (_NVIDIA, "meta/llama-3.1-405b-instruct", "nvidia_nim/meta/llama-3.1-405b-instruct"),
+        (
+            _NVIDIA,
+            "nvidia_nim/meta/llama-3.1-8b-instruct",
+            "nvidia_nim/meta/llama-3.1-8b-instruct",
+        ),
+    ],
+    ids=[
+        "siliconflow-bare", "siliconflow-prefixed", "llm7-bare",
+        "nvidia-bare", "nvidia-prefixed",
+    ],
+)
+def test_openai_compatible_endpoints_prefix_model_for_litellm(spec, model, expected):
+    provider = _load(spec)()
+    kw = provider._kwargs(model)
+    assert kw["model"] == expected
+    assert kw["api_base"] == provider.BASE_URL
+
+
+def test_nvidia_defaults_carry_litellm_prefix():
+    """Unprefixed 'meta/...' IDs are parsed by litellm as its Llama-API provider."""
+    provider = _load(("nvh.providers.nvidia_provider", "NvidiaProvider"))()
+    assert provider._default_model.startswith("nvidia_nim/")
+    assert provider._fallback_model.startswith("nvidia_nim/")

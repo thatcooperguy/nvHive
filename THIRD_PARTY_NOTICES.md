@@ -20,9 +20,9 @@ license or service terms.
 ## AI Providers and Model Hosts
 
 nvHive can connect to third-party AI providers and model hosts such as OpenAI,
-Anthropic, Google, Groq, GitHub Models, Mistral, NVIDIA NIM, Ollama, Hugging
-Face, and others. Users are responsible for the terms, privacy policies, rate
-limits, pricing, and license obligations of each provider they configure.
+Anthropic, Google, Groq, Mistral, NVIDIA NIM, Ollama, Hugging Face, and
+others. Users are responsible for the terms, privacy policies, rate limits,
+pricing, and license obligations of each provider they configure.
 
 ## Creative and Developer Tools
 

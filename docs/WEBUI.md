@@ -98,7 +98,7 @@ graph TB
     subgraph Providers
         LOCAL[Ollama / Nemotron]
         CLOUD[OpenAI / Anthropic / Google]
-        FREE[Groq / LLM7 / GitHub]
+        FREE[Groq / LLM7 / NVIDIA NIM]
     end
 
     CLI --> API

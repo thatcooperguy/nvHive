@@ -1,6 +1,6 @@
 # nvHive + Claude Code Integration Guide
 
-> Give Claude Code access to 63 models across 23 providers — with one command.
+> Give Claude Code access to every model nvHive routes — local Ollama plus the cloud providers — with one command.
 
 ## Quick Start
 
@@ -25,7 +25,7 @@ Once registered, Claude Code can use these tools in any session:
 
 | Tool | What It Does |
 |------|-------------|
-| `ask` | Smart-routed query across 63 models — nvHive picks the best provider for the task |
+| `ask` | Smart-routed query — nvHive picks the best provider and model for the task |
 | `ask_safe` | Local-only inference via Ollama — nothing leaves your machine |
 | `council` | Multi-model consensus — 3+ LLMs debate and synthesize an answer |
 | `throwdown` | Two-pass deep analysis with cross-critique between models |
@@ -37,7 +37,7 @@ Once registered, Claude Code can use these tools in any session:
 
 ### 1. Cost Savings
 Claude Code uses Anthropic models by default. With nvHive:
-- Simple queries route to **free providers** (Groq, GitHub Models, LLM7, local Nemotron)
+- Simple queries route to **free providers** (Groq, LLM7, local Nemotron)
 - Only complex tasks hit premium models
 - Council mode: 3 free models often match a single premium model's quality
 
@@ -88,8 +88,6 @@ nvHive reads config from `~/.hive/config.yaml`. Key settings:
 providers:
   groq:
     api_key: "gsk_..."      # Free tier: 30 req/min
-  github:
-    api_key: "ghp_..."      # Free tier: 150 req/day
   openai:
     api_key: "sk-..."       # Pay per use
 

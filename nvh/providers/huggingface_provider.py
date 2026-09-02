@@ -35,8 +35,8 @@ class HuggingFaceProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "huggingface/meta-llama/Meta-Llama-3-8B-Instruct",
-        fallback_model: str = "huggingface/mistralai/Mistral-7B-Instruct-v0.3",
+        default_model: str = "huggingface/openai/gpt-oss-120b",
+        fallback_model: str = "huggingface/openai/gpt-oss-20b",
         base_url: str | None = None,
         provider_name: str = "huggingface",
     ):

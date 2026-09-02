@@ -1,7 +1,7 @@
 """NVHive MCP Server — expose nvHive tools to Claude Code, Cursor, OpenClaw, and NemoClaw.
 
 Model Context Protocol server that gives any MCP client access to:
-- Smart routing across 23 LLM providers (63 models, 25 free)
+- Smart routing across every configured LLM provider (cloud and local)
 - Council consensus (multi-model synthesis)
 - Throwdown analysis (two-pass deep analysis)
 - Provider status and GPU info
@@ -155,7 +155,7 @@ def create_server():
     # on every fresh `pip install nvhive[mcp]`).
     server_blurb = (
         "NVHive — Multi-LLM orchestration with smart routing, "
-        "council consensus, and throwdown analysis across 23 providers (63 models, 25 free)."
+        "council consensus, and throwdown analysis across cloud and local LLM providers."
     )
     try:
         mcp = FastMCP("nvhive", instructions=server_blurb)
@@ -215,7 +215,7 @@ def create_server():
             return (
                 f"Quota exceeded during {operation}: {msg}\n\n"
                 "Options:\n"
-                "  - Use a free provider: set advisor='groq' or advisor='github'\n"
+                "  - Use a free provider: set advisor='groq' or advisor='llm7'\n"
                 "  - Use local inference: use the ask_safe tool instead\n"
                 "  - Check budget: use the status tool"
             )
@@ -266,13 +266,13 @@ def create_server():
         """Ask a question using NVHive's smart router.
 
         Routes to the best available LLM provider based on query type,
-        cost, speed, and reliability. Supports 23 providers and 63 models (25 free).
+        cost, speed, and reliability across every configured provider, free tiers included.
 
         Args:
             prompt: The question or task to send to the LLM.
             advisor: Specific advisor/provider to use (e.g. "openai", "anthropic", "groq").
                     Leave empty for smart routing.
-            model: Specific model to use (e.g. "gpt-4o", "claude-sonnet-4").
+            model: Specific model to use (e.g. "gpt-5.6-terra", "claude-sonnet-5").
                   Leave empty for auto-selection.
             temperature: Sampling temperature (0.0-2.0). Default 1.0.
             max_tokens: Maximum response tokens (1-200000). Default 4096.

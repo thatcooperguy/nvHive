@@ -722,15 +722,6 @@ KNOWN_ADVISORS = {
         "free_tier": True,
         "free_info": "Free tier available",
     },
-    "github": {
-        "name": "GitHub Models",
-        "url": "https://github.com/marketplace/models",
-        "free_tier": True,
-        "free_info": (
-            "Free for all GitHub users:"
-            " 50-150 req/day, frontier models"
-        ),
-    },
     "nvidia": {
         "name": "NVIDIA NIM",
         "url": "https://build.nvidia.com",
@@ -841,9 +832,10 @@ def _make_advisor_cmd(advisor_name: str):
     return cmd
 
 
-# Register all advisor names as commands
+# Register all advisor names as commands. `nvh nvidia` is the infrastructure
+# dashboard defined below, so that advisor is reachable via `nvh ask -p nvidia`.
 for _adv_name in KNOWN_ADVISORS:
-    if _adv_name != "mock":  # skip mock from top-level
+    if _adv_name not in ("mock", "nvidia"):
         app.command(_adv_name, rich_help_panel="Providers")(_make_advisor_cmd(_adv_name))
 
 
@@ -1256,7 +1248,7 @@ def code(
         await engine.initialize()
 
         # Route to coding-capable advisor; prefer anthropic/openai/groq for code
-        coding_advisors = ["anthropic", "openai", "groq", "github", "google", "deepseek"]
+        coding_advisors = ["anthropic", "openai", "groq", "google", "deepseek"]
         enabled = engine.registry.list_enabled()
         chosen_provider = advisor
         if not chosen_provider:
@@ -1320,7 +1312,7 @@ def write(
         await engine.initialize()
 
         # Claude is best for writing; fall back to openai, google
-        writing_advisors = ["anthropic", "openai", "google", "groq", "github"]
+        writing_advisors = ["anthropic", "openai", "google", "groq"]
         enabled = engine.registry.list_enabled()
         chosen_provider = None
         for pref in writing_advisors:
@@ -1469,7 +1461,7 @@ def math(
         engine = Engine(config=config)
         await engine.initialize()
 
-        # Route to reasoning-focused advisors: o3, DeepSeek-R1, then general fallback
+        # Route to reasoning-strong advisors first, then general fallback
         math_advisors = ["openai", "deepseek", "anthropic", "google", "groq"]
         enabled = engine.registry.list_enabled()
         chosen_provider = None
@@ -1478,12 +1470,12 @@ def math(
                 chosen_provider = pref
                 break
 
-        # For OpenAI, prefer o3/o1 reasoning models
+        # Pin the strongest verified reasoning model for these two providers
         chosen_model = None
         if chosen_provider == "openai":
-            chosen_model = "o3-mini"
+            chosen_model = "gpt-5.6-terra"
         elif chosen_provider == "deepseek":
-            chosen_model = "deepseek-reasoner"
+            chosen_model = "deepseek/deepseek-v4-pro"
 
         console.print(
             f"[dim][math → {chosen_provider or 'auto'}"
@@ -3312,11 +3304,6 @@ ACCOUNT_SIGNUP = [
         "https://aistudio.google.com/apikey",
         "Google account, 15 RPM free",
     ),
-    (
-        "github", "GitHub Models",
-        "https://github.com/settings/tokens",
-        "GitHub account, GPT-4o free",
-    ),
     ("nvidia", "NVIDIA NIM", "https://build.nvidia.com/", "NVIDIA Dev account, 1000 credits"),
     ("mistral", "Mistral", "https://console.mistral.ai/api-keys", "Phone verify, 2 RPM free"),
 ]
@@ -3493,7 +3480,6 @@ def setup(
                         "fireworks": "https://api.fireworks.ai/inference/v1/models",
                         "cohere": "https://api.cohere.ai/v1/models",
                         "google": "https://generativelanguage.googleapis.com/v1/models",
-                        "github": "https://models.inference.ai.azure.com/models",
                         "mistral": "https://api.mistral.ai/v1/models",
                     }
                     _test_url = _test_urls.get(name)
@@ -4253,6 +4239,60 @@ def config_diff(
     console.print(f"\n[bold]{diff_count}[/bold] field(s) differ.")
 
 
+@config_app.command("migrate")
+def config_migrate(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show changes without writing"),
+    file: str | None = typer.Option(
+        None, "--file", "-f", help="Config file to migrate (default: the user config)",
+    ),
+):
+    """Rewrite retired model IDs and providers in config.yaml.
+
+    Providers retire model IDs without notice; this rewrites the ones nvHive
+    knows about (RETIRED_MODEL_RENAMES in nvh.cli.setup), removes providers
+    whose service shut down, and keeps ${ENV_VAR} references untouched.
+    """
+    import shutil as _shutil
+
+    import yaml as _yaml
+
+    from nvh.cli.setup import migrate_config_data
+    from nvh.config.settings import DEFAULT_CONFIG_PATH
+
+    target = Path(file) if file else DEFAULT_CONFIG_PATH
+    if not target.exists():
+        console.print(f"[red]Config not found: {target}[/red]")
+        raise typer.Exit(1)
+    try:
+        raw = _yaml.safe_load(target.read_text()) or {}
+    except _yaml.YAMLError as exc:
+        console.print(f"[red]YAML parse error: {exc}[/red]")
+        raise typer.Exit(1)
+    if not isinstance(raw, dict):
+        console.print(f"[red]Config must be a YAML mapping: {target}[/red]")
+        raise typer.Exit(1)
+
+    migrated, changes = migrate_config_data(raw)
+    if not changes:
+        console.print("[green]Config is up to date — nothing to migrate.[/green]")
+        return
+
+    for change in changes:
+        console.print(f"  {change}")
+    if dry_run:
+        console.print(
+            f"\n[dim]Dry run — {len(changes)} change(s) not written to {target}[/dim]"
+        )
+        return
+
+    bak = target.with_suffix(".yaml.bak")
+    _shutil.copy2(target, bak)
+    target.write_text(_yaml.safe_dump(migrated, default_flow_style=False, sort_keys=False))
+    console.print(
+        f"\n[green]Applied {len(changes)} change(s) to {target}[/green] [dim](backup: {bak})[/dim]"
+    )
+
+
 # ---------------------------------------------------------------------------
 # hive advisor
 # ---------------------------------------------------------------------------
@@ -4395,13 +4435,21 @@ def advisor_add(
 
 @advisor_app.command("remove")
 def advisor_remove(name: str = typer.Argument(..., help="Advisor name")):
-    """Remove an advisor's API key."""
-    try:
-        import keyring
-        keyring.delete_password("nvhive", f"{name}_api_key")
-        console.print(f"[green]API key for {name} removed.[/green]")
-    except Exception as e:
-        console.print(f"[yellow]Could not remove key: {e}[/yellow]")
+    """Remove an advisor's API key (keychain + .env) and disable it in config."""
+    from nvh.cli.setup import disable_provider_in_config, provider_config_files, remove_key
+
+    removed = remove_key(name)
+    if removed["keyring"]:
+        console.print(f"[green]API key for {name} removed from keychain.[/green]")
+    if removed["env_file"]:
+        paths = ", ".join(str(p) for p in removed["env_paths"])
+        console.print(f"[green]Removed {', '.join(removed['env_file'])} from {paths}.[/green]")
+    if not removed["keyring"] and not removed["env_file"]:
+        console.print(f"[yellow]No stored API key found for {name}.[/yellow]")
+
+    for cfg in provider_config_files():
+        if disable_provider_in_config(cfg, name):
+            console.print(f"[green]Disabled {name} in {cfg}.[/green]")
 
 
 @advisor_app.command("test")
@@ -5267,7 +5315,9 @@ def model_list(
 # hive agent
 # ---------------------------------------------------------------------------
 
-agent_app = typer.Typer(help="Manage auto-generated agent personas")
+agent_app = typer.Typer(
+    help="Coding agent (run) and the expert personas it draws on (presets, analyze).",
+)
 app.add_typer(agent_app, name="agent", rich_help_panel="Subcommands")
 
 
@@ -5751,7 +5801,7 @@ def migrate(
     settings, and MCP configurations so you're up and running fast.
 
     Especially useful for OpenClaw users affected by the new API billing
-    — nvHive routes across 23 providers (25 free) so you're never locked
+    — nvHive routes across local and cloud providers so you're never locked
     into one provider's pricing.
 
     Examples:
@@ -5799,7 +5849,6 @@ def migrate(
         "ANTHROPIC_API_KEY": "anthropic",
         "GROQ_API_KEY": "groq",
         "GOOGLE_API_KEY": "google",
-        "GITHUB_TOKEN": "github",
         "MISTRAL_API_KEY": "mistral",
         "COHERE_API_KEY": "cohere",
         "XAI_API_KEY": "grok",
@@ -5912,7 +5961,7 @@ def migrate(
     console.print("    Dashboard: [bold]nvh webui[/bold]")
     console.print()
     console.print(
-        "  [dim]nvHive routes across 23 providers (25 free)"
+        "  [dim]nvHive routes across local and cloud providers"
         " — no more single-provider lock-in.[/dim]"
     )
 
@@ -6103,7 +6152,7 @@ def openclaw(
     """OpenClaw / NemoClaw integration — multi-LLM routing for agents.
 
     Anthropic dropped OpenClaw support. nvHive replaces that path
-    and gives agents access to 23 providers, local GPU inference,
+    and gives agents access to every configured provider, local GPU inference,
     and council consensus — more than OpenClaw provided.
 
     For NemoClaw users: nvHive plugs directly into OpenShell Gateway.
@@ -6122,7 +6171,7 @@ def openclaw(
     console.print(Panel(
         "[bold green]NVHive — OpenClaw Migration[/bold green]\n\n"
         "Anthropic dropped OpenClaw support.\n"
-        "nvHive replaces that path with 23 providers,\n"
+        "nvHive replaces that path with smart routing across providers,\n"
         "local GPU inference, and council consensus.\n\n"
         "[bold]Migrate:[/bold] nvh migrate --from openclaw\n"
         "[bold]NemoClaw:[/bold] nvh nemoclaw --start\n"
@@ -6315,7 +6364,7 @@ def openclaw(
     tool_table.add_column("What It Does")
     tool_table.add_column("Example Use")
 
-    tool_table.add_row("ask", "Smart-routed LLM query", "Ask any question across 22 providers")
+    tool_table.add_row("ask", "Smart-routed LLM query", "Ask any question across every configured provider")
     tool_table.add_row("ask_safe", "Local-only query", "Privacy-sensitive queries via Ollama")
     tool_table.add_row("council", "Multi-model consensus", "Get 3-5 LLMs to debate and synthesize")
     tool_table.add_row(
@@ -6349,7 +6398,7 @@ def openclaw(
     console.print("              ┌─────────-──┼────────────┐")
     console.print("              ▼            ▼            ▼")
     console.print("        ┌──────────┐ ┌──────────┐ ┌──────────┐")
-    console.print("        │  Ollama  │ │   Groq   │ │Anthropic │ ...22 providers")
+    console.print("        │  Ollama  │ │   Groq   │ │Anthropic │ ...more providers")
     console.print("        │ Nemotron │ │          │ │          │")
     console.print("        └──────────┘ └──────────┘ └──────────┘")
     console.print()
@@ -6379,11 +6428,18 @@ def openclaw(
 
 
 # ---------------------------------------------------------------------------
-# hive mcp — MCP server for Claude Code, Cursor, OpenClaw
+# hive mcp — MCP server for Claude Code, Cursor, OpenClaw. Bare `nvh mcp`
+# starts the server; `nvh mcp servers …` (registered further down) manages
+# the external tool servers the Wizard attaches.
 # ---------------------------------------------------------------------------
 
-@app.command(rich_help_panel="Infrastructure")
+mcp_app = typer.Typer(invoke_without_command=True)
+app.add_typer(mcp_app, name="mcp", rich_help_panel="Infrastructure")
+
+
+@mcp_app.callback()
 def mcp(
+    ctx: typer.Context,
     transport: str = typer.Option(
         "stdio", "--transport", "-t",
         help="Transport: stdio or streamable-http",
@@ -6407,31 +6463,37 @@ def mcp(
         nvh mcp                           Start via stdio (default)
         nvh mcp -t streamable-http        Start as HTTP server
         claude mcp add nvhive nvh mcp     Register with Claude Code
+        nvh mcp servers list              External tool servers for the Wizard
     """
+    if ctx.invoked_subcommand is not None:
+        return
+    # Under stdio, stdout is the JSON-RPC channel — anything printed there
+    # corrupts the stream for the client.
+    err = Console(stderr=True)
     try:
         from nvh.mcp_server import create_server
     except ImportError:
-        console.print("[red]MCP SDK not installed.[/red]")
-        console.print('Install with: [bold]pip install "nvhive[mcp]"[/bold]')
-        console.print('  or: [bold]pip install "mcp[cli]"[/bold]')
+        err.print("[red]MCP SDK not installed.[/red]")
+        err.print('Install with: [bold]pip install "nvhive[mcp]"[/bold]')
+        err.print('  or: [bold]pip install "mcp[cli]"[/bold]')
         raise typer.Exit(1)
 
     server = create_server()
 
     if transport == "stdio":
-        console.print("[bold]NVHive MCP Server[/bold] starting (stdio transport)")
-        console.print("Register with Claude Code:")
-        console.print("  [dim]$[/dim] claude mcp add nvhive nvh mcp")
-        console.print()
+        err.print("[bold]NVHive MCP Server[/bold] starting (stdio transport)")
+        err.print("Register with Claude Code:")
+        err.print("  [dim]$[/dim] claude mcp add nvhive nvh mcp")
+        err.print()
         server.run(transport="stdio")
     elif transport in ("streamable-http", "http", "sse"):
-        console.print(f"[bold]NVHive MCP Server[/bold] starting on port {port} (HTTP transport)")
-        console.print(f"Connect clients to: http://localhost:{port}/mcp")
-        console.print()
+        err.print(f"[bold]NVHive MCP Server[/bold] starting on port {port} (HTTP transport)")
+        err.print(f"Connect clients to: http://localhost:{port}/mcp")
+        err.print()
         server.run(transport="streamable-http", host="0.0.0.0", port=port)
     else:
-        console.print(f"[red]Unknown transport: {transport}[/red]")
-        console.print("Use: stdio, streamable-http")
+        err.print(f"[red]Unknown transport: {transport}[/red]")
+        err.print("Use: stdio, streamable-http")
         raise typer.Exit(1)
 
 
@@ -6976,7 +7038,7 @@ def nemoclaw(
         ))
         console.print()
         console.print("  [bold]Tools available to NemoClaw agents:[/bold]")
-        console.print("    [bold]ask[/bold]           — Smart-routed query across 22 providers")
+        console.print("    [bold]ask[/bold]           — Smart-routed query across every configured provider")
         console.print("    [bold]ask_safe[/bold]      — Local-only query (nothing leaves machine)")
         console.print("    [bold]council[/bold]       — Multi-model consensus (3-10 LLMs debate)")
         console.print("    [bold]throwdown[/bold]     — Two-pass deep analysis with critique")
@@ -7066,7 +7128,7 @@ def nemoclaw(
     console.print("              ┌─────────-──┼────────────┐")
     console.print("              ▼            ▼            ▼")
     console.print("        ┌──────────┐ ┌──────────┐ ┌──────────┐")
-    console.print("        │  Ollama  │ │   Groq   │ │Anthropic │ ...22 providers")
+    console.print("        │  Ollama  │ │   Groq   │ │Anthropic │ ...more providers")
     console.print("        │ Nemotron │ │          │ │          │")
     console.print("        └──────────┘ └──────────┘ └──────────┘")
     console.print()
@@ -7302,10 +7364,6 @@ def keys(
     """
     free_providers = [
         ("Groq", "https://console.groq.com/keys", "30 req/min free — FASTEST inference", "groq"),
-        (
-            "GitHub Models", "https://github.com/settings/tokens",
-            "Free GPT-4o — just need a GitHub account", "github",
-        ),
         (
             "Google Gemini", "https://aistudio.google.com/apikey",
             "15 req/min free — 1M token context", "google",
@@ -9354,7 +9412,7 @@ def debug(
     log("\n[API KEYS]")
     try:
         import keyring as kr
-        for name in ["openai", "anthropic", "google", "groq", "github", "ollama",
+        for name in ["openai", "anthropic", "google", "groq", "ollama",
                       "grok", "mistral", "cohere", "deepseek", "nvidia",
                       "cerebras", "sambanova", "huggingface", "ai21",
                       "perplexity", "together", "fireworks", "openrouter",
@@ -10000,6 +10058,32 @@ def doctor(
                     f"Advisor {name}: health check",
                     detail or "failed",
                     f"Check your {name} API key and network access.",
+                )
+
+        # 5c. Configured models a provider has since retired — every call
+        # to one 404s.
+        try:
+            from nvh.cli.setup import (
+                RETIRED_PROVIDERS,
+                rename_retired_model,
+                stale_default_models,
+            )
+            stale = stale_default_models(config.providers)
+        except Exception as e:
+            stale = []
+            _warn("Retired models", str(e))
+        for pname, field, model in stale:
+            if field == "provider":
+                _warn(
+                    f"Advisor {pname}",
+                    f"provider retired {RETIRED_PROVIDERS[pname]}",
+                    "Run `nvh config migrate` to remove it.",
+                )
+            else:
+                _warn(
+                    f"Advisor {pname}: {field}",
+                    f"'{model}' superseded by '{rename_retired_model(pname, model)}'",
+                    "Run `nvh config migrate` to rewrite retired model IDs.",
                 )
 
     # 6. Ollama detection. With --fix, offer to restart Ollama if it's
@@ -11321,10 +11405,11 @@ def do_task(
 
 
 # ---------------------------------------------------------------------------
-# nvh agent — tier-aware coding agent (beta)
+# nvh agent run — tier-aware coding agent (beta). Lives under the `agent`
+# group: a top-level `agent` command was silently shadowed by that group.
 # ---------------------------------------------------------------------------
 
-@app.command(rich_help_panel="Core")
+@agent_app.command("run")
 def agent(
     task: str = typer.Argument("", help="Coding task for the agent to complete"),
     tier: str | None = typer.Option(None, "--tier", help="Force GPU tier: 0-5 (auto-detects if omitted)"),
@@ -11356,13 +11441,13 @@ def agent(
 
     Examples:
 
-      nvh agent "Fix the streaming timeout bug in council.py"
+      nvh agent run "Fix the streaming timeout bug in council.py"
 
-      nvh agent "Add unit tests for the auth middleware" --dir /d/GitHub/project
+      nvh agent run "Add unit tests for the auth middleware" --dir /d/GitHub/project
 
-      nvh agent "Refactor the router to filter by health score" --tier 3
+      nvh agent run "Refactor the router to filter by health score" --tier 3
 
-      nvh agent "Read the codebase and create a CONTRIBUTING.md" -y
+      nvh agent run "Read the codebase and create a CONTRIBUTING.md" -y
     """
     import time as _time
     from pathlib import Path as _Path
@@ -11446,14 +11531,14 @@ def agent(
                 console.print("  [red]timed out after 30 minutes[/red]")
         console.print()
         console.print(
-            "[green]Setup complete.[/green] Run [bold]nvh agent \"your task\"[/bold] to start."
+            "[green]Setup complete.[/green] Run [bold]nvh agent run \"your task\"[/bold] to start."
             if setup else "[green]Models removed.[/green]"
         )
         return
 
     if not task:
         console.print("[red]Please provide a task or use --setup / --remove.[/red]")
-        console.print("Example: [bold]nvh agent \"Fix the bug in main.py\"[/bold]")
+        console.print("Example: [bold]nvh agent run \"Fix the bug in main.py\"[/bold]")
         raise typer.Exit(1)
 
     async def _run_agent():
@@ -11855,56 +11940,97 @@ def workspace(
 @app.command(rich_help_panel="Admin")
 def snapshot(
     action: str = typer.Argument("save", help="Action: save, restore, list"),
-    path: str = typer.Option("nvhive-snapshot.tar.gz", "-o", "--output", help="Snapshot file path"),
+    file: str | None = typer.Argument(
+        None, help="Snapshot tarball (written by save; read by restore / list)",
+    ),
+    output: str | None = typer.Option(
+        None, "-o", "--output",
+        help="Where to write the tarball (default: $NVH_HOME/snapshots/snapshot-<UTC>.tar.gz)",
+    ),
+    home_dir: str | None = typer.Option(
+        None, "--home-dir", help="NVH_HOME to bundle from / restore into (default: active)",
+    ),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", help="Replace files that already exist when restoring",
+    ),
 ):
-    """Save or restore nvHive state for ephemeral cloud VMs.
+    """Bundle your NVH_HOME workspace so it survives a new machine.
 
-    Captures config, learned scores, agent memory, and database into a
-    tarball. Restore on a new VM to resume where you left off.
+    Captures the vault, RAG index, install receipts, conversations database
+    and workspace preferences into one tarball. API keys and model weights
+    are never included — re-run `nvh setup` (or paste keys) and re-pull
+    models on the destination.
 
     Examples:
 
-      nvh snapshot save                           # save to nvhive-snapshot.tar.gz
-      nvh snapshot save -o ~/backups/state.tar.gz # custom path
-      nvh snapshot restore -o state.tar.gz        # restore from tarball
-      nvh snapshot list -o state.tar.gz           # list contents
+      nvh snapshot save                           # $NVH_HOME/snapshots/snapshot-<UTC>.tar.gz
+      nvh snapshot save ~/backups/state.tar.gz    # custom path (or -o)
+      nvh snapshot restore state.tar.gz           # into the active NVH_HOME
+      nvh snapshot restore state.tar.gz --overwrite --home-dir /mnt/persist/nvhive
+      nvh snapshot list state.tar.gz              # show bundled paths
     """
-    from pathlib import Path as _Path
+    from nvh.integrations.workspace.snapshot import (
+        export_snapshot,
+        import_snapshot,
+        list_snapshot,
+    )
 
-    try:
-        from nvh.core.snapshot import list_snapshot_contents, restore_snapshot, save_snapshot
-    except ImportError:
-        console.print("[red]Snapshot module not available.[/red]")
-        raise typer.Exit(1)
-
-    snap_path = _Path(path)
+    # `-o` doubled as the input path before 0.41.1; keep accepting it.
+    target = file or output
 
     if action == "save":
-        info = save_snapshot(snap_path)
-        if info.error:
-            console.print(f"[red]Error: {info.error}[/red]")
-        else:
-            size_kb = info.total_size_bytes / 1024
-            console.print(f"[green]Snapshot saved:[/green] {snap_path}")
-            console.print(f"  {len(info.files)} files, {size_kb:.1f} KB")
+        result = export_snapshot(home_dir=home_dir, out_path=target)
+        if not result.get("ok"):
+            console.print(f"[red]{result.get('error', 'snapshot failed')}[/red]")
+            raise typer.Exit(1)
+        manifest = result["manifest"]
+        console.print(f"[green]Snapshot saved:[/green] {result['path']}")
+        console.print(
+            f"  {len(manifest['includes'])} path(s), {result['bytes'] / 1024:.1f} KB,"
+            f" from {manifest['source_home']}"
+        )
+        if not manifest["includes"]:
+            console.print("  [yellow]Nothing to bundle yet — is this the right NVH_HOME?[/yellow]")
+        console.print(
+            "  [dim]API keys are not bundled; re-run `nvh setup` on the new machine.[/dim]"
+        )
 
     elif action == "restore":
-        if not snap_path.exists():
-            console.print(f"[red]File not found: {snap_path}[/red]")
+        if not target:
+            console.print("[red]Usage: nvh snapshot restore <file.tar.gz>[/red]")
             raise typer.Exit(1)
-        info = restore_snapshot(snap_path)
-        if info.error:
-            console.print(f"[red]Error: {info.error}[/red]")
-        else:
-            console.print(f"[green]Restored {len(info.files)} files.[/green]")
+        result = import_snapshot(target, home_dir=home_dir, overwrite=overwrite)
+        if not result.get("ok"):
+            console.print(f"[red]{result.get('error', 'restore failed')}[/red]")
+            raise typer.Exit(1)
+        console.print(
+            f"[green]Restored {result['extracted']} path(s) into {result['target_home']}[/green]"
+        )
+        if result["skipped"]:
+            console.print(
+                f"  {result['skipped']} skipped (already present — use --overwrite to replace)"
+            )
 
     elif action == "list":
-        if not snap_path.exists():
-            console.print(f"[red]File not found: {snap_path}[/red]")
+        if not target:
+            console.print("[red]Usage: nvh snapshot list <file.tar.gz>[/red]")
             raise typer.Exit(1)
-        files = list_snapshot_contents(snap_path)
-        for f in files:
-            console.print(f"  {f}")
+        result = list_snapshot(target)
+        if not result.get("ok"):
+            console.print(f"[red]{result.get('error', 'unreadable snapshot')}[/red]")
+            raise typer.Exit(1)
+        manifest = result.get("manifest") or {}
+        if manifest:
+            console.print(
+                f"[bold]{target}[/bold] — exported {manifest.get('exported_at', '?')}"
+                f" from {manifest.get('source_home', '?')}"
+            )
+        for member in result["members"]:
+            console.print(f"  {member['name']}  [dim]({member['size']} B)[/dim]")
+
+    else:
+        console.print(f"[red]Unknown action: {action}[/red] (use save, restore, list)")
+        raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -13423,7 +13549,6 @@ _FIRST_RUN_ENV_KEYS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "GOOGLE_API_KEY",
-    "GITHUB_TOKEN",
 )
 
 
@@ -13714,16 +13839,16 @@ def models_rm(
 
 
 # ---------------------------------------------------------------------------
-# nvh mcp — external MCP tool servers (roadmap critical #1, 2026-08-05)
+# nvh mcp servers — external MCP tool servers (roadmap critical #1, 2026-08-05)
 # ---------------------------------------------------------------------------
 
-mcp_app = typer.Typer(
+mcp_servers_app = typer.Typer(
     help="Attach external MCP tool servers to the AI Wizard (config: $NVH_HOME/config/mcp-servers.json).",
 )
-app.add_typer(mcp_app, name="mcp", rich_help_panel="Infrastructure")
+mcp_app.add_typer(mcp_servers_app, name="servers")
 
 
-@mcp_app.command("list")
+@mcp_servers_app.command("list")
 def mcp_list() -> None:
     """Show configured MCP servers + their cached tool status."""
     from nvh.integrations.mcp_client import (
@@ -13745,7 +13870,7 @@ def mcp_list() -> None:
             '        "auto_approve": ["read_file", "list_directory"]\n'
             "      }\n    }\n  }\n"
         )
-        console.print("Then run [bold]nvh mcp refresh[/bold] to connect + cache tools.")
+        console.print("Then run [bold]nvh mcp servers refresh[/bold] to connect + cache tools.")
         return
     for s in servers_status():
         if s["cached"] and s["ok"]:
@@ -13753,7 +13878,7 @@ def mcp_list() -> None:
         elif s["cached"]:
             state = f"[red]✗[/red] {s['error']}"
         else:
-            state = "[yellow]not refreshed — run `nvh mcp refresh`[/yellow]"
+            state = "[yellow]not refreshed — run `nvh mcp servers refresh`[/yellow]"
         console.print(f"  [bold]{s['name']}[/bold] ({s['command']}): {state}")
         if s["ok"] and s["tools"]:
             auto = set(s["auto_approve"])
@@ -13762,7 +13887,7 @@ def mcp_list() -> None:
                 console.print(f"      {t} ({marker})")
 
 
-@mcp_app.command("refresh")
+@mcp_servers_app.command("refresh")
 def mcp_refresh_cmd() -> None:
     """Connect to each enabled server, list its tools, rewrite the cache.
 
@@ -13779,7 +13904,9 @@ def mcp_refresh_cmd() -> None:
     )
 
     if not load_mcp_config():
-        console.print("No MCP servers configured — see [bold]nvh mcp list[/bold] for the format.")
+        console.print(
+            "No MCP servers configured — see [bold]nvh mcp servers list[/bold] for the format."
+        )
         raise typer.Exit(1)
     try:
         import mcp as _mcp  # noqa: F401
@@ -13800,6 +13927,11 @@ def mcp_refresh_cmd() -> None:
             console.print(f"  [red]✗[/red] {name}: {entry.get('error')}")
     if failed:
         raise typer.Exit(1)
+
+
+# Pre-0.41.1 spellings (`nvh mcp list|refresh`); hidden for one release.
+mcp_app.command("list", hidden=True)(mcp_list)
+mcp_app.command("refresh", hidden=True)(mcp_refresh_cmd)
 
 
 def _services_render_console(snap: Any) -> None:

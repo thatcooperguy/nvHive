@@ -9,7 +9,7 @@ Usage:
     output = await run_in_sandbox("python -c 'print(1+1)'", working_dir="/tmp/project")
 
 Enable via:
-    nvh agent "task" --sandbox
+    nvh agent run "task" --sandbox
     or set NVH_SANDBOX=1 in environment
     or set sandbox: true in nvh config
 """

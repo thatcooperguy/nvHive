@@ -2,7 +2,111 @@
 
 ## [Unreleased]
 
+## [0.41.1] - 2026-09-01
+
+The hotfix release. A six-lens product audit (docs/proposals/
+SIMPLIFICATION_PLAN_2026-09.md) found that several shipped defaults were
+simply broken: 17 of 21 cloud providers pointed at retired model IDs, cost
+accounting returned $0 for every provider, and two CLI commands were
+unreachable because a sub-command group shadowed them. This release fixes
+what is broken today; the plan's "subtract" release (0.42) follows.
+
 ### Fixed
+- **Retired default models on 17 providers.** Groq's `llama-3.3-70b-versatile`
+  / `llama-3.1-8b-instant` were deprecated 2026-08-16, Perplexity's
+  `llama-3.1-sonar-*` no longer exist, and `gemini-2.0-flash`, `grok-2`,
+  `command-r-plus`, `jamba-1.5-*` and the Llama-3.1-70B defaults on
+  Together/Fireworks/OpenRouter/Cerebras/SambaNova/NVIDIA were all stale.
+  Every default and fallback was re-verified against LiteLLM 1.99.0's model
+  DB and each provider's official model docs: OpenAI `gpt-5.6-terra` /
+  `gpt-5.6-luna`, Anthropic `claude-sonnet-5` / `claude-haiku-4-5-20251001`,
+  Google `gemini-3.7-flash` / `gemini-3.5-flash-lite`, Groq
+  `openai/gpt-oss-120b` / `-20b`, xAI `grok-4.6` / `grok-4.3`, DeepSeek
+  `deepseek-v4-pro` / `-flash`, Perplexity `sonar-pro` / `sonar`, Cohere
+  `command-a-03-2025`, the gpt-oss family on the aggregator hosts, NVIDIA NIM
+  `nvidia_nim/meta/llama-3.3-70b-instruct`, AI21 `jamba-large-1.7`, llm7
+  `gpt-oss` / `minimax-m2.7` (llm7 is the only cloud provider enabled by
+  default, and its old default was absent). Mistral and SiliconFlow were
+  already current. The same IDs are updated in every hardcoded copy
+  (settings template, server defaults, `nvh setup`, `config.example.yaml`,
+  the three installers, the vision-tool fallback chain, the web setup copy)
+  and `capabilities.yaml` gained rows for each new ID (scores inherited from
+  the retired row; 0.43 regenerates the catalog). New `nvh config migrate`
+  rewrites known-retired IDs in an existing `config.yaml` (`--dry-run`,
+  `.yaml.bak`), and `nvh doctor` now warns when an enabled provider's default
+  is superseded (driven by the same renames table, since retired IDs
+  deliberately stay in the catalog until 0.43 regenerates it) or when the
+  provider itself was retired. `deepseek-reasoner` migrates to
+  `deepseek-v4-pro`, not the non-reasoning flash tier.
+- **Cost accounting was $0 for every provider.** `_calc_cost` called
+  `litellm.completion_cost(model=, prompt_tokens=, completion_tokens=)` —
+  kwargs current LiteLLM rejects — and the bare `except` returned
+  `Decimal("0")`, so no query has been priced and `budget.hard_stop` could
+  never trigger. Now uses `litellm.cost_per_token`; expect non-zero cost
+  pills for the first time. Stale hand-typed catalog prices corrected along
+  the way (Claude Haiku 4.5, Mistral Large/Small, Gemini 2.5 Flash,
+  `gemma3:4b` context).
+- **Two adapters could not reach their provider through current LiteLLM.**
+  NVIDIA NIM passed unprefixed `meta/...` IDs, which LiteLLM 1.99 now parses
+  as its own `meta` (Llama API) provider and sends the wrong model name to
+  `integrate.api.nvidia.com` (404); IDs now carry the `nvidia_nim/` prefix.
+  SiliconFlow passed bare `Qwen/...` IDs with an `api_base` and no prefix,
+  which raises "LLM Provider NOT provided"; it now uses the same `openai/`
+  prefixing as llm7. Both adapters normalise the prefix on every model they
+  are given, so a user-configured or `-m` model works without migration.
+- **`nvh mcp` was unreachable.** The MCP-server command was shadowed by the
+  `mcp` sub-command group (`list`/`refresh`), so `claude mcp add nvhive nvh
+  mcp` in the docs never worked. `nvh mcp` with no sub-command now starts
+  the server; the external-server verbs moved to `nvh mcp servers list|
+  refresh` (old spellings remain as hidden aliases for one release). The
+  startup banner goes to stderr — stdout is the MCP JSON-RPC channel. A
+  registry-collision test now fails CI if a command and a group ever share a
+  name again.
+- **`nvh agent "task"` was unreachable** for the same reason (the `agent`
+  group with `presets`/`analyze` won, exit 2). The coding agent is now
+  `nvh agent run "task"` (and `nvh agent run --setup`); README and docs
+  updated.
+- **`nvh snapshot` archived the wrong tree.** The CLI used the pre-rename
+  `nvh/core/snapshot.py`, which tarred `~/.hive/config.yaml` and
+  `~/.council/council.db`, while the API and Wizard used the `NVH_HOME`
+  workspace snapshot. README sells this command as the reconnect-survival
+  story, so `save|restore` now use the workspace snapshot (vault, RAG index,
+  receipts, and now the conversations DB), `list` was added, extraction is
+  safe on Python < 3.11.4, and `core/snapshot.py` is deleted. The SQLite
+  files are captured with the `backup()` API from wherever the DB actually
+  lives (`HIVE_DATA_DIR`/`NVH_STATE` are honoured), so an export while the
+  API is writing is consistent, and restore clears stale `-wal`/`-shm`
+  sidecars first. Archives must carry `snapshot.json`; the 0.41.0 format
+  (which bundled `config.yaml` with raw keys) is refused with a clear
+  message. Config is deliberately not bundled (never risk raw keys) —
+  re-run `nvh setup`.
+- **`nvh advisor remove` left the provider enabled.** It deleted only the
+  keyring copy of the key; it now also removes the `.env` copy and disables
+  the provider stanza in `config.yaml` (writing a `.yaml.bak` first, as
+  `config migrate` does).
+- **A stale `~/.hive/config.yaml` could silently zero out every provider.**
+  `_find_project_config()` walks upward from the current directory looking
+  for a project `.hive/config.yaml`, so from any directory under `$HOME` it
+  found the *user* config at `~/.hive/` and deep-merged it as a project
+  overlay. On installs where `HIVE_CONFIG_HOME` points elsewhere (every
+  `install.sh` install), a leftover pre-`NVH_HOME` `~/.hive/config.yaml`
+  containing `providers: {}` merged over an `advisors:`-style config and
+  the alias validator then saw both keys and kept the empty one. The home
+  directory's `.hive/` is now never treated as a project config, and the
+  search no longer climbs above the home directory.
+- **Keys saved by `nvh setup` or the web Wizard were invisible to the API.**
+  The engine reads keyring only when `NVH_USE_KEYRING` is truthy (default
+  off, because headless boxes have slow keyring daemons); the CLI compensated
+  by loading keyring/`.env` into the environment at startup, but `nvh serve`
+  never did. The API lifespan now preloads the `.env` files off the event
+  loop (keyring stays opt-in via `NVH_USE_KEYRING` — headless boxes have
+  slow or hung SecretService daemons), and `load_env_keys()` also reads the
+  `NVH_HOME` config `.env` the Wizard writes to, so browser-saved keys work
+  from the CLI without exporting `HIVE_CONFIG_HOME`. `nvh advisor remove`
+  scrubs both `.env` locations and disables the stanza in whichever
+  `config.yaml` is in use.
+- **VS Code extension** always showed "unreachable": it fetched `/health`
+  while the server only defines `/v1/health`.
 - **Streaming council timeout crash**: `run_council_streaming`'s overall
   timeout handler read `m.label` from `CouncilMember`, a field that never
   existed, so a council-wide timeout raised `AttributeError` instead of
@@ -56,6 +160,36 @@
   claimed MIT inbound licensing and dco.yml's comment said the project
   "ships under MIT today"; both now state PolyForm Noncommercial 1.0.0
   (versions ≤ 0.40.0 remain MIT).
+- **LiteLLM floor raised to `>=1.99`.** The new default model IDs and the
+  `cost_per_token` pricing path need the current model DB; older LiteLLM
+  would route bare OpenAI IDs incorrectly and price everything at $0 again.
+- **Hand-typed marketing counts removed.** README, docs, and the MCP server
+  blurb no longer state provider/model/free counts — they had drifted three
+  different ways ("23 providers, 63 models, 25 free" vs. 21/70/14 real, and
+  the count changes again with GitHub Models gone); 0.42 makes every
+  remaining count generated and parity-tested.
+
+### Added
+- `nvh config migrate [--dry-run]` — rewrites retired model IDs and removes
+  retired providers from an existing `config.yaml`.
+- `nvh mcp servers list|refresh` and `nvh snapshot list`; `nvh snapshot save
+  <file>` honours the positional path (previously silently ignored) and
+  exits 1 with the error on failure.
+- `docs/proposals/SIMPLIFICATION_PLAN_2026-09.md` — the six-lens audit and
+  the 0.42 "subtract" / 0.43 "refresh" / 0.44 "add" plan — plus a
+  **Non-goals** section in docs/ROADMAP.md (single user, single VM, SQLite,
+  API-key auth, noncommercial; no enterprise, no alternative inference
+  backends, no marketplaces, no Docker as a supported path, no hand-typed
+  model facts, no new parallel implementations).
+
+### Removed
+- **GitHub Models provider.** The service was retired by GitHub on
+  2026-07-30, yet the engine auto-enabled it whenever `GITHUB_TOKEN` was set
+  and the free-tier ranker placed it second. The adapter and all references
+  are gone; `nvh config migrate` strips the stanza from existing configs,
+  and until then the registry skips a leftover `github:` stanza with a
+  warning instead of routing it through the generic OpenAI-compatible
+  fallback at the dead endpoint.
 
 ## [0.41.0] - 2026-08-05
 

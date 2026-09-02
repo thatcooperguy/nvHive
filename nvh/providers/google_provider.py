@@ -26,8 +26,8 @@ class GoogleProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "gemini/gemini-2.0-flash",
-        fallback_model: str = "gemini/gemini-2.0-flash",
+        default_model: str = "gemini/gemini-3.7-flash",
+        fallback_model: str = "gemini/gemini-3.5-flash-lite",
         base_url: str | None = None,
         provider_name: str = "google",
         timeout: int = 120,

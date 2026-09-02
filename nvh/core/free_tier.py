@@ -6,7 +6,6 @@ without any API key setup.
 
 Free tiers available:
 - Ollama (local)  — unlimited, free, requires NVIDIA GPU
-- GitHub Models   — 50-150 req/day free for all GitHub users
 - Groq            — free tier: 30 req/min, 14.4K tokens/min
 - Google Gemini   — free tier: 15 req/min
 - Mistral         — Free Experiment plan: 2 RPM, 1B tokens/month
@@ -48,19 +47,11 @@ FREE_TIER_ADVISORS = [
         daily_limit="Unlimited (local GPU)",
     ),
     FreeTierAdvisor(
-        name="github",
-        env_var="GITHUB_TOKEN",
-        alt_env_vars=["HIVE_GITHUB_TOKEN"],
-        check_fn="env",
-        priority=2,
-        daily_limit="Free for all GitHub users: 50-150 req/day, frontier models",
-    ),
-    FreeTierAdvisor(
         name="groq",
         env_var="GROQ_API_KEY",
         alt_env_vars=["HIVE_GROQ_API_KEY"],
         check_fn="env",
-        priority=3,
+        priority=2,
         daily_limit="30 req/min, 14.4K tok/min",
     ),
     FreeTierAdvisor(
@@ -68,7 +59,7 @@ FREE_TIER_ADVISORS = [
         env_var="GOOGLE_API_KEY",
         alt_env_vars=["HIVE_GOOGLE_API_KEY", "GEMINI_API_KEY"],
         check_fn="env",
-        priority=4,
+        priority=3,
         daily_limit="15 req/min free",
     ),
     FreeTierAdvisor(
@@ -76,7 +67,7 @@ FREE_TIER_ADVISORS = [
         env_var="MISTRAL_API_KEY",
         alt_env_vars=["HIVE_MISTRAL_API_KEY"],
         check_fn="env",
-        priority=5,
+        priority=4,
         daily_limit="Free Experiment plan: 2 RPM, 1B tokens/month",
     ),
     FreeTierAdvisor(
@@ -84,7 +75,7 @@ FREE_TIER_ADVISORS = [
         env_var="COHERE_API_KEY",
         alt_env_vars=["HIVE_COHERE_API_KEY", "CO_API_KEY"],
         check_fn="env",
-        priority=6,
+        priority=5,
         daily_limit="Trial tier rate limits",
     ),
     FreeTierAdvisor(
@@ -92,7 +83,7 @@ FREE_TIER_ADVISORS = [
         env_var="NVIDIA_API_KEY",
         alt_env_vars=["NIM_API_KEY", "HIVE_NVIDIA_API_KEY"],
         check_fn="env",
-        priority=7,
+        priority=6,
         daily_limit="1000+ free API credits, 40 RPM, NVIDIA Developer Program",
     ),
     FreeTierAdvisor(
@@ -100,7 +91,7 @@ FREE_TIER_ADVISORS = [
         env_var="SILICONFLOW_API_KEY",
         alt_env_vars=["HIVE_SILICONFLOW_API_KEY"],
         check_fn="env",
-        priority=8,
+        priority=7,
         daily_limit="Permanently free models at 1000 RPM",
     ),
     FreeTierAdvisor(
@@ -108,7 +99,7 @@ FREE_TIER_ADVISORS = [
         env_var="LLM7_API_KEY",
         alt_env_vars=["HIVE_LLM7_API_KEY"],
         check_fn="llm7",
-        priority=9,
+        priority=8,
         daily_limit="Anonymous access: 30 RPM, no signup. Token: 120 RPM",
     ),
     FreeTierAdvisor(
@@ -116,7 +107,7 @@ FREE_TIER_ADVISORS = [
         env_var="FIREWORKS_API_KEY",
         alt_env_vars=["HIVE_FIREWORKS_API_KEY"],
         check_fn="env",
-        priority=10,
+        priority=9,
         daily_limit="Free tier available",
     ),
     FreeTierAdvisor(
@@ -124,7 +115,7 @@ FREE_TIER_ADVISORS = [
         env_var="CEREBRAS_API_KEY",
         alt_env_vars=["HIVE_CEREBRAS_API_KEY"],
         check_fn="env",
-        priority=11,
+        priority=10,
         daily_limit="Free tier: 30 req/min",
     ),
     FreeTierAdvisor(
@@ -132,7 +123,7 @@ FREE_TIER_ADVISORS = [
         env_var="SAMBANOVA_API_KEY",
         alt_env_vars=["HIVE_SAMBANOVA_API_KEY"],
         check_fn="env",
-        priority=12,
+        priority=11,
         daily_limit="Free tier available",
     ),
     FreeTierAdvisor(
@@ -140,7 +131,7 @@ FREE_TIER_ADVISORS = [
         env_var="HUGGINGFACE_API_KEY",
         alt_env_vars=["HF_TOKEN", "HIVE_HUGGINGFACE_API_KEY"],
         check_fn="env",
-        priority=13,
+        priority=12,
         daily_limit="Free Inference API",
     ),
     FreeTierAdvisor(
@@ -148,7 +139,7 @@ FREE_TIER_ADVISORS = [
         env_var="AI21_API_KEY",
         alt_env_vars=["HIVE_AI21_API_KEY"],
         check_fn="env",
-        priority=14,
+        priority=13,
         daily_limit="Free tier available",
     ),
 ]

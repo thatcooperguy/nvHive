@@ -34,8 +34,8 @@ class PerplexityProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "perplexity/llama-3.1-sonar-large-128k-online",
-        fallback_model: str = "perplexity/llama-3.1-sonar-small-128k-online",
+        default_model: str = "perplexity/sonar-pro",
+        fallback_model: str = "perplexity/sonar",
         base_url: str | None = None,
         provider_name: str = "perplexity",
     ):

@@ -64,10 +64,9 @@ The wizard automatically:
 
 1. Detects if Ollama is running locally (unlimited free inference)
 2. Enables **LLM7** — anonymous access, no account, 30 req/min
-3. Enables **GitHub Models** — free frontier models if you have a GitHub account
-4. Enables **SiliconFlow** — 1000 RPM free tier, permanent
-5. Walks you through **Groq**, **Google Gemini**, and **Mistral** free tiers
-6. Sets your `defaults.mode` (ask / convene / poll / throwdown)
+3. Enables **SiliconFlow** — 1000 RPM free tier, permanent
+4. Walks you through **Groq**, **Google Gemini**, and **Mistral** free tiers
+5. Sets your `defaults.mode` (ask / convene / poll / throwdown)
 
 After setup, `nvh "question"` works immediately with no further configuration.
 
@@ -287,7 +286,7 @@ nvh          # Same thing — no args launches the REPL
 
 ```
 ╭─ NVHive REPL ────────────────────────────────────╮
-│ Advisors: groq, github, ollama                   │
+│ Advisors: groq, llm7, ollama                     │
 │ Type /help for commands. Ctrl+D to exit.         │
 ╰──────────────────────────────────────────────────╯
 
@@ -319,7 +318,7 @@ Both experts agree: a monad is like a special container...
 | Command | Description |
 |---|---|
 | `/advisor anthropic` | Switch advisor |
-| `/model gpt-4o-mini` | Switch model |
+| `/model gpt-5.6-luna` | Switch model |
 | `/system You are a pirate` | Set system prompt |
 | `/convene` | Toggle convene mode |
 | `/auto-agents` | Toggle auto-agent generation |
@@ -335,7 +334,7 @@ Both experts agree: a monad is like a special container...
 
 ## Advisor Setup
 
-### All 23 supported advisors
+### All 22 supported advisors
 
 | Provider | Free Tier | Get API Key | Best For |
 |---|---|---|---|
@@ -356,7 +355,6 @@ Both experts agree: a monad is like a special container...
 | **SambaNova** | Yes | [cloud.sambanova.ai](https://cloud.sambanova.ai) | Enterprise-scale models |
 | **Hugging Face** | Yes — Inference API | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) | Research, open weights |
 | **AI21 Labs** | Yes | [studio.ai21.com](https://studio.ai21.com/account/api-key) | Summarization, Jamba models |
-| **GitHub Models** | Yes — 50–150 req/day | [github.com/marketplace/models](https://github.com/marketplace/models) | Frontier models for GitHub users |
 | **NVIDIA NIM** | Yes — 1000+ credits | [build.nvidia.com](https://build.nvidia.com) | GPU-optimized NVIDIA models |
 | **SiliconFlow** | Yes — 1000 RPM | [cloud.siliconflow.cn](https://cloud.siliconflow.cn) | Chinese + global open models |
 | **LLM7** | Yes — no signup | [llm7.io](https://llm7.io) | Anonymous, 30 RPM, zero friction |
@@ -368,7 +366,6 @@ Both experts agree: a monad is like a special container...
 # Use the advisor name as a command with no question → setup wizard
 nvh openai          # Opens OpenAI setup: shows URL, prompts for API key
 nvh anthropic       # Opens Anthropic setup
-nvh github          # Opens GitHub Models setup (free for GitHub users)
 nvh llm7            # Enables LLM7 (no API key needed)
 nvh ollama          # Checks Ollama connectivity, lists local models
 ```
@@ -380,7 +377,6 @@ export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-...
 export GROQ_API_KEY=gsk_...
 export GOOGLE_API_KEY=AIza...
-export GITHUB_TOKEN=ghp_...
 ```
 
 ### Add via the Web UI

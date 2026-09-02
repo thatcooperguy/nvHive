@@ -996,7 +996,7 @@ async def run_repl(
     else:
         banner_body = (
             "[yellow]No advisors configured yet.[/yellow]\n"
-            "Run: [bold]nvh ollama[/bold]  (or nvh groq, nvh github, nvh openai ...)\n\n"
+            "Run: [bold]nvh ollama[/bold]  (or nvh groq, nvh google, nvh openai ...)\n\n"
             "[dim]Type [bold]/help[/bold] for commands, [bold]/quit[/bold] to exit.[/dim]"
         )
 

@@ -20,7 +20,7 @@ Works on GeForce NOW, RunPod, Lambda, Vast — anywhere you can open a terminal 
 
 - **A local LLM picked for your GPU's VRAM** — chat and image understanding with nothing leaving the machine
 - **An AI Wizard that knows your workspace** — reads live GPU/service state, fixes problems, RAGs over your files, searches the web
-- **A router across 23 providers** — free tiers first when you have no keys, your GPU first when you do
+- **A router across local and cloud providers** — free tiers first when you have no keys, your GPU first when you do
 - **Storage that survives resets** — models, chats, and config live on the persistent volume
 
 The browser only opens after every service passes a health check — including a real end-to-end test where the Wizard answers a message. You pay for GPU time, not debugging time.
@@ -70,7 +70,7 @@ The dashboard's **Debug Report** button generates a redacted report (secrets str
 | `nvh "question"` | Route to the best available model |
 | `nvh safe "question"` | Local inference only — nothing leaves the machine |
 | `nvh convene "question"` | Multi-model council with synthesis |
-| `nvh agent "task"` | Agentic coding with review loop |
+| `nvh agent run "task"` | Agentic coding with review loop |
 | `nvh models list --all` | Fit-ranked model catalog for your GPU |
 | `nvh services start` | Verified bring-up (Ollama → API → WebUI → smoke test) |
 | `nvh studio --install <pack> -y` | Rootless tool-pack install |
@@ -85,7 +85,7 @@ Full reference: [docs/COMMANDS.md](docs/COMMANDS.md)
 |---|---|
 | [Linux GPU Desktop](docs/LINUX_DESKTOP.md) | The no-root cloud workstation path in depth |
 | [Model Manager](docs/MODELS.md) | The in-app model browser and VRAM-fit logic |
-| [Providers](docs/PROVIDERS.md) | All 23 providers, free tiers, rate limits |
+| [Providers](docs/PROVIDERS.md) | Every supported provider, free tiers, rate limits |
 | [MCP](docs/MCP.md) | Attach external tool servers to the Wizard |
 | [Architecture](docs/ARCHITECTURE.md) | Routing, layers, system design |
 | [SDK & API](docs/SDK_API.md) | Python SDK, REST API, OpenAI/Anthropic-compatible proxies |

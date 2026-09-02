@@ -12,7 +12,7 @@ export type PaletteActionId =
   | 'mode-poll'
   | 'mode-throwdown'
   | 'model-best-local'
-  | 'model-gpt4o'
+  | 'model-gpt56-terra'
   | 'model-claude-sonnet'
   | 'nav-system'
   | 'nav-providers'
@@ -52,7 +52,7 @@ const STATIC_ACTIONS: PaletteAction[] = [
 
   // Models
   { id: 'model-best-local',     label: 'Switch to Best Local Model', category: 'Models', icon: '▷' },
-  { id: 'model-gpt4o',          label: 'Switch to GPT-4o',          category: 'Models', icon: '▷' },
+  { id: 'model-gpt56-terra',    label: 'Switch to GPT-5.6 Terra',   category: 'Models', icon: '▷' },
   { id: 'model-claude-sonnet',  label: 'Switch to Claude Sonnet',   category: 'Models', icon: '▷' },
 
   // Navigation
@@ -167,7 +167,7 @@ export default function CommandPalette({ open, onClose, onAction, models = [] }:
   // Merge static + dynamic, dedup models section
   const extraModelActions = dynamicModelActions.filter(a => {
     const mid = a.id.replace('model-switch:', '');
-    return !['nemotron', 'gpt-4o', 'claude-sonnet'].some(k => mid.includes(k));
+    return !['nemotron', 'gpt-5.6', 'claude-sonnet'].some(k => mid.includes(k));
   });
   const allActions = [...STATIC_ACTIONS, ...extraModelActions];
 

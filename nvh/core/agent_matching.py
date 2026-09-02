@@ -80,7 +80,6 @@ _STATIC_PROVIDER_STRENGTHS: dict[str, list[str]] = {
     "groq": ["code_generation", "debugging", "general"],
     "google": ["reasoning", "analysis", "creative", "math"],
     "ollama": ["code_generation", "debugging", "general"],
-    "github": ["code_generation", "debugging", "general"],
     "deepseek": ["code_generation", "math", "reasoning"],
     "mistral": ["code_generation", "reasoning", "creative"],
     "nvidia": ["code_generation", "ml", "optimization"],

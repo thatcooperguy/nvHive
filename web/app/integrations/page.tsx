@@ -622,7 +622,7 @@ function McpServersSection() {
       {servers !== null && !configured && !error && (
         <p className="text-xs font-mono text-[--text-muted]">
           No servers configured yet. Create the config file, then run{" "}
-          <code>nvh mcp refresh</code> or click Refresh tools.
+          <code>nvh mcp servers refresh</code> or click Refresh tools.
         </p>
       )}
       {servers?.map(s => (

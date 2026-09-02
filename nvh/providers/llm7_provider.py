@@ -9,7 +9,10 @@ Anonymous users get 30 RPM; users with a token get 120 RPM.
 If no LLM7_API_KEY is set, the provider uses "anonymous" as a dummy
 key, which the API accepts for anonymous-tier access.
 
-Default model: deepseek-r1-0528
+Default model : gpt-oss
+Fallback model: minimax-m2.7
+Both are on the anonymous/free tier; the gpt-5.x / claude / gemini entries in
+LLM7's model list are usage-based-only and need a paid key.
 
 Env var: LLM7_API_KEY (optional)
 """
@@ -78,8 +81,8 @@ class LLM7Provider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "deepseek-r1-0528",
-        fallback_model: str = "deepseek-r1-0528",
+        default_model: str = "gpt-oss",
+        fallback_model: str = "minimax-m2.7",
         base_url: str | None = None,
         provider_name: str = "llm7",
     ):

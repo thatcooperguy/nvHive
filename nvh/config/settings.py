@@ -205,15 +205,24 @@ PROJECT_CONFIG_NAMES = [".hive.yaml", ".hive/config.yaml"]
 
 
 def _find_project_config() -> Path | None:
-    """Search upward from cwd for a project-level config file."""
+    """Search upward from cwd for a project-level config file.
+
+    The home directory's ``.hive/`` is the user config location (or a
+    pre-NVH_HOME leftover), never a project overlay: merging it on top of
+    the real user config once left an ``advisors:``-style config with zero
+    providers whenever the CLI ran from anywhere under ``$HOME``. The walk
+    also stops at the home directory — nothing above it is a project.
+    """
+    home = Path.home().resolve()
+    user_config_dirs = {home / ".hive", DEFAULT_CONFIG_DIR.resolve()}
     current = Path.cwd()
     for _ in range(20):  # limit depth
         for name in PROJECT_CONFIG_NAMES:
             candidate = current / name
-            if candidate.is_file():
+            if candidate.is_file() and candidate.parent.resolve() not in user_config_dirs:
                 return candidate
         parent = current.parent
-        if parent == current:
+        if parent == current or current.resolve() == home:
             break
         current = parent
     return None
@@ -334,20 +343,20 @@ defaults:
 advisors:
   openai:
     api_key: ${OPENAI_API_KEY}
-    default_model: gpt-4o
-    fallback_model: gpt-4o-mini
+    default_model: gpt-5.6-terra
+    fallback_model: gpt-5.6-luna
     enabled: false
 
   anthropic:
     api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-sonnet-4-6
+    default_model: claude-sonnet-5
     fallback_model: claude-haiku-4-5-20251001
     enabled: false
 
   google:
     api_key: ${GOOGLE_API_KEY}
-    default_model: gemini/gemini-2.0-flash
-    fallback_model: gemini/gemini-2.0-flash
+    default_model: gemini/gemini-3.7-flash
+    fallback_model: gemini/gemini-3.5-flash-lite
     enabled: false
 
   ollama:
@@ -358,14 +367,14 @@ advisors:
 
   groq:
     api_key: ${GROQ_API_KEY}
-    default_model: groq/llama-3.3-70b-versatile
-    fallback_model: groq/llama-3.1-8b-instant
+    default_model: groq/openai/gpt-oss-120b
+    fallback_model: groq/openai/gpt-oss-20b
     enabled: false
 
   grok:
     api_key: ${XAI_API_KEY}
-    default_model: xai/grok-2
-    fallback_model: xai/grok-2
+    default_model: xai/grok-4.6
+    fallback_model: xai/grok-4.3
     base_url: https://api.x.ai/v1
     enabled: false
 
@@ -377,14 +386,14 @@ advisors:
 
   cohere:
     api_key: ${COHERE_API_KEY}
-    default_model: command-r-plus
-    fallback_model: command-r
+    default_model: command-a-03-2025
+    fallback_model: command-r-08-2024
     enabled: false
 
   deepseek:
     api_key: ${DEEPSEEK_API_KEY}
-    default_model: deepseek/deepseek-chat
-    fallback_model: deepseek/deepseek-chat
+    default_model: deepseek/deepseek-v4-pro
+    fallback_model: deepseek/deepseek-v4-flash
     base_url: https://api.deepseek.com
     enabled: false
 
@@ -396,63 +405,56 @@ advisors:
 
   perplexity:
     api_key: ${PERPLEXITY_API_KEY}
-    default_model: perplexity/llama-3.1-sonar-large-128k-online
-    fallback_model: perplexity/llama-3.1-sonar-small-128k-online
+    default_model: perplexity/sonar-pro
+    fallback_model: perplexity/sonar
     enabled: false
 
   together:
     api_key: ${TOGETHER_API_KEY:-${TOGETHERAI_API_KEY}}
-    default_model: together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo
-    fallback_model: together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo
+    default_model: together_ai/openai/gpt-oss-120b
+    fallback_model: together_ai/openai/gpt-oss-20b
     enabled: false
 
   fireworks:
     api_key: ${FIREWORKS_API_KEY}
-    default_model: fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct
-    fallback_model: fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct
+    default_model: fireworks_ai/accounts/fireworks/models/gpt-oss-120b
+    fallback_model: fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b
     enabled: false
 
   openrouter:
     api_key: ${OPENROUTER_API_KEY}
-    default_model: openrouter/meta-llama/llama-3.1-70b-instruct
-    fallback_model: openrouter/meta-llama/llama-3.1-8b-instruct
+    default_model: openrouter/openai/gpt-oss-120b
+    fallback_model: openrouter/openai/gpt-oss-20b
     enabled: false
 
   cerebras:
     api_key: ${CEREBRAS_API_KEY}
-    default_model: cerebras/llama3.1-70b
-    fallback_model: cerebras/llama3.1-8b
+    default_model: cerebras/gpt-oss-120b
+    fallback_model: cerebras/gpt-oss-120b
     enabled: false
 
   sambanova:
     api_key: ${SAMBANOVA_API_KEY}
-    default_model: sambanova/Meta-Llama-3.1-70B-Instruct
-    fallback_model: sambanova/Meta-Llama-3.1-8B-Instruct
+    default_model: sambanova/Meta-Llama-3.3-70B-Instruct
+    fallback_model: sambanova/gpt-oss-120b
     enabled: false
 
   huggingface:
     api_key: ${HUGGINGFACE_API_KEY:-${HF_TOKEN}}
-    default_model: huggingface/meta-llama/Meta-Llama-3-8B-Instruct
-    fallback_model: huggingface/mistralai/Mistral-7B-Instruct-v0.3
+    default_model: huggingface/openai/gpt-oss-120b
+    fallback_model: huggingface/openai/gpt-oss-20b
     enabled: false
 
   ai21:
     api_key: ${AI21_API_KEY}
-    default_model: jamba-1.5-large
-    fallback_model: jamba-1.5-mini
-    enabled: false
-
-  github:
-    api_key: ${GITHUB_TOKEN}
-    default_model: gpt-4o-mini
-    fallback_model: meta-llama-3.1-8b-instruct
-    base_url: https://models.inference.ai.azure.com
+    default_model: ai21_chat/jamba-large-1.7
+    fallback_model: ai21_chat/jamba-mini-2
     enabled: false
 
   nvidia:
     api_key: ${NVIDIA_API_KEY:-${NIM_API_KEY}}
-    default_model: meta/llama-3.1-70b-instruct
-    fallback_model: meta/llama-3.1-8b-instruct
+    default_model: nvidia_nim/meta/llama-3.3-70b-instruct
+    fallback_model: nvidia_nim/meta/llama-3.1-8b-instruct
     base_url: https://integrate.api.nvidia.com/v1
     enabled: false
 
@@ -470,7 +472,8 @@ advisors:
 
   llm7:
     api_key: ${LLM7_API_KEY:-anonymous}
-    default_model: deepseek-r1-0528
+    default_model: gpt-oss
+    fallback_model: minimax-m2.7
     base_url: https://api.llm7.io/v1
     enabled: true
 

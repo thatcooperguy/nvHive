@@ -69,7 +69,7 @@ _WEIGHTS_NO_REFERENCE: dict[QualityDimension, float] = {
 
 
 # Default provider groups
-FREE_COUNCIL = ["groq", "github", "llm7"]
+FREE_COUNCIL = ["groq", "llm7"]
 PREMIUM_COUNCIL = ["anthropic", "openai", "google"]
 
 

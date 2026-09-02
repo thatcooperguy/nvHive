@@ -108,7 +108,7 @@ KEY_COUNT=0
 KEY_NAMES=""
 for var in OPENAI_API_KEY ANTHROPIC_API_KEY GROQ_API_KEY GOOGLE_API_KEY \
            MISTRAL_API_KEY COHERE_API_KEY XAI_API_KEY DEEPSEEK_API_KEY \
-           FIREWORKS_API_KEY TOGETHER_API_KEY GITHUB_TOKEN; do
+           FIREWORKS_API_KEY TOGETHER_API_KEY; do
     eval val="\${$var:-}"
     if [ -n "$val" ]; then
         provider=$(echo "$var" | sed 's/_API_KEY//' | sed 's/_TOKEN//' | tr '[:upper:]' '[:lower:]')

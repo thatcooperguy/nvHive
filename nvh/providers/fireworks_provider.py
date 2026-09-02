@@ -34,8 +34,10 @@ class FireworksProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct",
-        fallback_model: str = "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct",
+        default_model: str = "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
+        fallback_model: str = (
+            "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b"
+        ),
         base_url: str | None = None,
         provider_name: str = "fireworks",
     ):

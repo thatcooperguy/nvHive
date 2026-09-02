@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nvhive"
-version = "0.41.0"
+version = "0.41.1"
 description = "NVHive — Multi-LLM orchestration platform with intelligent routing, hive consensus, and auto-agent generation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -33,7 +33,9 @@ classifiers = [
 ]
 dependencies = [
     "typer>=0.12",
-    "litellm>=1.55",
+    # >=1.99: the 0.41.1 default model IDs and litellm.cost_per_token() in
+    # the provider layer need the current model DB; older releases 400 them.
+    "litellm>=1.99",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "sqlalchemy[asyncio]>=2.0",

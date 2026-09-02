@@ -13,7 +13,7 @@ def test_first_run_detected(tmp_path):
     # Clear all keys that _is_first_run checks (API keys AND CI markers)
     env = {k: "" for k in (
         "GROQ_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY", "GITHUB_TOKEN",
+        "GOOGLE_API_KEY",
         "CI", "PYTEST_CURRENT_TEST", "GITHUB_ACTIONS",
     )}
     with (
@@ -33,7 +33,7 @@ def test_not_first_run_with_config(tmp_path):
     fake_config.write_text("model: gpt-4o\n")
     env = {k: "" for k in (
         "GROQ_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY", "GITHUB_TOKEN",
+        "GOOGLE_API_KEY",
     )}
     with (
         patch("nvh.cli.main.DEFAULT_CONFIG_PATH", fake_config),

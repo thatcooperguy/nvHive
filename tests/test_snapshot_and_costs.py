@@ -1,69 +1,17 @@
-"""Tests for nvh.core.snapshot and nvh.core.cost_tracker."""
+"""Tests for nvh.core.cost_tracker.
+
+The ``nvh.core.snapshot`` cases that used to live here went away with the
+module in 0.41.1 — ``nvh snapshot`` now drives
+``nvh.integrations.workspace.snapshot`` (see tests/test_cli_snapshot.py).
+"""
 
 from __future__ import annotations
 
-import tarfile
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 
 from nvh.core.cost_tracker import CostReport, format_cost_report, get_cost_report
-from nvh.core.snapshot import SnapshotInfo, list_snapshot_contents, save_snapshot
-
-# ---------------------------------------------------------------------------
-# snapshot tests
-# ---------------------------------------------------------------------------
-
-
-def test_snapshot_info_construction():
-    info = SnapshotInfo(
-        files=["a.txt", "b.txt"],
-        total_size_bytes=1024,
-        timestamp=1_700_000_000.0,
-    )
-    assert info.files == ["a.txt", "b.txt"]
-    assert info.total_size_bytes == 1024
-    assert info.error is None
-
-
-def test_snapshot_info_defaults():
-    info = SnapshotInfo()
-    assert info.files == []
-    assert info.total_size_bytes == 0
-    assert info.timestamp == 0.0
-    assert info.error is None
-
-
-def test_list_snapshot_contents_empty_tarball(tmp_path: Path):
-    tarball = tmp_path / "empty.tar.gz"
-    with tarfile.open(tarball, "w:gz"):
-        pass  # empty archive
-    assert list_snapshot_contents(tarball) == []
-
-
-def test_list_snapshot_contents_with_files(tmp_path: Path):
-    tarball = tmp_path / "snap.tar.gz"
-    dummy = tmp_path / "hello.txt"
-    dummy.write_text("hi")
-    with tarfile.open(tarball, "w:gz") as tar:
-        tar.add(str(dummy), arcname="hello.txt")
-    assert list_snapshot_contents(tarball) == ["hello.txt"]
-
-
-def test_save_snapshot_no_home_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """save_snapshot should succeed even when none of the expected files exist."""
-    monkeypatch.setattr("nvh.core.snapshot._home", lambda: tmp_path / "fakehome")
-    out = tmp_path / "out.tar.gz"
-    info = save_snapshot(out)
-    assert info.files == []
-    assert info.total_size_bytes == 0
-    assert info.error is None
-
-
-# ---------------------------------------------------------------------------
-# cost_tracker tests
-# ---------------------------------------------------------------------------
 
 
 def test_cost_report_construction():

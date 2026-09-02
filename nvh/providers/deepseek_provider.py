@@ -33,15 +33,15 @@ _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 class DeepSeekProvider:
     """DeepSeek adapter using LiteLLM.
 
-    Models use the ``deepseek/`` prefix (e.g. ``deepseek/deepseek-chat``).
+    Models use the ``deepseek/`` prefix (e.g. ``deepseek/deepseek-v4-pro``).
     Set the ``DEEPSEEK_API_KEY`` environment variable or pass ``api_key`` directly.
     """
 
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "deepseek/deepseek-chat",
-        fallback_model: str = "deepseek/deepseek-chat",
+        default_model: str = "deepseek/deepseek-v4-pro",
+        fallback_model: str = "deepseek/deepseek-v4-flash",
         base_url: str | None = None,
         provider_name: str = "deepseek",
         timeout: int = 120,

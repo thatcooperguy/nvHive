@@ -317,6 +317,25 @@ async def _run_boot_preflight_on_startup(app: FastAPI) -> None:
 # Lifespan
 # ---------------------------------------------------------------------------
 
+async def _preload_provider_keys() -> None:
+    """Expose keys saved by `nvh setup` / the web wizard to config ``${VAR}`` interpolation.
+
+    ``nvh serve`` reaches the lifespan via nvh.cli.main, which already ran
+    load_env_keys(); a bare ``uvicorn nvh.api.server:app`` does not. Keyring
+    is opt-in here for the same reason as in providers.registry: headless
+    boxes have slow or hung SecretService daemons, and the lifespan must not
+    block the event loop, so the loader runs in a worker thread. Existing
+    environment variables always win.
+    """
+    use_keyring = os.environ.get("NVH_USE_KEYRING", "0").lower() in {"1", "true", "yes"}
+    try:
+        from nvh.cli.setup import load_env_keys
+
+        await asyncio.to_thread(load_env_keys, use_keyring=use_keyring)
+    except Exception as exc:
+        logger.debug("keyring/.env preload skipped: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine
@@ -324,6 +343,7 @@ async def lifespan(app: FastAPI):
     from nvh.utils.logging import setup_logging
     json_mode = os.environ.get("HIVE_LOG_FORMAT", "text") == "json"
     setup_logging(level=os.environ.get("HIVE_LOG_LEVEL", "INFO"), json_format=json_mode)
+    await _preload_provider_keys()
     logger.info("Hive API: initializing engine...")
     try:
         _engine = Engine()
@@ -332,7 +352,7 @@ async def lifespan(app: FastAPI):
         boot_task = asyncio.create_task(_run_boot_preflight_on_startup(app))
         # MCP tools cache warm-up (2026-08-05): refresh in the background so
         # configured MCP servers' tools appear in the Wizard registry without
-        # the user running `nvh mcp refresh` first. Fire-and-forget — a dead
+        # the user running `nvh mcp servers refresh` first. Fire-and-forget — a dead
         # server records its error in the cache and never delays startup.
         try:
             from nvh.integrations.mcp_client import load_mcp_config, refresh_all_tools
@@ -2338,7 +2358,7 @@ async def workspace_snapshot_export_endpoint(
     """
     from nvh.integrations.workspace.snapshot import export_snapshot
 
-    result = export_snapshot(home_dir=request.home_dir)
+    result = await asyncio.to_thread(export_snapshot, home_dir=request.home_dir)
     return _response_envelope(result)
 
 
@@ -2391,7 +2411,8 @@ async def workspace_snapshot_import_endpoint(
     """
     from nvh.integrations.workspace.snapshot import import_snapshot
 
-    result = import_snapshot(
+    result = await asyncio.to_thread(
+        import_snapshot,
         request.path,
         home_dir=request.home_dir,
         overwrite=request.overwrite,
@@ -4877,7 +4898,6 @@ _PROVIDER_ENV_VAR_MAP = {
     "mistral": "MISTRAL_API_KEY",
     "cohere": "COHERE_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
-    "github": "GITHUB_TOKEN",
     "nvidia": "NVIDIA_API_KEY",
     "fireworks": "FIREWORKS_API_KEY",
     "cerebras": "CEREBRAS_API_KEY",
@@ -4900,7 +4920,6 @@ _PROVIDER_KEY_URLS = {
     "mistral": "https://console.mistral.ai/api-keys",
     "cohere": "https://dashboard.cohere.com/api-keys",
     "deepseek": "https://platform.deepseek.com/api_keys",
-    "github": "https://github.com/settings/tokens",
     "nvidia": "https://build.nvidia.com/explore/discover",
     "fireworks": "https://fireworks.ai/account/api-keys",
     "cerebras": "https://cloud.cerebras.ai/",
@@ -4923,7 +4942,6 @@ _PROVIDER_DOC_URLS = {
     "mistral": "https://docs.mistral.ai/",
     "cohere": "https://docs.cohere.com/",
     "deepseek": "https://api-docs.deepseek.com/",
-    "github": "https://docs.github.com/en/github-models",
     "nvidia": "https://docs.nvidia.com/nim/",
     "fireworks": "https://docs.fireworks.ai/",
     "cerebras": "https://inference-docs.cerebras.ai/",
@@ -4950,7 +4968,6 @@ _PROVIDER_LOGO_SLUGS = {
     "mistral": "mistral",
     "cohere": "cohere",
     "deepseek": "deepseek",
-    "github": "github",
     "nvidia": "nvidia",
     "fireworks": "fireworks",
     "cerebras": "cerebras",
@@ -4966,26 +4983,84 @@ _PROVIDER_LOGO_SLUGS = {
     "llm7": None,
 }
 
+# Must stay in lockstep with the template in nvh.config.settings.generate_default_config;
+# tests/test_provider_defaults.py cross-checks the two.
 _PROVIDER_DEFAULT_CONFIG = {
-    "openai": {"default_model": "gpt-4o", "fallback_model": "gpt-4o-mini"},
-    "anthropic": {"default_model": "claude-sonnet-4-6", "fallback_model": "claude-haiku-4-5-20251001"},
-    "google": {"default_model": "gemini/gemini-2.0-flash", "fallback_model": "gemini/gemini-2.0-flash"},
-    "groq": {"default_model": "groq/llama-3.3-70b-versatile", "fallback_model": "groq/llama-3.1-8b-instant"},
-    "mistral": {"default_model": "mistral/mistral-large-latest", "fallback_model": "mistral/mistral-small-latest"},
-    "cohere": {"default_model": "command-r-plus", "fallback_model": "command-r"},
-    "deepseek": {"default_model": "deepseek/deepseek-chat", "fallback_model": "deepseek/deepseek-chat", "base_url": "https://api.deepseek.com"},
-    "github": {"default_model": "gpt-4o-mini", "fallback_model": "meta-llama-3.1-8b-instruct", "base_url": "https://models.inference.ai.azure.com"},
-    "nvidia": {"default_model": "meta/llama-3.1-70b-instruct", "fallback_model": "meta/llama-3.1-8b-instruct", "base_url": "https://integrate.api.nvidia.com/v1"},
-    "fireworks": {"default_model": "fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct", "fallback_model": "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"},
-    "cerebras": {"default_model": "cerebras/llama3.1-70b", "fallback_model": "cerebras/llama3.1-8b"},
-    "sambanova": {"default_model": "sambanova/Meta-Llama-3.1-70B-Instruct", "fallback_model": "sambanova/Meta-Llama-3.1-8B-Instruct"},
-    "huggingface": {"default_model": "huggingface/meta-llama/Meta-Llama-3-8B-Instruct", "fallback_model": "huggingface/mistralai/Mistral-7B-Instruct-v0.3"},
-    "ai21": {"default_model": "jamba-1.5-large", "fallback_model": "jamba-1.5-mini"},
-    "siliconflow": {"default_model": "Qwen/Qwen2.5-7B-Instruct", "base_url": "https://api.siliconflow.cn/v1"},
-    "grok": {"default_model": "xai/grok-2", "fallback_model": "xai/grok-2", "base_url": "https://api.x.ai/v1"},
-    "perplexity": {"default_model": "perplexity/llama-3.1-sonar-large-128k-online", "fallback_model": "perplexity/llama-3.1-sonar-small-128k-online"},
-    "together": {"default_model": "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo", "fallback_model": "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"},
-    "openrouter": {"default_model": "openrouter/meta-llama/llama-3.1-70b-instruct", "fallback_model": "openrouter/meta-llama/llama-3.1-8b-instruct"},
+    "openai": {
+        "default_model": "gpt-5.6-terra",
+        "fallback_model": "gpt-5.6-luna",
+    },
+    "anthropic": {
+        "default_model": "claude-sonnet-5",
+        "fallback_model": "claude-haiku-4-5-20251001",
+    },
+    "google": {
+        "default_model": "gemini/gemini-3.7-flash",
+        "fallback_model": "gemini/gemini-3.5-flash-lite",
+    },
+    "groq": {
+        "default_model": "groq/openai/gpt-oss-120b",
+        "fallback_model": "groq/openai/gpt-oss-20b",
+    },
+    "mistral": {
+        "default_model": "mistral/mistral-large-latest",
+        "fallback_model": "mistral/mistral-small-latest",
+    },
+    "cohere": {
+        "default_model": "command-a-03-2025",
+        "fallback_model": "command-r-08-2024",
+    },
+    "deepseek": {
+        "default_model": "deepseek/deepseek-v4-pro",
+        "fallback_model": "deepseek/deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com",
+    },
+    "nvidia": {
+        "default_model": "nvidia_nim/meta/llama-3.3-70b-instruct",
+        "fallback_model": "nvidia_nim/meta/llama-3.1-8b-instruct",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+    },
+    "fireworks": {
+        "default_model": "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
+        "fallback_model": "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
+    },
+    "cerebras": {
+        "default_model": "cerebras/gpt-oss-120b",
+        "fallback_model": "cerebras/gpt-oss-120b",
+    },
+    "sambanova": {
+        "default_model": "sambanova/Meta-Llama-3.3-70B-Instruct",
+        "fallback_model": "sambanova/gpt-oss-120b",
+    },
+    "huggingface": {
+        "default_model": "huggingface/openai/gpt-oss-120b",
+        "fallback_model": "huggingface/openai/gpt-oss-20b",
+    },
+    "ai21": {
+        "default_model": "ai21_chat/jamba-large-1.7",
+        "fallback_model": "ai21_chat/jamba-mini-2",
+    },
+    "siliconflow": {
+        "default_model": "Qwen/Qwen2.5-7B-Instruct",
+        "base_url": "https://api.siliconflow.cn/v1",
+    },
+    "grok": {
+        "default_model": "xai/grok-4.6",
+        "fallback_model": "xai/grok-4.3",
+        "base_url": "https://api.x.ai/v1",
+    },
+    "perplexity": {
+        "default_model": "perplexity/sonar-pro",
+        "fallback_model": "perplexity/sonar",
+    },
+    "together": {
+        "default_model": "together_ai/openai/gpt-oss-120b",
+        "fallback_model": "together_ai/openai/gpt-oss-20b",
+    },
+    "openrouter": {
+        "default_model": "openrouter/openai/gpt-oss-120b",
+        "fallback_model": "openrouter/openai/gpt-oss-20b",
+    },
 }
 
 
@@ -5019,7 +5094,6 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
         "groq": "gsk_...",
         "mistral": "your-key...",
         "cohere": "your-key...",
-        "github": "ghp_...",
         "grok": "xai-...",
     }
 
@@ -5089,7 +5163,7 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "env_var": "",
             "env_key": "",
             "placeholder": "",
-            "strengths": ["No signup needed", "Anonymous access", "DeepSeek-R1 free"],
+            "strengths": ["No signup needed", "Anonymous access", "gpt-oss free"],
             "free_tier_limits": "30 RPM anonymous, 120 RPM with token (optional)",
         },
     ]
@@ -5105,7 +5179,7 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "key_url": "https://platform.openai.com/api-keys", "docs_url": "https://platform.openai.com/docs/overview",
             "env_var": "OPENAI_API_KEY", "env_key": "OPENAI_API_KEY",
             "placeholder": "sk-...",
-            "strengths": ["GPT-4o", "Best all-around", "Function calling"],
+            "strengths": ["GPT-5.6", "Best all-around", "Function calling"],
             "free_tier_limits": "",
         },
         {
@@ -5117,7 +5191,7 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "key_url": "https://console.anthropic.com/settings/keys", "docs_url": "https://docs.anthropic.com/",
             "env_var": "ANTHROPIC_API_KEY", "env_key": "ANTHROPIC_API_KEY",
             "placeholder": "sk-ant-...",
-            "strengths": ["Claude Sonnet", "Best for code", "200K context"],
+            "strengths": ["Claude Sonnet", "Best for code", "1M context"],
             "free_tier_limits": "",
         },
         {
@@ -5129,7 +5203,7 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
             "key_url": "https://platform.deepseek.com/api_keys", "docs_url": "https://api-docs.deepseek.com/",
             "env_var": "DEEPSEEK_API_KEY", "env_key": "DEEPSEEK_API_KEY",
             "placeholder": "sk-...",
-            "strengths": ["DeepSeek R1", "$0.07/M tokens", "Top reasoning"],
+            "strengths": ["DeepSeek V4", "From $0.44/M tokens", "Top reasoning"],
             "free_tier_limits": "",
         },
         {
@@ -5197,7 +5271,7 @@ async def get_free_providers(_auth: None = Depends(require_auth)):
 
 _ALLOWED_PROVIDERS = {
     "openai", "anthropic", "google", "groq", "mistral",
-    "cohere", "deepseek", "github", "nvidia", "fireworks",
+    "cohere", "deepseek", "nvidia", "fireworks",
     "cerebras", "sambanova", "huggingface", "ai21",
     "siliconflow", "grok", "perplexity", "together",
     "openrouter", "ollama",
@@ -5511,7 +5585,7 @@ async def proxy_chat_completions(
     - ``"safe"`` / ``"local"`` — Ollama only, stays on-device
     - ``"council"`` / ``"council:N"`` — multi-LLM consensus (N members)
     - ``"throwdown"`` — two-pass deep analysis with critique
-    - Any real model ID (``"gpt-4o"``, ``"claude-3-5-sonnet-20241022"``, …)
+    - Any real model ID (``"gpt-5.6-terra"``, ``"claude-sonnet-5"``, …)
 
     NemoClaw integration:
     - Set ``x-nvhive-privacy: local-only`` header to force local routing.

@@ -45,7 +45,7 @@ async function apiFetch(path: string, body: Record<string, unknown>): Promise<an
 
 async function checkConnection() {
   try {
-    const res = await fetch(`${apiUrl()}/health`);
+    const res = await fetch(`${apiUrl()}/v1/health`);
     if (res.ok) {
       statusBar.text = "$(check) nvHive";
       statusBar.tooltip = "nvHive API connected";

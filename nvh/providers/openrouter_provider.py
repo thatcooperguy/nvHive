@@ -36,8 +36,8 @@ class OpenRouterProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "openrouter/meta-llama/llama-3.1-70b-instruct",
-        fallback_model: str = "openrouter/meta-llama/llama-3.1-8b-instruct",
+        default_model: str = "openrouter/openai/gpt-oss-120b",
+        fallback_model: str = "openrouter/openai/gpt-oss-20b",
         base_url: str | None = None,
         provider_name: str = "openrouter",
     ):

@@ -34,8 +34,8 @@ class TogetherProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
-        fallback_model: str = "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        default_model: str = "together_ai/openai/gpt-oss-120b",
+        fallback_model: str = "together_ai/openai/gpt-oss-20b",
         base_url: str | None = None,
         provider_name: str = "together",
     ):

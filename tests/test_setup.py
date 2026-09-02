@@ -5,12 +5,16 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from nvh.cli.setup import (
     CORE_PROVIDERS,
     _check_provider_key,
     _detect_gpu_info,
+    _env_key_files,
     _get_recommended_models,
     _is_vision_model,
+    _layout_config_dir,
     _ollama_running,
     _reorder_vision_first,
     _store_key,
@@ -300,6 +304,85 @@ class TestNoKeyringFallback:
         assert os.environ["MY_KEY"] == "from_env"
         # Cleanup
         os.environ.pop("MY_KEY", None)
+
+    def test_load_env_keys_reads_storage_layout_env_too(self, tmp_path):
+        """Keys the web wizard saves to NVH_HOME/config/.env load without
+        HIVE_CONFIG_HOME exported; the legacy ~/.hive/.env still loads first
+        and anything already in the environment wins over both."""
+        legacy_dir = tmp_path / "hive"
+        legacy_dir.mkdir()
+        (legacy_dir / ".env").write_text(
+            "LEGACY_ONLY_KEY=from_legacy\nSHARED_KEY=from_legacy\n"
+        )
+        nvh_home = tmp_path / "nvh-home"
+        (nvh_home / "config").mkdir(parents=True)
+        (nvh_home / "config" / ".env").write_text(
+            "WIZARD_ONLY_KEY=from_wizard\nSHARED_KEY=from_wizard\nPRESET_KEY=from_wizard\n"
+        )
+
+        scrub = {
+            "HIVE_CONFIG_HOME", "NVHIVE_HOME",
+            "LEGACY_ONLY_KEY", "WIZARD_ONLY_KEY", "SHARED_KEY", "PRESET_KEY",
+        }
+        env = {k: v for k, v in os.environ.items() if k not in scrub}
+        env["NVH_HOME"] = str(nvh_home)
+        env["PRESET_KEY"] = "from_env"
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", legacy_dir),
+        ):
+            load_env_keys()
+
+            assert os.environ["LEGACY_ONLY_KEY"] == "from_legacy"
+            assert os.environ["WIZARD_ONLY_KEY"] == "from_wizard"
+            assert os.environ["SHARED_KEY"] == "from_legacy"
+            assert os.environ["PRESET_KEY"] == "from_env"
+
+    def test_load_env_keys_can_skip_keyring(self, tmp_path):
+        """The API lifespan passes use_keyring=False — no keyring round-trips."""
+        mock_keyring = MagicMock()
+        with (
+            patch.dict("sys.modules", {"keyring": mock_keyring}),
+            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", tmp_path),
+        ):
+            load_env_keys(use_keyring=False)
+        mock_keyring.get_password.assert_not_called()
+
+    def test_env_key_files_resolve_layout_without_importing_integrations(
+        self, tmp_path, monkeypatch,
+    ):
+        """Importing nvh.integrations costs every CLI invocation ~160 ms, so the
+        layout config dir is derived from the environment directly."""
+        for var in ("HIVE_CONFIG_HOME", "NVHIVE_HOME"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("NVH_HOME", str(tmp_path / "home"))
+        blocked = {
+            "nvh.integrations": None,
+            "nvh.integrations.workspace": None,
+            "nvh.integrations.workspace.storage": None,
+        }
+        with (
+            patch.dict("sys.modules", blocked),
+            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", tmp_path / "hive"),
+        ):
+            files = _env_key_files()
+        assert files == [tmp_path / "hive" / ".env", tmp_path / "home" / "config" / ".env"]
+
+    @pytest.mark.parametrize("env", [
+        {},
+        {"NVH_HOME": "{tmp}/a"},
+        {"NVHIVE_HOME": "{tmp}/b"},
+        {"NVH_HOME": "{tmp}/a", "NVHIVE_HOME": "{tmp}/b"},
+        {"HIVE_CONFIG_HOME": "{tmp}/cfg", "NVH_HOME": "{tmp}/a"},
+    ])
+    def test_layout_config_dir_matches_storage_layout(self, tmp_path, monkeypatch, env):
+        from nvh.integrations.workspace.storage import storage_layout
+
+        for var in ("HIVE_CONFIG_HOME", "NVH_HOME", "NVHIVE_HOME"):
+            monkeypatch.delenv(var, raising=False)
+        for var, value in env.items():
+            monkeypatch.setenv(var, value.format(tmp=tmp_path))
+        assert _layout_config_dir().resolve() == storage_layout().config_dir
 
 
 class TestVisionModelDetection:

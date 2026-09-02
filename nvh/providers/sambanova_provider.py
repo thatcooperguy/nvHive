@@ -34,8 +34,8 @@ class SambaNovProvider:
     def __init__(
         self,
         api_key: str = "",
-        default_model: str = "sambanova/Meta-Llama-3.1-70B-Instruct",
-        fallback_model: str = "sambanova/Meta-Llama-3.1-8B-Instruct",
+        default_model: str = "sambanova/Meta-Llama-3.3-70B-Instruct",
+        fallback_model: str = "sambanova/gpt-oss-120b",
         base_url: str | None = None,
         provider_name: str = "sambanova",
     ):

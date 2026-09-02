@@ -39,7 +39,7 @@ pip install 'nvhive[mcp]'
 3. Connect and cache the servers' tools:
 
 ```bash
-nvh mcp refresh
+nvh mcp servers refresh
 ```
 
 The API server also refreshes the cache automatically on startup, and the
@@ -48,7 +48,7 @@ Integrations page has a **Refresh tools** button.
 4. Check status any time:
 
 ```bash
-nvh mcp list
+nvh mcp servers list
 ```
 
 ## How tools appear to the Wizard
@@ -86,8 +86,8 @@ External MCP servers run arbitrary third-party code, so:
 
 | Surface | What it does |
 |---|---|
-| `nvh mcp list` | Config + cached tool status, per-tool safety class |
-| `nvh mcp refresh` | Reconnect all servers, rewrite the tools cache |
+| `nvh mcp servers list` | Config + cached tool status, per-tool safety class |
+| `nvh mcp servers refresh` | Reconnect all servers, rewrite the tools cache |
 | `GET /v1/mcp/servers` | Status JSON for UIs |
 | `POST /v1/mcp/refresh` | Same as the CLI refresh |
 | Integrations page | Server cards + Refresh tools button |

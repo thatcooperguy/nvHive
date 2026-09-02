@@ -93,7 +93,10 @@ class SiliconFlowProvider:
         return model or self._default_model
 
     def _kwargs(self, model: str) -> dict[str, Any]:
-        kw: dict[str, Any] = {"model": model}
+        # LiteLLM has no siliconflow provider; bare "Qwen/..." IDs fail provider
+        # detection, so route through the generic OpenAI-compatible path.
+        litellm_model = model if model.startswith("openai/") else f"openai/{model}"
+        kw: dict[str, Any] = {"model": litellm_model}
         if self._api_key:
             kw["api_key"] = self._api_key
         kw["api_base"] = self._base_url

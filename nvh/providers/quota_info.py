@@ -57,14 +57,6 @@ PROVIDER_QUOTAS: dict[str, QuotaInfo] = {
         upgrade_url="https://aistudio.google.com/apikey",
         upgrade_hint="Create a new API key in a fresh project, or enable billing.",
     ),
-    "github": QuotaInfo(
-        provider="github",
-        tier="free",
-        limit_description="Free for GitHub users: 50-150 requests/day",
-        reset_hint="Daily limits reset at midnight UTC",
-        upgrade_url="https://github.com/settings/tokens",
-        upgrade_hint="Ensure token has 'models' permission. Free for all GitHub users.",
-    ),
     "mistral": QuotaInfo(
         provider="mistral",
         tier="free",

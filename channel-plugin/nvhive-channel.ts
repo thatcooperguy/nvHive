@@ -71,7 +71,7 @@ const mcp = new Server(
       },
       tools: {},                            // expose nvHive tools
     },
-    instructions: `You have access to nvHive, a multi-LLM orchestration platform with 63 models across 23 providers (25 free).
+    instructions: `You have access to nvHive, a multi-LLM orchestration platform routing across local and cloud LLM providers.
 
 WHEN TO USE NVHIVE TOOLS:
 - Use "nvhive_ask" for queries where cost matters — nvHive routes to the cheapest capable model.
@@ -88,7 +88,7 @@ Events from nvHive arrive as <channel source="nvhive" event_type="...">. These i
 React to these by informing the user and suggesting actions.
 
 COST OPTIMIZATION:
-nvHive's smart router sends simple queries to free providers (Groq, GitHub Models, LLM7, local Nemotron) and only uses premium models when task complexity requires it. Prefer nvHive tools when cost optimization is relevant.`,
+nvHive's smart router sends simple queries to free providers (Groq, LLM7, local Nemotron) and only uses premium models when task complexity requires it. Prefer nvHive tools when cost optimization is relevant.`,
   },
 )
 
@@ -101,7 +101,7 @@ const TOOLS = [
     name: 'nvhive_ask',
     description:
       'Route a query through nvHive\'s smart router. Picks the best model based on task type, cost, and speed. ' +
-      'Supports 63 models across 23 providers — 25 free. Use this instead of direct API calls when cost matters.',
+      'Routes across local and cloud providers, free tiers first. Use this instead of direct API calls when cost matters.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -109,7 +109,7 @@ const TOOLS = [
         advisor: {
           type: 'string',
           description:
-            'Specific provider: "groq" (fast+free), "github" (free), "openai", "anthropic", "ollama" (local). Leave empty for smart routing.',
+            'Specific provider: "groq" (fast+free), "openai", "anthropic", "ollama" (local). Leave empty for smart routing.',
         },
         model: {
           type: 'string',

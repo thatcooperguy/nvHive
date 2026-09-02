@@ -51,18 +51,25 @@ class TestBuildMessages:
 
 
 class TestCalcCost:
-    def test_returns_decimal_on_success(self) -> None:
+    def test_sums_prompt_and_completion_cost(self) -> None:
         usage = Usage(input_tokens=100, output_tokens=50, total_tokens=150)
-        with patch("litellm.completion_cost", return_value=0.001234):
+        with patch("litellm.cost_per_token", return_value=(0.001, 0.000234)) as cpt:
             cost = _calc_cost("gpt-4o", usage)
         assert isinstance(cost, Decimal)
         assert cost == Decimal("0.001234")
+        cpt.assert_called_once_with(model="gpt-4o", prompt_tokens=100, completion_tokens=50)
 
     def test_returns_zero_on_exception(self) -> None:
         usage = Usage(input_tokens=10, output_tokens=5, total_tokens=15)
-        with patch("litellm.completion_cost", side_effect=Exception("nope")):
+        with patch("litellm.cost_per_token", side_effect=Exception("nope")):
             cost = _calc_cost("gpt-4o", usage)
         assert cost == Decimal("0")
+
+    def test_priced_default_is_nonzero(self) -> None:
+        # Regression guard: the old completion_cost(prompt_tokens=...) call raised
+        # TypeError on every request and silently reported $0 for all providers.
+        usage = Usage(input_tokens=1000, output_tokens=1000, total_tokens=2000)
+        assert _calc_cost("gpt-5.6-terra", usage) > Decimal("0")
 
 
 class TestMapError:
