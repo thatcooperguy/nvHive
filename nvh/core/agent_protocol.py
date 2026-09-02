@@ -199,7 +199,7 @@ def parse_qa_verdict(text: str) -> str:
     Returns the matching verdict string, defaulting to "FAILED".
 
     This is the single source of truth for post-QA verdict parsing,
-    used by iterative_loop, autonomous, and parallel_pipeline.
+    used by iterative_loop.
     """
     upper = text.upper()
     for v in ("PASSED", "PARTIAL", "FAILED"):

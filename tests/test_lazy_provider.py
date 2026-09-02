@@ -48,7 +48,7 @@ async def test_lazy_provider_imports_only_when_used(monkeypatch) -> None:
 def test_registry_keeps_configured_providers_lazy(monkeypatch) -> None:
     class ExplodingLoader:
         def import_module(self, module_name: str):
-            if module_name == "nvh.providers.openai_provider":
+            if module_name == "nvh.providers.openai_compatible":
                 raise AssertionError("configured providers should not import during registry setup")
             return __import__(module_name, fromlist=["*"])
 

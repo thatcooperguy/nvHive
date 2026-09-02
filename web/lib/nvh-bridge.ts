@@ -5,8 +5,8 @@ import path from 'node:path';
 /**
  * Shared rootless-CLI bridge helpers used by:
  *   - /api/services/start-api  (spawn `nvh serve`)
- *   - /api/services/doctor     (execFile `nvh doctor --json`)
- *   - /api/debug/report        (same doctor call, aggregated alongside log
+ *   - /api/services/doctor     (execFile `nvh status --deep --json`)
+ *   - /api/debug/report        (same status call, aggregated alongside log
  *                               tails + service probes)
  *
  * Why a shared module: the resolver had a directory-vs-file bug that

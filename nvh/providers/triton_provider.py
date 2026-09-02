@@ -18,7 +18,6 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import AsyncIterator
-from decimal import Decimal
 from typing import Any
 
 import litellm
@@ -29,33 +28,10 @@ from nvh.providers.base import (
     HealthStatus,
     Message,
     ModelInfo,
-    ProviderError,
     StreamChunk,
     Usage,
 )
-
-
-def _map_error(e: Exception, provider: str) -> ProviderError:
-    """Map LiteLLM/Triton exceptions to our error taxonomy."""
-    from nvh.providers.openai_provider import _map_error as _openai_map_error
-
-    return _openai_map_error(e, provider)
-
-
-def _build_messages(
-    messages: list[Message],
-    system_prompt: str | None = None,
-) -> list[dict[str, Any]]:
-    """Convert our Message models to LiteLLM format."""
-    result: list[dict[str, Any]] = []
-    if system_prompt:
-        result.append({"role": "system", "content": system_prompt})
-    for msg in messages:
-        d: dict[str, Any] = {"role": msg.role, "content": msg.content}
-        if msg.name:
-            d["name"] = msg.name
-        result.append(d)
-    return result
+from nvh.providers.openai_compatible import _build_messages, _calc_cost, _map_error
 
 
 def _get_base_url() -> str:
@@ -65,13 +41,6 @@ def _get_base_url() -> str:
         or os.environ.get("TRITON_ENDPOINT")
         or "http://localhost:8001"
     )
-
-
-def _calc_cost(model: str, usage: Usage) -> Decimal:
-    """Cost calculation — Triton is self-hosted so cost is effectively zero."""
-    from nvh.providers.openai_provider import _calc_cost as _openai_calc_cost
-
-    return _openai_calc_cost(model, usage)
 
 
 class TritonProvider:

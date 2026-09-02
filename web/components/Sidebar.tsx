@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { checkHealth } from '@/lib/api';
+import { checkHealth, searchConversations, type ConversationSearchHit } from '@/lib/api';
 import type { ConversationSummary } from '@/lib/types';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
@@ -78,15 +78,6 @@ function IconChat() {
     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round"
         d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-    </svg>
-  );
-}
-
-function IconAsk() {
-  return (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round"
-        d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
     </svg>
   );
 }
@@ -190,9 +181,11 @@ interface ConvItemProps {
   onClick: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, id: string) => void;
   collapsed: boolean;
+  /** Matching excerpt from a full-text search hit. */
+  snippet?: string;
 }
 
-function ConvItem({ conv, active, onClick, onContextMenu, collapsed }: ConvItemProps) {
+function ConvItem({ conv, active, onClick, onContextMenu, collapsed, snippet }: ConvItemProps) {
   if (collapsed) {
     return (
       <button
@@ -232,10 +225,16 @@ function ConvItem({ conv, active, onClick, onContextMenu, collapsed }: ConvItemP
         <div className={`text-xs truncate leading-snug ${active ? 'text-[#0a0a0a] font-medium dark:text-[#fafafa]' : 'text-[#404040] group-hover:text-[#0a0a0a] dark:text-[#d4d4d4] dark:group-hover:text-[#fafafa]'}`}>
           {conv.title}
         </div>
-        <div className="text-[9px] font-mono text-[#a3a3a3] mt-0.5 flex items-center gap-1.5 dark:text-[#737373]">
-          {conv.provider && <span>{conv.provider}</span>}
-          <span>{conv.message_count} msgs</span>
-        </div>
+        {snippet ? (
+          <div className="text-[9px] font-mono text-[#737373] mt-0.5 line-clamp-2 leading-snug dark:text-[#a3a3a3]">
+            {snippet}
+          </div>
+        ) : (
+          <div className="text-[9px] font-mono text-[#a3a3a3] mt-0.5 flex items-center gap-1.5 dark:text-[#737373]">
+            {conv.provider && <span>{conv.provider}</span>}
+            <span>{conv.message_count} msgs</span>
+          </div>
+        )}
       </div>
       {conv.pinned && (
         <span className="text-[8px] text-[#76B900] flex-shrink-0 mt-0.5">PIN</span>
@@ -263,7 +262,6 @@ const BOTTOM_NAV = [
   { href: '/agents', label: 'Agents', icon: <IconAgents /> },
   { href: '/models', label: 'Models', icon: <IconModels /> },
   { href: '/setup', label: 'Setup', icon: <IconSetup /> },
-  { href: '/query', label: 'Ask AI', icon: <IconAsk /> },
   { href: '/system', label: 'My Computer', icon: <IconSystem /> },
   { href: '/vault', label: 'Memory Vault', icon: <IconVault /> },
   { href: '/providers', label: 'AI Connections', icon: <IconProviders /> },
@@ -287,6 +285,8 @@ export default function Sidebar({
   const [connected, setConnected] = useState<boolean | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [search, setSearch] = useState('');
+  const [searchHits, setSearchHits] = useState<ConversationSearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -350,13 +350,68 @@ export default function Sidebar({
     setRenameValue('');
   }, [renamingId, renameValue, onRenameConversation]);
 
-  const filteredConvs = search.trim()
-    ? conversations.filter(c =>
-        c.title.toLowerCase().includes(search.toLowerCase())
-      )
-    : conversations;
+  // Search: full-text over message content on the server (debounced), plus
+  // instant title matches from the list already in hand so results appear
+  // even while the request is in flight or the API is offline.
+  const searchQuery = search.trim();
+  useEffect(() => {
+    if (!searchQuery) {
+      setSearchHits([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      searchConversations(searchQuery).then(hits => {
+        if (cancelled) return;
+        setSearchHits(hits);
+        setSearching(false);
+      });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [searchQuery]);
 
-  const groups = groupConversations(filteredConvs);
+  const searchResults: Array<ConversationSummary & { snippet?: string }> = (() => {
+    if (!searchQuery) return [];
+    const byId = new Map<string, ConversationSummary & { snippet?: string }>();
+    for (const hit of searchHits) byId.set(hit.id, hit);
+    const q = searchQuery.toLowerCase();
+    for (const c of conversations) {
+      if (!byId.has(c.id) && c.title.toLowerCase().includes(q)) byId.set(c.id, c);
+    }
+    return [...byId.values()];
+  })();
+
+  const groups = groupConversations(conversations);
+
+  const renderItem = (conv: ConversationSummary, snippet?: string) => (
+    renamingId === conv.id ? (
+      <div key={conv.id} className="px-3 py-1.5">
+        <input
+          ref={renameInputRef}
+          value={renameValue}
+          onChange={e => setRenameValue(e.target.value)}
+          onBlur={handleRenameSubmit}
+          onKeyDown={e => {
+            if (e.key === 'Enter') handleRenameSubmit();
+            if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); }
+          }}
+          className="w-full bg-white border border-[#76B900]/60 text-[#0a0a0a] text-xs font-mono px-2 py-1 focus:outline-none dark:bg-[#0a0a0a] dark:text-[#fafafa]"
+        />
+      </div>
+    ) : (
+      <ConvItem
+        key={conv.id}
+        conv={conv}
+        snippet={snippet}
+        active={activeConversationId === conv.id}
+        onClick={id => onSelectConversation?.(id)}
+        onContextMenu={handleContextMenu}
+        collapsed={collapsed}
+      />
+    )
+  );
 
   const renderGroup = (label: string, items: ConversationSummary[]) => {
     if (items.length === 0) return null;
@@ -367,32 +422,7 @@ export default function Sidebar({
             {label}
           </div>
         )}
-        {items.map(conv => (
-          renamingId === conv.id ? (
-            <div key={conv.id} className="px-3 py-1.5">
-              <input
-                ref={renameInputRef}
-                value={renameValue}
-                onChange={e => setRenameValue(e.target.value)}
-                onBlur={handleRenameSubmit}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') handleRenameSubmit();
-                  if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); }
-                }}
-                className="w-full bg-white border border-[#76B900]/60 text-[#0a0a0a] text-xs font-mono px-2 py-1 focus:outline-none dark:bg-[#0a0a0a] dark:text-[#fafafa]"
-              />
-            </div>
-          ) : (
-            <ConvItem
-              key={conv.id}
-              conv={conv}
-              active={activeConversationId === conv.id}
-              onClick={id => onSelectConversation?.(id)}
-              onContextMenu={handleContextMenu}
-              collapsed={collapsed}
-            />
-          )
-        ))}
+        {items.map(conv => renderItem(conv))}
       </div>
     );
   };
@@ -445,8 +475,10 @@ export default function Sidebar({
               </svg>
               <input
                 type="text"
+                data-sidebar-search
                 value={search}
                 onChange={e => setSearch(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Escape') setSearch(''); }}
                 placeholder="Search chats..."
                 className="w-full bg-white border border-[#d4d4d4] text-[#0a0a0a] text-xs font-mono pl-7 pr-3 py-1.5
                   focus:outline-none focus:border-[#76B900] placeholder-[#a3a3a3] transition-colors dark:bg-[#0a0a0a] dark:border-[#404040] dark:text-[#fafafa]"
@@ -469,7 +501,19 @@ export default function Sidebar({
             </button>
           )}
 
-          {conversations.length === 0 && !collapsed ? (
+          {searchQuery && !collapsed ? (
+            <div className="pb-2">
+              <div className="px-3 py-1.5 text-[9px] font-mono text-[#a3a3a3] uppercase tracking-[0.15em] dark:text-[#737373]">
+                {searching ? 'Searching...' : `${searchResults.length} result${searchResults.length === 1 ? '' : 's'}`}
+              </div>
+              {searchResults.map(conv => renderItem(conv, conv.snippet))}
+              {!searching && searchResults.length === 0 && (
+                <div className="px-3 py-4 text-center text-[9px] font-mono text-[#a3a3a3] dark:text-[#737373]">
+                  No chats match &ldquo;{searchQuery}&rdquo;
+                </div>
+              )}
+            </div>
+          ) : conversations.length === 0 && !collapsed ? (
             <div className="px-3 py-6 text-center">
               <div className="text-[10px] font-mono text-[#a3a3a3] uppercase tracking-wider dark:text-[#737373]">
                 No conversations yet

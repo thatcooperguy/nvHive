@@ -210,16 +210,18 @@ class ToolRegistry:
                     break
             return "\n".join(results) if results else f"No matches for '{query}'"
 
-        async def run_code(code: str, language: str = "python") -> str:
-            """Execute code in a sandboxed environment."""
-            from nvh.sandbox.executor import SandboxExecutor
-            executor = SandboxExecutor()
-            result = await executor.execute(code=code, language=language)
+        def _render_execution(result) -> str:
+            # A refusal (fail-closed, no Docker) executed nothing; raise so the
+            # agent sees a failed tool call rather than empty "output".
+            if result.error and not result.isolation:
+                raise RuntimeError(result.error)
             output = result.stdout
             if result.stderr:
                 output += f"\nSTDERR:\n{result.stderr}"
             if result.timed_out:
                 output += "\n(execution timed out)"
+            if result.exit_code and not output.strip():
+                output = f"[EXIT {result.exit_code}] Command failed with no output."
             if result.isolation == "subprocess":
                 output += (
                     "\n[isolation: subprocess — Docker unavailable, "
@@ -227,20 +229,25 @@ class ToolRegistry:
                 )
             return output
 
-        async def shell(command: str) -> str:
-            """Run a shell command (sandboxed).
+        async def run_code(code: str, language: str = "python") -> str:
+            """Execute code in a sandboxed environment."""
+            from nvh.sandbox.executor import SandboxExecutor
+            result = await SandboxExecutor().execute(code=code, language=language)
+            return _render_execution(result)
 
-            When Docker sandbox mode is enabled (--sandbox or NVH_SANDBOX=1),
-            commands run inside a Docker container for full isolation.
-            Otherwise falls through to the existing SandboxExecutor.
+        async def shell(command: str) -> str:
+            """Run a shell command with the workspace mounted.
+
+            Docker when available (workspace read-write at /workspace, no
+            network, non-root, memory/pids caps); otherwise a subprocess in
+            the workspace. NVH_SANDBOX_REQUIRE_DOCKER=1 / `nvh do --sandbox`
+            refuses the unisolated fallback.
             """
-            try:
-                from nvh.core.docker_sandbox import run_in_sandbox, sandbox_enabled
-                if sandbox_enabled():
-                    return await run_in_sandbox(command, self.workspace)
-            except ImportError:
-                pass
-            return await run_code(command, language="bash")
+            from nvh.sandbox.executor import SandboxConfig, SandboxExecutor
+            executor = SandboxExecutor(
+                SandboxConfig(mount_dir=self.workspace, timeout_seconds=60)
+            )
+            return _render_execution(await executor.run_shell(command))
 
         # Register all
         self.register(Tool(

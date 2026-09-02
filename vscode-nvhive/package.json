@@ -1,10 +1,10 @@
 {
   "name": "nvhive",
-  "displayName": "nvHive AI Agent",
-  "description": "Multi-LLM AI agent with smart team assembly, code review, and test generation",
+  "displayName": "nvHive",
+  "description": "Send prompts, staged diffs, files, and selections to a running nvHive server for smart-routed answers and council consensus",
   "version": "0.1.0",
   "publisher": "nvhive",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -13,27 +13,12 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "nvhive.agent", "title": "Run Agent Task", "category": "nvHive" },
+      { "command": "nvhive.agent", "title": "Ask nvHive", "category": "nvHive" },
       { "command": "nvhive.review", "title": "Code Review", "category": "nvHive" },
       { "command": "nvhive.testgen", "title": "Generate Tests", "category": "nvHive" },
       { "command": "nvhive.explain", "title": "Explain Code", "category": "nvHive" },
       { "command": "nvhive.council", "title": "Ask Council", "category": "nvHive" }
     ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "nvhive",
-          "title": "nvHive",
-          "icon": "$(hubot)"
-        }
-      ]
-    },
-    "views": {
-      "nvhive": [
-        { "id": "nvhive.agentPanel", "name": "Agent" },
-        { "id": "nvhive.advisorsPanel", "name": "Advisors" }
-      ]
-    },
     "configuration": {
       "title": "nvHive",
       "properties": {
@@ -41,11 +26,6 @@
           "type": "string",
           "default": "http://localhost:8000",
           "description": "URL of the nvHive API server"
-        },
-        "nvhive.autoStart": {
-          "type": "boolean",
-          "default": true,
-          "description": "Auto-start nvh serve if API is not running"
         }
       }
     }
@@ -56,6 +36,7 @@
     "package": "vsce package"
   },
   "devDependencies": {
+    "@types/node": "^18.19.0",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.3.0",
     "@vscode/vsce": "^2.22.0"

@@ -15,6 +15,7 @@ from nvh.sandbox.executor import ExecutionResult, SandboxConfig, SandboxExecutor
 @pytest.fixture
 def no_require_docker(monkeypatch):
     monkeypatch.delenv("NVH_SANDBOX_REQUIRE_DOCKER", raising=False)
+    monkeypatch.delenv("NVH_SANDBOX", raising=False)
 
 
 @pytest.fixture
@@ -111,15 +112,106 @@ async def test_require_docker_config_flag_refuses(no_require_docker, docker_unav
 
 def test_require_docker_env_parsing(monkeypatch):
     monkeypatch.delenv("NVH_SANDBOX_REQUIRE_DOCKER", raising=False)
+    monkeypatch.delenv("NVH_SANDBOX", raising=False)
     assert SandboxConfig().require_docker is False
     monkeypatch.setenv("NVH_SANDBOX_REQUIRE_DOCKER", "true")
     assert SandboxConfig().require_docker is True
-    # "yes" works for NVH_SANDBOX (docker_sandbox.sandbox_enabled); a
-    # fail-closed flag rejecting it would silently fail open
+    # "yes" was accepted by the pre-0.42 NVH_SANDBOX opt-in; a fail-closed
+    # flag rejecting it would silently fail open
     monkeypatch.setenv("NVH_SANDBOX_REQUIRE_DOCKER", "yes")
     assert SandboxConfig().require_docker is True
     monkeypatch.setenv("NVH_SANDBOX_REQUIRE_DOCKER", "0")
     assert SandboxConfig().require_docker is False
+
+
+def test_legacy_nvh_sandbox_env_means_require_docker(monkeypatch):
+    monkeypatch.delenv("NVH_SANDBOX_REQUIRE_DOCKER", raising=False)
+    monkeypatch.setenv("NVH_SANDBOX", "1")
+    assert SandboxConfig().require_docker is True
+
+
+# -- run_shell (the agent `shell` tool) ---------------------------------------
+
+_LIST_DIR = "dir" if sys.platform == "win32" else "ls"
+
+
+async def test_run_shell_subprocess_runs_in_mount_dir(
+    no_require_docker, docker_unavailable, tmp_path
+):
+    (tmp_path / "marker.txt").write_text("hi")
+    executor = SandboxExecutor(SandboxConfig(mount_dir=tmp_path))
+    result = await executor.run_shell(_LIST_DIR)
+    assert result.isolation == "subprocess"
+    assert result.exit_code == 0
+    assert "marker.txt" in result.stdout
+
+
+async def test_run_shell_docker_mounts_workspace_rw_with_isolation_flags(
+    no_require_docker, monkeypatch, tmp_path
+):
+    async def yes_docker(self):
+        return True
+
+    captured: dict[str, list[str]] = {}
+
+    async def fake_run_process(self, argv, *, shell_command=None, cwd=None):
+        captured["argv"] = argv
+        return ExecutionResult(stdout="ok", stderr="", exit_code=0, execution_time_ms=1)
+
+    monkeypatch.setattr(SandboxExecutor, "_check_docker", yes_docker)
+    monkeypatch.setattr(SandboxExecutor, "_run_process", fake_run_process)
+    result = await SandboxExecutor(SandboxConfig(mount_dir=tmp_path)).run_shell("make test")
+
+    argv = captured["argv"]
+    assert result.isolation == "docker"
+    assert argv[:3] == ["docker", "run", "--rm"]
+    assert f"{tmp_path.resolve()}:/workspace:rw" in argv
+    assert argv[argv.index("-w") + 1] == "/workspace"
+    for flag in ("--read-only", "--network", "--pids-limit", "--memory", "--user", "--tmpfs"):
+        assert flag in argv, flag
+    assert argv[-3:] == ["bash", "-c", "make test"]
+    assert argv[-4] == SandboxConfig().shell_image
+
+
+async def test_run_shell_refuses_without_docker_when_required(
+    monkeypatch, docker_unavailable, tmp_path
+):
+    monkeypatch.setenv("NVH_SANDBOX_REQUIRE_DOCKER", "1")
+    result = await SandboxExecutor(SandboxConfig(mount_dir=tmp_path)).run_shell(
+        "echo leaked > leaked.txt"
+    )
+    assert result.exit_code == -1
+    assert result.isolation == ""
+    assert "NVH_SANDBOX_REQUIRE_DOCKER" in result.error
+    assert not (tmp_path / "leaked.txt").exists()
+
+
+# -- shell tool ---------------------------------------------------------------
+
+
+async def test_shell_tool_sees_workspace_and_labels_fallback(
+    no_require_docker, docker_unavailable, tmp_path
+):
+    (tmp_path / "seen.txt").write_text("x")
+    from nvh.core.tools import ToolRegistry
+
+    registry = ToolRegistry(workspace=str(tmp_path), include_system=False)
+    result = await registry.execute("shell", {"command": _LIST_DIR})
+    assert result.success, result.error
+    assert "seen.txt" in result.output
+    assert "[isolation: subprocess" in result.output
+
+
+async def test_shell_tool_fails_closed_when_docker_required(
+    monkeypatch, docker_unavailable, tmp_path
+):
+    monkeypatch.setenv("NVH_SANDBOX_REQUIRE_DOCKER", "1")
+    from nvh.core.tools import ToolRegistry
+
+    registry = ToolRegistry(workspace=str(tmp_path), include_system=False)
+    result = await registry.execute("shell", {"command": "echo hi"})
+    assert result.success is False
+    assert "NVH_SANDBOX_REQUIRE_DOCKER" in result.error
 
 
 # -- run_code tool notice -----------------------------------------------------

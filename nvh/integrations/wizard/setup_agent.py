@@ -13,7 +13,6 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.catalog import catalog_status
 from nvh.integrations.installs.comfyui import detect_comfyui
 from nvh.integrations.installs.studio_packs import catalog_with_status, model_catalog_with_status
 from nvh.integrations.local_chat import local_chat_smoke_status
@@ -25,6 +24,7 @@ from nvh.integrations.services.service_registry import (
     service_for_question,
     service_status,
 )
+from nvh.integrations.setup_catalog import catalog_status
 from nvh.integrations.wizard.troubleshooter import analyze_setup_failure
 from nvh.integrations.workspace.storage import storage_status
 
@@ -154,7 +154,7 @@ def _safe_catalog_status() -> dict[str, Any]:
 
 def _safe_catalog_data() -> dict[str, Any]:
     try:
-        from nvh.integrations.catalog import load_setup_catalog
+        from nvh.integrations.setup_catalog import load_setup_catalog
 
         return load_setup_catalog(refresh=False).get("catalog", {})
     except Exception as exc:
@@ -383,7 +383,7 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             title="Choose persistent NVH_HOME",
             priority=10,
             status="required",
-            command='nvh doctor --storage --home-dir "/path/on/mounted/volume/nvhive"',
+            command='nvh status --deep --storage --home-dir "/path/on/mounted/volume/nvhive"',
             reason="Large downloads should live on the mounted file volume that survives reconnects.",
         ))
 
@@ -1111,7 +1111,7 @@ def setup_assistant_reply(
     elif any(word in q for word in ["storage", "mount", "persistent", "home", "nvh_home"]):
         focus = "storage"
         commands = _commands_for_actions(actions, "storage") or [
-            'nvh doctor --storage --home-dir "/path/on/mounted/volume/nvhive"',
+            'nvh status --deep --storage --home-dir "/path/on/mounted/volume/nvhive"',
         ]
         answer = (
             "Use the mounted file volume for NVH_HOME before large downloads. "

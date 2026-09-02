@@ -63,3 +63,34 @@ def test_mcp_server_create_server_without_sdk():
     from nvh.mcp_server import create_server
     with pytest.raises(ImportError, match="MCP SDK not installed"):
         create_server()
+
+
+def test_mcp_server_create():
+    pytest.importorskip("mcp", reason="MCP SDK not installed")
+    from nvh.mcp_server import create_server
+    server = create_server()
+    assert server is not None
+
+
+def test_mcp_server_import():
+    try:
+        from nvh import mcp_server
+        assert hasattr(mcp_server, "main") or hasattr(mcp_server, "serve")
+    except ImportError:
+        pytest.skip("MCP dependencies not installed")
+
+
+def test_mcp_server_has_main():
+    try:
+        from nvh import mcp_server
+        assert hasattr(mcp_server, "main") or hasattr(mcp_server, "serve")
+    except ImportError:
+        pytest.skip("MCP dependencies not installed")
+
+
+def test_mcp_server_import_optional_sdk():
+    try:
+        from nvh import mcp_server
+        assert hasattr(mcp_server, "main") or hasattr(mcp_server, "serve")
+    except ImportError:
+        pytest.skip("MCP dependencies not installed")

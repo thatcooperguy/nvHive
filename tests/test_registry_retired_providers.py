@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 
 from nvh.config.settings import CouncilConfig, ProviderConfig
-from nvh.providers.registry import PROVIDER_SPECS, RETIRED_PROVIDERS, ProviderRegistry
+from nvh.providers.registry import BESPOKE_ADAPTERS, RETIRED_PROVIDERS, ProviderRegistry
+from nvh.providers.specs import PROVIDER_SPECS
 
 
 def test_retired_provider_stanza_is_skipped_with_a_warning(caplog) -> None:
@@ -38,4 +39,4 @@ def test_disabled_retired_stanza_is_silent(caplog) -> None:
 
 
 def test_retired_providers_have_no_adapter_spec() -> None:
-    assert not set(RETIRED_PROVIDERS) & set(PROVIDER_SPECS)
+    assert not set(RETIRED_PROVIDERS) & (set(PROVIDER_SPECS) | set(BESPOKE_ADAPTERS))

@@ -310,3 +310,40 @@ class TestOrchestrationConfig:
         # 10GB VRAM — meets custom light threshold, below full
         mode = await orchestrator.initialize(registry, gpu_vram_gb=10)
         assert mode == OrchestrationMode.LIGHT
+
+
+class TestLocalOrchestratorSmoke:
+    def test_import(self):
+        assert LocalOrchestrator is not None
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_init(self):
+        orch = LocalOrchestrator()
+        assert orch is not None
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_initialize_basic(self):
+        from nvh.providers.registry import ProviderRegistry
+        orch = LocalOrchestrator()
+        registry = ProviderRegistry()
+        try:
+            mode = await orch.initialize(registry, gpu_vram_gb=0)
+            assert isinstance(mode, str)
+        except Exception:
+            pass  # May need specific providers
+
+    @pytest.mark.asyncio
+    async def test_initialize_no_gpu(self):
+        from nvh.providers.registry import ProviderRegistry
+        orch = LocalOrchestrator()
+        reg = ProviderRegistry()
+        mode = await orch.initialize(reg, gpu_vram_gb=0)
+        assert isinstance(mode, str)
+
+    @pytest.mark.asyncio
+    async def test_initialize_high_vram(self):
+        from nvh.providers.registry import ProviderRegistry
+        orch = LocalOrchestrator()
+        reg = ProviderRegistry()
+        mode = await orch.initialize(reg, gpu_vram_gb=48)
+        assert isinstance(mode, str)

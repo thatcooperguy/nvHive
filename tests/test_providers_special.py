@@ -27,6 +27,7 @@ import pytest
 from nvh.providers.base import (
     CompletionResponse,
     FinishReason,
+    HealthStatus,
     Message,
     ProviderError,
     ProviderUnavailableError,
@@ -321,3 +322,109 @@ class TestTritonProvider:
         # Should either be empty or contain the default
         if models:
             assert models[0].model_id.startswith("triton/")
+
+
+# ---------------------------------------------------------------------------
+# Ollama health_check and NDJSON streaming
+# ---------------------------------------------------------------------------
+
+
+class TestOllamaHealthCheck:
+    @pytest.mark.asyncio
+    async def test_health_check_when_ollama_down(self):
+        provider = OllamaProvider(base_url="http://localhost:99999")
+        status = await provider.health_check()
+        assert isinstance(status, HealthStatus)
+        assert status.healthy is False
+        assert status.error is not None
+
+
+class TestOllamaHealthAndStream:
+    @pytest.mark.asyncio
+    async def test_health_check_success(self):
+        provider = OllamaProvider()
+        fake_resp = MagicMock()
+        fake_resp.raise_for_status = MagicMock()
+        fake_resp.json.return_value = {"models": [{"name": "llama3.1"}, {"name": "phi3"}]}
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=fake_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("nvh.providers.ollama_provider.httpx.AsyncClient", return_value=mock_client):
+            status = await provider.health_check()
+
+        assert status.healthy is True
+        assert status.models_available == 2
+        assert status.provider == "ollama"
+        assert status.latency_ms is not None
+
+    @pytest.mark.asyncio
+    async def test_health_check_failure(self):
+        provider = OllamaProvider()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("nvh.providers.ollama_provider.httpx.AsyncClient", return_value=mock_client):
+            status = await provider.health_check()
+
+        assert status.healthy is False
+        assert "connection refused" in status.error
+
+    @pytest.mark.asyncio
+    async def test_stream_multiple_chunks(self):
+        """stream() uses _direct_stream over httpx NDJSON, not litellm, so the
+        httpx streaming response is what gets mocked."""
+        import json
+        from contextlib import asynccontextmanager
+
+        provider = OllamaProvider()
+
+        ndjson_lines = [
+            json.dumps({"message": {"content": "Hello"}, "done": False}),
+            json.dumps({"message": {"content": " world"}, "done": False}),
+            json.dumps({
+                "message": {"content": ""},
+                "done": True,
+                "prompt_eval_count": 5,
+                "eval_count": 3,
+            }),
+        ]
+
+        class FakeStreamResponse:
+            def raise_for_status(self) -> None:  # pragma: no cover - trivial
+                return None
+
+            async def aiter_lines(self):
+                for line in ndjson_lines:
+                    yield line
+
+        @asynccontextmanager
+        async def fake_stream_cm(*args, **kwargs):
+            yield FakeStreamResponse()
+
+        fake_client = MagicMock()
+        fake_client.stream = fake_stream_cm
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch(
+            "nvh.providers.ollama_provider.httpx.AsyncClient",
+            return_value=fake_client,
+        ):
+            chunks = []
+            async for chunk in provider.stream(
+                messages=[Message(role="user", content="hi")],
+                model="ollama/gemma3:4b",
+            ):
+                chunks.append(chunk)
+
+        assert len(chunks) == 3
+        assert chunks[0].delta == "Hello"
+        assert chunks[1].delta == " world"
+        assert chunks[2].is_final is True
+        assert chunks[2].accumulated_content == "Hello world"

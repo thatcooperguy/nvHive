@@ -234,13 +234,13 @@ class TestAPIEndpoints:
 
         resp = test_client.get(
             "/v1/ready",
-            params={"home_dir": "C:/Users/ccooper/persist/nvhive"},
+            params={"home_dir": "C:/Users/someone/persist/nvhive"},
         )
         rendered = resp.text
 
         assert resp.status_code == 200
         assert "sk-testsecret1234567890" not in rendered
-        assert "C:/Users/ccooper" not in rendered
+        assert "C:/Users/someone" not in rendered
         assert resp.json()["data"]["ready"] is False
 
     def test_providers_list(self, test_client: TestClient) -> None:
@@ -438,7 +438,7 @@ class TestAPIEndpoints:
 # Coverage gaps — endpoints that test_api.py never touched.
 #
 # These are the endpoints the audit flagged as having no test coverage:
-# /metrics, /v1/system/*, /v1/conversations/*, /v1/locks*, /v1/sandbox/*,
+# /metrics, /v1/system/*, /v1/conversations/*, /v1/sandbox/*,
 # /v1/setup/*, /v1/agents/analyze, /v1/auth/me, /v1/webhooks*. We hit
 # each one and verify status code + envelope shape — full behavioral
 # tests can come later, this is the regression-floor pass.
@@ -495,23 +495,6 @@ class TestAPIEndpointCoverage:
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "success"
-
-    def test_locks_endpoint(self, test_client: TestClient) -> None:
-        """GET /v1/locks returns current file lock status."""
-        resp = test_client.get("/v1/locks")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "success"
-
-    def test_locks_check_conflicts(self, test_client: TestClient) -> None:
-        """POST /v1/locks/check-conflicts accepts a path list."""
-        resp = test_client.post(
-            "/v1/locks/check-conflicts",
-            json={"paths": ["/tmp/test.txt"], "agent_id": "test-agent"},
-        )
-        # 200 if implemented, 422 if validation fires — both prove the
-        # route is wired.
-        assert resp.status_code in (200, 422)
 
     def test_sandbox_status(self, test_client: TestClient) -> None:
         """GET /v1/sandbox/status reports sandbox availability."""

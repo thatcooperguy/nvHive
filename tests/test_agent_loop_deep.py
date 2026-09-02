@@ -6,6 +6,7 @@ No real API calls, no real filesystem changes.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,7 +18,8 @@ from nvh.core.agent_loop import (
     _extract_tool_calls,
     run_agent_loop,
 )
-from nvh.core.tools import Tool, ToolResult
+from nvh.core.tools import Tool, ToolRegistry, ToolResult
+from nvh.providers.base import CompletionResponse, Usage
 
 # ---------------------------------------------------------------------------
 # _extract_tool_calls
@@ -286,3 +288,93 @@ async def test_loop_compresses_history_after_iteration_3():
     # After iteration 3, prompts should contain "compressed"
     last_prompt = calls[4].kwargs.get("prompt", calls[4].args[0] if calls[4].args else "")
     assert "compressed" in last_prompt.lower() or "Progress" in last_prompt
+
+
+# ---------------------------------------------------------------------------
+# Tool-call block extraction and end-to-end loops with a real ToolRegistry
+# ---------------------------------------------------------------------------
+
+
+class TestAgentLoopDeep:
+    def test_extract_tool_calls_json_block(self):
+        text = '''Let me read the file.
+```tool_call
+{"tool": "read_file", "args": {"path": "main.py"}}
+```
+'''
+        calls = _extract_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0]["tool"] == "read_file"
+
+    def test_extract_tool_calls_multiple(self):
+        text = '''
+```tool_call
+{"tool": "read_file", "args": {"path": "a.py"}}
+```
+Then I'll write:
+```tool_call
+{"tool": "write_file", "args": {"path": "b.py", "content": "hello"}}
+```
+'''
+        calls = _extract_tool_calls(text)
+        assert len(calls) == 2
+
+    def test_extract_tool_calls_none(self):
+        calls = _extract_tool_calls("Just a regular response with no tools.")
+        assert calls == []
+
+    def test_extract_tool_calls_malformed_json(self):
+        text = '''```tool_call
+{"tool": "read_file", "args": {invalid json}}
+```'''
+        calls = _extract_tool_calls(text)
+        assert calls == []
+
+    def test_extract_tool_calls_max_limit(self):
+        # Generate more than MAX_TOOL_CALLS_PER_TURN
+        blocks = "\n".join(
+            f'```tool_call\n{{"tool": "read_file", "args": {{"path": "file{i}.py"}}}}\n```'
+            for i in range(MAX_TOOL_CALLS_PER_TURN + 3)
+        )
+        calls = _extract_tool_calls(blocks)
+        assert len(calls) == MAX_TOOL_CALLS_PER_TURN
+
+    @pytest.mark.asyncio
+    async def test_agent_loop_completes_without_tools(self):
+        class MockEngine:
+            async def query(self, prompt="", **kw):
+                return CompletionResponse(
+                    content="The answer is 42.", model="m", provider="mock",
+                    usage=Usage(total_tokens=10), cost_usd=Decimal("0"), latency_ms=1,
+                )
+        result = await run_agent_loop(task="What is 6*7?", engine=MockEngine(), max_iterations=3)
+        assert result.completed is True
+        assert "42" in result.final_response
+
+    @pytest.mark.asyncio
+    async def test_agent_loop_uses_tools(self):
+        call_count = 0
+
+        class MockEngine:
+            async def query(self, prompt="", **kw):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    return CompletionResponse(
+                        content='```tool_call\n{"tool": "list_files", "args": {"pattern": "*.py"}}\n```',
+                        model="m", provider="mock",
+                        usage=Usage(total_tokens=10), cost_usd=Decimal("0"), latency_ms=1,
+                    )
+                return CompletionResponse(
+                    content="Found the files. Task complete.",
+                    model="m", provider="mock",
+                    usage=Usage(total_tokens=10), cost_usd=Decimal("0"), latency_ms=1,
+                )
+
+        tools = ToolRegistry(workspace=".", include_system=False)
+        result = await run_agent_loop(
+            task="List Python files", engine=MockEngine(),
+            tools=tools, max_iterations=5,
+        )
+        assert result.completed is True
+        assert result.total_tool_calls >= 1

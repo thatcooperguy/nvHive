@@ -2597,7 +2597,7 @@ export default function SetupPage() {
         <div className="flex items-center justify-between gap-3">
           <div className="text-[10px] font-mono text-[#76B900] tracking-[0.2em] uppercase">nvHive Setup</div>
           <div className="flex items-center gap-2">
-            <Link href="/query" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+            <Link href="/" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
               Ask AI
             </Link>
             <Link href="/providers" className="btn-ghost px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
@@ -4471,7 +4471,7 @@ export default function SetupPage() {
                 >
                   Finish Setup
                 </button>
-                <Link href="/query" className="btn-secondary py-3 text-xs font-mono uppercase tracking-widest text-center">
+                <Link href="/" className="btn-secondary py-3 text-xs font-mono uppercase tracking-widest text-center">
                   Open Chat
                 </Link>
                 <button
@@ -4949,16 +4949,6 @@ export default function SetupPage() {
                 </div>
               </div>
             </div>
-
-            <details className="bg-[#ffffff] border border-[#e5e5e5] p-4 dark:bg-[#0a0a0a] dark:border-[#262626]">
-              <summary className="cursor-pointer text-[10px] font-mono text-[#737373] uppercase tracking-wider dark:text-[#a3a3a3]">Rootless container option</summary>
-              <div className="mt-3">
-                <code className="text-[10px] font-mono text-[#76B900]">docker compose up -d</code>
-                <div className="text-[10px] text-[#737373] mt-1 dark:text-[#a3a3a3]">
-                  Only use this when Docker/Podman is available without sudo. Otherwise AI Wizard uses the workspace runtime.
-                </div>
-              </div>
-            </details>
           </div>
         )}
 
@@ -5721,7 +5711,7 @@ export default function SetupPage() {
                       <div className="text-[9px] font-mono text-[#737373] uppercase dark:text-[#a3a3a3]">{ollamaStatus === 'online' ? 'Ollama online' : 'Uses best available advisor'}</div>
                     </div>
                   </div>
-                  <Link href="/query" className="btn-primary block text-center mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
+                  <Link href="/" className="btn-primary block text-center mt-3 px-3 py-2 text-[10px] font-mono uppercase tracking-wider">
                     Open Chat
                   </Link>
                 </div>
@@ -5806,8 +5796,8 @@ export default function SetupPage() {
               <Link href="/" className="btn-primary flex-1 py-3 text-sm font-mono uppercase tracking-widest text-center">
                 GO TO DASHBOARD
               </Link>
-              <Link href="/query" className="btn-secondary flex-1 py-3 text-xs font-mono uppercase tracking-widest text-center">
-                ASK YOUR FIRST QUESTION
+              <Link href="/wizard" className="btn-secondary flex-1 py-3 text-xs font-mono uppercase tracking-widest text-center">
+                ASK THE AI WIZARD
               </Link>
             </div>
           </div>

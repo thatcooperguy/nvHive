@@ -1,33 +1,39 @@
-# Web Interface
+# Web UI
 
-nvHive includes a full web dashboard for users who prefer a visual experience over the CLI. Launch it with:
+The dashboard is a Next.js app served on `http://localhost:3000` that talks to
+the API server on `:8000`. Launch it with:
 
 ```bash
-nvh webui
+nvh webui                  # installs Node deps on first run, starts the API if needed
+nvh services start --open  # verified bring-up (Ollama → API → WebUI → smoke test)
 ```
 
-The dashboard opens at `http://localhost:3000` and connects to the nvHive API automatically.
-First launch installs dependencies and builds the WebUI under persistent `NVH_HOME`.
-Later launches run the optimized production server. Use `nvh webui --dev` only
-when developing the frontend. Pip and binary installs can fetch the WebUI with
-`git` or, when `git` is absent, a GitHub source-archive fallback. The bootstrap
-tries the installed release tag first and falls back to `main` only if needed.
-The API allows local WebUI fallback ports automatically, so rootless launches on
-`localhost`, `127.0.0.1`, `nvhive`, or loopback IPv6 keep working when the
-preferred port is already occupied.
+First launch installs dependencies and builds the WebUI under `NVH_HOME`
+(`$NVH_HOME/webui`); later launches run the production server. pip and binary
+installs fetch the WebUI source with `git`, or a GitHub source archive when
+`git` is absent — the installed release tag first, `main` only as a fallback
+(`NVH_WEB_REF` overrides). If port 3000 is taken the API allows the fallback
+ports (3001, 3002, 8080) automatically, on `localhost`, `127.0.0.1`,
+`nvhive` and loopback IPv6.
 
 ## Pages
 
-| Page | What It Does |
-|------|-------------|
-| **Chat** | Send prompts in single, council, or compare mode with streaming responses |
-| **Council** | Real-time multi-LLM orchestration with live member progress and synthesis |
-| **Query Builder** | Advanced query form with provider/model filters and agent presets |
-| **Advisors** | Provider health status, model listings, and connectivity testing |
-| **Integrations** | Auto-detect and connect NemoClaw, OpenClaw, Claude Code, Cursor |
-| **System** | GPU info, cache stats, budget status, and recommendations |
-| **Settings** | API URL, defaults, budget limits, theme, and council strategy |
-| **Setup Wizard** | Step-by-step onboarding: GPU detection, local AI, cloud providers |
+| Sidebar | Route | What it does |
+|---|---|---|
+| Chat | `/` | Prompts in single, council or compare mode with streaming. Council mode has an **Advanced** drawer for cabinet, member count, strategy, synthesis provider and per-provider weights |
+| AI Wizard | `/wizard` | Tool-using assistant grounded in live workspace state: refreshes models, runs safe repairs, ingests dropped files (PDF included), searches the web, cites sources, shows cost and latency per reply. **Convene council** hands the draft to the chat page |
+| Agents | `/agents` | The Agent Library — profiles grouped by category, each mappable to a local or cloud model; copy one into `$NVH_HOME/agent-profiles/` to customise |
+| Models | `/models` | The Model Manager: installed models, fit-ranked catalog, one-click install with live progress ([MODELS.md](MODELS.md)) |
+| Setup | `/setup` | Onboarding: storage check, GPU detection, local AI, free providers, ComfyUI and studio packs as resumable background jobs; **Advanced Details** exposes diagnostics and **Copy Error Report** |
+| My Computer | `/system` | GPU, storage, runtime, cache and budget status with recommendations |
+| Memory Vault | `/vault` | Markdown notes under `$NVH_HOME/vault`, queryable from the Wizard through RAG |
+| AI Connections | `/providers` | Provider cards: add a key, **Test Connection**, health and model listings |
+| Usage | `/analytics` | Spend, tokens and latency per provider and per agent |
+| Preferences | `/settings` | Theme, response cache, browser data. Model defaults and budgets live in `config.yaml` (`nvh config`) |
+| Developer Tools | `/integrations` | Detect and connect Claude Code, Cursor, OpenClaw, NemoClaw; attach external MCP servers and refresh their tools |
+
+The `/query` and `/council` pages were removed in 0.42; their features are the
+chat page's single and council modes.
 
 ## Chat history
 
@@ -35,93 +41,55 @@ Past conversations live in the sidebar on every page, grouped by date
 (Pinned / Today / Yesterday / Previous 7 Days / Older) with search, inline
 rename, and a right-click menu (Pin, Rename, Export as Markdown, Delete).
 
-- **Resume anywhere** — clicking a conversation reopens it on the surface
-  that produced it: Wizard chats resume on `/wizard`, chat/council threads
-  on the main page.
-- **Wizard persistence** — every Wizard turn is saved server-side
-  (SQLite at `$NVH_HOME/state/nvhive.db`), so a page reload or a
-  reconnect to the same workspace picks the thread back up.
-- **Pin** a conversation (right-click, or `/pin` in Wizard chat) to keep
-  it at the top of the sidebar and surface it on reconnect.
-- **Search across history** — the sidebar filter matches titles;
-  `GET /v1/conversations/search?q=` matches full message content.
-- **Two stores, one sidebar** — Wizard chats persist server-side; main-page
-  single/council chats stay in this browser (localStorage) and still appear
-  in the shared sidebar everywhere. Rename, pin, delete, and Export apply
-  to whichever store owns the chat.
+- **One store** — every chat surface persists to the API server (SQLite at
+  `$NVH_HOME/state/nvhive.db`) through `/v1/conversations`; nothing is kept
+  in the browser. A reload or a reconnect to the same workspace picks any
+  thread back up.
+- **Resume anywhere** — a conversation reopens on the surface that produced
+  it: Wizard chats on `/wizard`, chat/council/compare threads on `/?c=<id>`.
+- **Pin** (right-click, or `/pin` in Wizard chat) keeps a thread at the top
+  and surfaces it after a reconnect.
+- **Search** — the sidebar box queries `GET /v1/conversations/search?q=`
+  (full message content with a snippet per hit) and matches titles instantly;
+  `Ctrl+K` → "Search Conversations" focuses it.
+- **Upgrading from 0.41** — chats older builds kept in localStorage are
+  imported into the server store once, on the first page load after the
+  upgrade, then the local copy is removed.
 
 ## Design
 
-- NVIDIA-inspired dark theme with green (#76B900) accents
-- Angular design language with diamond status indicators
-- Command palette (Ctrl+K) for quick navigation
-- Real-time streaming via SSE and WebSocket
-- Responsive layout for desktop and mobile
-- Keyboard shortcuts throughout (Ctrl+N, Ctrl+B, Ctrl+/)
+- NVIDIA-inspired dark theme with green (`#76B900`) accents and diamond status
+  indicators
+- Command palette (`Ctrl+K`); shortcuts `Ctrl+N` new chat, `Ctrl+B` sidebar,
+  `Ctrl+/` help
+- Streaming over SSE and WebSocket; responsive down to phone width
 
 ## Screenshots
 
-| Chat Interface | Integrations |
+| Chat | Integrations |
 |:-:|:-:|
 | ![Chat](screenshots/chat.png) | ![Integrations](screenshots/integrations.png) |
 
-| Council Mode | System Dashboard |
+| System | Advisors |
 |:-:|:-:|
-| ![Council](screenshots/council.png) | ![System](screenshots/system.png) |
+| ![System](screenshots/system.png) | ![Advisors](screenshots/advisors.png) |
 
-| Advisors | Setup Wizard |
+| Setup wizard | Model Manager |
 |:-:|:-:|
-| ![Advisors](screenshots/advisors.png) | ![Setup](screenshots/setup.png) |
+| ![Setup](screenshots/setup.png) | ![Model Manager](screenshots/model-manager.png) |
 
-## Architecture Diagram
+## Developing the UI
 
-```mermaid
-graph TB
-    subgraph Clients
-        CLI[nvh CLI]
-        WEB[Web UI :3000]
-        SDK[OpenAI SDK]
-        NC[NemoClaw Agent]
-        OC[OpenClaw Agent]
-        CC[Claude Code / Cursor]
-    end
-
-    subgraph nvHive Core
-        API[API Server :8000]
-        MCP[MCP Server]
-        PROXY[OpenAI Proxy]
-        ROUTER[Smart Router]
-        COUNCIL[Council Engine]
-        AGENTS[Agent System]
-    end
-
-    subgraph Providers
-        LOCAL[Ollama / Nemotron]
-        CLOUD[OpenAI / Anthropic / Google]
-        FREE[Groq / LLM7 / NVIDIA NIM]
-    end
-
-    CLI --> API
-    WEB -->|REST + WebSocket| API
-    SDK -->|OpenAI-compatible| PROXY
-    NC -->|OpenShell Gateway| PROXY
-    OC -->|MCP stdio| MCP
-    CC -->|MCP stdio| MCP
-
-    MCP --> API
-    PROXY --> API
-    API --> ROUTER
-    ROUTER --> COUNCIL
-    ROUTER --> LOCAL
-    ROUTER --> CLOUD
-    ROUTER --> FREE
-    COUNCIL --> LOCAL
-    COUNCIL --> CLOUD
-
-    style LOCAL fill:#76B900,color:#000
-    style NC fill:#76B900,color:#000
+```bash
+nvh serve --port 8000          # terminal 1: the API
+cd web && npm install && npm run dev   # terminal 2: dev server on :3000
 ```
 
----
+`NEXT_PUBLIC_API_URL` (default `http://localhost:8000`) tells the browser
+where the API is. `nvh webui --dev` runs the same dev server from the
+installed copy; `nvh webui --clean` wipes `node_modules` and `.next` when the
+bundled build drifts from the backend. CI type-checks (`npx tsc --noEmit`),
+lints and builds the app on every push; the API's `ALLOWED_ORIGINS` must keep
+covering the defaults above.
 
 Back to [README](../README.md)

@@ -439,3 +439,108 @@ class TestWsQueryObservability:
         assert ("success", "alpha") in calls, (
             f"Expected record_success('alpha'), got calls: {calls}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Council streaming event contract
+# ---------------------------------------------------------------------------
+
+
+class TestCouncilStreamingEvents:
+    @pytest.mark.asyncio
+    async def test_streaming_emits_all_event_types(self):
+        providers = {
+            "alpha": _ControllableProvider("alpha", content="A"),
+            "beta": _ControllableProvider("beta", content="B"),
+            "gamma": _ControllableProvider("gamma", content="synth"),
+        }
+        council = _council_with(providers, synthesis_provider="gamma")
+        events: list[dict] = []
+
+        async def capture(event: dict) -> None:
+            events.append(event)
+
+        try:
+            await council.run_council_streaming(
+                query="test prompt",
+                on_event=capture,
+                synthesize=True,
+                temperature=0.0,
+                max_tokens=32,
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+        event_types = {e["type"] for e in events}
+        expected = {
+            "council_start",
+            "member_start",
+            "member_chunk",
+            "member_complete",
+            "synthesis_start",
+            "synthesis_complete",
+            "council_complete",
+        }
+        missing = expected - event_types
+        assert not missing, f"Missing event types: {missing}. Got: {event_types}"
+
+    @pytest.mark.asyncio
+    async def test_streaming_member_failed_event(self):
+        providers = {
+            "good": _ControllableProvider("good", content="ok"),
+            "bad": _ControllableProvider("bad", mode="raise"),
+        }
+        council = _council_with(providers)
+        events: list[dict] = []
+
+        async def capture(event: dict) -> None:
+            events.append(event)
+
+        try:
+            await council.run_council_streaming(
+                query="test",
+                on_event=capture,
+                synthesize=False,
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+        event_types = [e["type"] for e in events]
+        assert "member_failed" in event_types
+
+    @pytest.mark.asyncio
+    async def test_streaming_synthesis_failure_emits_error(self):
+        """When all synthesis candidates fail, an error event is emitted."""
+        providers = {
+            "alpha": _ControllableProvider("alpha", content="A"),
+            "beta": _ControllableProvider("beta", content="B"),
+            "bad_synth": _ControllableProvider("bad_synth", mode="raise"),
+        }
+        council = _council_with(providers, synthesis_provider="bad_synth")
+        events: list[dict] = []
+
+        async def capture(event: dict) -> None:
+            events.append(event)
+
+        try:
+            await council.run_council_streaming(
+                query="test",
+                on_event=capture,
+                synthesize=True,
+                timeout=10,
+            )
+        except Exception:
+            pass
+
+        event_types = [e.get("type") for e in events]
+        has_error = any(
+            e.get("type") == "error" and "synthesis" in e.get("phase", "")
+            for e in events
+        )
+        has_synth_complete = "synthesis_complete" in event_types
+        has_council_complete = "council_complete" in event_types
+        assert has_error or has_synth_complete or has_council_complete, (
+            f"Expected terminal event. Got: {event_types}"
+        )

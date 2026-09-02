@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -10,13 +11,42 @@ from nvh.storage import repository
 ROOT = Path(__file__).resolve().parents[1]
 
 
+_SELF_EXTRA = re.compile(r"^nvhive\[(?P<names>[^\]]+)\]$")
+
+
+def _resolve_extra(extras: dict[str, list[str]], name: str) -> list[str]:
+    """Expand ``nvhive[a,b]`` self-references into the concrete requirement list."""
+    out: list[str] = []
+    for req in extras[name]:
+        match = _SELF_EXTRA.match(req)
+        if match:
+            for inner in match.group("names").split(","):
+                out.extend(_resolve_extra(extras, inner.strip()))
+        else:
+            out.append(req)
+    return out
+
+
 def test_all_extra_contains_runtime_extras() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     extras = data["project"]["optional-dependencies"]
-    all_extra = set(extras["all"])
+    all_extra = _resolve_extra(extras, "all")
 
-    for group in ("serve", "nvidia", "mcp", "vision", "browser"):
+    for group in ("serve", "nvidia", "mcp", "vision", "browser", "rag", "jupyter"):
         assert set(extras[group]).issubset(all_extra)
+    # Self-referential extras must not list any package twice.
+    assert len(all_extra) == len(set(all_extra))
+    assert len(_resolve_extra(extras, "dev")) == len(set(_resolve_extra(extras, "dev")))
+    assert "mcp[cli]>=1.0,<2" in _resolve_extra(extras, "dev")
+
+
+def test_runtime_dependencies_match_imports() -> None:
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    names = {re.split(r"[\[<>=!;\s]", dep, maxsplit=1)[0] for dep in data["project"]["dependencies"]}
+
+    assert "packaging" in names  # nvh/integrations/wizard/setup_agent.py
+    assert "pydantic-settings" not in names  # nothing imports it
+    assert "strict" not in data["tool"]["mypy"]  # CI gates two packages, not the tree
 
 
 def test_release_workflow_has_tag_version_parity_gate() -> None:
@@ -40,19 +70,6 @@ def test_repository_default_db_path_prefers_rootless_state(monkeypatch, tmp_path
 
     monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path / "data"))
     assert repository._default_db_path() == tmp_path / "data" / "state" / "nvhive.db"
-
-
-def test_docker_compose_api_is_not_blocked_by_ollama_health() -> None:
-    compose = (ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
-    hive_api_block = compose.split("hive-api:", 1)[1].split("hive-web:", 1)[0]
-
-    assert "condition: service_healthy" not in hive_api_block
-
-
-def test_cloud_compose_requires_api_key_before_public_bind() -> None:
-    cloud = (ROOT / "docker-compose.cloud.yaml").read_text(encoding="utf-8")
-
-    assert "HIVE_API_KEY: \"${HIVE_API_KEY:?" in cloud
 
 
 def test_linux_installer_handles_missing_ensurepip_without_root() -> None:
@@ -255,12 +272,13 @@ def test_nvh_services_cli_is_registered_and_documented() -> None:
     """
     cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
     services = (ROOT / "nvh" / "cli" / "services.py").read_text(encoding="utf-8")
-    doc = (ROOT / "docs" / "SERVICE_ORDER.md").read_text(encoding="utf-8")
+    doc = (ROOT / "docs" / "MAINTAINERS.md").read_text(encoding="utf-8")
 
     # Typer wiring — subapp + the three canonical subcommands.
     assert "services_app = typer.Typer(" in cli
     assert 'app.add_typer(services_app, name="services"' in cli
-    assert '@services_app.command("status")' in cli
+    # `status` is a hidden alias since 0.42 (`nvh status` shows the same table).
+    assert '@services_app.command("status", hidden=True)' in cli
     assert '@services_app.command("start")' in cli
     assert '@services_app.command("restart")' in cli
     # `nvh services` (no subcommand) defaults to status via the callback.
@@ -319,8 +337,8 @@ def test_setup_has_canonical_workspace_state_and_runtime_doctor() -> None:
 def test_linux_installer_advertises_gpu_capability_matrix_and_opt_in_staging() -> None:
     """install.sh must surface the per-VRAM-tier capability matrix on every
     GPU install, and stage ComfyUI / speech / music packs behind the
-    opt-in NVH_INSTALL_FULL_CAPABILITY=1 knob. See docs/GPU_TIER_MATRIX.md
-    for the source of truth.
+    opt-in NVH_INSTALL_FULL_CAPABILITY=1 knob. See docs/MODELS.md for the
+    source of truth.
     """
     install = (ROOT / "install.sh").read_text(encoding="utf-8")
 
@@ -338,7 +356,7 @@ def test_linux_installer_advertises_gpu_capability_matrix_and_opt_in_staging() -
     assert '"$vram" -ge 24' in install
     assert '"$vram" -ge 40' in install
 
-    # Capability tokens documented in docs/GPU_TIER_MATRIX.md.
+    # Capability tokens documented in docs/MODELS.md.
     assert "vision-chat" in install
     assert "image-gen-starter" in install
     assert "image-edit" in install
@@ -363,10 +381,10 @@ def test_linux_installer_advertises_gpu_capability_matrix_and_opt_in_staging() -
     assert "GPU capabilities at" in install
 
     # Honesty banner: Nemotron Omni is a multimodal LLM, not an image
-    # generator or speech synthesizer. Documented in GPU_TIER_MATRIX.md;
+    # generator or speech synthesizer. Documented in MODELS.md;
     # not asserted in install.sh but the doc must exist.
-    matrix_doc = ROOT / "docs" / "GPU_TIER_MATRIX.md"
-    assert matrix_doc.is_file(), "docs/GPU_TIER_MATRIX.md must exist"
+    matrix_doc = ROOT / "docs" / "MODELS.md"
+    assert matrix_doc.is_file(), "docs/MODELS.md must exist"
     matrix_text = matrix_doc.read_text(encoding="utf-8")
     assert "What is \"Nemotron Omni\", really?" in matrix_text
     assert "NVH_INSTALL_FULL_CAPABILITY" in matrix_text
@@ -498,9 +516,10 @@ def test_webui_has_system_console_with_log_tail_and_restart_api_bridge() -> None
     # for the per-resolver assertions on NVH_BIN_EXE / NVH_BIN / venv paths.
     assert "@/lib/nvh-bridge" in start_api_route
 
-    # 4. Doctor bridge — runs `nvh doctor --json`, returns parsed report.
+    # 4. Diagnostics bridge — runs `nvh status --deep --json` (0.42; `nvh
+    # doctor` is a hidden alias) and returns the parsed report.
     assert "/api/services/doctor" in console
-    assert "doctor" in doctor_route
+    assert "'status'" in doctor_route and "'--deep'" in doctor_route
     assert "--json" in doctor_route
     assert "execFile" in doctor_route
     # Bounded execution time — doctor can hang on provider key validation.
@@ -1156,7 +1175,7 @@ def test_services_smoke_test_subcommand_exists() -> None:
     """`nvh services smoke-test` is the standalone command users run
     when they want to verify the stack works without redoing the full
     start pipeline. Exits 0 on success, 1 on hard failure with a
-    diagnostic hint pointing at `nvh services status` + `nvh doctor`
+    diagnostic hint pointing at `nvh status` + `nvh status --deep`
     + `nvh services restart`.
     """
     cli = (ROOT / "nvh" / "cli" / "main.py").read_text(encoding="utf-8")
@@ -1168,8 +1187,8 @@ def test_services_smoke_test_subcommand_exists() -> None:
     body = cli.split("def services_smoke_test(", 1)[1].split("\n@", 1)[0]
     assert "from nvh.cli.services import wizard_smoke_test" in body
     # The diagnostic hints on failure.
-    assert "nvh services status" in body
-    assert "nvh doctor" in body
+    assert "nvh status" in body
+    assert "nvh status --deep" in body
     assert "nvh services restart" in body
     # Non-zero exit on hard failure.
     assert "raise typer.Exit(1)" in body

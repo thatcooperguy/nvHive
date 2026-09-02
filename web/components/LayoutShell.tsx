@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import ApiHealthBanner from '@/components/ApiHealthBanner';
 import DebugReportButton from '@/components/DebugReportButton';
 import Sidebar from '@/components/Sidebar';
@@ -12,17 +12,15 @@ import ThemeToggle from '@/components/ThemeToggle';
 import WelcomeBackPanel from '@/components/WelcomeBackPanel';
 import { UIShellProvider, useUIShell } from '@/components/UIShellProvider';
 import {
+  CONVERSATIONS_CHANGED_EVENT,
+  announceConversationsChanged,
   deleteConversation,
   getConversations,
   pinConversation,
   renameConversation,
 } from '@/lib/api';
 import { exportConversationById } from '@/lib/exportConversation';
-import {
-  CONVERSATIONS_CHANGED_EVENT,
-  mutateStoredChats,
-  readStoredChats,
-} from '@/lib/localChats';
+import { hasLegacyChats, importLegacyChats } from '@/lib/importLocalChats';
 import type { ConversationSummary } from '@/lib/types';
 import { NVHIVE_VERSION } from '@/lib/version';
 
@@ -45,19 +43,26 @@ function InnerShell({ children }: { children: React.ReactNode }) {
   const isSetupPage = pathname?.startsWith('/setup');
   const { openCommandPalette } = useUIShell();
 
-  // Chat history for the shared sidebar, so past conversations are browsable
-  // from every page — not just the root chat. Two sources merged: the server
-  // (wizard chats + anything persisted) and the browser-local store (main-page
-  // single/council chats, which stay client-side). Refreshed on navigation
-  // and whenever a component announces a change (e.g. a wizard turn just
-  // created a conversation on this very page).
-  const [serverConvs, setServerConvs] = useState<ConversationSummary[]>([]);
-  const [localConvs, setLocalConvs] = useState<ConversationSummary[]>([]);
+  // Chat history for the shared sidebar. One store: the server. Refreshed on
+  // navigation and whenever a component announces a change (e.g. a wizard
+  // turn just created a conversation on this very page).
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const refreshConversations = useCallback(() => {
-    getConversations().then(setServerConvs).catch(() => {});
-    setLocalConvs(readStoredChats().conversations);
+    getConversations().then(setConversations).catch(() => {});
+  }, []);
+
+  // Pre-0.42 builds kept main-page chats in localStorage. Import them into
+  // the server store once, on whichever page loads first after the upgrade.
+  const importStartedRef = useRef(false);
+  useEffect(() => {
+    if (importStartedRef.current || !hasLegacyChats()) return;
+    importStartedRef.current = true;
+    getConversations()
+      .then(list => importLegacyChats(new Set(list.map(c => c.id))))
+      .then(imported => { if (imported > 0) announceConversationsChanged(); })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -72,26 +77,9 @@ function InnerShell({ children }: { children: React.ReactNode }) {
     } catch {
       setActiveId(null);
     }
-    const onChanged = () => refreshConversations();
-    window.addEventListener(CONVERSATIONS_CHANGED_EVENT, onChanged);
-    return () => window.removeEventListener(CONVERSATIONS_CHANGED_EVENT, onChanged);
+    window.addEventListener(CONVERSATIONS_CHANGED_EVENT, refreshConversations);
+    return () => window.removeEventListener(CONVERSATIONS_CHANGED_EVENT, refreshConversations);
   }, [pathname, isChatPage, isSetupPage, refreshConversations]);
-
-  // Merge: server metadata wins for ids it knows; local-only chats are kept.
-  const conversations: ConversationSummary[] = (() => {
-    const byId = new Map<string, ConversationSummary>();
-    for (const c of localConvs) byId.set(c.id, c);
-    for (const c of serverConvs) {
-      const local = byId.get(c.id);
-      byId.set(c.id, { ...local, ...c, pinned: c.pinned || local?.pinned });
-    }
-    return [...byId.values()].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  })();
-
-  const isServerConv = useCallback(
-    (id: string) => serverConvs.some(c => c.id === id),
-    [serverConvs],
-  );
 
   // A conversation resumes on the surface that produced it.
   const handleSelectConversation = useCallback((id: string) => {
@@ -100,62 +88,30 @@ function InnerShell({ children }: { children: React.ReactNode }) {
       return;
     }
     const conv = conversations.find(c => c.id === id);
-    if (conv?.mode === 'wizard') {
-      router.push(`/wizard?conversation=${encodeURIComponent(id)}`);
-    } else {
-      router.push(`/?c=${encodeURIComponent(id)}`);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverConvs, localConvs, router]);
+    router.push(
+      conv?.mode === 'wizard'
+        ? `/wizard?conversation=${encodeURIComponent(id)}`
+        : `/?c=${encodeURIComponent(id)}`
+    );
+  }, [conversations, router]);
 
-  // Rename/delete/pin: server-known conversations sync to the API; local-only
-  // ones write through to the browser store the chat page reads on mount.
   const handleRenameConversation = useCallback((id: string, title: string) => {
-    setServerConvs(prev => prev.map(c => c.id === id ? { ...c, title } : c));
-    setLocalConvs(prev => prev.map(c => c.id === id ? { ...c, title } : c));
-    if (isServerConv(id)) {
-      void renameConversation(id, title);
-    } else {
-      mutateStoredChats(prev => ({
-        ...prev,
-        conversations: prev.conversations.map(c => c.id === id ? { ...c, title } : c),
-      }));
-    }
-  }, [isServerConv]);
+    setConversations(prev => prev.map(c => c.id === id ? { ...c, title } : c));
+    void renameConversation(id, title);
+  }, []);
 
   const handleDeleteConversation = useCallback((id: string) => {
-    setServerConvs(prev => prev.filter(c => c.id !== id));
-    setLocalConvs(prev => prev.filter(c => c.id !== id));
-    if (isServerConv(id)) {
-      void deleteConversation(id);
-    } else {
-      mutateStoredChats(prev => ({
-        conversations: prev.conversations.filter(c => c.id !== id),
-        messages: Object.fromEntries(
-          Object.entries(prev.messages).filter(([k]) => k !== id)
-        ),
-      }));
-    }
-  }, [isServerConv]);
+    setConversations(prev => prev.filter(c => c.id !== id));
+    void deleteConversation(id);
+  }, []);
 
   const handlePinConversation = useCallback((id: string) => {
-    const current = conversations.find(c => c.id === id);
-    const nextPinned = !current?.pinned;
-    setServerConvs(prev => prev.map(c => c.id === id ? { ...c, pinned: nextPinned } : c));
-    setLocalConvs(prev => prev.map(c => c.id === id ? { ...c, pinned: nextPinned } : c));
-    if (isServerConv(id)) {
-      void pinConversation(id, nextPinned);
-    } else {
-      mutateStoredChats(prev => ({
-        ...prev,
-        conversations: prev.conversations.map(c => c.id === id ? { ...c, pinned: nextPinned } : c),
-      }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverConvs, localConvs, isServerConv]);
+    const nextPinned = !conversations.find(c => c.id === id)?.pinned;
+    setConversations(prev => prev.map(c => c.id === id ? { ...c, pinned: nextPinned } : c));
+    void pinConversation(id, nextPinned);
+  }, [conversations]);
 
   const handleExportConversation = useCallback((id: string) => {
-    // Shared helper: server copy first (meta tails stripped), local fallback.
     void exportConversationById(id);
   }, []);
 
@@ -170,7 +126,7 @@ function InnerShell({ children }: { children: React.ReactNode }) {
         {/* The SystemConsole is the load-bearing fix for "the WebUI says
             run `nvh serve` in a terminal." It tails $NVH_HOME/logs/*.log
             via a Next.js route (so it works when FastAPI is dead) and
-            exposes [Restart API]/[Doctor] bridges that spawn the rootless
+            exposes [Restart API]/[Deep status] bridges that spawn the rootless
             CLI directly. Surfaced on every page including chat + setup
             so a fresh-install user never has to leave the browser. */}
         <SystemConsole />

@@ -183,7 +183,6 @@ class CouncilConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     profiles: dict[str, ProfileConfig] = Field(default_factory=dict)
     webhooks: list[WebhookConfigModel] = Field(default_factory=list)
-    hooks: list[dict] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod

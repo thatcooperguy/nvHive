@@ -1,6 +1,6 @@
 """Shared Ollama-daemon helpers — model listing, required-model resolution.
 
-These are used by the REPL (interactive missing-model offer), `nvh doctor`
+These are used by the REPL (interactive missing-model offer), `nvh status --deep`
 (diagnostic check + --fix), and the setup flow. Keep this module lightweight:
 a single httpx import and pure helpers, no heavy deps. Centralizing avoids
 the three call sites drifting from each other.

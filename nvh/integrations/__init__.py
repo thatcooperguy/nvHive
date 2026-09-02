@@ -13,7 +13,7 @@ re-exports below; new code should import from the subpackage directly:
 
 from __future__ import annotations
 
-from . import catalog, cloud_session, local_chat
+from . import cloud_session, local_chat, setup_catalog
 from .diagnostics import (
     boot_preflight,
     compatibility,
@@ -56,7 +56,6 @@ from .workspace import passport as workspace_passport
 __all__ = [
     "auto_repair",
     "boot_preflight",
-    "catalog",
     "cloud_session",
     "comfyui",
     "compatibility",
@@ -77,6 +76,7 @@ __all__ = [
     "service",
     "service_registry",
     "setup_agent",
+    "setup_catalog",
     "smoke_tests",
     "storage",
     "studio_packs",

@@ -1,17 +1,26 @@
-"""Tests for provider base models and registry."""
+"""Tests for provider base models, the registry, the mock provider, and quota info."""
+
+from __future__ import annotations
 
 from decimal import Decimal
+from unittest.mock import MagicMock
 
-from nvh.core.rate_limiter import CircuitBreaker, ProviderRateManager, TokenBucket
+import pytest
+
 from nvh.providers.base import (
-    CircuitState,
     CompletionResponse,
+    FinishReason,
+    HealthStatus,
     Message,
     ModelInfo,
+    ProviderError,
+    ProviderUnavailableError,
     StreamChunk,
     TaskType,
     Usage,
 )
+from nvh.providers.mock_provider import MockProvider
+from nvh.providers.registry import ProviderRegistry
 
 
 class TestDataModels:
@@ -56,67 +65,186 @@ class TestDataModels:
         assert TaskType.MATH.value == "math"
 
 
-class TestCircuitBreaker:
-    def test_starts_closed(self):
-        cb = CircuitBreaker(provider="test")
-        assert cb.state == CircuitState.CLOSED
-        assert cb.allow_request()
+class TestBaseDataclasses:
+    def test_usage_defaults(self):
+        u = Usage()
+        assert u.input_tokens == 0
+        assert u.output_tokens == 0
+        assert u.total_tokens == 0
 
-    def test_opens_after_threshold(self):
-        cb = CircuitBreaker(provider="test", failure_threshold=3)
-        for _ in range(3):
-            cb.record_failure()
-        assert cb.state == CircuitState.OPEN
-        assert not cb.allow_request()
+    def test_usage_with_values(self):
+        u = Usage(input_tokens=10, output_tokens=20, total_tokens=30)
+        assert u.total_tokens == 30
 
-    def test_success_resets_half_open(self):
-        cb = CircuitBreaker(provider="test", failure_threshold=1, initial_cooldown=0)
-        cb.record_failure()
-        assert cb.state == CircuitState.OPEN
-        # Immediately transition to half-open (cooldown=0)
-        assert cb.allow_request()  # transitions to HALF_OPEN
-        cb.record_success()
-        assert cb.state == CircuitState.CLOSED
+    def test_completion_response_metadata(self):
+        r = CompletionResponse(
+            content="hello",
+            model="test",
+            provider="test",
+            usage=Usage(),
+            cost_usd=Decimal("0.01"),
+            latency_ms=100,
+        )
+        assert r.metadata == {} or isinstance(r.metadata, dict)
+        r.metadata["key"] = "value"
+        assert r.metadata["key"] == "value"
 
-    def test_reset(self):
-        cb = CircuitBreaker(provider="test", failure_threshold=1)
-        cb.record_failure()
-        assert cb.state == CircuitState.OPEN
-        cb.reset()
-        assert cb.state == CircuitState.CLOSED
+    def test_completion_response_finish_reasons(self):
+        for reason in FinishReason:
+            r = CompletionResponse(
+                content="",
+                model="m",
+                provider="p",
+                usage=Usage(),
+                cost_usd=Decimal("0"),
+                latency_ms=0,
+                finish_reason=reason,
+            )
+            assert r.finish_reason == reason
+
+    def test_model_info_minimal(self):
+        m = ModelInfo(model_id="test/model", provider="test")
+        assert m.model_id == "test/model"
+        assert m.provider == "test"
+        assert m.context_window == 0
+        assert m.supports_streaming is True
+
+    def test_health_status(self):
+        h = HealthStatus(provider="test", healthy=True, latency_ms=50)
+        assert h.healthy is True
+        h2 = HealthStatus(provider="test", healthy=False, latency_ms=0, error="down")
+        assert h2.healthy is False
+        assert h2.error == "down"
+
+    def test_stream_chunk(self):
+        c = StreamChunk(
+            delta="hello",
+            is_final=True,
+            accumulated_content="hello world",
+            model="m",
+            provider="p",
+            usage=Usage(total_tokens=5),
+            cost_usd=Decimal("0.001"),
+            finish_reason=FinishReason.STOP,
+        )
+        assert c.is_final is True
+        assert c.delta == "hello"
+
+    def test_provider_error_hierarchy(self):
+        e = ProviderError("test error", provider="alpha")
+        assert isinstance(e, Exception)
+        assert "test error" in str(e)
+
+        u = ProviderUnavailableError("down", provider="beta")
+        assert isinstance(u, ProviderError)
 
 
-class TestTokenBucket:
-    def test_consume(self):
-        bucket = TokenBucket(capacity=10, refill_rate=1.0)
-        assert bucket.consume(5)
-        assert bucket.consume(5)
-        assert not bucket.consume(1)
+class TestProviderRegistry:
+    def test_register_and_get(self) -> None:
+        reg = ProviderRegistry()
+        mock_prov = MagicMock()
+        reg.register("test", mock_prov)
+        assert reg.get("test") is mock_prov
 
-    def test_refill(self):
-        bucket = TokenBucket(capacity=10, refill_rate=100.0)
-        bucket.consume(10)
-        import time
-        time.sleep(0.1)
-        assert bucket.consume(1)
+    def test_get_nonexistent_raises(self) -> None:
+        reg = ProviderRegistry()
+        with pytest.raises(KeyError, match="not registered"):
+            reg.get("nope")
+
+    def test_register_duplicate_overwrites(self) -> None:
+        reg = ProviderRegistry()
+        p1, p2 = MagicMock(), MagicMock()
+        reg.register("x", p1)
+        reg.register("x", p2)
+        assert reg.get("x") is p2
+
+    def test_has(self) -> None:
+        reg = ProviderRegistry()
+        assert not reg.has("foo")
+        reg.register("foo", MagicMock())
+        assert reg.has("foo")
+
+    def test_list_models_no_filter(self) -> None:
+        reg = ProviderRegistry()
+        reg._model_catalog["m1"] = ModelInfo(model_id="m1", provider="a")
+        reg._model_catalog["m2"] = ModelInfo(model_id="m2", provider="b")
+        models = reg.list_models()
+        assert len(models) == 2
+
+    def test_list_models_with_provider_filter(self) -> None:
+        reg = ProviderRegistry()
+        reg._model_catalog["m1"] = ModelInfo(model_id="m1", provider="a")
+        reg._model_catalog["m2"] = ModelInfo(model_id="m2", provider="b")
+        models = reg.list_models(provider="a")
+        assert len(models) == 1
+        assert models[0].model_id == "m1"
 
 
-class TestProviderRateManager:
-    def test_health_score_healthy(self):
-        mgr = ProviderRateManager()
-        assert mgr.get_health_score("test") == 1.0
+class TestMockProvider:
+    def test_construct(self):
+        provider = MockProvider()
+        assert provider.name == "mock" or isinstance(provider.name, str)
 
-    def test_health_score_after_failures(self):
-        mgr = ProviderRateManager()
-        from nvh.providers.base import ProviderUnavailableError
-        for _ in range(3):
-            mgr.record_failure("test", ProviderUnavailableError("fail", provider="test"))
-        score = mgr.get_health_score("test")
-        assert score < 1.0
+    @pytest.mark.asyncio
+    async def test_complete(self):
+        provider = MockProvider()
+        resp = await provider.complete(
+            messages=[Message(role="user", content="hello")],
+        )
+        assert isinstance(resp, CompletionResponse)
+        assert len(resp.content) > 0
 
-    def test_reset(self):
-        mgr = ProviderRateManager()
-        from nvh.providers.base import ProviderUnavailableError
-        mgr.record_failure("test", ProviderUnavailableError("fail", provider="test"))
-        mgr.reset("test")
-        assert mgr.get_health_score("test") == 1.0
+    @pytest.mark.asyncio
+    async def test_stream(self):
+        provider = MockProvider()
+        chunks = []
+        async for chunk in provider.stream(
+            messages=[Message(role="user", content="hello")],
+        ):
+            chunks.append(chunk)
+        assert len(chunks) >= 1
+        assert any(c.is_final for c in chunks)
+
+    @pytest.mark.asyncio
+    async def test_list_models(self):
+        provider = MockProvider()
+        models = await provider.list_models()
+        assert isinstance(models, list)
+
+    @pytest.mark.asyncio
+    async def test_health_check(self):
+        provider = MockProvider()
+        status = await provider.health_check()
+        assert status.healthy is True
+
+
+class TestQuotaInfo:
+    def test_import(self):
+        from nvh.providers import quota_info
+        assert quota_info is not None
+
+    def test_has_quota_data(self):
+        from nvh.providers import quota_info
+        assert (hasattr(quota_info, "PROVIDER_QUOTAS") or
+                hasattr(quota_info, "get_quota") or
+                hasattr(quota_info, "QuotaInfo"))
+
+    def test_provider_quotas_structure(self):
+        from nvh.providers.quota_info import PROVIDER_QUOTAS, QuotaInfo
+        assert len(PROVIDER_QUOTAS) >= 5
+        for name, qi in PROVIDER_QUOTAS.items():
+            assert isinstance(qi, QuotaInfo)
+            assert qi.provider == name
+
+    def test_get_quota_info_known_and_unknown(self):
+        from nvh.providers.quota_info import get_quota_info
+        info = get_quota_info("groq")
+        assert info.provider == "groq"
+        assert info.tier == "free"
+        unknown = get_quota_info("made_up_provider")
+        assert unknown.tier == "unknown"
+
+    def test_parse_retry_after(self):
+        from nvh.providers.quota_info import parse_retry_after
+        assert parse_retry_after("please retry in 5.2s") == 5.2
+        assert parse_retry_after("no info here") is None

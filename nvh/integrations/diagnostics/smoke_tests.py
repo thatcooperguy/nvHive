@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import socket
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -15,6 +16,33 @@ from nvh.integrations.installs.studio_packs import (
 )
 from nvh.integrations.workspace.storage import storage_status
 
+# Modules the CLI/API/agent paths import lazily, so a broken one only
+# surfaces when a user reaches that code path. ``nvh test --imports``
+# probes them eagerly.
+CORE_IMPORT_PROBES: tuple[tuple[str, str], ...] = (
+    ("nvh.core.engine", "Engine"),
+    ("nvh.core.router", "RoutingEngine"),
+    ("nvh.core.council", "CouncilOrchestrator"),
+    ("nvh.core.agents", "generate_agents"),
+    ("nvh.core.tools", "ToolRegistry"),
+    ("nvh.core.browser_tools", "register_browser_tools"),
+    ("nvh.core.vision_tools", "register_vision_tools"),
+    ("nvh.sandbox.executor", "SandboxExecutor"),
+    ("nvh.core.agent_loop", "run_agent_loop"),
+    ("nvh.core.agent_guardrails", "check_command"),
+    ("nvh.core.code_graph", "build_import_graph"),
+    ("nvh.core.learning", "LearningEngine"),
+    ("nvh.core.smart_query", "query_with_escalation"),
+    ("nvh.core.orchestrator", "LocalOrchestrator"),
+    ("nvh.core.action_detector", "detect_action"),
+    ("nvh.core.cost_tracker", "CostReport"),
+    ("nvh.core.workflows", "run_workflow"),
+    ("nvh.integrations.rag", "ingest_folder"),
+    ("nvh.integrations.workspace.vault", "append_vault_memory"),
+    ("nvh.cli.main", "app"),
+    ("nvh.api.server", "app"),
+)
+
 
 @dataclass(frozen=True)
 class SmokeTest:
@@ -27,6 +55,36 @@ class SmokeTest:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def import_probe(
+    probes: tuple[tuple[str, str], ...] = CORE_IMPORT_PROBES,
+) -> list[SmokeTest]:
+    """Import each ``(module, symbol)`` pair; one summary row plus a fail row
+    per broken module so the culprit is visible without re-running."""
+    failures: list[SmokeTest] = []
+    for module, symbol in probes:
+        try:
+            mod = importlib.import_module(module)
+            if not hasattr(mod, symbol):
+                raise AttributeError(f"{symbol} not found in {module}")
+        except Exception as exc:
+            failures.append(
+                SmokeTest(
+                    id=f"import:{module}",
+                    title=f"Import {module}.{symbol}",
+                    status="fail",
+                    summary=f"{type(exc).__name__}: {exc}"[:200],
+                )
+            )
+    ok = len(probes) - len(failures)
+    summary = SmokeTest(
+        id="core-imports",
+        title="Core module imports",
+        status="pass" if not failures else "fail",
+        summary=f"{ok}/{len(probes)} modules import",
+    )
+    return [summary, *failures]
 
 
 def _port_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -51,8 +109,9 @@ def _pack_details(pack_id: str, packs: list[dict[str, Any]]) -> dict[str, Any]:
     return {}
 
 
-def smoke_test_report(home_dir: str | None = None) -> dict[str, Any]:
-    """Return non-destructive app health checks."""
+def smoke_test_report(home_dir: str | None = None, *, imports: bool = False) -> dict[str, Any]:
+    """Return non-destructive app health checks (plus the core import probe
+    when ``imports`` is set)."""
     storage = storage_status(home_dir=home_dir)
     packs = catalog_with_status().get("packs", [])
     comfy = detect_comfyui(home_dir=home_dir)
@@ -150,6 +209,8 @@ def smoke_test_report(home_dir: str | None = None) -> dict[str, Any]:
             action_id="game-tools",
         ),
     ]
+    if imports:
+        tests.extend(import_probe())
     failed = sum(1 for test in tests if test.status == "fail")
     warnings = sum(1 for test in tests if test.status == "warn")
     passed = sum(1 for test in tests if test.status == "pass")

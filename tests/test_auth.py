@@ -302,3 +302,32 @@ class TestAuthRateLimit:
         assert last_status == 429, (
             f"Expected 429 on attempt {AUTH_RATE_LIMIT + 1}, got {last_status}"
         )
+
+
+class TestAuthHelpers:
+    def test_hash_token_deterministic(self):
+        from nvh.auth.auth import hash_token
+        h1 = hash_token("test_token_123")
+        h2 = hash_token("test_token_123")
+        assert h1 == h2
+        assert h1 != "test_token_123"  # not plaintext
+
+    def test_hash_token_different_inputs(self):
+        from nvh.auth.auth import hash_token
+        h1 = hash_token("token_a")
+        h2 = hash_token("token_b")
+        assert h1 != h2
+
+    @pytest.mark.asyncio
+    async def test_get_user_count_returns_int(self, tmp_path):
+        repo._engine = None
+        repo._session_factory = None
+        await repo.init_db(db_path=tmp_path / "auth_test.db")
+        try:
+            from nvh.auth.auth import get_user_count
+            count = await get_user_count()
+            assert isinstance(count, int)
+            assert count >= 0
+        finally:
+            repo._engine = None
+            repo._session_factory = None

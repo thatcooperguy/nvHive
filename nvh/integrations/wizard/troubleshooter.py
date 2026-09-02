@@ -389,7 +389,7 @@ def analyze_setup_failure(
             report_fields=["environment.platform", "checks.compatibility", "checks.workspace_state"],
             web_search_queries=[
                 "NVIDIA GPU not exposed inside Ubuntu VM nvidia-smi not found",
-                "GeForce NOW Linux VM NVIDIA driver CUDA container runtime",
+                "cloud Linux VM NVIDIA driver CUDA container runtime",
             ],
             official_urls=[NVHIVE_README_URL],
             rootless_note="This is outside nvHive's rootless repair boundary.",

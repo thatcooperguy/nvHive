@@ -5,38 +5,23 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 from nvh.config.settings import CouncilConfig
 from nvh.providers.base import ModelInfo, Provider
+from nvh.providers.lazy_provider import LazyProvider
+from nvh.providers.specs import PROVIDER_SPECS
 
 logger = logging.getLogger(__name__)
 
-# provider name -> (module path, class name) for every shipped adapter
-PROVIDER_SPECS: dict[str, tuple[str, str]] = {
-    "openai": ("nvh.providers.openai_provider", "OpenAIProvider"),
-    "anthropic": ("nvh.providers.anthropic_provider", "AnthropicProvider"),
-    "google": ("nvh.providers.google_provider", "GoogleProvider"),
+# Adapters with their own transport or discovery code. Every other provider is
+# a PROVIDER_SPECS row served by OpenAICompatibleProvider.
+BESPOKE_ADAPTERS: dict[str, tuple[str, str]] = {
     "ollama": ("nvh.providers.ollama_provider", "OllamaProvider"),
-    "groq": ("nvh.providers.groq_provider", "GroqProvider"),
-    "grok": ("nvh.providers.grok_provider", "GrokProvider"),
-    "mistral": ("nvh.providers.mistral_provider", "MistralProvider"),
-    "cohere": ("nvh.providers.cohere_provider", "CohereProvider"),
-    "deepseek": ("nvh.providers.deepseek_provider", "DeepSeekProvider"),
-    "mock": ("nvh.providers.mock_provider", "MockProvider"),
-    "perplexity": ("nvh.providers.perplexity_provider", "PerplexityProvider"),
-    "together": ("nvh.providers.together_provider", "TogetherProvider"),
-    "fireworks": ("nvh.providers.fireworks_provider", "FireworksProvider"),
-    "openrouter": ("nvh.providers.openrouter_provider", "OpenRouterProvider"),
-    "cerebras": ("nvh.providers.cerebras_provider", "CerebrasProvider"),
-    "sambanova": ("nvh.providers.sambanova_provider", "SambaNovProvider"),
-    "huggingface": ("nvh.providers.huggingface_provider", "HuggingFaceProvider"),
-    "ai21": ("nvh.providers.ai21_provider", "AI21Provider"),
-    "nvidia": ("nvh.providers.nvidia_provider", "NvidiaProvider"),
-    "siliconflow": ("nvh.providers.siliconflow_provider", "SiliconFlowProvider"),
-    "llm7": ("nvh.providers.llm7_provider", "LLM7Provider"),
     "triton": ("nvh.providers.triton_provider", "TritonProvider"),
+    "mock": ("nvh.providers.mock_provider", "MockProvider"),
 }
 
 # provider name -> date its service shut down. Stanzas left in a user's
@@ -44,6 +29,29 @@ PROVIDER_SPECS: dict[str, tuple[str, str]] = {
 RETIRED_PROVIDERS: dict[str, str] = {
     "github": "2026-07-30",
 }
+
+
+def lazy_adapter(name: str, ptype: str = "", **kwargs: Any) -> LazyProvider:
+    """Wrap the adapter for ``name`` so it is imported on first use.
+
+    Blank kwargs are dropped so the adapter's own defaults apply. Unknown
+    types (including ``openai_compatible``) take the generic OpenAI route with
+    the caller's ``base_url``.
+    """
+    kwargs = {k: v for k, v in kwargs.items() if v not in ("", None)}
+    ptype = ptype or name
+    if ptype in BESPOKE_ADAPTERS:
+        module_path, class_name = BESPOKE_ADAPTERS[ptype]
+        return LazyProvider(name, module_path, class_name, provider_name=name, **kwargs)
+    spec = PROVIDER_SPECS.get(ptype, PROVIDER_SPECS["openai"])
+    return LazyProvider(
+        name,
+        "nvh.providers.openai_compatible",
+        "OpenAICompatibleProvider",
+        spec=spec,
+        provider_name=name,
+        **kwargs,
+    )
 
 
 class ProviderRegistry:
@@ -107,12 +115,7 @@ class ProviderRegistry:
 
     def setup_from_config(self, config: CouncilConfig) -> list[str]:
         """Initialize provider adapters from config. Returns list of enabled provider names."""
-        import importlib
-
-        from nvh.providers.lazy_provider import LazyProvider
-
         enabled = []
-        provider_specs = PROVIDER_SPECS
 
         for name, pconfig in config.providers.items():
             if not pconfig.enabled:
@@ -148,41 +151,25 @@ class ProviderRegistry:
                 except Exception:
                     pass
 
-            # Determine provider class
             ptype = pconfig.type or name
-            if ptype == "openai_compatible":
-                ptype = "openai"
-
-            spec = provider_specs.get(ptype)
-            if spec is None:
-                spec = provider_specs.get("openai")
-                if spec is None:
-                    continue
-            module_path, class_name = spec
-
-            # Mock provider: construct directly without API key forwarding
             if ptype == "mock":
-                mod = importlib.import_module(module_path)
-                cls = getattr(mod, class_name)
-                provider = cls(
+                # Mock provider: construct directly without API key forwarding
+                from nvh.providers.mock_provider import MockProvider
+
+                provider: Provider = MockProvider(
                     default_model=pconfig.default_model or "mock/default",
                     fallback_model=pconfig.fallback_model or "mock/fast",
                     provider_name=name,
                 )
-                self.register(name, provider)
-                enabled.append(name)
-                continue
-
-            provider = LazyProvider(
-                name,
-                module_path,
-                class_name,
-                api_key=api_key,
-                default_model=pconfig.default_model,
-                fallback_model=pconfig.fallback_model,
-                base_url=pconfig.base_url or None,
-                provider_name=name,
-            )
+            else:
+                provider = lazy_adapter(
+                    name,
+                    ptype,
+                    api_key=api_key,
+                    default_model=pconfig.default_model,
+                    fallback_model=pconfig.fallback_model,
+                    base_url=pconfig.base_url,
+                )
             self.register(name, provider)
             enabled.append(name)
 

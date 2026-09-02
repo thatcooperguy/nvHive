@@ -356,6 +356,6 @@ def workstation_next_steps(port: int = 3000, storage: StorageStatus | None = Non
         f"Open WebUI: nvh webui --port {port}",
         "Install the rootless student pack: nvh studio --install starter -y",
         "Install ComfyUI from Setup > ComfyUI, or run: nvh workstation --with-comfyui",
-        "Pull local chat models: nvh doctor --fix",
+        "Pull local chat models: nvh status --deep --fix",
         "Ask anything: nvh \"explain transformers like I am in high school\"",
     ]

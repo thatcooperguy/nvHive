@@ -83,18 +83,6 @@ export interface CouncilRequest {
   max_tokens?: number;
 }
 
-export interface CouncilResult {
-  member_responses: Record<string, CompletionResponse>;
-  failed_members: string[];
-  strategy: string;
-  total_cost_usd: string | null;
-  total_latency_ms: number;
-  quorum_met: boolean;
-  agents_used: boolean;
-  synthesis: CompletionResponse | null;
-  members: CouncilMemberInfo[];
-}
-
 // ─── Compare ─────────────────────────────────────────────────────────────────
 
 export interface CompareRequest {
@@ -169,14 +157,6 @@ export interface CacheStats {
 
 // ─── Agents ──────────────────────────────────────────────────────────────────
 
-export interface AgentPersona {
-  role: string;
-  expertise: string;
-  perspective: string;
-  system_prompt: string;
-  weight_boost: number;
-}
-
 export interface AgentPreset {
   name: string;
   description: string;
@@ -185,12 +165,6 @@ export interface AgentPreset {
 
 export interface AgentPresetsResult {
   presets: AgentPreset[];
-}
-
-export interface AgentAnalyzeResult {
-  agents: AgentPersona[];
-  count: number;
-  prompt_preview: string;
 }
 
 // ─── Health ──────────────────────────────────────────────────────────────────
@@ -1449,19 +1423,6 @@ export interface VaultMemoryResult {
   category: string;
   title: string;
   vault_dir: string;
-}
-
-export type QueryMode = 'simple' | 'council' | 'compare';
-export type ConnectionStatus = 'connected' | 'disconnected' | 'checking';
-
-export interface RecentQuery {
-  id: string;
-  prompt: string;
-  mode: QueryMode;
-  provider?: string;
-  timestamp: number;
-  cost?: string;
-  tokens?: number;
 }
 
 // ─── Chat UI types ────────────────────────────────────────────────────────────

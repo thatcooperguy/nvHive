@@ -1,767 +1,265 @@
-# Getting Started with NVHive
+# Getting Started
 
-NVHive is a multi-LLM orchestration platform that routes queries to the best AI model, convenes a council of AI advisors, and seamlessly falls back between providers.
+nvHive turns a Linux machine with an NVIDIA GPU — rented or your own — into a
+working AI lab without root and without Docker. This guide covers the install,
+the first five minutes, the hardware you need, and what to do when something
+breaks. Command details live in [COMMANDS.md](COMMANDS.md).
 
----
+## Install
 
-## Quick Start (3 minutes)
-
-If you are on a no-root NVIDIA Linux cloud desktop or a session where only a
-mounted block volume survives reconnects, start with the
-[Student GPU Cloud / Linux Desktop guide](LINUX_DESKTOP.md) instead. That is
-the rootless workstation path for local models, ComfyUI, and Studio packs.
-
-### Option A: Docker (local development / managed workstations)
+### One line, no root (Linux)
 
 ```bash
-# Clone the repo
-git clone https://github.com/thatcooperguy/nvHive.git
-cd nvHive
-
-# Copy the example env file and add your API keys
-cp .env.example .env
-nano .env   # Add at least one API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.)
-
-# Start everything (API + Web UI + local Ollama)
-docker compose up -d
-
-# Open the web UI
-xdg-open http://localhost:3000    # Linux
-open http://localhost:3000        # macOS
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
-That's it. The web UI is at **http://localhost:3000** and the API is at **http://localhost:8000**.
+The installer:
 
-### Option B: One-line setup (Ubuntu with NVIDIA GPU and install privileges)
+1. Picks a persistent home for `NVH_HOME` (see below), creates a self-contained
+   venv under `$NVH_HOME/venv` and clones the source to `$NVH_HOME/repo`.
+2. Detects the GPU with `nvidia-smi` and picks a local chat model that fits
+   the VRAM ([MODELS.md](MODELS.md)). `NVH_INSTALL_MODEL_DOWNLOAD=0` skips
+   the download.
+3. Installs a rootless Ollama binary under `$NVH_HOME/bin` and checks the
+   ports it needs (11434, 8000, 3000) for conflicts.
+4. Appends an `export NVH_HOME=...` block to your shell profile
+   (`# >>> nvhive rootless env >>>`) and writes `$NVH_HOME/nvh-env.sh`.
+5. Ends with `nvh services start --open`: Ollama, then the API, then the WebUI,
+   then a real end-to-end Wizard check. The browser opens only when every
+   gate is green. `NVH_INSTALL_LAUNCH=0` installs without launching.
+
+Cloud desktops usually have an ephemeral OS disk and one block-backed volume
+that survives reconnects. Everything nvHive owns — venv, models, config, chats,
+logs — lives under `NVH_HOME`, so that directory must be on the persistent
+volume. The installer auto-detects a likely mount (it prefers `$HOME` when
+`$HOME` is a large non-root, non-network filesystem, and honours `NVH_MOUNT`);
+to choose it yourself, export it first:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/scripts/setup.sh | bash
+export NVH_HOME=/mnt/persist/nvhive
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
-This prepares a Docker-backed local stack, starts NVHive, and pulls a local AI
-model. Use the Linux Desktop guide instead when Docker or system changes are not
-allowed.
+Avoid read-only CIFS/SMB shares and anything under `/tmp`. 200 GB or more is
+comfortable for local LLMs plus ComfyUI assets; the installer checks free
+space before every large download.
 
-### Option C: pip install (CLI only)
+### Desktop session (click-first)
+
+On a Linux *desktop* session use `start-linux.sh` instead. It runs the same
+installer, creates an **NVHive AI Studio** launcher and `~/.local/bin/nvh`, and
+opens the WebUI setup wizard so nobody has to source an env file:
 
 ```bash
-pip install -e .
-nvh setup       # One-shot free tier wizard — no credit card needed
+curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/start-linux.sh | bash
+```
+
+`NVH_USE_BINARY=1` makes it fetch the single-file binary from the
+[Releases page](https://github.com/thatcooperguy/nvHive/releases/latest)
+instead of using Python — useful on images with no working `python3`.
+
+### pip (Python 3.11+ already available)
+
+```bash
+pip install nvhive        # extras: [serve] [mcp] [vision] [rag] [nvidia] [all]
+nvh setup                 # free-tier wizard, no credit card
 nvh "Hello!"
 ```
 
----
+`nvh webui` starts the API and the dashboard; `nvh studio --install
+rootless-ollama -y` adds local models later. From a clone use `pip install -e
+".[dev]"`. Without `NVH_HOME` set, state defaults to `~/.nvh` and config to
+`~/.hive/config.yaml` — fine on a laptop, wrong on an ephemeral VM.
 
-## The `nvh setup` Wizard
-
-`nvh setup` is the fastest path from zero to working. Run it once after install:
-
-```bash
-nvh setup
-```
-
-The wizard automatically:
-
-1. Detects if Ollama is running locally (unlimited free inference)
-2. Enables **LLM7** — anonymous access, no account, 30 req/min
-3. Enables **SiliconFlow** — 1000 RPM free tier, permanent
-4. Walks you through **Groq**, **Google Gemini**, and **Mistral** free tiers
-5. Sets your `defaults.mode` (ask / convene / poll / throwdown)
-
-After setup, `nvh "question"` works immediately with no further configuration.
-
----
-
-## Your First Query
-
-### Smart default (routes to the best available advisor)
+### Reinstall or reset
 
 ```bash
-nvh "What is the CAP theorem?"
+bash "$NVH_HOME/uninstall.sh" --purge -y      # remove everything under NVH_HOME
+nvh update                                    # upgrade an existing install
+nvh snapshot save ~/nvhive.tar.gz             # bundle vault, RAG, receipts, chats
+nvh snapshot restore ~/nvhive.tar.gz          # ...on a brand-new machine
 ```
 
-Output:
-```
-[ask → groq/llama-3.3-70b]
+Snapshots deliberately exclude `config.yaml` (it may hold raw keys); run
+`nvh setup` again after a restore.
 
-The CAP theorem states that a distributed system can only guarantee
-two of three properties: Consistency, Availability, and Partition tolerance...
-
-Advisor: groq | Model: llama-3.3-70b | Tokens: 42 in / 187 out | Cost: $0.0000 | 94ms
-```
-
-### Ask a specific advisor
+## The first five minutes
 
 ```bash
-nvh ask "Write a Python binary search" -p anthropic
-nvh ask "Explain quantum computing" -p groq     # Ultra-fast
-nvh ask "Review this code" -p deepseek          # Very cheap
+nvh "What is the CAP theorem?"          # route to the best available advisor
+nvh ask "Review this" -p groq -f main.py # pick a provider, include a file
+nvh ask "Summarise this contract" --local   # Ollama only; nothing leaves the box
+nvh ask "What does HTTP 429 mean?" --fast   # cheapest/fastest advisor, no frills
+nvh convene "Redis or Postgres for sessions?" --cabinet engineering
+nvh status                               # what is configured, healthy, and routed
 ```
 
-### Use advisor shortcuts (fastest syntax)
+Every answer prints advisor, model, tokens, cost and latency unless you pass
+`--quiet` or `--raw`. `nvh` on its own opens the REPL (`/help` lists its
+commands; `/convene` toggles council mode, `/tools` enables tool use).
+
+### Providers and keys
+
+`nvh setup` enables the zero-signup providers (a local Ollama if one is
+running, LLM7 anonymously) and walks through the free tiers that need a key.
+`nvh keys` prints every signup link in one place. Keys can also arrive via
+environment variables (`GROQ_API_KEY`, `OPENAI_API_KEY`, ...) or the **AI
+Connections** page of the dashboard; `nvh advisor test` verifies them. The
+full table is in [PROVIDERS.md](PROVIDERS.md).
+
+### Council, cabinets, throwdown
+
+`nvh convene` sends one question to several models in parallel and
+synthesises a weighted answer. `--cabinet <name>` picks a preset panel of
+personas (`nvh agent presets` lists them; `nvh agent analyze "question"`
+previews the auto-generated panel). Students get teaching cabinets:
 
 ```bash
-nvh anthropic "Explain monads"
-nvh groq "What HTTP status code means rate limiting?"
-nvh ollama "Analyze this private document"
+nvh convene "Explain recursion step by step" --cabinet code_tutor
+nvh convene "Help me prepare for my calculus final" --cabinet exam_prep
 ```
 
-### Pipe files in
+`nvh throwdown` runs two passes — a panel answers, a second panel critiques,
+then a final synthesis. Cabinets and their members are listed in
+[CONFIGURATION.md](CONFIGURATION.md#council-cabinets).
+
+### Budget
 
 ```bash
-cat main.py | nvh ask "Review this code for bugs"
-nvh ask "Summarize this document" --file report.pdf
-```
-
----
-
-## Convene Mode — Your AI Advisory Board
-
-Convene mode sends your question to multiple LLMs simultaneously, then synthesizes a weighted consensus answer.
-
-### Basic convene
-
-```bash
-nvh convene "Should we use PostgreSQL or MongoDB for our SaaS app?"
-```
-
-Each advisor responds independently, then a synthesis LLM combines the best insights.
-
-### Auto-generated expert agents
-
-```bash
-nvh convene "Should we migrate to microservices?" --auto-agents
-```
-
-NVHive analyzes your question and generates relevant expert personas:
-- **Software Architect** — system design, scalability
-- **DevOps/SRE Engineer** — operational complexity
-- **CTO** — long-term technical vision
-
-Each LLM adopts a unique expert perspective, creating productive tension in the analysis.
-
-### Use a cabinet
-
-```bash
-# Executive team reviews your business plan
-nvh convene "Is this SaaS pricing model viable?" --cabinet executive
-
-# Engineering team reviews your architecture
-nvh convene "How should we design the API?" --cabinet engineering
-
-# Security team audits your auth flow
-nvh convene "Review our OAuth implementation" --cabinet security_review
-```
-
-Available cabinets: `executive`, `engineering`, `security_review`, `code_review`, `product`, `data`, `full_board`
-
-### Preview which agents would be generated
-
-```bash
-nvh agent analyze "How to scale our database to 1M users?" -n 5
-```
-
-```
-Auto-generated council for: How to scale our database to 1M users?
-
-┃ # ┃ Role                  ┃ Expertise                    ┃
-┡━━━╇━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ 1 │ Database Administrator│ database design, replication  │
-│ 2 │ Software Architect    │ system design, scalability    │
-│ 3 │ Performance Engineer  │ load testing, optimization    │
-│ 4 │ DevOps/SRE Engineer   │ infrastructure, monitoring    │
-│ 5 │ Senior Backend Eng.   │ APIs, databases, performance  │
-```
-
----
-
-## Throwdown Mode — Deep Analysis
-
-Throwdown runs a two-pass synthesis for the highest-quality output on hard questions:
-
-```bash
-nvh throwdown "Best database architecture for a 50k DAU SaaS product?"
-```
-
-**How it works:**
-1. **Pass 1** — Auto-generated expert council produces initial analysis
-2. **Pass 2** — A second council critiques Pass 1: what did they miss? what's wrong?
-3. **Final synthesis** — Integrates both passes into a definitive answer
-
-Higher cost than a single query, but significantly better reasoning on complex decisions.
-
----
-
-## Safe Mode — Local & Private
-
-```bash
-nvh safe "Analyze this confidential contract"
-cat sensitive.txt | nvh safe "Summarize this"
-```
-
-`nvh safe` routes exclusively to locally-running Ollama models. No data leaves your machine:
-- No API calls to external services
-- No logging or conversation persistence
-- No analytics or telemetry
-
-Use it whenever the content is sensitive. Requires Ollama installed locally:
-
-```bash
-nvh ollama          # Check Ollama status and available models
-nvh studio --install rootless-ollama -y          # Install without sudo
-nvhive-ollama-serve                              # Start local model server
-nvh studio --install-models recommended -y       # Pull recommended models
-```
-
----
-
-## Smart Features
-
-### Escalation (`--escalate`)
-
-Starts with a free-tier advisor and automatically escalates to a paid model if the initial response has low confidence. Use it when you want to save money on easy questions but still get high-quality answers on hard ones.
-
-```bash
-nvh ask "What's the time complexity of binary search?" --escalate
-# → Answered by groq (free) — high confidence, no escalation needed
-
-nvh ask "Design a CRDT for a collaborative editor" --escalate
-# → groq answered with low confidence → escalated to anthropic
-```
-
-### Verification (`--verify`)
-
-Cross-checks the answer by sending it to a second model for independent verification. Use it when correctness matters more than speed.
-
-```bash
-nvh ask "Is it safe to use MD5 for password hashing?" --verify
-# → Primary: openai | Verifier: anthropic — both agree: No, use bcrypt/argon2
-```
-
-### Using both together
-
-Combine `--escalate` and `--verify` for maximum reliability on high-stakes questions:
-
-```bash
-nvh ask "What are the tax implications of an LLC vs S-Corp?" --escalate --verify
-# → Free tier was uncertain → escalated to anthropic → verified by openai
-```
-
-This is the most thorough single-query mode: free when possible, premium when needed, verified either way.
-
----
-
-## Poll Mode
-
-See how different advisors answer the same question side-by-side:
-
-```bash
-nvh poll "Write a merge sort in Python"
-```
-
-Shows parallel panels with each advisor's response, tokens, cost, and latency.
-
----
-
-## Quick Mode
-
-Route to the fastest or cheapest available advisor:
-
-```bash
-nvh quick "What does HTTP 429 mean?"
-```
-
-Uses routing strategy `fastest` — picks the lowest-latency provider with available credits. Ideal for simple factual questions where speed matters.
-
----
-
-## Interactive REPL
-
-Launch an interactive session with multi-turn conversation:
-
-```bash
-nvh repl
-nvh          # Same thing — no args launches the REPL
-```
-
-```
-╭─ NVHive REPL ────────────────────────────────────╮
-│ Advisors: groq, llm7, ollama                     │
-│ Type /help for commands. Ctrl+D to exit.         │
-╰──────────────────────────────────────────────────╯
-
-[groq/llama-3.3-70b #1] > What is a monad?
-
-A monad is a design pattern from functional programming...
-
-[groq/llama-3.3-70b #2] > Can you give me a Python example?
-
-Here's a simple Maybe monad in Python...
-
-[groq/llama-3.3-70b #3] > /convene
-Convene mode: ON
-
-[groq/llama-3.3-70b #3] [convene] > Now explain it to a 5-year-old
-
---- Software Architect ---
-Imagine you have a magic box...
-
---- Senior Backend Engineer ---
-Think of it like a lunchbox...
-
---- Synthesis ---
-Both experts agree: a monad is like a special container...
-```
-
-### REPL commands
-
-| Command | Description |
-|---|---|
-| `/advisor anthropic` | Switch advisor |
-| `/model gpt-5.6-luna` | Switch model |
-| `/system You are a pirate` | Set system prompt |
-| `/convene` | Toggle convene mode |
-| `/auto-agents` | Toggle auto-agent generation |
-| `/cabinet executive` | Set agent cabinet |
-| `/cost` | Show session cost |
-| `/history` | Show conversation |
-| `/save chat.json` | Export conversation |
-| `/clear` | Start fresh |
-| `/help` | All commands |
-| `/quit` | Exit |
-
----
-
-## Advisor Setup
-
-### All 22 supported advisors
-
-| Provider | Free Tier | Get API Key | Best For |
-|---|---|---|---|
-| **OpenAI** | No | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | Code, multimodal, general |
-| **Anthropic** | No | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) | Reasoning, long-form, code review |
-| **Google Gemini** | Yes — 15 req/min | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | Long context, multimodal |
-| **Groq** | Yes — 30 req/min | [console.groq.com/keys](https://console.groq.com/keys) | Ultra-fast inference |
-| **Grok (xAI)** | No | [console.x.ai](https://console.x.ai) | Reasoning, real-time data |
-| **Mistral** | Yes — 2 RPM | [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys) | Multilingual, EU-hosted |
-| **Cohere** | Yes — trial key | [dashboard.cohere.com/api-keys](https://dashboard.cohere.com/api-keys) | RAG, summarization |
-| **DeepSeek** | No (very cheap) | [platform.deepseek.com](https://platform.deepseek.com) | Code, math ($0.07/M tokens) |
-| **Ollama** | Yes — unlimited | [ollama.com/download](https://ollama.com/download) | Free, private, local |
-| **Perplexity** | No | [perplexity.ai/settings/api](https://www.perplexity.ai/settings/api) | Search-augmented, cited answers |
-| **Together AI** | No | [api.together.xyz](https://api.together.xyz/settings/api-keys) | Open-source models |
-| **Fireworks AI** | Yes | [fireworks.ai](https://fireworks.ai/account/api-keys) | Fast open-source inference |
-| **OpenRouter** | No | [openrouter.ai/keys](https://openrouter.ai/keys) | Meta-router, model diversity |
-| **Cerebras** | Yes — 30 req/min | [cloud.cerebras.ai](https://cloud.cerebras.ai) | Fastest inference hardware |
-| **SambaNova** | Yes | [cloud.sambanova.ai](https://cloud.sambanova.ai) | Enterprise-scale models |
-| **Hugging Face** | Yes — Inference API | [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) | Research, open weights |
-| **AI21 Labs** | Yes | [studio.ai21.com](https://studio.ai21.com/account/api-key) | Summarization, Jamba models |
-| **NVIDIA NIM** | Yes — 1000+ credits | [build.nvidia.com](https://build.nvidia.com) | GPU-optimized NVIDIA models |
-| **SiliconFlow** | Yes — 1000 RPM | [cloud.siliconflow.cn](https://cloud.siliconflow.cn) | Chinese + global open models |
-| **LLM7** | Yes — no signup | [llm7.io](https://llm7.io) | Anonymous, 30 RPM, zero friction |
-| **Mock** | Yes — unlimited | n/a | Testing and development only |
-
-### Add an advisor via CLI shortcut
-
-```bash
-# Use the advisor name as a command with no question → setup wizard
-nvh openai          # Opens OpenAI setup: shows URL, prompts for API key
-nvh anthropic       # Opens Anthropic setup
-nvh llm7            # Enables LLM7 (no API key needed)
-nvh ollama          # Checks Ollama connectivity, lists local models
-```
-
-### Add via environment variables
-
-```bash
-export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-...
-export GROQ_API_KEY=gsk_...
-export GOOGLE_API_KEY=AIza...
-```
-
-### Add via the Web UI
-
-1. Open **http://localhost:3000/advisors**
-2. Click on an advisor card
-3. Enter your API key
-4. Click "Test Connection"
-
----
-
-## Running Local AI with Ollama
-
-Ollama lets you run AI models locally — free, private, no API key needed.
-
-### With Docker (automatic)
-
-Docker Compose starts Ollama automatically and pulls a small model:
-
-```bash
-docker compose up -d    # Ollama starts on port 11434
-```
-
-### Pull more models
-
-```bash
-# Quick start (1.3 GB)
-docker compose exec ollama ollama pull nemotron-mini
-
-# Better quality (4.7 GB)
-docker compose exec ollama ollama pull llama3.1:8b
-
-# Code-focused (3.8 GB)
-docker compose exec ollama ollama pull codellama
-
-# Or use the setup script
-./scripts/ollama-setup.sh
-```
-
-### Without Docker
-
-```bash
-# Install Ollama without sudo/root
-nvh studio --install rootless-ollama -y
-nvhive-ollama-serve
-
-# Pull recommended fitting models
-nvh studio --install-models recommended -y
-
-# NVHive auto-detects Ollama at localhost:11434
-nvh ollama          # Check status
-nvh safe "Test question"    # Use it in safe mode
-```
-
----
-
-## Budget Controls
-
-Set spending limits to avoid surprises:
-
-```bash
-# Set limits
 nvh config set budget.daily_limit_usd 5.00
-nvh config set budget.monthly_limit_usd 50.00
-
-# Check spending
 nvh budget status
-```
-
-```
-┃ Metric         ┃   Value ┃     Limit ┃
-┡━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━┩
-│ Daily spend    │ $0.4230 │    $5.00  │
-│ Monthly spend  │ $12.850 │   $50.00  │
-│ Daily queries  │      47 │       —   │
-```
-
-When limits are hit, NVHive blocks further queries (configurable: `budget.hard_stop: false` to just warn).
-
-See your cumulative savings from free-tier routing:
-
-```bash
 nvh savings
 ```
 
----
+`budget.hard_stop: true` (the default) blocks queries once a limit is hit;
+set it to `false` to warn instead.
 
-## Configuration
+## Hardware
 
-### Config file location
+| GPU | VRAM | What runs locally |
+|---|---|---|
+| none | — | cloud free tiers only (LLM7, Groq, Gemini, ...) |
+| GTX 1660 / RTX 2060 / RTX 4060 | 6–8 GB | `gemma3:4b` + `moondream` vision |
+| RTX 3060 / 4070 | 12 GB | `qwen3:8b` or `llama3.1:8b` + `minicpm-v` |
+| RTX 4070 Ti / 4080 | 16 GB | `qwen2.5-coder:7b` + `llama3.2-vision` |
+| RTX 3090 / 4090 / 5090 | 24–32 GB | `llama3.2-vision`, `nemotron-3-nano-omni` |
+| A100 / H100 / RTX 6000 Pro | 40 GB+ | `nemotron-omni`, 70B-class coders |
 
-```
-~/.nvhive/config.yaml
-```
+CPU-only machines work: the installer skips the local model and `nvh setup`
+configures the free cloud tiers. RAM 8 GB minimum (16 GB recommended); disk
+~2 GB for the smallest local model. Models unload after inactivity, so a
+gaming session gets its VRAM back. [MODELS.md](MODELS.md) has the fit logic,
+the capability matrix and `nvh bench`.
 
-### Key settings
+## Running without root
 
-```yaml
-# Default advisor and mode
-defaults:
-  provider: groq
-  model: llama-3.3-70b
-  temperature: 1.0
-  max_tokens: 4096
-  mode: ask        # ask | convene | poll | throwdown
+Everything the installer does works as an unprivileged user; nothing needs
+`sudo`, `apt`, or `systemctl`.
 
-# Council mode settings
-convene:
-  default_weights:
-    openai: 0.40
-    anthropic: 0.35
-    google: 0.25
-  synthesis_provider: anthropic
-  strategy: weighted_consensus
-  quorum: 2
-
-# Auto-routing rules
-routing:
-  rules:
-    - match: { task_type: code_generation }
-      provider: anthropic
-    - match: { task_type: math }
-      provider: openai
-    - match: { task_type: fast_lookup }
-      provider: groq
-```
-
-### Useful config commands
+- **API keys** — on a headless box the OS keyring is often absent or slow, so
+  nvHive reads keys from the environment and from `$NVH_HOME/config/.env`
+  (where the Wizard and `nvh setup` write them) and only consults the keyring
+  when `NVH_USE_KEYRING=1`. `cp .env.example "$NVH_HOME/config/.env"` gives
+  you a template.
+- **Node.js** — `nvh webui` installs Node 22 under `NVH_HOME` when the system
+  has none.
+- **Ports** — defaults are 11434 (Ollama), 8000 (API), 3000 (WebUI); all
+  unprivileged. Port 80 is skipped automatically. `nvh serve --host 0.0.0.0`
+  exposes the API on the network — set `HIVE_API_KEY` first.
+- **Browser** — `nvh webui` honours `NVH_BROWSER`, then a rootless Firefox
+  under `$NVH_HOME/apps/firefox`, then system browsers. It installs that
+  Firefox itself on Linux x86_64 unless `NVH_FIREFOX_AUTO_INSTALL=0`.
+- **Persistent service** — a systemd *user* unit needs no root:
 
 ```bash
-nvh config init                              # Interactive setup wizard
-nvh config get defaults.provider             # Read a value
-nvh config set defaults.provider anthropic   # Write a value
-nvh config edit                              # Open in $EDITOR
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/nvhive.service <<EOF
+[Unit]
+Description=nvHive API
+[Service]
+Environment=NVH_HOME=$NVH_HOME
+ExecStart=$NVH_HOME/venv/bin/nvh serve --port 8000
+Restart=on-failure
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload && systemctl --user enable --now nvhive
+loginctl enable-linger "$USER"      # survive logout
 ```
 
-### Named profiles
+## Studio packs and the workstation
+
+`nvh studio` installs optional tool packs into user-owned directories under
+`NVH_HOME`. `nvh studio --list` shows exact pack status and disk estimates.
+
+| Bundle | Command | Installs |
+|---|---|---|
+| AI Starter | `nvh studio --install starter -y` | rootless Ollama, recommended local LLMs, agent lab, ComfyUI power nodes, game-dev lab |
+| LLMs | `nvh studio --install llms -y` | Gemma 3, Qwen 3, Llama 3.1, Qwen coder, DeepSeek reasoning, embeddings |
+| Agents | `nvh studio --install agents -y` | LangGraph, CrewAI, AutoGen, JupyterLab, OpenClaw |
+| ComfyUI | `nvh studio --install comfy -y` | ComfyUI Manager, Impact Pack, ControlNet Aux, Video Helper Suite, GGUF, rgthree |
+| Creative | `nvh studio --install creative -y` | Blender LTS portable, launcher, asset workspace |
+| Games | `nvh studio --install game -y` | Pygame/Panda3D lab, asset helpers, Wine mod workspace |
+| Music | `nvh studio --install music -y` | ACE-Step, Demucs, WhisperX, Audacity/LMMS AppImages |
+| Runtime fallback | `nvh studio --install python-runtime-fallback -y` | micromamba under `NVH_HOME` for images with a broken `venv` |
+
+NemoClaw is the one pack that checks for Docker (it is an OpenShell sandbox
+stack); the Wizard marks it blocked unless Docker already works without sudo.
+
+`nvh workstation` wraps the student desktop flow: GPU detection, the desktop
+launcher, boot checks, and — with `--all -y` — local AI, ComfyUI, the starter
+pack and the WebUI in one go. The WebUI's **Memory Vault** keeps Markdown
+notes under `$NVH_HOME/vault` (Obsidian installs rootlessly beside it when the
+image allows AppImages).
+
+## If something breaks
 
 ```bash
-# Use a cost-optimized profile
-nvh ask "Quick question" --profile cost_optimized
-
-# Use a quality-focused profile
-nvh convene "Important decision" --profile quality
+nvh services            # per-service table: Ollama / API / WebUI, with the fix
+nvh services restart    # recycle API + WebUI (Ollama keeps its warm model)
+nvh status --deep       # config, keys, advisors, Ollama, GPU, disk, environment
+nvh status --smoke      # offline workspace smoke test
+nvh status --report     # redacted JSON support bundle under $NVH_HOME/support/
+nvh repair              # safe, idempotent repairs; never sudo, never deletes assets
 ```
 
----
-
-## HIVE.md — Project Context Injection
-
-Place a `HIVE.md` file in your project root. NVHive automatically injects it as a system prompt when you run any `nvh` command from that directory:
-
-```markdown
-# HIVE.md
-This is a Python 3.12 microservices project using FastAPI and PostgreSQL.
-Coding standards: PEP 8, type hints required, 100% test coverage target.
-Never suggest JavaScript. Always use async/await. PostgreSQL preferred over SQLite.
-```
-
-Any `nvh "question"` in that directory starts with full project context automatically.
-
----
-
-## REST API
-
-Start the API server:
-
-```bash
-nvh serve --port 8000
-```
-
-### Endpoints
-
-```bash
-# Simple query
-curl -X POST http://localhost:8000/v1/query \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Hello world", "provider": "openai"}'
-
-# Council mode with auto-agents
-curl -X POST http://localhost:8000/v1/council \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Should we use GraphQL?", "auto_agents": true}'
-
-# Poll advisors
-curl -X POST http://localhost:8000/v1/compare \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Write a sort function", "providers": ["openai", "anthropic"]}'
-
-# List advisors
-curl http://localhost:8000/v1/advisors
-
-# Budget status
-curl http://localhost:8000/v1/budget/status
-
-# Agent cabinet presets
-curl http://localhost:8000/v1/agents/presets
-```
-
-API docs with interactive Swagger UI: **http://localhost:8000/docs**
-
----
-
-## Web UI
-
-The web dashboard runs at **http://localhost:3000** and provides:
-
-- **Dashboard** — Advisor status, quick query, budget summary
-- **Query** — Full query interface with mode switching (Ask / Convene / Poll / Throwdown)
-- **Council** — Multi-panel view showing each expert's streaming response
-- **Advisors** — Add/configure advisors, test connectivity, browse model catalog
-- **Settings** — Configure defaults, budgets, and council weights
-
-### Running the web UI
-
-```bash
-# With Docker (automatic)
-docker compose up -d
-# → http://localhost:3000
-
-# Without Docker
-cd web
-npm install
-npm run dev
-# → http://localhost:3000
-# (requires nvh serve running on port 8000)
-```
-
----
-
-## Conversation Management
-
-```bash
-# List recent conversations
-nvh conversation list
-
-# Show a full conversation
-nvh conversation show abc123
-
-# Search conversations
-nvh conversation search "database migration"
-
-# Export to markdown
-nvh conversation export abc123 --format markdown --output chat.md
-
-# Delete a conversation
-nvh conversation delete abc123
-```
-
----
-
-## Diagnostics
-
-```bash
-nvh doctor          # Full health check: config, API keys, connectivity
-nvh status          # Quick advisor status overview
-```
-
-`nvh doctor` checks:
-- Config file validity
-- API key presence for each configured advisor
-- Network connectivity to each provider
-- Ollama local status
-- Budget limits
-
----
-
-## Example Workflows
-
-### Code Review
-
-```bash
-cat pull_request.diff | nvh convene "Review this PR for bugs, security issues, and code quality" \
-  --cabinet code_review --auto-agents
-```
-
-### Architecture Decision
-
-```bash
-nvh convene "Should we use event sourcing for our e-commerce platform? We have 50k DAU." \
-  --cabinet engineering --auto-agents
-```
-
-### Quick Research
-
-```bash
-# Fast answer via Groq (sub-100ms)
-nvh quick "What HTTP status code for rate limiting?"
-
-# Deep analysis via throwdown
-nvh throwdown "Compare REST vs GraphQL vs gRPC for a microservices platform"
-```
-
-### Private / Confidential Work
-
-```bash
-# Local only — nothing leaves your machine
-nvh safe "Analyze this confidential report" --file report.txt
-cat sensitive_code.py | nvh safe "Find security vulnerabilities"
-```
-
-### Cost-Conscious Usage
-
-```bash
-# Use free providers for simple tasks
-nvh quick "Fix this typo: recieve"
-
-# Use throwdown only for important decisions
-nvh throwdown "Should we rewrite the core engine in Rust?"
-```
-
-### Student / Zero-Budget Setup
-
-```bash
-nvh setup                               # Enable all free providers
-nvh status                              # Verify what's active
-nvh convene "Explain Big O notation"    # Uses only free providers
-nvh savings                             # See how much you've saved
-```
-
----
-
-## Troubleshooting
-
-### "No advisors available"
-
-```bash
-nvh setup          # Run the free tier wizard
-nvh status         # See which advisors are configured
-nvh doctor         # Full diagnostics
-```
-
-### "Advisor X is unhealthy"
-
-```bash
-nvh doctor         # Check which advisors are failing and why
-# Circuit breakers auto-reset after a 30s cooldown
-```
-
-### "Budget limit reached"
-
-```bash
-nvh budget status                              # Check current spend
-nvh config set budget.daily_limit_usd 20.00   # Increase limit
-nvh config set budget.hard_stop false          # Warn only, don't block
-```
-
-### Docker issues
-
-```bash
-# Check service logs
-docker compose logs nvhive-api
-docker compose logs nvhive-web
-docker compose logs ollama
-
-# Restart everything
-docker compose restart
-
-# Full rebuild
-docker compose down && docker compose up -d --build
-```
-
-### Ollama not detected
-
-```bash
-# Check if Ollama is running
-curl http://localhost:11434/api/tags
-
-# Start Ollama
-docker compose restart ollama
-
-# Pull a model if none exist
-docker compose exec ollama ollama pull llama3.1:8b
-
-# Or via CLI
-nvh ollama
-```
-
----
-
-## What's Next?
-
-- Browse available models: `nvh advisor info <name>`
-- Try different cabinets: `nvh agent analyze "your question"`
-- Set up budget alerts: `nvh config set budget.daily_limit_usd 5.00`
-- Configure routing rules for your workflow: `nvh config edit`
-- Explore the API docs at **http://localhost:8000/docs**
-- Try `nvh bench` when you want to benchmark your local GPU **
+Logs are under `$NVH_HOME/logs/` (`install.log`, `api-server.log`,
+`nvhive.log`). The dashboard's **Debug Report** button produces the same
+redacted bundle as `nvh status --report`.
+
+| Symptom | Fix |
+|---|---|
+| "No advisors available" | `nvh setup`, then `nvh status --providers` |
+| Ollama `connection refused` | `nvh services start` re-spawns it; `curl localhost:11434/api/tags` to confirm |
+| "Ollama binary not found" | `nvh workstation --with-local-ai -y` |
+| Dashboard shows "API offline" forever | stale `nvh serve` whose engine failed to start — `nvh services restart` |
+| Budget limit reached | `nvh budget status`; raise `budget.daily_limit_usd` or set `budget.hard_stop false` |
+| `Address already in use` | `nvh serve --port 8001` / `nvh webui --port 3001` |
+| WebUI never built | `nvh webui --install`, or `nvh webui --clean` to rebuild |
+| Slow rig times out during bring-up | `NVH_OLLAMA_BOOT_TIMEOUT=30 NVH_API_BOOT_TIMEOUT=45 nvh services start` |
+
+### Windows and macOS
+
+Linux x86_64 is the supported target and the only one CI tests. Windows and
+macOS binaries are published on the Releases page and `pip install nvhive`
+works on both, best-effort. Windows notes:
+
+- `nvh` sets `PYTHONIOENCODING=utf-8` at startup; when calling
+  `python -m nvh.cli.main` directly, set it yourself or box-drawing output
+  will raise `UnicodeEncodeError` under `cp1252`.
+- A crash *after* correct output (`0xC0000005`) is CPython's
+  `ProactorEventLoop` teardown bug; the CLI patches it, embedded use should
+  copy the patch at the top of `nvh/cli/main.py`.
+- Port 80 needs an elevated terminal — use `nvh webui --port 3000`.
+- `pip install -e .` cannot overwrite a running `nvh.exe`; close terminals
+  that used it, or run `python -m nvh.cli.main`.
+
+## Next
+
+- [MODELS.md](MODELS.md) — Model Manager, VRAM fit, capability matrix, `nvh bench`
+- [PROVIDERS.md](PROVIDERS.md) — every provider, key variable and free tier
+- [CONFIGURATION.md](CONFIGURATION.md) — `config.yaml`, env vars, `NVH_HOME` layout, cabinets, tools
+- [WEBUI.md](WEBUI.md) — the dashboard
+- [INTEGRATIONS.md](INTEGRATIONS.md) — SDK, REST, OpenAI proxy, MCP, Claude Code, NemoClaw
+
+Back to [README](../README.md)

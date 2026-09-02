@@ -206,6 +206,34 @@ async def _run_auto_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
     return await registry.execute(name, arguments=arguments, confirmed=True)
 
 
+def _resolve_profile(profile_name: str | None, home_dir: str | Path | None) -> Any:
+    """Look up a non-default profile; None for the default Wizard, unknown
+    names, or a failing profile store (the chat must never die on lookup)."""
+    if not profile_name or profile_name == "wizard":
+        return None
+    try:
+        from nvh.integrations.wizard.profiles import get_profile
+
+        return get_profile(profile_name, home_dir=home_dir)
+    except Exception as exc:
+        logger.debug("profile lookup failed (%s); falling back to default", exc)
+        return None
+
+
+def _apply_prompt_template(
+    question: str, profile_name: str | None, home_dir: str | Path | None,
+) -> str:
+    """Wrap the user's message in the profile's ``prompt_template`` (if any).
+
+    Routing and vault recall still see the raw question; only the message
+    handed to the model is rendered.
+    """
+    profile = _resolve_profile(profile_name, home_dir)
+    if profile is None:
+        return question
+    return profile.render_prompt(question)
+
+
 def _apply_profile(
     system_prompt: str,
     profile_name: str | None,
@@ -218,15 +246,7 @@ def _apply_profile(
     the unchanged system prompt and ``(None, None, None)`` for routing
     and cost ceiling.
     """
-    if not profile_name or profile_name == "wizard":
-        return system_prompt, None, None, None
-    try:
-        from nvh.integrations.wizard.profiles import get_profile
-
-        profile = get_profile(profile_name, home_dir=home_dir)
-    except Exception as exc:
-        logger.debug("profile lookup failed (%s); falling back to default", exc)
-        return system_prompt, None, None, None
+    profile = _resolve_profile(profile_name, home_dir)
     if profile is None:
         return system_prompt, None, None, None
     persona_addon = profile.system_prompt.strip()
@@ -314,6 +334,7 @@ async def wizard_chat(
     system_prompt, profile_provider, profile_model, profile_cost_ceiling = _apply_profile(
         system_prompt, profile, home_dir,
     )
+    user_message = _apply_prompt_template(question, profile, home_dir)
     history = history or []
 
     # Try the LLM path first.
@@ -337,7 +358,7 @@ async def wizard_chat(
                 content = turn.get("content", "")
                 if role in ("user", "assistant") and isinstance(content, str) and content.strip():
                     messages.append(Message(role=role, content=content))
-            messages.append(Message(role="user", content=question))
+            messages.append(Message(role="user", content=user_message))
 
             await engine.initialize()
             await engine._check_budget()
@@ -652,6 +673,7 @@ async def wizard_chat_stream(
     system_prompt, profile_provider, profile_model, profile_cost_ceiling = _apply_profile(
         system_prompt, profile, home_dir,
     )
+    user_message = _apply_prompt_template(question, profile, home_dir)
     history = history or []
 
     try:
@@ -678,7 +700,7 @@ async def wizard_chat_stream(
             content = turn.get("content", "")
             if role in ("user", "assistant") and isinstance(content, str) and content.strip():
                 messages.append(Message(role=role, content=content))
-        messages.append(Message(role="user", content=question))
+        messages.append(Message(role="user", content=user_message))
 
         await engine.initialize()
         await engine._check_budget()

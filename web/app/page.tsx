@@ -6,25 +6,32 @@ import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import ChatMessage, { exportConversationMarkdown } from '@/components/ChatMessage';
 import ChatInput, { type ChatInputAttachment } from '@/components/ChatInput';
+import CouncilAdvancedDrawer, {
+  DEFAULT_COUNCIL_OPTIONS,
+  councilRequestOptions,
+  type CouncilOptions,
+} from '@/components/CouncilAdvancedDrawer';
 import { HardwareWidgetCompact, HardwareWidgetHero } from '@/components/HardwareWidget';
 import WelcomeBackPanel from '@/components/WelcomeBackPanel';
 import { useUIShell } from '@/components/UIShellProvider';
 import {
-  queryStream,
-  query,
-  runCouncil,
+  CONVERSATIONS_CHANGED_EVENT,
+  appendConversationMessage,
   compare,
+  createConversation,
+  deleteConversation,
+  getBudgetStatus,
+  getConversation,
+  getConversations,
   getModels,
   getStudioModels,
-  getBudgetStatus,
-  getConversations,
-  getConversation,
-  deleteConversation,
   pinConversation,
+  query,
+  queryStream,
   renameConversation,
   streamCouncil,
 } from '@/lib/api';
-import { exportConversationById } from '@/lib/exportConversation';
+import { advisorLabel, downloadMarkdown, exportConversationById } from '@/lib/exportConversation';
 import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
   ChatMessage as ChatMessageType,
@@ -34,15 +41,6 @@ import type {
   WsCouncilStart,
 } from '@/lib/types';
 
-// ─── Local storage helpers ────────────────────────────────────────────────────
-
-const STORAGE_KEY = 'council_chats_v2';
-
-interface StoredState {
-  conversations: ConversationSummary[];
-  messages: Record<string, ChatMessageType[]>;
-}
-
 interface ModelOption {
   model_id: string;
   provider: string;
@@ -50,24 +48,6 @@ interface ModelOption {
   is_local?: boolean;
   cost_tier?: 'free' | 'low' | 'high';
   supports_vision?: boolean;
-}
-
-function loadState(): StoredState {
-  if (typeof window === 'undefined') return { conversations: [], messages: {} };
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{"conversations":[],"messages":{}}');
-  } catch {
-    return { conversations: [], messages: {} };
-  }
-}
-
-function saveState(state: StoredState) {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // ignore quota errors
-  }
 }
 
 function makeId(): string {
@@ -79,8 +59,29 @@ function titleFromMessage(msg: string): string {
   return clean.length > 50 ? clean.slice(0, 47) + '...' : clean;
 }
 
+/** Text form of a message for persistence and export. Compare and
+ * synthesis-less council replies carry their payload in structured fields,
+ * so flatten them to Markdown the server's plain content column can hold. */
+function messageText(msg: ChatMessageType): string {
+  if (msg.compare_data && Object.keys(msg.compare_data).length > 0) {
+    return Object.entries(msg.compare_data)
+      .map(([provider, r]) => `### ${provider} (${r.model})\n\n${r.content}`)
+      .join('\n\n');
+  }
+  if (!msg.content && msg.council_data) {
+    return Object.entries(msg.council_data.member_responses)
+      .map(([label, r]) => `### ${label}\n\n${r.content}`)
+      .join('\n\n');
+  }
+  return msg.content;
+}
+
+function isChatMode(value: string | null): value is ChatMode {
+  return value === 'single' || value === 'council' || value === 'compare';
+}
+
 // ─── Budget pill ──────────────────────────────────────────────────────────────
-// GPU pill is now <HardwareWidgetCompact /> from components/HardwareWidget.tsx,
+// GPU pill is <HardwareWidgetCompact /> from components/HardwareWidget.tsx,
 // which also renders persistent-mount status — useful on cloud sessions.
 
 function BudgetPill() {
@@ -323,19 +324,22 @@ function EmptyState({
 
 export default function ChatPage() {
   const router = useRouter();
-  // Persisted state
-  const [storedState, setStoredState] = useState<StoredState>({ conversations: [], messages: {} });
-  const [hydrated, setHydrated] = useState(false);
 
-  // Conversation state
+  // Conversation state — the server (/v1/conversations) is the only store.
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessageType[]>([]);
+  // Ids minted locally when the API was unreachable at first message. Such a
+  // thread lives only until the next "New Chat" (it is not in the server
+  // list), so the only thing it must never do is POST turns to the server.
+  const ephemeralIdsRef = useRef<Set<string>>(new Set());
 
   // Input state
   const [inputValue, setInputValue] = useState('');
   const [mode, setMode] = useState<ChatMode>('single');
   const [selectedModel, setSelectedModel] = useState('');
   const [models, setModels] = useState<ModelOption[]>([]);
+  const [councilOptions, setCouncilOptions] = useState<CouncilOptions>(DEFAULT_COUNCIL_OPTIONS);
   // Live-polled provider health — updates every 30s so the "connected/
   // offline" split in the model picker stays accurate throughout the
   // session without a manual refresh.
@@ -370,17 +374,19 @@ export default function ChatPage() {
   // current value.
   const synthesisContentRef = useRef('');
 
-  // Remote conversations (from API)
-  const [remoteConvs, setRemoteConvs] = useState<ConversationSummary[]>([]);
-
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Hydrate from local storage
-  useEffect(() => {
-    const stored = loadState();
-    setStoredState(stored);
-    setHydrated(true);
+  // Conversation list: fetched on mount and whenever any surface announces a
+  // change (the legacy-store import in LayoutShell, a wizard /pin, ...).
+  const refreshConversations = useCallback(() => {
+    getConversations().then(setConversations).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refreshConversations();
+    window.addEventListener(CONVERSATIONS_CHANGED_EVENT, refreshConversations);
+    return () => window.removeEventListener(CONVERSATIONS_CHANGED_EVENT, refreshConversations);
+  }, [refreshConversations]);
 
   // Load models once on mount. Provider health is handled separately
   // by useProviderHealth (polled every 30s).
@@ -447,39 +453,10 @@ export default function ChatPage() {
     setSelectedModel((firstHealthy ?? models[0]).model_id);
   }, [models, providerHealth, selectedModel]);
 
-  // Try loading remote conversations
-  useEffect(() => {
-    getConversations().then(setRemoteConvs).catch(() => {});
-  }, []);
-
   // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  // Merge local + remote conversations for the sidebar. Remote metadata wins
-  // for conversations the server knows about (wizard chats live only there);
-  // purely-local chats — this browser's localStorage history that was never
-  // persisted server-side — are kept, not clobbered. Newest first; the
-  // Sidebar handles pinned grouping.
-  const allConversations: ConversationSummary[] = (() => {
-    const byId = new Map<string, ConversationSummary>();
-    for (const c of storedState.conversations) byId.set(c.id, c);
-    for (const c of remoteConvs) {
-      const local = byId.get(c.id);
-      byId.set(c.id, { ...local, ...c, pinned: c.pinned || local?.pinned });
-    }
-    return [...byId.values()].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  })();
-
-  // Persist state changes
-  const updateStoredState = useCallback((updater: (prev: StoredState) => StoredState) => {
-    setStoredState(prev => {
-      const next = updater(prev);
-      saveState(next);
-      return next;
-    });
-  }, []);
 
   const updateMemberStates = useCallback((
     updater: Record<string, MemberStreamState> | ((prev: Record<string, MemberStreamState>) => Record<string, MemberStreamState>)
@@ -491,19 +468,6 @@ export default function ChatPage() {
     });
   }, []);
 
-  const addMessage = useCallback((msg: ChatMessageType) => {
-    setMessages(prev => [...prev, msg]);
-    if (activeConvId) {
-      updateStoredState(prev => ({
-        ...prev,
-        messages: {
-          ...prev.messages,
-          [activeConvId]: [...(prev.messages[activeConvId] ?? []), msg],
-        },
-      }));
-    }
-  }, [activeConvId, updateStoredState]);
-
   const updateLastMessage = useCallback((updater: (msg: ChatMessageType) => ChatMessageType) => {
     setMessages(prev => {
       if (prev.length === 0) return prev;
@@ -513,194 +477,30 @@ export default function ChatPage() {
     });
   }, []);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const handleNewChat = useCallback(() => {
-    stopStreamRef.current?.();
-    stopStreamRef.current = null;
-    wsRef.current?.close();
-    wsRef.current = null;
-    setStreaming(false);
+  // Move a conversation to the top of the list after a persisted turn.
+  const touchConversation = useCallback((id: string, added: number) => {
+    setConversations(prev => {
+      const idx = prev.findIndex(c => c.id === id);
+      if (idx < 0) return prev;
+      const updated = { ...prev[idx], message_count: prev[idx].message_count + added, updated_at: Date.now() };
+      return [updated, ...prev.slice(0, idx), ...prev.slice(idx + 1)];
+    });
+  }, []);
 
-    const id = makeId();
-    const newConv: ConversationSummary = {
-      id,
-      title: 'New Chat',
-      mode: 'single',
-      message_count: 0,
-      created_at: Date.now(),
-      updated_at: Date.now(),
-    };
-
-    updateStoredState(prev => ({
-      conversations: [newConv, ...prev.conversations],
-      messages: { ...prev.messages, [id]: [] },
-    }));
-
-    setActiveConvId(id);
-    setMessages([]);
-    setInputValue('');
-    setRightPanelOpen(false);
-    setCouncilPhase('idle');
-    setMemberOrder([]);
-    memberStatesRef.current = {};
-    memberModelByLabelRef.current = {};
-    setMemberStates({});
-    setSynthesisContent('');
-    setSynthesisStatus('hidden');
-  }, [updateStoredState]);
-
-  const handleSelectConversation = useCallback(async (id: string) => {
-    if (!id) {
-      // Clear active, go to home
-      setActiveConvId(null);
-      setMessages([]);
-      return;
-    }
-    // Wizard chats resume on their own surface — this page's message shapes
-    // (council data, member streams) don't apply to a wizard thread. Tear
-    // down any in-flight stream first (same as the normal path below), and
-    // replace() so Back doesn't bounce through /?c= into a redirect loop.
-    const remoteMeta = remoteConvs.find(c => c.id === id);
-    if (remoteMeta?.mode === 'wizard') {
-      stopStreamRef.current?.();
-      stopStreamRef.current = null;
-      wsRef.current?.close();
-      wsRef.current = null;
-      setStreaming(false);
-      router.replace(`/wizard?conversation=${encodeURIComponent(id)}`);
-      return;
-    }
-    stopStreamRef.current?.();
-    setStreaming(false);
-    setActiveConvId(id);
-    const msgs = storedState.messages[id] ?? [];
-    setMessages(msgs);
-    setCouncilPhase('idle');
-    setMemberOrder([]);
-    memberStatesRef.current = {};
-    memberModelByLabelRef.current = {};
-    setMemberStates({});
-    setSynthesisContent('');
-    setSynthesisStatus('hidden');
-    setRightPanelOpen(false);
-
-    if (msgs.length === 0) {
-      const remote = await getConversation(id);
-      // Deep-linked wizard chat before the remote list loaded — re-route.
-      // replace(), not push(): Back from /wizard must not land on /?c=,
-      // which would re-run this redirect and trap the Back button.
-      if (remote?.mode === 'wizard') {
-        router.replace(`/wizard?conversation=${encodeURIComponent(id)}`);
-        return;
-      }
-      if (remote?.messages?.length) {
-        const mapped: ChatMessageType[] = remote.messages
-          .filter(m => m.role !== 'system')
-          .map(m => ({
-            id: m.id,
-            role: m.role === 'user' ? 'user' : 'assistant',
-            content: m.content,
-            provider: m.provider,
-            model: m.model,
-            mode: m.mode,
-            cost_usd: m.cost_usd,
-            tokens: m.tokens,
-            latency_ms: m.latency_ms,
-            council_data: m.council_data,
-            timestamp: m.timestamp,
-          }));
-        setMessages(mapped);
-        updateStoredState(prev => ({
-          ...prev,
-          messages: {
-            ...prev.messages,
-            [id]: mapped,
-          },
-        }));
-      }
-    }
-  }, [storedState.messages, updateStoredState, remoteConvs, router]);
-
-  // Rename/delete/pin update local state immediately, and sync the server
-  // copy for conversations the server knows about (wizard chats and anything
-  // persisted). Purely-local chats live in localStorage only — no phantom
-  // API calls for ids the server never had.
-  const handleRenameConversation = useCallback((id: string, title: string) => {
-    updateStoredState(prev => ({
-      ...prev,
-      conversations: prev.conversations.map(c => c.id === id ? { ...c, title } : c),
-    }));
-    setRemoteConvs(prev => prev.map(c => c.id === id ? { ...c, title } : c));
-    if (remoteConvs.some(c => c.id === id)) void renameConversation(id, title);
-  }, [updateStoredState, remoteConvs]);
-
-  const handleDeleteConversation = useCallback((id: string) => {
-    updateStoredState(prev => ({
-      conversations: prev.conversations.filter(c => c.id !== id),
-      messages: Object.fromEntries(Object.entries(prev.messages).filter(([k]) => k !== id)),
-    }));
-    if (remoteConvs.some(c => c.id === id)) void deleteConversation(id);
-    setRemoteConvs(prev => prev.filter(c => c.id !== id));
-    if (activeConvId === id) {
-      setActiveConvId(null);
-      setMessages([]);
-    }
-  }, [activeConvId, updateStoredState, remoteConvs]);
-
-  const handlePinConversation = useCallback((id: string) => {
-    const current = remoteConvs.find(c => c.id === id)
-      ?? storedState.conversations.find(c => c.id === id);
-    const nextPinned = !current?.pinned;
-    updateStoredState(prev => ({
-      ...prev,
-      conversations: prev.conversations.map(c => c.id === id ? { ...c, pinned: nextPinned } : c),
-    }));
-    setRemoteConvs(prev => prev.map(c => c.id === id ? { ...c, pinned: nextPinned } : c));
-    if (remoteConvs.some(c => c.id === id)) void pinConversation(id, nextPinned);
-  }, [remoteConvs, storedState.conversations, updateStoredState]);
-
-  // Deep-link: /?c=<id> opens a conversation directly (the shared sidebar on
-  // other pages navigates here with it). window.location instead of
-  // useSearchParams so the static prerender doesn't need a Suspense boundary.
-  const deepLinkHandledRef = useRef(false);
-  useEffect(() => {
-    if (!hydrated || deepLinkHandledRef.current) return;
-    if (typeof window === 'undefined') return;
-    const target = new URLSearchParams(window.location.search).get('c');
-    if (!target) return;
-    deepLinkHandledRef.current = true;
-    void handleSelectConversation(target);
-  }, [hydrated, handleSelectConversation]);
-
-  // Export a conversation from the sidebar context menu as a Markdown
-  // download. Uses locally cached messages (remote-only conversations are
-  // pulled into the cache the first time they're opened).
-  const handleExportConversation = useCallback((id: string) => {
-    const msgs = id === activeConvId && messages.length > 0
-      ? messages
-      : storedState.messages[id] ?? [];
-    if (msgs.length === 0) {
-      // Server-only conversation (e.g. a wizard chat in the merged sidebar)
-      // — export from the server copy instead of silently doing nothing.
-      void exportConversationById(id);
-      return;
-    }
-    const lastAssistant = msgs.slice().reverse().find(m => m.role === 'assistant');
-    const advisorLabel = lastAssistant?.model
-      ? `${lastAssistant.model}${lastAssistant.provider ? ` (${lastAssistant.provider})` : ''}`
-      : lastAssistant?.provider ?? 'assistant';
-    const md = exportConversationMarkdown(msgs, advisorLabel, new Date().toISOString().slice(0, 10));
-    const sourceConvs = remoteConvs.length > 0 ? remoteConvs : storedState.conversations;
-    const title = sourceConvs.find(c => c.id === id)?.title ?? 'conversation';
-    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'conversation';
-    const blob = new Blob([md], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${slug}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [activeConvId, messages, storedState, remoteConvs]);
+  const persistMessage = useCallback((convId: string, msg: ChatMessageType) => {
+    if (msg.role === 'error' || ephemeralIdsRef.current.has(convId)) return;
+    const content = messageText(msg);
+    if (!content.trim()) return;
+    void appendConversationMessage(convId, {
+      role: msg.role,
+      content,
+      provider: msg.provider,
+      model: msg.model,
+      tokens: msg.tokens,
+      cost_usd: msg.cost_usd,
+      latency_ms: msg.latency_ms,
+    }).then(ok => { if (ok) touchConversation(convId, 1); });
+  }, [touchConversation]);
 
   const resetCouncilState = useCallback(() => {
     setCouncilPhase('idle');
@@ -712,16 +512,136 @@ export default function ChatPage() {
     setSynthesisStatus('hidden');
   }, []);
 
-  const handleStop = useCallback(() => {
+  const teardownStreams = useCallback(() => {
     stopStreamRef.current?.();
     stopStreamRef.current = null;
     wsRef.current?.close();
     wsRef.current = null;
     setStreaming(false);
+  }, []);
 
+  // A new chat is just an empty composer; the server row is created lazily
+  // on the first message so abandoned "New Chat" placeholders never exist.
+  const handleNewChat = useCallback(() => {
+    teardownStreams();
+    setActiveConvId(null);
+    setMessages([]);
+    setInputValue('');
+    setRightPanelOpen(false);
+    resetCouncilState();
+  }, [teardownStreams, resetCouncilState]);
+
+  const handleModeChange = useCallback((newMode: ChatMode) => {
+    setMode(newMode);
+    setRightPanelOpen(newMode === 'council');
+  }, []);
+
+  const handleSelectConversation = useCallback(async (id: string) => {
+    if (!id) {
+      setActiveConvId(null);
+      setMessages([]);
+      return;
+    }
+    teardownStreams();
+    // Wizard chats resume on their own surface — this page's message shapes
+    // (council data, member streams) don't apply to a wizard thread.
+    // replace() so Back doesn't bounce through /?c= into a redirect loop.
+    const meta = conversations.find(c => c.id === id);
+    if (meta?.mode === 'wizard') {
+      router.replace(`/wizard?conversation=${encodeURIComponent(id)}`);
+      return;
+    }
+    setActiveConvId(id);
+    setMessages([]);
+    resetCouncilState();
+    setRightPanelOpen(false);
+
+    const remote = await getConversation(id);
+    // Deep-linked wizard chat before the list loaded — re-route.
+    if (remote?.mode === 'wizard') {
+      router.replace(`/wizard?conversation=${encodeURIComponent(id)}`);
+      return;
+    }
+    const resumedMode = remote?.mode ?? meta?.mode ?? null;
+    if (isChatMode(resumedMode)) handleModeChange(resumedMode);
+    if (remote?.messages?.length) {
+      setMessages(remote.messages
+        .filter(m => m.role !== 'system')
+        .map(m => ({
+          id: m.id,
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: m.content,
+          provider: m.provider,
+          model: m.model,
+          cost_usd: m.cost_usd,
+          tokens: m.tokens,
+          latency_ms: m.latency_ms,
+          timestamp: m.timestamp,
+        })));
+    }
+  }, [conversations, router, teardownStreams, resetCouncilState, handleModeChange]);
+
+  const handleRenameConversation = useCallback((id: string, title: string) => {
+    setConversations(prev => prev.map(c => c.id === id ? { ...c, title } : c));
+    void renameConversation(id, title);
+  }, []);
+
+  const handleDeleteConversation = useCallback((id: string) => {
+    setConversations(prev => prev.filter(c => c.id !== id));
+    void deleteConversation(id);
+    if (activeConvId === id) {
+      setActiveConvId(null);
+      setMessages([]);
+    }
+  }, [activeConvId]);
+
+  const handlePinConversation = useCallback((id: string) => {
+    const nextPinned = !conversations.find(c => c.id === id)?.pinned;
+    setConversations(prev => prev.map(c => c.id === id ? { ...c, pinned: nextPinned } : c));
+    void pinConversation(id, nextPinned);
+  }, [conversations]);
+
+  // Deep links, read once on mount. window.location instead of
+  // useSearchParams so the static prerender doesn't need a Suspense boundary.
+  //   /?c=<id>                 open a conversation (shared sidebar on other pages)
+  //   /?mode=council&prompt=…  WizardChat's "Convene council" hand-off
+  const deepLinkHandledRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkHandledRef.current || typeof window === 'undefined') return;
+    deepLinkHandledRef.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const target = params.get('c');
+    if (target) {
+      void handleSelectConversation(target);
+      return;
+    }
+    const wantedMode = params.get('mode');
+    if (isChatMode(wantedMode)) handleModeChange(wantedMode);
+    const prompt = params.get('prompt');
+    if (prompt) {
+      setInputValue(prompt);
+      setTimeout(() => document.querySelector('textarea')?.focus(), 50);
+    }
+  }, [handleSelectConversation, handleModeChange]);
+
+  // Export a conversation from the sidebar context menu as a Markdown
+  // download. The open thread exports from memory (keeps compare tables and
+  // synthesis-less councils readable); anything else comes from the server.
+  const handleExportConversation = useCallback((id: string) => {
+    if (id !== activeConvId || messages.length === 0) {
+      void exportConversationById(id);
+      return;
+    }
+    const flat = messages.map(m => ({ ...m, content: messageText(m) }));
+    const md = exportConversationMarkdown(flat, advisorLabel(flat), new Date().toISOString().slice(0, 10));
+    downloadMarkdown(md, conversations.find(c => c.id === id)?.title ?? 'conversation');
+  }, [activeConvId, messages, conversations]);
+
+  const handleStop = useCallback(() => {
+    teardownStreams();
     // Mark last message as no longer streaming
     updateLastMessage(msg => ({ ...msg, streaming: false }));
-  }, [updateLastMessage]);
+  }, [teardownStreams, updateLastMessage]);
 
   // Safety: auto-reset streaming if stuck for more than 60 seconds
   useEffect(() => {
@@ -783,51 +703,42 @@ export default function ChatPage() {
       }
     }
 
-    // Ensure we have an active conversation
-    let convId = activeConvId;
-    if (!convId) {
-      convId = makeId();
-      const newConv: ConversationSummary = {
-        id: convId,
-        title: titleFromMessage(prompt),
-        mode,
-        message_count: 0,
-        created_at: Date.now(),
-        updated_at: Date.now(),
-      };
-      updateStoredState(prev => ({
-        conversations: [newConv, ...prev.conversations],
-        messages: { ...prev.messages, [convId!]: [] },
-      }));
-      setActiveConvId(convId);
-    }
-
     const userMsg: ChatMessageType = {
       id: makeId(),
       role: 'user',
       content: prompt,
       timestamp: Date.now(),
     };
-
     setMessages(prev => [...prev, userMsg]);
-    updateStoredState(prev => ({
-      ...prev,
-      conversations: prev.conversations.map(c =>
-        c.id === convId
-          ? { ...c, title: c.title === 'New Chat' ? titleFromMessage(prompt) : c.title, message_count: c.message_count + 1, updated_at: Date.now(), mode }
-          : c
-      ),
-      messages: {
-        ...prev.messages,
-        [convId!]: [...(prev.messages[convId!] ?? []), userMsg],
-      },
-    }));
-
     setInputValue('');
     setStreaming(true);
 
+    // Ensure we have a conversation. Created server-side on the first
+    // message; if the API is unreachable the thread stays in this tab.
+    let convId = activeConvId;
+    if (!convId) {
+      const created = await createConversation(titleFromMessage(prompt), mode);
+      if (created) {
+        convId = created.id;
+        setConversations(prev => [created, ...prev.filter(c => c.id !== created.id)]);
+      } else {
+        convId = makeId();
+        ephemeralIdsRef.current.add(convId);
+      }
+      setActiveConvId(convId);
+    }
+    persistMessage(convId, userMsg);
+
+    const finishAssistant = (assistantMsgId: string, finalMsg: ChatMessageType) => {
+      setMessages(prev => prev.map(m => m.id === assistantMsgId ? finalMsg : m));
+      persistMessage(convId!, finalMsg);
+    };
+    const failAssistant = (assistantMsgId: string, err: string) => {
+      const errMsg: ChatMessageType = { id: assistantMsgId, role: 'error', content: err, timestamp: Date.now() };
+      setMessages(prev => prev.map(m => m.id === assistantMsgId ? errMsg : m));
+    };
+
     if (mode === 'single') {
-      // Use SSE streaming
       const assistantMsgId = makeId();
       const assistantMsg: ChatMessageType = {
         id: assistantMsgId,
@@ -837,10 +748,10 @@ export default function ChatPage() {
         mode: 'single',
         timestamp: Date.now(),
       };
-
       setMessages(prev => [...prev, assistantMsg]);
 
       if (hasImageAttachments) {
+        // Vision requests go through the non-streaming endpoint.
         try {
           const resp = await query(prompt, {
             model: selectedModel || undefined,
@@ -848,7 +759,7 @@ export default function ChatPage() {
           });
           setStreaming(false);
           stopStreamRef.current = null;
-          const finalMsg: ChatMessageType = {
+          finishAssistant(assistantMsgId, {
             id: assistantMsgId,
             role: 'assistant',
             content: resp.content,
@@ -860,32 +771,11 @@ export default function ChatPage() {
             cost_usd: resp.cost_usd ?? null,
             latency_ms: resp.latency_ms,
             timestamp: Date.now(),
-          };
-          setMessages(prev =>
-            prev.map(m => m.id === assistantMsgId ? finalMsg : m)
-          );
-          updateStoredState(prev => ({
-            ...prev,
-            messages: {
-              ...prev.messages,
-              [convId!]: [
-                ...(prev.messages[convId!] ?? []).filter(m => m.id !== assistantMsgId),
-                finalMsg,
-              ],
-            },
-          }));
+          });
         } catch (error) {
           setStreaming(false);
           stopStreamRef.current = null;
-          const errMsg: ChatMessageType = {
-            id: assistantMsgId,
-            role: 'error',
-            content: error instanceof Error ? error.message : String(error),
-            timestamp: Date.now(),
-          };
-          setMessages(prev =>
-            prev.map(m => m.id === assistantMsgId ? errMsg : m)
-          );
+          failAssistant(assistantMsgId, error instanceof Error ? error.message : String(error));
         }
         return;
       }
@@ -900,7 +790,7 @@ export default function ChatPage() {
         (done) => {
           setStreaming(false);
           stopStreamRef.current = null;
-          const finalMsg: ChatMessageType = {
+          finishAssistant(assistantMsgId, {
             id: assistantMsgId,
             role: 'assistant',
             content: done.content,
@@ -911,33 +801,12 @@ export default function ChatPage() {
             tokens: done.usage?.total_tokens,
             cost_usd: done.cost_usd ?? null,
             timestamp: Date.now(),
-          };
-          setMessages(prev =>
-            prev.map(m => m.id === assistantMsgId ? finalMsg : m)
-          );
-          updateStoredState(prev => ({
-            ...prev,
-            messages: {
-              ...prev.messages,
-              [convId!]: [
-                ...(prev.messages[convId!] ?? []).filter(m => m.id !== assistantMsgId),
-                finalMsg,
-              ],
-            },
-          }));
+          });
         },
         (err) => {
           setStreaming(false);
           stopStreamRef.current = null;
-          const errMsg: ChatMessageType = {
-            id: assistantMsgId,
-            role: 'error',
-            content: err,
-            timestamp: Date.now(),
-          };
-          setMessages(prev =>
-            prev.map(m => m.id === assistantMsgId ? errMsg : m)
-          );
+          failAssistant(assistantMsgId, err);
         }
       );
       stopStreamRef.current = stop;
@@ -945,13 +814,7 @@ export default function ChatPage() {
     } else if (mode === 'council') {
       // Use WebSocket streaming for council
       setRightPanelOpen(true);
-      // Reset council state inline
-      setMemberOrder([]);
-      memberStatesRef.current = {};
-      memberModelByLabelRef.current = {};
-      setMemberStates({});
-      setSynthesisContent('');
-      setSynthesisStatus('hidden');
+      resetCouncilState();
       setCouncilPhase('connecting');
 
       const assistantMsgId = makeId();
@@ -965,9 +828,10 @@ export default function ChatPage() {
       };
       setMessages(prev => [...prev, placeholderMsg]);
       completedCostRef.current = 0;
+      synthesisContentRef.current = '';
 
       const ws = streamCouncil(
-        { prompt, synthesize: true },
+        { prompt, ...councilRequestOptions(councilOptions) },
         {
           onStart: (data: WsCouncilStart) => {
             const order = data.members.map(m =>
@@ -1052,14 +916,11 @@ export default function ChatPage() {
               prev.map(m => m.id === assistantMsgId ? { ...m, content } : m)
             );
           },
-          onComplete: (totalCost, _totalLatency, _quorumMet) => {
+          onComplete: (totalCost) => {
             setCouncilPhase('done');
             setStreaming(false);
             wsRef.current = null;
 
-            // Read from the ref so we get the live synthesis, not the
-            // closure value captured when handleSubmit was built.
-            const finalContent = synthesisContentRef.current;
             const memberStatesSnapshot = Object.fromEntries(
               Object.entries(memberStatesRef.current).map(([label, state]) => [
                 label,
@@ -1073,7 +934,10 @@ export default function ChatPage() {
                 },
               ])
             ) as Record<string, { content: string; provider: string; model: string; tokens: number; cost: string; latency_ms?: number }>;
-            const finalMsg: ChatMessageType = {
+            // Read from the ref so we get the live synthesis, not the
+            // closure value captured when handleSubmit was built.
+            const finalContent = synthesisContentRef.current;
+            finishAssistant(assistantMsgId, {
               id: assistantMsgId,
               role: 'assistant',
               content: finalContent,
@@ -1085,35 +949,15 @@ export default function ChatPage() {
                 member_responses: memberStatesSnapshot,
                 synthesis: finalContent,
                 total_cost: totalCost,
+                member_order: Object.keys(memberStatesSnapshot),
               },
-            };
-            setMessages(prev =>
-              prev.map(m => m.id === assistantMsgId ? finalMsg : m)
-            );
-            updateStoredState(prev => ({
-              ...prev,
-              messages: {
-                ...prev.messages,
-                [convId!]: [
-                  ...(prev.messages[convId!] ?? []).filter(m => m.id !== assistantMsgId),
-                  finalMsg,
-                ],
-              },
-            }));
+            });
           },
           onError: (err) => {
             setCouncilPhase('error');
             setStreaming(false);
             wsRef.current = null;
-            const errMsg: ChatMessageType = {
-              id: assistantMsgId,
-              role: 'error',
-              content: err,
-              timestamp: Date.now(),
-            };
-            setMessages(prev =>
-              prev.map(m => m.id === assistantMsgId ? errMsg : m)
-            );
+            failAssistant(assistantMsgId, err);
           },
         }
       );
@@ -1145,7 +989,7 @@ export default function ChatPage() {
             cache_hit: resp.cache_hit,
           };
         }
-        const finalMsg: ChatMessageType = {
+        finishAssistant(assistantMsgId, {
           id: assistantMsgId,
           role: 'assistant',
           content: '',
@@ -1153,64 +997,22 @@ export default function ChatPage() {
           mode: 'compare',
           compare_data: compareData,
           timestamp: Date.now(),
-        };
-        setMessages(prev =>
-          prev.map(m => m.id === assistantMsgId ? finalMsg : m)
-        );
-        updateStoredState(prev => ({
-          ...prev,
-          messages: {
-            ...prev.messages,
-            [convId!]: [
-              ...(prev.messages[convId!] ?? []).filter(m => m.id !== assistantMsgId),
-              finalMsg,
-            ],
-          },
-        }));
+        });
       } catch (err) {
-        const errMsg: ChatMessageType = {
-          id: assistantMsgId,
-          role: 'error',
-          content: err instanceof Error ? err.message : 'Compare failed',
-          timestamp: Date.now(),
-        };
-        setMessages(prev =>
-          prev.map(m => m.id === assistantMsgId ? errMsg : m)
-        );
+        failAssistant(assistantMsgId, err instanceof Error ? err.message : 'Compare failed');
       } finally {
         setStreaming(false);
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inputValue, streaming, activeConvId, mode, selectedModel, updateStoredState, synthesisContent]);
-
-  // Mode change — open right panel for council
-  const handleModeChange = useCallback((newMode: ChatMode) => {
-    setMode(newMode);
-    if (newMode === 'council') {
-      setRightPanelOpen(true);
-    } else {
-      setRightPanelOpen(false);
-    }
-  }, []);
+  }, [inputValue, streaming, activeConvId, mode, selectedModel, councilOptions, persistMessage]);
 
   // ─── Share / export conversation ─────────────────────────────────────────────
 
   const handleShare = useCallback(() => {
     if (messages.length === 0) return;
-
-    // Determine advisor label from last assistant message
-    const lastAssistant = messages.slice().reverse().find(m => m.role === 'assistant');
-    const advisorLabel = lastAssistant?.model
-      ? `${lastAssistant.model}${lastAssistant.provider ? ` (${lastAssistant.provider})` : ''}`
-      : lastAssistant?.provider ?? 'assistant';
-
-    const md = exportConversationMarkdown(
-      messages,
-      advisorLabel,
-      new Date().toISOString().slice(0, 10)
-    );
-
+    const flat = messages.map(m => ({ ...m, content: messageText(m) }));
+    const md = exportConversationMarkdown(flat, advisorLabel(flat), new Date().toISOString().slice(0, 10));
     navigator.clipboard.writeText(md).then(() => {
       setShareToast(true);
       setTimeout(() => setShareToast(false), 2500);
@@ -1235,7 +1037,6 @@ export default function ChatPage() {
       }),
     ];
     return () => unsubs.forEach(fn => fn());
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onShortcut, handleNewChat, handleModeChange, handleStop, messages]);
 
   // Listen for model switch events dispatched by GlobalModals
@@ -1248,10 +1049,12 @@ export default function ChatPage() {
     return () => window.removeEventListener('hive:switch-model', handler);
   }, []);
 
-  if (!hydrated) return null;
-
   const showRightPanel = rightPanelOpen && mode === 'council';
   const hasCouncilActivity = memberOrder.length > 0 || councilPhase !== 'idle';
+  const activeTitle = activeConvId
+    ? conversations.find(c => c.id === activeConvId)?.title
+      ?? (messages.find(m => m.role === 'user')?.content ? titleFromMessage(messages.find(m => m.role === 'user')!.content) : 'Chat')
+    : null;
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#ffffff] dark:bg-[#0a0a0a]">
@@ -1263,7 +1066,7 @@ export default function ChatPage() {
         />
       )}
 
-      {/* Sidebar — receives conversations from local state */}
+      {/* Sidebar — server conversation list */}
       <div className={`
         md:relative md:translate-x-0 md:flex
         fixed inset-y-0 left-0 z-50 transition-transform duration-200
@@ -1271,7 +1074,7 @@ export default function ChatPage() {
       `}>
         <Sidebar
           topOffset={false}
-          conversations={allConversations}
+          conversations={conversations}
           activeConversationId={activeConvId}
           onNewChat={() => { handleNewChat(); setMobileSidebarOpen(false); }}
           onSelectConversation={(id) => { handleSelectConversation(id); setMobileSidebarOpen(false); }}
@@ -1302,16 +1105,9 @@ export default function ChatPage() {
               NVHIVE
             </span>
             <span className="hidden sm:inline text-[#333333] dark:text-[#525252]">/</span>
-            {activeConvId && (
-              <span className="text-xs font-mono text-[#a3a3a3] truncate dark:text-[#737373]">
-                {allConversations.find(c => c.id === activeConvId)?.title ?? 'Chat'}
-              </span>
-            )}
-            {!activeConvId && (
-              <span className="text-xs font-mono text-[#a3a3a3] truncate dark:text-[#737373]">
-                NVIDIA AI Workspace
-              </span>
-            )}
+            <span className="text-xs font-mono text-[#a3a3a3] truncate dark:text-[#737373]">
+              {activeTitle ?? 'NVIDIA AI Workspace'}
+            </span>
           </div>
           <div className="flex items-center gap-2">
             <HardwareWidgetCompact />
@@ -1410,9 +1206,15 @@ export default function ChatPage() {
             />
           </div>
 
-          {/* Right panel — council experts */}
+          {/* Right panel — council settings + live experts */}
           {showRightPanel && (
             <div className="w-80 flex-shrink-0 border-l border-[#e5e5e5] bg-white overflow-y-auto animate-slide-in-right dark:bg-[#0a0a0a] dark:border-[#262626]">
+              <CouncilAdvancedDrawer
+                options={councilOptions}
+                onChange={setCouncilOptions}
+                providerHealth={providerHealth}
+                disabled={streaming}
+              />
               {hasCouncilActivity ? (
                 <LiveCouncilPanel
                   memberOrder={memberOrder}
@@ -1422,7 +1224,7 @@ export default function ChatPage() {
                   phase={councilPhase}
                 />
               ) : (
-                <div className="p-6 flex flex-col items-center justify-center h-full text-center max-w-xs mx-auto">
+                <div className="p-6 flex flex-col items-center justify-center text-center max-w-xs mx-auto">
                   <div className="mb-3 h-8 w-8 border border-[#d4d4d4] bg-[#ffffff] rounded dark:bg-[#0a0a0a] dark:border-[#404040]" />
                   <div className="text-xs font-mono text-[#a3a3a3] uppercase tracking-wider mb-1 dark:text-[#737373]">
                     Convene Mode
@@ -1433,11 +1235,12 @@ export default function ChatPage() {
                   <div className="text-[11px] text-[#525252] leading-relaxed mb-3 dark:text-[#a3a3a3]">
                     Best for decisions that need a second opinion: code review,
                     architecture choices, debugging hard bugs, or anything where
-                    "what would another expert say?" matters.
+                    &ldquo;what would another expert say?&rdquo; matters.
                   </div>
                   <div className="text-[10px] font-mono text-[#737373] leading-relaxed dark:text-[#a3a3a3]">
                     Type your question below and your selected providers will
-                    deliberate in this panel.
+                    deliberate in this panel. Open Advanced above to pick a
+                    preset, strategy, or per-provider weights.
                   </div>
                 </div>
               )}

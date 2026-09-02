@@ -33,13 +33,13 @@ build:
 # Publish to TestPyPI
 publish-test:
 	@echo "TestPyPI publishing for the canonical nvhive package is restricted."
-	@echo "Use GitHub Actions trusted publishing from thatcooperguy/nvHive; see docs/RELEASING.md."
+	@echo "Use GitHub Actions trusted publishing from thatcooperguy/nvHive; see docs/MAINTAINERS.md."
 	@exit 1
 
 # Publish to PyPI
 publish:
 	@echo "PyPI publishing for the canonical nvhive package is restricted."
-	@echo "Use GitHub Actions trusted publishing from thatcooperguy/nvHive; see docs/RELEASING.md."
+	@echo "Use GitHub Actions trusted publishing from thatcooperguy/nvHive; see docs/MAINTAINERS.md."
 	@exit 1
 
 # Build web UI

@@ -15,7 +15,7 @@ Run standalone:
     mcp dev nvh/mcp_server.py
 
 Register with Claude Code:
-    claude mcp add nvhive python -m nvh.mcp_server
+    claude mcp add nvhive -- nvhive-mcp
 
 Register with OpenClaw (openclaw.json):
     {
@@ -63,7 +63,7 @@ async def _get_engine():
                 f"nvHive engine failed to start: {e}\n"
                 "Troubleshooting:\n"
                 "  1. Check config:  nvh config init\n"
-                "  2. Test providers: nvh test --quick\n"
+                "  2. Test providers: nvh status --smoke\n"
                 "  3. Check logs:    ~/.hive/nvhive.log"
             ) from e
     return _engine

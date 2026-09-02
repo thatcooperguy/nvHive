@@ -22,7 +22,7 @@ from nvh.providers.base import (
     StreamChunk,
     Usage,
 )
-from nvh.providers.openai_provider import _build_messages, _map_error
+from nvh.providers.openai_compatible import _build_messages, _map_error
 
 _AUTO_MODEL_CHOICES = {
     "auto",

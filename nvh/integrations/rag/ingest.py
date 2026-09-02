@@ -9,6 +9,7 @@ so the user can install the optional dep rather than getting a silent skip.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -146,27 +147,63 @@ async def ingest_folder(
             ),
             "files_scanned": len(files),
         }
+    return await ingest_files(files, collection=collection, home_dir=home_dir)
 
+
+async def ingest_files(
+    files: Iterable[str | Path],
+    *,
+    collection: str | None = None,
+    home_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Ingest an explicit list of files (``nvh rag add``); same result shape
+    as :func:`ingest_folder`."""
+    paths = [Path(f).expanduser().resolve() for f in files]
     pdf_capable = _can_read_pdf()
-    pdfs_skipped_missing = 0
+    pdfs_skipped_missing = sum(
+        1 for p in paths if p.suffix.lower() == ".pdf" and not pdf_capable
+    )
 
+    def _documents() -> Iterable[tuple[str, str]]:
+        # Lazy so a 2000-file walk never holds every file's text at once.
+        for path in paths:
+            if path.suffix.lower() == ".pdf" and not pdf_capable:
+                continue
+            yield str(path), _read_text(path)
+
+    result = await ingest_documents(_documents(), collection=collection, home_dir=home_dir)
+    result["files_scanned"] = len(paths)
+    if pdfs_skipped_missing:
+        result["pdfs_skipped_missing_pypdf"] = pdfs_skipped_missing
+        result["hint"] = (
+            f"Found {pdfs_skipped_missing} PDF(s) but pypdf isn't installed. "
+            "Install with `pip install nvhive[rag]` to index PDFs too."
+        )
+    return result
+
+
+async def ingest_documents(
+    documents: Iterable[tuple[str, str]],
+    *,
+    collection: str | None = None,
+    home_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Chunk + embed + store ``(source, text)`` pairs — the core every ingest
+    path shares. ``source`` is the provenance label returned by ``ask``."""
+    collection = collection or default_collection()
     model = embed_model_name()
     ingested = 0
     total_chunks = 0
     skipped: list[str] = []
 
     with RagStore(home_dir=home_dir) as store:
-        for file_path in files:
-            if file_path.suffix.lower() == ".pdf" and not pdf_capable:
-                pdfs_skipped_missing += 1
-                continue
-            text = _read_text(file_path)
+        for source, text in documents:
             if not text.strip():
-                skipped.append(str(file_path))
+                skipped.append(source)
                 continue
             chunks = chunk_text(text)
             if not chunks:
-                skipped.append(str(file_path))
+                skipped.append(source)
                 continue
             try:
                 vectors = await embed_texts(chunks)
@@ -175,13 +212,12 @@ async def ingest_folder(
                 # silently producing a half-indexed collection.
                 return {
                     "ok": False,
-                    "error": f"Embedding failed at {file_path.name}: {exc}",
+                    "error": f"Embedding failed at {Path(source).name}: {exc}",
                     "collection": collection,
                     "files_ingested": ingested,
                     "chunks": total_chunks,
                     "model": model,
                 }
-            source = str(file_path)
             store.delete_source(collection=collection, source=source)
             store.add_chunks(
                 collection=collection,
@@ -193,19 +229,11 @@ async def ingest_folder(
             ingested += 1
             total_chunks += len(chunks)
 
-    result: dict[str, Any] = {
+    return {
         "ok": True,
         "collection": collection,
-        "files_scanned": len(files),
         "files_ingested": ingested,
         "chunks": total_chunks,
         "skipped": len(skipped),
         "model": model,
     }
-    if pdfs_skipped_missing:
-        result["pdfs_skipped_missing_pypdf"] = pdfs_skipped_missing
-        result["hint"] = (
-            f"Found {pdfs_skipped_missing} PDF(s) but pypdf isn't installed. "
-            "Install with `pip install nvhive[rag]` to index PDFs too."
-        )
-    return result

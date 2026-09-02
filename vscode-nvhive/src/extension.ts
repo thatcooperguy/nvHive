@@ -1,3 +1,4 @@
+import { execSync } from "child_process";
 import * as vscode from "vscode";
 import { NvHivePanel } from "./panel";
 
@@ -40,7 +41,13 @@ async function apiFetch(path: string, body: Record<string, unknown>): Promise<an
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  // Server wraps every payload as {status, data}; unwrap so callers see the payload.
+  const json: any = await res.json();
+  return json.data ?? json;
+}
+
+function queryText(data: any): string {
+  return data.content ?? JSON.stringify(data, null, 2);
 }
 
 async function checkConnection() {
@@ -66,8 +73,8 @@ async function cmdAgent() {
   panel.show();
   panel.setRunning(task);
   try {
-    const data = await apiFetch("/v1/query", { query: task });
-    panel.setDone(data.response ?? JSON.stringify(data, null, 2));
+    const data = await apiFetch("/v1/query", { prompt: task });
+    panel.setDone(queryText(data));
     vscode.window.showInformationMessage("nvHive: task complete");
   } catch (e: any) {
     panel.setDone(`Error: ${e.message}`);
@@ -81,8 +88,8 @@ async function cmdReview() {
   try {
     const diff = await getGitDiff();
     if (!diff) { panel.setDone("No staged changes."); return; }
-    const data = await apiFetch("/v1/query", { query: `Review this diff:\n${diff}`, intent: "review" });
-    panel.setDone(data.response ?? JSON.stringify(data, null, 2));
+    const data = await apiFetch("/v1/query", { prompt: `Review this diff:\n${diff}` });
+    panel.setDone(queryText(data));
   } catch (e: any) {
     panel.setDone(`Error: ${e.message}`);
     vscode.window.showErrorMessage(`nvHive review: ${e.message}`);
@@ -97,11 +104,8 @@ async function cmdTestgen() {
   panel.show();
   panel.setRunning(`Generate tests for ${editor.document.fileName}`);
   try {
-    const data = await apiFetch("/v1/query", {
-      query: `Generate tests for this ${lang} code:\n${code}`,
-      intent: "testgen",
-    });
-    const result = data.response ?? JSON.stringify(data, null, 2);
+    const data = await apiFetch("/v1/query", { prompt: `Generate tests for this ${lang} code:\n${code}` });
+    const result = queryText(data);
     panel.setDone(result);
     // Open result in a new untitled doc
     const doc = await vscode.workspace.openTextDocument({ content: result, language: lang });
@@ -120,8 +124,8 @@ async function cmdExplain() {
   panel.show();
   panel.setRunning("Explain selected code");
   try {
-    const data = await apiFetch("/v1/query", { query: `Explain this code:\n${selection}`, intent: "explain" });
-    panel.setDone(data.response ?? JSON.stringify(data, null, 2));
+    const data = await apiFetch("/v1/query", { prompt: `Explain this code:\n${selection}` });
+    panel.setDone(queryText(data));
   } catch (e: any) {
     panel.setDone(`Error: ${e.message}`);
   }
@@ -133,8 +137,8 @@ async function cmdCouncil() {
   panel.show();
   panel.setRunning(`Council: ${question}`);
   try {
-    const data = await apiFetch("/v1/council", { query: question });
-    panel.setDone(data.response ?? JSON.stringify(data, null, 2));
+    const data = await apiFetch("/v1/council", { prompt: question });
+    panel.setDone(data.synthesis?.content ?? JSON.stringify(data, null, 2));
   } catch (e: any) {
     panel.setDone(`Error: ${e.message}`);
     vscode.window.showErrorMessage(`nvHive council: ${e.message}`);
@@ -142,11 +146,10 @@ async function cmdCouncil() {
 }
 
 async function getGitDiff(): Promise<string> {
-  const exec = require("child_process").execSync;
   const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!ws) return "";
   try {
-    return exec("git diff --cached", { cwd: ws, encoding: "utf-8" }) as string;
+    return execSync("git diff --cached", { cwd: ws, encoding: "utf-8" });
   } catch {
     return "";
   }

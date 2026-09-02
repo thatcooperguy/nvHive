@@ -765,7 +765,7 @@ echo -e "${D}Recommended local model: $DEFAULT_OLLAMA_MODEL${N}"
 # This block does two things:
 #
 #   1. ALWAYS print what the current GPU could run (educational; no
-#      downloads). Source of truth for the table: docs/GPU_TIER_MATRIX.md
+#      downloads). Source of truth for the table: docs/MODELS.md
 #      and the recommended_vram_gb fields on STUDIO_MODELS / STUDIO_PACKS
 #      / TRENDING_COMFYUI_EXAMPLES.
 #   2. When NVH_INSTALL_FULL_CAPABILITY=1, write a marker file under
@@ -1988,7 +1988,7 @@ fi
 
 # Show the full capability matrix for this GPU, and (if opted in)
 # stage the matching ComfyUI / speech / music packs. See
-# docs/GPU_TIER_MATRIX.md for the source of truth.
+# docs/MODELS.md for the source of truth.
 if [ -n "$GPU_NAME" ]; then
     print_capability_summary
     stage_full_capability_for_vram_tier "$VRAM_GB"

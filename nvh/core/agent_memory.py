@@ -1,10 +1,13 @@
 """Cross-session memory for the nvhive agentic coding feature.
 
-Stores project knowledge in ``.nvhive/agent-memory.json`` so subsequent runs start faster.
+Stores project knowledge under ``$NVH_HOME/state/agent-memory/`` (one file
+per project root) so subsequent runs start faster and the memory survives a
+reconnect even when the checkout does not.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import tempfile
@@ -13,7 +16,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-_MEMORY_DIR, _MEMORY_FILE, _MAX_SESSIONS = ".nvhive", "agent-memory.json", 20
+_LEGACY_DIR, _MEMORY_FILE, _MAX_SESSIONS = ".nvhive", "agent-memory.json", 20
+
+
+def memory_path(working_dir: Path) -> Path:
+    from nvh.integrations.workspace.storage import storage_layout
+
+    root = Path(working_dir).resolve()
+    digest = hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:10]
+    return storage_layout().state_dir / "agent-memory" / f"{root.name or 'root'}-{digest}.json"
 
 
 @dataclass
@@ -45,7 +56,10 @@ class AgentMemory:
 
 def load_memory(working_dir: Path) -> AgentMemory:
     """Load agent memory from disk; returns empty memory if not found."""
-    mem_path = working_dir / _MEMORY_DIR / _MEMORY_FILE
+    mem_path = memory_path(working_dir)
+    if not mem_path.exists():
+        # Pre-0.42 location inside the project; the next save_memory moves it.
+        mem_path = working_dir / _LEGACY_DIR / _MEMORY_FILE
     if not mem_path.exists():
         return AgentMemory(project_root=str(working_dir))
     try:
@@ -64,9 +78,9 @@ def load_memory(working_dir: Path) -> AgentMemory:
 
 def save_memory(memory: AgentMemory, working_dir: Path) -> None:
     """Atomic write of agent memory to disk."""
-    mem_dir = working_dir / _MEMORY_DIR
+    dest = memory_path(working_dir)
+    mem_dir = dest.parent
     mem_dir.mkdir(parents=True, exist_ok=True)
-    dest = mem_dir / _MEMORY_FILE
     data = json.dumps(asdict(memory), indent=2, ensure_ascii=False)
     tmp_fd = tempfile.NamedTemporaryFile(
         mode="w", encoding="utf-8", dir=mem_dir, suffix=".tmp", delete=False,

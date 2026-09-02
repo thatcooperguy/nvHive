@@ -1,43 +1,47 @@
 # nvHive VS Code Extension
 
-Integrates the nvHive multi-LLM AI agent directly into VS Code.
+A thin client for a running nvHive API server. Every command sends text to
+the server and shows the reply in an "nvHive Agent" panel; no model runs
+inside VS Code.
 
-## Features
+## Commands
 
-- **Run Agent Task** -- describe what you need, nvHive picks the right model and tools
-- **Code Review** -- review staged git changes with AI feedback
-- **Generate Tests** -- generate tests for the current file
-- **Explain Code** -- highlight code and get a plain-language explanation
-- **Ask Council** -- pose a question to the full advisor council
+Open the Command Palette (`Ctrl+Shift+P`) and type **nvHive**:
+
+| Command | What it sends |
+|---|---|
+| Ask nvHive | Your prompt to `POST /v1/query`; nvHive's router picks the provider and model |
+| Code Review | `git diff --cached` from the first workspace folder to `/v1/query` |
+| Generate Tests | The active file to `/v1/query`; the reply opens in a new editor beside it |
+| Explain Code | The current selection to `/v1/query` |
+| Ask Council | Your question to `POST /v1/council`; shows the synthesized answer |
+
+The status bar item reports whether `GET /v1/health` succeeded when the
+extension activated.
 
 ## Requirements
 
-The nvHive API server must be running:
-
-```bash
-nvh serve          # default: http://localhost:8000
-```
-
-Install the canonical nvHive package from PyPI, published by
-`thatcooperguy/nvHive`, if you haven't already:
+An nvHive API server reachable at `nvhive.apiUrl` (default
+`http://localhost:8000`):
 
 ```bash
 pip install nvhive
+nvh serve
 ```
 
-## Installation
+The extension sends no credentials, so the server must be in open/local
+mode (no `HIVE_API_KEY` and no user accounts configured).
 
-1. Clone this repo and open the `vscode-nvhive` folder
+## Running from source
+
+The extension is not published to the Marketplace.
+
+1. Open the `vscode-nvhive` folder in VS Code
 2. `npm install && npm run compile`
 3. Press F5 to launch the Extension Development Host
 
-## Configuration
+## Settings
 
-| Setting            | Default                  | Description                        |
-|--------------------|--------------------------|------------------------------------|
-| `nvhive.apiUrl`    | `http://localhost:8000`  | URL of the nvHive API server       |
-| `nvhive.autoStart` | `true`                   | Auto-start `nvh serve` on activate |
-
-## Usage
-
-Open the Command Palette (`Ctrl+Shift+P`) and type **nvHive** to see available commands.
+| Setting         | Default                 | Description                  |
+|-----------------|-------------------------|------------------------------|
+| `nvhive.apiUrl` | `http://localhost:8000` | URL of the nvHive API server |

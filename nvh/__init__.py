@@ -1,6 +1,6 @@
 """NVHive — Multi-LLM Orchestration Platform."""
 
-__version__ = "0.41.1"
+__version__ = "0.42.0"
 
 
 # Silence LiteLLM's chatter as early as possible. Real-rig retest

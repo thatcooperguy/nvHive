@@ -64,7 +64,9 @@ if ! command -v nvh >/dev/null 2>&1; then
     error "nvHive is not installed."
     printf "\n"
     printf "  Install it first:\n"
-    printf "    ${BOLD}curl -fsSL https://nvhive.dev/install | sh${RESET}\n"
+    printf "    ${BOLD}curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash${RESET}\n"
+    printf "  or, with Python already available:\n"
+    printf "    ${BOLD}pip install nvhive${RESET}\n"
     printf "\n"
     exit 1
 fi
@@ -164,12 +166,12 @@ printf "\n"
 info "Verifying installation..."
 printf "\n"
 
-if nvh test --quick 2>/dev/null; then
+if nvh status --smoke 2>/dev/null; then
     printf "\n"
     success "All checks passed."
 else
     printf "\n"
-    warn "Some checks had warnings. Run 'nvh test' for full diagnostics."
+    warn "Some checks had warnings. Run 'nvh status --deep' for full diagnostics."
 fi
 
 # ---------------------------------------------------------------------------
@@ -191,6 +193,6 @@ printf "\n"
 printf "    3. Launch the web dashboard:\n"
 printf "       ${BOLD}nvh webui${RESET}\n"
 printf "\n"
-printf "  ${DIM}nvHive routes across 23 providers (25 free models)${RESET}\n"
+printf "  ${DIM}nvHive routes across every configured provider${RESET}\n"
 printf "  ${DIM}so you are never locked into one provider's pricing.${RESET}\n"
 printf "\n"

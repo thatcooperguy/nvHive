@@ -12,6 +12,7 @@ A *profile* is a saved configuration of:
   - ``temperature``  — sampling override (None inherits engine default)
   - ``max_tokens``   — generation cap override
   - ``tools_allowed``— optional whitelist of wizard tool names (None = all)
+  - ``prompt_template`` — optional ``{{input}}`` wrapper for the user's message
   - ``built_in``     — True for ships-with-nvHive profiles; user copies and
                        edits land under ``user_profiles`` and are mutable.
 
@@ -24,11 +25,20 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+
+
+def render_prompt_template(template: str, variables: dict[str, str]) -> str:
+    """Substitute ``{{name}}`` placeholders; unknown ones are left in place so
+    a typo is visible in the rendered prompt rather than silently dropped."""
+    return _PLACEHOLDER.sub(lambda m: variables.get(m.group(1), m.group(0)), template)
 
 
 @dataclass(frozen=True)
@@ -64,9 +74,21 @@ class AgentProfile:
     # group instead of rendering a 100-row flat list. Empty for the six
     # core built-ins and for user profiles that don't set one.
     category: str = ""
+    # Wraps the user's message before it reaches the model: ``{{input}}`` is
+    # the message; ``nvh ask --template <profile> --var k=v`` supplies more.
+    # Replaces the pre-0.42 ~/.council/templates system.
+    prompt_template: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def render_prompt(self, user_input: str, variables: dict[str, str] | None = None) -> str:
+        """Apply ``prompt_template`` to ``user_input`` (identity when unset)."""
+        if not self.prompt_template.strip():
+            return user_input
+        merged = {"input": user_input, "text": user_input, "code": user_input}
+        merged.update(variables or {})
+        return render_prompt_template(self.prompt_template, merged)
 
 
 # Ships-with-nvHive profiles. Each is a sane default for a common workflow.

@@ -4,14 +4,12 @@ import type {
   CouncilRequest,
   CompareRequest,
   CompletionResponse,
-  CouncilResult,
   CompareResult,
   ProvidersListResult,
   ModelsListResult,
   BudgetStatus,
   CacheStats,
   AgentPresetsResult,
-  AgentAnalyzeResult,
   ProviderHealth,
   HealthResult,
   StreamChunkPayload,
@@ -851,15 +849,6 @@ export function queryStream(
   };
 }
 
-// ─── Council ─────────────────────────────────────────────────────────────────
-
-export async function runCouncil(
-  prompt: string,
-  options: Omit<CouncilRequest, 'prompt'> = {}
-): Promise<CouncilResult> {
-  return apiPost<CouncilResult>('/v1/council', { prompt, ...options });
-}
-
 // ─── Compare ─────────────────────────────────────────────────────────────────
 
 export async function compare(
@@ -951,18 +940,6 @@ export async function getAgentPresets(): Promise<AgentPresetsResult> {
   return apiGet<AgentPresetsResult>('/v1/agents/presets');
 }
 
-export async function analyzeAgents(
-  prompt: string,
-  numAgents = 3,
-  preset?: string
-): Promise<AgentAnalyzeResult> {
-  return apiPost<AgentAnalyzeResult>('/v1/agents/analyze', {
-    prompt,
-    num_agents: numAgents,
-    preset,
-  });
-}
-
 // ─── Conversations ────────────────────────────────────────────────────────────
 
 // Canonical summary type lives in types.ts (the Sidebar imports it from
@@ -975,15 +952,9 @@ export interface ConversationMessage {
   content: string;
   provider?: string;
   model?: string;
-  mode?: 'single' | 'council' | 'compare';
   cost_usd?: string | null;
   tokens?: number;
   latency_ms?: number;
-  council_data?: {
-    member_responses: Record<string, { content: string; provider: string; model: string; tokens: number; cost: string }>;
-    synthesis?: string;
-    total_cost?: string;
-  };
   timestamp: number;
 }
 
@@ -1061,17 +1032,65 @@ export async function renameConversation(id: string, title: string): Promise<voi
   }
 }
 
-export async function sendMessage(
-  conversationId: string | null,
-  prompt: string,
-  options: Omit<QueryRequest, 'prompt' | 'stream'> & { conversation_id?: string | null } = {}
-): Promise<CompletionResponse> {
-  return apiPost<CompletionResponse>('/v1/query', {
-    prompt,
-    ...options,
-    conversation_id: conversationId ?? undefined,
-    stream: false,
-  });
+export interface AppendMessageInput {
+  role: 'user' | 'assistant';
+  content: string;
+  provider?: string;
+  model?: string;
+  tokens?: number;
+  cost_usd?: string | null;
+  latency_ms?: number;
+}
+
+/**
+ * Persist one turn to a server-side conversation. Best-effort: the chat
+ * keeps working in-memory when the API is offline, so failures are
+ * reported as `false` rather than thrown.
+ */
+export async function appendConversationMessage(
+  conversationId: string,
+  message: AppendMessageInput
+): Promise<boolean> {
+  try {
+    await apiPost(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`, {
+      role: message.role,
+      content: message.content,
+      provider: message.provider ?? '',
+      model: message.model ?? '',
+      tokens: message.tokens ?? 0,
+      cost_usd: message.cost_usd ?? '0',
+      latency_ms: message.latency_ms ?? 0,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export type ConversationSearchHit = ConversationSummary & { snippet: string };
+
+/** Full-text search over message content (GET /v1/conversations/search). */
+export async function searchConversations(q: string, limit = 20): Promise<ConversationSearchHit[]> {
+  const query = q.trim();
+  if (!query) return [];
+  try {
+    const data = await apiGet<{ results: ConversationSearchHit[] }>(
+      `/v1/conversations/search?q=${encodeURIComponent(query)}&limit=${limit}`
+    );
+    return data.results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Fired whenever a conversation is created/renamed/pinned/deleted so every
+ * mounted sidebar can refetch the server list without a navigation. */
+export const CONVERSATIONS_CHANGED_EVENT = 'nvh:conversations-changed';
+
+export function announceConversationsChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(CONVERSATIONS_CHANGED_EVENT));
+  }
 }
 
 // ─── Setup / Free-tier APIs ───────────────────────────────────────────────────

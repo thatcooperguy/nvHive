@@ -41,10 +41,15 @@ export default function GlobalModals() {
         dispatchShortcut('new-chat');
         router.push('/');
         break;
-      case 'search-conversations':
-        dispatchShortcut('new-chat'); // navigate home; search is in sidebar
-        router.push('/');
+      case 'search-conversations': {
+        // The sidebar search box is mounted on every page; focus it once the
+        // palette has closed. Fall back to home when the sidebar is collapsed.
+        setTimeout(() => {
+          const box = document.querySelector<HTMLInputElement>('[data-sidebar-search]');
+          if (box) { box.focus(); box.select(); } else { router.push('/'); }
+        }, 80);
         break;
+      }
       case 'mode-ask':
         dispatchShortcut('mode-ask');
         router.push('/');
@@ -55,10 +60,6 @@ export default function GlobalModals() {
         break;
       case 'mode-poll':
         dispatchShortcut('mode-poll');
-        router.push('/');
-        break;
-      case 'mode-throwdown':
-        dispatchShortcut('mode-convene'); // maps to council
         router.push('/');
         break;
       case 'nav-system':

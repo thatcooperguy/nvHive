@@ -2,8 +2,6 @@
 
 This is the glue that connects:
 - recursive_agents.py (agents spawn specialists on demand)
-- autonomous.py (pre/post QA on every execution)
-- parallel_pipeline.py (parallel dispatch)
 - agent_matching.py (best LLM per role)
 
 The loop:

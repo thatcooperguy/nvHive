@@ -1,10 +1,13 @@
-"""Tests for the adaptive learning engine pure functions."""
+"""Tests for the adaptive learning engine."""
 
 import pytest
 
 from nvh.core.learning import (
+    ALPHA,
     FULL_LEARNED_SAMPLES,
     MIN_SAMPLES_TO_BLEND,
+    LearnedScoreEntry,
+    LearningEngine,
     blend_score,
     ema_update,
     implicit_quality,
@@ -36,6 +39,14 @@ class TestEmaUpdate:
         """Custom alpha controls learning rate."""
         result = ema_update(0.5, 1.0, alpha=0.5)
         assert result == pytest.approx(0.75)
+
+    def test_basic_ema(self):
+        result = ema_update(0.5, 1.0, alpha=0.2)
+        assert result == pytest.approx(0.6)
+
+    def test_default_alpha(self):
+        result = ema_update(1.0, 0.0)
+        assert result == pytest.approx(1.0 * (1 - ALPHA))
 
 
 class TestBlendScore:
@@ -77,6 +88,16 @@ class TestBlendScore:
         assert result < 1.0
         assert result > 0.5
 
+    def test_below_min_samples_returns_static(self):
+        assert blend_score(0.8, 0.5, sample_count=3) == 0.8
+
+    def test_above_full_samples_returns_learned(self):
+        assert blend_score(0.8, 0.5, sample_count=25) == 0.5
+
+    def test_interpolation(self):
+        result = blend_score(1.0, 0.0, sample_count=12)
+        assert 0.0 < result < 1.0
+
 
 class TestQualityToCapability:
     def test_quality_to_capability(self):
@@ -115,3 +136,44 @@ class TestImplicitQuality:
         """User feedback takes priority over error status."""
         assert implicit_quality("error", False, 1) == pytest.approx(0.9)
         assert implicit_quality("error", True, -1) == pytest.approx(0.3)
+
+    def test_positive_feedback(self):
+        assert implicit_quality("success", False, 1) == 0.9
+
+    def test_negative_feedback(self):
+        assert implicit_quality("success", False, -1) == 0.3
+
+    def test_error_status(self):
+        assert implicit_quality("error", False, None) == 0.1
+
+    def test_success_no_feedback(self):
+        assert implicit_quality("success", False, None) == 0.7
+
+
+class TestLearningEngine:
+    def test_import(self):
+        assert LearningEngine is not None
+
+    def test_construction(self):
+        from pathlib import Path
+
+        try:
+            le = LearningEngine()
+            assert le is not None
+        except TypeError:
+            le = LearningEngine(data_dir=Path("."))
+            assert le is not None
+
+    def test_unknown_provider_returns_static(self):
+        engine = LearningEngine()
+        assert engine.get_blended_capability("x", "m", "code", 0.75) == 0.75
+
+    def test_cached_score_used(self):
+        engine = LearningEngine()
+        engine._cache[("x", "m", "code")] = LearnedScoreEntry(
+            provider="x", model="m", task_type="code",
+            learned_capability=0.9, learned_latency_ms=100,
+            learned_reliability=1.0, sample_count=25,
+        )
+        result = engine.get_blended_capability("x", "m", "code", 0.5)
+        assert result == pytest.approx(0.9)

@@ -22,8 +22,8 @@ table with `num_ctx`, one tool registry, one council pipeline, `NVH_HOME` as
 the only root), and 0.44 "add", where the Wizard finally gets to act —
 `run_code`/`shell` with approvals, `remember`, `generate_image`, vision —
 mostly by registering handlers that already exist. Say no to everything
-enterprise, multi-tenant, marketplace, alt-platform, and to the GeForce NOW
-Operator side project living in the product repo.
+enterprise, multi-tenant, marketplace, alt-platform, and to the remote-desktop
+input-injection side project living in the product repo.
 
 ## How this was produced
 
@@ -137,18 +137,18 @@ dropping its nvhive.dev URLs.
 
 Effort S · Impact H · LOC removed ~3,400 code + ~300 doc lines
 
-### 3. Move the GeForce NOW Operator/PhantomInput toolkit out; fix-or-delete the two orphan sub-packages
+### 3. Move the remote-desktop input-injection toolkit out; fix-or-delete the two orphan sub-packages
 
-**Evidence.** `tools/` = `cdp_session.py` 321, `gfn_input_bridge.py` 485,
-`gfn_session.py` 298, `operator_chrome.py` 233,
+**Evidence.** `tools/` = `cdp_session.py` 321, the streamer input bridge 485,
+the streamer session helper 298, `operator_chrome.py` 233,
 [operator_mcp_server.py](../../tools/operator_mcp_server.py) 250,
 `phantominput_host.py` 223, `operator_install.sh` 137,
 [launch_bridge.command](../../tools/launch_bridge.command) 3, plus
 `tools/phantominput-extension/` (665 LOC) with a committed extension key ID.
 Zero imports from `nvh`; hardcoded personal paths at
 `launch_bridge.command:2-3` and `operator_mcp_server.py:27`
-(`/Users/ccooper/nvh/...`); the manifest requests `debugger` on
-play.geforcenow.com; [operator-vision.md](../operator-vision.md) proposes a
+(`/Users/ccooper/nvh/...`); the manifest requests `debugger` on the
+streaming provider's web player; [operator-vision.md](../operator-vision.md) proposes a
 SaaS/enterprise tier the PolyForm-NC license forbids. The product leaks it
 via [vault.py:555-563](../../nvh/integrations/workspace/vault.py).
 [vscode-nvhive/src/extension.ts:48](../../vscode-nvhive/src/extension.ts)

@@ -188,7 +188,7 @@ Obsidian's Graph view shows real structure.
 
 - [[Product Direction]] — what we're shipping and why
 - [[Product Conflicts]] — tradeoffs the Wizard should explain
-- [[Multi-Expert Council]] — when to convene 23 personas instead of one Wizard
+- [[Multi-Expert Council]] — when to convene the persona pool instead of one Wizard
 - [[GPU Capability Matrix]] — VRAM tiers and what auto-enables at each one
 
 ## Playbooks
@@ -358,7 +358,7 @@ The universal first move is the services CLI — it encodes the boot
 order and health gates from [[Service Order]]:
 
 ```bash
-nvh services status      # which of the three services is unhealthy?
+nvh status               # which of the three services is unhealthy?
 nvh services restart     # recycle API + WebUI (Ollama keeps its cache)
 nvh services smoke-test  # "can the Wizard actually answer?"
 nvh services stop        # take the stack down cleanly (--ollama for all)
@@ -504,9 +504,8 @@ tags: [playbook, setup, qa]
 # Headless QA Loop
 
 Automates the [[Pilot Test Checklist]] on a rented cloud GPU desktop
-(e.g. NVIDIA CloudMatch Beta / GeForce NOW Enterprise private tile,
-RunPod, Lambda) so a "did nvHive install clean?" answer comes back
-without any manual clicking. Run before tagging a release.
+(e.g. RunPod, Lambda, Vast) so a "did nvHive install clean?" answer
+comes back without any manual clicking. Run before tagging a release.
 
 The loop:
 
@@ -518,8 +517,8 @@ The loop:
    wait for the streamed Ubuntu desktop.
 3. Send the install one-liner into the streamed Konsole via CDP key
    events.
-4. Wait for `nvh selfcheck` to report green; screenshot the [[AI Wizard]]
-   surface; diff against the recorded baseline.
+4. Wait for `nvh status --report --live` to report green; screenshot the
+   [[AI Wizard]] surface; diff against the recorded baseline.
 5. If anything regressed, file the screenshot + the failing step as a
    support report — same shape as [[Support Report Flow]].
 
@@ -537,30 +536,24 @@ specific ways that informed the harness design:
   stream per account. A second tab opening the same rig will bump the
   first. The dedicated Chrome the harness owns must be the *only*
   process holding a session, so close stray tabs first.
-- **WebRTC streamer input mode.** Some providers (GeForce NOW
-  specifically) gate keyboard/mouse passthrough on a real
-  "session-active" handshake — letting the rig-ready scrim auto-dismiss
-  or clicking it via the harness is required, and the streamer also
-  drops input if the `<video>` element isn't playing. The harness must
-  keep the video playing and refresh activity to prevent the
-  provider's idle-timeout from ending the session.
+- **WebRTC streamer input mode.** Some streamed-desktop providers gate
+  keyboard/mouse passthrough on a real "session-active" handshake —
+  letting the rig-ready scrim auto-dismiss or clicking it via the
+  harness is required, and the streamer also drops input if the
+  `<video>` element isn't playing. The harness must keep the video
+  playing and refresh activity to prevent the provider's idle-timeout
+  from ending the session.
 
 ## Provider compatibility
 
 - **RunPod / Lambda / Vast / Paperspace**: SSH + web terminal. The
   install one-liner runs directly. Simplest path for unattended CI.
-- **GeForce NOW (CloudMatch Beta)**: viable via dedicated Chrome +
-  `--remote-debugging-port` + CDP. Drive deeplink → tile → PLAY,
-  background keepalive (`mouseMoved` every ~60s), CDP keystrokes into
-  the streamed Konsole. The right channel when QA also needs to
-  validate the streamed-desktop UX (auto-launched browser, KDE Plasma
+- **Browser-streamed desktops**: viable via dedicated Chrome +
+  `--remote-debugging-port` + CDP. Drive the deep-link, background
+  keepalive (`mouseMoved` every ~60s), CDP keystrokes into the streamed
+  terminal. The right channel when QA also needs to validate the
+  streamed-desktop UX (auto-launched browser, desktop-shell
   interactions).
-
-## Running the loop
-
-The Operator harness lives in `tools/`. The current entry points are
-`tools/operator_install.sh` for one-shot install and the SSH-backed
-QA driver for the actual loop.
 
 ## How NVIDIA Nemotron Omni gets installed
 
@@ -610,8 +603,8 @@ same time.
 Council mode is fully built and shipping today (`nvh/core/council.py`,
 `nvh/core/agents.py`). Until recently it was hidden behind the API
 surface; the WizardChat composer now offers a "Convene council" link
-that deep-links into the dedicated `/council` page with the current
-draft pre-filled as the prompt.
+that opens the chat page in council mode (`/?mode=council&prompt=…`)
+with the current draft pre-filled as the prompt.
 
 ## When to convene
 
@@ -631,9 +624,9 @@ do" turns — the Wizard answers those faster.
 
 ## Available cabinets
 
-11 cabinets ship by default (e.g. `legal`, `marketing-and-customer`,
-`engineering-and-product`, `student-feedback`). Each cabinet is a
-named subset of the 23 personas, with a strategy:
+The cabinets listed by `nvh agent presets` ship by default (e.g. `legal`,
+`marketing-and-customer`, `engineering-and-product`, `student-feedback`).
+Each cabinet is a named subset of the persona pool, with a strategy:
 
 - `weighted_consensus` — personas weighted by how much they know the
   domain; produces a single synthesized answer.
@@ -644,8 +637,9 @@ named subset of the 23 personas, with a strategy:
 
 - `POST /v1/council` — synchronous (returns the full transcript).
 - `WS /v1/council/stream` — token-streaming each persona.
-- `/council` page in the WebUI — wraps the WS endpoint with a UI for
-  picking cabinet + strategy + watching the debate play out.
+- The chat page in council mode (`/?mode=council&prompt=…`) — wraps the
+  WS endpoint with a UI for picking cabinet + strategy + watching the
+  debate play out.
 
 ## Related
 
@@ -663,7 +657,7 @@ Different rigs run different capabilities. The installer probes VRAM
 once and picks the right defaults so users on a 6 GB laptop don't get
 a 40 GB ComfyUI download and users on a 48 GB RTX 6000 Ada don't end up
 on `moondream`. The canonical matrix lives in
-`docs/GPU_TIER_MATRIX.md` — when in doubt, that file wins over this
+`docs/MODELS.md` — when in doubt, that file wins over this
 note. This note explains the *intent* the matrix encodes so the
 [[AI Wizard]] and [[Multi-Expert Council]] can reason about it.
 
@@ -738,7 +732,7 @@ The install + launch path runs three services plus a final end-to-end
 check, in a specific dependency order. When something looks broken,
 this note tells you which step *was* supposed to come up first and
 where to look in the logs. Canonical contract lives in
-`docs/SERVICE_ORDER.md`; this note is the on-rig mirror so
+`docs/MAINTAINERS.md`; this note is the on-rig mirror so
 [[AI Wizard]] support reports can deep-link to it.
 
 ## Boot sequence
@@ -794,7 +788,7 @@ these module-level helpers in `nvh/cli/services.py`:
 
 ## Recovery commands
 
-- `nvh services status` — live table of all three services.
+- `nvh status` — live table of all three services.
 - `nvh services start` — boot everything in order; browser opens only
   when every gate is green.
 - `nvh services restart` — recycle API + WebUI (Ollama keeps its warm

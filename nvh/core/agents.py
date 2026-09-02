@@ -146,7 +146,7 @@ _PERSONA_POOL: list[PersonaTemplate] = [
         perspective="skeptical review from a smart student with no sudo, limited time, shifting VM images, and one persistent file mount",
         triggers=["student", "beginner", "wizard", "self-healing", "self healing", "rootless",
                   "install", "setup", "comfyui", "gpu", "driver", "cuda", "mount",
-                  "persistent", "cloud desktop", "geforce now", "easy to use", "broken"],
+                  "persistent", "cloud desktop", "easy to use", "broken"],
         weight_boost=0.18,
         system_prompt=(
             "You are the **Underdog Student Advocate**. Your job is to be the useful skeptic "
@@ -310,30 +310,6 @@ def _get_default_agents(query: str) -> list[PersonaTemplate]:
         if template.role in ("Software Architect", "Senior Backend Engineer", "Product Manager"):
             defaults.append(template)
     return defaults
-
-
-def generate_agents_with_llm(
-    query: str,
-    num_agents: int = 3,
-) -> str:
-    """Generate a prompt that asks an LLM to define expert personas for a query.
-
-    This is used when the keyword-based generator doesn't find strong matches,
-    or when the user wants fully dynamic persona generation.
-    """
-    return (
-        f"Given the following question/topic, suggest {num_agents} expert roles that would "
-        f"provide the most valuable and diverse perspectives for a thorough analysis.\n\n"
-        f"**Topic:** {query}\n\n"
-        f"For each expert, provide:\n"
-        f"1. **Role title** (e.g., 'Database Architect')\n"
-        f"2. **Key expertise** (2-3 areas of deep knowledge)\n"
-        f"3. **Unique perspective** (what they'd see that others miss)\n"
-        f"4. **System prompt** (a 2-3 sentence instruction to guide the AI to act as this expert)\n\n"
-        f"Choose roles that will create productive tension — experts who might disagree "
-        f"constructively due to different priorities (e.g., speed vs. safety, cost vs. quality).\n\n"
-        f"Return as a JSON array of objects with keys: role, expertise, perspective, system_prompt"
-    )
 
 
 # ---------------------------------------------------------------------------

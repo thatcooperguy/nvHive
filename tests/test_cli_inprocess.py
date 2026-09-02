@@ -78,6 +78,7 @@ class TestTopLevel:
     "auth",
     "budget",
     "conversation",
+    "rag",
     "knowledge",
     "schedule",
     "template",
@@ -91,6 +92,16 @@ class TestTopLevel:
     "tour",
     "status",
     "debug",
+    "services",
+    # 0.42 hidden aliases must still answer --help for one release
+    "code",
+    "write",
+    "pipe",
+    "health",
+    "test",
+    "selfcheck",
+    "why",
+    "groq",
 ])
 def test_subcommand_help_inprocess(subcommand: str, runner: CliRunner):
     """In-process `nvh <subcommand> --help` to actually move coverage."""
@@ -136,24 +147,18 @@ class TestCliHelpers:
 
 class TestKnownCommandsLookup:
     """The `main()` entry point inspects argv and decides whether the
-    first arg is a known subcommand or a bare prompt. We can test the
-    decision logic by parameterizing the inputs."""
+    first arg is a known subcommand or a bare prompt. Since 0.42 the
+    reserved-word set is derived from the Click tree, not hand-typed."""
 
     def test_known_commands_set_includes_core(self):
-        """Sanity: the known_commands set inside main() must include the
-        commands users actually rely on. We rebuild the set the same way
-        main() does, then assert membership."""
-        known: set[str] = set()
-        for cmd_info in cli_main.app.registered_commands:
-            if hasattr(cmd_info, "name") and cmd_info.name:
-                known.add(cmd_info.name)
-            if hasattr(cmd_info, "callback") and cmd_info.callback:
-                known.add(cmd_info.callback.__name__)
-        for group in cli_main.app.registered_groups:
-            if hasattr(group, "name") and group.name:
-                known.add(group.name)
-
-        # Core commands that must always be registered
-        core = {"ask", "convene", "poll", "config", "version", "doctor", "setup"}
+        known = cli_main._known_commands()
+        core = {"ask", "convene", "poll", "config", "version", "status", "setup", "do"}
         missing = core - known
         assert not missing, f"Missing core commands from Typer registry: {missing}"
+        # Hidden aliases and dashed names dispatch too — no normalisation needed.
+        assert {"doctor", "quick", "test-gen", "routing-stats"} <= known
+
+    def test_known_commands_match_click_tree(self):
+        from typer.main import get_command
+
+        assert cli_main._known_commands() == set(get_command(cli_main.app).commands)

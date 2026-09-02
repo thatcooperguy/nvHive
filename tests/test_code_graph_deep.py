@@ -232,3 +232,47 @@ class TestFindTestFilesEdgeCases:
         graph = build_import_graph(tmp_path)
         result = find_test_files(graph, "bar.py")
         assert any("test_bar.py" in r for r in result)
+
+
+# ---------------------------------------------------------------------------
+# Relative imports, reverse edges, and context depth
+# ---------------------------------------------------------------------------
+
+
+class TestRelativeImportsAndContext:
+    def test_relative_import(self) -> None:
+        imports = _extract_imports("from . import utils\n", "pkg/mod.py")
+        assert "pkg/__init__.py" in imports
+
+    def test_relative_import_with_name(self) -> None:
+        imports = _extract_imports("from .helpers import foo\n", "pkg/mod.py")
+        assert "pkg/helpers.py" in imports
+
+    def test_async_def_extraction(self) -> None:
+        source = "async def my_handler():\n    pass\n"
+        symbols = _extract_symbols(source)
+        assert "my_handler" in symbols
+
+    def test_no_imports(self) -> None:
+        imports = _extract_imports("x = 1\n", "standalone.py")
+        assert imports == []
+
+    def test_imported_by_reverse_edges(self, tmp_path: Path) -> None:
+        _write(tmp_path / "base.py", "x = 1\n")
+        _write(tmp_path / "child.py", "from base import x\n")
+        graph = build_import_graph(tmp_path)
+        assert "child.py" in graph.nodes["base.py"].imported_by
+
+    def test_format_context_depth_zero(self, tmp_path: Path) -> None:
+        _write(tmp_path / "a.py", "from b import y\n")
+        _write(tmp_path / "b.py", "y = 1\n")
+        graph = build_import_graph(tmp_path)
+        ctx = format_context_for_agent(graph, "a.py", depth=0)
+        # depth=0 means no related files beyond the target itself
+        assert "a.py" in ctx
+        assert "Related files" not in ctx
+
+    def test_format_context_missing_file(self) -> None:
+        graph = ImportGraph()
+        ctx = format_context_for_agent(graph, "missing.py")
+        assert "not found in graph" in ctx

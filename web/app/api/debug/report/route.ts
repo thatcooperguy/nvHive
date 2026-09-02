@@ -21,11 +21,11 @@ import { nvhHome, nvhLogsDir, resolveNvhBinary } from '@/lib/nvh-bridge';
  *   - API health (HTTP + engine_initialized) on :8000
  *   - Ollama reachability on :11434
  *   - Last 30 lines of each known log file
- *   - `nvh doctor --json` output (capped at 15s)
+ *   - `nvh status --deep --json` output (capped at 15s)
  *   - Environment: NVH_HOME, NVH_BIN, Node version, platform
  *
  * All capture steps run in parallel; total wall time is bounded by the
- * slowest probe (doctor at 15s).
+ * slowest probe (status --deep at 15s).
  */
 
 export const runtime = 'nodejs';
@@ -203,7 +203,7 @@ async function runDoctor(): Promise<DoctorResult> {
   const t0 = Date.now();
   const nvhBin = await resolveNvhBinary();
   try {
-    const { stdout, stderr } = await execFileAsync(nvhBin, ['doctor', '--json'], {
+    const { stdout, stderr } = await execFileAsync(nvhBin, ['status', '--deep', '--json'], {
       timeout: 15_000,
       maxBuffer: 4 * 1024 * 1024,
       env: { ...process.env, NVH_HOME: nvhHome() },
@@ -239,12 +239,12 @@ async function runDoctor(): Promise<DoctorResult> {
       stderr?: string;
       code?: number | string;
     };
-    // `nvh doctor --json` returns exit=1 when ANY check fails (e.g. the
-    // "Environment: local / on-prem detected" check fails on cloud GPU
+    // `nvh status --deep --json` returns exit=1 when ANY check fails (e.g.
+    // the "Environment: local / on-prem detected" check fails on cloud GPU
     // rigs). The JSON output is still there and useful. Parse it before
     // declaring the report unreadable. Real-rig photo 2026-05-22 hit
-    // exactly this — exit=1 hid a perfectly readable doctor report with
-    // 4 passing checks.
+    // exactly this — exit=1 hid a perfectly readable report with 4
+    // passing checks.
     if (e.stdout) {
       try {
         const parsed = JSON.parse(e.stdout) as unknown;

@@ -18,7 +18,7 @@ contract:
     ``restart_pipeline``.
   * ``nvh services`` typer subapp — status / start / restart / stop.
 
-See ``docs/SERVICE_ORDER.md`` for the dependency graph, the env knobs that
+See ``docs/MAINTAINERS.md`` for the dependency graph, the env knobs that
 tune the gates, and how ``nvh services`` interacts with ``nvh webui``.
 """
 
@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # These constants describe the contract — keep them in lock-step with
-# ``docs/SERVICE_ORDER.md`` (the release-hardening test enforces this).
+# ``docs/MAINTAINERS.md`` (the release-hardening test enforces this).
 OLLAMA_PORT = 11434
 API_PORT_DEFAULT = 8000
 WEBUI_PORT_DEFAULT = 3000
@@ -1050,7 +1050,7 @@ def start_pipeline(
 ) -> StartResult:
     """Boot the full pipeline in order, aborting on the first hard failure.
 
-    Order (also documented in ``docs/SERVICE_ORDER.md``):
+    Order (also documented in ``docs/MAINTAINERS.md``):
 
         1. Ollama → wait for ``/api/tags``     (NVH_OLLAMA_BOOT_TIMEOUT)
         2. API    → wait for ``/v1/health``    (NVH_API_BOOT_TIMEOUT)

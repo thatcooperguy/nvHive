@@ -10,7 +10,6 @@ export type PaletteActionId =
   | 'mode-ask'
   | 'mode-convene'
   | 'mode-poll'
-  | 'mode-throwdown'
   | 'model-best-local'
   | 'model-gpt56-terra'
   | 'model-claude-sonnet'
@@ -48,7 +47,6 @@ const STATIC_ACTIONS: PaletteAction[] = [
   { id: 'mode-ask',       label: 'Ask — Single Advisor',      category: 'Commands', shortcut: 'Ctrl+1', icon: '▶' },
   { id: 'mode-convene',   label: 'Convene — Council',          category: 'Commands', shortcut: 'Ctrl+2', icon: '◈' },
   { id: 'mode-poll',      label: 'Poll — Compare Models',      category: 'Commands', shortcut: 'Ctrl+3', icon: '▣' },
-  { id: 'mode-throwdown', label: 'Throwdown — Deep Analysis',  category: 'Commands',                    icon: '⚡' },
 
   // Models
   { id: 'model-best-local',     label: 'Switch to Best Local Model', category: 'Models', icon: '▷' },

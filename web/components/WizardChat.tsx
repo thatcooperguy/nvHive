@@ -23,6 +23,7 @@ import AgentAvatar from '@/components/AgentAvatar';
 import AgentProfilePicker from '@/components/AgentProfilePicker';
 import CreateAgentModal from '@/components/CreateAgentModal';
 import {
+  announceConversationsChanged,
   createConversation,
   executeWizardTool,
   getConversation,
@@ -38,7 +39,6 @@ import {
   type WizardStreamEvent,
   type WizardToolSchema,
 } from '@/lib/api';
-import { announceConversationsChanged } from '@/lib/localChats';
 import { metaNumber, parseWizardMeta } from '@/lib/wizardMeta';
 
 interface Message {
@@ -775,13 +775,13 @@ export default function WizardChat() {
           <a
             href={
               draft.trim()
-                ? `/council?prompt=${encodeURIComponent(draft.trim())}`
-                : '/council'
+                ? `/?mode=council&prompt=${encodeURIComponent(draft.trim())}`
+                : '/?mode=council'
             }
             title={
               draft.trim()
-                ? 'Open the council with this question prefilled — multiple expert advisors answer in parallel, then synthesize.'
-                : 'Open the council page — multiple expert advisors answer in parallel, then synthesize.'
+                ? 'Open the chat in council mode with this question prefilled — multiple expert advisors answer in parallel, then synthesize.'
+                : 'Open the chat in council mode — multiple expert advisors answer in parallel, then synthesize.'
             }
             className="flex items-center gap-1 rounded-md border px-2 py-0.5 hover:bg-[var(--bg-hover)]"
             style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}

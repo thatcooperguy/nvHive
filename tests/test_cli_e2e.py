@@ -117,12 +117,30 @@ class TestCLIGuides:
 # ---------------------------------------------------------------------------
 
 class TestCLIDoctor:
-    def test_doctor(self):
-        r = run_nvh("doctor", timeout=60)
-        # Doctor may return 1 if issues found (like missing config) — that's OK
+    def test_status_deep(self):
+        r = run_nvh("status", "--deep", timeout=60)
+        # Exit 1 when a check fails (like missing config) — that's OK
         assert r.returncode in (0, 1)
         assert "Diagnostic" in r.stdout or "Results" in r.stdout
-        assert len(r.stdout) > 100  # doctor produces verbose output
+        assert len(r.stdout) > 100  # the deep tier produces verbose output
+
+    def test_doctor_alias_still_answers(self):
+        r = run_nvh("doctor", "--json", timeout=60)
+        assert r.returncode in (0, 1)
+        assert r.stdout.lstrip().startswith("{")
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher — a typo must not become a metered LLM call
+# ---------------------------------------------------------------------------
+
+class TestCLIDispatch:
+    def test_typo_prints_did_you_mean_and_exits_2(self):
+        r = run_nvh("statsu", timeout=30)
+        assert r.returncode == 2
+        assert "Did you mean" in r.stderr
+        assert "nvh status" in r.stderr
+        assert r.stdout == ""
 
 
 # ---------------------------------------------------------------------------
@@ -195,11 +213,16 @@ class TestCLICompletions:
 # ---------------------------------------------------------------------------
 
 class TestCLITest:
-    def test_smoke_test_no_webui(self):
-        """nvh test --no-webui should run without crashing."""
-        r = run_nvh("test", "--no-webui", "--no-providers", timeout=60)
-        assert r.returncode == 0
+    def test_smoke_tier_runs_offline(self):
+        """nvh status --smoke should run without crashing (exit 1 = a check failed)."""
+        r = run_nvh("status", "--smoke", timeout=60)
+        assert r.returncode in (0, 1)
         assert "passed" in r.stdout.lower()
+
+    def test_test_alias_still_answers(self):
+        r = run_nvh("test", "--json", timeout=60)
+        assert r.returncode in (0, 1)
+        assert '"tests"' in r.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +266,8 @@ class TestCLISubcommandHelp:
         "auth",
         "budget",
         "conversation",
-        "knowledge",
+        "rag",
+        "knowledge",  # 0.42 hidden alias of rag
         "schedule",
         "template",
         "webhook",
@@ -252,6 +276,9 @@ class TestCLISubcommandHelp:
         "mcp",
         "nemoclaw",
         "openclaw",
+        "status",
+        "code",   # 0.42 hidden alias
+        "health",  # 0.42 hidden alias
     ])
     def test_subcommand_help(self, subcommand):
         """`nvh <subcommand> --help` must exit 0 with non-empty stdout."""

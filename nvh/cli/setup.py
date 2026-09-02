@@ -50,8 +50,8 @@ _ENV_VAR_ALIASES: dict[str, tuple[str, ...]] = {
 # Retired model IDs, keyed provider -> {old_id: new_id} — verified against
 # provider catalogs 2026-09-01 (0.41.1). A bare ID only means the retired
 # model inside its own provider's block (llm7 also served "gpt-4o-mini").
-# `nvh config migrate` rewrites these in the user's config.yaml; `nvh doctor`
-# suggests it when a configured model is in this table.
+# `nvh config migrate` rewrites these in the user's config.yaml; `nvh status
+# --deep` suggests it when a configured model is in this table.
 # ---------------------------------------------------------------------------
 
 RETIRED_MODEL_RENAMES: dict[str, dict[str, str]] = {
@@ -398,13 +398,18 @@ def migrate_config_data(data: dict[str, Any]) -> tuple[dict[str, Any], list[str]
     """Return a migrated copy of a raw config mapping plus human-readable changes.
 
     Rewrites retired model IDs per provider block (top-level and per-profile),
-    drops retired provider stanzas, and scrubs references to them from
-    ``defaults`` and ``council``. Input is never mutated.
+    drops retired provider stanzas, scrubs references to them from
+    ``defaults`` and ``council``, and drops the top-level ``hooks:`` key
+    (its consumer was deleted in 0.42). Input is never mutated.
     """
     import copy
 
     out = copy.deepcopy(data)
     changes: list[str] = []
+
+    if "hooks" in out:
+        del out["hooks"]
+        changes.append("hooks: removed (nvh.core.hooks was deleted in 0.42)")
 
     for section_path, blocks in _provider_sections(out):
         for name in list(blocks):
@@ -786,7 +791,7 @@ def _pull_model(console: Console, model: str, ollama_bin: str) -> bool:
             f"  [red]Model [bold]{model}[/bold] does not exist on the"
             " Ollama registry (404).[/red]\n"
             f"  [dim]Check the name at https://ollama.com/library, or run"
-            " [bold]nvh doctor[/bold] to see what's configured.[/dim]"
+            " [bold]nvh status --deep[/bold] to see what's configured.[/dim]"
         )
         return False
 

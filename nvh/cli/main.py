@@ -112,7 +112,7 @@ def _format_cli_error(e: Exception) -> str:
         return (
             f"[yellow]Quota/budget exceeded[/yellow]: {msg}\n"
             f"  Free options:\n"
-            f"    [bold]nvh safe \"your question\"[/bold]     (local, no cost)\n"
+            f"    [bold]nvh ask --local \"your question\"[/bold]     (local, no cost)\n"
             f"    [bold]nvh ask --advisor groq ...[/bold]    (free tier)"
         )
     if isinstance(e, TokenLimitError):
@@ -142,6 +142,8 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 console = Console(legacy_windows=False) if sys.platform == "win32" else Console()
+# Usage errors and the human half of --json runs; stdout stays machine-readable.
+err_console = Console(stderr=True, legacy_windows=False) if sys.platform == "win32" else Console(stderr=True)
 
 
 async def _smart_default(prompt: str, *, force_iterative: bool = False):
@@ -598,10 +600,10 @@ async def _launch_default_repl():
         # No providers configured — guide the user
         console.print("[bold yellow]Welcome to NVHive![/bold yellow]\n")
         console.print("No AI advisors are configured yet. Let's set you up:\n")
-        console.print("  [bold]nvh setup[/bold]    — configure free AI providers (recommended)")
-        console.print("  [bold]nvh ollama[/bold]   — set up local AI on your GPU")
-        console.print("  [bold]nvh openai[/bold]   — add your OpenAI API key")
-        console.print("  [bold]nvh groq[/bold]     — add Groq (free, ultra-fast)\n")
+        console.print("  [bold]nvh setup[/bold]                       — configure free AI providers (recommended)")
+        console.print("  [bold]nvh models pull --recommended[/bold]   — set up local AI on your GPU")
+        console.print("  [bold]nvh advisor login openai[/bold]        — add your OpenAI API key")
+        console.print("  [bold]nvh advisor login groq[/bold]          — add Groq (free, ultra-fast)\n")
 
         # Check if Ollama is available even without config
         try:
@@ -750,7 +752,7 @@ KNOWN_ADVISORS = {
 
 
 def _make_advisor_cmd(advisor_name: str):
-    """Factory: create a Typer command for an advisor."""
+    """Factory: hidden `nvh <provider>` alias of `nvh ask -p <provider>`."""
     info = KNOWN_ADVISORS[advisor_name]
 
     def cmd(
@@ -759,84 +761,25 @@ def _make_advisor_cmd(advisor_name: str):
         system: str | None = typer.Option(None, "-s", "--system", help="System prompt"),
         raw: bool = typer.Option(False, "--raw", help="Output just the answer, no metadata"),
     ):
-        if question:
-            # nvh openai "What is ML?" → ask this advisor
-            async def _ask():
-                from nvh.config.settings import load_config
-                from nvh.core.engine import Engine
-                config = load_config()
-                engine = Engine(config=config)
-                await engine.initialize()
-                try:
-                    resp = await engine.query(
-                        prompt=question,
-                        provider=advisor_name,
-                        model=model,
-                        system_prompt=system,
-                        stream=False,
-                    )
-                    if raw:
-                        print(resp.content, end="")
-                    else:
-                        console.print(resp.content)
-                        if resp.fallback_from:
-                            console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
-                        console.print(f"\n[bold]Provider:[/bold] [dim]{resp.provider}/{resp.model}[/dim] | "
-                                     f"[bold]Tokens:[/bold] [dim]{resp.usage.input_tokens}"
-                                     f"/{resp.usage.output_tokens}[/dim] | "
-                                     f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]")
-                except Exception as e:
-                    console.print(_format_cli_error(e))
-            _run(_ask())
-        else:
-            # nvh openai → setup/login
-            if advisor_name == "ollama":
-                console.print(f"[bold]{info['name']}[/bold] — {info.get('free_info', '')}")
-                console.print("Checking Ollama connectivity...")
-                try:
-                    import httpx
-                    resp = httpx.get("http://localhost:11434/api/tags", timeout=3)
-                    if resp.status_code == 200:
-                        models = resp.json().get("models", [])
-                        console.print(f"[green]Connected! {len(models)} models available.[/green]")
-                        for m in models[:5]:
-                            console.print(f"  - {m.get('name', '?')}")
-                    else:
-                        console.print("[yellow]Ollama returned an error.[/yellow]")
-                except Exception:
-                    console.print("[red]Ollama not reachable at localhost:11434[/red]")
-                    console.print("Install rootlessly: nvh studio --install rootless-ollama -y")
-                return
-
-            console.print(f"[bold]{info['name']}[/bold] — Setup")
-            if info.get("free_tier"):
-                console.print(f"[green]Free tier available: {info.get('free_info', '')}[/green]")
-            if info["url"]:
-                console.print(f"Get your API key: [link={info['url']}]{info['url']}[/link]")
-                if typer.confirm("Open in browser?", default=True):
-                    webbrowser.open(info["url"])
-            key = typer.prompt(f"Paste your {info['name']} API key", hide_input=True, default="")
-            if key:
-                try:
-                    import keyring
-                    keyring.set_password("nvhive", f"{advisor_name}_api_key", key)
-                    console.print("[green]Key stored securely.[/green]")
-                except Exception:
-                    console.print(
-                        f"[yellow]Set {advisor_name.upper()}_API_KEY"
-                        " in your environment.[/yellow]"
-                    )
+        if question is None:
+            # Pre-0.42 `nvh <provider>` with no question was the key-paste flow.
+            advisor_login(advisor_name, headless=False)
+            return
+        _ask(
+            question, provider=advisor_name, model=model, system=system,
+            output="raw" if raw else "text", quiet=raw,
+        )
 
     cmd.__name__ = f"{advisor_name}_cmd"
-    cmd.__doc__ = f"Ask {info['name']}, or set up API key if no question given."
+    cmd.__doc__ = f"(alias) nvh ask -p {advisor_name} — {info['name']}"
     return cmd
 
 
-# Register all advisor names as commands. `nvh nvidia` is the infrastructure
-# dashboard defined below, so that advisor is reachable via `nvh ask -p nvidia`.
+# `nvh nvidia` is the infrastructure dashboard defined below, so that advisor
+# is reachable only via `nvh ask -p nvidia`.
 for _adv_name in KNOWN_ADVISORS:
     if _adv_name not in ("mock", "nvidia"):
-        app.command(_adv_name, rich_help_panel="Providers")(_make_advisor_cmd(_adv_name))
+        app.command(_adv_name, hidden=True)(_make_advisor_cmd(_adv_name))
 
 
 # ---------------------------------------------------------------------------
@@ -892,16 +835,382 @@ def _format_output(content: str, fmt: str) -> None:
         console.print(content)
 
 
+_TEMPLATE_MIGRATION_HINT = (
+    "Prompt templates now live on agent profiles: add a `prompt_template:` field "
+    "(use {{input}} for the prompt) to $NVH_HOME/agent-profiles/<name>.yaml, "
+    "then run `nvh ask --template <name>`."
+)
+
+
+def _render_profile_template(
+    name: str, prompt: str, variables: dict[str, str],
+) -> tuple[str, str | None]:
+    """Render ``prompt`` through agent profile ``name``'s ``prompt_template``.
+
+    Returns ``(rendered_prompt, profile_system_prompt_or_None)``.
+    """
+    from nvh.integrations.wizard.profiles import get_profile
+
+    profile = get_profile(name)
+    if profile is None:
+        raise ValueError(f"No agent profile named '{name}'. {_TEMPLATE_MIGRATION_HINT}")
+    if not profile.prompt_template.strip():
+        raise ValueError(f"Profile '{name}' has no prompt_template. {_TEMPLATE_MIGRATION_HINT}")
+    return profile.render_prompt(prompt, variables), (profile.system_prompt.strip() or None)
+
+
+# ~100k chars ≈ 25-30k tokens, safe for most model context windows.
+_STDIN_MAX_CHARS = 100_000
+
+
 def _read_stdin() -> str:
-    """Read from stdin if piped."""
-    if not sys.stdin.isatty():
-        return sys.stdin.read()
-    return ""
+    """Piped stdin, capped at _STDIN_MAX_CHARS (the rest is drained and noted)."""
+    if sys.stdin.isatty():
+        return ""
+    text = sys.stdin.read(_STDIN_MAX_CHARS)
+    if sys.stdin.read(1):
+        try:
+            while sys.stdin.read(8192):
+                pass
+        except Exception:
+            pass
+        text += "\n\n[Content truncated — input exceeded limit]"
+    return text
 
 
 # ---------------------------------------------------------------------------
-# hive ask
+# nvh ask — the one query command. --focus/--fast/--local/--clipboard and
+# stdin replace the pre-0.42 code/write/research/math/quick/safe/clip/pipe
+# clones, which live on below as hidden aliases for one release.
 # ---------------------------------------------------------------------------
+
+# focus -> (system prompt, advisor preference order when -p is not given)
+FOCUS_MODES: dict[str, tuple[str, list[str]]] = {
+    "code": (
+        "You are an expert software engineer. Provide clear, correct, well-structured code. "
+        "When writing code, include brief explanations of key decisions. "
+        "Prefer idiomatic solutions. Highlight any edge cases or caveats.",
+        ["anthropic", "openai", "groq", "google", "deepseek"],
+    ),
+    "write": (
+        "You are a skilled writer. Produce clear, engaging, well-structured text. "
+        "Match the format to the request (email, essay, blog post, etc.).",
+        ["anthropic", "openai", "google", "groq"],
+    ),
+    "research": (
+        "You are a thorough research assistant. Synthesize information from multiple sources. "
+        "Always cite your sources. Highlight areas of consensus and disagreement. "
+        "Provide a balanced, well-structured summary.",
+        ["perplexity", "anthropic", "openai", "google"],
+    ),
+    "math": (
+        "You are an expert mathematician. Solve problems step by step, showing all work. "
+        "Use clear notation. Verify your answer when possible. "
+        "If there are multiple approaches, briefly mention alternatives after the main solution.",
+        ["openai", "deepseek", "anthropic", "google", "groq"],
+    ),
+}
+FAST_PROVIDERS = ["groq", "deepseek", "ollama"]
+_JSON_ONLY_SYSTEM = (
+    "You must respond with valid JSON only. No markdown, no explanation outside the JSON. "
+    "Use an appropriate JSON structure for the request."
+)
+
+
+def _ask(
+    prompt: str | None = None,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    system: str | None = None,
+    output: str = "text",
+    stream: bool = True,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    no_cache: bool = False,
+    strategy: str = "best",
+    continue_: bool = False,
+    conversation: str | None = None,
+    profile: str | None = None,
+    verbose: bool = False,
+    quiet: bool = False,
+    privacy: bool = False,
+    template: str | None = None,
+    var: list[str] | None = None,
+    file: str | None = None,
+    knowledge: bool = False,
+    prefer_nvidia: bool = False,
+    escalate: bool = False,
+    verify: bool = False,
+    focus: str | None = None,
+    fast: bool = False,
+    local: bool = False,
+    clipboard: bool = False,
+    copy: bool = False,
+) -> None:
+    """Body of `nvh ask`; the hidden aliases call it with their fixed flags."""
+    preferred: list[str] = []
+    if focus:
+        if focus not in FOCUS_MODES:
+            console.print(f"[red]Unknown focus '{focus}'. Choose from: {', '.join(FOCUS_MODES)}[/red]")
+            raise typer.Exit(1)
+        focus_system, preferred = FOCUS_MODES[focus]
+        system = f"{focus_system}\n\n{system}" if system else focus_system
+    if fast:
+        strategy = "cheapest"
+        preferred = preferred or FAST_PROVIDERS
+    if local:
+        provider, privacy = "ollama", True
+
+    # --template names an agent profile whose prompt_template wraps the prompt
+    if template:
+        template_vars: dict[str, str] = {}
+        for item in (var or []):
+            if "=" not in item:
+                console.print(f"[red]Error: --var '{item}' must be in key=value format.[/red]")
+                raise typer.Exit(1)
+            k, _, v = item.partition("=")
+            template_vars[k.strip()] = v.strip()
+        try:
+            prompt, template_system = _render_profile_template(
+                template, prompt or "", template_vars,
+            )
+        except ValueError as e:
+            console.print(f"[red]Template error: {e}[/red]")
+            raise typer.Exit(1)
+        if template_system and not system:
+            system = template_system
+
+    file_content = ""
+    if file:
+        file_path_obj = Path(file)
+        if not file_path_obj.exists():
+            console.print(f"[red]Error: File not found: {file}[/red]")
+            raise typer.Exit(1)
+        try:
+            file_content = file_path_obj.read_text()
+        except Exception as e:
+            console.print(f"[red]Error reading file {file}: {e}[/red]")
+            raise typer.Exit(1)
+
+    clip_content = ""
+    if clipboard:
+        try:
+            clip_content = _read_clipboard()
+        except RuntimeError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+        if not clip_content.strip():
+            console.print("[yellow]Clipboard is empty.[/yellow]")
+            raise typer.Exit(1)
+        if not quiet:
+            preview = clip_content[:80].replace("\n", " ") + ("..." if len(clip_content) > 80 else "")
+            console.print(f"[dim]Clipboard ({len(clip_content)} chars): {preview}[/dim]\n")
+
+    stdin_content = _read_stdin()
+    if not prompt and not stdin_content and not file_content and not clip_content:
+        console.print(
+            "[red]Error: No prompt provided."
+            " Pass a prompt, --file, --clipboard, or pipe input via stdin.[/red]"
+        )
+        raise typer.Exit(1)
+
+    parts_to_join = []
+    if prompt:
+        parts_to_join.append(prompt)
+    if file_content:
+        parts_to_join.append(f"```\n{file_content}\n```")
+    if clip_content:
+        parts_to_join.append(clip_content)
+    if stdin_content:
+        parts_to_join.append(stdin_content)
+    full_prompt = "\n\n".join(parts_to_join)
+
+    # RAG: prepend chunks retrieved from the local index if requested
+    if knowledge:
+        from nvh.integrations.rag import ask as rag_ask
+        from nvh.integrations.rag import format_context_block
+
+        rag_result = _run(rag_ask(full_prompt))
+        rag_context = (
+            format_context_block(rag_result.get("chunks", []))
+            if rag_result.get("ok") else ""
+        )
+        if rag_context:
+            full_prompt = rag_context + "\n\n" + full_prompt
+            if not quiet:
+                console.print("[dim][rag context injected][/dim]")
+        elif not rag_result.get("ok"):
+            console.print(f"[dim][rag unavailable: {rag_result.get('error')}][/dim]")
+        else:
+            console.print(
+                "[dim][rag: no relevant chunks — add documents with"
+                " 'nvh rag add <file>' or 'nvh rag ingest <folder>'][/dim]"
+            )
+
+    def _copy_result(text: str) -> None:
+        if not copy:
+            return
+        try:
+            _write_clipboard(text)
+            if not quiet:
+                console.print("[dim]Answer copied to clipboard.[/dim]")
+        except RuntimeError as e:
+            console.print(f"[yellow]Could not copy to clipboard: {e}[/yellow]")
+
+    async def _run_query():
+        from nvh.config.settings import load_config
+        from nvh.core.engine import Engine
+
+        config = load_config(profile=profile)
+        # Apply --prefer-nvidia CLI flag (overrides config setting)
+        if prefer_nvidia:
+            config.defaults.prefer_nvidia = True
+        engine = Engine(config=config)
+        enabled = await engine.initialize()
+
+        if local and not engine.registry.has("ollama"):
+            console.print(
+                "[red]--local needs Ollama.[/red] Install it from https://ollama.com,"
+                " then run [bold]nvh models pull --recommended[/bold]."
+            )
+            raise typer.Exit(1)
+        chosen = provider or next((p for p in preferred if p in enabled), None)
+
+        if local:
+            console.print("[dim][local mode — Ollama only, nothing leaves this machine, nothing stored][/dim]")
+        elif privacy:
+            console.print("[dim][privacy mode — no data stored][/dim]")
+        if focus and not quiet:
+            console.print(f"[dim][focus: {focus} → {chosen or 'auto'}][/dim]")
+
+        if verbose:
+            from nvh.core.router import classify_task
+            classification = classify_task(full_prompt)
+            console.print(
+                f"[dim]Task type: {classification.task_type.value}"
+                f" (confidence: {classification.confidence:.2f})[/dim]"
+            )
+
+        if stream and output == "text":
+            # Stream the response
+            decision = engine.router.route(
+                full_prompt,
+                provider_override=chosen,
+                model_override=model,
+                strategy=strategy,
+            )
+
+            if verbose:
+                console.print(
+                    f"[dim]Routed to: {decision.provider}"
+                    f"/{decision.model} ({decision.reason})[/dim]"
+                )
+
+            prov = engine.registry.get(decision.provider)
+            pconfig = config.providers.get(decision.provider)
+            pmodel = model or decision.model or (pconfig.default_model if pconfig else "")
+
+            from nvh.providers.base import Message
+            msgs = [Message(role="user", content=full_prompt)]
+            if system:
+                msgs.insert(0, Message(role="system", content=system))
+
+            start = time.monotonic()
+            accumulated = ""
+
+            try:
+                stream_iter = prov.stream(
+                    messages=msgs,
+                    model=pmodel or None,
+                    temperature=temperature,
+                    max_tokens=max_tokens or config.defaults.max_tokens,
+                    system_prompt=system,
+                )
+                async for chunk in stream_iter:
+                    if chunk.delta:
+                        console.print(chunk.delta, end="")
+                        accumulated += chunk.delta
+
+                    if chunk.is_final and not quiet:
+                        elapsed = int((time.monotonic() - start) * 1000)
+                        console.print()  # newline
+                        parts = [f"[bold]Provider:[/bold] [dim]{decision.provider}[/dim]", f"[bold]Model:[/bold] [dim]{pmodel}[/dim]"]
+                        if chunk.usage:
+                            parts.append(
+                                f"[bold]Tokens:[/bold] [dim]{chunk.usage.input_tokens}"
+                                f" in / {chunk.usage.output_tokens} out[/dim]"
+                            )
+                        if chunk.cost_usd:
+                            parts.append(f"[bold]Cost:[/bold] [dim]${chunk.cost_usd:.4f}[/dim]")
+                        parts.append(f"[bold]Latency:[/bold] [dim]{elapsed}ms[/dim]")
+                        console.print(f"\n{' | '.join(parts)}")
+            except Exception as e:
+                console.print(f"\n{_format_cli_error(e)}")
+                raise typer.Exit(1)
+            _copy_result(accumulated)
+        else:
+            # Non-streaming
+            try:
+                with console.status(f"Querying {chosen or 'advisor'}...", spinner="dots"):
+                    resp = await engine.query(
+                        prompt=full_prompt,
+                        provider=chosen,
+                        model=model,
+                        system_prompt=system,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        stream=False,
+                        use_cache=not no_cache and not privacy,
+                        strategy=strategy,
+                        conversation_id=None if privacy else conversation,
+                        continue_last=False if privacy else continue_,
+                        privacy=privacy,
+                        escalate=escalate,
+                        verify=verify,
+                    )
+
+                # Show escalation info before the response
+                if resp.metadata.get("escalated") and not quiet:
+                    meta = resp.metadata
+                    console.print(
+                        f"[dim][ask → {meta.get('initial_provider', '?')}"
+                        f" → escalated to {resp.provider}/{resp.model}"
+                        f" (confidence: {meta.get('initial_confidence', 0):.0%})][/dim]"
+                    )
+
+                _format_output(resp.content, output)
+                _print_metadata(resp, show=not quiet)
+                _copy_result(resp.content)
+
+                # Show verification result after metadata
+                veri = resp.metadata.get("verification")
+                if veri and not quiet:
+                    verdict = veri.get("verdict", "unverified")
+                    v_conf = veri.get("confidence", 0)
+                    verifier = veri.get("verifier", "unknown")
+                    issues = veri.get("issues", [])
+                    if verdict == "correct":
+                        console.print(
+                            f"[dim]Verified ✓ by {verifier}"
+                            f" (confidence: {v_conf:.0f}/10)[/dim]"
+                        )
+                    elif verdict in ("partially_correct", "incorrect"):
+                        issue_text = ", ".join(issues) if issues else "see correction"
+                        console.print(
+                            f"[dim]Verification ⚠ by {verifier}:"
+                            f" {verdict} — \"{issue_text}\"[/dim]"
+                        )
+                    else:
+                        console.print(
+                            f"[dim]Verification: {verdict}[/dim]"
+                        )
+            except Exception as e:
+                console.print(_format_cli_error(e))
+                raise typer.Exit(1)
+
+    _run(_run_query())
+
 
 @app.command(rich_help_panel="Query Modes")
 def ask(
@@ -951,7 +1260,7 @@ def ask(
     ),
     knowledge: bool = typer.Option(
         False, "--knowledge", "-k",
-        help="Augment prompt with your knowledge base (RAG)",
+        help="Augment prompt with chunks retrieved from your local RAG index (nvh rag)",
     ),
     prefer_nvidia: bool = typer.Option(
         False, "--prefer-nvidia",
@@ -966,544 +1275,59 @@ def ask(
         False, "--verify",
         help="Cross-check response with a different model for accuracy",
     ),
+    focus: str | None = typer.Option(
+        None, "--focus", rich_help_panel="Modes",
+        help="Focus mode: code, write, math, research (system prompt + advisor preference)",
+    ),
+    fast: bool = typer.Option(
+        False, "--fast", rich_help_panel="Modes",
+        help="Cheapest/fastest advisor (Groq > DeepSeek > Ollama), no frills",
+    ),
+    local: bool = typer.Option(
+        False, "--local", rich_help_panel="Modes",
+        help="Ollama only — nothing leaves this machine, nothing is stored",
+    ),
+    clipboard: bool = typer.Option(
+        False, "--clipboard", rich_help_panel="Modes",
+        help="Add the clipboard contents to the prompt",
+    ),
+    copy: bool = typer.Option(
+        False, "--copy", rich_help_panel="Modes",
+        help="Copy the answer to the clipboard",
+    ),
 ):
-    """Ask a single LLM advisor a question."""
-    # Apply shorthand output flags
+    """Ask an advisor a question — the one query command.
+
+    The prompt comes from the argument, --file, --clipboard, piped stdin, or
+    any combination. --focus tunes the system prompt and advisor preference,
+    --fast picks the cheapest advisor, --local keeps everything on Ollama.
+
+    Examples:
+        nvh ask "Explain the CAP theorem"
+        nvh ask --focus code -f main.py "Fix the bug on line 42"
+        git diff --staged | nvh ask --raw "Write a commit message"
+        nvh ask --local "Review this NDA" -f contract.txt
+        nvh ask --fast "What does HTTP 429 mean?"
+    """
     if output_json:
         output = "json"
     elif output_raw:
         output = "raw"
         quiet = True
-    # Handle template rendering before stdin processing
-    template_system: str | None = None
-    if template:
-        from nvh.core.templates import render_template
-        # Parse --var key=value pairs
-        template_vars: dict[str, str] = {}
-        for item in (var or []):
-            if "=" in item:
-                k, _, v = item.partition("=")
-                template_vars[k.strip()] = v.strip()
-            else:
-                console.print(f"[red]Error: --var '{item}' must be in key=value format.[/red]")
-                raise typer.Exit(1)
-        # If a positional prompt was given, use it as the
-        # primary variable if no explicit var mapping
-        if prompt and "text" not in template_vars and "code" not in template_vars:
-            template_vars.setdefault("text", prompt)
-            template_vars.setdefault("code", prompt)
-        try:
-            rendered_prompt, template_system = render_template(template, template_vars)
-            prompt = rendered_prompt
-            if template_system and not system:
-                system = template_system
-        except (FileNotFoundError, ValueError) as e:
-            console.print(f"[red]Template error: {e}[/red]")
-            raise typer.Exit(1)
-
-    # Read from --file if provided
-    file_content = ""
-    if file:
-        file_path_obj = Path(file)
-        if not file_path_obj.exists():
-            console.print(f"[red]Error: File not found: {file}[/red]")
-            raise typer.Exit(1)
-        try:
-            file_content = file_path_obj.read_text()
-        except Exception as e:
-            console.print(f"[red]Error reading file {file}: {e}[/red]")
-            raise typer.Exit(1)
-
-    # Read from stdin if no prompt provided
-    stdin_content = _read_stdin()
-    if not prompt and not stdin_content and not file_content:
-        console.print(
-            "[red]Error: No prompt provided."
-            " Pass a prompt or pipe input via stdin.[/red]"
-        )
-        raise typer.Exit(1)
-
-    full_prompt = ""
-    parts_to_join = []
-    if prompt:
-        parts_to_join.append(prompt)
-    if file_content:
-        parts_to_join.append(f"```\n{file_content}\n```")
-    if stdin_content:
-        parts_to_join.append(stdin_content)
-    full_prompt = "\n\n".join(parts_to_join) if parts_to_join else (prompt or "")  # type: ignore
-
-    # RAG: prepend knowledge base context if requested
-    if knowledge:
-        from nvh.core.knowledge import get_knowledge_base
-        kb = get_knowledge_base()
-        kb_context = kb.get_context(full_prompt)
-        if kb_context:
-            full_prompt = kb_context + "\n\n" + full_prompt
-            if not quiet:
-                console.print("[dim][knowledge base context injected][/dim]")
-        else:
-            console.print(
-                "[dim][knowledge base: no relevant documents"
-                " found — run 'nvh learn <file>' to add some][/dim]"
-            )
-
-    async def _run_query():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config(profile=profile)
-        # Apply --prefer-nvidia CLI flag (overrides config setting)
-        if prefer_nvidia:
-            config.defaults.prefer_nvidia = True
-        engine = Engine(config=config)
-        await engine.initialize()
-
-        if privacy:
-            console.print("[dim][privacy mode — no data stored][/dim]")
-
-        if verbose:
-            from nvh.core.router import classify_task
-            classification = classify_task(full_prompt)
-            console.print(
-                f"[dim]Task type: {classification.task_type.value}"
-                f" (confidence: {classification.confidence:.2f})[/dim]"
-            )
-
-        if stream and output == "text":
-            # Stream the response
-            decision = engine.router.route(
-                full_prompt,
-                provider_override=provider,
-                model_override=model,
-                strategy=strategy,
-            )
-
-            if verbose:
-                console.print(
-                    f"[dim]Routed to: {decision.provider}"
-                    f"/{decision.model} ({decision.reason})[/dim]"
-                )
-
-            prov = engine.registry.get(decision.provider)
-            pconfig = config.providers.get(decision.provider)
-            pmodel = model or decision.model or (pconfig.default_model if pconfig else "")
-
-            from nvh.providers.base import Message
-            msgs = [Message(role="user", content=full_prompt)]
-            if system:
-                msgs.insert(0, Message(role="system", content=system))
-
-            import time
-            start = time.monotonic()
-            accumulated = ""
-
-            try:
-                stream_iter = prov.stream(
-                    messages=msgs,
-                    model=pmodel or None,
-                    temperature=temperature,
-                    max_tokens=max_tokens or config.defaults.max_tokens,
-                    system_prompt=system,
-                )
-                async for chunk in stream_iter:
-                    if chunk.delta:
-                        console.print(chunk.delta, end="")
-                        accumulated += chunk.delta
-
-                    if chunk.is_final and not quiet:
-                        elapsed = int((time.monotonic() - start) * 1000)
-                        console.print()  # newline
-                        parts = [f"[bold]Provider:[/bold] [dim]{decision.provider}[/dim]", f"[bold]Model:[/bold] [dim]{pmodel}[/dim]"]
-                        if chunk.usage:
-                            parts.append(
-                                f"[bold]Tokens:[/bold] [dim]{chunk.usage.input_tokens}"
-                                f" in / {chunk.usage.output_tokens} out[/dim]"
-                            )
-                        if chunk.cost_usd:
-                            parts.append(f"[bold]Cost:[/bold] [dim]${chunk.cost_usd:.4f}[/dim]")
-                        parts.append(f"[bold]Latency:[/bold] [dim]{elapsed}ms[/dim]")
-                        console.print(f"\n{' | '.join(parts)}")
-            except Exception as e:
-                console.print(f"\n{_format_cli_error(e)}")
-                raise typer.Exit(1)
-        else:
-            # Non-streaming
-            try:
-                _ask_advisor = provider or "advisor"
-                with console.status(f"Querying {_ask_advisor}...", spinner="dots"):
-                    resp = await engine.query(
-                        prompt=full_prompt,
-                        provider=provider,
-                        model=model,
-                        system_prompt=system,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        stream=False,
-                        use_cache=not no_cache and not privacy,
-                        strategy=strategy,
-                        conversation_id=None if privacy else conversation,
-                        continue_last=False if privacy else continue_,
-                        privacy=privacy,
-                        escalate=escalate,
-                        verify=verify,
-                    )
-
-                # Show escalation info before the response
-                if resp.metadata.get("escalated") and not quiet:
-                    meta = resp.metadata
-                    console.print(
-                        f"[dim][ask → {meta.get('initial_provider', '?')}"
-                        f" → escalated to {resp.provider}/{resp.model}"
-                        f" (confidence: {meta.get('initial_confidence', 0):.0%})][/dim]"
-                    )
-
-                _format_output(resp.content, output)
-                _print_metadata(resp, show=not quiet)
-
-                # Show verification result after metadata
-                veri = resp.metadata.get("verification")
-                if veri and not quiet:
-                    verdict = veri.get("verdict", "unverified")
-                    v_conf = veri.get("confidence", 0)
-                    verifier = veri.get("verifier", "unknown")
-                    issues = veri.get("issues", [])
-                    if verdict == "correct":
-                        console.print(
-                            f"[dim]Verified \u2713 by {verifier}"
-                            f" (confidence: {v_conf:.0f}/10)[/dim]"
-                        )
-                    elif verdict in ("partially_correct", "incorrect"):
-                        issue_text = ", ".join(issues) if issues else "see correction"
-                        console.print(
-                            f"[dim]Verification \u26a0 by {verifier}:"
-                            f" {verdict} \u2014 \"{issue_text}\"[/dim]"
-                        )
-                    else:
-                        console.print(
-                            f"[dim]Verification: {verdict}[/dim]"
-                        )
-            except Exception as e:
-                console.print(_format_cli_error(e))
-                raise typer.Exit(1)
-
-    _run(_run_query())
+    _ask(
+        prompt, provider=provider, model=model, system=system, output=output,
+        stream=stream, max_tokens=max_tokens, temperature=temperature,
+        no_cache=no_cache, strategy=strategy, continue_=continue_,
+        conversation=conversation, profile=profile, verbose=verbose, quiet=quiet,
+        privacy=privacy, template=template, var=var, file=file,
+        knowledge=knowledge, prefer_nvidia=prefer_nvidia, escalate=escalate,
+        verify=verify, focus=focus, fast=fast, local=local, clipboard=clipboard,
+        copy=copy,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Focus Modes
-# ---------------------------------------------------------------------------
-
-@app.command(rich_help_panel="Query Modes")
-def code(
-    prompt: str | None = typer.Argument(None),
-    file: str | None = typer.Option(None, "-f", "--file"),
-    advisor: str | None = typer.Option(None, "-a"),
-):
-    """Coding focus — optimized for code tasks.
-
-    Auto-selects the best coding advisor, enables code-specific system prompt,
-    and formats output for code.
-
-    Examples:
-        nvh code "Write a binary search in Python"
-        nvh code -f main.py "Fix the bug on line 42"
-        nvh code "Explain this regex: ^[a-z]+@[a-z]+\\.[a-z]{2,}$"
-    """
-    system_prompt = (
-        "You are an expert software engineer. Provide clear, correct, well-structured code. "
-        "When writing code, include brief explanations of key decisions. "
-        "Prefer idiomatic solutions. Highlight any edge cases or caveats."
-    )
-
-    full_prompt = prompt or ""
-
-    if file:
-        file_path_obj = Path(file)
-        if not file_path_obj.exists():
-            console.print(f"[red]Error: File not found: {file}[/red]")
-            raise typer.Exit(1)
-        try:
-            file_content = file_path_obj.read_text()
-            file_block = f"File: {file}\n```\n{file_content}\n```"
-            full_prompt = f"{file_block}\n\n{full_prompt}".strip() if full_prompt else file_block
-        except Exception as e:
-            console.print(f"[red]Error reading file {file}: {e}[/red]")
-            raise typer.Exit(1)
-
-    stdin_content = _read_stdin()
-    if stdin_content:
-        full_prompt = f"{full_prompt}\n\n{stdin_content}".strip() if full_prompt else stdin_content
-
-    if not full_prompt:
-        console.print("[red]Error: No prompt provided.[/red]")
-        raise typer.Exit(1)
-
-    async def _run_code():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        await engine.initialize()
-
-        # Route to coding-capable advisor; prefer anthropic/openai/groq for code
-        coding_advisors = ["anthropic", "openai", "groq", "google", "deepseek"]
-        enabled = engine.registry.list_enabled()
-        chosen_provider = advisor
-        if not chosen_provider:
-            for pref in coding_advisors:
-                if pref in enabled:
-                    chosen_provider = pref
-                    break
-
-        console.print(f"[dim][code → {chosen_provider or 'auto'}][/dim]\n")
-        try:
-            resp = await engine.query(
-                prompt=full_prompt,
-                provider=chosen_provider,
-                system_prompt=system_prompt,
-                stream=False,
-            )
-            console.print(Markdown(resp.content))
-            if resp.fallback_from:
-                console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
-            console.print(
-                f"\n[bold]Advisor:[/bold] [dim]{resp.provider}[/dim] | [bold]Model:[/bold] [dim]{resp.model}[/dim] | "
-                f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]"
-            )
-        except Exception as e:
-            console.print(_format_cli_error(e))
-
-    _run(_run_code())
-
-
-@app.command(rich_help_panel="Query Modes")
-def write(
-    prompt: str | None = typer.Argument(None),
-    tone: str = typer.Option("professional", help="Tone: casual, professional, academic, creative"),
-):
-    """Writing focus — optimized for text composition.
-
-    Auto-selects the best writing advisor (Claude preferred).
-
-    Examples:
-        nvh write "Draft an email declining a meeting"
-        nvh write "Write a blog post about AI" --tone casual
-        nvh write "Create a cover letter for a software engineer position"
-    """
-    system_prompt = (
-        f"You are a skilled writer. Write with a {tone} tone. "
-        "Produce clear, engaging, well-structured text. "
-        "Match the format to the request (email, essay, blog post, etc.)."
-    )
-
-    full_prompt = prompt or _read_stdin().strip()
-    if not full_prompt:
-        console.print("[red]Error: No prompt provided.[/red]")
-        raise typer.Exit(1)
-
-    async def _run_write():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        await engine.initialize()
-
-        # Claude is best for writing; fall back to openai, google
-        writing_advisors = ["anthropic", "openai", "google", "groq"]
-        enabled = engine.registry.list_enabled()
-        chosen_provider = None
-        for pref in writing_advisors:
-            if pref in enabled:
-                chosen_provider = pref
-                break
-
-        console.print(f"[dim][write → {chosen_provider or 'auto'} | tone: {tone}][/dim]\n")
-        try:
-            resp = await engine.query(
-                prompt=full_prompt,
-                provider=chosen_provider,
-                system_prompt=system_prompt,
-                stream=False,
-            )
-            console.print(resp.content)
-            if resp.fallback_from:
-                console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
-            console.print(
-                f"\n[bold]Advisor:[/bold] [dim]{resp.provider}[/dim] | [bold]Model:[/bold] [dim]{resp.model}[/dim] | "
-                f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]"
-            )
-        except Exception as e:
-            console.print(_format_cli_error(e))
-
-    _run(_run_write())
-
-
-@app.command(rich_help_panel="Query Modes")
-def research(
-    prompt: str | None = typer.Argument(None),
-):
-    """Research focus — web search + multi-source synthesis.
-
-    Automatically searches the web, fetches relevant pages,
-    and synthesizes findings.
-
-    Examples:
-        nvh research "Latest developments in quantum computing"
-        nvh research "Compare React vs Vue vs Svelte in 2026"
-    """
-    system_prompt = (
-        "You are a thorough research assistant. Synthesize information from multiple sources. "
-        "Always cite your sources. Highlight areas of consensus and disagreement. "
-        "Provide a balanced, well-structured summary."
-    )
-
-    full_prompt = prompt or _read_stdin().strip()
-    if not full_prompt:
-        console.print("[red]Error: No prompt provided.[/red]")
-        raise typer.Exit(1)
-
-    async def _run_research():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        await engine.initialize()
-
-        console.print("[dim][research → web search + synthesis][/dim]\n")
-
-        # Step 1: web search via Perplexity if available, else council synthesis
-        enabled = engine.registry.list_enabled()
-        if "perplexity" in enabled:
-            console.print("[dim]Searching with Perplexity...[/dim]")
-            try:
-                search_resp = await engine.query(
-                    prompt=full_prompt,
-                    provider="perplexity",
-                    system_prompt=system_prompt,
-                    stream=False,
-                )
-                console.print(Markdown(search_resp.content))
-                if search_resp.fallback_from:
-                    console.print(f"\n[yellow]↪ Failover: {search_resp.fallback_from} → {search_resp.provider}[/yellow]")
-                console.print(
-                    f"\n[bold]Advisor:[/bold] [dim]{search_resp.provider}[/dim] | [bold]Model:[/bold] [dim]{search_resp.model}[/dim] | "
-                    f"[bold]Cost:[/bold] [dim]${search_resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{search_resp.latency_ms}ms[/dim]"
-                )
-                return
-            except Exception:
-                pass  # fall through to council synthesis
-
-        # Fall back: council synthesis with research system prompt
-        console.print("[dim]Synthesizing from multiple advisors...[/dim]\n")
-        try:
-            result = await engine.run_council(
-                prompt=full_prompt,
-                system_prompt=system_prompt,
-                auto_agents=True,
-                synthesize=True,
-            )
-            if result.synthesis:
-                console.print(Markdown(result.synthesis.content))
-                confidence_part = ""
-                if result.confidence_score is not None:
-                    pct = int(result.confidence_score * 100)
-                    summary = result.agreement_summary or ""
-                    confidence_part = f" | Confidence: {pct}%"
-                    if summary:
-                        confidence_part += f" — {summary}"
-                console.print(
-                    f"\n[bold]Agents:[/bold] [dim]{', '.join(result.agents_used)}[/dim] | "
-                    f"[bold]Cost:[/bold] [dim]${result.total_cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{result.total_latency_ms}ms[/dim]"
-                    f"{confidence_part}"
-                )
-            else:
-                for label, resp in result.member_responses.items():
-                    console.print(Panel(resp.content, title=label, border_style="blue"))
-        except Exception as e:
-            console.print(_format_cli_error(e))
-
-    _run(_run_research())
-
-
-@app.command(rich_help_panel="Query Modes")
-def math(
-    prompt: str | None = typer.Argument(None),
-):
-    """Math focus — optimized for math and calculations.
-
-    Routes to reasoning-focused advisors (o3, DeepSeek-R1).
-    Enables step-by-step problem solving.
-
-    Examples:
-        nvh math "Solve: integral of x^2 * sin(x) dx"
-        nvh math "Prove that sqrt(2) is irrational"
-    """
-    system_prompt = (
-        "You are an expert mathematician. Solve problems step by step, showing all work. "
-        "Use clear notation. Verify your answer when possible. "
-        "If there are multiple approaches, briefly mention alternatives after the main solution."
-    )
-
-    full_prompt = prompt or _read_stdin().strip()
-    if not full_prompt:
-        console.print("[red]Error: No prompt provided.[/red]")
-        raise typer.Exit(1)
-
-    async def _run_math():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        await engine.initialize()
-
-        # Route to reasoning-strong advisors first, then general fallback
-        math_advisors = ["openai", "deepseek", "anthropic", "google", "groq"]
-        enabled = engine.registry.list_enabled()
-        chosen_provider = None
-        for pref in math_advisors:
-            if pref in enabled:
-                chosen_provider = pref
-                break
-
-        # Pin the strongest verified reasoning model for these two providers
-        chosen_model = None
-        if chosen_provider == "openai":
-            chosen_model = "gpt-5.6-terra"
-        elif chosen_provider == "deepseek":
-            chosen_model = "deepseek/deepseek-v4-pro"
-
-        console.print(
-            f"[dim][math → {chosen_provider or 'auto'}"
-            f"{f'/{chosen_model}' if chosen_model else ''} | step-by-step][/dim]\n"
-        )
-        try:
-            resp = await engine.query(
-                prompt=full_prompt,
-                provider=chosen_provider,
-                model=chosen_model,
-                system_prompt=system_prompt,
-                stream=False,
-            )
-            console.print(Markdown(resp.content))
-            if resp.fallback_from:
-                console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
-            console.print(
-                f"\n[bold]Advisor:[/bold] [dim]{resp.provider}[/dim] | [bold]Model:[/bold] [dim]{resp.model}[/dim] | "
-                f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]"
-            )
-        except Exception as e:
-            console.print(_format_cli_error(e))
-
-    _run(_run_math())
-
-
-# ---------------------------------------------------------------------------
-# Clipboard Integration
+# Clipboard helpers (used by `ask --clipboard/--copy` and the `clip` alias)
 # ---------------------------------------------------------------------------
 
 def _read_clipboard() -> str:
@@ -1577,82 +1401,82 @@ _CLIP_ACTIONS = {
 }
 
 
-@app.command(rich_help_panel="Query Modes")
-def clip(
-    action: str = typer.Argument("ask", help="What to do: ask, explain, fix, summarize, translate"),
+# ---------------------------------------------------------------------------
+# Pre-0.42 query-mode spellings — hidden aliases of `nvh ask` for one release.
+# ---------------------------------------------------------------------------
+
+@app.command(hidden=True)
+def code(
+    prompt: str | None = typer.Argument(None),
+    file: str | None = typer.Option(None, "-f", "--file"),
     advisor: str | None = typer.Option(None, "-a"),
-    copy: bool = typer.Option(False, "--copy", "-c", help="Copy the result back to clipboard"),
 ):
-    """Process clipboard contents with AI.
+    """(alias) nvh ask --focus code"""
+    _ask(prompt, file=file, provider=advisor, focus="code")
 
-    Reads your clipboard and applies an action to it.
 
-    Examples:
-        nvh clip              # ask about clipboard contents
-        nvh clip explain      # explain the clipboard contents
-        nvh clip fix          # fix code from clipboard
-        nvh clip summarize    # summarize clipboard text
-        nvh clip translate    # translate clipboard text to English
-    """
-    valid_actions = list(_CLIP_ACTIONS.keys())
-    if action not in valid_actions:
-        console.print(
-            f"[red]Unknown action '{action}'."
-            f" Choose from: {', '.join(valid_actions)}[/red]"
-        )
+@app.command(hidden=True)
+def write(
+    prompt: str | None = typer.Argument(None),
+    tone: str = typer.Option("professional", "--tone"),
+):
+    """(alias) nvh ask --focus write"""
+    _ask(prompt, focus="write", system=f"Write with a {tone} tone.")
+
+
+@app.command(hidden=True)
+def research(prompt: str | None = typer.Argument(None)):
+    """(alias) nvh ask --focus research"""
+    _ask(prompt, focus="research")
+
+
+@app.command(hidden=True)
+def math(prompt: str | None = typer.Argument(None)):
+    """(alias) nvh ask --focus math"""
+    _ask(prompt, focus="math")
+
+
+@app.command(hidden=True)
+def quick(prompt: str = typer.Argument(..., help="Question to answer quickly")):
+    """(alias) nvh ask --fast --raw"""
+    _ask(prompt, fast=True, output="raw", quiet=True)
+
+
+@app.command(hidden=True)
+def safe(
+    prompt: str = typer.Argument(..., help="Question to answer with local models only"),
+    model: str | None = typer.Option(None, "-m", "--model"),
+    raw: bool = typer.Option(False, "--raw"),
+):
+    """(alias) nvh ask --local"""
+    _ask(prompt, local=True, model=model, output="raw" if raw else "text", quiet=raw)
+
+
+@app.command(hidden=True)
+def pipe(
+    prompt: str | None = typer.Argument(None),
+    provider: str | None = typer.Option(None, "-a", "--provider"),
+    model: str | None = typer.Option(None, "-m", "--model"),
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """(alias) ... | nvh ask --raw"""
+    _ask(
+        prompt, provider=provider, model=model, output="raw", quiet=True,
+        system=_JSON_ONLY_SYSTEM if json_output else None,
+    )
+
+
+@app.command(hidden=True)
+def clip(
+    action: str = typer.Argument("ask", help="ask, explain, fix, summarize, translate"),
+    advisor: str | None = typer.Option(None, "-a"),
+    copy: bool = typer.Option(False, "--copy", "-c"),
+):
+    """(alias) nvh ask --clipboard"""
+    if action not in _CLIP_ACTIONS:
+        console.print(f"[red]Unknown action '{action}'. Choose from: {', '.join(_CLIP_ACTIONS)}[/red]")
         raise typer.Exit(1)
-
-    try:
-        clipboard_text = _read_clipboard()
-    except RuntimeError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1)
-
-    if not clipboard_text.strip():
-        console.print("[yellow]Clipboard is empty.[/yellow]")
-        raise typer.Exit(1)
-
-    action_instruction = _CLIP_ACTIONS[action]
-    full_prompt = f"{action_instruction}\n\n{clipboard_text}"
-
-    # Show a preview of what's being processed
-    preview = clipboard_text[:80].replace("\n", " ")
-    if len(clipboard_text) > 80:
-        preview += "..."
-    console.print(f"[dim]Clipboard ({len(clipboard_text)} chars): {preview}[/dim]\n")
-
-    async def _run_clip():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        await engine.initialize()
-
-        console.print(f"[dim][clip:{action} → {advisor or 'auto'}][/dim]\n")
-        try:
-            resp = await engine.query(
-                prompt=full_prompt,
-                provider=advisor,
-                stream=False,
-            )
-            console.print(resp.content)
-            if resp.fallback_from:
-                console.print(f"\n[yellow]↪ Failover: {resp.fallback_from} → {resp.provider}[/yellow]")
-            console.print(
-                f"\n[bold]Advisor:[/bold] [dim]{resp.provider}[/dim] | [bold]Model:[/bold] [dim]{resp.model}[/dim] | "
-                f"[bold]Cost:[/bold] [dim]${resp.cost_usd:.4f}[/dim] | [bold]Latency:[/bold] [dim]{resp.latency_ms}ms[/dim]"
-            )
-            if copy:
-                try:
-                    _write_clipboard(resp.content)
-                    console.print("[dim]Result copied to clipboard.[/dim]")
-                except RuntimeError as e:
-                    console.print(f"[yellow]Could not copy to clipboard: {e}[/yellow]")
-        except Exception as e:
-            console.print(_format_cli_error(e))
-
-    _run(_run_clip())
+    _ask(_CLIP_ACTIONS[action], provider=advisor, clipboard=True, copy=copy)
 
 
 # ---------------------------------------------------------------------------
@@ -2398,24 +2222,12 @@ def throwdown(
 
 
 # ---------------------------------------------------------------------------
-# nvh why — routing explainability
+# nvh status --routing — routing explainability for the last query
 # ---------------------------------------------------------------------------
 
 
-@app.command(rich_help_panel="Other")
-def why():
-    """Explain why the last query was routed the way it was.
-
-    Shows the full routing decision breakdown: task classification,
-    provider scores, learned vs static capability, and why the
-    chosen provider won.
-
-    Run any query first, then run `nvh why` to see the explanation.
-
-    Examples:
-        nvh "What is quicksort?"
-        nvh why
-    """
+def _status_routing():
+    """Task classification, provider scores and why the chosen provider won."""
     import json as _json
     from pathlib import Path as _Path
 
@@ -2423,7 +2235,7 @@ def why():
     if not why_path.exists():
         console.print(
             "[dim]No query to explain yet."
-            " Run a query first, then nvh why.[/dim]",
+            " Run a query first, then nvh status --routing.[/dim]",
         )
         return
 
@@ -2532,116 +2344,6 @@ def why():
     if ts:
         console.print(f"\n  [dim]{ts}[/dim]")
     console.print()
-
-
-# ---------------------------------------------------------------------------
-# nvh health — provider resilience dashboard
-# ---------------------------------------------------------------------------
-
-
-@app.command(rich_help_panel="Admin")
-def health():
-    """Provider health + resilience dashboard.
-
-    Shows which providers are up, their health scores, failover
-    chain, and recent error rates. Use this to verify your setup
-    can survive any single provider going down.
-
-    Examples:
-        nvh health
-    """
-    async def _run_health():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        await engine.initialize()
-
-        enabled = engine.registry.list_enabled()
-        if not enabled:
-            console.print(
-                "[red]No providers enabled.[/red]\n"
-                "  Run: [bold]nvh setup[/bold]"
-            )
-            return
-
-        table = Table(
-            title="Provider Health & Resilience",
-            show_header=True,
-            header_style="bold cyan",
-        )
-        table.add_column("Provider", style="bold")
-        table.add_column("Status", justify="center")
-        table.add_column("Health", justify="right")
-        table.add_column("In Fallback Chain", justify="center")
-
-        fallback = engine._get_fallback_chain(
-            config.defaults.provider or enabled[0],
-        )
-
-        for prov in sorted(enabled):
-            try:
-                score = engine.rate_manager.get_health_score(prov)
-            except Exception:
-                score = 0.5
-
-            if score >= 0.8:
-                status_str = "[green]Healthy[/green]"
-            elif score >= 0.4:
-                status_str = "[yellow]Degraded[/yellow]"
-            elif score >= 0.1:
-                status_str = "[red]Unhealthy[/red]"
-            else:
-                status_str = "[red bold]Down[/red bold]"
-
-            health_str = f"{score:.0%}"
-            chain_pos = (
-                fallback.index(prov) + 1
-                if prov in fallback else 0
-            )
-            chain_str = (
-                f"#{chain_pos}" if chain_pos else "[dim]—[/dim]"
-            )
-
-            table.add_row(prov, status_str, health_str, chain_str)
-
-        console.print(table)
-        console.print()
-
-        # Resilience summary
-        healthy = sum(
-            1 for p in enabled
-            if engine.rate_manager.get_health_score(p) >= 0.8
-        )
-        console.print(
-            f"  [bold]{healthy}/{len(enabled)}[/bold]"
-            f" providers healthy"
-        )
-
-        if healthy >= 3:
-            console.print(
-                "  [green]Resilient[/green] — your workflow"
-                " survives any single provider outage"
-            )
-        elif healthy >= 2:
-            console.print(
-                "  [yellow]Partial resilience[/yellow] — add more"
-                " providers with [bold]nvh setup --all[/bold]"
-            )
-        else:
-            console.print(
-                "  [red]Vulnerable[/red] — only 1 healthy provider."
-                " Run [bold]nvh setup[/bold] to add more."
-            )
-
-        console.print(
-            f"\n  Fallback chain: "
-            f"[bold]{' → '.join(fallback[:5])}[/bold]"
-        )
-        console.print()
-
-    _run(_run_health())
 
 
 # ---------------------------------------------------------------------------
@@ -2895,358 +2597,652 @@ def history(
 
 
 # ---------------------------------------------------------------------------
-# nvh status
+# nvh status — every diagnostic tier over the shared checks registry in
+# nvh.integrations.diagnostics.checks. The pre-0.42 health / doctor / test /
+# debug / selfcheck / why verbs are hidden aliases of one tier each.
 # ---------------------------------------------------------------------------
+
+_STATUS_TIERS = ("providers", "deep", "smoke", "report", "routing")
+_STATUS_ICONS = {
+    "pass": "[green]✓[/green]",
+    "warn": "[yellow]![/yellow]",
+    "fail": "[red]✗[/red]",
+    "skip": "[dim]-[/dim]",
+    "info": "[dim]·[/dim]",
+}
+_STATUS_LABELS = {
+    "pass": "[green]PASS[/green]",
+    "warn": "[yellow]WARN[/yellow]",
+    "fail": "[red]FAIL[/red]",
+    "info": "[dim]INFO[/dim]",
+}
+
 
 @app.command(rich_help_panel="Admin")
-def status():
-    """Quick system status — advisors, GPU, budget, and models at a glance."""
+def status(
+    providers: bool = typer.Option(
+        False, "--providers", rich_help_panel="Tiers",
+        help="Advisor health, scores and the failover chain",
+    ),
+    deep: bool = typer.Option(
+        False, "--deep", rich_help_panel="Tiers",
+        help="Full diagnostic: config, keys, advisors, Ollama, GPU, disk, environment",
+    ),
+    smoke: bool = typer.Option(
+        False, "--smoke", rich_help_panel="Tiers",
+        help="Offline smoke test of the workspace (storage, Ollama, WebUI runtime, packs)",
+    ),
+    report: bool = typer.Option(
+        False, "--report", rich_help_panel="Tiers",
+        help="Write a redacted JSON support bundle (deep checks + smoke + snapshot)",
+    ),
+    routing: bool = typer.Option(
+        False, "--routing", rich_help_panel="Tiers",
+        help="Explain how the last query was routed",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="JSON on stdout (glance, --providers, --deep, --smoke)"),
+    fix: bool = typer.Option(False, "--fix", help="--deep: offer to restart Ollama / pull missing models"),
+    storage_only: bool = typer.Option(False, "--storage", help="--deep: only the persistent-storage preflight"),
+    home_dir: str | None = typer.Option(None, "--home-dir", help="NVH_HOME to check (default: the active one)"),
+    min_free_gb: float = typer.Option(200.0, "--min-free-gb", help="Free space expected for local models and ComfyUI"),
+    imports: bool = typer.Option(False, "--imports", help="--smoke/--report: also import every core module"),
+    live: bool = typer.Option(False, "--live", help="--report: include one live Wizard round-trip"),
+    strict: bool = typer.Option(False, "--strict", help="--smoke/--report: warnings exit 1 too"),
+    output: str | None = typer.Option(None, "-o", "--output", help="--report: bundle path (default $NVH_HOME/support/)"),
+    send: bool = typer.Option(False, "--send", help="--report: copy the bundle to the clipboard"),
+    nvidia_report: bool = typer.Option(False, "--nvidia-report", help="--report: also run nvidia-bug-report.sh"),
+):
+    """System status — one command, five tiers.
+
+    With no tier: GPU, local models, advisors, budget and the service
+    pipeline at a glance. --providers, --deep, --smoke, --report and
+    --routing go deeper; every tier reads the same checks registry.
+
+    Examples:
+        nvh status                       glance
+        nvh status --deep --fix          diagnose, then repair Ollama / models
+        nvh status --smoke --json        CI gate for the local workspace
+        nvh status --report --live       support bundle with a live Wizard turn
+    """
+    chosen = [t for t, on in zip(_STATUS_TIERS, (providers, deep, smoke, report, routing)) if on]
+    if storage_only and not chosen:
+        chosen = ["deep"]
+    if len(chosen) > 1:
+        console.print(f"[red]Pick one tier: {' / '.join('--' + t for t in chosen)}[/red]")
+        raise typer.Exit(2)
+    _run_status(
+        chosen[0] if chosen else None,
+        json_output=json_output, fix=fix, storage_only=storage_only,
+        home_dir=home_dir, min_free_gb=min_free_gb, imports=imports, live=live,
+        strict=strict, output=output, send=send, nvidia_report=nvidia_report,
+    )
+
+
+def _run_status(
+    tier: str | None,
+    *,
+    json_output: bool = False,
+    fix: bool = False,
+    storage_only: bool = False,
+    home_dir: str | None = None,
+    min_free_gb: float = 200.0,
+    imports: bool = False,
+    live: bool = False,
+    live_prompt: str = "Say hello in one sentence",
+    strict: bool = False,
+    output: str | None = None,
+    send: bool = False,
+    nvidia_report: bool = False,
+    quiet: bool = False,
+) -> None:
+    from nvh.integrations.diagnostics import checks as diag
+
+    ctx = diag.CheckContext(home_dir=home_dir, min_free_gb=min_free_gb)
+    if tier == "routing":
+        _status_routing()
+    elif tier == "smoke":
+        _status_smoke(home_dir, imports=imports, json_output=json_output, strict=strict)
+    elif tier == "report":
+        _status_report(
+            ctx, imports=imports, live=live, live_prompt=live_prompt, strict=strict,
+            output=output, send=send, nvidia_report=nvidia_report, quiet=quiet,
+        )
+    elif tier == "deep":
+        _status_deep(ctx, json_output=json_output, fix=fix, storage_only=storage_only)
+    elif tier == "providers":
+        _status_providers(ctx, json_output=json_output)
+    else:
+        _status_glance(ctx, json_output=json_output)
+
+
+def _status_glance(ctx, *, json_output: bool = False) -> None:
+    import json as _json
+
     from rich.rule import Rule
 
-    async def _run_status():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
+    from nvh.integrations.diagnostics import checks as diag
 
-        config = load_config()
-        engine = Engine(config=config)
-        enabled_providers = await engine.initialize()
+    results = _run(diag.run_checks(diag.GLANCE, ctx))
+    if json_output:
+        print(_json.dumps(diag.summarize(results), indent=2))
+        return
+    by_id: dict[str, list] = {}
+    for r in results:
+        by_id.setdefault(r.id, []).append(r)
 
-        console.print(f"[bold]NVHive v{__version__}[/bold]")
-        console.print(Rule(style="dim"))
+    def first(check_id: str):
+        rows = by_id.get(check_id)
+        return rows[0] if rows else None
 
-        # GPU
-        try:
-            from nvh.utils.gpu import detect_gpus
-            gpus = detect_gpus()
-            if gpus:
-                gpu_parts = []
-                for g in gpus:
-                    gpu_parts.append(
-                        f"{g.name} ({g.vram_gb:.0f} GB)"
-                        f" — {g.utilization_pct}% utilized"
-                    )
-                gpu_line = " | ".join(gpu_parts)
-            else:
-                gpu_line = "no NVIDIA GPU detected (CPU mode)"
-        except Exception:
-            gpu_line = "unavailable"
-        console.print(f"[bold]GPU:[/bold]      {gpu_line}")
+    console.print(f"[bold]NVHive v{__version__}[/bold]")
+    console.print(Rule(style="dim"))
 
-        # cloud session info
-        try:
-            from nvh.integrations.cloud_session import detect_cloud_session, format_cloud_status
-            cloud = detect_cloud_session()
-            if cloud.is_cloud_session:
-                console.print(f"  [bold green]Cloud:[/bold green]     {format_cloud_status(cloud)}")
-        except Exception:
-            pass
+    gpu = first("gpu")
+    gpus = gpu.data.get("gpus", []) if gpu else []
+    gpu_line = (
+        " | ".join(f"{g['name']} ({g['vram_gb']:.0f} GB) — {g['utilization_pct']}% utilized" for g in gpus)
+        if gpus else (gpu.detail if gpu else "unavailable")
+    )
+    console.print(f"[bold]GPU:[/bold]      {gpu_line}")
 
-        # Local models from Ollama
-        try:
-            import httpx
-            resp = httpx.get("http://localhost:11434/api/tags", timeout=3)
-            if resp.status_code == 200:
-                ollama_models = [m.get("name", "") for m in resp.json().get("models", [])]
-                if ollama_models:
-                    loaded_names = ", ".join(f"{m} (loaded)" for m in ollama_models[:3])
-                    if len(ollama_models) > 3:
-                        loaded_names += f" +{len(ollama_models) - 3} more"
-                    models_line = loaded_names
-                else:
-                    models_line = "none loaded (run: ollama pull llama3.1)"
-            else:
-                models_line = "Ollama not reachable"
-        except Exception:
-            models_line = "Ollama not reachable"
-        console.print(f"[bold]Models:[/bold]   {models_line}")
+    cloud = first("cloud_session")
+    if cloud and cloud.data.get("cloud"):
+        console.print(f"  [bold green]Cloud:[/bold green]     {cloud.data['summary']}")
 
-        # Advisor health
-        advisor_parts = []
-        for pname in enabled_providers:
-            try:
-                provider = engine.registry.get(pname)
-                health = await provider.health_check()
-                mark = "[green]✓[/green]" if health.healthy else "[red]✗[/red]"
-                advisor_parts.append(f"{pname} {mark}")
-            except Exception:
-                advisor_parts.append(f"{pname} [red]✗[/red]")
+    ollama = first("ollama")
+    models = ollama.data.get("models", []) if ollama else []
+    if models:
+        models_line = ", ".join(f"{m} (loaded)" for m in models[:3])
+        if len(models) > 3:
+            models_line += f" +{len(models) - 3} more"
+    elif ollama and ollama.status == "pass":
+        models_line = "none loaded (run: nvh models pull --recommended)"
+    else:
+        models_line = "Ollama not reachable"
+    console.print(f"[bold]Models:[/bold]   {models_line}")
 
-        if advisor_parts:
-            advisors_line = f"{len(enabled_providers)} online — {', '.join(advisor_parts)}"
-        else:
-            advisors_line = "none configured (run: nvh config init)"
-        console.print(f"[bold]Advisors:[/bold] {advisors_line}")
-
-        # Budget
-        try:
-            budget_data = await engine.get_budget_status()
-            daily_spend = budget_data["daily_spend"]
-            daily_limit = budget_data["daily_limit"]
-            monthly_spend = budget_data["monthly_spend"]
-            monthly_limit = budget_data["monthly_limit"]
-
-            daily_str = (
-                f"${daily_spend:.2f} / ${daily_limit:.2f} daily"
-                if daily_limit > 0
-                else f"${daily_spend:.2f} spent today"
-            )
-            monthly_str = (
-                f"${monthly_spend:.2f} / ${monthly_limit:.2f} monthly"
-                if monthly_limit > 0
-                else f"${monthly_spend:.2f} spent this month"
-            )
-            console.print(f"[bold]Budget:[/bold]   {daily_str} | {monthly_str}")
-
-            # Savings: queries handled by local (Ollama) vs cloud
-            local_queries = budget_data.get("local_queries", 0)
-            monthly_queries = budget_data.get("monthly_queries", 0)
-            if monthly_queries > 0 and local_queries > 0:
-                # Rough savings estimate: average cloud query cost * local query count
-                avg_cloud_cost = (
-                    float(monthly_spend)
-                    / max(monthly_queries - local_queries, 1)
-                    if monthly_queries > local_queries
-                    else 0.002
-                )
-                saved_usd = avg_cloud_cost * local_queries
-                console.print(
-                    f"[bold]Savings:[/bold]  ${saved_usd:.2f}"
-                    f" saved this month ({local_queries} local queries)"
-                )
-        except Exception:
-            console.print("[bold]Budget:[/bold]   unavailable")
-
-        # Default mode
-        default_mode = getattr(config.defaults, "mode", "ask")
-        console.print(
-            f"[bold]Mode:[/bold]     {default_mode} (default)"
-            " — change with: nvh config set defaults.mode convene"
+    health = [r for r in by_id.get("provider_health", []) if r.data.get("provider")]
+    if health:
+        marks = ", ".join(
+            f"{r.data['provider']} {'[green]✓[/green]' if r.data.get('healthy') else '[red]✗[/red]'}"
+            for r in health
         )
+        online = sum(1 for r in health if r.data.get("healthy"))
+        advisors_line = f"{online}/{len(health)} online — {marks}"
+    else:
+        advisors_line = "none configured (run: nvh setup)"
+    console.print(f"[bold]Advisors:[/bold] {advisors_line}")
 
-        console.print(Rule(style="dim"))
+    budget = first("budget")
+    console.print(f"[bold]Budget:[/bold]   {budget.detail if budget else 'unavailable'}")
+    savings = first("savings")
+    if savings:
+        console.print(f"[bold]Savings:[/bold]  {savings.detail}")
+    services = first("services")
+    if services:
+        console.print(f"[bold]Services:[/bold] {services.detail}")
 
-    _run(_run_status())
-
-
-# ---------------------------------------------------------------------------
-# nvh quick
-# ---------------------------------------------------------------------------
-
-@app.command(rich_help_panel="Query Modes")
-def quick(
-    prompt: str = typer.Argument(..., help="Question to answer quickly"),
-):
-    """Quick answer from the fastest/cheapest advisor. No frills.
-
-    Routes to the cheapest available advisor: Groq > DeepSeek > Ollama > cheapest cloud.
-    Outputs just the answer with no metadata — for when you need a fast answer.
-    """
-    async def _run_quick():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        enabled = await engine.initialize()
-
-        # Priority order: groq (fastest free tier) > deepseek (cheapest cloud) > ollama (local free)
-        # then fall back to cheapest available
-        cheap_priority = ["groq", "deepseek", "ollama"]
-        chosen_provider = None
-        for pname in cheap_priority:
-            if pname in enabled:
-                chosen_provider = pname
-                break
-
-        if chosen_provider is None:
-            # Fall back to cheapest routing strategy
-            chosen_provider = None  # let the router decide with "cheapest" strategy
-
-        try:
-            resp = await engine.query(
-                prompt=prompt,
-                provider=chosen_provider,
-                stream=False,
-                strategy="cheapest",
-                use_cache=True,
-            )
-            # Raw output — no metadata
-            print(resp.content, end="")
-        except Exception as e:
-            console.print(_format_cli_error(e))
-            raise typer.Exit(1)
-
-    _run(_run_quick())
+    default_mode = getattr(ctx.config.defaults, "mode", "ask") if ctx.config is not None else "ask"
+    console.print(
+        f"[bold]Mode:[/bold]     {default_mode} (default)"
+        " — change with: nvh config set defaults.mode convene"
+    )
+    console.print(Rule(style="dim"))
 
 
-# ---------------------------------------------------------------------------
-# nvh pipe — Unix pipeline mode
-# ---------------------------------------------------------------------------
+def _status_providers(ctx, *, json_output: bool) -> None:
+    import json as _json
 
-# Maximum characters to read from stdin before truncating.
-# ~100k chars ≈ ~25-30k tokens, safe for most model context windows.
-_PIPE_MAX_CHARS = 100_000
+    from nvh.integrations.diagnostics import checks as diag
 
-@app.command(rich_help_panel="Query Modes")
-def pipe(
-    prompt: str | None = typer.Argument(None, help="Prompt to prepend to stdin content"),
-    provider: str | None = typer.Option(None, "-a", "--provider", help="Provider to use"),
-    model: str | None = typer.Option(None, "-m", "--model", help="Model to use"),
-    json_output: bool = typer.Option(False, "--json", help="Output structured JSON response"),
-):
-    """Read from stdin and send to LLM — composable with Unix pipelines.
-
-    Reads piped input, optionally prepends a prompt, sends to the LLM,
-    and prints only raw response text (no Rich formatting) so output
-    can be piped further.
-
-    Examples:
-        git diff --staged | nvh pipe "Write a commit message for this diff"
-        cat error.log | nvh pipe "What caused this crash?"
-        echo "explain this" | nvh pipe
-        cat data.json | nvh pipe "Summarize this JSON" --provider groq
-        nvh pipe "translate to Spanish" < input.txt > output.txt
-    """
-    _run_pipe_command(prompt=prompt, provider=provider, model=model, json_output=json_output)
-
-
-def _run_pipe_command(
-    prompt: str | None = None,
-    provider: str | None = None,
-    model: str | None = None,
-    json_output: bool = False,
-):
-    """Shared implementation for pipe mode (explicit command and auto-detect)."""
-    # Read stdin
-    if sys.stdin.isatty():
-        print("Error: nvh pipe expects input on stdin.", file=sys.stderr)
-        print("Usage: cat file.txt | nvh pipe \"your prompt\"", file=sys.stderr)
+    results = _run(diag.run_checks(diag.PROVIDERS, ctx))
+    if json_output:
+        print(_json.dumps(diag.summarize(results), indent=2))
+        return
+    health = [r for r in results if r.id == "provider_health" and r.data.get("provider")]
+    if not health:
+        console.print("[red]No providers enabled.[/red]\n  Run: [bold]nvh setup[/bold]")
         raise typer.Exit(1)
 
-    stdin_text = sys.stdin.read(_PIPE_MAX_CHARS)
-
-    # Check if there was more data we truncated
-    extra = sys.stdin.read(1)
-    truncated = len(extra) > 0
-    if truncated:
-        # Drain remaining stdin to avoid broken pipe
-        try:
-            while sys.stdin.read(8192):
-                pass
-        except Exception:
-            pass
-        stdin_text += "\n\n[Content truncated — input exceeded limit]"
-
-    if not stdin_text.strip() and not prompt:
-        print("Error: no input received on stdin and no prompt provided.", file=sys.stderr)
-        raise typer.Exit(1)
-
-    # Build the full prompt: user prompt + stdin content
-    parts = []
-    if prompt:
-        parts.append(prompt)
-    if stdin_text.strip():
-        if prompt:
-            parts.append(f"\n---\n{stdin_text}")
+    table = Table(title="Provider Health & Resilience", show_header=True, header_style="bold cyan")
+    table.add_column("Provider", style="bold")
+    table.add_column("Status", justify="center")
+    table.add_column("Health", justify="right")
+    table.add_column("Latency / error")
+    table.add_column("In Fallback Chain", justify="center")
+    healthy = 0
+    for r in sorted(health, key=lambda r: r.data["provider"]):
+        score = r.data.get("score", 0.5)
+        if score >= 0.8:
+            status_str, healthy = "[green]Healthy[/green]", healthy + 1
+        elif score >= 0.4:
+            status_str = "[yellow]Degraded[/yellow]"
+        elif score >= 0.1:
+            status_str = "[red]Unhealthy[/red]"
         else:
-            parts.append(stdin_text)
-    full_prompt = "".join(parts)
+            status_str = "[red bold]Down[/red bold]"
+        pos = r.data.get("chain_position", 0)
+        table.add_row(
+            r.data["provider"], status_str, f"{score:.0%}",
+            f"{_STATUS_ICONS[r.status]} {r.detail}", f"#{pos}" if pos else "[dim]—[/dim]",
+        )
+    console.print(table)
+    console.print()
+    console.print(f"  [bold]{healthy}/{len(health)}[/bold] providers healthy")
+    if healthy >= 3:
+        console.print("  [green]Resilient[/green] — your workflow survives any single provider outage")
+    elif healthy >= 2:
+        console.print("  [yellow]Partial resilience[/yellow] — add more providers with [bold]nvh setup --all[/bold]")
+    else:
+        console.print("  [red]Vulnerable[/red] — only 1 healthy provider. Run [bold]nvh setup[/bold] to add more.")
+    chain = next((r for r in results if r.id == "fallback_chain"), None)
+    if chain:
+        console.print(f"\n  Fallback chain: [bold]{chain.detail}[/bold]")
+    console.print()
+
+
+def _print_check_table(results, title: str) -> None:
+    table = Table(title=title, show_lines=False)
+    table.add_column("Check", style="bold", min_width=35)
+    table.add_column("Status", justify="center", min_width=8)
+    table.add_column("Detail")
+    for r in results:
+        table.add_row(r.title, _STATUS_LABELS.get(r.status, r.status.upper()), r.detail)
+    console.print(table)
+
+    counts = {s: sum(1 for r in results if r.status == s) for s in ("pass", "warn", "fail")}
+    summary_parts = []
+    if counts["pass"]:
+        summary_parts.append(f"[green]{counts['pass']} passed[/green]")
+    if counts["warn"]:
+        summary_parts.append(f"[yellow]{counts['warn']} warnings[/yellow]")
+    if counts["fail"]:
+        summary_parts.append(f"[red]{counts['fail']} failures[/red]")
+    console.print(f"\nResults: {', '.join(summary_parts)} ({len(results)} checks total)")
+
+    fixes = [r.fix for r in results if r.fix and r.status != "pass"]
+    if fixes:
+        console.print("\n[bold]Suggested fixes:[/bold]")
+        for i, fix in enumerate(fixes, 1):
+            console.print(f"  {i}. {fix}")
+
+
+def _confirm_fix(prompt: str) -> bool:
+    try:
+        answer = console.input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer not in ("n", "no")
+
+
+def _apply_deep_fixes(ctx, results) -> list:
+    """Interactive repairs for `--deep --fix`; returns the rows to append."""
+    from nvh.integrations.diagnostics import checks as diag
+
+    extra = []
+    by_id = {r.id: r for r in results}
+    ollama = by_id.get("ollama")
+    ollama_cfg = ctx.config.providers.get("ollama") if ctx.config is not None else None
+    if ollama and ollama.status != "pass" and ollama_cfg is not None and ollama_cfg.enabled:
+        console.print("\n[yellow]Ollama is enabled in config but not running.[/yellow]")
+        if _confirm_fix("  Restart Ollama now? [Y/n] "):
+            from nvh.cli.setup import _find_ollama_binary, _start_ollama
+
+            ollama_bin = _find_ollama_binary()
+            if ollama_bin is None:
+                console.print("  [red]ollama binary not found.[/red] Install from https://ollama.com")
+            elif _start_ollama(console, ollama_bin):
+                ctx.reset_ollama()
+                if ctx.ollama_models is not None:
+                    extra.append(diag.CheckResult(
+                        "ollama", "Ollama (restarted)", "pass",
+                        f"now running, {len(ctx.ollama_models)} model(s)",
+                    ))
+
+    required = by_id.get("ollama_required_models")
+    missing = required.data.get("missing", []) if required else []
+    if missing:
+        console.print(
+            f"\n[yellow]{len(missing)} required model(s) missing in Ollama:[/yellow]"
+            f" [bold]{', '.join(missing)}[/bold]"
+        )
+        if _confirm_fix("  Pull them now? [Y/n] "):
+            from nvh.cli.setup import _find_ollama_binary, _pull_model
+
+            ollama_bin = _find_ollama_binary() or "ollama"
+            pulled = [m for m in missing if _pull_model(console, m, ollama_bin)]
+            if pulled:
+                extra.append(diag.CheckResult(
+                    "ollama_required_models", "Ollama required models (fixed)", "pass",
+                    f"pulled {', '.join(pulled)}",
+                ))
+    return extra
+
+
+def _status_deep(ctx, *, json_output: bool, fix: bool, storage_only: bool) -> None:
+    import json as _json
+
+    from nvh.integrations.diagnostics import checks as diag
+
+    # Under --json stdout is the payload; everything human goes to stderr.
+    out = err_console if json_output else console
+
+    if storage_only:
+        from nvh.integrations.workspace.storage import ensure_storage
+
+        storage = ensure_storage(ctx.home_dir, min_free_gb=ctx.min_free_gb)
+        out.print("[bold]Storage preflight[/bold]\n")
+        out.print(f"  NVH_HOME:  [bold]{storage.layout.home}[/bold]")
+        out.print(f"  Env file:  {storage.env_file}")
+        out.print(f"  Writable:  {'yes' if storage.writable else 'no'}")
+        out.print(
+            f"  Free:      {storage.free_gb if storage.free_gb is not None else '?'} GB"
+            f" / minimum {storage.min_free_gb:.0f} GB"
+        )
+        for warning in storage.warnings:
+            out.print(f"  [yellow]![/yellow] {warning}")
+        out.print(f"\n  [green]Activate:[/green] source {storage.env_file}")
+        raise typer.Exit(0 if storage.ok and storage.configured_by != "default" else 1)
+
+    out.print("[bold]nvh status --deep[/bold] — running diagnostics...\n")
+    results = _run(diag.run_checks(diag.DEEP, ctx))
+    if fix:
+        results.extend(_apply_deep_fixes(ctx, results))
+    summary = diag.summarize(results)
 
     if json_output:
-        system_prompt = (
-            "You must respond with valid JSON only. No markdown, no explanation outside the JSON. "
-            "Use an appropriate JSON structure for the request."
+        print(_json.dumps({"schema_version": 2, **summary}, indent=2))
+        raise typer.Exit(0 if summary["failed"] == 0 else 1)
+
+    _print_check_table(results, "Diagnostic Results")
+    if summary["failed"]:
+        raise typer.Exit(1)
+
+
+def _status_smoke(home_dir: str | None, *, imports: bool, json_output: bool, strict: bool) -> None:
+    import json as _json
+
+    from rich.rule import Rule
+
+    from nvh.integrations.diagnostics.smoke_tests import smoke_test_report
+
+    report = smoke_test_report(home_dir=home_dir, imports=imports)
+    exit_code = 1 if report["failed"] or (strict and report["warnings"]) else 0
+
+    if json_output:
+        print(_json.dumps(report, indent=2))
+        raise typer.Exit(exit_code)
+
+    console.print()
+    console.print(Rule("nvHive Smoke Test"))
+    for t in report["tests"]:
+        console.print(f"  {_STATUS_ICONS.get(t['status'], '?')} {t['title']}  [dim]{t['summary']}[/dim]")
+        if t.get("detail") and t["status"] in ("warn", "fail"):
+            console.print(f"      [dim]{t['detail']}[/dim]")
+    console.print()
+    console.print(f"  {report['summary']}")
+    if exit_code:
+        console.print("  [dim]Fix hints: nvh status --deep --fix · nvh workstation[/dim]")
+    console.print()
+    raise typer.Exit(exit_code)
+
+
+def _nvidia_bug_report() -> dict[str, Any]:
+    import subprocess
+
+    path = os.path.expanduser("~/nvh/nvidia-bug-report.log.gz")
+    try:
+        result = subprocess.run(
+            ["nvidia-bug-report.sh", "--output-file", path],
+            capture_output=True, text=True, timeout=60,
         )
+    except FileNotFoundError:
+        return {"ok": False, "error": "nvidia-bug-report.sh not found (NVIDIA driver may not be installed)"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "nvidia-bug-report.sh timed out (60s)"}
+    if result.returncode == 0 and os.path.exists(path):
+        return {"ok": True, "path": path, "size_kb": round(os.path.getsize(path) / 1024)}
+    return {"ok": False, "error": f"exit {result.returncode}: {result.stderr.strip()[:200]}"}
+
+
+def _status_report(
+    ctx,
+    *,
+    imports: bool,
+    live: bool,
+    live_prompt: str,
+    strict: bool,
+    output: str | None,
+    send: bool,
+    nvidia_report: bool,
+    quiet: bool,
+) -> None:
+    """Redacted JSON support bundle; nothing leaves $NVH_HOME/support/."""
+    import json as _json
+
+    from nvh import telemetry as _telemetry
+    from nvh.integrations.diagnostics import checks as diag
+    from nvh.integrations.diagnostics.smoke_tests import smoke_test_report
+    from nvh.integrations.workspace.passport import support_snapshot
+    from nvh.integrations.workspace.storage import nvh_home as _nvh_home
+
+    home_path, home_source = _nvh_home(ctx.home_dir)
+
+    def say(text: str) -> None:
+        if not quiet:
+            console.print(text)
+
+    say("[bold]nvh status --report[/bold] — gathering support bundle...\n")
+    say(f"  NVH_HOME: [bold]{home_path}[/bold] ([dim]{home_source}[/dim])\n")
+
+    bundle: dict[str, Any] = {
+        "schema_version": 2,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "nvh_home": str(home_path),
+        "nvh_home_source": home_source,
+        "nvh_version": diag.nvh_version(),
+        "platform": diag.platform_summary(),
+        "components": {},
+        "status": {"ok": True, "failures": [], "warnings": []},
+    }
+    failures: list[str] = bundle["status"]["failures"]
+    warnings: list[str] = bundle["status"]["warnings"]
+    soft = failures if strict else warnings
+
+    say("  [dim]→ running checks ...[/dim]")
+    results = _run(diag.run_checks(diag.REPORT, ctx))
+    summary = diag.summarize(results)
+    bundle["components"]["checks"] = summary
+    if summary["failed"]:
+        failures.append(f"checks: {summary['failed']} failure(s)")
+    if summary["warned"]:
+        soft.append(f"checks: {summary['warned']} warning(s)")
+
+    say("  [dim]→ running smoke test ...[/dim]")
+    try:
+        smoke = smoke_test_report(home_dir=str(home_path), imports=imports)
+        bundle["components"]["smoke"] = smoke
+        if smoke["failed"]:
+            failures.append(f"smoke: {smoke['failed']} hard failure(s)")
+        if smoke["warnings"]:
+            soft.append(f"smoke: {smoke['warnings']} warning(s)")
+    except Exception as e:  # noqa: BLE001 — bundle continues even if one block fails
+        bundle["components"]["smoke"] = {"error": str(e)[:500]}
+        failures.append(f"smoke: crashed ({type(e).__name__})")
+
+    if not live:
+        bundle["components"]["wizard_live_turn"] = {"skipped": True}
     else:
-        system_prompt = None
-
-    async def _run_pipe():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        await engine.initialize()
-
+        say("  [dim]→ exercising live Wizard turn ...[/dim]")
         try:
-            resp = await engine.query(
-                prompt=full_prompt,
-                provider=provider,
-                model=model,
-                system_prompt=system_prompt,
-                stream=False,
+            from nvh.core.engine import Engine
+
+            async def _live() -> dict[str, Any]:
+                engine = Engine()
+                await engine.initialize()
+                t0 = time.monotonic()
+                resp = await engine.query(live_prompt)
+                return {
+                    "ok": True,
+                    "provider": getattr(resp, "provider", "?"),
+                    "model": getattr(resp, "model", "?"),
+                    "duration_ms": int((time.monotonic() - t0) * 1000),
+                    "reply_chars": len(getattr(resp, "content", "") or ""),
+                }
+
+            result = _run(_live())
+            bundle["components"]["wizard_live_turn"] = result
+            _telemetry.emit(
+                "first_wizard_turn",
+                {
+                    "provider": result.get("provider"),
+                    "model": result.get("model"),
+                    "duration_ms": result.get("duration_ms"),
+                    "source": "status-report",
+                },
+                home_dir=ctx.home_dir,
             )
-            # Raw output only — no Rich formatting so it pipes cleanly
-            print(resp.content, end="")
-        except Exception as e:
-            print(f"Error: {e}", file=sys.stderr)
-            raise typer.Exit(1)
-
-    _run(_run_pipe())
-
-
-# ---------------------------------------------------------------------------
-# nvh safe — local-only private mode
-# ---------------------------------------------------------------------------
-
-@app.command(rich_help_panel="Query Modes")
-def safe(
-    prompt: str = typer.Argument(..., help="Question to answer privately using local models only"),
-    model: str | None = typer.Option(None, "-m", "--model", help="Local model to use"),
-    raw: bool = typer.Option(False, "--raw", help="Output just the answer"),
-):
-    """Private mode — your data never leaves your machine.
-
-    Routes ONLY to local Ollama models. No cloud APIs are called.
-    No data is logged, cached, or stored. No data is used to train other AI models.
-
-    Perfect for: confidential documents, salary data, medical info, legal matters,
-    proprietary code, personal questions.
-
-    Examples:
-        nvh safe "Analyze my salary negotiation strategy"
-        nvh safe "Review this NDA" -f contract.pdf
-        nvh safe "Debug this proprietary algorithm"
-    """
-    async def _run_safe():
-        from nvh.config.settings import load_config
-        from nvh.core.engine import Engine
-
-        config = load_config()
-        engine = Engine(config=config)
-        await engine.initialize()
-
-        if not engine.registry.has("ollama"):
-            console.print("[red]Safe mode requires Ollama (local AI).[/red]")
-            console.print("Set up: nvh ollama")
-            raise typer.Exit(1)
-
-        console.print("[dim][safe mode — local only, no data leaves your machine][/dim]\n")
-
-        try:
-            resp = await engine.query(
-                prompt=prompt,
-                provider="ollama",
-                model=model,
-                stream=False,
-                privacy=True,  # no logging, no caching, no persistence
-            )
-            if raw:
-                print(resp.content, end="")
+        except Exception as e:  # noqa: BLE001
+            err = str(e)[:500]
+            rate_limited = "rate" in err.lower() or "429" in err
+            bundle["components"]["wizard_live_turn"] = {"ok": False, "error": err, "rate_limited": rate_limited}
+            if rate_limited and not strict:
+                warnings.append("wizard_live_turn: rate limited (transient)")
             else:
-                console.print(resp.content)
-                console.print(
-                    f"\n[dim]{resp.model} (local)"
-                    f" | {resp.usage.total_tokens} tokens"
-                    " | FREE"
-                    f" | {resp.latency_ms}ms"
-                    " | [green]no data transmitted[/green][/dim]"
-                )
-        except Exception as e:
-            console.print(_format_cli_error(e))
-            raise typer.Exit(1)
+                failures.append(f"wizard_live_turn: {type(e).__name__}")
 
-    _run(_run_safe())
+    say("  [dim]→ writing redacted workspace snapshot ...[/dim]")
+    try:
+        snap = support_snapshot(home_dir=str(home_path), include_logs=True)
+        bundle["components"]["support_snapshot"] = {
+            "path": snap.get("path"),
+            "workspace_id": snap.get("passport", {}).get("workspace_id"),
+            "rootless": snap.get("passport", {}).get("rootless"),
+            "excludes": snap.get("excludes", []),
+        }
+    except Exception as e:  # noqa: BLE001
+        bundle["components"]["support_snapshot"] = {"error": str(e)[:500]}
+        warnings.append(f"support_snapshot: {type(e).__name__}")
+
+    try:
+        bundle["components"]["telemetry"] = _telemetry.summary(home_dir=ctx.home_dir)
+    except Exception as e:  # noqa: BLE001
+        bundle["components"]["telemetry"] = {"error": str(e)[:500]}
+
+    if nvidia_report:
+        say("  [dim]→ running nvidia-bug-report.sh ...[/dim]")
+        bundle["components"]["nvidia_bug_report"] = _nvidia_bug_report()
+
+    bundle["status"]["ok"] = not failures
+
+    if output:
+        bundle_path = Path(output).expanduser()
+    else:
+        stamp = bundle["created_at"].replace(":", "").replace("-", "")
+        bundle_path = home_path / "support" / f"status-report-{stamp}.json"
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    text = _json.dumps(bundle, indent=2, sort_keys=True, default=str)
+    bundle_path.write_text(text, encoding="utf-8")
+
+    if send:
+        try:
+            _write_clipboard(text)
+            say("  [dim]Bundle copied to clipboard.[/dim]")
+        except RuntimeError as e:
+            say(f"  [yellow]{e}[/yellow]")
+
+    if quiet:
+        print(str(bundle_path))
+    else:
+        console.print()
+        if bundle["status"]["ok"]:
+            console.print(f"  [bold green]Bundle OK[/bold green] → {bundle_path}")
+        else:
+            console.print(f"  [bold red]Bundle has failures[/bold red] → {bundle_path}")
+            for f in failures:
+                console.print(f"    [red]✗[/red] {f}")
+        for w in warnings:
+            console.print(f"    [yellow]![/yellow] {w}")
+        attention = [r for r in results if r.status in ("warn", "fail")]
+        if attention:
+            console.print()
+            _print_check_table(attention, "Needs attention")
+        console.print(
+            "\n  [dim]Send the bundle file above to support, or paste"
+            " its contents into the issue.[/dim]"
+        )
+    raise typer.Exit(0 if bundle["status"]["ok"] else 1)
+
+
+# Pre-0.42 diagnostic verbs — hidden aliases of one `nvh status` tier each.
+
+@app.command(hidden=True)
+def health():
+    """(alias) nvh status --providers"""
+    _run_status("providers")
+
+
+@app.command(hidden=True)
+def why():
+    """(alias) nvh status --routing"""
+    _run_status("routing")
+
+
+@app.command(hidden=True)
+def doctor(
+    fix: bool = typer.Option(False, "--fix"),
+    storage_only: bool = typer.Option(False, "--storage"),
+    home_dir: str | None = typer.Option(None, "--home-dir"),
+    min_free_gb: float = typer.Option(200.0, "--min-free-gb"),
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """(alias) nvh status --deep"""
+    _run_status(
+        "deep", fix=fix, storage_only=storage_only, home_dir=home_dir,
+        min_free_gb=min_free_gb, json_output=json_output,
+    )
+
+
+@app.command(hidden=True)
+def test(
+    imports: bool = typer.Option(False, "--imports", help="Also import every core module"),
+    home_dir: str | None = typer.Option(None, "--home-dir"),
+    json_output: bool = typer.Option(False, "--json"),
+    strict: bool = typer.Option(False, "--strict"),
+    quick: bool = typer.Option(False, "--quick", hidden=True),
+):
+    """(alias) nvh status --smoke"""
+    del quick  # pre-0.42 flag; every run is the quick one now
+    _run_status("smoke", imports=imports, home_dir=home_dir, json_output=json_output, strict=strict)
+
+
+app.command("smoke", hidden=True)(test)
+
+
+@app.command(hidden=True)
+def debug(
+    output: str | None = typer.Option(None, "-o", "--output"),
+    send: bool = typer.Option(False, "--send"),
+    nvidia_report: bool = typer.Option(False, "--nvidia-report"),
+):
+    """(alias) nvh status --report"""
+    _run_status("report", output=output, send=send, nvidia_report=nvidia_report)
+
+
+@app.command(hidden=True)
+def selfcheck(
+    home_dir: str | None = typer.Option(None, "--home-dir"),
+    output: str | None = typer.Option(None, "--output", "-o"),
+    test_query: str = typer.Option("Say hello in one sentence", "--query"),
+    skip_live_query: bool = typer.Option(False, "--no-live-query"),
+    strict: bool = typer.Option(False, "--strict"),
+    quiet: bool = typer.Option(False, "--quiet"),
+):
+    """(alias) nvh status --report --live --imports"""
+    _run_status(
+        "report", home_dir=home_dir, output=output, live=not skip_live_query,
+        live_prompt=test_query, strict=strict, quiet=quiet, imports=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3268,7 +3264,7 @@ By proceeding, you agree to:
 4. Queries sent to cloud AI providers are subject to THEIR data policies
 5. API keys are stored locally on your machine (OS keychain — never transmitted)
 6. NVHive does not collect telemetry, analytics, or personal data
-7. Local AI processing (nvh safe) keeps all data on your device
+7. Local AI processing (nvh ask --local) keeps all data on your device
 8. Free tiers have rate limits — NVHive manages these automatically
 9. Nemotron model usage is subject to NVIDIA's model license terms
 10. AI-generated content should be reviewed before relying on it
@@ -3759,7 +3755,7 @@ def setup(
     console.print("  [bold]Next steps:[/bold]")
     console.print(
         "    Verify everything works: "
-        " [bold]nvh test --quick[/bold]",
+        " [bold]nvh status --smoke[/bold]",
     )
     console.print(
         "    Try a query:             "
@@ -3784,8 +3780,6 @@ def setup(
 # ---------------------------------------------------------------------------
 # nvh conversation
 # ---------------------------------------------------------------------------
-
-from datetime import UTC  # noqa: E402
 
 from nvh.cli.conversations import conversation_app  # noqa: E402
 
@@ -4250,7 +4244,8 @@ def config_migrate(
 
     Providers retire model IDs without notice; this rewrites the ones nvHive
     knows about (RETIRED_MODEL_RENAMES in nvh.cli.setup), removes providers
-    whose service shut down, and keeps ${ENV_VAR} references untouched.
+    whose service shut down, drops the dead top-level `hooks:` key, and
+    keeps ${ENV_VAR} references untouched.
     """
     import shutil as _shutil
 
@@ -4491,15 +4486,9 @@ def advisor_login(
     headless: bool = typer.Option(False, "--headless", help="Don't open browser"),
 ):
     """Interactive login flow for an advisor."""
-    urls = {
-        "openai": "https://platform.openai.com/api-keys",
-        "anthropic": "https://console.anthropic.com/settings/keys",
-        "google": "https://aistudio.google.com/apikey",
-        "mistral": "https://console.mistral.ai/api-keys",
-        "cohere": "https://dashboard.cohere.com/api-keys",
-        "groq": "https://console.groq.com/keys",
-        "huggingface": "https://huggingface.co/settings/tokens",
-    }
+    info = KNOWN_ADVISORS.get(name, {})
+    if info.get("free_tier"):
+        console.print(f"[green]Free tier available: {info.get('free_info', '')}[/green]")
 
     if name == "ollama":
         console.print("Ollama doesn't require authentication. Checking connectivity...")
@@ -4527,7 +4516,7 @@ def advisor_login(
             )
             console.print("Or paste an API key manually below.")
 
-    url = urls.get(name, "")
+    url = info.get("url", "")
     if url:
         console.print(f"Get your API key at: [link={url}]{url}[/link]")
         if not headless:
@@ -5956,7 +5945,7 @@ def migrate(
         f" {imported} provider(s) imported.\n"
     )
     console.print("  [bold]Next steps:[/bold]")
-    console.print("    Verify:    [bold]nvh test --quick[/bold]")
+    console.print("    Verify:    [bold]nvh status --smoke[/bold]")
     console.print("    Try it:    [bold]nvh \"Hello from nvHive!\"[/bold]")
     console.print("    Dashboard: [bold]nvh webui[/bold]")
     console.print()
@@ -8358,8 +8347,8 @@ def webui(
                     return True
 
         # Prefer any pre-installed browser before attempting a rootless
-        # Firefox download. On minimal Linux desktops (e.g. NVIDIA
-        # CloudMatch / GFN rigs) Chromium is already in the taskbar; the
+        # Firefox download. On minimal Linux desktops (e.g. rented cloud
+        # GPU desktops) Chromium is already in the taskbar; the
         # Firefox download is slow and can be blocked by network policy,
         # so trying it first leaves users staring at "Browser:
         # http://localhost:3000/setup" with nothing visibly opening.
@@ -9167,1509 +9156,6 @@ def webui(
 
 
 # ---------------------------------------------------------------------------
-# nvh debug — full diagnostic dump for troubleshooting
-# ---------------------------------------------------------------------------
-
-@app.command(rich_help_panel="Admin")
-def debug(
-    output: str | None = typer.Option(
-        None, "-o", "--output",
-        help="Save to file instead of printing",
-    ),
-    send: bool = typer.Option(False, "--send", help="Copy to clipboard for sharing"),
-    nvidia_report: bool = typer.Option(
-        False, "--nvidia-report",
-        help="Also run nvidia-bug-report.sh for NVIDIA support",
-    ),
-):
-    """Full diagnostic dump — captures everything needed to troubleshoot issues.
-
-    Collects: system info, GPU, Python, config, advisors, Ollama, cloud session status,
-    disk, memory, network, recent errors, and a test query result.
-
-    Use --nvidia-report to also generate NVIDIA's official bug report
-    (runs nvidia-bug-report.sh and packages the output).
-
-    Share the output when reporting issues.
-
-    Examples:
-        nvh debug                    # print to terminal
-        nvh debug -o debug.txt       # save to file
-        nvh debug --send             # copy to clipboard
-        nvh debug --nvidia-report    # include NVIDIA driver/GPU diagnostics
-    """
-    import os
-    import platform
-    import subprocess
-    import sys
-    from datetime import datetime
-
-    lines: list[str] = []
-
-    def log(text: str = ""):
-        lines.append(text)
-        if not output and not send:
-            console.print(text)
-
-    log(f"NVHive Debug Report — {datetime.now(UTC).isoformat()}")
-    log("=" * 60)
-
-    # --- System ---
-    log("\n[SYSTEM]")
-    log(f"  Platform:    {platform.platform()}")
-    log(f"  Python:      {sys.version}")
-    log(f"  Executable:  {sys.executable}")
-    log(f"  NVHive:      v{__version__}")
-    log(f"  CWD:         {os.getcwd()}")
-    log(f"  HOME:        {os.path.expanduser('~')}")
-    log(f"  User:        {os.environ.get('USER', 'unknown')}")
-    log(f"  Shell:       {os.environ.get('SHELL', 'unknown')}")
-
-    # --- Environment ---
-    log("\n[ENVIRONMENT]")
-    try:
-        from nvh.utils.environment import detect_environment
-        env = detect_environment()
-        log(f"  Docker:      {env.is_docker}")
-        log(f"  Cloud:       {env.is_cloud} ({env.cloud_provider})")
-        log(f"  Has root:    {env.has_root}")
-        log(f"  GPU access:  {env.gpu_accessible}")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Cloud Session ---
-    log("\n[CLOUD SESSION]")
-    try:
-        from nvh.integrations.cloud_session import detect_cloud_session
-        cloud = detect_cloud_session()
-        log(f"  Detected:    {cloud.is_cloud_session}")
-        if cloud.is_cloud_session:
-            log(f"  Tier:        {cloud.tier}")
-            log(f"  GPU class:   {cloud.gpu_class}")
-            log(
-                f"  Session ID:  {cloud.session_id[:12]}..."
-                if cloud.session_id
-                else "  Session ID:  none"
-            )
-            log(f"  Storage:     {cloud.persistent_storage}")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- GPU ---
-    log("\n[GPU]")
-    try:
-        from nvh.utils.gpu import detect_gpus, detect_system_memory, get_ollama_optimizations
-        gpus = detect_gpus()
-        if gpus:
-            for g in gpus:
-                log(f"  GPU {g.index}: {g.name}")
-                log(f"    VRAM:      {g.vram_gb:.1f} GB total, {g.memory_free_mb} MB free")
-                log(f"    Util:      {g.utilization_pct}%")
-                log(f"    Driver:    {g.driver_version}")
-                log(f"    CUDA:      {g.cuda_version}")
-            opts = get_ollama_optimizations(gpus)
-            log(f"  Architecture: {opts.architecture} (CC {opts.compute_capability})")
-            log(f"  Flash Attn:  {opts.flash_attention}")
-            log(f"  Rec. quant:  {opts.recommended_quant}")
-            log(f"  Rec. ctx:    {opts.recommended_ctx}")
-        else:
-            log("  No NVIDIA GPU detected")
-
-        mem = detect_system_memory()
-        log(f"\n  System RAM:  {mem.total_ram_gb} GB total, {mem.available_ram_gb} GB free")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Drivers & Dependencies ---
-    log("\n[DRIVERS & DEPENDENCIES]")
-    try:
-        # NVIDIA driver
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=driver_version",
-             "--format=csv,noheader"],
-                                capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            log(f"  NVIDIA driver: {result.stdout.strip()}")
-        else:
-            log("  NVIDIA driver: NOT FOUND")
-
-        # CUDA
-        cuda_paths = ["/usr/local/cuda/version.txt", "/usr/local/cuda/bin/nvcc"]
-        cuda_found = False
-        for p in cuda_paths:
-            if os.path.exists(p):
-                if p.endswith("nvcc"):
-                    r = subprocess.run([p, "--version"], capture_output=True, text=True, timeout=5)
-                    ver = [ln for ln in r.stdout.splitlines() if "release" in ln.lower()]
-                    log(f"  CUDA toolkit: {ver[0].strip() if ver else 'found'}")
-                else:
-                    log(f"  CUDA toolkit: {open(p).read().strip()}")
-                cuda_found = True
-                break
-        if not cuda_found:
-            log("  CUDA toolkit: not found (OK — Ollama bundles its own)")
-
-        # Docker
-        r = subprocess.run(["docker", "--version"], capture_output=True, text=True, timeout=5)
-        log(f"  Docker:       {r.stdout.strip() if r.returncode == 0 else 'not found'}")
-
-        # Docker GPU support
-        if r.returncode == 0:
-            r2 = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=10)
-            if "nvidia" in r2.stdout.lower():
-                log("  Docker GPU:   NVIDIA runtime detected")
-            else:
-                log("  Docker GPU:   NVIDIA runtime NOT found (install nvidia-container-toolkit)")
-
-        # Git
-        r = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=5)
-        log(f"  Git:          {r.stdout.strip() if r.returncode == 0 else 'not found'}")
-
-        # Ollama binary
-        ollama_bin = os.path.expanduser("~/nvh/ollama")
-        if os.path.exists(ollama_bin):
-            log(f"  Ollama bin:   {ollama_bin} (local)")
-        elif subprocess.run(["which", "ollama"], capture_output=True).returncode == 0:
-            log("  Ollama bin:   system install")
-        else:
-            log("  Ollama bin:   not found")
-
-        # Key Python packages
-        import importlib
-        for pkg, name in [("litellm", "LiteLLM"), ("fastapi", "FastAPI"), ("rich", "Rich"),
-                          ("typer", "Typer"), ("pydantic", "Pydantic"), ("httpx", "httpx"),
-                          ("keyring", "Keyring"), ("tiktoken", "tiktoken")]:
-            try:
-                mod = importlib.import_module(pkg)
-                ver = getattr(mod, "__version__", "?")
-                log(f"  {name:12s}  {ver}")
-            except ImportError:
-                log(f"  {name:12s}  MISSING — pip install {pkg}")
-
-        # Audio tools (for voice)
-        for tool in ["sox", "arecord", "espeak", "edge-tts"]:
-            found = subprocess.run(["which", tool], capture_output=True).returncode == 0
-            log(f"  {tool:12s}  {'found' if found else 'not found (optional, for nvh voice)'}")
-
-        # Screenshot tools
-        for tool in ["scrot", "gnome-screenshot", "import"]:
-            found = subprocess.run(["which", tool], capture_output=True).returncode == 0
-            log(f"  {tool:12s}  {'found' if found else 'not found (optional, for nvh screenshot)'}")
-
-        # PDF tools (for RAG)
-        for tool in ["pdftotext"]:
-            found = subprocess.run(["which", tool], capture_output=True).returncode == 0
-            log(f"  {tool:12s}  {'found' if found else 'not found (optional, for PDF ingestion)'}")
-
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Disk ---
-    log("\n[DISK]")
-    try:
-        import shutil
-        home = os.path.expanduser("~")
-        usage = shutil.disk_usage(home)
-        free_gb = usage.free / (1024**3)
-        total_gb = usage.total / (1024**3)
-        log(f"  Home dir:    {free_gb:.1f} GB free / {total_gb:.1f} GB total")
-        nvh_dir = os.path.expanduser("~/nvh")
-        if os.path.isdir(nvh_dir):
-            nvh_size = sum(
-                os.path.getsize(os.path.join(dp, f))
-                for dp, _, fns in os.walk(nvh_dir) for f in fns
-            ) / (1024**3)
-            log(f"  ~/nvh size:  {nvh_size:.2f} GB")
-        hive_dir = os.path.expanduser("~/.hive")
-        if os.path.isdir(hive_dir):
-            log("  ~/.hive:     exists")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Config ---
-    log("\n[CONFIG]")
-    try:
-        from nvh.config.settings import DEFAULT_CONFIG_PATH, load_config
-        log(f"  Config path: {DEFAULT_CONFIG_PATH}")
-        log(f"  Exists:      {DEFAULT_CONFIG_PATH.exists()}")
-        config = load_config()
-        log(f"  Default mode:    {config.defaults.mode}")
-        log(f"  Default advisor: {config.defaults.provider or '(auto)'}")
-        log(f"  Budget daily:    ${config.budget.daily_limit_usd}")
-        log(f"  Budget monthly:  ${config.budget.monthly_limit_usd}")
-        log(f"  Cache enabled:   {config.cache.enabled}")
-        log(f"  Hooks:           {len(config.hooks)}")
-        log(f"  Webhooks:        {len(config.webhooks)}")
-
-        enabled_advisors = [n for n, p in config.providers.items() if p.enabled]
-        disabled_advisors = [n for n, p in config.providers.items() if not p.enabled]
-        log(f"  Advisors enabled:  {enabled_advisors}")
-        log(f"  Advisors disabled: {disabled_advisors}")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- API Keys (masked) ---
-    log("\n[API KEYS]")
-    try:
-        import keyring as kr
-        for name in ["openai", "anthropic", "google", "groq", "ollama",
-                      "grok", "mistral", "cohere", "deepseek", "nvidia",
-                      "cerebras", "sambanova", "huggingface", "ai21",
-                      "perplexity", "together", "fireworks", "openrouter",
-                      "siliconflow", "llm7"]:
-            key = ""
-            try:
-                key = kr.get_password("nvhive", f"{name}_api_key") or ""
-            except Exception:
-                pass
-            if not key:
-                key = os.environ.get(f"{name.upper()}_API_KEY", "")
-            status = (
-                f"set ({key[:4]}...{key[-4:]})"
-                if len(key) > 8
-                else ("set" if key else "not set")
-            )
-            log(f"  {name:15s} {status}")
-    except Exception as e:
-        log(f"  Keyring error: {e}")
-
-    # --- Ollama ---
-    log("\n[OLLAMA]")
-    try:
-        import httpx
-        resp = httpx.get("http://localhost:11434/api/tags", timeout=3)
-        if resp.status_code == 200:
-            models = resp.json().get("models", [])
-            log("  Status:      running")
-            log(f"  Models:      {len(models)}")
-            for m in models[:10]:
-                name = m.get("name", "?")
-                size_gb = m.get("size", 0) / (1024**3)
-                log(f"    - {name} ({size_gb:.1f} GB)")
-        else:
-            log(f"  Status:      error ({resp.status_code})")
-    except Exception as e:
-        log(f"  Status:      not reachable ({type(e).__name__})")
-
-    # --- Free Tier ---
-    log("\n[FREE TIER DETECTION]")
-    try:
-        from nvh.core.free_tier import detect_available_free_advisors
-        available = detect_available_free_advisors()
-        log(f"  Available:   {[a.name for a in available]}")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Knowledge Base ---
-    log("\n[KNOWLEDGE BASE]")
-    try:
-        from nvh.core.knowledge import get_knowledge_base
-        kb = get_knowledge_base()
-        docs = kb.list_documents()
-        log(f"  Documents:   {len(docs)}")
-        for d in docs[:5]:
-            log(f"    - {d.filename} ({d.num_chunks} chunks)")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Memory ---
-    log("\n[MEMORY STORE]")
-    try:
-        from nvh.core.memory import get_memory_store
-        store = get_memory_store()
-        memories = store.get_all()
-        log(f"  Memories:    {len(memories)}")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Test Query (mock) ---
-    log("\n[TEST QUERY]")
-    try:
-        async def _test():
-            from nvh.core.engine import Engine
-            engine = Engine()
-            enabled = await engine.initialize()
-            log(f"  Initialized: {len(enabled)} advisors")
-            if enabled:
-                decision = engine.router.route("test query hello world")
-                log(f"  Route test:  {decision.provider}/{decision.model}")
-                log(f"  Task type:   {decision.task_type.value}")
-                log(f"  Confidence:  {decision.confidence:.2f}")
-                log(f"  Reason:      {decision.reason}")
-            else:
-                log("  No advisors — cannot test routing")
-        _run(_test())
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Tools ---
-    log("\n[TOOLS]")
-    try:
-        from nvh.core.tools import ToolRegistry
-        tools = ToolRegistry()
-        log(f"  Registered:  {[t.name for t in tools.list_tools()]}")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Scheduled Tasks ---
-    log("\n[SCHEDULER]")
-    try:
-        from nvh.core.scheduler import Scheduler
-        sched = Scheduler()
-        tasks = sched.list_tasks()
-        log(f"  Tasks:       {len(tasks)}")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- Network ---
-    log("\n[NETWORK]")
-    try:
-        import httpx
-        for url, name in [
-            ("https://api.groq.com", "Groq API"),
-            ("https://html.duckduckgo.com", "DuckDuckGo"),
-            ("https://ollama.com", "Ollama.com"),
-        ]:
-            try:
-                resp = httpx.head(url, timeout=5, follow_redirects=True)
-                log(f"  {name:15s} reachable ({resp.status_code})")
-            except Exception:
-                log(f"  {name:15s} UNREACHABLE")
-    except Exception as e:
-        log(f"  Error: {e}")
-
-    # --- NVIDIA Bug Report (only when issues detected or --nvidia-report) ---
-    gpu_issues = any("NOT FOUND" in ln or "UNREACHABLE" in ln or "not found" in ln.lower()
-                     for ln in lines
-                     if "[GPU]" in "".join(lines[:lines.index(ln)+1])
-                     or "NVIDIA" in ln)
-
-    if nvidia_report or gpu_issues:
-        log("\n[NVIDIA BUG REPORT]")
-        nvidia_report_path = os.path.expanduser("~/nvh/nvidia-bug-report.log.gz")
-        try:
-            # nvidia-bug-report.sh generates nvidia-bug-report.log.gz
-            result = subprocess.run(
-                ["nvidia-bug-report.sh", "--output-file", nvidia_report_path],
-                capture_output=True, text=True, timeout=60,
-            )
-            if result.returncode == 0 and os.path.exists(nvidia_report_path):
-                size_kb = os.path.getsize(nvidia_report_path) / 1024
-                log(f"  Generated:   {nvidia_report_path} ({size_kb:.0f} KB)")
-                log("  Send to NVIDIA support or attach to bug reports")
-                if gpu_issues:
-                    log("  [!] GPU issues detected — this report may help diagnose the problem")
-            else:
-                log(f"  nvidia-bug-report.sh failed (exit {result.returncode})")
-                if result.stderr:
-                    log(f"  {result.stderr.strip()[:200]}")
-        except FileNotFoundError:
-            log("  nvidia-bug-report.sh not found (NVIDIA driver may not be installed)")
-            log("  Install: https://www.nvidia.com/drivers")
-        except subprocess.TimeoutExpired:
-            log("  nvidia-bug-report.sh timed out (60s)")
-        except Exception as e:
-            log(f"  Error: {e}")
-    elif not nvidia_report:
-        log("\n[NVIDIA BUG REPORT]")
-        log("  Skipped — no GPU issues detected. Use --nvidia-report to force.")
-
-    log("\n" + "=" * 60)
-    log("End of debug report")
-
-    full_report = "\n".join(lines)
-
-    # Save to file
-    if output:
-        from pathlib import Path
-        Path(output).write_text(full_report)
-        console.print(f"[green]Debug report saved to {output}[/green]")
-
-    # Copy to clipboard
-    if send:
-        try:
-            subprocess.run(
-                ["xclip", "-selection", "clipboard"],
-                input=full_report.encode(), timeout=5,
-            )
-            console.print("[green]Debug report copied to clipboard[/green]")
-        except FileNotFoundError:
-            try:
-                subprocess.run(
-                    ["pbcopy"],
-                    input=full_report.encode(), timeout=5,
-                )
-                console.print("[green]Debug report copied to clipboard[/green]")
-            except FileNotFoundError:
-                console.print("[yellow]Clipboard tools not found. Use -o to save to file.[/yellow]")
-
-
-# ---------------------------------------------------------------------------
-# hive test — end-to-end smoke test
-# ---------------------------------------------------------------------------
-
-@app.command(rich_help_panel="Admin")
-def test(
-    api_url: str = typer.Option("http://localhost:8000", "--api", help="API server URL"),
-    webui_url: str = typer.Option("http://localhost:3000", "--webui", help="WebUI URL"),
-    skip_webui: bool = typer.Option(False, "--no-webui", help="Skip WebUI tests"),
-    skip_providers: bool = typer.Option(
-        False, "--no-providers",
-        help="Skip provider health checks",
-    ),
-    quick: bool = typer.Option(
-        False, "--quick",
-        help="Quick mode: skip provider health, webui, and remote API checks",
-    ),
-    json_output: bool = typer.Option(
-        False, "--json",
-        help="Emit the report as JSON on stdout (for CI / scripting)",
-    ),
-    strict: bool = typer.Option(
-        False, "--strict",
-        help=(
-            "Treat soft-passes (e.g. all providers 429'd) as failures. "
-            "Use in CI so a rate-limited environment fails loud."
-        ),
-    ),
-    fix: bool = typer.Option(False, "--fix", help="Attempt to fix issues found"),
-):
-    """Run end-to-end smoke tests on your nvHive installation.
-
-    Walks through every component and reports what works and what doesn't:
-    core imports, engine init, provider health, API endpoints, WebUI pages,
-    integrations, MCP server, GPU detection, and quota system.
-
-    Examples:
-        nvh test                  Run all tests
-        nvh test --quick          Fast sanity check (core only, no network)
-        nvh test --no-webui       Skip WebUI (if not running)
-        nvh test --strict         CI-mode: rate-limited providers fail loud
-        nvh test --fix            Try to fix issues automatically
-    """
-    # --quick implies skipping webui and provider health checks
-    if quick:
-        skip_webui = True
-        skip_providers = True
-    from rich.rule import Rule
-
-    from nvh.core.smoke_test import run_smoke_tests
-
-    console.print()
-    console.print(Panel(
-        "[bold]nvHive Smoke Test[/bold]\n"
-        "Walking through every component...",
-        border_style="cyan",
-    ))
-    console.print()
-
-    report = _run(run_smoke_tests(
-        api_url=api_url,
-        webui_url=webui_url,
-        skip_webui=skip_webui,
-        skip_providers=skip_providers,
-        quick=quick,
-    ))
-
-    exit_failed = report.strict_failed() if strict else report.failed
-
-    if json_output:
-        import json
-        from dataclasses import asdict
-        payload = {
-            "total": report.total,
-            "passed": report.passed,
-            "failed": report.failed,
-            "soft_passed": report.soft_passed,
-            "strict_failed": report.strict_failed(),
-            "strict": strict,
-            "total_ms": report.total_ms,
-            "results": [asdict(r) for r in report.results],
-        }
-        print(json.dumps(payload, indent=2))
-        raise typer.Exit(0 if exit_failed == 0 else 1)
-
-    # Group by category
-    categories: dict[str, list] = {}
-    for r in report.results:
-        categories.setdefault(r.category, []).append(r)
-
-    for category, results in categories.items():
-        passed = sum(1 for r in results if r.passed)
-        total = len(results)
-        console.print(Rule(f"{category} ({passed}/{total})"))
-        console.print()
-
-        for r in results:
-            if r.passed:
-                icon = "[green]✓[/green]"
-                detail = f"[dim]{r.message}[/dim]" if r.message else ""
-                time_str = f"[dim]{r.duration_ms}ms[/dim]" if r.duration_ms else ""
-                console.print(f"  {icon} {r.name}  {detail}  {time_str}")
-            else:
-                icon = "[red]✗[/red]"
-                console.print(f"  {icon} {r.name}")
-                if r.error:
-                    console.print(f"    [red]{r.error}[/red]")
-        console.print()
-
-    # Summary
-    console.print(Rule("Summary"))
-    console.print()
-    if report.failed == 0:
-        soft_note = (
-            f" — [yellow]{report.soft_passed} soft-pass[/yellow]"
-            f" (would fail under --strict)" if report.soft_passed else ""
-        )
-        console.print(
-            f"  [bold green]All {report.total} tests passed"
-            f"[/bold green] in {report.total_ms}ms{soft_note}"
-        )
-    else:
-        soft_note = (
-            f", [yellow]{report.soft_passed} soft-pass[/yellow]"
-            if report.soft_passed else ""
-        )
-        console.print(
-            f"  [bold]{report.passed}[/bold] passed, "
-            f"[bold red]{report.failed}[/bold red] failed{soft_note} "
-            f"out of {report.total} tests ({report.total_ms}ms)"
-        )
-
-    # Always surface soft-pass detail so users see *why* providers were
-    # transient-skipped, even in green runs.
-    soft = [r for r in report.results if r.soft_pass]
-    if soft:
-        console.print()
-        console.print("  [yellow]Soft-pass detail[/yellow] (counted as passing"
-                      " unless --strict):")
-        for r in soft:
-            console.print(
-                f"    [yellow]~[/yellow] {r.name}"
-                f" [dim]({r.soft_reason or 'transient'})[/dim]"
-            )
-
-    if fix and report.failed > 0:
-        console.print()
-        console.print("  [bold]Attempting fixes...[/bold]")
-        for r in report.results:
-            if not r.passed:
-                if "not reachable" in r.error.lower() and "serve" in r.error:
-                    console.print(
-                        f"  [yellow]![/yellow] {r.name}:"
-                        " Start API with [bold]nvh serve[/bold]"
-                    )
-                elif "not reachable" in r.error.lower() and "webui" in r.error:
-                    console.print(
-                        f"  [yellow]![/yellow] {r.name}:"
-                        " Start WebUI with [bold]nvh webui[/bold]"
-                    )
-                elif "pip install" in r.error:
-                    console.print(f"  [yellow]![/yellow] {r.name}: Run [bold]{r.error}[/bold]")
-                elif "unhealthy" in r.error or "rate" in r.error.lower():
-                    console.print(
-                        f"  [yellow]![/yellow] {r.name}:"
-                        " Provider issue — check API key or quota"
-                    )
-                else:
-                    console.print(f"  [yellow]![/yellow] {r.name}: {r.error[:80]}")
-
-    console.print()
-
-    # Preserve legacy behavior: the rich-output run is lenient and only
-    # exits non-zero when the user explicitly asks for strict mode. JSON
-    # mode (handled above) still exits 1 on hard failures for CI scripts.
-    if strict and exit_failed > 0:
-        raise typer.Exit(1)
-
-
-# ---------------------------------------------------------------------------
-# hive doctor
-# ---------------------------------------------------------------------------
-
-@app.command(rich_help_panel="Admin")
-def doctor(
-    fix: bool = typer.Option(
-        False, "--fix",
-        help="Interactively apply fixes for detected problems (e.g. restart Ollama)",
-    ),
-    storage_only: bool = typer.Option(
-        False,
-        "--storage",
-        help="Only run the rootless persistent storage preflight",
-    ),
-    home_dir: str | None = typer.Option(
-        None,
-        "--home-dir",
-        help="Persistent NVH_HOME on a mounted volume to check",
-    ),
-    min_free_gb: float = typer.Option(
-        200.0,
-        "--min-free-gb",
-        help="Minimum free space recommended for local models and ComfyUI",
-    ),
-    json_output: bool = typer.Option(
-        False, "--json",
-        help="Emit the diagnostic as JSON on stdout (for selfcheck / scripting)",
-    ),
-):
-    """Run comprehensive system diagnostic."""
-    import os
-
-    rows: list[tuple[str, str, str]] = []  # (check, status, detail)
-    # Structured mirror of the rows table, so --json doesn't have to
-    # re-parse rich markup. ``status`` is one of pass/warn/fail.
-    structured: list[dict[str, str]] = []
-
-    passed = 0
-    warned = 0
-    failed = 0
-    fixes: list[str] = []
-
-    def _pass(check: str, detail: str = "") -> None:
-        nonlocal passed
-        passed += 1
-        rows.append((check, "[green]PASS[/green]", detail))
-        structured.append({"check": check, "status": "pass", "detail": detail})
-
-    def _warn(check: str, detail: str = "", fix: str = "") -> None:
-        nonlocal warned
-        warned += 1
-        rows.append((check, "[yellow]WARN[/yellow]", detail))
-        structured.append({
-            "check": check, "status": "warn", "detail": detail,
-            "fix": fix,
-        })
-        if fix:
-            fixes.append(fix)
-
-    def _fail(check: str, detail: str = "", fix: str = "") -> None:
-        nonlocal failed
-        failed += 1
-        rows.append((check, "[red]FAIL[/red]", detail))
-        structured.append({
-            "check": check, "status": "fail", "detail": detail,
-            "fix": fix,
-        })
-        if fix:
-            fixes.append(fix)
-
-    # When --json is requested, suppress all rich output so stdout is
-    # pure JSON for selfcheck / CI parsers. We swap the global console
-    # for an stderr-bound one for the duration of the gathering phase
-    # and restore it before raising.
-    _saved_console_file = getattr(console, "file", None)
-    if json_output:
-        import sys as _sys
-        try:
-            console.file = _sys.stderr
-        except Exception:
-            pass
-
-    console.print("[bold]Hive Doctor[/bold] — running diagnostics...\n")
-
-    from nvh.integrations.workspace.storage import ensure_storage, storage_status
-
-    if storage_only:
-        storage = ensure_storage(home_dir, min_free_gb=min_free_gb)
-        console.print("[bold]Hive Storage Doctor[/bold]\n")
-        console.print(f"  NVH_HOME:  [bold]{storage.layout.home}[/bold]")
-        console.print(f"  Env file:  {storage.env_file}")
-        console.print(f"  Writable:  {'yes' if storage.writable else 'no'}")
-        console.print(
-            f"  Free:      {storage.free_gb if storage.free_gb is not None else '?'} GB"
-            f" / minimum {storage.min_free_gb:.0f} GB"
-        )
-        for warning in storage.warnings:
-            console.print(f"  [yellow]![/yellow] {warning}")
-        console.print(f"\n  [green]Activate:[/green] source {storage.env_file}")
-        raise typer.Exit(0 if storage.ok and storage.configured_by != "default" else 1)
-
-    # 1. Python version
-    py_version = sys.version_info
-    if py_version >= (3, 11):
-        _pass("Python version", f"{py_version.major}.{py_version.minor}.{py_version.micro}")
-    else:
-        _fail(
-            "Python version",
-            f"{py_version.major}.{py_version.minor}.{py_version.micro} (need >= 3.11)",
-            "Upgrade Python to 3.11+: https://python.org/downloads",
-        )
-
-    rootless_storage = storage_status(home_dir=home_dir, min_free_gb=min_free_gb)
-    storage_detail = (
-        f"{rootless_storage.layout.home}"
-        f" ({rootless_storage.free_gb if rootless_storage.free_gb is not None else '?'} GB free)"
-    )
-    if rootless_storage.ok and rootless_storage.configured_by != "default":
-        _pass("Rootless storage", storage_detail)
-    else:
-        _warn(
-            "Rootless storage",
-            "; ".join(rootless_storage.warnings) or storage_detail,
-            "Run `nvh doctor --storage --home-dir /path/on/mounted/volume/nvhive`",
-        )
-
-    try:
-        from nvh.integrations.services.receipts import receipt_summary
-
-        receipts = receipt_summary()
-        detail = (
-            f"{receipts['count']} receipt(s), "
-            f"{receipts['unhealthy']} need attention, root {receipts['root']}"
-        )
-        if receipts["unhealthy"]:
-            _warn(
-                "Install receipts",
-                detail,
-                "Open the setup wizard or rerun the matching `nvh studio` / `nvh workstation` command.",
-            )
-        else:
-            _pass("Install receipts", detail)
-    except Exception as e:
-        _warn("Install receipts", str(e))
-
-    try:
-        from nvh.integrations.catalog import catalog_status
-
-        catalog = catalog_status(refresh=False)
-        detail = (
-            f"{catalog.get('source')} catalog, {catalog.get('profile_count', 0)} profiles, "
-            f"{catalog.get('model_count', 0)} models"
-        )
-        if catalog.get("error"):
-            _warn("Setup catalog", f"{detail}; {catalog['error']}")
-        else:
-            _pass("Setup catalog", detail)
-    except Exception as e:
-        _warn("Setup catalog", str(e))
-
-    # 2. Config file exists and is valid YAML
-    from nvh.config.settings import DEFAULT_CONFIG_PATH
-    if not DEFAULT_CONFIG_PATH.exists():
-        _fail(
-            "Config file exists",
-            str(DEFAULT_CONFIG_PATH),
-            "Run `nvh config init` to create a configuration file.",
-        )
-        raw_yaml_ok = False
-    else:
-        try:
-            import yaml
-            yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
-            _pass("Config file (YAML)", str(DEFAULT_CONFIG_PATH))
-            raw_yaml_ok = True
-        except Exception as e:
-            _fail("Config file (YAML)", str(e), f"Fix YAML syntax in {DEFAULT_CONFIG_PATH}")
-            raw_yaml_ok = False
-
-    # 3. Config parses into HiveConfig
-    config = None
-    if raw_yaml_ok:
-        try:
-            from nvh.config.settings import load_config
-            config = load_config()
-            _pass("Config schema (Pydantic)", "HiveConfig validated successfully")
-        except Exception as e:
-            _fail("Config schema (Pydantic)", str(e), f"Fix config errors in {DEFAULT_CONFIG_PATH}")
-
-    # 4. Database accessible
-    async def _check_db() -> tuple[bool, str]:
-        try:
-            from nvh.storage import repository as repo
-            await repo.init_db()
-            return True, ""
-        except Exception as e:
-            return False, str(e)
-
-    db_ok, db_err = asyncio.run(_check_db())
-    if db_ok:
-        _pass("Database", "init_db succeeded")
-    else:
-        _fail("Database", db_err, "Check storage permissions or reinstall: pip install hive-ai")
-
-    # 5 & 6. Per-provider checks (API key + health check)
-    if config is not None:
-        async def _check_providers() -> list[tuple[str, bool, bool, str]]:
-            """Returns list of (name, has_key, health_ok, detail)."""
-            results = []
-            for name, pconfig in config.providers.items():
-                if not pconfig.enabled:
-                    continue
-
-                # Check for API key
-                has_key = bool(pconfig.api_key and not pconfig.api_key.startswith("${"))
-                if not has_key:
-                    has_key = bool(
-                        os.environ.get(f"{name.upper()}_API_KEY")
-                        or os.environ.get(f"HIVE_{name.upper()}_API_KEY")
-                    )
-                if not has_key:
-                    try:
-                        import keyring
-                        has_key = bool(keyring.get_password("nvhive", f"{name}_api_key"))
-                    except Exception:
-                        pass
-                if name == "ollama":
-                    has_key = True  # no key needed
-
-                # Health check
-                health_ok = False
-                detail = ""
-                try:
-                    from nvh.core.engine import Engine
-                    engine = Engine(config=config)
-                    await engine.initialize()
-                    if engine.registry.has(name):
-                        import asyncio as _aio
-                        health = await _aio.wait_for(
-                            engine.registry.get(name).health_check(),
-                            timeout=10,
-                        )
-                        health_ok = health.healthy
-                        detail = (
-                            f"{health.latency_ms}ms"
-                            if health_ok
-                            else (health.error or "failed")
-                        )
-                    else:
-                        detail = "not registered (check API key)"
-                except Exception as e:
-                    detail = str(e)
-
-                results.append((name, has_key, health_ok, detail))
-            return results
-
-        provider_results = asyncio.run(_check_providers())
-        for name, has_key, health_ok, detail in provider_results:
-            if not has_key:
-                _fail(
-                    f"Advisor {name}: API key",
-                    "missing",
-                    f"Run `hive advisor login {name}` or set {name.upper()}_API_KEY",
-                )
-            else:
-                _pass(f"Advisor {name}: API key", "found")
-
-            if health_ok:
-                _pass(f"Advisor {name}: health check", detail)
-            else:
-                _warn(
-                    f"Advisor {name}: health check",
-                    detail or "failed",
-                    f"Check your {name} API key and network access.",
-                )
-
-        # 5c. Configured models a provider has since retired — every call
-        # to one 404s.
-        try:
-            from nvh.cli.setup import (
-                RETIRED_PROVIDERS,
-                rename_retired_model,
-                stale_default_models,
-            )
-            stale = stale_default_models(config.providers)
-        except Exception as e:
-            stale = []
-            _warn("Retired models", str(e))
-        for pname, field, model in stale:
-            if field == "provider":
-                _warn(
-                    f"Advisor {pname}",
-                    f"provider retired {RETIRED_PROVIDERS[pname]}",
-                    "Run `nvh config migrate` to remove it.",
-                )
-            else:
-                _warn(
-                    f"Advisor {pname}: {field}",
-                    f"'{model}' superseded by '{rename_retired_model(pname, model)}'",
-                    "Run `nvh config migrate` to rewrite retired model IDs.",
-                )
-
-    # 6. Ollama detection. With --fix, offer to restart Ollama if it's
-    # enabled in config but the daemon isn't reachable.
-    ollama_models: list[str] = []
-    ollama_ok = False
-    try:
-        import httpx
-        resp = httpx.get("http://localhost:11434/api/tags", timeout=5)
-        if resp.status_code == 200:
-            data = resp.json()
-            ollama_models = [m.get("name", "") for m in data.get("models", [])]
-            _pass("Ollama", f"detected, {len(ollama_models)} model(s)")
-            ollama_ok = True
-        else:
-            _warn("Ollama", f"HTTP {resp.status_code}", "Start Ollama: `ollama serve`")
-    except Exception:
-        _warn(
-            "Ollama",
-            "not reachable at localhost:11434",
-            "Install from https://ollama.ai"
-            " or start with `ollama serve`",
-        )
-
-    # Offer to auto-restart Ollama if --fix is set and config expects it running
-    if fix and not ollama_ok and config is not None:
-        ollama_cfg = config.providers.get("ollama") if hasattr(config, "providers") else None
-        if ollama_cfg and getattr(ollama_cfg, "enabled", False):
-            console.print(
-                "\n[yellow]Ollama is enabled in config but not running.[/yellow]"
-            )
-            try:
-                answer = console.input("  Restart Ollama now? [Y/n] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                answer = "n"
-            if answer not in ("n", "no"):
-                from nvh.cli.setup import _find_ollama_binary, _start_ollama
-                ollama_bin = _find_ollama_binary()
-                if ollama_bin is None:
-                    console.print(
-                        "  [red]ollama binary not found.[/red] "
-                        "Install from https://ollama.com"
-                    )
-                elif _start_ollama(console, ollama_bin):
-                    # Re-probe to update status
-                    try:
-                        resp = httpx.get("http://localhost:11434/api/tags", timeout=5)
-                        if resp.status_code == 200:
-                            ollama_models = [
-                                m.get("name", "")
-                                for m in resp.json().get("models", [])
-                            ]
-                            rows.append((
-                                "Ollama (restarted)",
-                                "[green]PASS[/green]",
-                                f"now running, {len(ollama_models)} model(s)",
-                            ))
-                            ollama_ok = True
-                    except Exception:
-                        pass
-
-    # 7. Cache status
-    if config is not None:
-        try:
-            from nvh.core.engine import Engine
-            engine_for_cache = Engine(config=config)
-            stats = engine_for_cache.cache.stats
-            cache_detail = f"{stats['entries']} entries / max {stats['max_size']}"
-            if config.cache.enabled:
-                _pass("Cache", cache_detail)
-            else:
-                _warn(
-                    "Cache", "disabled in config",
-                    "Set cache.enabled: true in config"
-                    " to improve performance.",
-                )
-        except Exception as e:
-            _warn("Cache", str(e))
-
-    # 8. Disk space
-    try:
-        import shutil as _shutil
-        home_path = Path.home()
-        usage = _shutil.disk_usage(home_path)
-        free_gb = usage.free / (1024 ** 3)
-        if free_gb < 1.0:
-            _fail(
-                "Disk space",
-                f"{free_gb:.1f}GB free",
-                "Free up disk space — less than 1GB available.",
-            )
-        elif free_gb < 5.0:
-            _warn("Disk space", f"{free_gb:.1f}GB free", "Disk space is low (< 5GB).")
-        else:
-            _pass("Disk space", f"{free_gb:.1f}GB free")
-    except Exception as e:
-        _warn("Disk space", str(e))
-
-    # 9. GPU detection
-    try:
-        from nvh.utils.gpu import detect_gpus, get_gpu_summary, recommend_models
-        gpus = detect_gpus()
-        if gpus:
-            summary = get_gpu_summary()
-            _pass("GPU (nvidia-smi)", summary)
-            # Show per-GPU detail for multi-GPU systems
-            if len(gpus) > 1:
-                for g in gpus:
-                    _pass(
-                        f"  GPU {g.index}: {g.name}",
-                        f"{g.vram_gb:.1f} GB VRAM, driver {g.driver_version}",
-                    )
-            # Show model recommendations
-            recs = recommend_models(gpus)
-            rec_str = ", ".join(r.model for r in recs)
-            _pass("GPU model recommendations", rec_str + f" — {recs[0].reason}" if recs else "none")
-        else:
-            _warn(
-                "GPU (nvidia-smi)",
-                "no NVIDIA GPU detected — Ollama will run in CPU mode",
-                "Install NVIDIA drivers and nvidia-smi to enable GPU acceleration.",
-            )
-    except Exception as e:
-        _warn("GPU (nvidia-smi)", str(e))
-
-    # 9b. Linux Desktop detection
-    try:
-        from nvh.integrations.cloud_session import detect_cloud_session
-        cloud = detect_cloud_session()
-        if cloud.is_cloud_session:
-            tier_label = cloud.tier.capitalize() if cloud.tier else "Unknown"
-            _pass(
-                "Linux Desktop",
-                (
-                    f"{tier_label} tier — {cloud.gpu_class}"
-                    + (
-                        f" | Session: {cloud.session_id[:8]}..."
-                        if cloud.session_id else ""
-                    )
-                ),
-            )
-        else:
-            _pass("Linux Desktop", "not detected (local / native)")
-    except Exception as e:
-        _warn("Linux Desktop", str(e))
-
-    # 10. Local models from Ollama
-    if ollama_models:
-        _pass(
-            "Ollama local models",
-            ", ".join(ollama_models[:5])
-            + (" ..." if len(ollama_models) > 5 else ""),
-        )
-    else:
-        _warn(
-            "Ollama local models",
-            "none found",
-            "Pull a model: `ollama pull llama3.1`",
-        )
-
-    # 10b. Required Ollama models — does the config reference any models
-    # that aren't pulled? This catches the common "Ollama is up but the
-    # configured default model isn't installed" case. With --fix, offer
-    # to pull the missing ones.
-    if ollama_ok and config is not None:
-        try:
-            from nvh.utils.ollama import missing_models, required_ollama_models
-            required = required_ollama_models(config)
-        except Exception:
-            required = []
-        if required:
-            missing = missing_models(required, ollama_models)
-            if not missing:
-                _pass(
-                    "Ollama required models",
-                    f"all {len(required)} present: {', '.join(required)}",
-                )
-            else:
-                _warn(
-                    "Ollama required models",
-                    f"{len(missing)}/{len(required)} missing: {', '.join(missing)}",
-                    "Pull missing: " + "; ".join(f"ollama pull {m}" for m in missing),
-                )
-                if fix:
-                    console.print(
-                        f"\n[yellow]{len(missing)} required model(s) missing"
-                        f" in Ollama:[/yellow] [bold]{', '.join(missing)}[/bold]"
-                    )
-                    try:
-                        answer = console.input(
-                            "  Pull them now? [Y/n] "
-                        ).strip().lower()
-                    except (EOFError, KeyboardInterrupt):
-                        answer = "n"
-                    if answer not in ("n", "no"):
-                        from nvh.cli.setup import _find_ollama_binary, _pull_model
-                        ollama_bin = _find_ollama_binary() or "ollama"
-                        pulled_any = False
-                        for m in missing:
-                            if _pull_model(console, m, ollama_bin):
-                                pulled_any = True
-                        if pulled_any:
-                            rows.append((
-                                "Ollama required models (fixed)",
-                                "[green]PASS[/green]",
-                                f"pulled {', '.join(missing)}",
-                            ))
-
-    # 11. Deployment environment detection
-    try:
-        from nvh.utils.environment import detect_environment, get_environment_summary
-        env_info = detect_environment()
-
-        # Platform
-        _pass("Environment: platform", env_info.platform)
-
-        # Docker
-        if env_info.is_docker:
-            _pass("Environment: container", "running inside Docker")
-        else:
-            _pass("Environment: container", "not in Docker (native)")
-
-        # Cloud
-        if env_info.is_cloud:
-            cloud_detail = env_info.cloud_provider
-            if env_info.instance_type and env_info.instance_type != "unknown":
-                cloud_detail += f" / {env_info.instance_type}"
-            if env_info.public_ip:
-                cloud_detail += f" / {env_info.public_ip}"
-            _pass("Environment: cloud", cloud_detail)
-        else:
-            _pass("Environment: cloud", "not detected (local / on-prem)")
-
-        # GPU accessibility (separate from nvidia-smi check above)
-        if env_info.gpu_accessible:
-            _pass(
-                "Environment: GPU accessible",
-                f"{env_info.gpu_count} GPU(s) accessible"
-                " from this process",
-            )
-        elif env_info.has_gpu:
-            _warn(
-                "Environment: GPU accessible",
-                "GPU detected but not accessible (container config?)",
-                "Add --gpus all to docker run, or configure NVIDIA Container Toolkit.",
-            )
-        else:
-            _pass("Environment: GPU accessible", "no GPU present (CPU mode)")
-
-        # Root access
-        if env_info.has_root:
-            _warn(
-                "Environment: root access",
-                "running as root",
-                "Consider running as a non-root user for improved security.",
-            )
-        else:
-            _pass("Environment: root access", "non-root user (good)")
-
-        # Print a compact environment summary line
-        summary = get_environment_summary(env_info)
-        console.print(f"\n[dim]Environment summary: {summary}[/dim]")
-
-    except Exception as e:
-        _warn("Environment detection", str(e))
-
-    # 12. nvh on PATH — ensures the user can invoke "nvh" directly.
-    # Reuses the env-aware helper in setup.py which handles conda/mamba/venv.
-    try:
-        from nvh.cli.setup import _check_nvh_on_path
-        path_hint = _check_nvh_on_path()
-        if path_hint is None:
-            _pass("nvh on PATH", "reachable")
-        else:
-            kind = path_hint["env_kind"]
-            if kind in ("conda", "mamba") and path_hint["env_name"]:
-                fix_cmd = path_hint["activate_cmd"]
-                _warn(
-                    "nvh on PATH",
-                    f"installed in {kind} env '{path_hint['env_name']}' but not activated",
-                    f"Activate the env: {fix_cmd}",
-                )
-            elif kind == "venv" and path_hint["activate_cmd"]:
-                _warn(
-                    "nvh on PATH",
-                    f"installed in venv '{path_hint['env_name']}' but not activated",
-                    f"Activate the venv: {path_hint['activate_cmd']}",
-                )
-            else:
-                _warn(
-                    "nvh on PATH",
-                    f"binary at {path_hint['full_path']} is not on PATH",
-                    f"Add to PATH: export PATH=\"{path_hint['bin_dir']}:$PATH\"",
-                )
-    except Exception as e:
-        _warn("nvh on PATH", str(e))
-
-    # -----------------------------------------------------------------------
-    # Render results
-    # -----------------------------------------------------------------------
-    total = passed + warned + failed
-
-    if json_output:
-        import json as _json
-        # Restore stdout binding so JSON goes to the real stdout even
-        # though the rich body wrote everything to stderr.
-        try:
-            if _saved_console_file is not None:
-                console.file = _saved_console_file
-        except Exception:
-            pass
-        payload = {
-            "schema_version": 1,
-            "total": total,
-            "passed": passed,
-            "warned": warned,
-            "failed": failed,
-            "fixes": fixes,
-            "checks": structured,
-        }
-        print(_json.dumps(payload, indent=2))
-        raise typer.Exit(0 if failed == 0 else 1)
-
-    table = Table(title="Diagnostic Results", show_lines=False)
-    table.add_column("Check", style="bold", min_width=35)
-    table.add_column("Status", justify="center", min_width=8)
-    table.add_column("Detail")
-
-    for check, status, detail in rows:
-        table.add_row(check, status, detail)
-
-    console.print(table)
-
-    summary_parts = []
-    if passed:
-        summary_parts.append(f"[green]{passed} passed[/green]")
-    if warned:
-        summary_parts.append(f"[yellow]{warned} warnings[/yellow]")
-    if failed:
-        summary_parts.append(f"[red]{failed} failures[/red]")
-    console.print(f"\nResults: {', '.join(summary_parts)} ({total} checks total)")
-
-    if fixes:
-        console.print("\n[bold]Suggested fixes:[/bold]")
-        for i, fix in enumerate(fixes, 1):
-            console.print(f"  {i}. {fix}")
-
-    if failed:
-        raise typer.Exit(1)
-
-
-# ---------------------------------------------------------------------------
-# nvh selfcheck — one-shot diagnostic bundle for GPU-VM product tests
-# ---------------------------------------------------------------------------
-
-@app.command(rich_help_panel="Admin")
-def selfcheck(
-    home_dir: str | None = typer.Option(
-        None, "--home-dir",
-        help="Persistent NVH_HOME on a mounted volume to check",
-    ),
-    output: str | None = typer.Option(
-        None, "--output", "-o",
-        help="Write the bundle to this path (default: $NVH_HOME/support/selfcheck-<ts>.json)",
-    ),
-    test_query: str = typer.Option(
-        "Say hello in one sentence", "--query",
-        help="Prompt to fire at the live Wizard turn as the end-to-end check",
-    ),
-    skip_live_query: bool = typer.Option(
-        False, "--no-live-query",
-        help="Skip the live Wizard round-trip (useful when no providers are configured)",
-    ),
-    strict: bool = typer.Option(
-        False, "--strict",
-        help="Treat soft-passes (rate limits) as failures in the bundle status",
-    ),
-    quiet: bool = typer.Option(
-        False, "--quiet",
-        help="Suppress rich output; only print the bundle path on stdout",
-    ),
-):
-    """One-shot health bundle for product tests on rented GPU desktops.
-
-    Runs `nvh doctor` + `nvh test --quick` + a live Wizard round-trip + a
-    redacted workspace snapshot, then writes a single JSON bundle the user
-    can scp back for triage. **No network egress** — everything stays under
-    ``$NVH_HOME/support/``.
-
-    Examples:
-        nvh selfcheck                              Run all checks, write to default path
-        nvh selfcheck --output /tmp/nvh.json       Custom bundle path
-        nvh selfcheck --no-live-query --strict     CI-friendly invocation
-    """
-    import json as _json
-    from dataclasses import asdict
-
-    from nvh import telemetry as _telemetry
-    from nvh.core.smoke_test import run_smoke_tests
-    from nvh.integrations.workspace.passport import support_snapshot
-    from nvh.integrations.workspace.storage import nvh_home as _nvh_home
-
-    home_path, home_source = _nvh_home(home_dir)
-
-    bundle: dict[str, Any] = {
-        "schema_version": 1,
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "nvh_home": str(home_path),
-        "nvh_home_source": home_source,
-        "nvh_version": _safe_nvh_version(),
-        "platform": _platform_summary(),
-        "components": {},
-        "status": {"ok": True, "failures": [], "warnings": []},
-    }
-
-    if not quiet:
-        console.print("[bold]nvHive Selfcheck[/bold] — gathering diagnostic bundle...\n")
-        console.print(f"  NVH_HOME: [bold]{home_path}[/bold] ([dim]{home_source}[/dim])\n")
-
-    # ------- smoke test (quick mode, skip webui/providers if unconfigured) -
-    if not quiet:
-        console.print("  [dim]→ running smoke test ...[/dim]")
-    try:
-        smoke_report = _run(run_smoke_tests(
-            quick=True,
-            skip_webui=True,
-            skip_providers=False,
-        ))
-        smoke_payload = {
-            "total": smoke_report.total,
-            "passed": smoke_report.passed,
-            "failed": smoke_report.failed,
-            "soft_passed": smoke_report.soft_passed,
-            "strict_failed": smoke_report.strict_failed(),
-            "total_ms": smoke_report.total_ms,
-            "results": [asdict(r) for r in smoke_report.results],
-        }
-        bundle["components"]["smoke"] = smoke_payload
-        if smoke_report.failed:
-            bundle["status"]["failures"].append(
-                f"smoke: {smoke_report.failed} hard failure(s)"
-            )
-        if strict and smoke_report.soft_passed:
-            bundle["status"]["failures"].append(
-                f"smoke: {smoke_report.soft_passed} soft-pass(es) under --strict"
-            )
-        elif smoke_report.soft_passed:
-            bundle["status"]["warnings"].append(
-                f"smoke: {smoke_report.soft_passed} soft-pass(es)"
-                " (would fail under --strict)"
-            )
-    except Exception as e:  # noqa: BLE001 — bundle continues even if one block fails
-        bundle["components"]["smoke"] = {"error": str(e)[:500]}
-        bundle["status"]["failures"].append(f"smoke: crashed ({type(e).__name__})")
-
-    # ------- live wizard turn (the canonical end-to-end signal) -----------
-    if skip_live_query:
-        bundle["components"]["wizard_live_turn"] = {"skipped": True}
-    else:
-        if not quiet:
-            console.print("  [dim]→ exercising live Wizard turn ...[/dim]")
-        try:
-            from nvh.core.engine import Engine
-            async def _live() -> dict[str, Any]:
-                engine = Engine()
-                await engine.initialize()
-                t0 = time.monotonic()
-                resp = await engine.query(test_query)
-                ms = int((time.monotonic() - t0) * 1000)
-                return {
-                    "ok": True,
-                    "provider": getattr(resp, "provider", "?"),
-                    "model": getattr(resp, "model", "?"),
-                    "duration_ms": ms,
-                    "reply_chars": len(getattr(resp, "content", "") or ""),
-                }
-            result = _run(_live())
-            bundle["components"]["wizard_live_turn"] = result
-            # Best-effort telemetry breadcrumb so the bundle and the
-            # opt-in event log agree on "the product actually worked here".
-            _telemetry.emit(
-                "first_wizard_turn",
-                {
-                    "provider": result.get("provider"),
-                    "model": result.get("model"),
-                    "duration_ms": result.get("duration_ms"),
-                    "source": "selfcheck",
-                },
-                home_dir=home_dir,
-            )
-        except Exception as e:  # noqa: BLE001
-            err = str(e)[:500]
-            is_rate_limit = "rate" in err.lower() or "429" in err
-            bundle["components"]["wizard_live_turn"] = {
-                "ok": False,
-                "error": err,
-                "rate_limited": is_rate_limit,
-            }
-            if is_rate_limit and not strict:
-                bundle["status"]["warnings"].append(
-                    "wizard_live_turn: rate limited (transient)"
-                )
-            else:
-                bundle["status"]["failures"].append(
-                    f"wizard_live_turn: {type(e).__name__}"
-                )
-
-    # ------- workspace support snapshot (already redacted) ----------------
-    if not quiet:
-        console.print("  [dim]→ writing redacted workspace snapshot ...[/dim]")
-    try:
-        snap = support_snapshot(home_dir=str(home_path), include_logs=True)
-        bundle["components"]["support_snapshot"] = {
-            "path": snap.get("path"),
-            "workspace_id": snap.get("passport", {}).get("workspace_id"),
-            "rootless": snap.get("passport", {}).get("rootless"),
-            "excludes": snap.get("excludes", []),
-        }
-    except Exception as e:  # noqa: BLE001
-        bundle["components"]["support_snapshot"] = {"error": str(e)[:500]}
-        bundle["status"]["warnings"].append(
-            f"support_snapshot: {type(e).__name__}"
-        )
-
-    # ------- telemetry summary --------------------------------------------
-    try:
-        bundle["components"]["telemetry"] = _telemetry.summary(home_dir=home_dir)
-    except Exception as e:  # noqa: BLE001
-        bundle["components"]["telemetry"] = {"error": str(e)[:500]}
-
-    # ------- finalize status ----------------------------------------------
-    bundle["status"]["ok"] = not bundle["status"]["failures"]
-
-    # ------- write the bundle ---------------------------------------------
-    if output:
-        bundle_path = Path(output).expanduser()
-    else:
-        support_dir = home_path / "support"
-        support_dir.mkdir(parents=True, exist_ok=True)
-        stamp = bundle["created_at"].replace(":", "").replace("-", "")
-        bundle_path = support_dir / f"selfcheck-{stamp}.json"
-    bundle_path.parent.mkdir(parents=True, exist_ok=True)
-    bundle_path.write_text(
-        _json.dumps(bundle, indent=2, sort_keys=True, default=str),
-        encoding="utf-8",
-    )
-
-    if quiet:
-        print(str(bundle_path))
-    else:
-        console.print()
-        if bundle["status"]["ok"]:
-            console.print(f"  [bold green]Bundle OK[/bold green] → {bundle_path}")
-        else:
-            console.print(f"  [bold red]Bundle has failures[/bold red] → {bundle_path}")
-            for f in bundle["status"]["failures"]:
-                console.print(f"    [red]✗[/red] {f}")
-        for w in bundle["status"]["warnings"]:
-            console.print(f"    [yellow]![/yellow] {w}")
-        console.print(
-            "\n  [dim]Send the bundle file above to support, or paste"
-            " its contents into the issue.[/dim]"
-        )
-
-    raise typer.Exit(0 if bundle["status"]["ok"] else 1)
-
-
-def _safe_nvh_version() -> str:
-    try:
-        from nvh import __version__
-        return str(__version__)
-    except Exception:
-        return "unknown"
-
-
-def _platform_summary() -> dict[str, str]:
-    import platform as _platform
-    return {
-        "system": _platform.system(),
-        "release": _platform.release(),
-        "machine": _platform.machine(),
-        "python": _platform.python_version(),
-    }
-
-
-# ---------------------------------------------------------------------------
 # nvWizard rootless planning and repair
 # ---------------------------------------------------------------------------
 
@@ -10840,154 +9326,38 @@ def wizard_command(
 # hive template
 # ---------------------------------------------------------------------------
 
-template_app = typer.Typer(help="Manage prompt templates")
-app.add_typer(template_app, name="template", rich_help_panel="Subcommands")
+# Removed in 0.42 (prompt_template on agent profiles); the group stays hidden
+# for one release so the old spellings print the migration hint.
+template_app = typer.Typer(help="(removed) Prompt templates moved to agent profiles")
+app.add_typer(template_app, name="template", hidden=True, rich_help_panel="Subcommands")
 
 
-@template_app.command("list")
-def template_list():
-    """List all available prompt templates."""
-    from nvh.core.templates import list_templates
-
-    templates = list_templates()
-    if not templates:
-        console.print("[dim]No templates found.[/dim]")
-        return
-
-    table = Table(title="Available Templates")
-    table.add_column("Name", style="bold cyan")
-    table.add_column("Description")
-    table.add_column("Required vars", style="dim")
-    table.add_column("Optional vars", style="dim")
-
-    for t in templates:
-        req = ", ".join(t.required_vars) if t.required_vars else "[dim]—[/dim]"
-        opt = ", ".join(t.optional_vars.keys()) if t.optional_vars else "[dim]—[/dim]"
-        table.add_row(t.name, t.description or "[dim]—[/dim]", req, opt)
-
-    console.print(table)
-    console.print("\n[dim]Use: hive ask --template <name> --var key=value[/dim]")
-
-
-@template_app.command("show")
-def template_show(
-    name: str = typer.Argument(..., help="Template name"),
-):
-    """Display template content and variable information."""
-    from nvh.core.templates import load_template
-
-    try:
-        t = load_template(name)
-    except FileNotFoundError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"[bold cyan]{t.name}[/bold cyan]")
-    if t.description:
-        console.print(f"[dim]{t.description}[/dim]")
-    console.print()
-
-    if t.required_vars:
-        console.print("[bold]Required variables:[/bold]")
-        for v in t.required_vars:
-            console.print(f"  [yellow]{{{{[/yellow]{v}[yellow]}}}}[/yellow]  (required)")
-
-    if t.optional_vars:
-        console.print("[bold]Optional variables:[/bold]")
-        for v, default in t.optional_vars.items():
-            default_str = f"  default: {default!r}" if default != "" else ""
-            console.print(f"  [green]{{{{[/green]{v}[green]}}}}[/green]{default_str}")
-
-    if t.system:
-        console.print(f"\n[bold]System prompt:[/bold]\n{t.system}")
-
-    console.print("\n[bold]Body:[/bold]")
-    console.print(Panel(t.body, border_style="dim"))
-
+def _template_removed() -> None:
+    console.print(f"[yellow]`nvh template` was removed in 0.42.[/yellow] {_TEMPLATE_MIGRATION_HINT}")
     console.print(
-        f"\n[dim]Example: hive ask --template {t.name}"
-        + "".join(f" --var {v}=..." for v in t.required_vars)
-        + "[/dim]"
+        "[dim]Example profile YAML:\n"
+        "  name: code_review\n"
+        "  system_prompt: You are a senior code reviewer.\n"
+        "  prompt_template: |\n"
+        "    Review this code for bugs, security and readability:\n"
+        "    {{input}}[/dim]"
     )
+    raise typer.Exit(1)
 
 
-@template_app.command("create")
-def template_create(
-    name: str = typer.Argument(..., help="Template name (alphanumeric, underscores)"),
-):
-    """Create a new prompt template interactively."""
-    import re as _re
+@template_app.command("list", hidden=True)
+def template_list() -> None:
+    _template_removed()
 
-    from nvh.core.templates import TEMPLATES_DIR
 
-    if not _re.match(r"^[a-zA-Z0-9_]+$", name):
-        console.print("[red]Template name must be alphanumeric with underscores only.[/red]")
-        raise typer.Exit(1)
+@template_app.command("show", hidden=True)
+def template_show(name: str = typer.Argument("")) -> None:
+    _template_removed()
 
-    dest = TEMPLATES_DIR / f"{name}.yaml"
-    if dest.exists():
-        if not typer.confirm(f"Template '{name}' already exists. Overwrite?", default=False):
-            raise typer.Exit(0)
 
-    console.print(f"[bold]Creating template:[/bold] {name}\n")
-
-    description = typer.prompt("Description", default="")
-    system_prompt = typer.prompt("System prompt (leave blank for none)", default="")
-
-    req_vars_raw = typer.prompt(
-        "Required variables (comma-separated, e.g. code,text)", default=""
-    )
-    required_vars = [v.strip() for v in req_vars_raw.split(",") if v.strip()]
-
-    opt_vars_raw = typer.prompt(
-        "Optional variables with defaults (e.g. length=medium,format=prose)", default=""
-    )
-    optional_vars: dict[str, str] = {}
-    for item in opt_vars_raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        if "=" in item:
-            k, _, v = item.partition("=")
-            optional_vars[k.strip()] = v.strip()
-        else:
-            optional_vars[item] = ""
-
-    console.print(
-        "\nEnter the template body. "
-        "Use {{variable}} for placeholders. "
-        "Type END on a new line when done."
-    )
-    body_lines = []
-    while True:
-        line = input()
-        if line.strip() == "END":
-            break
-        body_lines.append(line)
-    body = "\n".join(body_lines)
-
-    # Build YAML frontmatter
-    import yaml as _yaml
-    frontmatter: dict = {"name": name}
-    if description:
-        frontmatter["description"] = description
-    if system_prompt:
-        frontmatter["system"] = system_prompt
-    if required_vars:
-        frontmatter["required_vars"] = required_vars
-    if optional_vars:
-        frontmatter["optional_vars"] = optional_vars
-
-    content = f"---\n{_yaml.dump(frontmatter, default_flow_style=False)}---\n{body}\n"
-
-    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content)
-    console.print(f"\n[green]Template '{name}' saved to {dest}[/green]")
-    console.print(
-        f"[dim]Use: hive ask --template {name}"
-        + "".join(f" --var {v}=..." for v in required_vars)
-        + "[/dim]"
-    )
+@template_app.command("create", hidden=True)
+def template_create(name: str = typer.Argument("")) -> None:
+    _template_removed()
 
 
 # ---------------------------------------------------------------------------
@@ -11232,13 +9602,18 @@ def do_task(
         False, "--dry-run",
         help="Show what would be done without executing",
     ),
+    sandbox: bool = typer.Option(
+        False, "--sandbox",
+        help="Require Docker isolation for run_code/shell (refuse the unisolated fallback)",
+    ),
     profile: str | None = typer.Option(None, "--profile", help="Config profile to use"),
 ):
     """Hands-free mode — give NVHive a task and it completes it autonomously.
 
     The agent can read/write files, search the web, run code, and more.
     Safe tools (read, search) run automatically by default. Unsafe tools
-    (write, execute) always ask for confirmation.
+    (write, execute) always ask for confirmation. run_code/shell use Docker
+    when it is available; --sandbox makes that mandatory.
 
     Examples:
 
@@ -11248,7 +9623,7 @@ def do_task(
 
       nvh do "Read README.md and suggest improvements"
 
-      nvh do "Create a Python script that sorts CSV files by column"
+      nvh do "Run the test suite and fix the first failure" --sandbox
     """
     import time as _time
 
@@ -11256,6 +9631,9 @@ def do_task(
     from nvh.core.agent_loop import AgentStep, run_agent_loop
     from nvh.core.engine import Engine
     from nvh.core.tools import ToolRegistry
+
+    if sandbox:
+        os.environ["NVH_SANDBOX_REQUIRE_DOCKER"] = "1"
 
     async def _run_do():
         config = load_config(profile=profile)
@@ -12333,168 +10711,181 @@ def screenshot(
 # nvh learn — ingest documents into the knowledge base
 # ---------------------------------------------------------------------------
 
-@app.command(rich_help_panel="Media")
-def learn(
-    path: str = typer.Argument(..., help="File or directory to ingest into the knowledge base"),
-):
-    """Add documents to your knowledge base for RAG queries.
+# ---------------------------------------------------------------------------
+# nvh rag — local RAG over your documents ($NVH_HOME/rag/index.sqlite)
+# ---------------------------------------------------------------------------
 
-    Supports: PDF, TXT, MD, RST, CSV, PY, JS, TS, JSON, YAML, and more.
+rag_app = typer.Typer(
+    help="Index documents locally and retrieve them for grounded answers "
+         "(SQLite + Ollama embeddings under $NVH_HOME/rag).",
+)
+app.add_typer(rag_app, name="rag", rich_help_panel="Subcommands")
+# Pre-0.42 spelling; hidden for one release.
+app.add_typer(rag_app, name="knowledge", hidden=True)
 
-    Examples:
 
-      nvh learn README.md
-
-      nvh learn docs/
-
-      nvh ask "What does the spec say about authentication?" --knowledge
-    """
-    from pathlib import Path as _Path
-
-    from nvh.core.knowledge import get_knowledge_base
-
-    kb = get_knowledge_base()
-    target = _Path(path)
-
-    if not target.exists():
-        console.print(f"[red]Path not found: {path}[/red]")
+def _rag_report(result: dict[str, Any], *, verb: str) -> None:
+    if not result.get("ok"):
+        console.print(f"[red]{result.get('error', f'{verb} failed')}[/red]")
         raise typer.Exit(1)
+    console.print(
+        f"[green]{verb}:[/green] {result.get('files_ingested', 0)} file(s), "
+        f"{result.get('chunks', 0)} chunk(s) → collection [bold]{result.get('collection')}[/bold]"
+        + (f", {result['skipped']} skipped" if result.get("skipped") else "")
+    )
+    if result.get("hint"):
+        console.print(f"[yellow]{result['hint']}[/yellow]")
+    console.print('[dim]Ask: nvh rag ask "your question" · or nvh ask "..." --knowledge[/dim]')
 
-    files: list[_Path] = []
-    if target.is_dir():
-        # Ingest all readable files in the directory (non-recursive for safety)
-        supported_exts = {
-            ".txt", ".md", ".rst", ".csv", ".log",
-            ".py", ".js", ".ts", ".java", ".c", ".cpp", ".go", ".rs",
-            ".json", ".yaml", ".yml", ".toml", ".pdf",
-        }
-        files = [
-            f for f in sorted(target.iterdir())
-            if f.is_file() and f.suffix.lower() in supported_exts
-        ]
-        if not files:
-            console.print(f"[yellow]No supported files found in {path}[/yellow]")
+
+@rag_app.command("add")
+def rag_add(
+    paths: list[str] = typer.Argument(..., help="Files (or folders) to index"),
+    collection: str | None = typer.Option(
+        None, "--collection", "-c", help="Collection name (default: 'default')",
+    ),
+) -> None:
+    """Index one or more files into the local RAG store."""
+    from nvh.integrations.rag import ingest_files, ingest_folder
+
+    files: list[Path] = []
+    for raw in paths:
+        target = Path(raw)
+        if not target.exists():
+            console.print(f"[red]Path not found: {raw}[/red]")
             raise typer.Exit(1)
-    else:
-        files = [target]
-
-    ingested = 0
-    skipped = 0
-    for f in files:
-        try:
-            doc = kb.ingest(str(f))
-            if doc.num_chunks == 0:
-                console.print(f"[yellow]Skipped (empty):[/yellow] {f.name}")
-                skipped += 1
-            else:
-                console.print(
-                    f"[green]Ingested:[/green] {doc.filename} "
-                    f"[dim]({doc.num_chunks} chunks, {doc.size_bytes:,} bytes, id={doc.id})[/dim]"
-                )
-                ingested += 1
-        except Exception as e:
-            console.print(f"[red]Error ingesting {f.name}: {e}[/red]")
-            skipped += 1
-
-    console.print(
-        f"\n[bold]{ingested} file(s) ingested[/bold]"
-        + (f", {skipped} skipped" if skipped else "")
-        + "."
-    )
-    console.print("[dim]Use: nvh ask \"your question\" --knowledge[/dim]")
+        if target.is_dir():
+            _rag_report(_run(ingest_folder(target, collection=collection)), verb="Ingested")
+        else:
+            files.append(target)
+    if files:
+        _rag_report(_run(ingest_files(files, collection=collection)), verb="Indexed")
 
 
-# ---------------------------------------------------------------------------
-# nvh knowledge — manage the knowledge base
-# ---------------------------------------------------------------------------
+@rag_app.command("ingest")
+def rag_ingest(
+    folder: str = typer.Argument(..., help="Folder to walk (skips .git, node_modules, …)"),
+    collection: str | None = typer.Option(
+        None, "--collection", "-c", help="Collection name (default: 'default')",
+    ),
+    max_files: int = typer.Option(2000, "--max-files", help="Safety cap on files per ingest"),
+) -> None:
+    """Walk a folder and index every supported document in it."""
+    from nvh.integrations.rag import ingest_folder
 
-knowledge_app = typer.Typer(help="Manage the RAG knowledge base")
-app.add_typer(knowledge_app, name="knowledge", rich_help_panel="Subcommands")
-
-
-@knowledge_app.command("list")
-def knowledge_list():
-    """List all ingested documents."""
-    from nvh.core.knowledge import get_knowledge_base
-
-    kb = get_knowledge_base()
-    docs = kb.list_documents()
-
-    if not docs:
-        console.print("[dim]No documents in the knowledge base.[/dim]")
-        console.print("[dim]Add some with: nvh learn path/to/file[/dim]")
-        return
-
-    table = Table(title="Knowledge Base Documents")
-    table.add_column("ID", style="dim cyan")
-    table.add_column("Filename", style="bold")
-    table.add_column("Type", style="dim")
-    table.add_column("Chunks", justify="right")
-    table.add_column("Size", justify="right", style="dim")
-    table.add_column("Ingested", style="dim")
-
-    for doc in docs:
-        size_str = (
-            f"{doc.size_bytes:,} B"
-            if doc.size_bytes < 1024
-            else f"{doc.size_bytes // 1024:,} KB"
-        )
-        ingested_at = doc.ingested_at[:10] if doc.ingested_at else "—"
-        table.add_row(
-            doc.id, doc.filename, doc.doc_type,
-            str(doc.num_chunks), size_str, ingested_at,
-        )
-
-    console.print(table)
-    console.print(
-        f"\n[dim]{len(docs)} document(s)"
-        " | Use 'nvh knowledge remove <id>' to remove one[/dim]"
+    _rag_report(
+        _run(ingest_folder(folder, collection=collection, max_files=max_files)),
+        verb="Ingested",
     )
 
 
-@knowledge_app.command("search")
-def knowledge_search(
-    query: str = typer.Argument(..., help="Search query"),
-    max_results: int = typer.Option(5, "-n", "--max", help="Maximum results to return"),
-):
-    """Search the knowledge base for relevant chunks."""
-    from nvh.core.knowledge import get_knowledge_base
+@rag_app.command("ask")
+def rag_ask_cmd(
+    question: str = typer.Argument(..., help="What to look up"),
+    collection: str | None = typer.Option(None, "--collection", "-c", help="Collection to search"),
+    top_k: int = typer.Option(5, "-n", "--top-k", help="Chunks to return"),
+) -> None:
+    """Retrieve the most relevant indexed chunks for a question."""
+    from nvh.integrations.rag import ask as rag_ask
 
-    kb = get_knowledge_base()
-    chunks = kb.search(query, max_results=max_results)
-
-    if not chunks:
-        console.print("[dim]No results found.[/dim]")
-        return
-
-    console.print(f"[bold]Top {len(chunks)} result(s) for:[/bold] {query}\n")
-    for i, chunk in enumerate(chunks, 1):
-        source = chunk.metadata.get("filename", "unknown")
-        total = chunk.metadata.get("total", "?")
-        console.print(
-            f"[bold cyan]{i}.[/bold cyan] [dim]{source} — chunk {chunk.chunk_index}/{total}[/dim]"
-        )
-        preview = chunk.content[:300].replace("\n", " ")
-        if len(chunk.content) > 300:
-            preview += "..."
-        console.print(f"   {preview}\n")
-
-
-@knowledge_app.command("remove")
-def knowledge_remove(
-    doc_id: str = typer.Argument(..., help="Document ID (or prefix) to remove"),
-):
-    """Remove a document and its chunks from the knowledge base."""
-    from nvh.core.knowledge import get_knowledge_base
-
-    kb = get_knowledge_base()
-    removed = kb.remove_document(doc_id)
-    if removed:
-        console.print(f"[green]Removed document:[/green] {doc_id}")
-    else:
-        console.print(f"[red]Document not found:[/red] {doc_id}")
-        console.print("[dim]Run 'nvh knowledge list' to see available document IDs.[/dim]")
+    result = _run(rag_ask(question, collection=collection, top_k=top_k))
+    if not result.get("ok"):
+        console.print(f"[red]{result.get('error', 'retrieval failed')}[/red]")
         raise typer.Exit(1)
+    chunks = result.get("chunks", [])
+    if not chunks:
+        console.print(
+            f"[dim]No indexed chunks in collection '{result.get('collection')}'."
+            " Add some with `nvh rag add <file>`.[/dim]"
+        )
+        return
+    console.print(f"[bold]Top {len(chunks)} chunk(s) for:[/bold] {question}\n")
+    for i, chunk in enumerate(chunks, 1):
+        source = Path(chunk.get("source", "?")).name
+        console.print(
+            f"[bold cyan]{i}.[/bold cyan] [dim]{source} — chunk {chunk.get('chunk_index')}"
+            f" · score {chunk.get('score')}[/dim]"
+        )
+        text = chunk.get("text", "").replace("\n", " ")
+        console.print(f"   {text[:300]}{'...' if len(text) > 300 else ''}\n")
+
+
+# Pre-0.42 `knowledge search`; hidden for one release.
+rag_app.command("search", hidden=True)(rag_ask_cmd)
+
+
+@rag_app.command("list")
+def rag_list() -> None:
+    """List collections in the local RAG store."""
+    from nvh.integrations.rag import list_collections
+
+    collections = list_collections()
+    if not collections:
+        console.print(
+            "[dim]RAG store is empty. Add documents with `nvh rag add <file>`"
+            " or `nvh rag ingest <folder>`.[/dim]"
+        )
+        return
+    table = Table(title="RAG collections")
+    table.add_column("Collection", style="bold cyan")
+    table.add_column("Chunks", justify="right")
+    table.add_column("Sources", justify="right")
+    for c in collections:
+        table.add_row(c["name"], str(c["chunks"]), str(c["sources"]))
+    console.print(table)
+
+
+@rag_app.command("remove")
+def rag_remove(
+    source: str = typer.Argument(..., help="Source path exactly as shown by `nvh rag ask`"),
+    collection: str | None = typer.Option(None, "--collection", "-c"),
+) -> None:
+    """Drop every chunk of one source from a collection."""
+    from nvh.integrations.rag import RagStore
+    from nvh.integrations.rag.store import default_collection
+
+    target = Path(source).expanduser()
+    resolved = str(target.resolve()) if target.exists() else source
+    with RagStore() as store:
+        removed = store.delete_source(
+            collection=collection or default_collection(), source=resolved,
+        )
+    if not removed:
+        console.print(f"[red]No chunks for source:[/red] {source}")
+        raise typer.Exit(1)
+    console.print(f"[green]Removed {removed} chunk(s) for[/green] {source}")
+
+
+@rag_app.command("import-legacy")
+def rag_import_legacy() -> None:
+    """One-shot import of the pre-0.42 ~/.hive/knowledge store."""
+    from nvh.integrations.rag import import_legacy_knowledge, legacy_knowledge_status
+
+    status = legacy_knowledge_status()
+    if not status["found"]:
+        console.print(f"[dim]No legacy knowledge base at {status['path']}; nothing to import.[/dim]")
+        return
+    if status["imported"]:
+        console.print(
+            f"[dim]Already imported on {status['imported_at']};"
+            " re-importing replaces the same sources.[/dim]"
+        )
+    console.print(f"Importing {status['documents']} legacy document(s) from {status['path']}...")
+    result = _run(import_legacy_knowledge())
+    _rag_report(result, verb="Imported")
+    console.print(
+        f"[dim]{result.get('reingested', 0)} re-read from their original path,"
+        f" {result.get('rebuilt', 0)} rebuilt from stored chunks.[/dim]"
+    )
+
+
+@app.command(hidden=True)
+def learn(
+    path: str = typer.Argument(..., help="File or directory to index"),
+) -> None:
+    """Pre-0.42 spelling of `nvh rag add`; hidden for one release."""
+    console.print("[dim]`nvh learn` is now `nvh rag add <file>` / `nvh rag ingest <folder>`.[/dim]")
+    rag_add(paths=[path], collection=None)
 
 
 # ---------------------------------------------------------------------------
@@ -13566,14 +11957,49 @@ def _is_first_run() -> bool:
     return not any(os.environ.get(k) for k in _FIRST_RUN_ENV_KEYS)
 
 
+def _known_commands() -> set[str]:
+    """Every name Click will dispatch — groups and hidden aliases included."""
+    return set(typer.main.get_command(app).commands)
+
+
+def _suggest_commands(args: list[str]) -> list[str]:
+    """Visible commands close to a mistyped first word.
+
+    Fires for a lone word (`nvh statsu`), a word followed by a flag
+    (`nvh docter --fix`) or by a subcommand of the suggested group
+    (`nvh confg set …`). Anything longer is a prompt, not a typo.
+    """
+    import difflib
+
+    root = typer.main.get_command(app)
+    visible = sorted(name for name, cmd in root.commands.items() if not cmd.hidden)
+    matches = difflib.get_close_matches(args[0].lower(), visible, n=3, cutoff=0.75)
+    if not matches:
+        return []
+    if len(args) == 1 or args[1].startswith("-"):
+        return matches
+    for name in matches:
+        if args[1] in getattr(root.commands[name], "commands", {}):
+            return [name]
+    return []
+
+
+def _forward(fn, *args, **kwargs) -> None:
+    """Call a command body outside Typer, turning typer.Exit into a process exit."""
+    try:
+        fn(*args, **kwargs)
+    except typer.Exit as exc:
+        sys.exit(exc.exit_code)
+
+
 def main():
     """Entry point — routes between subcommands and bare prompts.
 
     nvh                     → REPL
     nvh version             → subcommand
-    nvh status              → subcommand
+    nvh statsu              → did-you-mean, exit 2
     nvh "what is AI?"       → bare prompt → LLM
-    nvh ask "question"      → subcommand
+    nvh "install comfyui"   → task-shaped → asks for an explicit `nvh do`
     """
     # Shell completion requests invoke `nvh` (or the `nvhive` alias, whose
     # Click env var is _NVHIVE_COMPLETE) with no argv, which would otherwise
@@ -13622,11 +12048,10 @@ def main():
                     return
 
     if not args:
-        # If stdin is piped (not a TTY), auto-engage pipe mode
+        # Piped stdin with no arguments is the Unix-pipeline case
         if not sys.stdin.isatty():
-            _run_pipe_command()
+            _forward(_ask, output="raw", quiet=True)
             return
-        # No arguments → launch REPL
         _run(_launch_default_repl())
         return
 
@@ -13636,73 +12061,43 @@ def main():
         app()
         return
 
-    # Check if the first arg is a known subcommand or advisor
-    first = args[0].lower().replace("-", "_")
-
-    # Get all registered command names from Typer
-    known_commands = set()
-    for cmd_info in app.registered_commands:
-        if hasattr(cmd_info, "name") and cmd_info.name:
-            known_commands.add(cmd_info.name)
-        if hasattr(cmd_info, "callback") and cmd_info.callback:
-            known_commands.add(cmd_info.callback.__name__)
-
-    # Also add sub-typer group names
-    for group in app.registered_groups:
-        if hasattr(group, "name") and group.name:
-            known_commands.add(group.name)
-
-    # Add advisor names
-    known_commands.update(k.lower() for k in KNOWN_ADVISORS.keys())
-
-    # Common command aliases
-    known_commands.update({
-        "ask", "convene", "poll", "batch", "throwdown", "quick", "safe", "do",
-        "code", "write", "research", "math", "clip", "pipe",
-        "voice", "imagine", "screenshot", "bench", "scan", "learn",
-        "setup", "status", "savings", "debug", "doctor", "update", "version",
-        "serve", "repl", "completions", "plugins",
-        "nemoclaw", "mcp", "openclaw", "integrate",
-        "service", "test",
-        "advisor", "agent", "config", "conversation", "budget", "model",
-        "template", "workflow", "knowledge", "schedule", "webhook", "auth",
-        "git", "webui", "workstation", "studio", "keys", "tour",
-        "plan", "repair", "wizard",
-    })
-
-    if first in known_commands:
-        # It's a subcommand — let Typer handle it
+    if args[0].lower() in _known_commands():
         app()
-    else:
-        # If stdin is piped, auto-engage pipe mode with args as the prompt
-        if not sys.stdin.isatty():
-            _run_pipe_command(prompt=" ".join(args))
-            return
+        return
 
-        # It's a bare prompt — route to smart default
-        # Check for --iterative flag
-        force_iterative = "--iterative" in args
-        remaining_args = [a for a in args if a != "--iterative"]
-        prompt = " ".join(remaining_args)
+    suggestions = _suggest_commands(args)
+    if suggestions:
+        err_console.print(
+            f"[red]nvh: '{args[0]}' is not a command.[/red] Did you mean "
+            + " / ".join(f"[bold]nvh {s}[/bold]" for s in suggestions) + "?"
+        )
+        err_console.print(f"[dim]To send it to an advisor anyway: nvh ask \"{' '.join(args)}\"[/dim]")
+        sys.exit(2)
 
-        if not prompt:
-            _run(_launch_default_repl())
-            return
+    # Piped stdin + words: the words are the prompt, stdin is the payload
+    if not sys.stdin.isatty():
+        _forward(_ask, " ".join(args), output="raw", quiet=True)
+        return
 
-        # Check for system actions first
-        from nvh.core.action_detector import detect_action
-        action = detect_action(prompt)
-        if action and not force_iterative:
-            _run(_execute_action(action))
-        else:
-            # Auto-escalate task-like inputs to agent mode
-            from nvh.cli.repl import _is_task_input
-            if _is_task_input(prompt) and not force_iterative:
-                # Route to nvh do
-                sys.argv = [sys.argv[0], "do", prompt]
-                app()
-            else:
-                _run(_smart_default(prompt, force_iterative=force_iterative))
+    force_iterative = "--iterative" in args
+    prompt = " ".join(a for a in args if a != "--iterative")
+    if not prompt:
+        _run(_launch_default_repl())
+        return
+
+    # A task-shaped bare prompt used to start `nvh do` with --auto — a
+    # metered, auto-approved agent run one typo away. Ask for it explicitly.
+    from nvh.cli.repl import _is_task_input
+    if _is_task_input(prompt) and not force_iterative:
+        err_console.print(
+            "[yellow]That reads like a task, not a question — bare prompts"
+            " no longer start an agent run.[/yellow]"
+        )
+        err_console.print(f"  Run it:  [bold]nvh do \"{prompt}\"[/bold]")
+        err_console.print(f"  Ask it:  [bold]nvh ask \"{prompt}\"[/bold]")
+        sys.exit(2)
+
+    _run(_smart_default(prompt, force_iterative=force_iterative))
 
 
 # ---------------------------------------------------------------------------
@@ -13777,19 +12172,54 @@ def models_list(
                       "or `nvh models pull <name>` to install one.[/dim]")
 
 
+def _recommended_pull_targets() -> list[str]:
+    """VRAM tier → catalog models recommended for this GPU that are not installed yet."""
+    from nvh.integrations.installs.studio_packs import (
+        STUDIO_MODELS,
+        _detect_vram_gb,
+        _ollama_models,
+        _recommended_model_ids,
+    )
+
+    vram = _detect_vram_gb()
+    wanted = _recommended_model_ids(vram)
+    installed = _ollama_models()
+    picks = [m for m in sorted(STUDIO_MODELS, key=lambda m: m.priority) if m.id in wanted]
+    tier = f"Detected {vram} GB VRAM" if vram else "No GPU detected (CPU tier)"
+    console.print(f"[bold]{tier}[/bold] — {len(picks)} recommended model(s):")
+    targets: list[str] = []
+    for m in picks:
+        have = m.install_target in installed or m.install_target.split(":")[0] in installed
+        mark = "[green]installed[/green]" if have else f"~{m.estimated_disk_gb} GB"
+        console.print(f"  {m.title} ({m.install_target}) · {mark}")
+        if not have:
+            targets.append(m.install_target)
+    console.print()
+    return targets
+
+
 @models_app.command("pull")
 def models_pull(
-    name: str = typer.Argument(..., help="Model name, e.g. llama3.2-vision"),
+    name: str | None = typer.Argument(None, help="Model name, e.g. llama3.2-vision"),
+    recommended: bool = typer.Option(
+        False, "--recommended",
+        help="Pull the catalog models recommended for the detected GPU VRAM (skips installed)",
+    ),
 ) -> None:
     """Download a model into the local Ollama store with live progress.
 
     Runs `ollama pull` against the rootless Ollama binary and streams its
     progress. The Wizard picks the new model up on its next turn; the
-    WebUI Model Manager drives the same pull over SSE.
+    WebUI Model Manager drives the same pull over SSE. --recommended pulls
+    the VRAM-tier model set (what scripts/ollama-setup.sh used to do).
     """
     import subprocess
 
     from nvh.integrations.installs.studio_packs import _ollama_binary
+
+    if bool(name) == recommended:
+        console.print("[red]Give a model name or --recommended (not both).[/red]")
+        raise typer.Exit(1)
 
     binary = _ollama_binary()
     if not binary:
@@ -13799,19 +12229,26 @@ def models_pull(
         )
         raise typer.Exit(1)
 
-    console.print(f"[bold]Pulling {name}...[/bold] [dim](Ctrl+C to cancel)[/dim]")
-    try:
-        proc = subprocess.run([binary, "pull", name], check=False)
-    except FileNotFoundError:
-        console.print(f"[red]Could not run {binary} pull.[/red]")
-        raise typer.Exit(1)
-    if proc.returncode == 0:
-        console.print(f"[green]✓[/green] {name} ready.")
-    else:
-        console.print(
-            f"[red]✗[/red] {name} did not install cleanly "
-            f"(exit {proc.returncode}). Try `nvh models list --all` for names that fit."
-        )
+    targets = [name] if name else _recommended_pull_targets()
+    if not targets:
+        console.print("[green]✓[/green] Every recommended model is already installed.")
+        return
+
+    failed: list[str] = []
+    for target in targets:
+        console.print(f"[bold]Pulling {target}...[/bold] [dim](Ctrl+C to cancel)[/dim]")
+        try:
+            proc = subprocess.run([binary, "pull", target], check=False)
+        except FileNotFoundError:
+            console.print(f"[red]Could not run {binary} pull.[/red]")
+            raise typer.Exit(1)
+        if proc.returncode == 0:
+            console.print(f"[green]✓[/green] {target} ready.")
+        else:
+            failed.append(target)
+            console.print(f"[red]✗[/red] {target} did not install cleanly (exit {proc.returncode}).")
+    if failed:
+        console.print("[dim]Try `nvh models list --all` for names that fit.[/dim]")
         raise typer.Exit(1)
 
 
@@ -13962,9 +12399,9 @@ def _services_root(
         _services_render_console(snapshot(api_port=api_port, webui_port=webui_port))
 
 
-@services_app.command("status")
+@services_app.command("status", hidden=True)
 def services_status(ctx: typer.Context) -> None:
-    """Print a status table of Ollama, the API, and the WebUI."""
+    """(alias) nvh services / nvh status — status table of Ollama, the API, and the WebUI."""
     from nvh.cli.services import snapshot
 
     ports = ctx.obj or {}
@@ -14334,8 +12771,8 @@ def services_smoke_test(
     console.print(f"  [red]✗[/red] {reason}")
     console.print(
         "\nTo diagnose:\n"
-        "  [bold]nvh services status[/bold]   show per-service health\n"
-        "  [bold]nvh doctor --json[/bold]     run the full diagnostic\n"
+        "  [bold]nvh status[/bold]                show per-service health\n"
+        "  [bold]nvh status --deep --json[/bold]  run the full diagnostic\n"
         "  [bold]nvh services restart[/bold]  recycle the API\n"
     )
     raise typer.Exit(1)

@@ -15,6 +15,7 @@ import yaml
 import nvh.api.server as server_module
 from nvh.cli.setup import RETIRED_MODEL_RENAMES
 from nvh.config.settings import generate_default_config
+from nvh.providers.specs import PROVIDER_SPECS
 
 # Every ID the migrate table retires, plus the GitHub Models fallback that
 # left with its provider (no rename target — the provider is gone).
@@ -62,6 +63,16 @@ def test_template_default_and_fallback_models() -> None:
         if name in EXPECTED_DEFAULTS
     }
     assert actual == EXPECTED_DEFAULTS
+
+
+def test_template_defaults_match_provider_specs() -> None:
+    """The settings template is a hand copy of PROVIDER_SPECS until 0.43 derives it."""
+    advisors = _template_advisors()
+    for name, spec in PROVIDER_SPECS.items():
+        block = advisors[name]
+        assert block.get("default_model") == spec.default_model, f"{name}.default_model"
+        # A blank template fallback inherits the spec's; anything else must match it.
+        assert block.get("fallback_model", "") in ("", spec.fallback_model), f"{name}.fallback_model"
 
 
 def test_template_has_no_retired_models_or_github() -> None:

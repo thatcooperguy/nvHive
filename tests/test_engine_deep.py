@@ -124,6 +124,88 @@ class TestResponseCache:
         assert hit.content == "second"
         assert len(cache._store) == 1
 
+    @pytest.mark.asyncio
+    async def test_cache_put_and_get(self):
+        cache = ResponseCache(max_size=10, ttl_seconds=300)
+        resp = CompletionResponse(
+            content="cached", model="m", provider="p",
+            usage=Usage(input_tokens=1, output_tokens=2, total_tokens=3),
+            cost_usd=Decimal("0.01"), latency_ms=10,
+        )
+        msgs = [Message(role="user", content="q")]
+        await cache.put("p", "m", msgs, 0.0, 128, resp)
+        hit = await cache.get("p", "m", msgs, 0.0, 128)
+        assert hit is not None
+        assert hit.cache_hit is True
+        assert hit.cost_usd == Decimal("0")
+
+    @pytest.mark.asyncio
+    async def test_cache_miss(self):
+        cache = ResponseCache(max_size=10, ttl_seconds=300)
+        msgs = [Message(role="user", content="x")]
+        assert await cache.get("p", "m", msgs, 0.0, 128) is None
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_miss(self):
+        c = ResponseCache(max_size=10, ttl_seconds=3600)
+        msgs = [Message(role="user", content="hello")]
+        assert await c.get("openai", "m", msgs, 0, 100) is None
+        await c.put("openai", "m", msgs, 0, 100, _make_response())
+        hit = await c.get("openai", "m", msgs, 0, 100)
+        assert hit.cache_hit is True and hit.cost_usd == Decimal("0")
+
+    @pytest.mark.asyncio
+    async def test_cache_ttl_expiry(self):
+        cache = ResponseCache(max_size=10, ttl_seconds=1)
+        resp = CompletionResponse(
+            content="old", model="m", provider="p",
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2),
+            cost_usd=Decimal("0"), latency_ms=1,
+        )
+        msgs = [Message(role="user", content="q")]
+        await cache.put("p", "m", msgs, 0.0, 128, resp)
+        # Manually backdate the entry so it appears expired
+        key = cache._make_key("p", "m", msgs, 0.0, 128)
+        cache._store[key].timestamp -= 10
+        assert await cache.get("p", "m", msgs, 0.0, 128) is None
+
+    @pytest.mark.asyncio
+    async def test_cache_eviction(self):
+        cache = ResponseCache(max_size=1, ttl_seconds=300)
+        msgs_a = [Message(role="user", content="a")]
+        msgs_b = [Message(role="user", content="b")]
+        resp = CompletionResponse(
+            content="v", model="m", provider="p",
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2),
+            cost_usd=Decimal("0"), latency_ms=1,
+        )
+        await cache.put("p", "m", msgs_a, 0.0, 128, resp)
+        await cache.put("p", "m", msgs_b, 0.0, 128, resp)
+        assert await cache.get("p", "m", msgs_a, 0.0, 128) is None
+        assert await cache.get("p", "m", msgs_b, 0.0, 128) is not None
+
+    @pytest.mark.asyncio
+    async def test_cache_clear(self):
+        cache = ResponseCache(max_size=10, ttl_seconds=300)
+        resp = CompletionResponse(
+            content="v", model="m", provider="p",
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2),
+            cost_usd=Decimal("0"), latency_ms=1,
+        )
+        msgs = [Message(role="user", content="q")]
+        await cache.put("p", "m", msgs, 0.0, 128, resp)
+        cleared = await cache.clear()
+        assert cleared == 1
+        assert cache.stats["entries"] == 0
+
+    @pytest.mark.asyncio
+    async def test_cache_stats_property(self):
+        cache = ResponseCache(max_size=50, ttl_seconds=600)
+        stats = cache.stats
+        assert stats["max_size"] == 50
+        assert stats["ttl_seconds"] == 600
+        assert stats["entries"] == 0
+
 
 # ---------------------------------------------------------------------------
 # Engine._get_fallback_chain

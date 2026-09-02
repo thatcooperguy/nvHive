@@ -22,15 +22,35 @@ environments where Docker is not available.
 ExecutionResult.isolation records which mode actually ran ("docker" or
 "subprocess"). Set NVH_SANDBOX_REQUIRE_DOCKER=1 (or
 SandboxConfig.require_docker) to fail closed instead of falling back.
+
+``run_shell`` is the agent ``shell`` tool's entry point: the same Docker
+flags as ``execute`` plus a read-write mount of ``SandboxConfig.mount_dir``
+(the agent workspace) at /workspace, so build/test commands can see the
+project. The subprocess fallback runs the command with ``mount_dir`` as cwd.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+_TRUTHY = ("1", "true", "yes")
+
+
+def _require_docker_default() -> bool:
+    # NVH_SANDBOX was the pre-0.42 docker_sandbox opt-in; honoured as a
+    # spelling of "require isolation" for one release.
+    return any(
+        os.environ.get(var, "").strip().lower() in _TRUTHY
+        for var in ("NVH_SANDBOX_REQUIRE_DOCKER", "NVH_SANDBOX")
+    )
 
 
 @dataclass
@@ -51,16 +71,15 @@ class SandboxConfig:
     network_enabled: bool = False
     max_output_bytes: int = 1_000_000  # 1MB output limit
     allowed_languages: list[str] = field(default_factory=lambda: ["python", "javascript", "bash"])
+    # Host directory ``run_shell`` mounts read-write at /workspace (Docker)
+    # or uses as cwd (subprocess). None = an empty temp dir, like ``execute``.
+    mount_dir: str | Path | None = None
+    shell_image: str = "python:3.12-slim"
     # Fail closed instead of falling back to an unisolated subprocess when
     # Docker is unavailable. Off by default: the primary deployment target
-    # is rootless Linux boxes without Docker.
-    # Truthy set matches docker_sandbox.sandbox_enabled — "yes" silently
-    # failing open here would defeat the whole flag.
-    require_docker: bool = field(
-        default_factory=lambda: os.environ.get(
-            "NVH_SANDBOX_REQUIRE_DOCKER", ""
-        ).strip().lower() in ("1", "true", "yes")
-    )
+    # is rootless Linux boxes without Docker. "yes" is accepted so a flag
+    # meant to fail closed never silently fails open.
+    require_docker: bool = field(default_factory=_require_docker_default)
 
 class SandboxExecutor:
     """Execute code in a sandboxed environment."""
@@ -105,29 +124,136 @@ class SandboxExecutor:
                 exit_code=1, execution_time_ms=0, error=f"Language '{language}' not allowed"
             )
 
-        docker = await self._check_docker()
-
-        if not docker and self.config.require_docker:
-            msg = (
-                "Docker is unavailable and NVH_SANDBOX_REQUIRE_DOCKER is set — "
-                "refusing subprocess fallback, nothing was executed"
-            )
-            return ExecutionResult(
-                stdout="", stderr=msg,
-                exit_code=-1, execution_time_ms=0, error=msg,
-            )
-
-        if not docker:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Docker unavailable — using subprocess fallback "
-                "(no network/memory/user isolation)"
-            )
+        docker, refusal = await self._select_mode()
+        if refusal is not None:
+            return refusal
 
         runner = self._execute_docker if docker else self._execute_subprocess
         result = await runner(code, language, files)
         result.isolation = "docker" if docker else "subprocess"
         return result
+
+    async def run_shell(self, command: str) -> ExecutionResult:
+        """Run a shell command with the workspace (``config.mount_dir``) visible.
+
+        Docker mode keeps every isolation flag from ``execute`` — non-root,
+        memory/pids caps, read-only root fs, no network — and additionally
+        mounts ``mount_dir`` read-write at /workspace. Subprocess fallback
+        runs the command with ``mount_dir`` as cwd and no isolation; it is
+        refused when ``require_docker`` is set, exactly like ``execute``.
+        """
+        docker, refusal = await self._select_mode()
+        if refusal is not None:
+            return refusal
+
+        mount = Path(self.config.mount_dir).resolve() if self.config.mount_dir else None
+        if docker:
+            result = await self._run_shell_docker(command, mount)
+        else:
+            result = await self._run_shell_subprocess(command, mount)
+        result.isolation = "docker" if docker else "subprocess"
+        return result
+
+    async def _select_mode(self) -> tuple[bool, ExecutionResult | None]:
+        """Return ``(docker_available, refusal)``; refusal is set when the
+        fail-closed flag forbids the subprocess fallback."""
+        docker = await self._check_docker()
+        if not docker and self.config.require_docker:
+            msg = (
+                "Docker is unavailable and NVH_SANDBOX_REQUIRE_DOCKER is set — "
+                "refusing subprocess fallback, nothing was executed"
+            )
+            return False, ExecutionResult(
+                stdout="", stderr=msg,
+                exit_code=-1, execution_time_ms=0, error=msg,
+            )
+        if not docker:
+            logger.warning(
+                "Docker unavailable — using subprocess fallback "
+                "(no network/memory/user isolation)"
+            )
+        return docker, None
+
+    def _docker_run_flags(self) -> list[str]:
+        cmd = [
+            "docker", "run", "--rm",
+            "--user", "1000:1000",
+            "--memory", f"{self.config.memory_limit_mb}m",
+            "--cpus", "1",
+            "--pids-limit", "64",
+            "--read-only",
+            "--tmpfs", "/tmp:rw,size=64m",
+        ]
+        if not self.config.network_enabled:
+            cmd.extend(["--network", "none"])
+        return cmd
+
+    async def _run_process(
+        self, argv: list[str] | None, *, shell_command: str | None = None,
+        cwd: str | None = None,
+    ) -> ExecutionResult:
+        """Run ``argv`` (exec) or ``shell_command`` (via the system shell)
+        under the configured timeout and output cap."""
+        start = time.monotonic()
+        try:
+            if shell_command is not None:
+                proc = await asyncio.create_subprocess_shell(
+                    shell_command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                )
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    *(argv or []),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=self.config.timeout_seconds,
+                )
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                elapsed = int((time.monotonic() - start) * 1000)
+                return ExecutionResult(
+                    stdout="", stderr="Execution timed out",
+                    exit_code=-1, execution_time_ms=elapsed,
+                    timed_out=True, error=f"Timed out after {self.config.timeout_seconds}s",
+                )
+            elapsed = int((time.monotonic() - start) * 1000)
+            return ExecutionResult(
+                stdout=stdout.decode(errors="replace")[:self.config.max_output_bytes],
+                stderr=stderr.decode(errors="replace")[:self.config.max_output_bytes],
+                exit_code=proc.returncode or 0,
+                execution_time_ms=elapsed,
+            )
+        except Exception as e:
+            elapsed = int((time.monotonic() - start) * 1000)
+            return ExecutionResult(
+                stdout="", stderr=str(e),
+                exit_code=-1, execution_time_ms=elapsed, error=str(e),
+            )
+
+    async def _run_shell_docker(self, command: str, mount: Path | None) -> ExecutionResult:
+        cmd = self._docker_run_flags()
+        if mount is not None:
+            cmd.extend(["-v", f"{mount}:/workspace:rw", "-w", "/workspace"])
+            cmd.extend([self.config.shell_image, "bash", "-c", command])
+            return await self._run_process(cmd)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd.extend(["-v", f"{tmpdir}:/workspace:ro", "-w", "/workspace"])
+            cmd.extend([self.config.shell_image, "bash", "-c", command])
+            return await self._run_process(cmd)
+
+    async def _run_shell_subprocess(self, command: str, mount: Path | None) -> ExecutionResult:
+        if mount is not None:
+            return await self._run_process(None, shell_command=command, cwd=str(mount))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            return await self._run_process(None, shell_command=command, cwd=tmpdir)
 
     async def _execute_docker(
         self, code: str, language: str, files: dict[str, str] | None
@@ -146,80 +272,16 @@ class SandboxExecutor:
                     safe_name = Path(name).name
                     (Path(tmpdir) / safe_name).write_text(content)
 
-            # Docker image per language
             images = {
                 "python": "python:3.12-slim",
                 "javascript": "node:22-slim",
                 "bash": "ubuntu:24.04",
             }
-
-            # Build docker run command
-            cmd = [
-                "docker", "run", "--rm",
-                "--user", "1000:1000",
-                "--memory", f"{self.config.memory_limit_mb}m",
-                "--cpus", "1",
-                "--pids-limit", "64",
-                "--read-only",
-                "--tmpfs", "/tmp:rw,size=64m",
-                "-v", f"{tmpdir}:/workspace:ro",
-                "-w", "/workspace",
-            ]
-
-            if not self.config.network_enabled:
-                cmd.extend(["--network", "none"])
-
-            cmd.append(images[language])
-
-            # Execution command per language
-            if language == "python":
-                cmd.extend(["python", f"/workspace/main{ext}"])
-            elif language == "javascript":
-                cmd.extend(["node", f"/workspace/main{ext}"])
-            elif language == "bash":
-                cmd.extend(["bash", f"/workspace/main{ext}"])
-
-            import time
-            start = time.monotonic()
-
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-
-                try:
-                    stdout, stderr = await asyncio.wait_for(
-                        proc.communicate(),
-                        timeout=self.config.timeout_seconds,
-                    )
-                except TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    elapsed = int((time.monotonic() - start) * 1000)
-                    return ExecutionResult(
-                        stdout="", stderr="Execution timed out",
-                        exit_code=-1, execution_time_ms=elapsed,
-                        timed_out=True, error=f"Timed out after {self.config.timeout_seconds}s"
-                    )
-
-                elapsed = int((time.monotonic() - start) * 1000)
-
-                return ExecutionResult(
-                    stdout=stdout.decode(errors="replace")[:self.config.max_output_bytes],
-                    stderr=stderr.decode(errors="replace")[:self.config.max_output_bytes],
-                    exit_code=proc.returncode or 0,
-                    execution_time_ms=elapsed,
-                )
-
-            except Exception as e:
-                elapsed = int((time.monotonic() - start) * 1000)
-                return ExecutionResult(
-                    stdout="", stderr=str(e),
-                    exit_code=-1, execution_time_ms=elapsed,
-                    error=str(e)
-                )
+            interpreters = {"python": "python", "javascript": "node", "bash": "bash"}
+            cmd = self._docker_run_flags()
+            cmd.extend(["-v", f"{tmpdir}:/workspace:ro", "-w", "/workspace"])
+            cmd.extend([images[language], interpreters[language], f"/workspace/main{ext}"])
+            return await self._run_process(cmd)
 
     async def _execute_subprocess(
         self, code: str, language: str, files: dict[str, str] | None
@@ -235,47 +297,7 @@ class SandboxExecutor:
                     safe_name = Path(name).name
                     (Path(tmpdir) / safe_name).write_text(content)
 
-            interpreters = {
-                "python": ["python3", str(code_file)],
-                "javascript": ["node", str(code_file)],
-                "bash": ["bash", str(code_file)],
-            }
-
-            import time
-            start = time.monotonic()
-
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *interpreters[language],
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=tmpdir,
-                )
-
-                try:
-                    stdout, stderr = await asyncio.wait_for(
-                        proc.communicate(),
-                        timeout=self.config.timeout_seconds,
-                    )
-                except TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    elapsed = int((time.monotonic() - start) * 1000)
-                    return ExecutionResult(
-                        stdout="", stderr="Execution timed out",
-                        exit_code=-1, execution_time_ms=elapsed,
-                        timed_out=True,
-                    )
-
-                elapsed = int((time.monotonic() - start) * 1000)
-                return ExecutionResult(
-                    stdout=stdout.decode(errors="replace")[:self.config.max_output_bytes],
-                    stderr=stderr.decode(errors="replace")[:self.config.max_output_bytes],
-                    exit_code=proc.returncode or 0,
-                    execution_time_ms=elapsed,
-                )
-            except Exception as e:
-                return ExecutionResult(
-                    stdout="", stderr=str(e),
-                    exit_code=-1, execution_time_ms=0, error=str(e)
-                )
+            interpreters = {"python": "python3", "javascript": "node", "bash": "bash"}
+            return await self._run_process(
+                [interpreters[language], str(code_file)], cwd=tmpdir,
+            )

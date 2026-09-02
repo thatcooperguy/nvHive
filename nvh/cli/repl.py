@@ -41,9 +41,9 @@ HELP_TEXT = """
   [cyan]/cost[/cyan]                  Show cumulative session cost
   [cyan]/history[/cyan]               Show conversation history for this session
   [cyan]/save <path>[/cyan]           Export conversation to a JSON file
-  [cyan]/remember <text>[/cyan]       Save a memory that persists across sessions
-  [cyan]/forget <keyword>[/cyan]      Remove memories matching a keyword
-  [cyan]/memories[/cyan]              List all stored memories
+  [cyan]/remember <text>[/cyan]       Save a note to the vault (Wizard Memory) — persists across sessions
+  [cyan]/forget <keyword>[/cyan]      Delete REPL memory notes matching a keyword
+  [cyan]/memories [query][/cyan]      List memory notes, or search the whole vault with RAG
   [cyan]/tools[/cyan]                 Toggle tool use on/off and show available tools
   [cyan]/do <task>[/cyan]             Run agent loop on a task (hands-free mode)
   [cyan]/setup[/cyan]                 Re-run guided setup (GPU, providers, Ollama)
@@ -65,6 +65,88 @@ PRESETS = [
     "executive", "engineering", "security_review",
     "code_review", "product", "data", "full_board",
 ]
+
+# /remember writes ordinary vault notes (category "Wizard Memory") tagged
+# #repl so /forget and the startup context only ever touch REPL-authored
+# notes, never the seeded product notes in the same folder.
+REPL_MEMORY_TAG = "repl"
+REPL_MEMORY_CATEGORY = "Wizard Memory"
+
+
+def _memory_title(text: str) -> str:
+    first = text.strip().splitlines()[0]
+    return first if len(first) <= 60 else first[:57].rstrip() + "..."
+
+
+def _parse_memory_note(text: str) -> tuple[str, list[str], str]:
+    """Split an append_vault_memory note into (title, tags, body)."""
+    title = ""
+    tags: list[str] = []
+    header, _, body = text.partition("\n\n")
+    if header.startswith("# "):
+        title = header[2:].strip()
+    meta, _, body = body.partition("\n\n")
+    for line in meta.splitlines():
+        if line.startswith("Tags:"):
+            tags = [t.lstrip("#") for t in line[5:].split() if t.startswith("#")]
+    return title, tags, body.strip()
+
+
+def _repl_memory_notes() -> list[tuple[Path, str, str]]:
+    """``(path, title, body)`` of notes written by /remember, newest first."""
+    from nvh.integrations.workspace.vault import vault_status
+
+    memory_dir = Path(vault_status()["vault_dir"]) / REPL_MEMORY_CATEGORY
+    if not memory_dir.is_dir():
+        return []
+    notes: list[tuple[Path, str, str]] = []
+    for path in sorted(memory_dir.glob("*.md"), reverse=True):
+        try:
+            title, tags, body = _parse_memory_note(path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if REPL_MEMORY_TAG in tags:
+            notes.append((path, title, body))
+    return notes
+
+
+def _repl_memory_context(max_notes: int = 20) -> str:
+    notes = _repl_memory_notes()[:max_notes]
+    if not notes:
+        return ""
+    lines = ["<memory>", "Things I remember about you and this project:"]
+    lines.extend(f"  - {body}" for _, _, body in notes)
+    lines.append("</memory>")
+    return "\n".join(lines)
+
+
+def _forget_repl_memories(keyword: str) -> int:
+    needle = keyword.lower()
+    removed = 0
+    for path, title, body in _repl_memory_notes():
+        if needle in title.lower() or needle in body.lower():
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
+
+
+async def _search_vault_memories(query: str, top_k: int = 5) -> None:
+    from nvh.integrations.rag import ask_vault
+
+    result = await ask_vault(query, top_k=top_k)
+    if not result.get("ok"):
+        console.print(f"[yellow]Vault search unavailable: {result.get('error')}[/yellow]")
+        return
+    chunks = result.get("chunks", [])
+    if not chunks:
+        console.print(f"[dim]Nothing in the vault matches '{query}'.[/dim]")
+        return
+    console.print(f"\n[bold]Vault matches for:[/bold] {query}")
+    for chunk in chunks:
+        source = Path(chunk.get("source", "?")).name
+        text = chunk.get("text", "").replace("\n", " ")
+        console.print(f"  [cyan]{source}[/cyan] [dim]({chunk.get('score')})[/dim] {text[:200]}")
+    console.print()
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +339,7 @@ def _try_restart_ollama_interactive(
                 "  [dim]The error above was likely transient"
                 " (timeout, bad request).[/dim]\n"
                 "  [dim]Try the query again, or run"
-                " [bold]nvh doctor[/bold] for details.[/dim]"
+                " [bold]nvh status --deep[/bold] for details.[/dim]"
             )
             return False
 
@@ -606,35 +688,37 @@ def _handle_command(line: str, session: ReplSession, engine: Engine | None = Non
         if not arg:
             console.print("[yellow]Usage: /remember <text>[/yellow]")
         else:
-            from nvh.core.memory import get_memory_store
-            store = get_memory_store()
-            mem = store.add(arg, memory_type="fact", source="user")
-            console.print(f"[dim]Memory saved: [bold][{mem.id}][/bold] {arg[:60]}{'...' if len(arg) > 60 else ''}[/dim]")
+            from nvh.integrations.workspace.vault import append_vault_memory
+            saved = append_vault_memory(
+                _memory_title(arg), arg,
+                category=REPL_MEMORY_CATEGORY, tags=[REPL_MEMORY_TAG],
+            )
+            console.print(f"[dim]Memory saved to vault: [bold]{Path(saved['path']).name}[/bold][/dim]")
 
     elif cmd == "/forget":
         if not arg:
             console.print("[yellow]Usage: /forget <keyword>[/yellow]")
         else:
-            from nvh.core.memory import get_memory_store
-            store = get_memory_store()
-            removed = store.forget(arg)
+            removed = _forget_repl_memories(arg)
             if removed:
-                console.print(f"[dim]Removed [bold]{removed}[/bold] memory{'s' if removed != 1 else ''} matching '{arg}'.[/dim]")
+                console.print(f"[dim]Removed [bold]{removed}[/bold] memory note{'s' if removed != 1 else ''} matching '{arg}'.[/dim]")
             else:
-                console.print(f"[dim]No memories found matching '{arg}'.[/dim]")
+                console.print(f"[dim]No REPL memory notes match '{arg}'.[/dim]")
 
     elif cmd == "/memories":
-        from nvh.core.memory import get_memory_store
-        store = get_memory_store()
-        memories = store.get_all()
-        if not memories:
-            console.print("[dim]No memories stored yet. Use /remember <text> to add one.[/dim]")
+        if arg:
+            # Semantic search over the whole vault — run_repl awaits it
+            return ("memories", arg)
+        notes = _repl_memory_notes()
+        if not notes:
+            console.print("[dim]No memory notes yet. Use /remember <text> to add one.[/dim]")
         else:
-            console.print(f"\n[bold]Stored memories ({len(memories)})[/bold]")
-            for m in memories:
+            console.print(f"\n[bold]Memory notes ({len(notes)})[/bold]")
+            for path, title, body in notes:
+                preview = body.replace("\n", " ")
                 console.print(
-                    f"  [bold cyan][{m.id}][/bold cyan] "
-                    f"[dim][{m.type}][/dim] {m.content}"
+                    f"  [bold cyan]{title}[/bold cyan] [dim]{path.name}[/dim]\n"
+                    f"    {preview[:120]}{'...' if len(preview) > 120 else ''}"
                 )
             console.print()
 
@@ -953,10 +1037,8 @@ async def run_repl(
         mode=mode,
     )
 
-    # At session start, load memories and inject into system prompt
-    from nvh.core.memory import get_memory_store
-    memory_store = get_memory_store()
-    memory_context = memory_store.get_context_prompt()
+    # At session start, inject the REPL's vault memory notes into the system prompt
+    memory_context = _repl_memory_context()
     if memory_context and not session.system_prompt:
         session.system_prompt = memory_context
     elif memory_context:
@@ -1060,6 +1142,9 @@ async def run_repl(
                 except Exception as exc:
                     console.print(f"[red]Agent error: {exc}[/red]")
                 continue
+            if isinstance(result, tuple) and result[0] == "memories":
+                await _search_vault_memories(result[1])
+                continue
             # /setup returns a reinit signal — reload config and providers
             if isinstance(result, tuple) and result[0] == "setup_reinit":
                 try:
@@ -1134,29 +1219,13 @@ async def run_repl(
         content: str = ""
         cost: Decimal = Decimal("0")
 
-        # Apply focus mode: inject a one-shot system prompt override and provider hint
-        focus_systems: dict[str, str] = {
-            "code": (
-                "You are an expert software engineer. Provide clear, correct, well-structured code. "
-                "When writing code, include brief explanations of key decisions. "
-                "Prefer idiomatic solutions. Highlight any edge cases or caveats."
-            ),
-            "write": (
-                "You are a skilled writer. Write clearly and engagingly. "
-                "Match the format to the request (email, essay, blog post, etc.)."
-            ),
-            "research": (
-                "You are a thorough research assistant. Synthesize information from multiple sources. "
-                "Always cite your sources. Highlight areas of consensus and disagreement."
-            ),
-            "math": (
-                "You are an expert mathematician. Solve problems step by step, showing all work. "
-                "Use clear notation. Verify your answer when possible."
-            ),
-        }
+        # Apply focus mode: one-shot system prompt override, same table as `nvh ask --focus`
         _focus_system_override: str | None = None
         if session.focus:
-            _focus_system_override = focus_systems.get(session.focus)
+            from nvh.cli.main import FOCUS_MODES
+
+            focus_mode = FOCUS_MODES.get(session.focus)
+            _focus_system_override = focus_mode[0] if focus_mode else None
             console.print(f"[dim][focus: {session.focus}][/dim]")
             session.focus = None  # consume the one-shot focus
 

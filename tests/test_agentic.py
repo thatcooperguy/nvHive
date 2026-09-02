@@ -6,21 +6,30 @@ with mock providers. No real network or GPU required.
 
 from __future__ import annotations
 
+import subprocess
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from nvh.core.agent_loop import AgentResult, AgentStep
 from nvh.core.agentic import (
+    CODING_SYSTEM_PROMPT,
+    TIER_DESCRIPTIONS,
     AgentConfig,
     AgentMode,
     AgentTier,
     CodingResult,
+    _build_changes_summary,
+    _extract_commands,
+    _extract_file_operations,
+    _run_quality_gates,
     build_agent_config,
     detect_agent_tier,
     run_coding_agent,
 )
+from nvh.core.tools import ToolResult
 from nvh.providers.base import CompletionResponse, Usage
 from nvh.providers.registry import ProviderRegistry
 
@@ -267,3 +276,256 @@ class TestCodingAgentLoop:
         assert result.orchestrator_model == "gpt-4o-mini"
         assert result.worker_model == "ollama/qwen2.5-coder:32b"
         assert result.duration_ms >= 0
+
+
+# ---------------------------------------------------------------------------
+# Result summarisation and quality gates
+# ---------------------------------------------------------------------------
+
+
+def _make_step(tool_calls: list[dict], tool_results: list[ToolResult]) -> AgentStep:
+    return AgentStep(
+        iteration=1,
+        thought="",
+        tool_calls=tool_calls,
+        tool_results=tool_results,
+        response="",
+    )
+
+
+def _make_agent_result(steps: list[AgentStep]) -> AgentResult:
+    return AgentResult(
+        task="test",
+        final_response="done",
+        steps=steps,
+        total_iterations=len(steps),
+        total_tool_calls=sum(len(s.tool_calls) for s in steps),
+        completed=True,
+    )
+
+
+class TestExtractCommands:
+    def test_shell_commands_extracted(self):
+        step = _make_step(
+            [
+                {"tool": "shell", "args": {"command": "pytest"}},
+                {"tool": "run_code", "args": {"command": "python -c 'p'"}},
+            ],
+            [
+                ToolResult(tool_name="shell", success=True, output="ok"),
+                ToolResult(tool_name="run_code", success=True, output="ok"),
+            ],
+        )
+        cmds = _extract_commands(_make_agent_result([step]))
+        assert "pytest" in cmds
+        assert "python -c 'p'" in cmds
+
+    def test_no_duplicates(self):
+        step = _make_step(
+            [
+                {"tool": "shell", "args": {"command": "ls"}},
+                {"tool": "shell", "args": {"command": "ls"}},
+            ],
+            [
+                ToolResult(tool_name="shell", success=True, output=""),
+                ToolResult(tool_name="shell", success=True, output=""),
+            ],
+        )
+        cmds = _extract_commands(_make_agent_result([step]))
+        assert cmds.count("ls") == 1
+
+
+class TestBuildChangesSummary:
+    def test_summary_includes_write_and_shell(self):
+        step = _make_step(
+            [
+                {"tool": "write_file", "args": {"path": "f.py", "content": "x"}},
+                {"tool": "shell", "args": {"command": "pytest"}},
+                {"tool": "read_file", "args": {"path": "bar.py"}},
+            ],
+            [
+                ToolResult(tool_name="write_file", success=True, output="ok"),
+                ToolResult(tool_name="shell", success=True, output="passed"),
+                ToolResult(tool_name="read_file", success=True, output="data"),
+            ],
+        )
+        summary = _build_changes_summary(_make_agent_result([step]))
+        assert "f.py" in summary
+        assert "pytest" in summary
+        assert "bar.py" in summary
+
+    def test_empty_steps(self):
+        summary = _build_changes_summary(_make_agent_result([]))
+        assert "no tool calls" in summary.lower()
+
+
+class TestRunQualityGates:
+    """Cover _run_quality_gates with real subprocess mocks."""
+
+    @pytest.mark.asyncio
+    async def test_py_file_passes_lint(self, tmp_path: Path):
+        """A syntactically valid .py file should pass quality gates."""
+        f = tmp_path / "good.py"
+        f.write_text("x = 1\n", encoding="utf-8")
+        with patch("subprocess.run") as mock_run:
+            # ruff passes, syntax passes
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            passed, output = await _run_quality_gates(tmp_path, [str(f)])
+        assert passed is True
+        assert "passed" in output.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_python_files_returns_none(self, tmp_path: Path):
+        """Non-Python files should result in (None, '')."""
+        passed, output = await _run_quality_gates(tmp_path, ["data.json"])
+        assert passed is None
+        assert output == ""
+
+    @pytest.mark.asyncio
+    async def test_ruff_failure_marks_not_passed(self, tmp_path: Path):
+        """When ruff reports errors, quality gates should fail."""
+        f = tmp_path / "bad.py"
+        f.write_text("import os\n", encoding="utf-8")
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # ruff check fails
+                return subprocess.CompletedProcess(
+                    args=[], returncode=1,
+                    stdout="bad.py:1: F401 unused import", stderr=""
+                )
+            # syntax check passes
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+
+        with patch("subprocess.run", side_effect=side_effect):
+            passed, output = await _run_quality_gates(tmp_path, [str(f)])
+        assert passed is False
+        assert "FAILED" in output
+
+    @pytest.mark.asyncio
+    async def test_ruff_not_installed_skipped(self, tmp_path: Path):
+        """When ruff is not found, gate is skipped but syntax still runs."""
+        f = tmp_path / "ok.py"
+        f.write_text("x = 1\n", encoding="utf-8")
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise FileNotFoundError("ruff not found")
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+
+        with patch("subprocess.run", side_effect=side_effect):
+            passed, output = await _run_quality_gates(tmp_path, [str(f)])
+        assert "skipped" in output.lower()
+
+
+class TestExtractFileOperations:
+    """Cover _extract_file_operations with mixed read/write calls."""
+
+    def test_read_then_write_is_modified(self):
+        """A file that was read then written should be 'modified'."""
+        steps = [
+            _make_step(
+                [
+                    {"tool": "read_file", "args": {"path": "a.py"}},
+                    {"tool": "write_file", "args": {"path": "a.py"}},
+                ],
+                [
+                    ToolResult(tool_name="read_file", success=True, output="content"),
+                    ToolResult(tool_name="write_file", success=True, output="ok"),
+                ],
+            )
+        ]
+        result = _make_agent_result(steps)
+        modified, created, read = _extract_file_operations(result)
+        assert "a.py" in modified
+        assert "a.py" in read
+        assert "a.py" not in created
+
+    def test_write_without_read_is_created(self):
+        """A file written without prior read should be 'created'."""
+        steps = [
+            _make_step(
+                [{"tool": "write_file", "args": {"path": "new.py"}}],
+                [ToolResult(tool_name="write_file", success=True, output="ok")],
+            )
+        ]
+        result = _make_agent_result(steps)
+        modified, created, read = _extract_file_operations(result)
+        assert "new.py" in created
+        assert "new.py" not in modified
+
+    def test_mixed_operations(self):
+        """Mix of read-only, create, and modify in one result."""
+        steps = [
+            _make_step(
+                [
+                    {"tool": "read_file", "args": {"path": "r.py"}},
+                    {"tool": "read_file", "args": {"path": "m.py"}},
+                    {"tool": "write_file", "args": {"path": "m.py"}},
+                    {"tool": "write_file", "args": {"path": "c.py"}},
+                ],
+                [
+                    ToolResult(tool_name="read_file", success=True, output="x"),
+                    ToolResult(tool_name="read_file", success=True, output="y"),
+                    ToolResult(tool_name="write_file", success=True, output="ok"),
+                    ToolResult(tool_name="write_file", success=True, output="ok"),
+                ],
+            )
+        ]
+        result = _make_agent_result(steps)
+        modified, created, read = _extract_file_operations(result)
+        assert "r.py" in read
+        assert "m.py" in modified
+        assert "c.py" in created
+
+
+class TestAgenticModuleSurface:
+    def test_coding_system_prompt_has_tools(self):
+        assert "{tool_descriptions}" in CODING_SYSTEM_PROMPT
+        assert "read" in CODING_SYSTEM_PROMPT.lower()
+        assert "write" in CODING_SYSTEM_PROMPT.lower()
+
+    def test_tier_descriptions_all_tiers(self):
+        for tier in AgentTier:
+            assert tier in TIER_DESCRIPTIONS
+            assert len(TIER_DESCRIPTIONS[tier]) > 10
+
+    def test_agent_mode_enum(self):
+        assert AgentMode.AUTO == "auto"
+        assert AgentMode.SINGLE == "single"
+        assert AgentMode.MULTI == "multi"
+
+    def test_build_changes_summary_empty(self):
+        result = AgentResult(
+            task="test", final_response="done",
+            steps=[], total_iterations=0, total_tool_calls=0, completed=True,
+        )
+        summary = _build_changes_summary(result)
+        assert "no tool calls" in summary.lower()
+
+    def test_extract_commands_empty(self):
+        result = AgentResult(
+            task="test", final_response="done",
+            steps=[], total_iterations=0, total_tool_calls=0, completed=True,
+        )
+        cmds = _extract_commands(result)
+        assert cmds == []
+
+    def test_coding_result_defaults(self):
+        r = CodingResult(task="test", plan="plan", final_summary="done")
+        assert r.completed is False
+        assert r.total_cost_usd == Decimal("0")
+        assert r.tier == AgentTier.TIER_0
+        assert r.quality_gate_passed is None

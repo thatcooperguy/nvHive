@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * out-of-the-box promise. The console sits below the top status bar,
  * tails $NVH_HOME/logs/*.log via /api/logs (a Next.js route that reads
  * disk directly, so it works even when the FastAPI server is down), and
- * offers one-click [Restart API] + [Run Doctor] via /api/services/* —
+ * offers one-click [Restart API] + [Deep status] via /api/services/* —
  * bridges that spawn the rootless `nvh` binary from inside the Next.js
  * process.
  *
@@ -294,19 +294,29 @@ export default function SystemConsole() {
 
   const runDoctor = useCallback(async () => {
     setActionBusy(true);
-    setActionMessage('Running nvh doctor…');
+    setActionMessage('Running nvh status --deep…');
     try {
       const r = await fetch('/api/services/doctor', { cache: 'no-store' });
       const data = await r.json();
       if (data.ok) {
+        // Both schema_version 1 and 2 carry passed/total; anything else
+        // falls back to a key count.
+        const rep = (typeof data.report === 'object' && data.report
+          ? data.report
+          : null) as { passed?: unknown; total?: unknown } | null;
+        const counts = rep
+          ? (typeof rep.passed === 'number' && typeof rep.total === 'number'
+            ? `${rep.passed}/${rep.total} checks passed`
+            : `${Object.keys(rep).length} sections in report`)
+          : null;
         const summary = data.format === 'json'
-          ? (typeof data.report === 'object' && data.report
-            ? `Doctor OK — ${Object.keys(data.report as object).length} sections in report. See WebUI log for details.`
-            : 'Doctor OK.')
-          : 'Doctor finished (text mode).';
+          ? (counts
+            ? `status --deep done — ${counts}. See WebUI log for details.`
+            : 'status --deep OK.')
+          : 'status --deep finished (text mode).';
         setActionMessage(summary);
       } else {
-        setActionMessage(`Doctor reported issues: ${data.reason || 'see exit code'}`);
+        setActionMessage(`status --deep failed: ${data.reason || 'see exit code'}`);
       }
     } catch (err) {
       setActionMessage(`Bridge route failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -328,7 +338,7 @@ export default function SystemConsole() {
 
   // First-time-user audit 2026-05-22 (Agent C): when everything is
   // healthy, the System Console shouldn't read as a permanent "tech-
-  // debt billboard" with 3 action buttons (Restart API · Doctor ·
+  // debt billboard" with 3 action buttons (Restart API · Deep status ·
   // Logs ▾). Collapse to a minimal "all systems good" bar that just
   // shows a green dot and the Logs toggle. The instant ANY chip
   // turns yellow/red, the full bar with action buttons reappears.
@@ -392,7 +402,7 @@ export default function SystemConsole() {
           </>
         )}
         {/* 2026-06-10 audit: actionMessage used to render only inside the
-            expanded panel, so auto-restart and Restart-API/Doctor feedback
+            expanded panel, so auto-restart and Restart-API/Deep-status feedback
             was invisible in the default collapsed state (PR #87's D7
             removed the collapsed-bar copy as a "dead conditional" — the
             precedence analysis was inverted). Render it here whenever the
@@ -422,9 +432,9 @@ export default function SystemConsole() {
                 disabled={actionBusy}
                 className="uppercase tracking-wider px-2 py-0.5 border rounded-sm disabled:opacity-40 hover:opacity-90"
                 style={{ borderColor: 'var(--border-bright, #3f3f46)' }}
-                title="Run `nvh doctor --json` via the Next.js bridge"
+                title="Run `nvh status --deep --json` via the Next.js bridge"
               >
-                Doctor
+                Deep status
               </button>
             </>
           )}

@@ -2,6 +2,149 @@
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-09-02
+
+The "subtract" release. The September audit
+(docs/proposals/SIMPLIFICATION_PLAN_2026-09.md) found nvHive had become two
+products stacked on top of each other — a `~/.hive`-era core and the
+`NVH_HOME`-era Wizard layer — with every mechanism built two or three times
+and the copies already drifted. This release deletes the second copy of
+everything and adds no new capability: roughly 39,000 lines removed across
+257 files (about 15,000 of product code and scripts, the rest tests and docs
+that only existed to cover the deleted code), no feature a user could reach
+is gone, and every removed command survives as a hidden alias for one
+release. Issues #122–#130.
+
+### Removed
+- **Seven dead orchestration modules** (`nvh/core/{autonomous,agent_pr,
+  parallel_pipeline,rollback,hooks,agent_report,file_lock}.py`) — nothing in
+  `nvh/` imported them; the `/v1/locks` routes nothing called; the `hooks:`
+  config field nothing executed (a leftover key in an existing `config.yaml`
+  is ignored); and two caller-less helpers (`agents.generate_agents_with_llm`,
+  `advisor_profiles.get_best_advisor_for_task`). (#122)
+- **The Docker/compose deployment family.** `Dockerfile`, `web/Dockerfile`,
+  both compose files, `.dockerignore`, the five stale scripts
+  (`scripts/{setup,cloud-setup,portable-setup,install,ollama-setup}.sh` —
+  one still invoked the pre-rename `council` binary, one pointed at an
+  unregistered domain) and the demo-GIF tooling. README said "No Docker"
+  twice; nothing in CI built the images; the cloud compose mounted
+  directories that did not exist. The supported installs are the README
+  one-liner into an `NVH_HOME` venv and `pip install nvhive`. `.env.example`
+  now documents the `$NVH_HOME/config/.env` file nvHive actually reads and
+  drops the never-read `HIVE_DAILY_LIMIT`/`HIVE_MONTHLY_LIMIT`. (#123)
+- **The remote-desktop input-injection toolkit** (`tools/`, two design docs)
+  and the Bun **channel plugin** (`channel-plugin/`, a second copy of the
+  seven `nvhive-mcp` tools with one commit and no tests). Nothing in `nvh`
+  imported either. The toolkit moved to a separate private repository;
+  history remains in this repo before this release. The one CI script moved
+  to `ci/integration-test-install.sh`. (#124)
+- **The `~/.hive`-era core modules that had `NVH_HOME` successors.**
+  `core/knowledge.py` (JSON keyword search) → the SQLite/embedding RAG store
+  behind `nvh rag` (`nvh rag import-legacy` re-ingests an old knowledge base,
+  and `nvh status --deep` nags until you do); `core/memory.py` → vault memory
+  (REPL `/remember`, `/memories`, `/forget` now write `#repl`-tagged vault
+  notes that survive a VM swap); `core/smoke_test.py` → the diagnostics
+  report (`nvh test` is now the offline smoke, `--imports` probes core
+  modules); `core/templates.py` (`~/.council/templates`) → an optional
+  `prompt_template` on agent-profile YAML with `{{input}}`/`--var k=v`
+  rendering; `core/docker_sandbox.py` → `SandboxExecutor.run_shell` (one
+  sandbox, one isolation policy — the agent `shell` tool now always sees the
+  workspace, read-write under Docker's read-only-root/no-network/non-root
+  flags, or as cwd in the labelled subprocess fallback). Agent memory moved
+  from the project-local `.nvhive/agent-memory.json` to
+  `$NVH_HOME/state/agent-memory/`. `core/scheduler.py` stays until the
+  durable-jobs scheduler lands (0.44). (#125)
+- **Twenty-three docs became eleven.** `TESTING_GUIDE.md` (1,725 lines
+  documenting a `council` binary) is replaced by a 114-line `TESTING.md`;
+  `CONFIGURATION.md` (new: config schema, secrets order, the full `NVH_HOME`
+  layout, every env var, cabinets, tools, workflows), `INTEGRATIONS.md`,
+  `MAINTAINERS.md` and `TESTING.md` absorb 19 pages; `NVIDIA_DEVELOPER_BRIEF`,
+  `GITHUB_LISTING` and `future-ideas` are gone; ~8.7 MB of unreferenced
+  screenshots and frame captures removed. Two guard tests keep it honest:
+  `tests/test_docs_links.py` (every relative link resolves, every page is
+  linked from README) and `tests/test_marketing_parity.py` (no hand-typed
+  provider/model/free/cabinet/tool counts anywhere unless they equal the
+  derived value). CONTRIBUTING now describes the real provider, plugin and
+  test layout. (#129)
+- **Dependency truth.** `pydantic-settings` (never imported) removed;
+  `packaging` (always imported) declared; a `jupyter` extra for
+  `%load_ext nvh.jupyter`; `dev`/`all` extras reference the other extras
+  instead of hand-copying them; the unenforced repo-wide `mypy strict`
+  dropped (CI's gated step passes `--strict` explicitly for the two clean
+  packages). The 24 coverage-campaign test files (`test_coverage_80_batch*`,
+  `test_final_push_*`, …) are folded into subject-named files with a shared
+  `conftest.py` — test count unchanged, ~1,100 lines of duplicated fixtures
+  gone. `nvh.integrations.catalog` is renamed `setup_catalog` (it collided
+  with the `nvh/catalog` package). (#130)
+- **GeForce NOW is no longer mentioned anywhere** in nvHive's shipped text,
+  seeded vault notes, persona triggers or search queries (GPU product names
+  and trademark notices are untouched); a guard test keeps it out.
+
+### Changed
+- **Nineteen cloud provider adapters are one.** Eighteen of them were 86–93%
+  identical to `openai_provider.py`. `nvh/providers/openai_compatible.py`
+  (`OpenAICompatibleProvider`) plus one `ProviderSpec` row per provider in
+  `nvh/providers/specs.py` (default/fallback model, LiteLLM prefix rule, base
+  URL, key env vars, zero-cost flag, anonymous key, sunset date) replace the
+  clone modules; `nvh.providers.<name>_provider` remain as seven-line compat
+  shims, removed in 0.43. Adding a provider is now one row. Clone drift was
+  unified on the way: request timeouts are forwarded on all adapters (13
+  never did), health checks time out at 15 s everywhere, `list_models`
+  returns default+fallback for all, streamed tool calls report the right
+  finish reason. A config stanza that omits `default_model` now gets the
+  shipped default instead of an empty model string (the `LazyProvider` bug
+  from #134). (#126)
+- **One query command.** `nvh ask` gained `--focus code|write|math|research`,
+  `--fast`, `--local`, `--clipboard`, `--copy` and reads stdin; `code`,
+  `write`, `research`, `math`, `quick`, `clip`, `pipe`, `safe` are hidden
+  aliases for one release. **One status command.** `nvh status` has tiers
+  `--providers`, `--deep` (the old doctor), `--smoke` (the old test),
+  `--report` (debug+selfcheck as a redacted JSON bundle under
+  `$NVH_HOME/support/`), `--routing`, all over one checks registry
+  (`nvh/integrations/diagnostics/checks.py`); `health`, `doctor`, `test`,
+  `debug`, `selfcheck`, `why` and `services status` are hidden aliases. The
+  21 per-provider commands (`nvh groq "q"`) are hidden aliases of
+  `nvh ask -p <provider>`. `docs/COMMANDS.md` is generated from the Typer
+  registry (`scripts/gen_commands_doc.py`, parity-tested). (#127)
+- **The dispatcher stopped guessing.** Reserved words come from the Typer
+  registry, a typo'd command gets a did-you-mean and exit 2 instead of being
+  sent to an LLM, and a task-shaped bare prompt asks you to run `nvh do`
+  instead of auto-approving an agent run. (#127)
+- **One chat surface with one store.** `/query` and `/council` are gone
+  (one-release redirects to `/` and `/?mode=council`); council presets,
+  member count, strategy, synthesis and per-provider weights live in an
+  Advanced drawer on the chat page, and the WebSocket now honours the
+  synthesize toggle and member count. Chats are no longer kept in the
+  browser: every turn persists to `/v1/conversations` (new
+  `POST /v1/conversations/{id}/messages`), pre-0.42 localStorage threads are
+  imported once on first load, and the sidebar search box queries the
+  server. Preferences shrank to Theme, Cache and Data (the fourteen
+  write-only settings are gone); the command palette's silent
+  "Throwdown → council" mapping is gone. Reloaded council/compare threads
+  show the synthesis or a Markdown join of member replies — structured
+  member payloads need a metadata column (0.43). (#128)
+- **`nvh models pull --recommended`** replaces `scripts/ollama-setup.sh`:
+  detects VRAM, pulls the fitting set, skips what is installed. (#123, #125)
+- **VS Code extension** could not complete a single command — it posted
+  `query` where the API expects `prompt` and read a `response` field the API
+  never returns. Requests now match `/v1/query` and `/v1/council`, the
+  never-implemented `autoStart` setting and two empty sidebar views are
+  removed, the manifest says PolyForm-Noncommercial-1.0.0, and `npm run
+  compile` passes for the first time. (#124)
+- **`NVH_SANDBOX=1`** now means fail-closed (an alias of
+  `NVH_SANDBOX_REQUIRE_DOCKER` for one release); `nvh do --sandbox` sets it.
+
+### Fixed
+- **PyPI publishing never auto-triggered.** `publish.yml` listened for the
+  `release: published` event, but `release.yml` creates the GitHub Release
+  with the repository `GITHUB_TOKEN`, and GitHub does not start workflows
+  from events that token produces — every PyPI release since 0.33.0 was a
+  manual dispatch (0.41.0 was uploaded by hand). The publish workflow now
+  runs on the `v*.*.*` tag push, the same event that builds the release.
+- `nvh doctor --json` pinned the global Rich console to a closed stream
+  after restoring it; the engine's LLM7 and env-detected providers are built
+  through the registry instead of the compat-shim module paths.
+
 ## [0.41.1] - 2026-09-01
 
 The hotfix release. A six-lens product audit (docs/proposals/

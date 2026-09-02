@@ -212,3 +212,27 @@ class TestResourceLimits:
     def test_preserves_short_output(self):
         short = "hello world"
         assert truncate_output(short) == short
+
+
+class TestGuardrailPatterns:
+    def test_check_command_pip_install(self):
+        with pytest.raises(GuardrailError):
+            check_command("pip install malicious-package")
+
+    def test_check_command_npm_install(self):
+        with pytest.raises(GuardrailError):
+            check_command("npm install evil-pkg")
+
+    def test_check_command_dd_disk_fill(self):
+        with pytest.raises(GuardrailError):
+            check_command("dd if=/dev/zero of=bigfile bs=1M count=10000")
+
+    def test_redact_private_key(self):
+        text = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKC..."
+        result = redact_secrets(text)
+        assert "BEGIN RSA PRIVATE KEY" not in result
+
+    def test_redact_aws_secret(self):
+        text = "AWS_SECRET_ACCESS_KEY = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        result = redact_secrets(text)
+        assert "wJalrXUtn" not in result

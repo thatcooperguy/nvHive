@@ -38,7 +38,7 @@ from nvh.providers.base import (
     RateLimitError,
     Usage,
 )
-from nvh.providers.registry import ProviderRegistry, get_registry
+from nvh.providers.registry import ProviderRegistry, get_registry, lazy_adapter
 from nvh.storage import repository as repo
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ class Engine:
         orch_mode = OrchestrationMode(self.config.defaults.orchestration_mode)
         self.orchestrator = LocalOrchestrator(OrchestrationConfig(mode=orch_mode))
 
-        # Load COUNCIL.md context files for injection into all prompts
+        # Load HIVE.md / .hive/context/*.md for injection into all prompts
         from nvh.core.context_files import find_context_files
         self._context_files = find_context_files()
         if self._context_files:
@@ -206,10 +206,10 @@ class Engine:
             logger.info(f"Loaded context files: {names}")
 
     def _build_system_prompt(self, user_prompt: str | None = None) -> str | None:
-        """Build system prompt with COUNCIL.md context injected.
+        """Build system prompt with HIVE.md context injected.
 
-        Combines context files (COUNCIL.md, .council/context/*.md, etc.)
-        with the user's explicit system prompt.
+        Combines context files (HIVE.md, .hive/context/*.md) with the
+        user's explicit system prompt.
         """
         from nvh.core.context_files import build_context_prompt
         combined = build_context_prompt(
@@ -302,8 +302,7 @@ class Engine:
 
         # LLM7 — always available (anonymous API, no signup)
         try:
-            from nvh.providers.lazy_provider import LazyProvider
-            provider = LazyProvider("llm7", "nvh.providers.llm7_provider", "LLM7Provider")
+            provider = lazy_adapter("llm7")
             self.registry.register("llm7", provider)
             detected.append("llm7")
             logger.info("Auto-detected: LLM7 lazy fallback (anonymous, no signup needed)")
@@ -429,14 +428,10 @@ class Engine:
         """Detect cloud providers from env vars and keyring."""
         # Check for API keys in environment AND keyring
         env_providers = {
-            "GROQ_API_KEY": ("groq", "nvh.providers.groq_provider", "GroqProvider"),
-            "GOOGLE_API_KEY": ("google", "nvh.providers.google_provider", "GoogleProvider"),
-            "OPENAI_API_KEY": ("openai", "nvh.providers.openai_provider", "OpenAIProvider"),
-            "ANTHROPIC_API_KEY": (
-                "anthropic",
-                "nvh.providers.anthropic_provider",
-                "AnthropicProvider",
-            ),
+            "GROQ_API_KEY": "groq",
+            "GOOGLE_API_KEY": "google",
+            "OPENAI_API_KEY": "openai",
+            "ANTHROPIC_API_KEY": "anthropic",
         }
 
         # Also check keyring for keys saved by nvh setup
@@ -463,13 +458,11 @@ class Engine:
                 pass
             return ""
 
-        for env_var, (name, module_path, class_name) in env_providers.items():
+        for env_var, name in env_providers.items():
             key = _get_key(env_var, name)
             if key and name not in detected:
                 try:
-                    from nvh.providers.lazy_provider import LazyProvider
-
-                    provider = LazyProvider(name, module_path, class_name, api_key=key)
+                    provider = lazy_adapter(name, api_key=key)
                     self.registry.register(name, provider)
                     detected.append(name)
                     logger.info("Auto-detected: %s lazy provider (API key found)", name)
@@ -1296,7 +1289,7 @@ class Engine:
             f"What to do:\n"
             f"  1. Check provider status:  nvh status\n"
             f"  2. Reconfigure providers:  nvh setup\n"
-            f"  3. Try a local model:      nvh safe \"your question\"\n"
+            f"  3. Try a local model:      nvh ask --local \"your question\"\n"
             f"  4. Try a specific provider: nvh ask --advisor groq \"your question\"",
             provider=decision.provider,
         )
@@ -1347,7 +1340,7 @@ class Engine:
                         f"Options:\n"
                         f"  Raise the limit:    nvh config set budget.daily_limit_usd 10\n"
                         f"  Disable hard stop:  nvh config set budget.hard_stop false\n"
-                        f"  Use a free model:   nvh safe \"question\"  (local/free only)"
+                        f"  Use a free model:   nvh ask --local \"question\"  (local/free only)"
                     )
             elif (
                 budget.alert_threshold > 0
@@ -1376,7 +1369,7 @@ class Engine:
                         f"Options:\n"
                         f"  Raise the limit:    nvh config set budget.monthly_limit_usd 50\n"
                         f"  Disable hard stop:  nvh config set budget.hard_stop false\n"
-                        f"  Use a free model:   nvh safe \"question\"  (local/free only)"
+                        f"  Use a free model:   nvh ask --local \"question\"  (local/free only)"
                     )
             elif (
                 budget.alert_threshold > 0

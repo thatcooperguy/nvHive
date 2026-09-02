@@ -20,7 +20,7 @@ from collections import defaultdict
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path as FilePath
 from typing import Any
 from urllib.parse import urlparse
@@ -1790,6 +1790,7 @@ class WizardProfileUpsertRequest(BaseModel):
     title: str = Field(..., max_length=128)
     description: str = Field(default="", max_length=400)
     system_prompt: str = Field(default="", max_length=8000)
+    prompt_template: str = ""
     provider: str = ""
     model: str = ""
     temperature: float | None = None
@@ -1816,6 +1817,7 @@ async def wizard_profiles_upsert(
         title=request.title,
         description=request.description,
         system_prompt=request.system_prompt,
+        prompt_template=request.prompt_template,
         provider=request.provider,
         model=request.model,
         temperature=request.temperature,
@@ -2541,7 +2543,7 @@ async def setup_catalog(
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Return remote/cache/bundled setup catalog data for the wizard."""
-    from nvh.integrations.catalog import load_setup_catalog
+    from nvh.integrations.setup_catalog import load_setup_catalog
 
     return _response_envelope(load_setup_catalog(refresh=refresh))
 
@@ -3435,7 +3437,9 @@ async def ws_council(websocket: WebSocket) -> None:
         "weights": null,
         "temperature": 1.0,
         "max_tokens": 4096,
-        "system_prompt": null
+        "system_prompt": null,
+        "synthesize": true,
+        "num_agents": null
       }
 
     Server streams a sequence of typed events (see CouncilOrchestrator.run_council_streaming).
@@ -3468,6 +3472,8 @@ async def ws_council(websocket: WebSocket) -> None:
     temperature = float(raw.get("temperature") or engine.config.defaults.temperature)
     max_tokens = int(raw.get("max_tokens") or engine.config.defaults.max_tokens)
     system_prompt = raw.get("system_prompt") or engine.config.defaults.system_prompt or None
+    synthesize = bool(raw.get("synthesize", True))
+    num_agents = min(max(int(raw["num_agents"]), 1), 10) if raw.get("num_agents") else None
 
     try:
         await engine._check_budget()
@@ -3495,9 +3501,10 @@ async def ws_council(websocket: WebSocket) -> None:
             system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
-            synthesize=True,
+            synthesize=synthesize,
             auto_agents=auto_agents,
             agent_preset=preset,
+            num_agents=num_agents,
             budget_check=engine._check_budget,
         )
 
@@ -4496,52 +4503,6 @@ async def sandbox_status(_auth: None = Depends(require_auth)) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# File Lock Coordination
-# ---------------------------------------------------------------------------
-
-@app.get("/v1/locks", summary="Current file lock status")
-async def get_lock_status(_auth: None = Depends(require_auth)):
-    """Show all active file locks and which agents hold them."""
-    from nvh.core.file_lock import get_file_lock_coordinator
-    coordinator = get_file_lock_coordinator()
-    status = await coordinator.get_status()
-    return {"status": "success", "data": status}
-
-
-class ConflictCheckRequest(BaseModel):
-    changes: dict[str, str] = Field(
-        ..., description="Mapping of agent_id to file_path they want to modify"
-    )
-
-
-@app.post("/v1/locks/check-conflicts", summary="Check for file modification conflicts")
-async def check_conflicts(
-    request: ConflictCheckRequest,
-    _auth: None = Depends(require_auth),
-):
-    """Check if proposed file changes would conflict with existing locks."""
-    from nvh.core.file_lock import get_file_lock_coordinator
-    coordinator = get_file_lock_coordinator()
-    conflicts = await coordinator.check_conflicts(request.changes)
-    return {
-        "status": "success",
-        "data": {
-            "has_conflicts": len(conflicts) > 0,
-            "conflicts": [
-                {
-                    "file": c.file_path,
-                    "holder": c.agent_a,
-                    "requester": c.agent_b,
-                    "lock_held": c.lock_type_held.value,
-                    "lock_requested": c.lock_type_requested.value,
-                }
-                for c in conflicts
-            ],
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
 # Part 3: Conversations management endpoints
 # ---------------------------------------------------------------------------
 
@@ -4624,6 +4585,16 @@ class ConversationRenameRequest(BaseModel):
         return stripped
 
 
+class ConversationMessageAppendRequest(BaseModel):
+    role: str = Field(..., pattern=r"^(user|assistant)$")
+    content: str = Field(..., min_length=1, max_length=500_000)
+    provider: str = Field(default="", max_length=64)
+    model: str = Field(default="", max_length=128)
+    tokens: int = Field(default=0, ge=0)
+    cost_usd: str = Field(default="0", max_length=32)
+    latency_ms: int = Field(default=0, ge=0)
+
+
 from nvh.storage import (
     repository as repo,  # noqa: E402 — after middleware setup to avoid circular import
 )
@@ -4677,6 +4648,52 @@ async def create_conversation(
             detail=str(exc),
         )
     return _response_envelope(_serialize_conversation(conv))
+
+
+@app.post(
+    "/v1/conversations/{conversation_id}/messages",
+    summary="Append a message the client already holds",
+)
+async def append_conversation_message(
+    request: ConversationMessageAppendRequest,
+    conversation_id: str = Path(..., description="Conversation UUID"),
+    _auth: None = Depends(require_auth),
+) -> dict[str, Any]:
+    """Persist a turn the client already holds; does not run the engine.
+
+    The streaming SSE/WS modes receive the assistant reply outside the
+    conversation store, and the one-time localStorage import replays old
+    chats — both need a way to record a finished turn without re-asking.
+    ``tokens`` lands on input_tokens for user turns and output_tokens for
+    assistant turns.
+    """
+    try:
+        cost = Decimal(request.cost_usd)
+    except (InvalidOperation, ValueError):
+        cost = Decimal("0")
+    try:
+        msg = await repo.add_message(
+            conversation_id=conversation_id,
+            role=request.role,
+            content=request.content,
+            provider=request.provider,
+            model=request.model,
+            input_tokens=request.tokens if request.role == "user" else 0,
+            output_tokens=request.tokens if request.role == "assistant" else 0,
+            cost_usd=cost,
+            latency_ms=request.latency_ms,
+        )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Conversation '{conversation_id}' not found.",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        )
+    return _response_envelope(_serialize_message(msg))
 
 
 @app.get("/v1/conversations/search", summary="Search conversations by message content")
@@ -4859,7 +4876,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) ->
 
 @app.get("/v1/context")
 async def get_context_files(_auth: None = Depends(require_auth)):
-    """List loaded COUNCIL.md context files."""
+    """List loaded context files (HIVE.md, .hive/context/*.md)."""
     from nvh.core.context_files import get_context_summary
     engine = get_engine()
     return {

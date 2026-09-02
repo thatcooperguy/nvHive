@@ -394,7 +394,7 @@ export function exportConversationMarkdown(
     }
   }
 
-  lines.push('*Exported from NVHive - nvhive.dev*');
+  lines.push('*Exported from nvHive*');
   return lines.join('\n');
 }
 

@@ -146,6 +146,49 @@ def test_apply_profile_unknown_name_is_safe() -> None:
     assert prov is None and model is None and ceiling is None
 
 
+def test_prompt_template_round_trips_and_renders(tmp_path: Path) -> None:
+    """``prompt_template`` (0.42, replaces ~/.council/templates) survives the
+    YAML round trip and wraps the user's input; unknown placeholders stay
+    visible instead of vanishing."""
+    from nvh.integrations.wizard.profiles import AgentProfile, get_profile, save_user_profile
+
+    save_user_profile(
+        AgentProfile(
+            name="reviewer", title="Reviewer", description="", system_prompt="Be terse.",
+            prompt_template="Review for bugs in {{lang}}:\n{{input}}",
+        ),
+        home_dir=tmp_path,
+    )
+    profile = get_profile("reviewer", home_dir=tmp_path)
+    assert profile is not None
+    assert profile.render_prompt("print(1)", {"lang": "python"}) == (
+        "Review for bugs in python:\nprint(1)"
+    )
+    assert "{{lang}}" in profile.render_prompt("x")
+    # {{text}} / {{code}} are accepted as aliases of {{input}} (old template vocabulary).
+    assert AgentProfile(
+        name="t", title="t", description="", system_prompt="", prompt_template="<{{code}}>",
+    ).render_prompt("y") == "<y>"
+    # Profiles without a template are pass-through.
+    coder = get_profile("coder", home_dir=tmp_path)
+    assert coder is not None and coder.render_prompt("hi") == "hi"
+
+
+def test_apply_prompt_template_wraps_user_message_only_for_real_profiles(tmp_path: Path) -> None:
+    from nvh.integrations.wizard.chat import _apply_prompt_template
+    from nvh.integrations.wizard.profiles import AgentProfile, save_user_profile
+
+    save_user_profile(
+        AgentProfile(name="wrap", title="Wrap", description="", system_prompt="",
+                     prompt_template="Q: {{input}}"),
+        home_dir=tmp_path,
+    )
+    assert _apply_prompt_template("why?", "wrap", tmp_path) == "Q: why?"
+    assert _apply_prompt_template("why?", None, tmp_path) == "why?"
+    assert _apply_prompt_template("why?", "wizard", tmp_path) == "why?"
+    assert _apply_prompt_template("why?", "missing-profile", tmp_path) == "why?"
+
+
 @pytest.mark.asyncio
 async def test_wizard_chat_accepts_profile_argument(monkeypatch, tmp_path: Path) -> None:
     """End-to-end: passing profile="coder" still runs a valid chat turn."""
