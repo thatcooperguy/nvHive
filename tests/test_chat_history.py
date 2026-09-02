@@ -264,8 +264,11 @@ class TestFrontendWiring:
         assert "onSelectConversation" in shell
 
         page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
-        # Remote sync on the main chat's handlers + merge (not replace).
+        # 0.42: the server is the only chat store — the main chat creates the
+        # conversation lazily and persists every turn, no localStorage merge.
         assert "void renameConversation(" in page
         assert "void deleteConversation(" in page
         assert "void pinConversation(" in page
-        assert "byId" in page
+        assert "createConversation(" in page
+        assert "appendConversationMessage(" in page
+        assert "council_chats_v2" not in page

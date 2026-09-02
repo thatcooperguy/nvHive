@@ -10,6 +10,7 @@ is a hidden alias), and ``nvh models pull --recommended`` replaces the deleted
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import types
 
@@ -18,6 +19,14 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 import nvh.cli.main as cli_main
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    # Rich colours help output on CI and styles `--flag` as `-` + `-flag`
+    # with escape codes between; substring checks need the de-styled text.
+    return _ANSI.sub("", text)
 
 
 @pytest.fixture()
@@ -158,8 +167,8 @@ class TestSmokeCommand:
         result = runner.invoke(cli_main.app, ["test", "--quick", "--json"])
         assert result.exit_code in (0, 1)
         assert "tests" in json.loads(result.stdout)
-        help_text = runner.invoke(cli_main.app, ["test", "--help"]).output
-        assert "--imports" in help_text.replace("\x1b", "")
+        help_text = _plain(runner.invoke(cli_main.app, ["test", "--help"]).output)
+        assert "--imports" in help_text
         assert "quick" not in help_text
 
 
