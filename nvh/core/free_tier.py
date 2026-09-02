@@ -24,6 +24,9 @@ import logging
 import os
 from dataclasses import dataclass
 
+from nvh.providers.specs import PROVIDER_SPECS
+from nvh.utils.ollama import ollama_base_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,17 +34,21 @@ logger = logging.getLogger(__name__)
 class FreeTierAdvisor:
     name: str
     env_var: str           # primary env var to check
-    alt_env_vars: list[str]  # alternative env var names
     check_fn: str          # "env" or "ollama" (special check)
     priority: int          # lower = preferred (used first)
     daily_limit: str       # human-readable limit description
+
+    @property
+    def alt_env_vars(self) -> list[str]:
+        """Alternative env var names, from the provider spec table."""
+        spec = PROVIDER_SPECS.get(self.name)
+        return list(spec.env_keys) if spec else []
 
 
 FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="ollama",
         env_var="",
-        alt_env_vars=[],
         check_fn="ollama",
         priority=1,
         daily_limit="Unlimited (local GPU)",
@@ -49,7 +56,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="groq",
         env_var="GROQ_API_KEY",
-        alt_env_vars=["HIVE_GROQ_API_KEY"],
         check_fn="env",
         priority=2,
         daily_limit="30 req/min, 14.4K tok/min",
@@ -57,7 +63,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="google",
         env_var="GOOGLE_API_KEY",
-        alt_env_vars=["HIVE_GOOGLE_API_KEY", "GEMINI_API_KEY"],
         check_fn="env",
         priority=3,
         daily_limit="15 req/min free",
@@ -65,7 +70,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="mistral",
         env_var="MISTRAL_API_KEY",
-        alt_env_vars=["HIVE_MISTRAL_API_KEY"],
         check_fn="env",
         priority=4,
         daily_limit="Free Experiment plan: 2 RPM, 1B tokens/month",
@@ -73,7 +77,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="cohere",
         env_var="COHERE_API_KEY",
-        alt_env_vars=["HIVE_COHERE_API_KEY", "CO_API_KEY"],
         check_fn="env",
         priority=5,
         daily_limit="Trial tier rate limits",
@@ -81,7 +84,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="nvidia",
         env_var="NVIDIA_API_KEY",
-        alt_env_vars=["NIM_API_KEY", "HIVE_NVIDIA_API_KEY"],
         check_fn="env",
         priority=6,
         daily_limit="1000+ free API credits, 40 RPM, NVIDIA Developer Program",
@@ -89,7 +91,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="siliconflow",
         env_var="SILICONFLOW_API_KEY",
-        alt_env_vars=["HIVE_SILICONFLOW_API_KEY"],
         check_fn="env",
         priority=7,
         daily_limit="Permanently free models at 1000 RPM",
@@ -97,7 +98,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="llm7",
         env_var="LLM7_API_KEY",
-        alt_env_vars=["HIVE_LLM7_API_KEY"],
         check_fn="llm7",
         priority=8,
         daily_limit="Anonymous access: 30 RPM, no signup. Token: 120 RPM",
@@ -105,7 +105,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="fireworks",
         env_var="FIREWORKS_API_KEY",
-        alt_env_vars=["HIVE_FIREWORKS_API_KEY"],
         check_fn="env",
         priority=9,
         daily_limit="Free tier available",
@@ -113,7 +112,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="cerebras",
         env_var="CEREBRAS_API_KEY",
-        alt_env_vars=["HIVE_CEREBRAS_API_KEY"],
         check_fn="env",
         priority=10,
         daily_limit="Free tier: 30 req/min",
@@ -121,7 +119,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="sambanova",
         env_var="SAMBANOVA_API_KEY",
-        alt_env_vars=["HIVE_SAMBANOVA_API_KEY"],
         check_fn="env",
         priority=11,
         daily_limit="Free tier available",
@@ -129,7 +126,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="huggingface",
         env_var="HUGGINGFACE_API_KEY",
-        alt_env_vars=["HF_TOKEN", "HIVE_HUGGINGFACE_API_KEY"],
         check_fn="env",
         priority=12,
         daily_limit="Free Inference API",
@@ -137,7 +133,6 @@ FREE_TIER_ADVISORS = [
     FreeTierAdvisor(
         name="ai21",
         env_var="AI21_API_KEY",
-        alt_env_vars=["HIVE_AI21_API_KEY"],
         check_fn="env",
         priority=13,
         daily_limit="Free tier available",
@@ -157,7 +152,7 @@ def detect_available_free_advisors() -> list[FreeTierAdvisor]:
             # Check if Ollama is running locally
             try:
                 import httpx
-                resp = httpx.get("http://localhost:11434/api/tags", timeout=2)
+                resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=2)
                 if resp.status_code == 200:
                     available.append(advisor)
             except Exception:

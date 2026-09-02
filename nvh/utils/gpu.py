@@ -429,12 +429,6 @@ def _get_compute_capabilities() -> list[tuple[int, int]]:
 def _get_cuda_version() -> str:
     """Return CUDA version string reported by nvidia-smi, or 'unknown'."""
     try:
-        subprocess.run(
-            ["nvidia-smi", "--query-gpu=compute_cap", "--format=csv,noheader"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
         # nvidia-smi doesn't directly expose the CUDA runtime version, but we
         # can parse it from the human-readable output header.
         header_result = subprocess.run(
@@ -1096,7 +1090,7 @@ def _parse_compute_capability(gpu_name: str) -> tuple[int, int]:
     return (0, 0)
 
 
-def get_gpu_summary() -> str:
+def get_gpu_summary(gpus: list[GPUInfo] | None = None) -> str:
     """Return a human-readable GPU summary suitable for CLI / UI display.
 
     Examples::
@@ -1105,7 +1099,8 @@ def get_gpu_summary() -> str:
         "2x GPU: NVIDIA A100 80GB PCIe (80.0 GB each, 160.0 GB total)"
         "No NVIDIA GPU detected (CPU mode)"
     """
-    gpus = detect_gpus()
+    if gpus is None:
+        gpus = detect_gpus()
 
     if not gpus:
         return "No NVIDIA GPU detected (CPU mode)"

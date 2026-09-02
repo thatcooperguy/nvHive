@@ -7,8 +7,10 @@ import shutil
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import delete, func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from nvh.storage.models import (
@@ -141,15 +143,73 @@ def get_session() -> AsyncSession:
 # Conversations
 # ---------------------------------------------------------------------------
 
+def _message_row(
+    conversation_id: str,
+    sequence: int,
+    role: str,
+    content: str,
+    provider: str = "",
+    model: str = "",
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cost_usd: Decimal = Decimal("0"),
+    latency_ms: int = 0,
+) -> ConversationMessage:
+    return ConversationMessage(
+        conversation_id=conversation_id,
+        sequence=sequence,
+        role=role,
+        content=content,
+        provider=provider,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
+        latency_ms=latency_ms,
+    )
+
+
+def _fill_summary_from_turn(conv: Conversation, msg: ConversationMessage) -> None:
+    """Fill the conversation's empty provider/model/title from a new turn."""
+    if not conv.provider:
+        conv.provider = msg.provider
+    if not conv.model:
+        conv.model = msg.model
+    if not conv.title and msg.role == "user":
+        conv.title = msg.content[:100]
+
+
 async def create_conversation(
     provider: str = "",
     model: str = "",
     title: str = "",
     mode: str = "",
+    pinned: bool = False,
+    messages: list[dict[str, Any]] | None = None,
 ) -> Conversation:
+    """Create a conversation, optionally seeded with ``messages``.
+
+    Seed messages take ``add_message``'s keyword arguments (minus
+    ``conversation_id``) and are inserted in the same transaction as the
+    conversation, so an imported thread lands whole or not at all.
+    """
     async with get_session() as session:
-        conv = Conversation(provider=provider, model=model, title=title, mode=mode)
+        conv = Conversation(
+            provider=provider, model=model, title=title, mode=mode, pinned=pinned,
+        )
         session.add(conv)
+        if messages:
+            await session.flush()  # assigns conv.id; still one transaction
+            total_tokens, total_cost = 0, Decimal("0")
+            for seq, fields in enumerate(messages, start=1):
+                msg = _message_row(conv.id, seq, **fields)
+                session.add(msg)
+                total_tokens += msg.input_tokens + msg.output_tokens
+                total_cost += msg.cost_usd
+                _fill_summary_from_turn(conv, msg)
+            conv.message_count = len(messages)
+            conv.total_tokens = total_tokens
+            conv.total_cost_usd = total_cost
         await session.commit()
         await session.refresh(conv)
         return conv
@@ -228,6 +288,37 @@ async def list_conversations(limit: int = 20) -> list[Conversation]:
         return list(result.scalars().all())
 
 
+async def _next_sequence(session: AsyncSession, conversation_id: str) -> int:
+    result = await session.execute(
+        select(func.coalesce(func.max(ConversationMessage.sequence), 0)).where(
+            ConversationMessage.conversation_id == conversation_id
+        )
+    )
+    return int(result.scalar_one()) + 1
+
+
+async def _add_message_once(conversation_id: str, **fields: Any) -> ConversationMessage:
+    async with get_session() as session:
+        conv = await session.get(Conversation, conversation_id)
+        if conv is None:
+            raise ValueError(f"Conversation {conversation_id} not found")
+
+        seq = await _next_sequence(session, conversation_id)
+        msg = _message_row(conversation_id, seq, **fields)
+        session.add(msg)
+
+        conv.message_count = seq
+        # SQL-side increments so a concurrent append can't clobber the totals.
+        conv.total_tokens = Conversation.total_tokens + (msg.input_tokens + msg.output_tokens)
+        conv.total_cost_usd = Conversation.total_cost_usd + msg.cost_usd
+        conv.updated_at = datetime.now(UTC)
+        _fill_summary_from_turn(conv, msg)
+
+        await session.commit()
+        await session.refresh(msg)
+        return msg
+
+
 async def add_message(
     conversation_id: str,
     role: str,
@@ -239,40 +330,19 @@ async def add_message(
     cost_usd: Decimal = Decimal("0"),
     latency_ms: int = 0,
 ) -> ConversationMessage:
-    async with get_session() as session:
-        conv = await session.get(Conversation, conversation_id)
-        if conv is None:
-            raise ValueError(f"Conversation {conversation_id} not found")
-
-        seq = conv.message_count + 1
-        msg = ConversationMessage(
-            conversation_id=conversation_id,
-            sequence=seq,
-            role=role,
-            content=content,
-            provider=provider,
-            model=model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_usd=cost_usd,
-            latency_ms=latency_ms,
-        )
-        session.add(msg)
-
-        conv.message_count = seq
-        conv.total_tokens += input_tokens + output_tokens
-        conv.total_cost_usd += cost_usd
-        conv.updated_at = datetime.now(UTC)
-        if not conv.provider:
-            conv.provider = provider
-        if not conv.model:
-            conv.model = model
-        if not conv.title and role == "user":
-            conv.title = content[:100]
-
-        await session.commit()
-        await session.refresh(msg)
-        return msg
+    """Append one turn; the sequence is MAX(sequence)+1 read in the same
+    transaction. Two appends racing past that read collide on
+    UNIQUE(conversation_id, sequence) — the loser recomputes once instead of
+    dropping the turn."""
+    fields = dict(
+        role=role, content=content, provider=provider, model=model,
+        input_tokens=input_tokens, output_tokens=output_tokens,
+        cost_usd=cost_usd, latency_ms=latency_ms,
+    )
+    try:
+        return await _add_message_once(conversation_id, **fields)
+    except IntegrityError:
+        return await _add_message_once(conversation_id, **fields)
 
 
 async def get_messages(conversation_id: str) -> list[ConversationMessage]:

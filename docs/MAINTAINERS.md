@@ -14,8 +14,10 @@ must use a distinct package name, metadata and release channel.
 ```bash
 git checkout main && git pull --ff-only && git status     # clean and green
 python -m pytest tests/ -q
-# bump pyproject.toml::project.version AND nvh/__init__.py::__version__
-#   (tests/test_version.py fails CI if they differ)
+# bump all three version files: pyproject.toml::project.version,
+#   nvh/__init__.py::__version__ and web/lib/version.ts::NVHIVE_VERSION
+#   (tests/test_version.py and tests/test_release_hardening.py::
+#   test_webui_version_matches_package fail CI if any of them differ)
 # add the CHANGELOG.md section
 git commit -am "release: v0.42.0" && git push
 git tag v0.42.0 && git push origin v0.42.0

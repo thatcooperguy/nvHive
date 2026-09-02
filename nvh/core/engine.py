@@ -38,8 +38,14 @@ from nvh.providers.base import (
     RateLimitError,
     Usage,
 )
-from nvh.providers.registry import ProviderRegistry, get_registry, lazy_adapter
+from nvh.providers.registry import (
+    ProviderRegistry,
+    get_registry,
+    lazy_adapter,
+    resolve_provider_key,
+)
 from nvh.storage import repository as repo
+from nvh.utils.ollama import ollama_base_url
 
 # ---------------------------------------------------------------------------
 # In-Memory LRU Cache with TTL
@@ -218,11 +224,12 @@ class Engine:
         )
         return combined if combined else None
 
-    async def initialize(self) -> list[str]:
+    async def initialize(self, gpu_vram_gb: float | None = None) -> list[str]:
         """Initialize the engine: setup DB, register providers.
 
         If no providers are configured, auto-detects zero-signup providers
-        (Ollama, LLM7) so the product works out of the box.
+        (Ollama, LLM7) so the product works out of the box. ``gpu_vram_gb``
+        skips the nvidia-smi probe when the caller has already detected GPUs.
 
         Returns list of enabled provider names.
         """
@@ -244,19 +251,19 @@ class Engine:
             if "ollama" in enabled:
                 try:
                     import httpx as _httpx
-                    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-                    _httpx.get(f"{ollama_url}/api/tags", timeout=2)
+                    _httpx.get(f"{ollama_base_url()}/api/tags", timeout=2)
                 except Exception:
                     self._try_start_ollama()
 
             # Initialize local orchestrator
-            gpu_vram = 0
-            try:
-                from nvh.utils.gpu import get_total_vram_mb
-                gpu_vram = get_total_vram_mb() / 1024
-            except Exception:
-                pass
-            await self.orchestrator.initialize(self.registry, gpu_vram)
+            if gpu_vram_gb is None:
+                gpu_vram_gb = 0
+                try:
+                    from nvh.utils.gpu import get_total_vram_mb
+                    gpu_vram_gb = get_total_vram_mb() / 1024
+                except Exception:
+                    pass
+            await self.orchestrator.initialize(self.registry, gpu_vram_gb)
 
             await self.webhooks.start()
 
@@ -310,7 +317,7 @@ class Engine:
             pass
 
         # Ollama — try to start if installed, then check if running
-        ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        ollama_url = ollama_base_url()
         ollama_http_timeout = float(os.environ.get("NVH_OLLAMA_HTTP_TIMEOUT", "0.5"))
         ollama_running = False
         try:
@@ -408,7 +415,7 @@ class Engine:
             # 10s default is empirical headroom; override via env if you
             # need a snappier check on a warm restart.
             import httpx as _httpx
-            ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            ollama_url = ollama_base_url()
             wait_seconds = max(0.0, float(os.environ.get("NVH_OLLAMA_START_WAIT", "10")))
             deadline = time.monotonic() + wait_seconds
             while time.monotonic() < deadline:
@@ -426,40 +433,11 @@ class Engine:
 
     def _auto_detect_env_providers(self, detected: list[str]) -> None:
         """Detect cloud providers from env vars and keyring."""
-        # Check for API keys in environment AND keyring
-        env_providers = {
-            "GROQ_API_KEY": "groq",
-            "GOOGLE_API_KEY": "google",
-            "OPENAI_API_KEY": "openai",
-            "ANTHROPIC_API_KEY": "anthropic",
-        }
-
-        # Also check keyring for keys saved by nvh setup
-        use_keyring = os.environ.get("NVH_USE_KEYRING", "0").lower() in {"1", "true", "yes"}
-
-        def _get_key(env_var: str, provider_name: str) -> str:
-            # 1. Environment variable (highest priority)
-            key = os.environ.get(env_var, "")
-            if key:
-                return key
-            # 2. Keyring (saved by nvh setup)
-            if not use_keyring:
-                return ""
-            try:
-                import keyring
-                key = keyring.get_password(
-                    "nvhive", f"{provider_name}_api_key",
-                )
-                if key:
-                    # Also set the env var so providers can find it
-                    os.environ[env_var] = key
-                    return key
-            except Exception:
-                pass
-            return ""
-
-        for env_var, name in env_providers.items():
-            key = _get_key(env_var, name)
+        for name in ("groq", "google", "openai", "anthropic"):
+            key, source = resolve_provider_key(name)
+            if key and source == "keyring":
+                # Expose keyring-only keys to code that still reads the env.
+                os.environ.setdefault(f"{name.upper()}_API_KEY", key)
             if key and name not in detected:
                 try:
                     provider = lazy_adapter(name, api_key=key)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from pathlib import Path
 
@@ -191,6 +192,71 @@ async def test_conversation_messages_round_trip(db):
     assert len(msgs) == 2
     assert msgs[0].role == "user"
     assert msgs[1].content == "world"
+
+
+@pytest.mark.asyncio
+async def test_create_conversation_with_messages_is_one_transaction(db):
+    """The localStorage import seeds a whole thread per create: turns,
+    totals, pinned flag and auto-title all land together."""
+    conv = await repo.create_conversation(
+        title="", mode="council", pinned=True,
+        messages=[
+            {"role": "user", "content": "q", "input_tokens": 3},
+            {"role": "assistant", "content": "a", "output_tokens": 5,
+             "cost_usd": Decimal("0.002"), "provider": "groq", "model": "m"},
+        ],
+    )
+    assert conv.pinned is True
+    assert conv.message_count == 2
+    assert conv.total_tokens == 8
+    assert conv.total_cost_usd == Decimal("0.002")
+    assert (conv.title, conv.provider, conv.model) == ("q", "groq", "m")
+    msgs = await repo.get_messages(conv.id)
+    assert [(m.sequence, m.role) for m in msgs] == [(1, "user"), (2, "assistant")]
+    # A later append continues the numbering.
+    assert (await repo.add_message(conv.id, role="user", content="more")).sequence == 3
+
+
+@pytest.mark.asyncio
+async def test_create_conversation_with_bad_message_leaves_nothing(db):
+    with pytest.raises(TypeError):
+        await repo.create_conversation(
+            title="x", messages=[{"role": "user", "content": "ok"}, {"bogus": 1}],
+        )
+    assert await repo.list_conversations() == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_appends_keep_both_turns(db):
+    conv = await repo.create_conversation(title="race")
+    await asyncio.gather(
+        repo.add_message(conv.id, role="user", content="a"),
+        repo.add_message(conv.id, role="assistant", content="b"),
+    )
+    msgs = await repo.get_messages(conv.id)
+    assert sorted(m.sequence for m in msgs) == [1, 2]
+    assert (await repo.get_conversation(conv.id)).message_count == 2
+
+
+@pytest.mark.asyncio
+async def test_add_message_recomputes_sequence_after_collision(db, monkeypatch):
+    """A writer that read a stale MAX(sequence) hits UNIQUE(conversation_id,
+    sequence) and must recompute once rather than lose the turn."""
+    conv = await repo.create_conversation(title="race")
+    await repo.add_message(conv.id, role="user", content="first")
+    real = repo._next_sequence
+    seen: list[int] = []
+
+    async def stale_once(session, conversation_id):
+        seq = await real(session, conversation_id)
+        seen.append(seq)
+        return 1 if len(seen) == 1 else seq  # what a racer saw before "first" landed
+
+    monkeypatch.setattr(repo, "_next_sequence", stale_once)
+    msg = await repo.add_message(conv.id, role="assistant", content="second")
+    assert msg.sequence == 2
+    assert seen == [2, 2]
+    assert [m.content for m in await repo.get_messages(conv.id)] == ["first", "second"]
 
 
 @pytest.mark.asyncio

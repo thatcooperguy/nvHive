@@ -365,6 +365,26 @@ def test_snapshot_distinguishes_running_from_healthy(
     assert snap.webui.suggested_action == "leave"
 
 
+def test_snapshot_skips_ollama_probes_when_seeded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller that already fetched /api/tags (the glance tier) seeds the tag list."""
+    probed: list[int] = []
+
+    def record(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> bool:
+        probed.append(port)
+        return False
+
+    monkeypatch.setattr(services, "port_listening", record)
+    monkeypatch.setattr(
+        services, "ollama_healthy",
+        lambda *a, **k: pytest.fail("ollama_healthy must not run when seeded"),
+    )
+
+    snap = services.snapshot(api_port=8000, webui_port=3000, ollama_models=["a", "b"])
+    assert snap.ollama.running is True and snap.ollama.healthy is True
+    assert "2 models" in snap.ollama.detail
+    assert services.OLLAMA_PORT not in probed and probed == [8000, 3000]
+
+
 # ---------------------------------------------------------------------------
 # start_pipeline / restart_pipeline — order + abort-on-failure
 # ---------------------------------------------------------------------------

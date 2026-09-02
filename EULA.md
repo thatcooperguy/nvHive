@@ -54,8 +54,8 @@ Data processed by local runtimes stays on the machine running nvHive unless you
 choose to share it. Data sent to cloud providers is governed by those providers'
 terms and privacy policies.
 
-Use `nvh safe` or local-only routing when prompts, files, or outputs should not
-leave your machine.
+Use `nvh ask --local` or local-only routing when prompts, files, or outputs
+should not leave your machine.
 
 ## AI Output and Operational Risk
 

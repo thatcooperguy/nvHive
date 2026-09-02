@@ -64,6 +64,7 @@ from nvh.utils.gpu import (
     gpu_architecture_info,
     recommend_models,
 )
+from nvh.utils.ollama import ollama_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -1501,8 +1502,10 @@ async def wizard_support_snapshot(
     """Write a redacted support bundle under NVH_HOME/support."""
     from nvh.integrations.workspace.passport import support_snapshot
 
+    # Embeds the DEEP checks (Engine init + provider pings, 10-30 s): off the loop.
     return _response_envelope(
-        support_snapshot(
+        await asyncio.to_thread(
+            support_snapshot,
             home_dir=request.home_dir,
             include_logs=request.include_logs,
             min_free_gb=request.min_free_gb,
@@ -2508,7 +2511,9 @@ async def setup_diagnostics(
     """Package rootless setup state, recent jobs, and redacted log warnings."""
     from nvh.integrations.diagnostics.report import diagnostics_report
 
-    report = diagnostics_report(
+    # Embeds the DEEP checks (Engine init + provider pings, 10-30 s): off the loop.
+    report = await asyncio.to_thread(
+        diagnostics_report,
         home_dir=home_dir,
         request_id=request.headers.get("x-request-id"),
         include_logs=include_logs,
@@ -3458,7 +3463,7 @@ async def ws_council(websocket: WebSocket) -> None:
         await websocket.close()
         return
 
-    if raw.get("type") != "council_request":
+    if not isinstance(raw, dict) or raw.get("type") != "council_request":
         await websocket.send_json({"type": "error", "error": "Expected type 'council_request'"})
         await websocket.close()
         return
@@ -3469,11 +3474,17 @@ async def ws_council(websocket: WebSocket) -> None:
     strategy = raw.get("strategy") or None
     members_override = raw.get("members") or None
     weights_override = raw.get("weights") or None
-    temperature = float(raw.get("temperature") or engine.config.defaults.temperature)
-    max_tokens = int(raw.get("max_tokens") or engine.config.defaults.max_tokens)
     system_prompt = raw.get("system_prompt") or engine.config.defaults.system_prompt or None
     synthesize = bool(raw.get("synthesize", True))
-    num_agents = min(max(int(raw["num_agents"]), 1), 10) if raw.get("num_agents") else None
+    try:
+        temperature = float(raw.get("temperature") or engine.config.defaults.temperature)
+        max_tokens = int(raw.get("max_tokens") or engine.config.defaults.max_tokens)
+        num_agents = min(max(int(raw["num_agents"]), 1), 10) if raw.get("num_agents") else None
+    except (TypeError, ValueError) as exc:
+        # A malformed number is the client's mistake: tell it, don't 1011.
+        await websocket.send_json({"type": "error", "error": f"Invalid council_request: {exc}"})
+        await websocket.close()
+        return
 
     try:
         await engine._check_budget()
@@ -3771,7 +3782,7 @@ async def auth_me(current_user: Any = Depends(require_user_auth)) -> dict[str, A
 
 def _get_ollama_base_url() -> str:
     """Return the Ollama base URL from environment or default."""
-    return os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    return ollama_base_url()
 
 
 class OllamaPullRequest(BaseModel):
@@ -4566,11 +4577,53 @@ class ConversationQueryRequest(BaseModel):
     max_tokens: int | None = Field(default=None, gt=0)
 
 
+class ConversationMessageAppendRequest(BaseModel):
+    role: str = Field(..., pattern=r"^(user|assistant)$")
+    content: str = Field(..., min_length=1, max_length=500_000)
+    provider: str = Field(default="", max_length=64)
+    model: str = Field(default="", max_length=128)
+    tokens: int = Field(default=0, ge=0)
+    cost_usd: str = Field(default="0", max_length=32)
+    latency_ms: int = Field(default=0, ge=0)
+
+    @field_validator("cost_usd")
+    @classmethod
+    def _finite_non_negative(cls, value: str) -> str:
+        # Decimal() rather than a digits-only pattern: the server itself
+        # serialises small costs as "1.2E-7", and the client echoes them back.
+        try:
+            cost = Decimal(value)
+        except InvalidOperation:
+            raise ValueError("cost_usd must be a decimal number")
+        if not cost.is_finite() or cost < 0:
+            raise ValueError("cost_usd must be finite and non-negative")
+        return value
+
+    def repo_fields(self) -> dict[str, Any]:
+        """``repo.add_message`` keyword arguments; ``tokens`` lands on
+        input_tokens for user turns and output_tokens for assistant turns."""
+        return {
+            "role": self.role,
+            "content": self.content,
+            "provider": self.provider,
+            "model": self.model,
+            "input_tokens": self.tokens if self.role == "user" else 0,
+            "output_tokens": self.tokens if self.role == "assistant" else 0,
+            "cost_usd": Decimal(self.cost_usd),
+            "latency_ms": self.latency_ms,
+        }
+
+
 class ConversationCreateRequest(BaseModel):
     title: str = Field(default="", max_length=255)
     mode: str = Field(default="", max_length=16)
     provider: str = Field(default="", max_length=64)
     model: str = Field(default="", max_length=128)
+    pinned: bool = False
+    # Seed turns, stored in the same transaction as the conversation.
+    messages: list[ConversationMessageAppendRequest] = Field(
+        default_factory=list, max_length=5_000,
+    )
 
 
 class ConversationRenameRequest(BaseModel):
@@ -4583,16 +4636,6 @@ class ConversationRenameRequest(BaseModel):
         if not stripped:
             raise ValueError("title must contain non-whitespace characters")
         return stripped
-
-
-class ConversationMessageAppendRequest(BaseModel):
-    role: str = Field(..., pattern=r"^(user|assistant)$")
-    content: str = Field(..., min_length=1, max_length=500_000)
-    provider: str = Field(default="", max_length=64)
-    model: str = Field(default="", max_length=128)
-    tokens: int = Field(default=0, ge=0)
-    cost_usd: str = Field(default="0", max_length=32)
-    latency_ms: int = Field(default=0, ge=0)
 
 
 from nvh.storage import (
@@ -4629,11 +4672,13 @@ async def create_conversation(
     request: ConversationCreateRequest,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Create an empty conversation and return its summary.
+    """Create a conversation and return its summary.
 
     The WebUI calls this lazily on the first message of a chat so slash
     commands (/pin) and turn persistence have an id to attach to. An empty
-    ``title`` is auto-filled from the first user message on persist.
+    ``title`` is auto-filled from the first user message. ``messages`` seeds
+    the thread atomically — the one-time localStorage import sends one
+    request per old chat, so a failure leaves no half-imported thread.
     """
     try:
         conv = await repo.create_conversation(
@@ -4641,6 +4686,8 @@ async def create_conversation(
             model=request.model,
             title=request.title.strip(),
             mode=request.mode.strip(),
+            pinned=request.pinned,
+            messages=[m.repo_fields() for m in request.messages],
         )
     except Exception as exc:
         raise HTTPException(
@@ -4661,28 +4708,14 @@ async def append_conversation_message(
 ) -> dict[str, Any]:
     """Persist a turn the client already holds; does not run the engine.
 
-    The streaming SSE/WS modes receive the assistant reply outside the
-    conversation store, and the one-time localStorage import replays old
-    chats — both need a way to record a finished turn without re-asking.
-    ``tokens`` lands on input_tokens for user turns and output_tokens for
-    assistant turns.
+    Bridge: the streaming SSE/WS modes hand the assistant reply to the
+    browser without touching the conversation store, so the WebUI echoes
+    each finished turn back here — until the streaming handlers persist
+    server-side in 0.43. ``tokens`` lands on input_tokens for user turns
+    and output_tokens for assistant turns.
     """
     try:
-        cost = Decimal(request.cost_usd)
-    except (InvalidOperation, ValueError):
-        cost = Decimal("0")
-    try:
-        msg = await repo.add_message(
-            conversation_id=conversation_id,
-            role=request.role,
-            content=request.content,
-            provider=request.provider,
-            model=request.model,
-            input_tokens=request.tokens if request.role == "user" else 0,
-            output_tokens=request.tokens if request.role == "assistant" else 0,
-            cost_usd=cost,
-            latency_ms=request.latency_ms,
-        )
+        msg = await repo.add_message(conversation_id, **request.repo_fields())
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -190,14 +190,29 @@ def _recent_log_entries(logs_dir: Path, *, max_lines: int) -> list[dict[str, Any
     return entries
 
 
+def _registry_checks(home_dir: str | Path | None = None) -> dict[str, Any]:
+    """The ``nvh status --deep`` rows, so the Wizard and the CLI read one registry."""
+    from nvh.integrations.diagnostics.checks import DEEP, CheckContext, run_checks_sync, summarize
+
+    ctx = CheckContext(home_dir=str(home_dir) if home_dir else None)
+    return summarize(run_checks_sync(DEEP, ctx))
+
+
 def diagnostics_report(
     home_dir: str | Path | None = None,
     *,
     request_id: str | None = None,
     include_logs: bool = True,
     log_lines: int = 80,
+    smoke_tests: dict[str, Any] | None = None,
+    registry_checks: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a redacted support report that is safe to copy from the wizard."""
+    """Build a redacted support report that is safe to copy from the wizard.
+
+    ``smoke_tests`` / ``registry_checks`` accept results a caller already
+    has (``nvh status --report`` runs both before writing the snapshot) so
+    they are embedded instead of run a second time.
+    """
     checked_at = _now()
     layout = storage_layout(home_dir)
     request_id = request_id or get_request_id()
@@ -250,9 +265,9 @@ def diagnostics_report(
         return ollama_runtime_doctor(home_dir=layout.home)
 
     def _workspace_state() -> dict[str, Any]:
-        from nvh.integrations.diagnostics.workspace_state import workspace_state_report
+        from nvh.integrations.diagnostics.workspace_state import workspace_state
 
-        report = workspace_state_report(home_dir=layout.home)
+        report = workspace_state(home_dir=layout.home)
         return {
             "phase": report.get("phase"),
             "ready": report.get("ready"),
@@ -286,9 +301,16 @@ def diagnostics_report(
         }
 
     def _smoke_tests() -> dict[str, Any]:
+        if smoke_tests is not None:
+            return smoke_tests
         from nvh.integrations.diagnostics.smoke_tests import smoke_test_report
 
         return smoke_test_report(home_dir=str(layout.home))
+
+    def _registry() -> dict[str, Any]:
+        if registry_checks is not None:
+            return registry_checks
+        return _registry_checks(home_dir=layout.home)
 
     diagnostics = {
         "report_id": report_id,
@@ -319,6 +341,7 @@ def diagnostics_report(
         },
         "checks": {
             "storage": storage,
+            "registry": _safe_call("registry", _registry),
             "local_ai_runtime": _safe_call("local_ai_runtime", _local_ai_runtime),
             "workspace_state": _safe_call("workspace_state", _workspace_state),
             "compatibility": _safe_call("compatibility", _compatibility),

@@ -393,15 +393,20 @@ def support_snapshot(
     *,
     include_logs: bool = True,
     min_free_gb: float = ROOTLESS_MIN_FREE_GB,
+    **report_kwargs: Any,
 ) -> dict[str, Any]:
-    """Write a redacted support snapshot under NVH_HOME/support."""
+    """Write a redacted support snapshot under NVH_HOME/support.
+
+    ``report_kwargs`` go to :func:`diagnostics_report` — ``nvh status --report``
+    passes the ``smoke_tests`` / ``registry_checks`` it already ran.
+    """
     from nvh.integrations.diagnostics.report import diagnostics_report
 
     passport = workspace_passport(home_dir=home_dir, create=True, min_free_gb=min_free_gb)
     layout_home = Path(passport["storage_home"])
     support_dir = Path(passport["paths"]["support_dir"])
     support_dir.mkdir(parents=True, exist_ok=True)
-    diagnostics = diagnostics_report(home_dir=layout_home, include_logs=include_logs)
+    diagnostics = diagnostics_report(home_dir=layout_home, include_logs=include_logs, **report_kwargs)
     snapshot = {
         "schema_version": 1,
         "created_at": _now(),

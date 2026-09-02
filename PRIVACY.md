@@ -9,14 +9,17 @@ NVHive is a local-first tool. We don't run servers, don't collect telemetry, and
 
 ## What NVHive Stores (on YOUR device only)
 
+Paths are under `$NVH_HOME` (default `~/.nvh`; a plain `pip install` keeps
+config in `~/.hive/`).
+
 | Data | Location | Purpose |
 |---|---|---|
-| Config | ~/.hive/config.yaml | Your settings and preferences |
-| API keys | OS keychain | Authenticate with AI providers |
-| Conversations | ~/.hive/council.db | Chat history (local SQLite) |
-| Memory | ~/.hive/memory/ | Persistent context across sessions |
-| Knowledge base | ~/.hive/knowledge/ | Ingested documents for RAG |
-| Model weights | ~/nvh/models/ | Local AI models (Nemotron, etc.) |
+| Config | `$NVH_HOME/config/config.yaml` | Your settings and preferences |
+| API keys | `$NVH_HOME/config/.env` (OS keychain when `NVH_USE_KEYRING=1`) | Authenticate with AI providers |
+| Conversations | `$NVH_HOME/state/nvhive.db` | Chat history (local SQLite) |
+| Memory | `$NVH_HOME/vault/Wizard Memory/` | Persistent context across sessions, as plain Markdown notes in the vault |
+| Knowledge base | `$NVH_HOME/rag/` | Ingested documents for RAG |
+| Model weights | `$NVH_HOME/models/` | Local AI models (Nemotron, etc.) |
 
 **All data stays on your device.** NVHive has no server, no cloud backend, no analytics endpoint.
 
@@ -24,7 +27,7 @@ NVHive is a local-first tool. We don't run servers, don't collect telemetry, and
 
 | When | What is sent | Where | Your control |
 |---|---|---|---|
-| Cloud AI query | Your prompt text | The AI provider you selected | Choose provider, or use `nvh safe` for local-only |
+| Cloud AI query | Your prompt text | The AI provider you selected | Choose provider, or use `nvh ask --local` for local-only |
 | Provider signup | Your email | The provider's signup page | You enter it directly on their site |
 | Web search | Search query | DuckDuckGo/Brave/Google | Configurable engine choice |
 | URL fetch | The URL | The target website | Only when you explicitly request it |
@@ -32,16 +35,16 @@ NVHive is a local-first tool. We don't run servers, don't collect telemetry, and
 
 ## What NEVER Leaves Your Device
 
-- Your API keys (stored in OS keychain, sent only to the respective provider)
+- Your API keys (stored locally, sent only to the respective provider)
 - Your conversation history
 - Your memory/preferences
 - Your knowledge base documents
 - Your configuration
-- Any data processed in safe mode (`nvh safe`)
+- Any data processed in local-only mode (`nvh ask --local`)
 
-## Safe Mode
+## Local-Only Mode
 
-`nvh safe "your question"` guarantees:
+`nvh ask --local "your question"` guarantees:
 - Query processed by local Ollama model only
 - Zero network requests made
 - No logging, no caching, no persistence
@@ -66,7 +69,7 @@ When you use a cloud AI provider through NVHive:
 
 - NVHive uses NVIDIA's NVML library for GPU detection (local only)
 - Nemotron models are downloaded from Ollama's registry and run locally
-- GPU diagnostic data (`nvh debug --nvidia-report`) stays on your device unless you choose to share it
+- GPU diagnostic data (`nvh status --report --nvidia-report`) stays on your device unless you choose to share it
 - NVHive does not send any data to NVIDIA
 
 ## Children
@@ -76,9 +79,9 @@ NVHive is a developer tool intended for users aged 13+. We do not knowingly coll
 ## Your Rights
 
 Since all data is stored locally on your device:
-- **Access**: Read your data at ~/.hive/ and ~/nvh/
-- **Delete**: `rm -rf ~/.hive ~/nvh` removes everything
-- **Portability**: Copy ~/.hive/ to another machine
+- **Access**: Read your data under `$NVH_HOME` (and `~/.hive/` for a plain pip install)
+- **Delete**: `rm -rf "$NVH_HOME" ~/.hive` removes everything
+- **Portability**: Copy `$NVH_HOME` to another machine
 - **Control**: You choose which providers to use and what data to share
 
 ## Opt-In Install Telemetry
@@ -118,7 +121,7 @@ cat $NVH_HOME/telemetry/events.jsonl
 nvh telemetry --disable   # not yet wired; use: rm -rf $NVH_HOME/telemetry
 ```
 
-The bundle produced by `nvh selfcheck` includes a *summary* of the
+The bundle produced by `nvh status --report --live` includes a *summary* of the
 telemetry log (event counts only — no individual records). You choose
 whether to share the bundle.
 

@@ -61,7 +61,7 @@ read docs are in [docs/TESTING.md](docs/TESTING.md).
 ```bash
 python -m pytest tests/test_<subject>.py -q
 python -m ruff check nvh/ tests/ --ignore E501,E402,N806,E702,F841     # CI's rule set
-python -m mypy nvh/sandbox nvh/catalog --follow-imports=silent --ignore-missing-imports
+python -m mypy nvh/sandbox nvh/catalog --strict --follow-imports=silent --ignore-missing-imports
 ```
 
 mypy gates only the modules that are already clean (`nvh/sandbox`,

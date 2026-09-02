@@ -31,13 +31,35 @@ from nvh.providers.openai_compatible import (
     _calc_cost,
     _map_error,
 )
-from nvh.providers.registry import ProviderRegistry, lazy_adapter
+from nvh.providers.registry import ProviderRegistry, lazy_adapter, resolve_provider_key
 
 _ACOMPLETION = "nvh.providers.openai_compatible.litellm.acompletion"
+_ASYNC_CLIENT = "nvh.providers.openai_compatible.httpx.AsyncClient"
 
 
 def _spec_provider(name: str) -> OpenAICompatibleProvider:
     return OpenAICompatibleProvider(PROVIDER_SPECS[name])
+
+
+def _fake_http(status_code: int = 200, payload=None):
+    """A stand-in for ``httpx.AsyncClient`` recording every GET."""
+    calls: list[tuple[str, dict]] = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, headers=None):
+            calls.append((url, headers or {}))
+            return SimpleNamespace(status_code=status_code, json=lambda: payload)
+
+    return Client, calls
 
 
 def _response(model: str = "served-model"):
@@ -85,9 +107,16 @@ class TestConstruction:
         }
 
 
+def _clear_provider_env(monkeypatch, name: str) -> None:
+    """Remove every env var ``resolve_provider_key`` consults for ``name``."""
+    monkeypatch.delenv("NVH_USE_KEYRING", raising=False)
+    for var in (f"COUNCIL_{name.upper()}_API_KEY", f"{name.upper()}_API_KEY", *PROVIDER_SPECS[name].env_keys):
+        monkeypatch.delenv(var, raising=False)
+
+
 class TestApiKeyResolution:
     def test_spec_env_keys_are_consulted_in_order(self, monkeypatch):
-        monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+        _clear_provider_env(monkeypatch, "nvidia")
         monkeypatch.setenv("NIM_API_KEY", "nim-key")
         monkeypatch.setenv("HIVE_NVIDIA_API_KEY", "hive-key")
         assert OpenAICompatibleProvider(PROVIDER_SPECS["nvidia"])._api_key == "nim-key"
@@ -96,15 +125,32 @@ class TestApiKeyResolution:
         monkeypatch.setenv("NVIDIA_API_KEY", "env-key")
         assert OpenAICompatibleProvider(PROVIDER_SPECS["nvidia"], api_key="k")._api_key == "k"
 
-    def test_no_env_keys_means_litellm_resolves_the_key(self, monkeypatch):
+    def test_conventional_env_var_is_resolved_by_the_adapter(self, monkeypatch):
+        # The registry, the adapter and `nvh status --deep` share one resolver,
+        # so GROQ_API_KEY reaches litellm explicitly rather than by accident.
+        _clear_provider_env(monkeypatch, "groq")
         monkeypatch.setenv("GROQ_API_KEY", "env-key")
         p = OpenAICompatibleProvider(PROVIDER_SPECS["groq"])
-        assert p._api_key == ""
-        assert "api_key" not in p._kwargs("groq/openai/gpt-oss-120b")
+        assert p._api_key == "env-key"
+        assert p._kwargs("groq/openai/gpt-oss-120b")["api_key"] == "env-key"
+
+    @pytest.mark.parametrize("name", sorted(PROVIDER_SPECS))
+    def test_historical_hive_spelling_works_for_every_spec(self, name, monkeypatch):
+        _clear_provider_env(monkeypatch, name)
+        monkeypatch.setenv(f"HIVE_{name.upper()}_API_KEY", "hive-key")
+        assert OpenAICompatibleProvider(PROVIDER_SPECS[name])._api_key == "hive-key"
+
+    @pytest.mark.parametrize(
+        ("name", "var"), [("nvidia", "NIM_API_KEY"), ("groq", "HIVE_GROQ_API_KEY")],
+    )
+    def test_check_and_adapter_agree(self, name, var, monkeypatch):
+        _clear_provider_env(monkeypatch, name)
+        monkeypatch.setenv(var, "the-key")
+        assert resolve_provider_key(name) == ("the-key", f"env:{var}")
+        assert OpenAICompatibleProvider(PROVIDER_SPECS[name])._api_key == "the-key"
 
     def test_anonymous_key_when_nothing_configured(self, monkeypatch):
-        monkeypatch.delenv("LLM7_API_KEY", raising=False)
-        monkeypatch.delenv("HIVE_LLM7_API_KEY", raising=False)
+        _clear_provider_env(monkeypatch, "llm7")
         p = OpenAICompatibleProvider(PROVIDER_SPECS["llm7"])
         assert p._kwargs("gpt-oss") == {
             "model": "openai/gpt-oss",
@@ -114,12 +160,74 @@ class TestApiKeyResolution:
 
     def test_unexpanded_placeholder_is_ignored(self, monkeypatch):
         placeholder = "${LLM7_API_KEY:-anonymous}"
+        _clear_provider_env(monkeypatch, "llm7")
+        _clear_provider_env(monkeypatch, "openai")
         monkeypatch.setenv("LLM7_API_KEY", "real")
         assert OpenAICompatibleProvider(PROVIDER_SPECS["llm7"], api_key=placeholder)._api_key == "real"
         monkeypatch.delenv("LLM7_API_KEY")
-        monkeypatch.delenv("HIVE_LLM7_API_KEY", raising=False)
         assert OpenAICompatibleProvider(PROVIDER_SPECS["llm7"], api_key=placeholder)._api_key == "anonymous"
         assert OpenAICompatibleProvider(PROVIDER_SPECS["openai"], api_key="${OPENAI_API_KEY}")._api_key == ""
+
+
+class TestSpecDefaults:
+    def test_timeouts_come_from_the_spec_unless_given(self):
+        assert OpenAICompatibleProvider(PROVIDER_SPECS["groq"])._timeout == 120
+        for name in ("nvidia", "llm7", "perplexity", "siliconflow"):
+            assert OpenAICompatibleProvider(PROVIDER_SPECS[name])._timeout == 600, name
+        assert OpenAICompatibleProvider(PROVIDER_SPECS["nvidia"], timeout=7)._timeout == 7
+
+    def test_health_model_defaults_to_default_model(self):
+        nvidia = OpenAICompatibleProvider(PROVIDER_SPECS["nvidia"])
+        assert nvidia._health_model == PROVIDER_SPECS["nvidia"].fallback_model  # the quick 8B
+        groq = OpenAICompatibleProvider(PROVIDER_SPECS["groq"], default_model="groq/x")
+        assert groq._health_model == "groq/x"
+
+
+# Provider litellm must resolve for each spec's bare default model once routed.
+_LITELLM_PROVIDER = {
+    "openai": "openai", "anthropic": "anthropic", "google": "gemini", "groq": "groq",
+    "grok": "xai", "mistral": "mistral", "cohere": "cohere_chat", "deepseek": "deepseek",
+    "perplexity": "perplexity", "together": "together_ai", "fireworks": "fireworks_ai",
+    "openrouter": "openrouter", "cerebras": "cerebras", "sambanova": "sambanova",
+    "huggingface": "huggingface", "ai21": "ai21_chat", "nvidia": "nvidia_nim",
+    "siliconflow": "openai", "llm7": "openai",
+}
+
+
+class TestLitellmPrefix:
+    @pytest.mark.parametrize("name", sorted(PROVIDER_SPECS))
+    def test_bare_model_routes_to_the_spec_provider(self, name):
+        import litellm
+
+        spec = PROVIDER_SPECS[name]
+        bare = spec.default_model.removeprefix(spec.litellm_prefix)
+        routed = spec.route(bare)
+        # siliconflow/llm7 ship bare IDs and gain "openai/" only at request time.
+        assert routed == spec.route(spec.default_model)
+        assert routed.startswith(spec.litellm_prefix)
+        assert litellm.get_llm_provider(routed)[1] == _LITELLM_PROVIDER[name]
+
+    @pytest.mark.parametrize("name", sorted(PROVIDER_SPECS))
+    def test_routing_is_idempotent(self, name):
+        spec = PROVIDER_SPECS[name]
+        for model in (spec.default_model, spec.fallback_model):
+            once = spec.route(model)
+            assert spec.route(once) == once
+            assert once.count(spec.litellm_prefix) <= 1 or not spec.litellm_prefix
+
+    def test_partial_route_gets_only_the_missing_lead(self):
+        fw = PROVIDER_SPECS["fireworks"]
+        assert fw.route("accounts/fireworks/models/x") == "fireworks_ai/accounts/fireworks/models/x"
+        assert fw.route("x") == "fireworks_ai/accounts/fireworks/models/x"
+
+    @pytest.mark.asyncio
+    async def test_bare_model_is_routed_and_priced_under_its_prefix(self):
+        p = OpenAICompatibleProvider(PROVIDER_SPECS["groq"], api_key="k")
+        with patch(_ACOMPLETION, new=AsyncMock(return_value=_response())) as ac, \
+                patch("litellm.cost_per_token", return_value=(0.001, 0.002)) as cpt:
+            await p.complete([Message(role="user", content="hi")], model="openai/gpt-oss-20b")
+        assert ac.await_args.kwargs["model"] == "groq/openai/gpt-oss-20b"
+        assert cpt.call_args.kwargs["model"] == "groq/openai/gpt-oss-20b"
 
 
 class TestCost:
@@ -148,21 +256,64 @@ class TestCost:
         )
 
 
-class TestRequestShaping:
+class TestHealthCheck:
     @pytest.mark.asyncio
-    async def test_health_check_pings_default_model_with_short_timeout(self):
+    async def test_prefers_free_models_endpoint_over_a_billed_ping(self):
         p = OpenAICompatibleProvider(PROVIDER_SPECS["nvidia"], api_key="k")
-        with patch(_ACOMPLETION, new=AsyncMock(return_value=_response())) as ac:
+        client, calls = _fake_http(200, {"data": [{"id": "a"}, {"id": "b"}]})
+        with patch(_ASYNC_CLIENT, client), patch(_ACOMPLETION, new=AsyncMock()) as ac:
+            status = await p.health_check()
+        assert status.healthy is True and status.models_available == 2
+        assert calls == [("https://integrate.api.nvidia.com/v1/models", {"Authorization": "Bearer k"})]
+        ac.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_uses_litellm_known_base_when_spec_has_none(self):
+        p = OpenAICompatibleProvider(PROVIDER_SPECS["groq"], api_key="k")
+        client, calls = _fake_http(200, {"data": []})
+        with patch(_ASYNC_CLIENT, client):
+            assert (await p.health_check()).healthy is True
+        assert calls[0][0] == "https://api.groq.com/openai/v1/models"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_ping_with_health_model_when_models_is_missing(self):
+        p = OpenAICompatibleProvider(PROVIDER_SPECS["nvidia"], api_key="k")
+        client, _ = _fake_http(404)
+        with patch(_ASYNC_CLIENT, client), \
+                patch(_ACOMPLETION, new=AsyncMock(return_value=_response())) as ac:
             status = await p.health_check()
         assert status.healthy is True
         ac.assert_awaited_once_with(
             messages=[{"role": "user", "content": "ping"}],
             max_tokens=1,
             timeout=15,
-            model="nvidia_nim/meta/llama-3.3-70b-instruct",
+            model="nvidia_nim/meta/llama-3.1-8b-instruct",  # the 8B, not the 70B default
             api_key="k",
             api_base="https://integrate.api.nvidia.com/v1",
         )
+
+    @pytest.mark.asyncio
+    async def test_pings_when_no_models_endpoint_is_known(self):
+        # litellm publishes no base for openai; the ping is the only probe left.
+        p = OpenAICompatibleProvider(PROVIDER_SPECS["openai"], api_key="k")
+        client, calls = _fake_http(200)
+        with patch(_ASYNC_CLIENT, client), \
+                patch(_ACOMPLETION, new=AsyncMock(return_value=_response())) as ac:
+            assert (await p.health_check()).healthy is True
+        assert calls == []
+        assert ac.await_args.kwargs["model"] == "gpt-5.6-terra"
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_on_models_is_unhealthy_without_a_ping(self):
+        p = OpenAICompatibleProvider(PROVIDER_SPECS["nvidia"], api_key="bad")
+        client, _ = _fake_http(401)
+        with patch(_ASYNC_CLIENT, client), patch(_ACOMPLETION, new=AsyncMock()) as ac:
+            status = await p.health_check()
+        assert status.healthy is False and "HTTP 401" in status.error
+        ac.assert_not_awaited()
+
+
+class TestRequestShaping:
 
     @pytest.mark.asyncio
     async def test_complete_forwards_timeout_and_prefixed_model(self):
@@ -560,8 +711,10 @@ def _litellm_resp():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name", sorted(PROVIDER_SPECS))
 async def test_provider_health_check_success(name):
-    """Every litellm provider returns healthy=True when acompletion succeeds."""
+    """Every litellm provider returns healthy=True when its probe succeeds."""
     provider = _spec_provider(name)
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=_litellm_resp()):
+    client, _ = _fake_http(200, {"data": []})
+    with patch(_ASYNC_CLIENT, client), \
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=_litellm_resp()):
         result = await provider.health_check()
     assert isinstance(result, HealthStatus) and result.healthy is True

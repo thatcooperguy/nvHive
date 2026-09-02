@@ -6,18 +6,15 @@ can assert on ordering and terminal events; ``error_client`` explodes mid-stream
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import AsyncIterator
 from decimal import Decimal
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 import nvh.api.server as server_module
-import nvh.storage.repository as repo
 from nvh.api.proxy import (
     anthropic_messages_to_nvhive,
     build_models_list,
@@ -118,26 +115,21 @@ def _make_engine(provider=None) -> Engine:
     return engine
 
 
-def _client_for(tmp_path: Path, engine: Engine):
-    repo._engine = None
-    repo._session_factory = None
-    asyncio.run(repo.init_db(db_path=tmp_path / "proxy.db"))
+def _client_for(engine: Engine):
     original = server_module._engine
     server_module._engine = engine
     yield TestClient(app, raise_server_exceptions=False)
     server_module._engine = original
-    repo._engine = None
-    repo._session_factory = None
 
 
 @pytest.fixture()
-def client(tmp_path: Path):
-    yield from _client_for(tmp_path, _make_engine())
+def client(sync_db):
+    yield from _client_for(_make_engine())
 
 
 @pytest.fixture()
-def error_client(tmp_path: Path):
-    yield from _client_for(tmp_path, _make_engine(ErroringStreamProvider("alpha")))
+def error_client(sync_db):
+    yield from _client_for(_make_engine(ErroringStreamProvider("alpha")))
 
 
 def _parse_sse_events(raw: str) -> list[tuple[str | None, str]]:

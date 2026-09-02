@@ -78,6 +78,8 @@ def _option_rows(cmd: click.Command) -> list[tuple[str, str]]:
 
 
 def render(app=None) -> str:
+    from nvh.cli.main import DEPRECATED_ALIASES
+
     if app is None:
         from nvh.cli.main import app as nvh_app
 
@@ -137,7 +139,9 @@ def render(app=None) -> str:
         "Hidden aliases kept for one release; each forwards to the command in its",
         "description. They do not appear in `nvh --help` and will be removed in 0.43.",
         "",
-        *_table([(f"nvh {name}", _summary(hidden[name])) for name in sorted(hidden)]),
+        # Only the DEPRECATED_ALIASES table: commands hidden for other reasons
+        # (benchmark, the removed template group) are not deprecated spellings.
+        *_table([(f"nvh {name}", _summary(hidden[name])) for name in sorted(DEPRECATED_ALIASES)]),
         "",
         "---",
         "",

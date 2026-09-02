@@ -12,7 +12,7 @@ python -m pytest tests/test_council.py -q       # one subject
 python -m pytest tests/ -k "snapshot and not live" -q
 python -m pytest tests/ --cov=nvh --cov-report=term-missing
 python -m ruff check nvh/ tests/ --ignore E501,E402,N806,E702,F841   # CI's exact rule set
-python -m mypy nvh/sandbox nvh/catalog --follow-imports=silent --ignore-missing-imports
+python -m mypy nvh/sandbox nvh/catalog --strict --follow-imports=silent --ignore-missing-imports
 ```
 
 `pyproject.toml` configures pytest: `asyncio_mode = "auto"` (async tests need
@@ -25,9 +25,12 @@ warnings. Tests run from any directory; paths are resolved from
 ## Layout
 
 `tests/` is flat: one `test_<subject>.py` per module or feature, no
-subdirectories, no fixtures package beyond what a file needs. When a module is
-deleted its test file goes with it; when a module is renamed the test file is
-renamed too. A handful of files are guards rather than unit tests:
+subdirectories. `tests/conftest.py` holds the shared `db` fixture (a fresh
+SQLite database bound to the repository for one async test) and its
+synchronous twin `sync_db` for `TestClient`-driven tests; everything else
+lives in the file that needs it. When a module is deleted its test file goes
+with it; when a module is renamed the test file is renamed too. A handful of
+files are guards rather than unit tests:
 
 | File | Guards |
 |---|---|

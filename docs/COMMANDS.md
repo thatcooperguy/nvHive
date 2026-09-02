@@ -274,7 +274,7 @@ to an advisor, and a task-shaped bare prompt asks for an explicit `nvh do`.
 |---------|-------------|
 | `nvh rag add PATHS` | Index one or more files into the local RAG store. |
 | `nvh rag ask QUESTION` | Retrieve the most relevant indexed chunks for a question. |
-| `nvh rag import-legacy` | One-shot import of the pre-0.42 ~/.hive/knowledge store. |
+| `nvh rag import-legacy` | One-shot import of the pre-0.42 ~/.hive/knowledge store (or, with --memories, the REPL memories). |
 | `nvh rag ingest FOLDER` | Walk a folder and index every supported document in it. |
 | `nvh rag list` | List collections in the local RAG store. |
 | `nvh rag remove SOURCE` | Drop every chunk of one source from a collection. |
@@ -322,7 +322,6 @@ description. They do not appear in `nvh --help` and will be removed in 0.43.
 |---------|-------------|
 | `nvh ai21` | (alias) nvh ask -p ai21 — AI21 Labs |
 | `nvh anthropic` | (alias) nvh ask -p anthropic — Anthropic |
-| `nvh benchmark` | Quality benchmark — compare single model vs council. |
 | `nvh cerebras` | (alias) nvh ask -p cerebras — Cerebras |
 | `nvh clip` | (alias) nvh ask --clipboard |
 | `nvh code` | (alias) nvh ask --focus code |
@@ -336,8 +335,8 @@ description. They do not appear in `nvh --help` and will be removed in 0.43.
 | `nvh groq` | (alias) nvh ask -p groq — Groq |
 | `nvh health` | (alias) nvh status --providers |
 | `nvh huggingface` | (alias) nvh ask -p huggingface — Hugging Face |
-| `nvh knowledge` | Index documents locally and retrieve them for grounded answers (SQLite + Ollama embeddings under $NVH_HOME/rag). |
-| `nvh learn` | Pre-0.42 spelling of `nvh rag add`; hidden for one release. |
+| `nvh knowledge` | (alias) nvh rag |
+| `nvh learn` | (alias) nvh rag add |
 | `nvh llm7` | (alias) nvh ask -p llm7 — LLM7 |
 | `nvh math` | (alias) nvh ask --focus math |
 | `nvh mistral` | (alias) nvh ask -p mistral — Mistral |
@@ -345,7 +344,7 @@ description. They do not appear in `nvh --help` and will be removed in 0.43.
 | `nvh openai` | (alias) nvh ask -p openai — OpenAI |
 | `nvh openrouter` | (alias) nvh ask -p openrouter — OpenRouter |
 | `nvh perplexity` | (alias) nvh ask -p perplexity — Perplexity |
-| `nvh pipe` | (alias) ... \| nvh ask --raw |
+| `nvh pipe` | (alias) nvh ask --raw |
 | `nvh quick` | (alias) nvh ask --fast --raw |
 | `nvh research` | (alias) nvh ask --focus research |
 | `nvh safe` | (alias) nvh ask --local |
@@ -353,7 +352,6 @@ description. They do not appear in `nvh --help` and will be removed in 0.43.
 | `nvh selfcheck` | (alias) nvh status --report --live --imports |
 | `nvh siliconflow` | (alias) nvh ask -p siliconflow — SiliconFlow |
 | `nvh smoke` | (alias) nvh status --smoke |
-| `nvh template` | (removed) Prompt templates moved to agent profiles |
 | `nvh test` | (alias) nvh status --smoke |
 | `nvh together` | (alias) nvh ask -p together — Together AI |
 | `nvh why` | (alias) nvh status --routing |

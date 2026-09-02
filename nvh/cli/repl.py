@@ -9,9 +9,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -128,6 +129,75 @@ def _forget_repl_memories(keyword: str) -> int:
             path.unlink(missing_ok=True)
             removed += 1
     return removed
+
+
+def legacy_memory_file() -> Path:
+    """Where the deleted ``nvh/core/memory.py`` kept its memories."""
+    return Path.home() / ".hive" / "memory" / "memories.json"
+
+
+def _legacy_memory_marker(home_dir: str | Path | None = None) -> Path:
+    from nvh.integrations.workspace.storage import storage_layout
+
+    return storage_layout(home_dir).state_dir / "legacy-memories-imported.json"
+
+
+def import_legacy_memories(*, home_dir: str | Path | None = None) -> dict[str, Any]:
+    """One-shot: every ``memories.json`` entry becomes a #repl vault note.
+
+    The pre-0.42 rows were ``{id, type, content, created_at, ...}``; ``type``
+    (user/project/feedback/fact) survives as a second tag. The marker under
+    ``$NVH_STATE`` keeps the import from running twice, so ``imported_at`` set
+    in the result means "already done".
+    """
+    source = legacy_memory_file()
+    marker = _legacy_memory_marker(home_dir)
+    result: dict[str, Any] = {
+        "found": source.is_file(), "path": str(source), "imported": 0,
+        "marker": str(marker), "imported_at": None,
+    }
+    if marker.is_file():
+        try:
+            result["imported_at"] = json.loads(marker.read_text(encoding="utf-8")).get("imported_at") or "unknown"
+        except (OSError, ValueError):
+            result["imported_at"] = "unknown"
+        return result
+    if not result["found"]:
+        return result
+    try:
+        entries = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        entries = []
+
+    from nvh.integrations.workspace.vault import append_vault_memory
+
+    seen_titles: set[str] = set()
+    for entry in entries if isinstance(entries, list) else []:
+        content = str(entry.get("content", "")).strip() if isinstance(entry, dict) else ""
+        if not content:
+            continue
+        title = _memory_title(content)
+        if title in seen_titles:
+            # Notes are named by second + title; keep same-titled memories apart.
+            title = f"{title} ({entry.get('id') or len(seen_titles)})"
+        seen_titles.add(title)
+        tags = [REPL_MEMORY_TAG, str(entry.get("type") or "").strip()]
+        append_vault_memory(
+            title, content, category=REPL_MEMORY_CATEGORY,
+            tags=[t for t in tags if t], home_dir=home_dir,
+        )
+        result["imported"] += 1
+
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps({
+            "imported_at": datetime.now(UTC).isoformat(),
+            "source": str(source),
+            "imported": result["imported"],
+        }, indent=2),
+        encoding="utf-8",
+    )
+    return result
 
 
 async def _search_vault_memories(query: str, top_k: int = 5) -> None:
@@ -1036,6 +1106,15 @@ async def run_repl(
         system_prompt=system_prompt,
         mode=mode,
     )
+
+    # Pre-0.42 ~/.hive/memory/memories.json entries become vault notes, once.
+    try:
+        legacy = import_legacy_memories()
+    except Exception as exc:  # noqa: BLE001 — a migration must never block the REPL
+        console.print(f"[yellow]Legacy memory import skipped: {exc}[/yellow]")
+    else:
+        if legacy["imported"]:
+            console.print(f"[dim]Imported {legacy['imported']} legacy memories into the vault[/dim]")
 
     # At session start, inject the REPL's vault memory notes into the system prompt
     memory_context = _repl_memory_context()

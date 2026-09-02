@@ -1,17 +1,52 @@
-"""Shared Ollama-daemon helpers — model listing, required-model resolution.
+"""Shared Ollama-daemon helpers — base URL, model listing, required-model resolution.
 
 These are used by the REPL (interactive missing-model offer), `nvh status --deep`
-(diagnostic check + --fix), and the setup flow. Keep this module lightweight:
-a single httpx import and pure helpers, no heavy deps. Centralizing avoids
-the three call sites drifting from each other.
+(diagnostic check + --fix), the Engine, the Ollama adapter and the setup flow.
+Keep this module lightweight: a single httpx import and pure helpers, no heavy
+deps. Centralizing avoids the call sites drifting from each other.
 """
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     from nvh.config.settings import HiveConfig
+
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+# Ollama's own OLLAMA_HOST is honoured after OLLAMA_BASE_URL; it may be a
+# bare "host:port" or a bind address like 0.0.0.0.
+_URL_ENV_VARS = ("OLLAMA_BASE_URL", "OLLAMA_HOST")
+
+
+def ollama_base_url(value: str | None = None) -> str:
+    """The daemon's base URL: ``value``, else the env override, else the default.
+
+    Loopback is always spelled ``127.0.0.1`` — ``localhost`` resolves through
+    IPv6 first on some hosts and adds hundreds of ms to every probe.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        for var in _URL_ENV_VARS:
+            raw = os.environ.get(var, "").strip()
+            if raw:
+                break
+    if not raw:
+        return DEFAULT_OLLAMA_URL
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    parts = urlsplit(raw)
+    host = parts.hostname or "127.0.0.1"
+    if host in ("localhost", "0.0.0.0", "::", "[::]"):
+        host = "127.0.0.1"
+    try:
+        port: int | str | None = parts.port
+    except ValueError:  # out-of-range ports are passed through, e.g. a deliberately dead :99999
+        port = parts.netloc.rpartition(":")[2]
+    netloc = f"{host}:{port or 11434}"
+    return urlunsplit((parts.scheme or "http", netloc, parts.path.rstrip("/"), "", ""))
 
 
 def strip_ollama_prefix(model: str) -> str:
@@ -51,19 +86,25 @@ def _tags_match(required: str, installed: str) -> bool:
     return req_tag == "" or req_tag == inst_tag
 
 
-def list_installed_models(base_url: str = "http://localhost:11434") -> list[str]:
+def probe_installed_models(base_url: str | None = None, timeout: float = 2.0) -> list[str] | None:
+    """Installed Ollama model tags, or None when the daemon is unreachable."""
+    try:
+        import httpx
+
+        resp = httpx.get(f"{ollama_base_url(base_url)}/api/tags", timeout=timeout)
+        if resp.status_code != 200:
+            return None
+        return [m.get("name", "") for m in resp.json().get("models", [])]
+    except Exception:
+        return None
+
+
+def list_installed_models(base_url: str | None = None) -> list[str]:
     """Return the list of installed Ollama model tags, or [] on any failure.
 
     Short timeout — this is used on hot paths (REPL startup banner).
     """
-    try:
-        import httpx
-        resp = httpx.get(f"{base_url.rstrip('/')}/api/tags", timeout=2)
-        if resp.status_code != 200:
-            return []
-        return [m.get("name", "") for m in resp.json().get("models", [])]
-    except Exception:
-        return []
+    return probe_installed_models(base_url) or []
 
 
 def required_ollama_models(config: HiveConfig) -> list[str]:

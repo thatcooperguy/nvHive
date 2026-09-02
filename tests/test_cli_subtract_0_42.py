@@ -1,10 +1,10 @@
 """CLI surface after the 0.42 core-module deletions (issue #125).
 
-``nvh knowledge`` -> ``nvh rag`` (hidden alias), ``nvh template`` -> hidden
-migration hint, ``nvh learn`` -> hidden alias of ``nvh rag add``, ``nvh test``
-runs the diagnostics smoke report (``--imports`` adds the module probe, ``smoke``
-is a hidden alias), and ``nvh models pull --recommended`` replaces the deleted
-``scripts/ollama-setup.sh``.
+``nvh knowledge`` -> ``nvh rag`` (hidden forwarding alias), ``nvh template`` ->
+hidden migration hint, ``nvh learn`` -> hidden alias of ``nvh rag add``,
+``nvh test`` runs the diagnostics smoke report (``--imports`` adds the module
+probe, ``smoke`` is a hidden alias), and ``nvh models pull --recommended``
+replaces the deleted ``scripts/ollama-setup.sh``.
 """
 
 from __future__ import annotations
@@ -29,6 +29,11 @@ def _plain(text: str) -> str:
     return _ANSI.sub("", text)
 
 
+def _json_payload(text: str):
+    # Under click < 8.2 CliRunner mixes the stderr header into stdout.
+    return json.loads(text[text.index("{"):])
+
+
 @pytest.fixture()
 def runner() -> CliRunner:
     return CliRunner()
@@ -51,15 +56,17 @@ class TestRegistryShape:
         assert rag.commands["search"].hidden is True  # pre-0.42 `knowledge search`
         knowledge = root.commands["knowledge"]
         assert knowledge.hidden is True
-        assert set(knowledge.commands) == set(rag.commands)
+        # A forwarder, not a second copy of the group: `nvh knowledge X` re-enters `nvh rag X`.
+        assert knowledge.help == "(alias) nvh rag" and cli_main.DEPRECATED_ALIASES["knowledge"] == "rag"
 
     def test_removed_spellings_are_hidden(self):
         root = get_command(cli_main.app)
         for name in ("template", "learn", "smoke"):
             assert root.commands[name].hidden is True, name
-        # Typer wraps each registration separately; both wrap the same function.
-        assert root.commands["smoke"].callback.__name__ == "test"
-        assert root.commands["test"].callback.__name__ == "test"
+        assert cli_main.DEPRECATED_ALIASES["smoke"] == cli_main.DEPRECATED_ALIASES["test"] == "status --smoke"
+        assert cli_main.DEPRECATED_ALIASES["learn"] == "rag add"
+        # Removed outright (migration hint), so not a deprecated spelling of anything.
+        assert "template" not in cli_main.DEPRECATED_ALIASES
 
     def test_deleted_modules_are_gone(self):
         for module in (
@@ -123,10 +130,27 @@ class TestRagCommands:
             mp.setattr(ingest_mod, "embed_texts", fake_embed)
             result = runner.invoke(cli_main.app, ["rag", "add", str(note)])
         assert result.exit_code == 0, result.output
-        assert "Indexed: 1 file(s)" in result.output
+        assert "Indexed: 1 file(s)" in _plain(result.output)
 
         listing = runner.invoke(cli_main.app, ["rag", "list"])
-        assert "default" in listing.output
+        assert "default" in _plain(listing.output)
+
+    def test_learn_alias_forwards_to_rag_add(self, runner: CliRunner, nvh_home, tmp_path, monkeypatch):
+        import nvh.integrations.rag as rag_pkg
+
+        seen: dict = {}
+
+        async def fake_ingest_files(files, collection=None, **_kwargs):
+            seen["files"], seen["collection"] = list(files), collection
+            return {"ok": True, "files_ingested": len(files), "chunks": 3, "collection": "default"}
+
+        monkeypatch.setattr(rag_pkg, "ingest_files", fake_ingest_files)
+        note = tmp_path / "note.md"
+        note.write_text("x", encoding="utf-8")
+        result = runner.invoke(cli_main.app, ["learn", str(note)])
+        assert result.exit_code == 0, result.output
+        assert seen == {"files": [note], "collection": None}
+        assert "Indexed: 1 file(s)" in _plain(result.output)
 
     def test_import_legacy_without_store_is_a_noop(self, runner: CliRunner, nvh_home, monkeypatch):
         import nvh.integrations.rag.legacy as legacy_mod
@@ -147,7 +171,7 @@ class TestRagCommands:
         monkeypatch.setattr(legacy_mod, "legacy_knowledge_dir", lambda: legacy)
 
         result = runner.invoke(cli_main.app, ["doctor", "--json"])
-        report = json.loads(result.stdout)
+        report = _json_payload(result.stdout)
         rows = [r for r in json.dumps(report).split('{"check": "') if r.startswith("Legacy knowledge base")]
         assert rows, report
         assert '"status": "warn"' in rows[0]
@@ -157,7 +181,7 @@ class TestRagCommands:
 class TestSmokeCommand:
     def test_json_report_with_import_probe(self, runner: CliRunner, nvh_home):
         result = runner.invoke(cli_main.app, ["test", "--json", "--imports"])
-        report = json.loads(result.stdout)
+        report = _json_payload(result.stdout)
         by_id = {t["id"]: t for t in report["tests"]}
         assert by_id["core-imports"]["status"] == "pass", by_id["core-imports"]
         assert report["failed"] == 0
@@ -166,9 +190,11 @@ class TestSmokeCommand:
     def test_quick_flag_is_accepted_and_hidden(self, runner: CliRunner, nvh_home):
         result = runner.invoke(cli_main.app, ["test", "--quick", "--json"])
         assert result.exit_code in (0, 1)
-        assert "tests" in json.loads(result.stdout)
+        assert "tests" in _json_payload(result.stdout)
+        assert "--quick" in _plain(result.output) and "no longer apply" in _plain(result.output)
+        # --help is the target's help: `nvh status`, where the flag never existed.
         help_text = _plain(runner.invoke(cli_main.app, ["test", "--help"]).output)
-        assert "--imports" in help_text
+        assert "--imports" in help_text and "--smoke" in help_text
         assert "quick" not in help_text
 
 
@@ -197,7 +223,7 @@ class TestModelsPullRecommended:
         assert "nomic-embed-text" in pulled       # RAG embedder is in every tier
         assert "qwen3:8b" in pulled               # 8 GB tier
         assert "nemotron" not in pulled           # 40 GB+ tier
-        assert "Detected 8 GB VRAM" in result.output
+        assert "Detected 8 GB VRAM" in _plain(result.output)
 
     def test_nothing_to_pull_when_all_installed(self, runner: CliRunner, monkeypatch):
         import nvh.integrations.installs.studio_packs as sp
@@ -207,7 +233,7 @@ class TestModelsPullRecommended:
         result = runner.invoke(cli_main.app, ["models", "pull", "--recommended"])
         assert result.exit_code == 0, result.output
         assert calls == []
-        assert "already installed" in result.output
+        assert "already installed" in _plain(result.output)
 
     def test_name_and_flag_are_exclusive(self, runner: CliRunner):
         assert runner.invoke(cli_main.app, ["models", "pull"]).exit_code == 1

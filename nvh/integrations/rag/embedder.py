@@ -20,10 +20,12 @@ from typing import Any
 
 import httpx
 
+from nvh.utils.ollama import ollama_base_url
+
 logger = logging.getLogger(__name__)
 
+# The embedder's historical override; wins over OLLAMA_BASE_URL / OLLAMA_HOST.
 OLLAMA_URL_ENV = "OLLAMA_URL"
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
 EMBED_MODEL_ENV = "NVH_RAG_EMBED_MODEL"
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
 AUTO_PULL_ENV = "NVH_RAG_AUTO_PULL"  # set to "0" to disable auto-pull
@@ -39,7 +41,7 @@ class EmbeddingError(RuntimeError):
 
 
 def _ollama_url() -> str:
-    return os.environ.get(OLLAMA_URL_ENV, DEFAULT_OLLAMA_URL).rstrip("/")
+    return ollama_base_url(os.environ.get(OLLAMA_URL_ENV))
 
 
 def embed_model_name() -> str:

@@ -21,7 +21,9 @@ from rich.table import Table
 from rich.text import Text
 
 from nvh.config.settings import DEFAULT_CONFIG_DIR
-from nvh.providers.registry import RETIRED_PROVIDERS
+from nvh.providers.registry import RETIRED_PROVIDERS, resolve_provider_key
+from nvh.providers.specs import PROVIDER_SPECS
+from nvh.utils.ollama import ollama_base_url
 
 # ---------------------------------------------------------------------------
 # Provider definitions — the four core providers plus Ollama
@@ -34,17 +36,6 @@ CORE_PROVIDERS = [
     ("anthropic", "Anthropic", "ANTHROPIC_API_KEY", "https://console.anthropic.com/settings/keys"),
     ("google", "Google Gemini", "GOOGLE_API_KEY", "https://aistudio.google.com/apikey"),
 ]
-
-# Secondary env var names some providers accept (config.yaml templates use
-# ${PRIMARY:-${ALIAS}}); the primary is always <NAME>_API_KEY.
-_ENV_VAR_ALIASES: dict[str, tuple[str, ...]] = {
-    "grok": ("XAI_API_KEY",),
-    "google": ("GEMINI_API_KEY",),
-    "cohere": ("CO_API_KEY",),
-    "together": ("TOGETHERAI_API_KEY",),
-    "huggingface": ("HF_TOKEN",),
-    "nvidia": ("NIM_API_KEY",),
-}
 
 # ---------------------------------------------------------------------------
 # Retired model IDs, keyed provider -> {old_id: new_id} — verified against
@@ -232,11 +223,11 @@ def load_env_keys(use_keyring: bool = True) -> None:
 
 def _check_provider_key(name: str, env_var: str) -> str | None:
     """Return the API key if configured (env or keyring), else None."""
-    # Check environment variable
-    val = os.environ.get(env_var)
+    val = resolve_provider_key(name)[0]
     if val:
         return val
-    # Check keyring
+    # Unconditional keyring read: setup is interactive and must see a key it
+    # just stored even when NVH_USE_KEYRING is unset.
     try:
         import keyring
         val = keyring.get_password("nvhive", f"{name}_api_key")
@@ -290,7 +281,9 @@ def _store_key(name: str, env_var: str, key: str) -> bool:
 
 def provider_env_vars(name: str) -> list[str]:
     """Env var names a provider's key may be stored under (primary first)."""
-    return [f"{name.upper()}_API_KEY", *_ENV_VAR_ALIASES.get(name, ())]
+    spec = PROVIDER_SPECS.get(name)
+    names = [f"{name.upper()}_API_KEY", *(spec.env_keys if spec else ())]
+    return list(dict.fromkeys(names))
 
 
 def remove_key(name: str) -> dict[str, Any]:
@@ -510,8 +503,7 @@ def _ollama_running() -> tuple[bool, list[str]]:
     """Check if Ollama is running and return (running, installed_models)."""
     try:
         import httpx
-        base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        resp = httpx.get(f"{base}/api/tags", timeout=3)
+        resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=3)
         if resp.status_code == 200:
             models = [
                 m.get("name", "")
@@ -810,7 +802,7 @@ def _pull_model(console: Console, model: str, ollama_bin: str) -> bool:
 
         import httpx
 
-        base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        base = ollama_base_url()
         with Progress(
             TextColumn("  "),
             TextColumn("[bold blue]{task.description}"),

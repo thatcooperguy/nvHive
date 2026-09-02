@@ -43,7 +43,9 @@ def _load_documents(legacy_dir: Path) -> list[dict[str, Any]]:
 
 
 def legacy_knowledge_status(
-    *, home_dir: str | Path | None = None, legacy_dir: str | Path | None = None,
+    *,
+    home_dir: str | Path | None = None,
+    legacy_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """``{found, path, documents, imported, imported_at}`` for doctor / CLI."""
     root = Path(legacy_dir) if legacy_dir else legacy_knowledge_dir()
@@ -110,18 +112,23 @@ async def import_legacy_knowledge(
 
     marker = _marker_path(home_dir)
     marker.write_text(
-        json.dumps({
-            "imported_at": datetime.now(UTC).isoformat(),
-            "legacy_dir": str(root),
-            "documents": len(docs),
-            "collection": collection,
-        }, indent=2),
+        json.dumps(
+            {
+                "imported_at": datetime.now(UTC).isoformat(),
+                "legacy_dir": str(root),
+                "documents": len(docs),
+                "collection": collection,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
-    result.update({
-        "documents": len(docs),
-        "reingested": reingested,
-        "rebuilt": rebuilt,
-        "marker": str(marker),
-    })
+    result.update(
+        {
+            "documents": len(docs),
+            "reingested": reingested,
+            "rebuilt": rebuilt,
+            "marker": str(marker),
+        }
+    )
     return result

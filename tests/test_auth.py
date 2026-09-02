@@ -14,13 +14,11 @@ test_api.py.
 from __future__ import annotations
 
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 import nvh.api.server as server_module
-import nvh.storage.repository as repo
 from nvh.api.server import app
 from nvh.config.settings import (
     BudgetConfig,
@@ -113,16 +111,9 @@ def _make_engine() -> Engine:
 
 
 @pytest.fixture()
-def secured_client(tmp_path: Path, monkeypatch):
+def secured_client(sync_db, monkeypatch):
     """TestClient with HIVE_API_KEY set so require_auth enforces a key."""
-    import asyncio
-
     monkeypatch.setenv("HIVE_API_KEY", "secret-test-key-abc123")
-
-    db_file = tmp_path / "auth_test.db"
-    repo._engine = None
-    repo._session_factory = None
-    asyncio.run(repo.init_db(db_path=db_file))
 
     engine = _make_engine()
     original_engine = server_module._engine
@@ -137,21 +128,12 @@ def secured_client(tmp_path: Path, monkeypatch):
     yield client
 
     server_module._engine = original_engine
-    repo._engine = None
-    repo._session_factory = None
 
 
 @pytest.fixture()
-def open_client(tmp_path: Path, monkeypatch):
+def open_client(sync_db, monkeypatch):
     """TestClient with HIVE_API_KEY explicitly unset (open mode)."""
-    import asyncio
-
     monkeypatch.delenv("HIVE_API_KEY", raising=False)
-
-    db_file = tmp_path / "auth_test_open.db"
-    repo._engine = None
-    repo._session_factory = None
-    asyncio.run(repo.init_db(db_path=db_file))
 
     engine = _make_engine()
     original_engine = server_module._engine
@@ -162,8 +144,6 @@ def open_client(tmp_path: Path, monkeypatch):
     yield client
 
     server_module._engine = original_engine
-    repo._engine = None
-    repo._session_factory = None
 
 
 # ---------------------------------------------------------------------------
@@ -319,15 +299,8 @@ class TestAuthHelpers:
         assert h1 != h2
 
     @pytest.mark.asyncio
-    async def test_get_user_count_returns_int(self, tmp_path):
-        repo._engine = None
-        repo._session_factory = None
-        await repo.init_db(db_path=tmp_path / "auth_test.db")
-        try:
-            from nvh.auth.auth import get_user_count
-            count = await get_user_count()
-            assert isinstance(count, int)
-            assert count >= 0
-        finally:
-            repo._engine = None
-            repo._session_factory = None
+    async def test_get_user_count_returns_int(self, db):
+        from nvh.auth.auth import get_user_count
+        count = await get_user_count()
+        assert isinstance(count, int)
+        assert count >= 0

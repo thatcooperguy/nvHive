@@ -174,6 +174,22 @@ def test_prompt_template_round_trips_and_renders(tmp_path: Path) -> None:
     assert coder is not None and coder.render_prompt("hi") == "hi"
 
 
+def test_library_entries_keep_prompt_template_and_max_tokens() -> None:
+    """The packaged Agent Library must round-trip every AgentProfile field it
+    may carry, not just the persona ones."""
+    from nvh.integrations.wizard.profiles import _library_profile
+
+    profile = _library_profile({
+        "name": "lib-reviewer", "title": "Lib Reviewer", "system_prompt": "Be terse.",
+        "prompt_template": "Review:\n{{input}}", "max_tokens": 512, "category": "Coding",
+    })
+    assert profile.built_in is True
+    assert profile.prompt_template == "Review:\n{{input}}"
+    assert profile.max_tokens == 512
+    assert profile.render_prompt("x") == "Review:\nx"
+    assert _library_profile({"name": "bare"}).prompt_template == ""
+
+
 def test_apply_prompt_template_wraps_user_message_only_for_real_profiles(tmp_path: Path) -> None:
     from nvh.integrations.wizard.chat import _apply_prompt_template
     from nvh.integrations.wizard.profiles import AgentProfile, save_user_profile

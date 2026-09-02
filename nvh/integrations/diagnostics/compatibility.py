@@ -114,6 +114,20 @@ def _which(command: str) -> str | None:
     return shutil.which(command)
 
 
+def python_version() -> str:
+    return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
+def platform_summary() -> dict[str, str]:
+    """The four platform facts every report and bundle header carries."""
+    return {
+        "system": platform.system(),
+        "release": platform.release(),
+        "machine": platform.machine(),
+        "python": python_version(),
+    }
+
+
 def _command_version(command: str, *args: str, timeout: float = 4.0) -> str:
     executable = _which(command)
     if not executable:
@@ -209,17 +223,17 @@ def _host_facts() -> dict[str, Any]:
     nvidia = _nvidia_smi_query()
     runtime = runtime_status()
     storage = storage_status(min_free_gb=20)
-    py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    facts = platform_summary()
     return {
         "platform": sys.platform,
-        "system": platform.system(),
-        "machine": platform.machine(),
-        "kernel": platform.release(),
+        "system": facts["system"],
+        "machine": facts["machine"],
+        "kernel": facts["release"],
         "distro": os_release.get("PRETTY_NAME") or os_release.get("NAME") or platform.platform(),
         "libc": {"name": libc_name, "version": libc_version},
         "python": {
             "executable": sys.executable,
-            "version": py_version,
+            "version": facts["python"],
             "venv_available": runtime.venv_available,
             "pip_available": runtime.pip_available,
             "strategy": runtime.strategy,

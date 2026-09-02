@@ -17,6 +17,7 @@ import os
 import sys
 import time
 import webbrowser
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ from rich.table import Table
 
 from nvh import __version__
 from nvh.config.settings import DEFAULT_CONFIG_PATH
+from nvh.utils.ollama import DEFAULT_OLLAMA_URL, ollama_base_url
 
 # Fix Windows legacy console (cp1252) Unicode crashes on symbols like ✓/✗.
 # Without this, Rich raises UnicodeEncodeError whenever it tries to print
@@ -608,7 +610,7 @@ async def _launch_default_repl():
         # Check if Ollama is available even without config
         try:
             import httpx
-            resp = httpx.get("http://localhost:11434/api/tags", timeout=2)
+            resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=2)
             if resp.status_code == 200:
                 console.print("[green]Ollama detected! Enabling local AI...[/green]")
                 # Auto-enable ollama and continue to REPL
@@ -751,35 +753,108 @@ KNOWN_ADVISORS = {
 }
 
 
-def _make_advisor_cmd(advisor_name: str):
-    """Factory: hidden `nvh <provider>` alias of `nvh ask -p <provider>`."""
-    info = KNOWN_ADVISORS[advisor_name]
+# ---------------------------------------------------------------------------
+# Pre-0.42 spellings, kept as hidden aliases for one release: old name ->
+# replacement spelling. Every entry is registered through _alias(); the
+# did-you-mean hint and docs/COMMANDS.md read this table. Commands hidden
+# for other reasons (benchmark, the removed template group) stay out of it.
+# ---------------------------------------------------------------------------
 
-    def cmd(
-        question: str | None = typer.Argument(None, help="Question to ask this advisor"),
-        model: str | None = typer.Option(None, "-m", "--model", help="Specific model"),
-        system: str | None = typer.Option(None, "-s", "--system", help="System prompt"),
-        raw: bool = typer.Option(False, "--raw", help="Output just the answer, no metadata"),
-    ):
-        if question is None:
-            # Pre-0.42 `nvh <provider>` with no question was the key-paste flow.
-            advisor_login(advisor_name, headless=False)
-            return
-        _ask(
-            question, provider=advisor_name, model=model, system=system,
-            output="raw" if raw else "text", quiet=raw,
-        )
+DEPRECATED_ALIASES: dict[str, str] = {
+    # query modes -> nvh ask
+    "code": "ask --focus code",
+    "write": "ask --focus write",
+    "research": "ask --focus research",
+    "math": "ask --focus math",
+    "quick": "ask --fast --raw",
+    "safe": "ask --local",
+    "pipe": "ask --raw",
+    "clip": "ask --clipboard",
+    # diagnostic verbs -> nvh status
+    "health": "status --providers",
+    "why": "status --routing",
+    "doctor": "status --deep",
+    "test": "status --smoke",
+    "smoke": "status --smoke",
+    "debug": "status --report",
+    "selfcheck": "status --report --live --imports",
+    # knowledge base -> nvh rag
+    "knowledge": "rag",
+    "learn": "rag add",
+    # `nvh nvidia` is the infrastructure dashboard, so that advisor is
+    # reachable only via `nvh ask -p nvidia`.
+    **{name: f"ask -p {name}" for name in KNOWN_ADVISORS if name not in ("mock", "nvidia")},
+}
 
-    cmd.__name__ = f"{advisor_name}_cmd"
-    cmd.__doc__ = f"(alias) nvh ask -p {advisor_name} — {info['name']}"
-    return cmd
+
+def _pop_flag(argv: list[str], *spellings: str, value: bool = False) -> str | bool | None:
+    """Remove every occurrence of a legacy flag from argv; the last value (or True) wins."""
+    found: str | bool | None = None
+    i = 0
+    while i < len(argv):
+        name, eq, inline = argv[i].partition("=")
+        if name not in spellings:
+            i += 1
+            continue
+        if not value:
+            found = True
+            del argv[i]
+        elif eq:
+            found = inline
+            del argv[i]
+        else:
+            found = argv[i + 1] if i + 1 < len(argv) else ""
+            del argv[i:i + 2]
+    return found
 
 
-# `nvh nvidia` is the infrastructure dashboard defined below, so that advisor
-# is reachable only via `nvh ask -p nvidia`.
+def _alias(name: str, *, translate=None, note: str | None = None) -> None:
+    """Register `nvh <name>` as a hidden forwarder to its DEPRECATED_ALIASES target.
+
+    The alias declares no options of its own: everything after the name is
+    re-parsed by the real command, so `nvh debug --live` is exactly
+    `nvh status --report --live` and `--help` shows the target's help.
+    ``translate(argv)`` may rewrite the assembled argv (legacy flag
+    spellings) or return None once it has handled the call itself.
+    """
+    target = DEPRECATED_ALIASES[name]
+
+    def run_alias(ctx: typer.Context) -> None:
+        argv = [*target.split(), *ctx.args]
+        if "--help" in ctx.args:
+            err_console.print(f"[dim]`nvh {name}` is now `nvh {target}`; showing its help.[/dim]")
+        if translate is not None:
+            argv = translate(argv)
+            if argv is None:
+                return
+        app(argv)
+
+    run_alias.__name__ = name
+    run_alias.__doc__ = f"(alias) nvh {target}" + (f" — {note}" if note else "")
+    app.command(
+        name, hidden=True, add_help_option=False,
+        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    )(run_alias)
+
+
+def _provider_translate(name: str):
+    """`nvh <provider>` with no question was the key-paste flow; otherwise `nvh ask -p <provider>`."""
+    def translate(argv: list[str]) -> list[str] | None:
+        rest = argv[3:]
+        question = [
+            tok for i, tok in enumerate(rest)
+            if not tok.startswith("-") and (i == 0 or rest[i - 1] not in ("-m", "--model", "-s", "--system"))
+        ]
+        if question or "--help" in rest:
+            return argv
+        advisor_login(name, headless=False)
+        return None
+    return translate
+
+
 for _adv_name in KNOWN_ADVISORS:
-    if _adv_name not in ("mock", "nvidia"):
-        app.command(_adv_name, hidden=True)(_make_advisor_cmd(_adv_name))
+    if _adv_name in DEPRECATED_ALIASES:
+        _alias(_adv_name, translate=_provider_translate(_adv_name), note=KNOWN_ADVISORS[_adv_name]["name"])
 
 
 # ---------------------------------------------------------------------------
@@ -1077,6 +1152,10 @@ def _ask(
             raise typer.Exit(1)
         chosen = provider or next((p for p in preferred if p in enabled), None)
 
+        if focus == "research" and provider is None and "perplexity" not in enabled:
+            await _research_council(engine, full_prompt, system, output=output, quiet=quiet)
+            return
+
         if local:
             console.print("[dim][local mode — Ollama only, nothing leaves this machine, nothing stored][/dim]")
         elif privacy:
@@ -1146,7 +1225,7 @@ def _ask(
                         parts.append(f"[bold]Latency:[/bold] [dim]{elapsed}ms[/dim]")
                         console.print(f"\n{' | '.join(parts)}")
             except Exception as e:
-                console.print(f"\n{_format_cli_error(e)}")
+                err_console.print(f"\n{_format_cli_error(e)}")
                 raise typer.Exit(1)
             _copy_result(accumulated)
         else:
@@ -1206,10 +1285,44 @@ def _ask(
                             f"[dim]Verification: {verdict}[/dim]"
                         )
             except Exception as e:
-                console.print(_format_cli_error(e))
+                # stderr, so `... | nvh ask --raw` pipelines never see error text on stdout
+                err_console.print(_format_cli_error(e))
                 raise typer.Exit(1)
 
     _run(_run_query())
+
+
+async def _research_council(engine, prompt: str, system: str | None, *, output: str, quiet: bool) -> None:
+    """`--focus research` without Perplexity: the pre-0.42 `nvh research` path —
+    an auto-agent council whose synthesis and agreement summary are printed."""
+    if not quiet:
+        console.print("[dim][research → no Perplexity advisor, synthesizing from multiple advisors][/dim]\n")
+    try:
+        with console.status("Convening research council...", spinner="dots"):
+            result = await engine.run_council(
+                prompt=prompt, system_prompt=system, auto_agents=True, synthesize=True,
+            )
+    except Exception as e:
+        err_console.print(_format_cli_error(e))
+        raise typer.Exit(1)
+    if result.synthesis is None:
+        for label, resp in result.member_responses.items():
+            console.print(Panel(resp.content, title=label, border_style="blue"))
+        return
+    _format_output(result.synthesis.content, output)
+    if quiet:
+        return
+    parts = [
+        f"[bold]Agents:[/bold] [dim]{', '.join(result.agents_used) or 'auto'}[/dim]",
+        f"[bold]Cost:[/bold] [dim]${result.total_cost_usd:.4f}[/dim]",
+        f"[bold]Latency:[/bold] [dim]{result.total_latency_ms}ms[/dim]",
+    ]
+    if result.confidence_score is not None:
+        confidence = f"[bold]Confidence:[/bold] [dim]{int(result.confidence_score * 100)}%[/dim]"
+        if result.agreement_summary:
+            confidence += f" — {result.agreement_summary}"
+        parts.append(confidence)
+    console.print(f"\n{' | '.join(parts)}")
 
 
 @app.command(rich_help_panel="Query Modes")
@@ -1403,80 +1516,56 @@ _CLIP_ACTIONS = {
 
 # ---------------------------------------------------------------------------
 # Pre-0.42 query-mode spellings — hidden aliases of `nvh ask` for one release.
+# The translators map the old flag spellings (`-a`, `--tone`, pipe's `--json`,
+# clip's ACTION) onto ask's before the argv is re-parsed by `nvh ask`.
 # ---------------------------------------------------------------------------
 
-@app.command(hidden=True)
-def code(
-    prompt: str | None = typer.Argument(None),
-    file: str | None = typer.Option(None, "-f", "--file"),
-    advisor: str | None = typer.Option(None, "-a"),
-):
-    """(alias) nvh ask --focus code"""
-    _ask(prompt, file=file, provider=advisor, focus="code")
+def _translate_code(argv: list[str]) -> list[str]:
+    return ["-p" if tok == "-a" else tok for tok in argv]
 
 
-@app.command(hidden=True)
-def write(
-    prompt: str | None = typer.Argument(None),
-    tone: str = typer.Option("professional", "--tone"),
-):
-    """(alias) nvh ask --focus write"""
-    _ask(prompt, focus="write", system=f"Write with a {tone} tone.")
+def _translate_write(argv: list[str]) -> list[str]:
+    tone = _pop_flag(argv, "--tone", value=True) or "professional"
+    return [*argv, "-s", f"Write with a {tone} tone."]
 
 
-@app.command(hidden=True)
-def research(prompt: str | None = typer.Argument(None)):
-    """(alias) nvh ask --focus research"""
-    _ask(prompt, focus="research")
+def _translate_pipe(argv: list[str]) -> list[str]:
+    # pipe's --json asked the model for JSON; ask's --json is an output format.
+    argv = ["-p" if tok in ("-a", "--provider") else tok for tok in argv]
+    if _pop_flag(argv, "--json"):
+        argv += ["-s", _JSON_ONLY_SYSTEM]
+    return argv
 
 
-@app.command(hidden=True)
-def math(prompt: str | None = typer.Argument(None)):
-    """(alias) nvh ask --focus math"""
-    _ask(prompt, focus="math")
-
-
-@app.command(hidden=True)
-def quick(prompt: str = typer.Argument(..., help="Question to answer quickly")):
-    """(alias) nvh ask --fast --raw"""
-    _ask(prompt, fast=True, output="raw", quiet=True)
-
-
-@app.command(hidden=True)
-def safe(
-    prompt: str = typer.Argument(..., help="Question to answer with local models only"),
-    model: str | None = typer.Option(None, "-m", "--model"),
-    raw: bool = typer.Option(False, "--raw"),
-):
-    """(alias) nvh ask --local"""
-    _ask(prompt, local=True, model=model, output="raw" if raw else "text", quiet=raw)
-
-
-@app.command(hidden=True)
-def pipe(
-    prompt: str | None = typer.Argument(None),
-    provider: str | None = typer.Option(None, "-a", "--provider"),
-    model: str | None = typer.Option(None, "-m", "--model"),
-    json_output: bool = typer.Option(False, "--json"),
-):
-    """(alias) ... | nvh ask --raw"""
-    _ask(
-        prompt, provider=provider, model=model, output="raw", quiet=True,
-        system=_JSON_ONLY_SYSTEM if json_output else None,
-    )
-
-
-@app.command(hidden=True)
-def clip(
-    action: str = typer.Argument("ask", help="ask, explain, fix, summarize, translate"),
-    advisor: str | None = typer.Option(None, "-a"),
-    copy: bool = typer.Option(False, "--copy", "-c"),
-):
-    """(alias) nvh ask --clipboard"""
+def _translate_clip(argv: list[str]) -> list[str]:
+    """`nvh clip [ACTION] [-a ADVISOR] [-c]` -> `nvh ask --clipboard [-p ADVISOR] [--copy] "<prompt>"`."""
+    head, rest = argv[:2], argv[2:]
+    action, out = "ask", []
+    while rest:
+        tok = rest.pop(0)
+        if tok == "-a":
+            out += ["-p", *rest[:1]]
+            rest = rest[1:]
+        elif tok == "-c":
+            out.append("--copy")
+        elif tok.startswith("-"):
+            out.append(tok)
+        else:
+            action = tok
     if action not in _CLIP_ACTIONS:
         console.print(f"[red]Unknown action '{action}'. Choose from: {', '.join(_CLIP_ACTIONS)}[/red]")
         raise typer.Exit(1)
-    _ask(_CLIP_ACTIONS[action], provider=advisor, clipboard=True, copy=copy)
+    return [*head, *out, _CLIP_ACTIONS[action]]
+
+
+_alias("code", translate=_translate_code)
+_alias("write", translate=_translate_write)
+_alias("research")
+_alias("math")
+_alias("quick")
+_alias("safe")
+_alias("pipe", translate=_translate_pipe)
+_alias("clip", translate=_translate_clip)
 
 
 # ---------------------------------------------------------------------------
@@ -2602,7 +2691,13 @@ def history(
 # debug / selfcheck / why verbs are hidden aliases of one tier each.
 # ---------------------------------------------------------------------------
 
-_STATUS_TIERS = ("providers", "deep", "smoke", "report", "routing")
+def _json_default(obj: Any) -> str:
+    """json.dumps fallback: check data carries Decimal budgets, Paths and timestamps."""
+    if isinstance(obj, (Decimal, Path, datetime)):
+        return str(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 _STATUS_ICONS = {
     "pass": "[green]✓[/green]",
     "warn": "[yellow]![/yellow]",
@@ -2614,6 +2709,7 @@ _STATUS_LABELS = {
     "pass": "[green]PASS[/green]",
     "warn": "[yellow]WARN[/yellow]",
     "fail": "[red]FAIL[/red]",
+    "skip": "[dim]SKIP[/dim]",
     "info": "[dim]INFO[/dim]",
 }
 
@@ -2651,6 +2747,9 @@ def status(
     output: str | None = typer.Option(None, "-o", "--output", help="--report: bundle path (default $NVH_HOME/support/)"),
     send: bool = typer.Option(False, "--send", help="--report: copy the bundle to the clipboard"),
     nvidia_report: bool = typer.Option(False, "--nvidia-report", help="--report: also run nvidia-bug-report.sh"),
+    # Hidden: the selfcheck alias's --query / --quiet land here.
+    live_prompt: str = typer.Option("Say hello in one sentence", "--live-prompt", hidden=True),
+    quiet: bool = typer.Option(False, "--quiet", hidden=True),
 ):
     """System status — one command, five tiers.
 
@@ -2664,7 +2763,8 @@ def status(
         nvh status --smoke --json        CI gate for the local workspace
         nvh status --report --live       support bundle with a live Wizard turn
     """
-    chosen = [t for t, on in zip(_STATUS_TIERS, (providers, deep, smoke, report, routing)) if on]
+    tiers = {"providers": providers, "deep": deep, "smoke": smoke, "report": report, "routing": routing}
+    chosen = [name for name, on in tiers.items() if on]
     if storage_only and not chosen:
         chosen = ["deep"]
     if len(chosen) > 1:
@@ -2674,7 +2774,8 @@ def status(
         chosen[0] if chosen else None,
         json_output=json_output, fix=fix, storage_only=storage_only,
         home_dir=home_dir, min_free_gb=min_free_gb, imports=imports, live=live,
-        strict=strict, output=output, send=send, nvidia_report=nvidia_report,
+        live_prompt=live_prompt, strict=strict, output=output, send=send,
+        nvidia_report=nvidia_report, quiet=quiet,
     )
 
 
@@ -2701,7 +2802,7 @@ def _run_status(
     if tier == "routing":
         _status_routing()
     elif tier == "smoke":
-        _status_smoke(home_dir, imports=imports, json_output=json_output, strict=strict)
+        _status_smoke(ctx, imports=imports, json_output=json_output, strict=strict)
     elif tier == "report":
         _status_report(
             ctx, imports=imports, live=live, live_prompt=live_prompt, strict=strict,
@@ -2724,7 +2825,7 @@ def _status_glance(ctx, *, json_output: bool = False) -> None:
 
     results = _run(diag.run_checks(diag.GLANCE, ctx))
     if json_output:
-        print(_json.dumps(diag.summarize(results), indent=2))
+        print(_json.dumps(diag.summarize(results), indent=2, default=_json_default))
         return
     by_id: dict[str, list] = {}
     for r in results:
@@ -2797,7 +2898,7 @@ def _status_providers(ctx, *, json_output: bool) -> None:
 
     results = _run(diag.run_checks(diag.PROVIDERS, ctx))
     if json_output:
-        print(_json.dumps(diag.summarize(results), indent=2))
+        print(_json.dumps(diag.summarize(results), indent=2, default=_json_default))
         return
     health = [r for r in results if r.id == "provider_health" and r.data.get("provider")]
     if not health:
@@ -2842,6 +2943,8 @@ def _status_providers(ctx, *, json_output: bool) -> None:
 
 
 def _print_check_table(results, title: str) -> None:
+    from nvh.integrations.diagnostics import checks as diag
+
     table = Table(title=title, show_lines=False)
     table.add_column("Check", style="bold", min_width=35)
     table.add_column("Status", justify="center", min_width=8)
@@ -2850,20 +2953,19 @@ def _print_check_table(results, title: str) -> None:
         table.add_row(r.title, _STATUS_LABELS.get(r.status, r.status.upper()), r.detail)
     console.print(table)
 
-    counts = {s: sum(1 for r in results if r.status == s) for s in ("pass", "warn", "fail")}
-    summary_parts = []
-    if counts["pass"]:
-        summary_parts.append(f"[green]{counts['pass']} passed[/green]")
-    if counts["warn"]:
-        summary_parts.append(f"[yellow]{counts['warn']} warnings[/yellow]")
-    if counts["fail"]:
-        summary_parts.append(f"[red]{counts['fail']} failures[/red]")
-    console.print(f"\nResults: {', '.join(summary_parts)} ({len(results)} checks total)")
+    summary = diag.summarize(results)
+    summary_parts = [
+        f"[{colour}]{summary[key]} {label}[/{colour}]"
+        for key, label, colour in (
+            ("passed", "passed", "green"), ("warned", "warnings", "yellow"), ("failed", "failures", "red"),
+        )
+        if summary[key]
+    ]
+    console.print(f"\nResults: {', '.join(summary_parts)} ({summary['total']} checks total)")
 
-    fixes = [r.fix for r in results if r.fix and r.status != "pass"]
-    if fixes:
+    if summary["fixes"]:
         console.print("\n[bold]Suggested fixes:[/bold]")
-        for i, fix in enumerate(fixes, 1):
+        for i, fix in enumerate(summary["fixes"], 1):
             console.print(f"  {i}. {fix}")
 
 
@@ -2951,7 +3053,7 @@ def _status_deep(ctx, *, json_output: bool, fix: bool, storage_only: bool) -> No
     summary = diag.summarize(results)
 
     if json_output:
-        print(_json.dumps({"schema_version": 2, **summary}, indent=2))
+        print(_json.dumps({"schema_version": 2, **summary}, indent=2, default=_json_default))
         raise typer.Exit(0 if summary["failed"] == 0 else 1)
 
     _print_check_table(results, "Diagnostic Results")
@@ -2959,18 +3061,26 @@ def _status_deep(ctx, *, json_output: bool, fix: bool, storage_only: bool) -> No
         raise typer.Exit(1)
 
 
-def _status_smoke(home_dir: str | None, *, imports: bool, json_output: bool, strict: bool) -> None:
+def _status_smoke(ctx, *, imports: bool, json_output: bool, strict: bool) -> None:
     import json as _json
 
     from rich.rule import Rule
 
+    from nvh.integrations.diagnostics import checks as diag
     from nvh.integrations.diagnostics.smoke_tests import smoke_test_report
 
-    report = smoke_test_report(home_dir=home_dir, imports=imports)
-    exit_code = 1 if report["failed"] or (strict and report["warnings"]) else 0
+    report = smoke_test_report(home_dir=ctx.home_dir, imports=imports)
+    # The registry's smoke rows (API probes against NVH_API_URL; "skip" when
+    # nothing listens) ride along under "checks" so the JSON keeps its shape.
+    checks = _run(diag.run_checks(diag.SMOKE, ctx))
+    summary = diag.summarize(checks)
+    report["checks"] = summary
+    failed = report["failed"] or summary["failed"]
+    warned = report["warnings"] or summary["warned"]
+    exit_code = 1 if failed or (strict and warned) else 0
 
     if json_output:
-        print(_json.dumps(report, indent=2))
+        print(_json.dumps(report, indent=2, default=_json_default))
         raise typer.Exit(exit_code)
 
     console.print()
@@ -2979,8 +3089,17 @@ def _status_smoke(home_dir: str | None, *, imports: bool, json_output: bool, str
         console.print(f"  {_STATUS_ICONS.get(t['status'], '?')} {t['title']}  [dim]{t['summary']}[/dim]")
         if t.get("detail") and t["status"] in ("warn", "fail"):
             console.print(f"      [dim]{t['detail']}[/dim]")
+    for r in checks:
+        console.print(f"  {_STATUS_ICONS.get(r.status, '?')} {r.title}  [dim]{r.detail}[/dim]")
+        if r.fix and r.status in ("warn", "fail"):
+            console.print(f"      [dim]{r.fix}[/dim]")
     console.print()
     console.print(f"  {report['summary']}")
+    if summary["total"]:
+        console.print(
+            f"  API: {summary['passed']} passed, {summary['warned']} warning(s), "
+            f"{summary['failed']} failed, {summary['skipped']} skipped"
+        )
     if exit_code:
         console.print("  [dim]Fix hints: nvh status --deep --fix · nvh workstation[/dim]")
     console.print()
@@ -3059,6 +3178,7 @@ def _status_report(
         soft.append(f"checks: {summary['warned']} warning(s)")
 
     say("  [dim]→ running smoke test ...[/dim]")
+    smoke: dict[str, Any] | None = None
     try:
         smoke = smoke_test_report(home_dir=str(home_path), imports=imports)
         bundle["components"]["smoke"] = smoke
@@ -3113,7 +3233,11 @@ def _status_report(
 
     say("  [dim]→ writing redacted workspace snapshot ...[/dim]")
     try:
-        snap = support_snapshot(home_dir=str(home_path), include_logs=True)
+        # Embed the sections already gathered above instead of re-running them.
+        snap = support_snapshot(
+            home_dir=str(home_path), include_logs=True,
+            smoke_tests=smoke, registry_checks=summary,
+        )
         bundle["components"]["support_snapshot"] = {
             "path": snap.get("path"),
             "workspace_id": snap.get("passport", {}).get("workspace_id"),
@@ -3175,74 +3299,40 @@ def _status_report(
 
 
 # Pre-0.42 diagnostic verbs — hidden aliases of one `nvh status` tier each.
+# Every flag is re-parsed by `nvh status`; only the spellings that no longer
+# exist there are translated.
 
-@app.command(hidden=True)
-def health():
-    """(alias) nvh status --providers"""
-    _run_status("providers")
-
-
-@app.command(hidden=True)
-def why():
-    """(alias) nvh status --routing"""
-    _run_status("routing")
-
-
-@app.command(hidden=True)
-def doctor(
-    fix: bool = typer.Option(False, "--fix"),
-    storage_only: bool = typer.Option(False, "--storage"),
-    home_dir: str | None = typer.Option(None, "--home-dir"),
-    min_free_gb: float = typer.Option(200.0, "--min-free-gb"),
-    json_output: bool = typer.Option(False, "--json"),
-):
-    """(alias) nvh status --deep"""
-    _run_status(
-        "deep", fix=fix, storage_only=storage_only, home_dir=home_dir,
-        min_free_gb=min_free_gb, json_output=json_output,
-    )
+def _translate_test(argv: list[str]) -> list[str]:
+    """Pre-0.42 `nvh test` flags: --api feeds the API probes, the rest are accepted and ignored."""
+    api_url = _pop_flag(argv, "--api", value=True)
+    if api_url:
+        os.environ["NVH_API_URL"] = api_url
+    ignored = [
+        flag for flag in ("--webui", "--no-webui", "--no-providers", "--fix", "--quick")
+        if _pop_flag(argv, flag, value=flag == "--webui") is not None
+    ]
+    if ignored:
+        err_console.print(
+            f"[dim]nvh test: {' '.join(ignored)} no longer apply — `nvh status --smoke` runs"
+            " the same offline checks every time (these flags go away in 0.43).[/dim]"
+        )
+    return argv
 
 
-@app.command(hidden=True)
-def test(
-    imports: bool = typer.Option(False, "--imports", help="Also import every core module"),
-    home_dir: str | None = typer.Option(None, "--home-dir"),
-    json_output: bool = typer.Option(False, "--json"),
-    strict: bool = typer.Option(False, "--strict"),
-    quick: bool = typer.Option(False, "--quick", hidden=True),
-):
-    """(alias) nvh status --smoke"""
-    del quick  # pre-0.42 flag; every run is the quick one now
-    _run_status("smoke", imports=imports, home_dir=home_dir, json_output=json_output, strict=strict)
+def _translate_selfcheck(argv: list[str]) -> list[str]:
+    if _pop_flag(argv, "--no-live-query"):
+        argv.remove("--live")
+    query = _pop_flag(argv, "--query", value=True)
+    return [*argv, "--live-prompt", query] if query else argv
 
 
-app.command("smoke", hidden=True)(test)
-
-
-@app.command(hidden=True)
-def debug(
-    output: str | None = typer.Option(None, "-o", "--output"),
-    send: bool = typer.Option(False, "--send"),
-    nvidia_report: bool = typer.Option(False, "--nvidia-report"),
-):
-    """(alias) nvh status --report"""
-    _run_status("report", output=output, send=send, nvidia_report=nvidia_report)
-
-
-@app.command(hidden=True)
-def selfcheck(
-    home_dir: str | None = typer.Option(None, "--home-dir"),
-    output: str | None = typer.Option(None, "--output", "-o"),
-    test_query: str = typer.Option("Say hello in one sentence", "--query"),
-    skip_live_query: bool = typer.Option(False, "--no-live-query"),
-    strict: bool = typer.Option(False, "--strict"),
-    quiet: bool = typer.Option(False, "--quiet"),
-):
-    """(alias) nvh status --report --live --imports"""
-    _run_status(
-        "report", home_dir=home_dir, output=output, live=not skip_live_query,
-        live_prompt=test_query, strict=strict, quiet=quiet, imports=True,
-    )
+_alias("health")
+_alias("why")
+_alias("doctor")
+_alias("test", translate=_translate_test)
+_alias("smoke", translate=_translate_test)
+_alias("debug")
+_alias("selfcheck", translate=_translate_selfcheck)
 
 
 # ---------------------------------------------------------------------------
@@ -3372,8 +3462,7 @@ def setup(
         "[bold green]Step 1/3: Zero-signup providers"
         "[/bold green] (enabled immediately)\n"
     )
-    import os as _os
-    _ollama_url = _os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    _ollama_url = ollama_base_url()
     for name, display, desc in ZERO_SIGNUP:
         if name == "ollama":
             try:
@@ -3385,7 +3474,7 @@ def setup(
                         f"  [green]✓[/green] {display}"
                         f" — {desc} ({len(models)} models ready)"
                     )
-                    if _ollama_url != "http://localhost:11434":
+                    if _ollama_url != DEFAULT_OLLAMA_URL:
                         console.print(f"    [dim]Using custom URL: {_ollama_url}[/dim]")
                 else:
                     console.print(
@@ -3420,12 +3509,8 @@ def setup(
         except Exception:
             pass
         if not has_key:
-            import os
-            env_names = [f"{name.upper()}_API_KEY", f"HIVE_{name.upper()}_API_KEY"]
-            for env_name in env_names:
-                if os.environ.get(env_name):
-                    has_key = True
-                    break
+            from nvh.providers.registry import resolve_provider_key
+            has_key = bool(resolve_provider_key(name)[0])
 
         if has_key:
             console.print(f"  [green]✓[/green] {display} — already configured")
@@ -3634,10 +3719,7 @@ def setup(
                 # portable installs at ~/.nvh/ollama/ollama), and an
                 # uncaught FileNotFoundError would bail the whole block
                 # with a misleading "Ollama not detected" message.
-                _ollama_base = _os.environ.get(
-                    "OLLAMA_BASE_URL",
-                    "http://localhost:11434",
-                )
+                _ollama_base = ollama_base_url()
                 daemon_reachable = False
                 existing: list[str] = []
                 try:
@@ -3840,8 +3922,7 @@ def config_init(
                 providers_to_enable.append(name)
 
     # Check for Ollama (supports OLLAMA_BASE_URL env var)
-    import os as _os_cfg
-    _ollama_cfg_url = _os_cfg.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+    _ollama_cfg_url = ollama_base_url()
     console.print(f"\nChecking for local Ollama at {_ollama_cfg_url}...")
     try:
         import httpx
@@ -4308,15 +4389,10 @@ def advisor_list():
     table.add_column("Default Model")
     table.add_column("API Key")
 
+    from nvh.providers.registry import resolve_provider_key
+
     for name, pconfig in config.providers.items():
-        # Check for key
-        has_key = bool(pconfig.api_key and not pconfig.api_key.startswith("${"))
-        if not has_key:
-            import os
-            has_key = bool(
-                os.environ.get(f"{name.upper()}_API_KEY")
-                or os.environ.get(f"HIVE_{name.upper()}_API_KEY")
-            )
+        has_key = bool(resolve_provider_key(name, pconfig, ptype=pconfig.type or name)[0])
         if not has_key:
             try:
                 import keyring
@@ -4492,16 +4568,17 @@ def advisor_login(
 
     if name == "ollama":
         console.print("Ollama doesn't require authentication. Checking connectivity...")
+        base = ollama_base_url()
         try:
             import httpx
-            resp = httpx.get("http://localhost:11434/api/tags", timeout=3)
+            resp = httpx.get(f"{base}/api/tags", timeout=3)
             if resp.status_code == 200:
                 models = resp.json().get("models", [])
                 console.print(f"[green]✓ Ollama detected! {len(models)} models available.[/green]")
             else:
                 console.print("[red]Ollama returned an error.[/red]")
         except Exception:
-            console.print("[red]Ollama not reachable at localhost:11434.[/red]")
+            console.print(f"[red]Ollama not reachable at {base}.[/red]")
         return
 
     if name in ("google", "aws", "azure"):
@@ -4771,7 +4848,7 @@ def bench(
 
         # Discover available Ollama models
         try:
-            resp = httpx.get("http://localhost:11434/api/tags", timeout=5)
+            resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=5)
             resp.raise_for_status()
             ollama_models = [m.get("name", "") for m in resp.json().get("models", [])]
         except Exception:
@@ -6752,15 +6829,9 @@ def nvidia():
         if "ollama" in enabled:
             console.print("[bold]Local Models[/bold]")
             try:
-                import os as _os
-
                 import httpx
-                base = _os.environ.get(
-                    "OLLAMA_BASE_URL",
-                    "http://localhost:11434",
-                )
                 r = httpx.get(
-                    f"{base}/api/tags", timeout=5,
+                    f"{ollama_base_url()}/api/tags", timeout=5,
                 )
                 if r.status_code == 200:
                     models = r.json().get("models", [])
@@ -10720,8 +10791,8 @@ rag_app = typer.Typer(
          "(SQLite + Ollama embeddings under $NVH_HOME/rag).",
 )
 app.add_typer(rag_app, name="rag", rich_help_panel="Subcommands")
-# Pre-0.42 spelling; hidden for one release.
-app.add_typer(rag_app, name="knowledge", hidden=True)
+_alias("knowledge")
+_alias("learn")
 
 
 def _rag_report(result: dict[str, Any], *, verb: str) -> None:
@@ -10857,8 +10928,28 @@ def rag_remove(
 
 
 @rag_app.command("import-legacy")
-def rag_import_legacy() -> None:
-    """One-shot import of the pre-0.42 ~/.hive/knowledge store."""
+def rag_import_legacy(
+    memories: bool = typer.Option(
+        False, "--memories",
+        help="Import the pre-0.42 REPL memories (~/.hive/memory/memories.json) as vault notes instead",
+    ),
+) -> None:
+    """One-shot import of the pre-0.42 ~/.hive/knowledge store (or, with --memories, the REPL memories)."""
+    if memories:
+        from nvh.cli.repl import import_legacy_memories
+
+        result = import_legacy_memories()
+        if result["imported_at"]:
+            console.print(
+                f"[dim]Already imported on {result['imported_at']};"
+                f" delete {result['marker']} to import again.[/dim]"
+            )
+        elif not result["found"]:
+            console.print(f"[dim]No legacy memories at {result['path']}; nothing to import.[/dim]")
+        else:
+            console.print(f"[green]Imported {result['imported']} legacy memories into the vault[/green]")
+        return
+
     from nvh.integrations.rag import import_legacy_knowledge, legacy_knowledge_status
 
     status = legacy_knowledge_status()
@@ -10877,15 +10968,6 @@ def rag_import_legacy() -> None:
         f"[dim]{result.get('reingested', 0)} re-read from their original path,"
         f" {result.get('rebuilt', 0)} rebuilt from stored chunks.[/dim]"
     )
-
-
-@app.command(hidden=True)
-def learn(
-    path: str = typer.Argument(..., help="File or directory to index"),
-) -> None:
-    """Pre-0.42 spelling of `nvh rag add`; hidden for one release."""
-    console.print("[dim]`nvh learn` is now `nvh rag add <file>` / `nvh rag ingest <folder>`.[/dim]")
-    rag_add(paths=[path], collection=None)
 
 
 # ---------------------------------------------------------------------------
@@ -11963,25 +12045,20 @@ def _known_commands() -> set[str]:
 
 
 def _suggest_commands(args: list[str]) -> list[str]:
-    """Visible commands close to a mistyped first word.
+    """Spellings close to a mistyped first word, deprecated aliases resolved
+    to their replacement (`nvh docter` -> `nvh status --deep`).
 
-    Fires for a lone word (`nvh statsu`), a word followed by a flag
-    (`nvh docter --fix`) or by a subcommand of the suggested group
-    (`nvh confg set …`). Anything longer is a prompt, not a typo.
+    Fires for a lone word (`nvh statsu`), a word followed by a flag or one
+    positional (`nvh docter --fix`, `nvh quik hi`) or by a subcommand of the
+    suggested group (`nvh confg set …`). Anything longer is a prompt, not a typo.
     """
     import difflib
 
     root = typer.main.get_command(app)
-    visible = sorted(name for name, cmd in root.commands.items() if not cmd.hidden)
-    matches = difflib.get_close_matches(args[0].lower(), visible, n=3, cutoff=0.75)
-    if not matches:
-        return []
-    if len(args) == 1 or args[1].startswith("-"):
-        return matches
-    for name in matches:
-        if args[1] in getattr(root.commands[name], "commands", {}):
-            return [name]
-    return []
+    matches = difflib.get_close_matches(args[0].lower(), sorted(root.commands), n=3, cutoff=0.75)
+    if len(args) > 2 and not args[1].startswith("-"):
+        matches = [m for m in matches if args[1] in getattr(root.commands[m], "commands", {})][:1]
+    return list(dict.fromkeys(DEPRECATED_ALIASES.get(m, m) for m in matches))
 
 
 def _forward(fn, *args, **kwargs) -> None:
@@ -12067,9 +12144,11 @@ def main():
 
     suggestions = _suggest_commands(args)
     if suggestions:
+        # soft_wrap: a replacement spelling must stay on one copyable line
         err_console.print(
             f"[red]nvh: '{args[0]}' is not a command.[/red] Did you mean "
-            + " / ".join(f"[bold]nvh {s}[/bold]" for s in suggestions) + "?"
+            + " / ".join(f"[bold]nvh {s}[/bold]" for s in suggestions) + "?",
+            soft_wrap=True,
         )
         err_console.print(f"[dim]To send it to an advisor anyway: nvh ask \"{' '.join(args)}\"[/dim]")
         sys.exit(2)
@@ -12262,7 +12341,7 @@ def models_rm(
 
     if not yes and not typer.confirm(f"Delete model '{name}' and reclaim its disk?"):
         raise typer.Exit(0)
-    base = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+    base = ollama_base_url()
     try:
         resp = httpx.request("DELETE", f"{base}/api/delete", json={"name": name}, timeout=30.0)
         if resp.status_code == 404:

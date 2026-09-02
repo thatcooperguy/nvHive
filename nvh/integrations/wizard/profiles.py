@@ -229,6 +229,26 @@ def _profiles_dir(home_dir: str | Path | None = None) -> Path:
     return out
 
 
+def _library_profile(entry: dict[str, Any]) -> AgentProfile:
+    """One Agent Library JSON entry as a read-only built-in profile."""
+    return AgentProfile(
+        name=entry["name"],
+        title=entry.get("title", entry["name"]),
+        description=entry.get("description", ""),
+        system_prompt=entry.get("system_prompt", ""),
+        provider=entry.get("provider", ""),
+        model=entry.get("model", ""),
+        temperature=entry.get("temperature"),
+        max_tokens=entry.get("max_tokens"),
+        tools_allowed=entry.get("tools_allowed"),
+        built_in=True,
+        tags=list(entry.get("tags", [])),
+        avatar=_avatar_url_for(entry["name"]),
+        category=entry.get("category", ""),
+        prompt_template=entry.get("prompt_template", ""),
+    )
+
+
 def _load_library_profiles() -> list[AgentProfile]:
     """Load the packaged Agent Library (nvh/catalog/agent-library.json).
 
@@ -259,22 +279,7 @@ def _load_library_profiles() -> list[AgentProfile]:
     out: list[AgentProfile] = []
     for entry in data.get("profiles", []):
         try:
-            out.append(
-                AgentProfile(
-                    name=entry["name"],
-                    title=entry.get("title", entry["name"]),
-                    description=entry.get("description", ""),
-                    system_prompt=entry.get("system_prompt", ""),
-                    provider=entry.get("provider", ""),
-                    model=entry.get("model", ""),
-                    temperature=entry.get("temperature"),
-                    tools_allowed=entry.get("tools_allowed"),
-                    built_in=True,
-                    tags=list(entry.get("tags", [])),
-                    avatar=_avatar_url_for(entry["name"]),
-                    category=entry.get("category", ""),
-                )
-            )
+            out.append(_library_profile(entry))
         except Exception as exc:
             logger.warning(
                 "agent library entry %r failed to load: %s",

@@ -8,8 +8,52 @@ from types import SimpleNamespace
 
 from nvh.integrations import diagnostics
 
+_FAKE_REGISTRY = {"total": 1, "passed": 1, "warned": 0, "failed": 0, "skipped": 0, "fixes": [], "checks": [
+    {"check": "Python version", "status": "pass", "detail": "3.12", "fix": "", "id": "python"},
+]}
+
+
+def test_diagnostics_report_embeds_registry_rows_and_reuses_precomputed_sections(monkeypatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(diagnostics, "_registry_checks", lambda home_dir=None: calls.append("registry") or _FAKE_REGISTRY)
+    # nvh.integrations rebinds the `diagnostics` attribute to the report module,
+    # so the sibling modules are reached through the package re-exports.
+    from nvh.integrations import (
+        compatibility,
+        production_readiness,
+        receipts,
+        studio_packs,
+        workspace_state,
+    )
+    from nvh.integrations import smoke_tests as smoke_mod
+    from nvh.integrations.services import jobs
+
+    monkeypatch.setattr(smoke_mod, "smoke_test_report", lambda home_dir=None, imports=False: calls.append("smoke") or {"ready": True})
+    # The other sections are not under test; stub them so the report builds in milliseconds.
+    monkeypatch.setattr(production_readiness, "production_readiness_report", lambda home_dir=None: {})
+    monkeypatch.setattr(workspace_state, "workspace_state", lambda home_dir=None: {})
+    monkeypatch.setattr(compatibility, "compatibility_report", lambda home_dir=None: {})
+    monkeypatch.setattr(studio_packs, "ollama_runtime_doctor", lambda home_dir=None: {})
+    monkeypatch.setattr(receipts, "receipt_summary", lambda home_dir=None: {})
+    monkeypatch.setattr(jobs, "list_jobs", lambda limit=8, home_dir=None: [])
+    report = diagnostics.diagnostics_report(home_dir="/persist/nvhive", include_logs=False)
+    assert report["checks"]["registry"]["data"]["checks"][0]["id"] == "python"
+    assert calls == ["registry", "smoke"]
+    # Every section built (the workspace_state import used to fail silently).
+    assert all(section["ok"] for section in report["checks"].values()), report["checks"]
+
+    calls.clear()
+    report = diagnostics.diagnostics_report(
+        home_dir="/persist/nvhive", include_logs=False,
+        smoke_tests={"ready": False, "marker": "given"}, registry_checks=_FAKE_REGISTRY,
+    )
+    assert calls == []  # nothing re-run: `nvh status --report` already has both
+    assert report["checks"]["smoke_tests"]["data"]["marker"] == "given"
+    assert report["checks"]["registry"]["data"]["passed"] == 1
+
 
 def test_diagnostics_report_redacts_log_secrets(monkeypatch) -> None:
+    monkeypatch.setattr(diagnostics, "_registry_checks", lambda home_dir=None: _FAKE_REGISTRY)
     monkeypatch.setattr(
         diagnostics,
         "storage_layout",
@@ -52,6 +96,7 @@ def test_diagnostics_report_redacts_log_secrets(monkeypatch) -> None:
 
 
 def test_diagnostics_report_survives_missing_logs(monkeypatch) -> None:
+    monkeypatch.setattr(diagnostics, "_registry_checks", lambda home_dir=None: _FAKE_REGISTRY)
     monkeypatch.setattr(
         diagnostics,
         "storage_layout",
@@ -165,6 +210,7 @@ def test_diagnostics_report_uses_requested_home_for_jobs_receipts_and_logs(tmp_p
         encoding="utf-8",
     )
 
+    monkeypatch.setattr(diagnostics, "_registry_checks", lambda home_dir=None: _FAKE_REGISTRY)
     monkeypatch.setattr(
         diagnostics,
         "storage_status",

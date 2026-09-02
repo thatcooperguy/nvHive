@@ -9,6 +9,23 @@ import { getConversation } from './api';
 import type { ChatMessage } from './types';
 import { parseWizardMeta } from './wizardMeta';
 
+/** Text form of a message for persistence and export. Compare and
+ * synthesis-less council replies carry their payload in structured fields,
+ * so flatten them to Markdown the server's plain content column can hold. */
+export function messageText(msg: ChatMessage): string {
+  if (msg.compare_data && Object.keys(msg.compare_data).length > 0) {
+    return Object.entries(msg.compare_data)
+      .map(([provider, r]) => `### ${provider} (${r.model})\n\n${r.content}`)
+      .join('\n\n');
+  }
+  if (!msg.content && msg.council_data) {
+    return Object.entries(msg.council_data.member_responses)
+      .map(([label, r]) => `### ${label}\n\n${r.content}`)
+      .join('\n\n');
+  }
+  return msg.content;
+}
+
 export function downloadMarkdown(markdown: string, title: string): void {
   const slug =
     title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) ||

@@ -272,3 +272,22 @@ class TestFrontendWiring:
         assert "createConversation(" in page
         assert "appendConversationMessage(" in page
         assert "council_chats_v2" not in page
+
+    def test_legacy_import_is_atomic_and_resumable(self):
+        """One request per old thread (conversation + turns + pinned flag in
+        one transaction), flattened with the same helper the chat page
+        persists with — so a council reply whose `content` is empty imports
+        as Markdown instead of being skipped — and each thread leaves the
+        local store as soon as it lands, so a retry resumes, never duplicates."""
+        importer = (ROOT / "web" / "lib" / "importLocalChats.ts").read_text(encoding="utf-8")
+        assert "messageText(" in importer
+        assert "compareMarkdown" not in importer
+        assert "appendConversationMessage" not in importer
+        assert "{ pinned: Boolean(conv.pinned), messages }" in importer
+        assert "dropThread(store, conv.id)" in importer
+
+        shared = (ROOT / "web" / "lib" / "exportConversation.ts").read_text(encoding="utf-8")
+        assert "export function messageText(" in shared
+        assert "council_data" in shared and "compare_data" in shared
+        page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+        assert "function messageText(" not in page  # one copy, imported

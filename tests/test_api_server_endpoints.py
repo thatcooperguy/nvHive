@@ -7,7 +7,6 @@ raising so error-path assertions can inspect the response.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +15,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import nvh.api.server as server_module
-import nvh.storage.repository as repo
 from nvh.api.server import (
     _check_auth_rate_limit,
     _prom_escape,
@@ -91,18 +89,13 @@ def _make_engine():
 
 
 @pytest.fixture()
-def client(tmp_path):
-    repo._engine = None
-    repo._session_factory = None
-    asyncio.run(repo.init_db(db_path=tmp_path / "server.db"))
+def client(sync_db):
     orig = server_module._engine
     server_module._engine = _make_engine()
     server_module._auth_attempts.clear()
     c = TestClient(app, raise_server_exceptions=False)
     yield c
     server_module._engine = orig
-    repo._engine = None
-    repo._session_factory = None
 
 
 class TestServerSSE:
@@ -279,14 +272,15 @@ class TestConversationEndpoints:
             f"/v1/conversations/{cid}/messages",
             json={
                 "role": "assistant", "content": "hi back", "provider": "alpha", "model": "m",
-                "tokens": 7, "cost_usd": "not-a-number", "latency_ms": 12,
+                "tokens": 7, "cost_usd": "2E-6", "latency_ms": 12,
             },
         )
         assert r.status_code == 200
         assistant_msg = r.json()["data"]
         assert (assistant_msg["input_tokens"], assistant_msg["output_tokens"]) == (0, 7)
-        # An unparseable cost is stored as zero rather than rejecting the turn.
-        assert Decimal(assistant_msg["cost_usd"]) == 0
+        # Exponent notation is how the server itself prints small costs
+        # (the column holds six decimals, so 2E-6 survives the round trip).
+        assert Decimal(assistant_msg["cost_usd"]) == Decimal("0.000002")
 
         detail = client.get(f"/v1/conversations/{cid}").json()["data"]
         assert detail["message_count"] == 2
@@ -298,6 +292,58 @@ class TestConversationEndpoints:
             "/v1/conversations/missing-id/messages", json={"role": "user", "content": "x"}
         )
         assert r.status_code == 404
+
+    def test_append_rejects_non_finite_or_negative_cost(self, client):
+        cid = client.post("/v1/conversations", json={"title": "t"}).json()["data"]["id"]
+        for bad in ("not-a-number", "NaN", "Infinity", "-0.01", ""):
+            r = client.post(
+                f"/v1/conversations/{cid}/messages",
+                json={"role": "assistant", "content": "x", "cost_usd": bad},
+            )
+            assert r.status_code == 422, bad
+        assert client.get(f"/v1/conversations/{cid}").json()["data"]["message_count"] == 0
+
+    def test_create_with_messages_imports_a_whole_thread(self, client):
+        """The localStorage import sends one request per old chat: the
+        conversation, its turns in order and the pinned flag land together."""
+        r = client.post(
+            "/v1/conversations",
+            json={
+                "title": "",
+                "mode": "council",
+                "pinned": True,
+                "messages": [
+                    {"role": "user", "content": "first question", "tokens": 3},
+                    {"role": "assistant", "content": "### groq\n\nanswer", "tokens": 5,
+                     "cost_usd": "0.001", "provider": "groq", "model": "m"},
+                    {"role": "user", "content": "follow-up"},
+                ],
+            },
+        )
+        assert r.status_code == 200
+        conv = r.json()["data"]
+        assert conv["pinned"] is True
+        assert conv["message_count"] == 3
+        assert conv["total_tokens"] == 8
+        assert Decimal(conv["total_cost_usd"]) == Decimal("0.001")
+        assert conv["title"] == "first question"  # auto-titled from the seed
+        detail = client.get(f"/v1/conversations/{conv['id']}").json()["data"]
+        assert [m["sequence"] for m in detail["messages"]] == [1, 2, 3]
+        assert [m["role"] for m in detail["messages"]] == ["user", "assistant", "user"]
+        pinned = client.get("/v1/conversations/pinned").json()["data"]["conversations"]
+        assert any(c["id"] == conv["id"] for c in pinned)
+
+    def test_create_with_bad_seed_message_creates_nothing(self, client):
+        before = client.get("/v1/conversations").json()["data"]["count"]
+        r = client.post(
+            "/v1/conversations",
+            json={"messages": [
+                {"role": "user", "content": "ok"},
+                {"role": "system", "content": "x"},
+            ]},
+        )
+        assert r.status_code == 422
+        assert client.get("/v1/conversations").json()["data"]["count"] == before
 
     def test_append_bad_role_422(self, client):
         cid = client.post("/v1/conversations", json={"title": "t"}).json()["data"]["id"]
@@ -516,6 +562,21 @@ class TestWSCouncilFrame:
         assert kwargs["synthesize"] is True
         kwargs = self._run(client, monkeypatch, {})
         assert kwargs["num_agents"] is None
+
+    @pytest.mark.parametrize(
+        "frame",
+        [{"temperature": "hot"}, {"max_tokens": "lots"}, {"num_agents": "many"}, {"num_agents": [3]}],
+    )
+    def test_bad_number_is_an_error_frame_not_a_1011_close(self, client, monkeypatch, frame):
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        run = AsyncMock()
+        monkeypatch.setattr(server_module._engine.council, "run_council_streaming", run)
+        with client.websocket_connect("/v1/ws/council") as ws:
+            ws.send_json({"type": "council_request", "prompt": "hi", **frame})
+            reply = ws.receive_json()
+        assert reply["type"] == "error"
+        assert "council_request" in reply["error"]
+        run.assert_not_called()
 
 
 class TestPromEscape:

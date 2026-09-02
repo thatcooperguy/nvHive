@@ -22,6 +22,8 @@ import logging
 import time as _time
 from pathlib import Path
 
+from nvh.utils.ollama import ollama_base_url
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -64,7 +66,6 @@ def _ensure_display() -> bool:
 def _detect_ollama_vision_model() -> str | None:
     """Check if Ollama has a vision-capable model installed (cached)."""
     global _vision_model_cache
-    import os
 
     now = _time.monotonic()
     if now - _vision_model_cache[0] < _VISION_CACHE_TTL:
@@ -73,8 +74,7 @@ def _detect_ollama_vision_model() -> str | None:
     result = None
     try:
         import httpx
-        base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-        resp = httpx.get(f"{base}/api/tags", timeout=3)
+        resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=3)
         if resp.status_code == 200:
             models = [m.get("name", "") for m in resp.json().get("models", [])]
             # Known vision-capable models, in preference order
@@ -99,14 +99,11 @@ def _detect_ollama_vision_model() -> str | None:
 
 async def _analyze_with_ollama(image_data: str, question: str, model: str) -> str | None:
     """Call Ollama's native vision API directly."""
-    import os
-
     try:
         import httpx
-        base = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{base}/api/chat",
+                f"{ollama_base_url()}/api/chat",
                 json={
                     "model": model,
                     "messages": [{

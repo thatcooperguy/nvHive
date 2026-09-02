@@ -14,7 +14,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import nvh.api.server as server_module
-import nvh.storage.repository as repo
 from nvh.api.server import QueryRequest, app
 from nvh.config.settings import (
     BudgetConfig,
@@ -141,33 +140,19 @@ def _make_test_engine(tmp_path: Path) -> Engine:
 
 
 @pytest.fixture()
-def test_client(tmp_path: Path):
+def test_client(tmp_path: Path, sync_db):
     """Fixture that provides a TestClient wired to a mock Engine and a fresh DB."""
-    # 1. Point repository at a fresh SQLite file for this test.
-    # We use asyncio.run() so the DB init and the resulting aiosqlite worker
-    # thread share a single completed loop — pytest-asyncio then uses its own
-    # fresh loop for the async tests.
-    import asyncio
-
-    db_file = tmp_path / "api_test.db"
-    repo._engine = None
-    repo._session_factory = None
-    asyncio.run(repo.init_db(db_path=db_file))
-
-    # 2. Inject a mock engine into the server module (bypasses the lifespan)
+    # Inject a mock engine into the server module (bypasses the lifespan)
     engine = _make_test_engine(tmp_path)
     original_engine = server_module._engine
     server_module._engine = engine
 
-    # 3. Build client — use app directly without triggering lifespan
+    # Build client — use app directly without triggering lifespan
     client = TestClient(app, raise_server_exceptions=True)
 
     yield client
 
-    # Restore state
     server_module._engine = original_engine
-    repo._engine = None
-    repo._session_factory = None
 
 
 # ---------------------------------------------------------------------------

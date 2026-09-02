@@ -100,8 +100,13 @@ not deferred.
   the SQLite/rootless wins listed above are exactly what these would undo.
 - **Alternative inference backends, native desktop apps, i18n** — nvHive
   is a router over Ollama + NIM; extra backends compete for the same VRAM
-  budget, `install.ps1`/`install-mac.sh` stay best-effort, and the LLM
-  already answers in the user's language.
+  budget, `install.ps1`/`install-mac.sh` stay best-effort for x86 Windows
+  and macOS, and the LLM already answers in the user's language. One
+  planned exception (owner decision 2026-09-02, #136): NVIDIA's
+  unified-memory desktops — DGX Spark (Linux aarch64) becomes a supported
+  target in 0.43, and RTX Spark (Windows on Arm) becomes one when the
+  hardware ships this fall; both are the owned counterpart to the rented
+  GPU desktop, not a new platform category.
 - **Marketplace surfaces** (community app catalog, agent marketplace,
   preset hub, in-UI tool editor, vertical packs, patterns dir, the full
   SKILL.md restructure, a skill installer) — the scan/quarantine/SHA-pin/

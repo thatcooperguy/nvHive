@@ -42,15 +42,27 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _TRUTHY = ("1", "true", "yes")
+REQUIRE_DOCKER_ENV = "NVH_SANDBOX_REQUIRE_DOCKER"
+# NVH_SANDBOX was the pre-0.42 docker_sandbox opt-in; honoured as a
+# spelling of "require isolation" for one release.
+_REQUIRE_DOCKER_ENV_VARS = (REQUIRE_DOCKER_ENV, "NVH_SANDBOX")
+
+
+def require_docker_source() -> str | None:
+    """Name of the env var that currently demands Docker isolation, if any."""
+    for var in _REQUIRE_DOCKER_ENV_VARS:
+        if os.environ.get(var, "").strip().lower() in _TRUTHY:
+            return var
+    return None
 
 
 def _require_docker_default() -> bool:
-    # NVH_SANDBOX was the pre-0.42 docker_sandbox opt-in; honoured as a
-    # spelling of "require isolation" for one release.
-    return any(
-        os.environ.get(var, "").strip().lower() in _TRUTHY
-        for var in ("NVH_SANDBOX_REQUIRE_DOCKER", "NVH_SANDBOX")
-    )
+    return require_docker_source() is not None
+
+
+async def docker_available() -> bool:
+    """Whether ``docker info`` succeeds — the probe the sandbox itself uses."""
+    return await SandboxExecutor()._check_docker()
 
 
 @dataclass
@@ -159,8 +171,11 @@ class SandboxExecutor:
         fail-closed flag forbids the subprocess fallback."""
         docker = await self._check_docker()
         if not docker and self.config.require_docker:
+            # Name the variable the user actually set; the config flag alone
+            # points at the canonical one.
+            flag = require_docker_source() or f"SandboxConfig.require_docker / {REQUIRE_DOCKER_ENV}"
             msg = (
-                "Docker is unavailable and NVH_SANDBOX_REQUIRE_DOCKER is set — "
+                f"Docker is unavailable and isolation is required ({flag}) — "
                 "refusing subprocess fallback, nothing was executed"
             )
             return False, ExecutionResult(

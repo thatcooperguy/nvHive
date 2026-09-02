@@ -522,10 +522,19 @@ class ServicesSnapshot:
 def snapshot(
     api_port: int = API_PORT_DEFAULT,
     webui_port: int = WEBUI_PORT_DEFAULT,
+    *,
+    ollama_models: list[str] | None = None,
 ) -> ServicesSnapshot:
-    """Probe all three services concurrently-cheap and return a snapshot."""
-    ollama_running = port_listening(OLLAMA_PORT)
-    if ollama_running:
+    """Probe all three services concurrently-cheap and return a snapshot.
+
+    ``ollama_models`` is a tag list the caller already fetched from
+    ``/api/tags``; when given, the Ollama port and health probes are skipped.
+    """
+    if ollama_models is not None:
+        ollama_running = ollama_ok = True
+        ollama_detail = f"{OLLAMA_HEALTH_PATH} 200 ({len(ollama_models)} models)"
+    elif port_listening(OLLAMA_PORT):
+        ollama_running = True
         ollama_ok, ollama_reason = ollama_healthy(OLLAMA_PORT)
         ollama_detail = (
             f"{OLLAMA_HEALTH_PATH} 200 ({ollama_reason})"
@@ -533,7 +542,7 @@ def snapshot(
             else f"{OLLAMA_HEALTH_PATH} {ollama_reason}"
         )
     else:
-        ollama_ok = False
+        ollama_running = ollama_ok = False
         ollama_detail = "no listener on 11434"
 
     api_running = port_listening(api_port)

@@ -7,12 +7,12 @@ compat shims over :class:`OpenAICompatibleProvider`.
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from typing import Any
 
+import httpx
 import litellm
 
 from nvh.providers.base import (
@@ -32,9 +32,12 @@ from nvh.providers.base import (
     TokenLimitError,
     Usage,
 )
+from nvh.providers.registry import resolve_provider_key
 from nvh.providers.specs import PROVIDER_SPECS, ProviderSpec
 
 __all__ = ["PROVIDER_SPECS", "OpenAICompatibleProvider", "ProviderSpec"]
+
+_HEALTH_TIMEOUT = 15
 
 _FINISH_REASONS = {
     "stop": FinishReason.STOP,
@@ -50,6 +53,7 @@ def _map_error(e: Exception, provider: str) -> ProviderError:
     msg = str(e)
     if "AuthenticationError" in type(e).__name__ or "401" in msg:
         from nvh.providers.quota_info import get_quota_info
+
         info = get_quota_info(provider)
         parts = [
             f"API key invalid or missing permissions for '{provider}'.",
@@ -64,6 +68,7 @@ def _map_error(e: Exception, provider: str) -> ProviderError:
         )
     if "RateLimitError" in type(e).__name__ or "429" in msg:
         from nvh.providers.quota_info import format_rate_limit_message, parse_retry_after
+
         retry_after = getattr(e, "retry_after", None) or parse_retry_after(msg)
         friendly = format_rate_limit_message(provider, msg)
         return RateLimitError(
@@ -135,23 +140,37 @@ def _calc_cost(model: str, usage: Usage) -> Decimal:
         return Decimal("0")
 
 
-def _resolve_api_key(spec: ProviderSpec, api_key: str) -> str:
+def _resolve_api_key(spec: ProviderSpec, api_key: str, provider_name: str) -> str:
     # An unexpanded "${VAR}" placeholder means the registry found no env value.
-    key = "" if api_key.startswith("${") else api_key
-    if not key:
-        for env_name in spec.env_keys:
-            key = os.environ.get(env_name, "")
-            if key:
-                break
-    return key or spec.anonymous_key
+    if api_key and not api_key.startswith("${"):
+        return api_key
+    return resolve_provider_key(provider_name, ptype=spec.name)[0] or ""
+
+
+def _litellm_api_base(model: str) -> str | None:
+    """The endpoint LiteLLM routes ``model`` to, when it publishes one."""
+    try:
+        return litellm.get_llm_provider(model)[3]
+    except Exception:
+        return None
+
+
+def _model_count(resp: httpx.Response) -> int:
+    try:
+        data = resp.json()
+    except ValueError:
+        return 0
+    if isinstance(data, dict):
+        data = data.get("data", [])
+    return len(data) if isinstance(data, list) else 0
 
 
 class OpenAICompatibleProvider:
     """LiteLLM adapter parameterised by a :class:`ProviderSpec`.
 
-    Blank ``default_model``/``fallback_model``/``base_url``/``provider_name``
-    fall back to the spec, so a config stanza that omits them gets the
-    shipped defaults.
+    Blank ``default_model``/``fallback_model``/``base_url``/``provider_name``/
+    ``timeout`` fall back to the spec, so a config stanza that omits them gets
+    the shipped defaults.
     """
 
     def __init__(
@@ -162,15 +181,16 @@ class OpenAICompatibleProvider:
         fallback_model: str = "",
         base_url: str | None = None,
         provider_name: str = "",
-        timeout: int = 120,
+        timeout: int | None = None,
     ):
         self._spec = spec
-        self._api_key = _resolve_api_key(spec, api_key)
+        self._provider_name = provider_name or spec.name
+        self._api_key = _resolve_api_key(spec, api_key, self._provider_name)
         self._default_model = default_model or spec.default_model
         self._fallback_model = fallback_model or spec.fallback_model
+        self._health_model = spec.health_model or self._default_model
         self._base_url = base_url or spec.base_url
-        self._provider_name = provider_name or spec.name
-        self._timeout = timeout
+        self._timeout = timeout or spec.timeout
 
     @property
     def name(self) -> str:
@@ -181,13 +201,10 @@ class OpenAICompatibleProvider:
         return self._spec
 
     def _get_model(self, model: str | None) -> str:
-        return model or self._default_model
+        return self._spec.route(model or self._default_model)
 
     def _kwargs(self, model: str) -> dict[str, Any]:
-        prefix = self._spec.litellm_prefix
-        if prefix and not model.startswith(prefix):
-            model = prefix + model
-        kw: dict[str, Any] = {"model": model}
+        kw: dict[str, Any] = {"model": self._spec.route(model)}
         if self._api_key:
             kw["api_key"] = self._api_key
         if self._base_url:
@@ -323,33 +340,57 @@ class OpenAICompatibleProvider:
             if model_id
         ]
 
+    def _models_url(self) -> str | None:
+        """The free ``GET /models`` endpoint, when one is known and we hold a key."""
+        base = self._base_url or _litellm_api_base(self._get_model(None))
+        if not base or not self._api_key:
+            return None
+        return f"{base.rstrip('/')}/models"
+
+    def _health(
+        self, start: float, healthy: bool, error: str = "", models: int = 0
+    ) -> HealthStatus:
+        return HealthStatus(
+            provider=self._provider_name,
+            healthy=healthy,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            error=error[:200] or None,
+            models_available=models,
+        )
+
     async def health_check(self) -> HealthStatus:
+        """Free ``GET /models`` when the endpoint is known; otherwise a one-token ping."""
         start = time.monotonic()
+        models_url = self._models_url()
+        if models_url:
+            try:
+                async with httpx.AsyncClient(timeout=_HEALTH_TIMEOUT) as client:
+                    resp = await client.get(
+                        models_url,
+                        headers={"Authorization": f"Bearer {self._api_key}"},
+                    )
+            except Exception as e:
+                return self._health(start, False, str(e))
+            if resp.status_code < 400:
+                return self._health(start, True, models=_model_count(resp))
+            if resp.status_code not in (404, 405):
+                return self._health(start, False, f"HTTP {resp.status_code} from {models_url}")
+            # No /models on this host: fall through to the billed ping.
         try:
             await litellm.acompletion(
                 messages=[{"role": "user", "content": "ping"}],
                 max_tokens=1,
-                timeout=15,
-                **self._kwargs(self._default_model),
-            )
-            elapsed = int((time.monotonic() - start) * 1000)
-            return HealthStatus(
-                provider=self._provider_name,
-                healthy=True,
-                latency_ms=elapsed,
+                timeout=_HEALTH_TIMEOUT,
+                **self._kwargs(self._health_model),
             )
         except Exception as e:
-            elapsed = int((time.monotonic() - start) * 1000)
-            return HealthStatus(
-                provider=self._provider_name,
-                healthy=False,
-                latency_ms=elapsed,
-                error=str(e)[:200],
-            )
+            return self._health(start, False, str(e))
+        return self._health(start, True)
 
     def estimate_tokens(self, text: str) -> int:
         try:
             import tiktoken
+
             enc = tiktoken.encoding_for_model(self._default_model)
             return len(enc.encode(text))
         except Exception:

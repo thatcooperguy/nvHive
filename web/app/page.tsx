@@ -31,7 +31,7 @@ import {
   renameConversation,
   streamCouncil,
 } from '@/lib/api';
-import { advisorLabel, downloadMarkdown, exportConversationById } from '@/lib/exportConversation';
+import { advisorLabel, downloadMarkdown, exportConversationById, messageText } from '@/lib/exportConversation';
 import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
   ChatMessage as ChatMessageType,
@@ -57,23 +57,6 @@ function makeId(): string {
 function titleFromMessage(msg: string): string {
   const clean = msg.trim().replace(/\s+/g, ' ');
   return clean.length > 50 ? clean.slice(0, 47) + '...' : clean;
-}
-
-/** Text form of a message for persistence and export. Compare and
- * synthesis-less council replies carry their payload in structured fields,
- * so flatten them to Markdown the server's plain content column can hold. */
-function messageText(msg: ChatMessageType): string {
-  if (msg.compare_data && Object.keys(msg.compare_data).length > 0) {
-    return Object.entries(msg.compare_data)
-      .map(([provider, r]) => `### ${provider} (${r.model})\n\n${r.content}`)
-      .join('\n\n');
-  }
-  if (!msg.content && msg.council_data) {
-    return Object.entries(msg.council_data.member_responses)
-      .map(([label, r]) => `### ${label}\n\n${r.content}`)
-      .join('\n\n');
-  }
-  return msg.content;
 }
 
 function isChatMode(value: string | null): value is ChatMode {
@@ -351,6 +334,11 @@ export default function ChatPage() {
 
   // Share / export toast
   const [shareToast, setShareToast] = useState(false);
+  // Non-blocking notice that a turn did not reach server-side history.
+  const [persistWarning, setPersistWarning] = useState(false);
+  // Appends chained per conversation: callers fire and forget, but the user
+  // turn must be sequenced before the assistant turn on the server.
+  const persistQueueRef = useRef<Map<string, Promise<void>>>(new Map());
 
   // Mobile sidebar drawer
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -489,17 +477,29 @@ export default function ChatPage() {
 
   const persistMessage = useCallback((convId: string, msg: ChatMessageType) => {
     if (msg.role === 'error' || ephemeralIdsRef.current.has(convId)) return;
+    const role = msg.role;
     const content = messageText(msg);
     if (!content.trim()) return;
-    void appendConversationMessage(convId, {
-      role: msg.role,
-      content,
-      provider: msg.provider,
-      model: msg.model,
-      tokens: msg.tokens,
-      cost_usd: msg.cost_usd,
-      latency_ms: msg.latency_ms,
-    }).then(ok => { if (ok) touchConversation(convId, 1); });
+    const queue = persistQueueRef.current;
+    const next = (queue.get(convId) ?? Promise.resolve())
+      .then(() => appendConversationMessage(convId, {
+        role,
+        content,
+        provider: msg.provider,
+        model: msg.model,
+        tokens: msg.tokens,
+        cost_usd: msg.cost_usd,
+        latency_ms: msg.latency_ms,
+      }))
+      .then(ok => {
+        if (ok) {
+          touchConversation(convId, 1);
+          return;
+        }
+        setPersistWarning(true);
+        setTimeout(() => setPersistWarning(false), 4000);
+      });
+    queue.set(convId, next);
   }, [touchConversation]);
 
   const resetCouncilState = useCallback(() => {
@@ -1145,6 +1145,11 @@ export default function ChatPage() {
         {shareToast && (
           <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-[#76B900] text-black text-xs font-mono font-bold uppercase tracking-wider shadow-lg animate-fade-in pointer-events-none">
             Copied to clipboard!
+          </div>
+        )}
+        {persistWarning && (
+          <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-[#d97706] text-black text-xs font-mono font-bold uppercase tracking-wider shadow-lg animate-fade-in pointer-events-none">
+            History not saved — this turn lives only in this tab
           </div>
         )}
 

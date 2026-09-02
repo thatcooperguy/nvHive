@@ -130,6 +130,20 @@ def test_legacy_nvh_sandbox_env_means_require_docker(monkeypatch):
     assert SandboxConfig().require_docker is True
 
 
+async def test_refusal_names_the_variable_actually_set(monkeypatch, docker_unavailable):
+    from nvh.sandbox.executor import require_docker_source
+
+    monkeypatch.delenv("NVH_SANDBOX_REQUIRE_DOCKER", raising=False)
+    monkeypatch.setenv("NVH_SANDBOX", "1")
+    assert require_docker_source() == "NVH_SANDBOX"
+    result = await SandboxExecutor().execute("print('nope')")
+    assert result.exit_code == -1
+    assert "NVH_SANDBOX" in result.error
+    assert "NVH_SANDBOX_REQUIRE_DOCKER" not in result.error
+    monkeypatch.setenv("NVH_SANDBOX_REQUIRE_DOCKER", "1")
+    assert require_docker_source() == "NVH_SANDBOX_REQUIRE_DOCKER"
+
+
 # -- run_shell (the agent `shell` tool) ---------------------------------------
 
 _LIST_DIR = "dir" if sys.platform == "win32" else "ls"

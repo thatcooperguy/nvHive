@@ -349,9 +349,11 @@ class TestAdvisorRemove:
     ENV = "GROQ_API_KEY=gsk_live\nOPENAI_API_KEY=sk_live\n# comment\n"
 
     def test_provider_env_vars_include_aliases(self):
-        assert provider_env_vars("groq") == ["GROQ_API_KEY"]
-        assert provider_env_vars("huggingface") == ["HUGGINGFACE_API_KEY", "HF_TOKEN"]
-        assert provider_env_vars("grok") == ["GROK_API_KEY", "XAI_API_KEY"]
+        # Primary first, then the spec table's aliases, deduplicated.
+        assert provider_env_vars("groq") == ["GROQ_API_KEY", "HIVE_GROQ_API_KEY"]
+        assert provider_env_vars("huggingface") == ["HUGGINGFACE_API_KEY", "HF_TOKEN", "HIVE_HUGGINGFACE_API_KEY"]
+        assert provider_env_vars("grok") == ["GROK_API_KEY", "XAI_API_KEY", "HIVE_GROK_API_KEY"]
+        assert provider_env_vars("ollama") == ["OLLAMA_API_KEY"]
 
     def test_remove_key_clears_keyring_env_file_and_environ(
         self, tmp_path: Path, layout_config_dir: Path, monkeypatch,

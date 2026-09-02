@@ -8,7 +8,6 @@ and cacheable so the WebUI can be honest without hammering the model server.
 from __future__ import annotations
 
 import json
-import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +16,7 @@ from typing import Any
 import httpx
 
 from nvh.integrations.workspace.storage import storage_layout
+from nvh.utils.ollama import ollama_base_url
 
 PREFERRED_CHAT_MODELS = (
     "nemotron-3-nano-omni",
@@ -42,7 +42,7 @@ def _checked_at() -> str:
 
 
 def _base_url() -> str:
-    return os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+    return ollama_base_url()
 
 
 def _state_path(home_dir: str | Path | None = None) -> Path:

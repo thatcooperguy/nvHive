@@ -135,9 +135,13 @@ was classified and why it went where it went.
 
 API keys are resolved in order: the stanza's `api_key` (usually `${VAR}`),
 then `COUNCIL_<NAME>_API_KEY` and `<NAME>_API_KEY` in the environment, then
-the provider's own variables (LiteLLM's conventions, e.g. `XAI_API_KEY`), then
-the OS keyring — only when `NVH_USE_KEYRING=1`, because headless boxes often
-have a slow or absent SecretService. `nvh setup`, `nvh advisor add` and the
+the provider's aliases, then the OS keyring — only when `NVH_USE_KEYRING=1`,
+because headless boxes often have a slow or absent SecretService. Every
+provider accepts the historical `HIVE_<NAME>_API_KEY`; the provider-native
+aliases are `XAI_API_KEY` (grok), `GEMINI_API_KEY` (google), `CO_API_KEY`
+(cohere), `TOGETHERAI_API_KEY` (together), `FIREWORKS_AI_API_KEY` (fireworks),
+`PERPLEXITYAI_API_KEY` (perplexity), `HF_TOKEN` / `HUGGINGFACE_API_KEY`
+(huggingface) and `NIM_API_KEY` (nvidia). `nvh setup`, `nvh advisor add` and the
 Wizard write keys to the `.env` file under `$NVH_HOME/config` (falling back to
 `~/.hive/.env`); `nvh advisor remove` scrubs both and disables the stanza.
 `.env.example` at the repo root is a template. Snapshots never bundle
@@ -191,7 +195,7 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | where the browser reaches the API (WebUI build/dev) |
 | `NVH_DB_TIMEOUT` | `5` | SQLite busy timeout in seconds |
 | `NVH_VERBOSE` | unset | verbose WebUI bootstrap output |
-| `OLLAMA_BASE_URL` / `OLLAMA_HOST` | `http://localhost:11434` | where to find Ollama |
+| `OLLAMA_BASE_URL` / `OLLAMA_HOST` | `http://127.0.0.1:11434` | where to find Ollama. Precedence: `OLLAMA_URL` (RAG embedder only) → `OLLAMA_BASE_URL` → `OLLAMA_HOST` → the default; a bare `host:port` gets `http://`, and `localhost` / `0.0.0.0` are rewritten to `127.0.0.1` |
 | `NVH_OLLAMA_BIN` | `$(which ollama)` | Ollama binary for `nvh services` and `nvh models` |
 | `NVH_DEFAULT_OLLAMA_MODEL` | from config | model preloaded after boot |
 | `NVH_OLLAMA_PRELOAD` | `1` | `0` skips the post-boot warm-up |
@@ -203,11 +207,22 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVH_FIREFOX_AUTO_INSTALL` | `1` | `0` disables the rootless Firefox fallback install |
 | `NVH_FIREFOX_PROFILE` | `$NVH_STATE/browser-profiles/desktop` | isolated Firefox profile directory |
 | `NVH_SANDBOX_REQUIRE_DOCKER` | unset | `1`/`true`/`yes`: refuse `run_code`/`shell` instead of falling back to an unisolated subprocess (`nvh do --sandbox` sets it) |
+| `NVH_SANDBOX` | unset | pre-0.42 spelling of `NVH_SANDBOX_REQUIRE_DOCKER`, honoured for one more release; truthy fails closed the same way |
 | `NVH_BOOT_PREFLIGHT`, `NVH_BOOT_AUTO_REPAIR` | `1`, `1` | run the boot preflight at API start; let it apply safe repairs |
 | `NVH_TARGET_VM_VALIDATED` | unset | `1` after the target-VM checklist; gates `production-ready` |
+| `NVH_API_URL` | `http://127.0.0.1:8000` | API server the `nvh status --smoke` / `--report` probes exercise (`nvh test --api URL` sets it); requests carry `Authorization: Bearer $HIVE_API_KEY` when that is set |
+| `NVH_SYNC_LEARNING_LOAD`, `NVH_LEARNING_LOAD_TIMEOUT` | `0`, `3` | `1` loads learned routing scores before the engine answers (waiting up to the timeout in seconds) instead of in the background |
+| `NVH_TELEMETRY` | unset | `1` enables the opt-in, local-only install-health log at `$NVH_HOME/telemetry/events.jsonl`; nothing is ever sent ([PRIVACY.md](../PRIVACY.md)) |
 | `NVH_CATALOG_URL` | GitHub raw URL | remote setup catalog; the bundled copy is the fallback |
-| `SEARXNG_URL`, `BRAVE_SEARCH_KEY`, `GOOGLE_SEARCH_KEY` + `GOOGLE_CX` | unset | web-search backends for the `web_search` tool (DuckDuckGo needs nothing) |
+| `NVH_RAG_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for the RAG store |
+| `NVH_RAG_AUTO_PULL` | `1` | `0` stops the embedder pulling a missing embedding model on first use |
+| `NVH_WIZARD_PLUGIN_DIR` | `$NVH_HOME/wizard-tools/` | directory of `.py` files exposing `register(reg)` that add Wizard tools |
+| `NVH_WIZARD_AUTOFOLD_VAULT` | `1` | `0` stops the Wizard folding a strongly matching vault note into its system prompt |
+| `NVH_SEARXNG_URL`, `BRAVE_API_KEY` | unset | backends for the Wizard's `web_search`: SearXNG wins, then Brave, then key-free DuckDuckGo |
+| `SEARXNG_URL`, `BRAVE_SEARCH_KEY`, `GOOGLE_SEARCH_KEY` + `GOOGLE_CX` | unset | web-search backends for the agent `web_search` tool (DuckDuckGo needs nothing) |
 | `NVAPI_KEY` | unset | NVIDIA-hosted image generation for the Wizard's portrait tool |
+| `NVH_NVIDIA_IMAGE_ENDPOINT`, `NVH_NVIDIA_IMAGE_MODEL` | NVIDIA's hosted SDXL Turbo endpoint, unset | endpoint and model that generation uses |
+| `NVH_COMFYUI_CHECKPOINT` | `sd_xl_base_1.0.safetensors` | checkpoint the local ComfyUI portrait workflow renders with |
 | `NVH_WEB_REF` | `v<version>` | git ref of the WebUI source `nvh webui` fetches |
 
 Installer-only knobs (`install.sh` / `start-linux.sh`):

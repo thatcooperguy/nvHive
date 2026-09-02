@@ -31,6 +31,49 @@ RETIRED_PROVIDERS: dict[str, str] = {
 }
 
 
+def _keyring_enabled() -> bool:
+    # Headless/rootless cloud desktops often have a slow or unavailable
+    # keyring service, so startup never blocks on it unless asked to.
+    return os.environ.get("NVH_USE_KEYRING", "0").lower() in {"1", "true", "yes"}
+
+
+def resolve_provider_key(
+    name: str, pconfig: Any = None, *, ptype: str | None = None,
+) -> tuple[str | None, str]:
+    """``(key, source)`` for a provider, or ``(None, "none")``.
+
+    One resolution order for the registry, the adapters and the diagnostics:
+    the config value (unless it is an unexpanded ``${VAR}`` placeholder),
+    ``COUNCIL_<NAME>_API_KEY``, ``<NAME>_API_KEY``, the spec's ``env_keys``,
+    the keyring when ``NVH_USE_KEYRING`` is set, then the spec's anonymous
+    key. ``source`` is ``config``, ``env:<VAR>``, ``keyring`` or ``anonymous``.
+    """
+    configured = str(getattr(pconfig, "api_key", "") or "")
+    if configured and not configured.startswith("${"):
+        return configured, "config"
+    spec = PROVIDER_SPECS.get(ptype or name)
+    upper = name.upper()
+    env_names = [f"COUNCIL_{upper}_API_KEY", f"{upper}_API_KEY"]
+    if spec is not None:
+        env_names.extend(v for v in spec.env_keys if v not in env_names)
+    for env_name in env_names:
+        value = os.environ.get(env_name, "")
+        if value:
+            return value, f"env:{env_name}"
+    if _keyring_enabled():
+        try:
+            import keyring
+
+            value = keyring.get_password("nvhive", f"{name}_api_key") or ""
+        except Exception:
+            value = ""
+        if value:
+            return value, "keyring"
+    if spec is not None and spec.anonymous_key:
+        return spec.anonymous_key, "anonymous"
+    return None, "none"
+
+
 def lazy_adapter(name: str, ptype: str = "", **kwargs: Any) -> LazyProvider:
     """Wrap the adapter for ``name`` so it is imported on first use.
 
@@ -127,31 +170,8 @@ class ProviderRegistry:
                 )
                 continue
 
-            # Resolve API key: config value, then env var fallback
-            api_key = pconfig.api_key
-            if not api_key or api_key.startswith("${"):
-                env_names = [
-                    f"COUNCIL_{name.upper()}_API_KEY",
-                    f"{name.upper()}_API_KEY",
-                ]
-                for env_name in env_names:
-                    val = os.environ.get(env_name)
-                    if val:
-                        api_key = val
-                        break
-
-            # Try keyring as an opt-in fallback. Headless/rootless cloud desktops
-            # often have a slow or unavailable keyring service, so startup should
-            # not block on it by default.
-            use_keyring = os.environ.get("NVH_USE_KEYRING", "0").lower() in {"1", "true", "yes"}
-            if not api_key and use_keyring:
-                try:
-                    import keyring
-                    api_key = keyring.get_password("nvhive", f"{name}_api_key") or ""
-                except Exception:
-                    pass
-
             ptype = pconfig.type or name
+            api_key = resolve_provider_key(name, pconfig, ptype=ptype)[0] or ""
             if ptype == "mock":
                 # Mock provider: construct directly without API key forwarding
                 from nvh.providers.mock_provider import MockProvider

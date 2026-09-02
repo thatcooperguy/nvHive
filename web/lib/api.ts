@@ -989,16 +989,29 @@ export async function getConversation(id: string): Promise<ConversationDetail | 
   }
 }
 
+export interface CreateConversationOptions {
+  pinned?: boolean;
+  /** Seed turns stored in the same transaction as the conversation. */
+  messages?: AppendMessageInput[];
+}
+
 /**
- * Create an empty server-side conversation. Pass an empty title to let the
- * backend auto-title it from the first persisted user message.
+ * Create a server-side conversation. Pass an empty title to let the backend
+ * auto-title it from the first user message; pass `messages` to import a
+ * whole thread in one request (it lands entirely or not at all).
  */
 export async function createConversation(
   title = '',
-  mode: ConversationMode | '' = ''
+  mode: ConversationMode | '' = '',
+  options: CreateConversationOptions = {}
 ): Promise<ConversationSummary | null> {
   try {
-    return await apiPost<ConversationSummary>('/v1/conversations', { title, mode });
+    return await apiPost<ConversationSummary>('/v1/conversations', {
+      title,
+      mode,
+      pinned: options.pinned ?? false,
+      messages: (options.messages ?? []).map(toWireMessage),
+    });
   } catch {
     return null;
   }
@@ -1042,6 +1055,21 @@ export interface AppendMessageInput {
   latency_ms?: number;
 }
 
+function toWireMessage(message: AppendMessageInput) {
+  // The server rejects non-finite or negative costs with 422; a stray bad
+  // value (old localStorage rows) must not block the whole turn or thread.
+  const cost = Number(message.cost_usd);
+  return {
+    role: message.role,
+    content: message.content,
+    provider: message.provider ?? '',
+    model: message.model ?? '',
+    tokens: message.tokens ?? 0,
+    cost_usd: message.cost_usd && Number.isFinite(cost) && cost >= 0 ? message.cost_usd : '0',
+    latency_ms: message.latency_ms ?? 0,
+  };
+}
+
 /**
  * Persist one turn to a server-side conversation. Best-effort: the chat
  * keeps working in-memory when the API is offline, so failures are
@@ -1052,15 +1080,10 @@ export async function appendConversationMessage(
   message: AppendMessageInput
 ): Promise<boolean> {
   try {
-    await apiPost(`/v1/conversations/${encodeURIComponent(conversationId)}/messages`, {
-      role: message.role,
-      content: message.content,
-      provider: message.provider ?? '',
-      model: message.model ?? '',
-      tokens: message.tokens ?? 0,
-      cost_usd: message.cost_usd ?? '0',
-      latency_ms: message.latency_ms ?? 0,
-    });
+    await apiPost(
+      `/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+      toWireMessage(message)
+    );
     return true;
   } catch {
     return false;

@@ -23,6 +23,7 @@ from nvh.providers.base import (
     Usage,
 )
 from nvh.providers.openai_compatible import _build_messages, _map_error
+from nvh.utils.ollama import ollama_base_url
 
 _AUTO_MODEL_CHOICES = {
     "auto",
@@ -107,7 +108,7 @@ class OllamaProvider:
     ):
         self._default_model = default_model
         self._fallback_model = fallback_model
-        self._base_url = base_url or "http://localhost:11434"
+        self._base_url = ollama_base_url(base_url)
         self._provider_name = provider_name
         self._timeout = timeout
 
