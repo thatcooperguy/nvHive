@@ -2,116 +2,6 @@
 
 ## [Unreleased]
 
-### Fixed
-- **Pre-0.42 spellings are now pure forwarders.** `code/write/research/math/
-  quick/safe/pipe/clip`, `health/why/doctor/test/smoke/debug/selfcheck`,
-  `knowledge/learn` and every `nvh <provider>` alias forward their argv to
-  the replacement command, so any real flag works through the alias
-  (`nvh debug --live` is exactly `nvh status --report --live`) and
-  `nvh <alias> --help` shows the replacement's help with a one-line hint.
-  One table (`DEPRECATED_ALIASES`) drives the aliases, the generated
-  COMMANDS.md "Deprecated spellings" table (which wrongly listed
-  `benchmark` and `template`), and did-you-mean — which now recognises the
-  deprecated verbs: `nvh docter --fix` → "Did you mean nvh status --deep?",
-  `nvh gorq hi` → `nvh ask -p groq`. A typo followed by a single word is
-  treated as a typo, not a prompt; three-plus-word prompts still route to
-  the LLM.
-- **`nvh test` / `nvh smoke` keep their old flags for one more release**
-  (`--api URL`, `--webui URL`, `--no-webui`, `--no-providers`, `--fix`,
-  `--quick`; all but `--api` are ignored with a note on stderr), and the API
-  smoke checks the old `nvh test` performed are back as a `smoke` tier of
-  the checks registry (also in `--report`): GET `/v1/health`, `/v1/advisors`,
-  `/v1/proxy/health`, `/v1/quota`, one real `POST /v1/query` and one
-  `/v1/proxy/chat/completions` against `NVH_API_URL` (default
-  `http://127.0.0.1:8000`), reported as `skip` when no API is listening.
-- **`nvh status --json` crashed** on budget `Decimal` values; Decimal, Path
-  and datetime are rendered as strings/numbers in every JSON tier.
-- **One API-key resolution order everywhere.** `nvh status --deep`, the
-  registry and the adapters had three different orders (the status check
-  reported `HIVE_GROQ_API_KEY` as present while nothing read it, and
-  `NIM_API_KEY` as missing while queries worked). `resolve_provider_key()`
-  is the single implementation: config value → `COUNCIL_<NAME>_API_KEY` →
-  `<NAME>_API_KEY` → provider aliases (`XAI_API_KEY`, `GEMINI_API_KEY`,
-  `CO_API_KEY`, `TOGETHERAI_API_KEY`, `FIREWORKS_AI_API_KEY`,
-  `PERPLEXITYAI_API_KEY`, `HF_TOKEN`, `NIM_API_KEY`) → `HIVE_<NAME>_API_KEY`
-  → keyring (only with `NVH_USE_KEYRING=1`) → anonymous tier.
-- **Bare model IDs route on every prefixed provider.** `ProviderSpec.
-  litellm_prefix` is set for gemini, groq, xai, mistral, deepseek,
-  perplexity, together, fireworks, openrouter, cerebras, sambanova,
-  huggingface and ai21 and applied exactly once, so `nvh ask -p groq -m
-  openai/gpt-oss-20b` works instead of failing in LiteLLM with "LLM
-  Provider NOT provided".
-- **`nvh ask --focus research` regained its council fallback**: with no
-  Perplexity advisor it runs an auto-agent council with synthesis and an
-  agreement summary, as `nvh research` did before 0.42.
-- **`nvh ask` errors go to stderr**, so `... | nvh pipe` and `--raw`
-  pipelines never see error text on stdout.
-- **Legacy REPL memories** (`~/.hive/memory/memories.json`) are imported
-  once into the vault as `#repl` notes — automatically at REPL start or via
-  `nvh rag import-legacy --memories`.
-- **Checks registry**: `ollama_required_models` is its own registered check
-  (so `--deep --fix` can find it), titles no longer drift from their
-  registration, budget figures are plain numbers, summaries include a
-  `skipped` count, and the Wizard's `/v1/setup/diagnostics` report embeds
-  the same registry rows (its `workspace_state` section had been silently
-  failing on a wrong import).
-- **Storage**: message sequence numbers are computed inside the write
-  transaction with a one-time retry on collision, so two concurrent appends
-  to the same conversation both persist (one used to be lost to the
-  UNIQUE constraint) and running totals are incremented SQL-side. The WebUI
-  persists the user turn before the assistant turn and shows a
-  non-blocking "History not saved" notice if a turn could not be stored.
-- **The one-time import of pre-0.42 browser chats** sends each thread as a
-  single atomic request (`POST /v1/conversations` accepts `pinned` and seed
-  `messages`) and removes the thread from localStorage as soon as it lands,
-  so an interrupted import resumes instead of duplicating; council/compare
-  replies whose text field is empty are imported as Markdown instead of
-  being skipped and lost.
-- **API validation**: `POST /v1/conversations/{id}/messages` rejects a
-  non-finite or negative `cost_usd` with 422 (a `NaN` used to poison the
-  conversation's totals); `/v1/ws/council` answers a malformed
-  `temperature`/`max_tokens`/`num_agents` with an error frame instead of
-  closing the socket.
-- **Sandbox refusals name the variable actually set** (`NVH_SANDBOX` or
-  `NVH_SANDBOX_REQUIRE_DOCKER`), and `nvh status --deep` has a "Sandbox
-  isolation" row explaining when `run_code`/`shell` will refuse.
-- **Agent Library profiles keep `prompt_template` and `max_tokens`** from
-  the packaged catalog (the loader dropped them).
-
-### Changed
-- **Advisor health checks no longer bill you.** Providers with a known
-  endpoint are probed with a free `GET /models`; the one-token ping remains
-  only where no models endpoint exists and uses the spec's `health_model`
-  (NVIDIA pings its 8B fallback, not the 70B default). Health checks run
-  concurrently; GPU detection runs once per `nvh status` instead of
-  spawning `nvidia-smi` for every check; the Ollama `/api/tags` listing is
-  fetched once per run and shared with the services glance.
-- **One Ollama endpoint resolver.** Every runtime read of the local Ollama
-  URL (status, setup, model pulls, local chat, vision tools, the free tier,
-  the RAG embedder and the API server) goes through `ollama_base_url()`:
-  `OLLAMA_BASE_URL` → `OLLAMA_HOST` → `http://127.0.0.1:11434`, with
-  `localhost`/`0.0.0.0` rewritten to `127.0.0.1` (`localhost` resolved
-  IPv6-first and stalled ~2 s per probe on some hosts). The embedder still
-  honours `OLLAMA_URL` first; `NVH_OLLAMA_URL` remains the installer
-  archive URL and is unrelated.
-- **The API server no longer blocks its event loop** on `/v1/setup/
-  diagnostics` or the Wizard's support snapshot; both run the deep checks
-  (Engine init plus provider pings) in a worker thread.
-- **Per-provider request timeouts** are a spec field: 120 s by default,
-  600 s for nvidia, llm7, perplexity and siliconflow, matching the deleted
-  bespoke adapters.
-- **`nvh status --deep` warns 30 days ahead of a provider API retirement**
-  from `ProviderSpec.sunset_date` (Perplexity: "Sonar Chat Completions
-  retires 2026-09-27") and reports it as retired after the date.
-- Docs: CONTRIBUTING and TESTING show CI's `mypy --strict` gate; MAINTAINERS
-  lists all three version files and their guard tests; CONFIGURATION
-  documents every remaining env var (`NVH_SANDBOX`, `NVH_TELEMETRY`,
-  `NVH_RAG_*`, `NVH_SEARXNG_URL`/`BRAVE_API_KEY`, `NVH_API_URL` with its
-  `http://127.0.0.1:8000` default, the Ollama URL precedence and the full
-  provider-key alias list, …);
-  PRIVACY and EULA use the 0.42 command spellings and the `$NVH_HOME`
-  layout.
-
 ## [0.42.0] - 2026-09-02
 
 The "subtract" release. The September audit
@@ -124,6 +14,11 @@ everything and adds no new capability: roughly 39,000 lines removed across
 that only existed to cover the deleted code), no feature a user could reach
 is gone, and every removed command survives as a hidden alias for one
 release. Issues #122–#130.
+
+A post-merge review of the first cut found ten defects (import duplication,
+a sequence collision, a `--json` crash, three different API-key resolution
+orders); their fixes are folded into the entries below and landed before the
+tag.
 
 ### Removed
 - **Seven dead orchestration modules** (`nvh/core/{autonomous,agent_pr,
@@ -243,6 +138,38 @@ release. Issues #122–#130.
   compile` passes for the first time. (#124)
 - **`NVH_SANDBOX=1`** now means fail-closed (an alias of
   `NVH_SANDBOX_REQUIRE_DOCKER` for one release); `nvh do --sandbox` sets it.
+- **Advisor health checks no longer bill you.** Providers with a known
+  endpoint are probed with a free `GET /models`; the one-token ping remains
+  only where no models endpoint exists and uses the spec's `health_model`
+  (NVIDIA pings its 8B fallback, not the 70B default). Health checks run
+  concurrently; GPU detection runs once per `nvh status` instead of
+  spawning `nvidia-smi` for every check; the Ollama `/api/tags` listing is
+  fetched once per run and shared with the services glance.
+- **One Ollama endpoint resolver.** Every runtime read of the local Ollama
+  URL (status, setup, model pulls, local chat, vision tools, the free tier,
+  the RAG embedder and the API server) goes through `ollama_base_url()`:
+  `OLLAMA_BASE_URL` → `OLLAMA_HOST` → `http://127.0.0.1:11434`, with
+  `localhost`/`0.0.0.0` rewritten to `127.0.0.1` (`localhost` resolved
+  IPv6-first and stalled ~2 s per probe on some hosts). The embedder still
+  honours `OLLAMA_URL` first; `NVH_OLLAMA_URL` remains the installer
+  archive URL and is unrelated.
+- **The API server no longer blocks its event loop** on `/v1/setup/
+  diagnostics` or the Wizard's support snapshot; both run the deep checks
+  (Engine init plus provider pings) in a worker thread.
+- **Per-provider request timeouts** are a spec field: 120 s by default,
+  600 s for nvidia, llm7, perplexity and siliconflow, matching the deleted
+  bespoke adapters.
+- **`nvh status --deep` warns 30 days ahead of a provider API retirement**
+  from `ProviderSpec.sunset_date` (Perplexity: "Sonar Chat Completions
+  retires 2026-09-27") and reports it as retired after the date.
+- Docs: CONTRIBUTING and TESTING show CI's `mypy --strict` gate; MAINTAINERS
+  lists all three version files and their guard tests; CONFIGURATION
+  documents every remaining env var (`NVH_SANDBOX`, `NVH_TELEMETRY`,
+  `NVH_RAG_*`, `NVH_SEARXNG_URL`/`BRAVE_API_KEY`, `NVH_API_URL` with its
+  `http://127.0.0.1:8000` default, the Ollama URL precedence and the full
+  provider-key alias list, …);
+  PRIVACY and EULA use the 0.42 command spellings and the `$NVH_HOME`
+  layout.
 
 ### Fixed
 - **PyPI publishing never auto-triggered.** `publish.yml` listened for the
@@ -254,6 +181,80 @@ release. Issues #122–#130.
 - `nvh doctor --json` pinned the global Rich console to a closed stream
   after restoring it; the engine's LLM7 and env-detected providers are built
   through the registry instead of the compat-shim module paths.
+- **Pre-0.42 spellings are now pure forwarders.** `code/write/research/math/
+  quick/safe/pipe/clip`, `health/why/doctor/test/smoke/debug/selfcheck`,
+  `knowledge/learn` and every `nvh <provider>` alias forward their argv to
+  the replacement command, so any real flag works through the alias
+  (`nvh debug --live` is exactly `nvh status --report --live`) and
+  `nvh <alias> --help` shows the replacement's help with a one-line hint.
+  One table (`DEPRECATED_ALIASES`) drives the aliases, the generated
+  COMMANDS.md "Deprecated spellings" table (which wrongly listed
+  `benchmark` and `template`), and did-you-mean — which now recognises the
+  deprecated verbs: `nvh docter --fix` → "Did you mean nvh status --deep?",
+  `nvh gorq hi` → `nvh ask -p groq`. A typo followed by a single word is
+  treated as a typo, not a prompt; three-plus-word prompts still route to
+  the LLM.
+- **`nvh test` / `nvh smoke` keep their old flags for one more release**
+  (`--api URL`, `--webui URL`, `--no-webui`, `--no-providers`, `--fix`,
+  `--quick`; all but `--api` are ignored with a note on stderr), and the API
+  smoke checks the old `nvh test` performed are back as a `smoke` tier of
+  the checks registry (also in `--report`): GET `/v1/health`, `/v1/advisors`,
+  `/v1/proxy/health`, `/v1/quota`, one real `POST /v1/query` and one
+  `/v1/proxy/chat/completions` against `NVH_API_URL` (default
+  `http://127.0.0.1:8000`), reported as `skip` when no API is listening.
+- **`nvh status --json` crashed** on budget `Decimal` values; Decimal, Path
+  and datetime are rendered as strings/numbers in every JSON tier.
+- **One API-key resolution order everywhere.** `nvh status --deep`, the
+  registry and the adapters had three different orders (the status check
+  reported `HIVE_GROQ_API_KEY` as present while nothing read it, and
+  `NIM_API_KEY` as missing while queries worked). `resolve_provider_key()`
+  is the single implementation: config value → `COUNCIL_<NAME>_API_KEY` →
+  `<NAME>_API_KEY` → provider aliases (`XAI_API_KEY`, `GEMINI_API_KEY`,
+  `CO_API_KEY`, `TOGETHERAI_API_KEY`, `FIREWORKS_AI_API_KEY`,
+  `PERPLEXITYAI_API_KEY`, `HF_TOKEN`, `NIM_API_KEY`) → `HIVE_<NAME>_API_KEY`
+  → keyring (only with `NVH_USE_KEYRING=1`) → anonymous tier.
+- **Bare model IDs route on every prefixed provider.** `ProviderSpec.
+  litellm_prefix` is set for gemini, groq, xai, mistral, deepseek,
+  perplexity, together, fireworks, openrouter, cerebras, sambanova,
+  huggingface and ai21 and applied exactly once, so `nvh ask -p groq -m
+  openai/gpt-oss-20b` works instead of failing in LiteLLM with "LLM
+  Provider NOT provided".
+- **`nvh ask --focus research` regained its council fallback**: with no
+  Perplexity advisor it runs an auto-agent council with synthesis and an
+  agreement summary, as `nvh research` did before 0.42.
+- **`nvh ask` errors go to stderr**, so `... | nvh pipe` and `--raw`
+  pipelines never see error text on stdout.
+- **Legacy REPL memories** (`~/.hive/memory/memories.json`) are imported
+  once into the vault as `#repl` notes — automatically at REPL start or via
+  `nvh rag import-legacy --memories`.
+- **Checks registry**: `ollama_required_models` is its own registered check
+  (so `--deep --fix` can find it), titles no longer drift from their
+  registration, budget figures are plain numbers, summaries include a
+  `skipped` count, and the Wizard's `/v1/setup/diagnostics` report embeds
+  the same registry rows (its `workspace_state` section had been silently
+  failing on a wrong import).
+- **Storage**: message sequence numbers are computed inside the write
+  transaction with a one-time retry on collision, so two concurrent appends
+  to the same conversation both persist (one used to be lost to the
+  UNIQUE constraint) and running totals are incremented SQL-side. The WebUI
+  persists the user turn before the assistant turn and shows a
+  non-blocking "History not saved" notice if a turn could not be stored.
+- **The one-time import of pre-0.42 browser chats** sends each thread as a
+  single atomic request (`POST /v1/conversations` accepts `pinned` and seed
+  `messages`) and removes the thread from localStorage as soon as it lands,
+  so an interrupted import resumes instead of duplicating; council/compare
+  replies whose text field is empty are imported as Markdown instead of
+  being skipped and lost.
+- **API validation**: `POST /v1/conversations/{id}/messages` rejects a
+  non-finite or negative `cost_usd` with 422 (a `NaN` used to poison the
+  conversation's totals); `/v1/ws/council` answers a malformed
+  `temperature`/`max_tokens`/`num_agents` with an error frame instead of
+  closing the socket.
+- **Sandbox refusals name the variable actually set** (`NVH_SANDBOX` or
+  `NVH_SANDBOX_REQUIRE_DOCKER`), and `nvh status --deep` has a "Sandbox
+  isolation" row explaining when `run_code`/`shell` will refuse.
+- **Agent Library profiles keep `prompt_template` and `max_tokens`** from
+  the packaged catalog (the loader dropped them).
 
 ## [0.41.1] - 2026-09-01
 
