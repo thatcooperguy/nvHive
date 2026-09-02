@@ -7,6 +7,7 @@ All three lean on the retired-model table in nvh.cli.setup, added for the
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +17,14 @@ from typer.testing import CliRunner
 
 import nvh.cli.main as cli_main
 from nvh.cli import setup as cli_setup
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    # Rich styles CLI output when colour is forced (CI), splitting phrases
+    # with escape codes; substring checks must run on the de-styled text.
+    return _ANSI.sub("", text)
 from nvh.cli.setup import (
     RETIRED_MODEL_RENAMES,
     RETIRED_PROVIDERS,
@@ -242,9 +251,10 @@ class TestConfigMigrateCommand:
 
         result = runner.invoke(cli_main.app, ["config", "migrate", "--dry-run", "--file", str(cfg)])
         assert result.exit_code == 0, result.output
-        assert "Dry run" in result.output
-        assert "gpt-4o → gpt-5.6-terra" in result.output
-        assert "github provider retired 2026-07-30" in result.output
+        output = _plain(result.output)
+        assert "Dry run" in output
+        assert "gpt-4o → gpt-5.6-terra" in output
+        assert "github provider retired 2026-07-30" in output
         assert cfg.read_text() == SHIPPED_CONFIG
         assert not cfg.with_suffix(".yaml.bak").exists()
 

@@ -9,6 +9,7 @@ the tool-server verbs live under ``nvh mcp servers``.
 
 from __future__ import annotations
 
+import re
 import sys
 import types
 
@@ -18,6 +19,15 @@ from typer.main import get_command, get_command_name
 from typer.testing import CliRunner
 
 import nvh.cli.main as cli_main
+
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    # Rich colours help output on CI (FORCE_COLOR) and styles `--flag` as
+    # `-` + `-flag` with escape codes between, so substring checks must run
+    # on the de-styled text.
+    return _ANSI.sub("", text)
 
 
 @pytest.fixture()
@@ -85,11 +95,12 @@ class TestMcpGroup:
     def test_help_describes_the_server(self, runner: CliRunner):
         result = runner.invoke(cli_main.app, ["mcp", "--help"])
         assert result.exit_code == 0, result.output
-        assert "Model Context Protocol" in result.output
-        assert "--transport" in result.output
-        assert "servers" in result.output
+        output = _plain(result.output)
+        assert "Model Context Protocol" in output
+        assert "--transport" in output
+        assert "servers" in output
         # Old spellings are hidden aliases — not advertised.
-        assert "refresh" not in result.output
+        assert "refresh" not in output
 
     def test_servers_subgroup_and_hidden_aliases(self):
         mcp_group = get_command(cli_main.app).commands["mcp"]
