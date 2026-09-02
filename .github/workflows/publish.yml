@@ -3,7 +3,15 @@
 
 name: Publish to PyPI
 
+# release.yml creates the GitHub Release with the repository GITHUB_TOKEN,
+# and GitHub never starts workflows from events that token produces — so
+# `release: published` alone has never fired here (0.33.0–0.41.0 were all
+# published by manual dispatch). The tag push is the trigger that actually
+# runs; the release event is kept for releases created by hand.
 on:
+  push:
+    tags:
+      - 'v*.*.*'
   release:
     types: [published]
   workflow_dispatch:
@@ -71,7 +79,8 @@ jobs:
     needs: build
     if: >
       github.repository == 'thatcooperguy/nvHive' &&
-      (github.event_name == 'release' ||
+      (github.event_name == 'push' ||
+      github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi'))
     runs-on: ubuntu-latest
     environment: pypi
