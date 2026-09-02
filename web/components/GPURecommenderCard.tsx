@@ -68,6 +68,11 @@ export default function GPURecommenderCard({ onInstall }: Props) {
           <div className="mt-0.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
             {top.reason} · ~{top.vram_required_gb.toFixed(1)} GB VRAM · tier {top.tier}
           </div>
+          {top.note ? (
+            <div className="mt-1 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+              {top.note}
+            </div>
+          ) : null}
         </div>
         <button
           type="button"

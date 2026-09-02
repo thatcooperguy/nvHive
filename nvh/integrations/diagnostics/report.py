@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from nvh.integrations.workspace.storage import storage_layout, storage_status
+from nvh.utils.hw_ids import detect_machine
 from nvh.utils.logging import get_request_id
 
 ENV_ALLOWLIST = [
@@ -321,7 +322,12 @@ def diagnostics_report(
             "platform": platform.platform(),
             "system": platform.system(),
             "release": platform.release(),
-            "machine": platform.machine(),
+            # hw_ids.detect_machine() is WOW64-aware: an x64 Python under
+            # Windows-on-Arm emulation reports AMD64 from platform.machine().
+            # compatibility.host.machine already uses it, so the two sections
+            # agree; the raw value is kept alongside for support triage.
+            "machine": detect_machine(),
+            "machine_raw": platform.machine(),
             "python": platform.python_version(),
             "executable": sys.executable,
             "cwd": str(Path.cwd()),

@@ -112,3 +112,19 @@ def test_lifespan_survives_missing_env_file(config_home) -> None:
     with TestClient(app) as client:
         assert client.get("/v1/health").status_code == 200
     assert KEY_VAR not in os.environ
+
+
+def test_lifespan_kill_switch_never_reaches_the_platform_probe(config_home, monkeypatch: pytest.MonkeyPatch) -> None:
+    """tests/conftest.py sets NVH_PLATFORM_WARMUP=0 so suites like this one never spawn
+    ``sudo -n`` / ``curl`` / ``hostname``; the real lifespan must honour it."""
+    from nvh.utils import platform_facts
+
+    monkeypatch.setenv("NVH_PLATFORM_WARMUP", "0")
+    calls: list[int] = []
+    monkeypatch.setattr(platform_facts, "warm_platform_facts", lambda: calls.append(1))
+
+    with TestClient(app) as client:
+        assert client.get("/v1/health").status_code == 200
+
+    assert calls == []
+    assert app.state.platform_warmup_thread is None

@@ -6,6 +6,7 @@ import ApiHealthBanner from '@/components/ApiHealthBanner';
 import DebugReportButton from '@/components/DebugReportButton';
 import Sidebar from '@/components/Sidebar';
 import GlobalModals from '@/components/GlobalModals';
+import Mascot from '@/components/Mascot';
 import SessionAgePill from '@/components/SessionAgePill';
 import SystemConsole from '@/components/SystemConsole';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -138,6 +139,9 @@ function InnerShell({ children }: { children: React.ReactNode }) {
             photograph + share. Sits bottom-left so it's reachable on
             every page including chat + setup. */}
         <DebugReportButton />
+        {/* Sprite guide (bottom-right) that mirrors Wizard activity. Mounted
+            here too so first-run users on /setup see it. */}
+        <Mascot />
         <div className="pointer-events-auto fixed right-3 top-3 z-50">
           <ThemeToggle compact />
         </div>
@@ -152,6 +156,7 @@ function InnerShell({ children }: { children: React.ReactNode }) {
       <SystemConsole />
       <ApiHealthBanner />
       <DebugReportButton />
+      <Mascot />
       {/* Top status bar */}
       <div
         className="fixed top-0 left-0 right-0 z-50 h-8 border-b flex items-center px-4 gap-6 text-[10px] font-mono"

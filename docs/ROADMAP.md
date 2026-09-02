@@ -26,7 +26,10 @@ this page is the short version. Features are listed once each.
   cross-session agent memory; per-message cost, tokens and latency with
   per-profile cost ceilings.
 - Everything works as an unprivileged user: cron-free scheduler,
-  zero-dependency SQLite RAG, env-file secrets with an opt-in keyring.
+  zero-dependency SQLite RAG, env-file secrets with an opt-in keyring. On
+  owned hardware (DGX Spark, RTX Spark) the helper can do more with
+  approval: privileged actions are a separate tool class behind a red
+  card, audited to the vault, never auto-approved.
 
 ## Plan by release
 
@@ -34,8 +37,8 @@ this page is the short version. Features are listed once each.
 |---|---|---|
 | 0.41.1 | hotfix | retired default models on most cloud providers; `$0` cost accounting; unreachable `nvh mcp` / `nvh agent`; `nvh snapshot` archiving the wrong tree; GitHub Models removed |
 | 0.42 | subtract | dead orchestration modules, Docker/compose, stale installers and demo assets; `~/.hive`-era modules folded into their `NVH_HOME` successors; provider adapters collapsed into `ProviderSpec` rows; CLI query modes into `nvh ask` flags and diagnostics into `nvh status`; `/query` and `/council` pages removed; docs 33 → 12 with parity and link tests |
-| 0.43 | refresh | one `ProviderSpec`-derived provider doc; price, context and capability flags derived from LiteLLM at load; a live `/v1/models` intersection and a model-currency CI test; a regenerated cloud catalog; `nemotron3:33b` local tiers; `num_ctx` passed to Ollama from the VRAM tier; Perplexity's 2026-09-27 Chat Completions sunset handled |
-| 0.44 | add | Wizard `run_code`/`shell` with approval cards and `ask_user`; a `remember` tool and a Memory filter on `/vault`; `generate_image` (NVIDIA-hosted or local ComfyUI); one chat surface; standard-path OpenAI endpoints and `nvh launch <tool>`; durable schedules under `NVH_HOME` with `/v1/schedules`; session cost against the hourly desktop rate; push-to-talk STT and optional TTS in the WebUI |
+| 0.43 | refresh + concierge | one `ProviderSpec`-derived provider doc; price, context and capability flags derived from LiteLLM at load; a live `/v1/models` intersection and a model-currency CI test; a regenerated cloud catalog; `nemotron3:33b` local tiers; `num_ctx` passed to Ollama from the VRAM tier; Perplexity's 2026-09-27 Chat Completions sunset handled. **Spark concierge groundwork** ([proposal](proposals/SPARK_CONCIERGE_2026-09.md)): Wizard profile fields enforced; platform facts (device class, unified memory, sudo) in the prompt; GB10 recognised; `nvh-linux-arm64` release and arm64 CI; the mascot; Home Assistant tools; `profile=auto` hidden-specialist routing |
+| 0.44 | add | Wizard `run_code`/`shell` with approval cards and `ask_user`; a `remember` tool and a Memory filter on `/vault`; `generate_image` (NVIDIA-hosted or local ComfyUI); one chat surface; standard-path OpenAI endpoints and `nvh launch <tool>`; durable schedules under `NVH_HOME` with `/v1/schedules`; session cost against the hourly desktop rate; push-to-talk STT and optional TTS in the WebUI; **privileged tool class** (sudo with approval cards, vault audit) and Spark playbook packs |
 
 ## Features
 
@@ -55,6 +58,10 @@ Status: **shipped** · **planned** (in a release above) · **present-but-hidden*
 | Persistent cross-chat memory in the WebUI | planned 0.44 | `remember` tool; the vault is already RAG-queryable |
 | Image generation from chat | planned 0.44 | rename `generate_portrait` → `generate_image`; NVIDIA-hosted when `NVAPI_KEY` is set, else local ComfyUI |
 | One chat surface (`/` and `/wizard` merged) | planned 0.44 | two surfaces confuse first-time users |
+| Hidden specialists — the Wizard picks the agent per turn (`profile=auto`) | planned 0.43 | [Spark concierge](proposals/SPARK_CONCIERGE_2026-09.md) §3.1; the picker leaves the composer |
+| Mascot — sprite-based avatar reacting to Wizard state | planned 0.43 | placeholder sprite ships; a real-person likeness needs sign-off ([MASCOT.md](MASCOT.md)) |
+| Home Assistant operator (smart home via the HA REST API) | planned 0.43 | five Wizard tools, service calls behind a confirm card |
+| Device settings and app installs with sudo (Spark playbooks) | planned 0.44 | `privileged` tool class; DGX OS first, Windows on Arm when RTX Spark ships |
 | Standard-path OpenAI endpoints; `nvh launch <tool>` for Claude Code / Codex / opencode / Cursor / Continue | planned 0.44 | `/v1/chat/completions` beside `/v1/proxy/...` |
 | Scheduled prompts with a UI | planned 0.44 | durable jobs under `NVH_HOME`, `/v1/schedules`; today `nvh schedule` only |
 | Session cost vs hourly desktop rate | planned 0.44 | the "am I wasting GPU money" pill |

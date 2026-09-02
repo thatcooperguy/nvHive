@@ -13,6 +13,12 @@ A *profile* is a saved configuration of:
   - ``max_tokens``   — generation cap override
   - ``tools_allowed``— optional whitelist of wizard tool names (None = all)
   - ``prompt_template`` — optional ``{{input}}`` wrapper for the user's message
+  - ``tags``         — free-form labels; two are read by the chat layer
+                       (``nvh.integrations.wizard.chat``): ``local-only``
+                       (never run on a cloud provider) and ``strict-tools``
+                       (the whitelist is never widened, even when the
+                       concierge routed the turn here — for personas whose
+                       prompt forbids a tool)
   - ``built_in``     — True for ships-with-nvHive profiles; user copies and
                        edits land under ``user_profiles`` and are mutable.
 
@@ -26,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,6 +40,24 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+
+
+def normalise_tools_allowed(value: Any) -> list[str] | None:
+    """Coerce a ``tools_allowed`` value into ``list[str] | None``.
+
+    Hand-written YAML often says ``tools_allowed: web_search`` (a bare string)
+    and code may pass a tuple or set; the chat layer wants one shape so the
+    whitelist check is ``name in tools_allowed`` everywhere. ``None`` keeps
+    meaning "no whitelist"; an empty string means "no tools at all".
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        return [value] if value else []
+    if isinstance(value, Iterable):
+        return [str(t).strip() for t in value if str(t).strip()]
+    raise TypeError(f"tools_allowed must be a string, a list of strings or null, got {type(value).__name__}")
 
 
 def render_prompt_template(template: str, variables: dict[str, str]) -> str:
@@ -78,6 +103,11 @@ class AgentProfile:
     # the message; ``nvh ask --template <profile> --var k=v`` supplies more.
     # Replaces the pre-0.42 ~/.council/templates system.
     prompt_template: str = ""
+
+    def __post_init__(self) -> None:
+        # Every construction path (core built-ins, the packaged library JSON,
+        # user YAML, tests) lands here, so the whitelist has one shape.
+        object.__setattr__(self, "tools_allowed", normalise_tools_allowed(self.tools_allowed))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -214,7 +244,9 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
         temperature=0.2,
         tools_allowed=["rag_ask_vault"],
         built_in=True,
-        tags=["rag", "notes"],
+        # strict-tools: the prompt forbids web_search, so concierge routing
+        # must not widen this whitelist with the general Wizard's core tools.
+        tags=["rag", "notes", "strict-tools"],
         avatar=_avatar_url_for("vault-rag"),
     ),
 )

@@ -28,9 +28,17 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onCreated?: (name: string) => void;
+  /** Tool names from the live /v1/wizard/tools catalog (WizardChat already
+   * fetches it). When provided and non-empty these are the options; the
+   * static list below is only the fallback for hosts without the catalog. */
+  toolNames?: string[];
 }
 
+/** Fallback whitelist options — keep in sync with the shipped registry
+ * (nvh/integrations/wizard/tools.py + home_assistant.py). Prefer passing
+ * `toolNames` from the catalog so a new tool never needs a UI edit. */
 const TOOL_OPTIONS = [
+  'diagnose',
   'refresh_models',
   'repair_workspace',
   'validate_provider_key',
@@ -39,9 +47,15 @@ const TOOL_OPTIONS = [
   'rag_ingest',
   'rag_ask_vault',
   'web_search',
+  'home_assistant_status',
+  'home_assistant_entities',
+  'home_assistant_state',
+  'home_assistant_services',
+  'home_assistant_call',
 ];
 
-export default function CreateAgentModal({ open, onClose, onCreated }: Props) {
+export default function CreateAgentModal({ open, onClose, onCreated, toolNames }: Props) {
+  const toolOptions = toolNames && toolNames.length > 0 ? toolNames : TOOL_OPTIONS;
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -325,7 +339,7 @@ export default function CreateAgentModal({ open, onClose, onCreated }: Props) {
             <div className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
               Allowed tools (none = all)
               <div className="mt-1 flex flex-wrap gap-1">
-                {TOOL_OPTIONS.map(name => {
+                {toolOptions.map(name => {
                   const active = toolsAllowed.has(name);
                   return (
                     <button

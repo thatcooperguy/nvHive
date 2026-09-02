@@ -12,33 +12,78 @@
  *   1. POST /v1/wizard/chat with the question + recent history
  *   2. Render the assistant answer; if tool_calls came back, render each
  *      as an inline action card under the message.
- *   3. Auto-execute `auto`-class tools immediately; surface a "Run" button
- *      for `confirm`-class tools so the user can review before acting.
+ *   3. Surface a "Run" / "Skip" card for every call in `confirm_required`
+ *      (and any that only `done.tool_calls` carried). Nothing auto-runs
+ *      client-side: the server already ran every auto-class call it was
+ *      willing to, so whatever reaches the UI needs a click (the server
+ *      re-checks `confirmed` on execute). Auto-class calls the server chose
+ *      not to run (depth 1, cost ceiling) arrive as `deferred_tool_calls` and
+ *      are listed as "not run: <reason>"; whitelist refusals arrive as
+ *      `tool_result` with `not_allowed` and are listed as "not allowed for
+ *      <specialist>: <tool>" — neither is executed or counted as used.
  *   4. After execution, append a small system message showing what ran.
+ *
+ * Stream `error` events always carry the deterministic text that saved the
+ * turn (`fallback`) plus a `fallback_reason`. The bubble shows the text every
+ * time; the red banner shows unless the reason is a specialist's deliberate
+ * refusal (`isWizardDeliberateRefusal`), because then the text IS the answer
+ * — see `wizardErrorBanner`. The mascot applies the same split: the whole
+ * event (reason included) goes to `applyMascotEvent`, and
+ * `deriveMascotState` lands a refusal like `done` instead of in the error
+ * strip. So does the bubble itself: the reason is kept on the message
+ * (`fallbackReason`, from the event or the persisted wizard-meta tail) and
+ * `isDeliberateRefusalMessage` decides the footer and the avatar's status
+ * dot — a refusal is the specialist's answer (no "offline helper" line, a
+ * 'declined' dot), while a genuine deterministic fallback keeps the offline
+ * footer and the grey dot. Nothing in the bubble keys on `mode` alone.
+ *
+ * Profiles: the composer defaults to `auto` (the concierge picks a hidden
+ * specialist per turn); the bubble credits whoever answered and that
+ * attribution rides along in the next turn's history (`used_profile`) and in
+ * the persisted wizard-meta tail so it survives a reload. While an auto turn
+ * streams, `agentProfile` is only the general-Wizard placeholder
+ * (`attributionPending`), so nothing in the bubble may pin a refusal on it.
  */
 
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import AgentAvatar from '@/components/AgentAvatar';
 import AgentProfilePicker from '@/components/AgentProfilePicker';
 import CreateAgentModal from '@/components/CreateAgentModal';
 import {
+  AUTO_PROFILE,
+  GENERAL_PROFILE,
   announceConversationsChanged,
+  isAutoProfile,
+  isWizardDeliberateRefusal,
   createConversation,
   executeWizardTool,
   getConversation,
+  isRefusedToolResult,
   listAgentProfiles,
   listWizardTools,
   pinConversation,
   saveVaultMemory,
   uploadAndIngest,
   wizardChatStream,
+  wizardDiagnostics,
   type AgentProfileSchema,
   type WizardChatToolCall,
   type WizardChatToolResult,
+  type WizardChatTurn,
+  type WizardDeferredToolCall,
+  type WizardDiagnosticsPayload,
   type WizardStreamEvent,
   type WizardToolSchema,
 } from '@/lib/api';
+import {
+  applyMascotEvent,
+  markMascotTipProbed,
+  mascotTipProbeDue,
+  noteMascotTyping,
+  sayMascotTip,
+  setMascotState,
+} from '@/lib/mascot';
 import { metaNumber, parseWizardMeta } from '@/lib/wizardMeta';
 
 interface Message {
@@ -46,12 +91,18 @@ interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   toolCalls?: WizardChatToolCall[];
-  toolStatus?: Record<string, 'idle' | 'running' | 'ok' | 'error' | 'awaiting-confirm'>;
+  toolStatus?: Record<string, ToolCardStatus>;
   toolResults?: Record<string, string>;
+  // Auto-class calls the server skipped this turn (depth 1 / cost ceiling),
+  // with its reason. Rendered as muted "not run" lines; never executed here.
+  deferredToolCalls?: WizardDeferredToolCall[];
   // Auto-class tool results that ran server-side inside the follow-up loop.
   // Surfaced as a compact "Wizard's reasoning" trace below the answer so the
   // user can see exactly what fired and what came back. Builds trust in the
   // model's grounding (RAG, web search, etc.) without dumping raw JSON.
+  // Whitelist refusals (`result.not_allowed`) ride along in the same list
+  // (that is how the stream delivers them) but ServerToolTrace / Sources
+  // split them out: they never ran, so they are neither counted nor cited.
   serverToolTrace?: WizardChatToolResult[];
   iterations?: number;
   mode?: 'llm' | 'deterministic';
@@ -63,6 +114,13 @@ interface Message {
   costUsd?: number;
   latencyMs?: number;
   fallbackFrom?: string | null;
+  // Why no LLM answered a deterministic turn — the stream `error` event's
+  // `fallback_reason`, or `fallback_reason` from the persisted wizard-meta
+  // tail on reload. Its VALUE, not its presence, tells a specialist's
+  // deliberate refusal from the offline helper standing in for a failed
+  // model path (`isDeliberateRefusalMessage`); the footer and the status
+  // dot must never decide that from `mode` alone.
+  fallbackReason?: string | null;
   // Profile cost-ceiling diagnostics. costCeilingHit=true triggers an inline
   // banner so the user understands why the follow-up loop stopped early.
   costCeilingHit?: boolean;
@@ -71,17 +129,138 @@ interface Message {
   // Surfaces as a tooltip on the provider chip in the message footer.
   routingReason?: string | null;
   // Name of the agent profile that produced this reply ("wizard", "coder",
-  // …). Snapshot at send time so the bubble keeps showing the right avatar
-  // even after the user swaps to a different profile mid-conversation.
+  // …). Seeded at send time (an auto turn shows the general Wizard while
+  // streaming) and replaced by `used_profile` on `done`, so the bubble keeps
+  // showing the right avatar even after the user swaps profiles later.
   agentProfile?: string;
+  // Why the concierge routed this turn to that specialist (tooltip text).
+  profileReason?: string | null;
+  // Raw `used_profile` from the server: null = the general Wizard answered,
+  // undefined = unknown (older API / row persisted before attribution). Echoed back in the next
+  // turn's history so the concierge can stay with the same specialist.
+  usedProfile?: string | null;
+  // True while an auto turn streams: `agentProfile` is the general-Wizard
+  // placeholder, not who is answering, so per-specialist text (the whitelist
+  // refusal line) must stay generic. Cleared when `done` or an attributed
+  // `error` names the specialist. Never set on pinned turns or hydrated rows.
+  attributionPending?: boolean;
 }
+
+type ToolCardStatus = 'idle' | 'running' | 'ok' | 'error' | 'awaiting-confirm' | 'dismissed';
 
 function makeId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Confirm cards on a message the user has neither run nor skipped. */
+function pendingConfirmCalls(message: Message | undefined, except?: string): WizardChatToolCall[] {
+  if (!message?.toolCalls) return [];
+  return message.toolCalls.filter(call => {
+    if (call.name === except) return false;
+    const status = message.toolStatus?.[call.name] ?? 'idle';
+    return status === 'idle' || status === 'awaiting-confirm';
+  });
+}
+
+/**
+ * Every call that reaches the UI needs a click. The server has already run
+ * every auto-class call it was willing to run (and deferred / refused the
+ * rest), so nothing here is a candidate for client-side auto-execution —
+ * regardless of what the local tool catalog says its safety class is.
+ */
+function awaitingConfirm(
+  calls: WizardChatToolCall[],
+  prev: Record<string, ToolCardStatus> | undefined,
+): Record<string, ToolCardStatus> {
+  const next: Record<string, ToolCardStatus> = { ...(prev ?? {}) };
+  for (const call of calls) {
+    if (!next[call.name] || next[call.name] === 'idle') next[call.name] = 'awaiting-confirm';
+  }
+  return next;
+}
+
+/**
+ * Attribution from a persisted wizard-meta tail. `used_profile` present and
+ * null means the general Wizard answered; the key being absent means a row
+ * persisted before attribution existed (unknown → no avatar / title).
+ */
+function hydrateAttribution(
+  meta: Record<string, unknown> | null,
+): Pick<Message, 'agentProfile' | 'profileReason' | 'usedProfile'> {
+  if (!meta || !('used_profile' in meta)) return {};
+  const used = typeof meta.used_profile === 'string' && meta.used_profile ? meta.used_profile : null;
+  const reason =
+    typeof meta.profile_reason === 'string' && meta.profile_reason ? meta.profile_reason : undefined;
+  return { usedProfile: used, agentProfile: used ?? GENERAL_PROFILE, profileReason: reason };
+}
+
+/**
+ * Banner text for a stream `error` event, or null for no banner.
+ *
+ * The server sets `fallback_reason` on EVERY error event that ended in a
+ * deterministic answer, so gating the banner on its presence hides every
+ * genuine failure. The value is what matters: a local-only specialist
+ * declining an explicit pin is an answer (the bubble carries it, attributed —
+ * no banner); "engine not initialized" or an LLM exception means the offline
+ * helper stood in for a failed model path, and the banner says so with the
+ * server's reason. An error with no fallback text at all is just an error.
+ */
+function wizardErrorBanner(event: Extract<WizardStreamEvent, { type: 'error' }>): string | null {
+  if (isWizardDeliberateRefusal(event)) return null;
+  if (event.fallback) {
+    return `The offline helper answered because the model path failed: ${event.error}`;
+  }
+  return event.error;
+}
+
+/**
+ * True when a rendered deterministic message is a specialist's deliberate
+ * refusal (a pinned local-only profile declining because no local provider
+ * was up) rather than the offline helper covering a failed model path.
+ *
+ * Same predicate as the banner and the mascot (`isWizardDeliberateRefusal`),
+ * fed the reason the message carries — from the live `error` event or the
+ * persisted wizard-meta tail — so the footer and the avatar's status dot
+ * cannot drift from what the header already credits to the specialist.
+ */
+function isDeliberateRefusalMessage(message: Message): boolean {
+  return (
+    message.mode === 'deterministic'
+    && isWizardDeliberateRefusal({ fallback_reason: message.fallbackReason })
+  );
+}
+
+/** `fallback_reason` from a persisted wizard-meta tail (deterministic rows only). */
+function metaFallbackReason(meta: Record<string, unknown> | null): string | null | undefined {
+  if (!meta || !('fallback_reason' in meta)) return undefined;
+  return typeof meta.fallback_reason === 'string' && meta.fallback_reason ? meta.fallback_reason : null;
+}
+
+/** Deferred (not-run) auto-class calls from a persisted wizard-meta tail. */
+function metaDeferredToolCalls(meta: Record<string, unknown> | null): WizardDeferredToolCall[] | undefined {
+  const raw = meta?.deferred_tool_calls;
+  if (!Array.isArray(raw)) return undefined;
+  const out: WizardDeferredToolCall[] = [];
+  for (const item of raw) {
+    const r = (item ?? {}) as Record<string, unknown>;
+    if (typeof r.name !== 'string' || !r.name) continue;
+    out.push({
+      name: r.name,
+      arguments: (r.arguments && typeof r.arguments === 'object' ? r.arguments : {}) as Record<string, unknown>,
+      reason: typeof r.reason === 'string' ? r.reason : undefined,
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 export default function WizardChat() {
   const [messages, setMessages] = useState<Message[]>([]);
+  // Latest committed messages, for handlers that inspect state after an
+  // await (e.g. "are confirm cards still pending?") without a stale closure.
+  const messagesRef = useRef<Message[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,11 +279,15 @@ export default function WizardChat() {
   // Conversation id is created on first user message — until then chats are
   // not persisted. /save, /pin, and reconnect-resume all key off this id.
   const [conversationId, setConversationId] = useState<string | null>(null);
-  // Active agent profile name. "wizard" = default persona. Picker swaps this
-  // and the next turn gets the new persona + LLM preferences via the chat
-  // stream's `profile` field.
-  const [profile, setProfile] = useState<string>('wizard');
+  // Active agent profile name. Defaults to `auto`: the concierge picks a
+  // hidden specialist per turn (the API treats null / "" / "auto" as auto).
+  // Anything else — including "wizard", the general persona — is an explicit
+  // pin, set from the Advanced picker, the /agents cards or ?profile=.
+  const [profile, setProfile] = useState<string>(AUTO_PROFILE);
   const [creatingAgent, setCreatingAgent] = useState(false);
+  // The profile picker lives behind this disclosure so the primary composer
+  // row stays "type and Send" (proposal §3.1: the picker leaves the composer).
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // Tool-budget slider: 1 = "just answer", 3 = "let it chain". Sent on every
   // turn so the user can dial the Wizard's chattiness per question.
   const [maxIterations, setMaxIterations] = useState<number>(3);
@@ -120,6 +303,16 @@ export default function WizardChat() {
   // Ref so the URL-param effect can invoke send() without a temporal-dead-zone
   // reference to a function declared further down the component body.
   const sendRef = useRef<(() => Promise<void>) | null>(null);
+  // /v1/wizard/diagnostics is a full workspace probe (~360 ms). Two things on
+  // this page may want it — the ?issue= deep link and the mascot tip — so it
+  // is fetched at most once per mount and only when something asks for it.
+  const diagnosticsRef = useRef<Promise<WizardDiagnosticsPayload | null> | null>(null);
+  const loadDiagnostics = useCallback((): Promise<WizardDiagnosticsPayload | null> => {
+    if (!diagnosticsRef.current) {
+      diagnosticsRef.current = wizardDiagnostics().catch(() => null);
+    }
+    return diagnosticsRef.current;
+  }, []);
 
   /** Slash-command handler. Returns true if the input was consumed as a
    * command (so caller should NOT forward it to the Wizard chat). */
@@ -258,20 +451,46 @@ export default function WizardChat() {
     };
   }, []);
 
+  // Mascot nudge: the most severe open finding, as a speech bubble. The probe
+  // behind it runs only while there is a mascot to show it (not hidden) and
+  // at most once per browser session; it shares one fetch with the ?issue=
+  // deep link. The finding id is burned inside sayMascotTip only when the
+  // bubble actually renders, and the session flag is set only after that.
+  useEffect(() => {
+    if (!mascotTipProbeDue()) return;
+    let cancelled = false;
+    void loadDiagnostics().then(diag => {
+      if (cancelled || !diag) return; // offline: leave the flag unset, retry next mount
+      const topFinding =
+        diag.findings.find(f => f.severity === 'error') ?? diag.findings.find(f => f.severity === 'warn');
+      if (topFinding) {
+        sayMascotTip(`Heads up: ${topFinding.title}`, { id: `finding:${topFinding.id}`, ttlMs: 15_000 });
+      }
+      markMascotTipProbed();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadDiagnostics]);
+
   // Auto-scroll to bottom on new messages.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
 
-  // Deep-link from the /agents discovery page: `?profile=<name>` selects the
+  // Deep-link from the /agents discovery page: `?profile=<name>` pins the
   // matching agent profile so the next user message routes through that
-  // persona + LLM mapping. Idempotent — only runs while the value differs.
+  // persona + LLM mapping. Applied ONCE per distinct URL value — after that
+  // the picker owns the state, so a user arriving from /agents can switch
+  // back to Auto without the still-present param re-pinning them. (Depending
+  // on `profile` here would do exactly that on every change.)
+  const appliedProfileParamRef = useRef<string | null>(null);
   useEffect(() => {
-    const requested = searchParams?.get('profile');
-    if (!requested) return;
-    if (requested === profile) return;
-    setProfile(requested);
-  }, [searchParams, profile]);
+    const requested = searchParams?.get('profile') ?? null;
+    if (appliedProfileParamRef.current === requested) return;
+    appliedProfileParamRef.current = requested;
+    if (requested) setProfile(requested);
+  }, [searchParams]);
 
   // Deep-link from the setup page: either ?issue=<finding_id> (we look up the
   // matching finding from /v1/wizard/diagnostics so the starter cites the real
@@ -288,17 +507,13 @@ export default function WizardChat() {
     void (async () => {
       let starter = rawStarter ?? '';
       if (issueId) {
-        try {
-          const { wizardDiagnostics } = await import('@/lib/api');
-          const d = await wizardDiagnostics();
-          if (cancelled) return;
-          const match = d.findings.find(f => f.id === issueId);
-          starter = match
-            ? `Help me with: ${match.title}`
-            : `Help me with issue: ${issueId}`;
-        } catch {
-          starter = `Help me with issue: ${issueId}`;
-        }
+        // One probe per mount, shared with the mascot tip effect above.
+        const d = await loadDiagnostics();
+        if (cancelled) return;
+        const match = d?.findings.find(f => f.id === issueId);
+        starter = match
+          ? `Help me with: ${match.title}`
+          : `Help me with issue: ${issueId}`;
       }
       if (!starter || cancelled) return;
       setDraft(starter);
@@ -351,11 +566,19 @@ export default function WizardChat() {
             // Restore the meter footer: persisted rows carry provider/model
             // on the message and cost/latency in the meta tail.
             mode: (meta?.mode === 'deterministic' ? 'deterministic' : 'llm') as Message['mode'],
+            // A deterministic row's reason survives too, so a reloaded
+            // specialist refusal still renders as a refusal (no offline
+            // footer / grey dot) — `_TurnSetup.meta_for` persists it.
+            fallbackReason: metaFallbackReason(meta),
             usedProvider: m.provider || undefined,
             usedModel: m.model || undefined,
             iterations: metaNumber(meta?.iterations),
             costUsd: metaNumber(meta?.cost_usd),
             latencyMs: metaNumber(meta?.latency_ms),
+            // Attribution survives reload: the tail carries used_profile
+            // (null = general Wizard) and profile_reason once the API persists them.
+            ...hydrateAttribution(meta),
+            deferredToolCalls: metaDeferredToolCalls(meta),
           };
         });
       setMessages(hydrated);
@@ -365,6 +588,27 @@ export default function WizardChat() {
       cancelled = true;
     };
   }, [searchParams]);
+
+  // Mascot follow-up once a confirm card settles: back to `asking` while
+  // sibling cards still wait, otherwise the outcome (happy / error / idle).
+  const settleMascot = (messageId: string, callName: string, outcome: 'happy' | 'error' | 'idle') => {
+    const msg = messagesRef.current.find(m => m.id === messageId);
+    setMascotState(pendingConfirmCalls(msg, callName).length > 0 ? 'asking' : outcome);
+  };
+
+  // "Skip": leave a confirm-class call un-run. The card stays as a record of
+  // what the Wizard proposed; the mascot stops asking once nothing is pending.
+  const dismissTool = (messageId: string, call: WizardChatToolCall) => {
+    setMessages(prev => prev.map(m =>
+      m.id === messageId
+        ? {
+          ...m,
+          toolStatus: { ...(m.toolStatus ?? {}), [call.name]: 'dismissed' },
+        }
+        : m,
+    ));
+    settleMascot(messageId, call.name, 'idle');
+  };
 
   const runTool = async (
     messageId: string,
@@ -399,6 +643,7 @@ export default function WizardChat() {
             }
             : m,
         ));
+        setMascotState('asking');
         return;
       }
 
@@ -425,6 +670,7 @@ export default function WizardChat() {
             : `✗ ${call.name} — ${summary}`,
         },
       ]);
+      settleMascot(messageId, call.name, result.ok ? 'happy' : 'error');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Tool call failed';
       setMessages(prev => prev.map(m =>
@@ -436,29 +682,20 @@ export default function WizardChat() {
           }
           : m,
       ));
+      settleMascot(messageId, call.name, 'error');
     }
   };
 
-  const handleAssistantToolCalls = (messageId: string, calls: WizardChatToolCall[]) => {
-    for (const call of calls) {
-      const schema = tools.get(call.name);
-      // Auto-class: run immediately. Confirm-class: surface an inline card
-      // with a Run button. Unknown tool: treat as confirm-required so we
-      // never silently execute something we don't recognize.
-      const isAuto = schema?.safety_class === 'auto';
-      if (isAuto) {
-        void runTool(messageId, call, true);
-      } else {
-        setMessages(prev => prev.map(m =>
-          m.id === messageId
-            ? {
-              ...m,
-              toolStatus: { ...(m.toolStatus ?? {}), [call.name]: 'awaiting-confirm' },
-            }
-            : m,
-        ));
-      }
-    }
+  // `confirm_required` (and `done.tool_calls`): show a Run / Skip card for
+  // every call. No client-side auto-run branch exists any more — the server
+  // owns auto-class execution and only hands the UI what needs a human.
+  const surfaceConfirmCards = (messageId: string, calls: WizardChatToolCall[]) => {
+    if (calls.length === 0) return;
+    setMessages(prev => prev.map(m =>
+      m.id === messageId
+        ? { ...m, toolCalls: calls, toolStatus: awaitingConfirm(calls, m.toolStatus) }
+        : m,
+    ));
   };
 
   const send = async () => {
@@ -516,21 +753,43 @@ export default function WizardChat() {
       toolCalls: [],
       toolStatus: {},
       serverToolTrace: [],
-      agentProfile: profile,
+      // Placeholder while streaming: an auto turn shows the general Wizard
+      // until `done` names the specialist that actually answered.
+      agentProfile: isAutoProfile(profile) ? GENERAL_PROFILE : profile,
+      attributionPending: isAutoProfile(profile),
     };
     setMessages(prev => [...prev, userMsg, assistantSeed]);
     setDraft('');
 
-    const history = messages
+    const history: WizardChatTurn[] = messages
       .filter(m => m.role !== 'system')
       .slice(-12)
       .map(m => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
+        // Continuity: assistant turns name the specialist that produced them
+        // so the concierge can stay with it on a weak follow-up ("and then?").
+        ...(m.role === 'assistant' && m.usedProfile !== undefined ? { used_profile: m.usedProfile } : {}),
       }));
 
     const updateAssistant = (mut: (m: Message) => Message) => {
       setMessages(prev => prev.map(m => (m.id === assistantId ? mut(m) : m)));
+    };
+
+    // Confirm-class calls this turn has surfaced so far. The server's `error`
+    // event does not repeat them (only `confirm_required` / `done` do), so the
+    // mascot mapping gets them attached: an error after confirm_required must
+    // resume `asking`, not idle under cards that still need a click.
+    //
+    // The event is spread, not rebuilt, so `fallback_reason` reaches the
+    // mapping as well: `deriveMascotState` tells a specialist's deliberate
+    // refusal (an answer — no banner, no error strip) from a genuine failure
+    // by that value, exactly as `wizardErrorBanner` does in the `error` case
+    // below. The bare `{ type: 'error' }` the catch block publishes carries
+    // no reason and is always a genuine failure.
+    let pendingConfirm: WizardChatToolCall[] = [];
+    const publishMascot = (event: WizardStreamEvent | { type: 'error' }) => {
+      applyMascotEvent(event.type === 'error' ? { ...event, tool_calls: pendingConfirm } : event);
     };
 
     try {
@@ -541,6 +800,7 @@ export default function WizardChat() {
         maxIterations,
         signal: controller.signal,
       })) {
+        publishMascot(event);
         switch (event.type) {
           case 'iteration':
             setIterationStatus(event.n === 1 ? 'thinking…' : `reacting (round ${event.n})…`);
@@ -552,6 +812,9 @@ export default function WizardChat() {
             setIterationStatus(`calling ${event.name}…`);
             break;
           case 'tool_result':
+            // Ran server-side OR refused by the whitelist (result.not_allowed).
+            // Both land in the trace; the renderers split them so refusals are
+            // never counted as used tools or mined for sources.
             updateAssistant(m => ({
               ...m,
               serverToolTrace: [
@@ -567,8 +830,8 @@ export default function WizardChat() {
             }));
             break;
           case 'confirm_required':
-            updateAssistant(m => ({ ...m, toolCalls: event.tool_calls }));
-            handleAssistantToolCalls(assistantId, event.tool_calls);
+            pendingConfirm = event.tool_calls ?? [];
+            surfaceConfirmCards(assistantId, event.tool_calls);
             break;
           case 'done':
             updateAssistant(m => ({
@@ -587,16 +850,65 @@ export default function WizardChat() {
               costCeilingHit: event.cost_ceiling_hit,
               costCeilingUsd: event.cost_ceiling_usd,
               routingReason: event.routing_reason,
+              // Attribution: the concierge may have routed this turn to a
+              // hidden specialist. null = the general Wizard answered;
+              // undefined = an older API without the field (keep the seed).
+              usedProfile: event.used_profile,
+              agentProfile: event.used_profile ?? m.agentProfile,
+              profileReason: event.profile_reason ?? undefined,
+              // The turn is over: whatever `agentProfile` now says is final.
+              attributionPending: false,
+              // Confirm-class cards normally arrive via confirm_required; if
+              // only `done` carried them, show the cards (never run them).
+              toolCalls: m.toolCalls?.length ? m.toolCalls : (event.tool_calls ?? []),
+              toolStatus: m.toolCalls?.length
+                ? m.toolStatus
+                : awaitingConfirm(event.tool_calls ?? [], m.toolStatus),
+              // Auto-class calls the server skipped (depth 1 / cost ceiling):
+              // display only, never executed client-side.
+              deferredToolCalls: event.deferred_tool_calls ?? [],
             }));
             setIterationStatus(null);
             break;
-          case 'error':
-            if (event.fallback) {
-              updateAssistant(m => ({ ...m, content: event.fallback as string, mode: 'deterministic' }));
-            }
-            setError(event.error);
+          case 'error': {
+            // Two shapes share this event and BOTH carry `fallback_reason`.
+            // (a) The LLM path failed ("engine not initialized" or the
+            // exception text) and the offline helper saved the turn:
+            // `fallback` is the answer and the banner explains why it, not
+            // the model, answered. (b) A specialist itself declined
+            // (local-only profile, no local provider): `error` === `fallback`
+            // and `used_profile` says who — the bubble shows that text once,
+            // attributed, with no red banner. `wizardErrorBanner` tells them
+            // apart by the reason's value, never by its presence — and so does
+            // the mascot (`publishMascot` above ran first): a refusal never
+            // plays the error strip or announces "something went wrong".
+            // The reason rides onto the message as well, so the bubble's
+            // footer and status dot (`isDeliberateRefusalMessage`) make the
+            // same call instead of keying on `mode` alone.
+            const attributed = event.used_profile !== undefined;
+            updateAssistant(m => ({
+              ...m,
+              ...(event.fallback
+                ? {
+                  content: event.fallback,
+                  mode: 'deterministic' as const,
+                  fallbackReason: event.fallback_reason ?? null,
+                }
+                : {}),
+              ...(attributed
+                ? {
+                  usedProfile: event.used_profile ?? null,
+                  agentProfile: event.used_profile ?? GENERAL_PROFILE,
+                  profileReason: event.profile_reason ?? undefined,
+                  attributionPending: false,
+                }
+                : {}),
+            }));
+            const banner = wizardErrorBanner(event);
+            if (banner) setError(banner);
             setIterationStatus(null);
             break;
+          }
         }
       }
     } catch (err) {
@@ -604,6 +916,7 @@ export default function WizardChat() {
         // User reissued the chat — silent abort.
       } else {
         setError(err instanceof Error ? err.message : 'Wizard chat failed');
+        publishMascot({ type: 'error' });
       }
     } finally {
       setSending(false);
@@ -678,7 +991,11 @@ export default function WizardChat() {
             message={message}
             tools={tools}
             profileMap={profileMap}
-            onConfirmTool={(call) => runTool(message.id, call, true)}
+            onConfirmTool={(call) => {
+              setMascotState('working');
+              void runTool(message.id, call, true);
+            }}
+            onDismissTool={(call) => dismissTool(message.id, call)}
           />
         ))}
         {iterationStatus && (
@@ -713,7 +1030,12 @@ export default function WizardChat() {
         <div className="flex items-end gap-2">
           <textarea
             value={draft}
-            onChange={e => setDraft(e.target.value)}
+            onChange={e => {
+              setDraft(e.target.value);
+              // Settles happy / error / sleeping back to idle; never yanks
+              // the mascot out of thinking / working / asking.
+              noteMascotTyping();
+            }}
             onKeyDown={handleKey}
             placeholder="Ask the Wizard — about your setup, what to install, what just broke..."
             rows={2}
@@ -735,15 +1057,11 @@ export default function WizardChat() {
           </button>
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono" style={{ color: 'var(--text-faint)' }}>
-          <AgentProfilePicker
-            value={profile}
-            onChange={setProfile}
-            onCreateNew={() => setCreatingAgent(true)}
-          />
           <CreateAgentModal
             open={creatingAgent}
             onClose={() => setCreatingAgent(false)}
             onCreated={(name) => setProfile(name)}
+            toolNames={Array.from(tools.keys())}
           />
           <div
             className="flex items-center gap-1"
@@ -772,6 +1090,23 @@ export default function WizardChat() {
               {maxIterations}
             </span>
           </div>
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen(open => !open)}
+            aria-expanded={advancedOpen}
+            aria-controls="wizard-advanced"
+            className="flex items-center gap-1 transition-colors hover:text-[#76B900]"
+            style={{ color: 'var(--text-muted)' }}
+            title="Pin a specialist instead of letting the Wizard choose one per turn"
+          >
+            <span aria-hidden>{advancedOpen ? '▾' : '▸'}</span>
+            <span>Advanced</span>
+            {!isAutoProfile(profile) && (
+              <span style={{ color: '#76B900' }}>
+                · pinned: {profileMap.get(profile)?.title ?? profile}
+              </span>
+            )}
+          </button>
           <a
             href={
               draft.trim()
@@ -795,6 +1130,23 @@ export default function WizardChat() {
             files into the chat to ingest them.
           </span>
         </div>
+        {advancedOpen && (
+          <div
+            id="wizard-advanced"
+            className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono"
+            style={{ color: 'var(--text-faint)' }}
+          >
+            <AgentProfilePicker
+              value={profile}
+              onChange={setProfile}
+              onCreateNew={() => setCreatingAgent(true)}
+            />
+            <span>
+              Auto lets the Wizard route each question to a hidden specialist;
+              a pin keeps one persona and its tool set for every turn.
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -906,12 +1258,13 @@ function EmptyState({
           AI Wizard
         </div>
         <div className="mt-2 text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-          Pick an agent to start.
+          Ask anything — the Wizard picks the specialist.
         </div>
         <div className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          Each profile maps to a persona + a preferred LLM. The default Wizard
-          reads your live GPU, storage, providers, and vault before it answers
-          and can run repairs, refresh models, and validate keys.
+          The Wizard reads your live GPU, storage, providers, and vault before
+          it answers, and routes each question to a hidden specialist that can
+          run repairs, refresh models, and validate keys. Pick a card below to
+          pin one persona instead.
         </div>
       </div>
 
@@ -1015,6 +1368,13 @@ const PROFILE_ACCENTS: Record<string, string> = {
 
 function statusForMessage(message: Message): { color: string; label: string } | null {
   if (message.mode === 'deterministic') {
+    // A pinned local-only specialist declining is ITS answer, not the offline
+    // helper's: keep the local green the specialist would normally wear
+    // (nothing left the box) and say so on hover. Only a genuine fallback —
+    // the helper standing in for a failed model path — is grey "offline".
+    if (isDeliberateRefusalMessage(message)) {
+      return { color: '#76B900', label: 'declined' };
+    }
     return { color: '#737373', label: 'offline' };
   }
   if (message.fallbackFrom) {
@@ -1034,11 +1394,13 @@ function MessageBlock({
   tools,
   profileMap,
   onConfirmTool,
+  onDismissTool,
 }: {
   message: Message;
   tools: Map<string, WizardToolSchema>;
   profileMap: Map<string, AgentProfileSchema>;
   onConfirmTool: (call: WizardChatToolCall) => void;
+  onDismissTool: (call: WizardChatToolCall) => void;
 }) {
   if (message.role === 'system') {
     return (
@@ -1085,6 +1447,7 @@ function MessageBlock({
           <div
             className="mb-1 text-[10px] font-mono font-bold uppercase tracking-[0.14em]"
             style={{ color: accent ?? '#76B900' }}
+            title={message.profileReason ?? undefined}
           >
             {profile.title}
           </div>
@@ -1092,7 +1455,21 @@ function MessageBlock({
         <div>{message.content}</div>
 
         {!isUser && message.serverToolTrace && message.serverToolTrace.length > 0 && (
-          <ServerToolTrace trace={message.serverToolTrace} />
+          <ServerToolTrace
+            trace={message.serverToolTrace}
+            // An auto turn streams under the general-Wizard placeholder until
+            // `done` names who answered; a refusal seen before then belongs to
+            // "this specialist", not to "AI Wizard".
+            specialist={
+              message.attributionPending
+                ? 'this specialist'
+                : (profile?.title ?? message.agentProfile ?? 'this specialist')
+            }
+          />
+        )}
+
+        {!isUser && message.deferredToolCalls && message.deferredToolCalls.length > 0 && (
+          <DeferredToolNotes calls={message.deferredToolCalls} />
         )}
 
         {!isUser && message.serverToolTrace && message.serverToolTrace.length > 0 && (
@@ -1130,7 +1507,7 @@ function MessageBlock({
           </div>
         )}
 
-        {message.mode === 'deterministic' && (
+        {message.mode === 'deterministic' && !isDeliberateRefusalMessage(message) && (
           <div className="mt-1 text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-faint)' }}>
             offline helper
           </div>
@@ -1163,6 +1540,7 @@ function MessageBlock({
             status={message.toolStatus?.[call.name] ?? 'idle'}
             result={message.toolResults?.[call.name]}
             onConfirm={() => onConfirmTool(call)}
+            onDismiss={() => onDismissTool(call)}
           />
         ))}
       </div>
@@ -1176,14 +1554,17 @@ function ToolCard({
   status,
   result,
   onConfirm,
+  onDismiss,
 }: {
   call: WizardChatToolCall;
   schema: WizardToolSchema | undefined;
-  status: 'idle' | 'running' | 'ok' | 'error' | 'awaiting-confirm';
+  status: ToolCardStatus;
   result?: string;
   onConfirm: () => void;
+  onDismiss: () => void;
 }) {
-  const isConfirm = schema?.safety_class === 'confirm' || !schema; // unknown tools default to confirm
+  // Every call that reaches a card needs a click, whatever the catalog says
+  // its safety class is — the server already ran what it was willing to.
   const description = schema?.description ?? call.name;
 
   let badge = '';
@@ -1205,9 +1586,13 @@ function ToolCard({
       badge = 'Needs confirmation';
       badgeColor = '#d97706';
       break;
+    case 'dismissed':
+      badge = 'Skipped';
+      badgeColor = '#737373';
+      break;
     default:
-      badge = isConfirm ? 'Click to run' : 'Auto';
-      badgeColor = isConfirm ? '#d97706' : '#76B900';
+      badge = 'Click to run';
+      badgeColor = '#d97706';
   }
 
   return (
@@ -1224,14 +1609,25 @@ function ToolCard({
             {badge}
           </span>
         </div>
-        {isConfirm && (status === 'idle' || status === 'awaiting-confirm') && (
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="btn-primary px-2 py-1 text-[10px] font-mono"
-          >
-            Run
-          </button>
+        {(status === 'idle' || status === 'awaiting-confirm') && (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="rounded-sm border px-2 py-1 text-[10px] font-mono transition-colors hover:bg-[var(--bg-hover)]"
+              style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+              title="Leave this tool un-run"
+            >
+              Skip
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              className="btn-primary px-2 py-1 text-[10px] font-mono"
+            >
+              Run
+            </button>
+          </div>
         )}
       </div>
       <div className="mt-1" style={{ color: 'var(--text-secondary)' }}>
@@ -1275,41 +1671,99 @@ function formatToolResultSummary(name: string, result: Record<string, unknown> |
 }
 
 /**
+ * DeferredToolNotes lists auto-class calls the server chose NOT to run this
+ * turn (Depth 1 or the profile's cost ceiling) with the reason it gave.
+ * Informational only — these never execute client-side; the user can raise
+ * Depth or ask again. Kept out of ServerToolTrace so "used N tools" stays an
+ * honest count of what actually ran.
+ */
+function DeferredToolNotes({ calls }: { calls: WizardDeferredToolCall[] }) {
+  return (
+    <div
+      className="mt-1 space-y-0.5 text-[10px] font-mono"
+      style={{ color: 'var(--text-faint)' }}
+      aria-label="Tools not run this turn"
+    >
+      {calls.map((c, i) => (
+        <div key={`${c.name}-${i}`}>
+          not run: <span style={{ color: 'var(--text-muted)' }}>{c.name}</span>
+          {c.reason ? ` — ${c.reason}` : ''}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Split a trace into what actually ran and what the whitelist refused. */
+function splitToolTrace(trace: WizardChatToolResult[]): {
+  ran: WizardChatToolResult[];
+  refused: WizardChatToolResult[];
+} {
+  const ran: WizardChatToolResult[] = [];
+  const refused: WizardChatToolResult[] = [];
+  for (const entry of trace) (isRefusedToolResult(entry) ? refused : ran).push(entry);
+  return { ran, refused };
+}
+
+/**
  * ServerToolTrace renders auto-class tool calls that ran server-side
  * inside the Wizard's follow-up loop, so the user can see "Wizard
  * called rag_ask → got 4 chunks from notes.md, ideas.md" rather than
  * just an answer that appears out of nowhere.
  *
+ * Whitelist refusals travel in the same list (`result.not_allowed`) but
+ * never ran, so they are split out here: the "used N tools" header counts
+ * only what executed, and each refusal is a muted one-liner instead.
+ *
  * Collapsed by default to keep the chat feeling like chat. Click to
  * expand the details (args + raw result excerpt) for the curious.
  */
-function ServerToolTrace({ trace }: { trace: WizardChatToolResult[] }) {
+function ServerToolTrace({ trace, specialist }: { trace: WizardChatToolResult[]; specialist: string }) {
   const [open, setOpen] = useState(false);
-  if (trace.length === 0) return null;
+  const { ran, refused } = splitToolTrace(trace);
+  if (ran.length === 0 && refused.length === 0) return null;
   return (
-    <div className="mt-2 rounded-md border" style={{ background: 'var(--bg-subtle)', borderColor: 'var(--border)' }}>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="flex w-full items-center justify-between px-2 py-1 text-[10px] font-mono"
-        style={{ color: 'var(--text-muted)' }}
-      >
-        <span>
-          {open ? '▾' : '▸'} Wizard used {trace.length} tool{trace.length === 1 ? '' : 's'} to answer
-          <span style={{ color: 'var(--text-faint)' }}>
-            {' '}
-            ({trace.map(t => t.name).join(' → ')})
-          </span>
-        </span>
-      </button>
-      {open && (
-        <div className="border-t px-2 py-2 space-y-2" style={{ borderColor: 'var(--border)' }}>
-          {trace.map((entry, i) => (
-            <ServerToolTraceItem key={`${entry.name}-${i}`} entry={entry} />
+    <>
+      {ran.length > 0 && (
+        <div className="mt-2 rounded-md border" style={{ background: 'var(--bg-subtle)', borderColor: 'var(--border)' }}>
+          <button
+            type="button"
+            onClick={() => setOpen(o => !o)}
+            className="flex w-full items-center justify-between px-2 py-1 text-[10px] font-mono"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            <span>
+              {open ? '▾' : '▸'} Wizard used {ran.length} tool{ran.length === 1 ? '' : 's'} to answer
+              <span style={{ color: 'var(--text-faint)' }}>
+                {' '}
+                ({ran.map(t => t.name).join(' → ')})
+              </span>
+            </span>
+          </button>
+          {open && (
+            <div className="border-t px-2 py-2 space-y-2" style={{ borderColor: 'var(--border)' }}>
+              {ran.map((entry, i) => (
+                <ServerToolTraceItem key={`${entry.name}-${i}`} entry={entry} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {refused.length > 0 && (
+        <div
+          className="mt-1 space-y-0.5 text-[10px] font-mono"
+          style={{ color: 'var(--text-faint)' }}
+          aria-label="Tools this specialist may not use"
+        >
+          {refused.map((entry, i) => (
+            <div key={`${entry.name}-refused-${i}`}>
+              not allowed for {specialist}:{' '}
+              <span style={{ color: 'var(--text-muted)' }}>{entry.name}</span>
+            </div>
           ))}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -1461,6 +1915,9 @@ function collectSources(trace: WizardChatToolResult[]): SourceEntry[] {
   const out: SourceEntry[] = [];
   const seen = new Set<string>();
   for (const entry of trace) {
+    // A refused call never ran, so it has nothing to cite — skip it even if
+    // a future payload happened to carry a `result` body.
+    if (isRefusedToolResult(entry)) continue;
     const inner = (entry.result?.result as Record<string, unknown> | undefined) ?? undefined;
     if (!inner) continue;
     if (entry.name === 'rag_ask' || entry.name === 'rag_ask_vault') {

@@ -92,6 +92,11 @@ jobs:
           - os: ubuntu-latest
             asset: nvh-linux-x86_64
             sep: ':'
+          # DGX Spark (GB10, aarch64 DGX OS) — see #136. Built on GitHub's
+          # arm64 Ubuntu runner so the binary runs on DGX OS without Python.
+          - os: ubuntu-24.04-arm
+            asset: nvh-linux-arm64
+            sep: ':'
           - os: macos-latest
             asset: nvh-macos-arm64
             sep: ':'
@@ -168,6 +173,13 @@ jobs:
           merge-multiple: true
       - name: List assets
         run: ls -la release-assets/
+      # start-linux.sh verifies the binary it downloads against this file when
+      # it is present (releases before 0.43 have none, so it warns instead).
+      - name: Write SHA256SUMS
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

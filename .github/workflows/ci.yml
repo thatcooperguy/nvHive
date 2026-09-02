@@ -15,11 +15,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  # Python test matrix: Linux launch target only.
+  # Python test matrix: Linux launch targets only.
   #
-  # nvHive is currently launching on rootless NVIDIA Linux cloud desktops,
-  # specifically Ubuntu 24.04-style VMs with NVIDIA GPUs. Keep macOS/Windows
-  # work paused until the Linux installer, wizard, and GPU journey are stable.
+  # nvHive launches on rootless NVIDIA Linux desktops (Ubuntu 24.04-style
+  # x86_64 VMs) and, since 0.43 (#136), on DGX Spark (GB10, aarch64 DGX OS),
+  # so the suite runs on both x86_64 and arm64 runners. Keep macOS and x86
+  # Windows paused; Windows on Arm (RTX Spark) joins when hardware ships.
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -27,6 +28,9 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python-version: ["3.11", "3.12"]
+        include:
+          - os: ubuntu-24.04-arm
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python

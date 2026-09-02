@@ -10,6 +10,7 @@ from nvh.integrations.wizard.tools import (
     WizardTool,
     WizardToolRegistry,
     default_registry,
+    format_summary,
 )
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -129,6 +130,37 @@ async def test_execute_confirm_tool_requires_confirmation_flag() -> None:
     assert result["arguments"]["target"] == "groq"
     # Summary template gets formatted with the args.
     assert "groq" in result["summary"]
+
+
+@pytest.mark.asyncio
+async def test_execute_confirm_tool_missing_required_argument_still_returns_card() -> None:
+    """A model call that forgot a REQUIRED argument must yield the confirm
+    card (with ``?`` in the summary), not a KeyError that the HTTP layer
+    turns into a 500 on /v1/wizard/tools/execute."""
+    reg = WizardToolRegistry()
+    reg.register(_make_confirm_tool())
+    result = await reg.execute("stub_confirm", arguments={})
+    assert result["ok"] is False
+    assert result["needs_confirmation"] is True
+    assert result["summary"] == "About to act on ?."
+    # No arguments at all is the same story.
+    result = await reg.execute("stub_confirm")
+    assert result["needs_confirmation"] is True
+    assert result["summary"] == "About to act on ?."
+    assert result["arguments"] == {}
+
+
+def test_format_summary_never_raises() -> None:
+    assert format_summary("Act on {target}.", {"target": "groq"}) == "Act on groq."
+    assert format_summary("Act on {target}.", {}) == "Act on ?."
+    assert format_summary("Act on {target}.", None) == "Act on ?."
+    assert format_summary("{domain}.{service}", {"domain": "light"}) == "light.?"
+    # Positional / attribute / index placeholders cannot be satisfied by a
+    # name mapping: the raw template comes back rather than an exception.
+    assert format_summary("{0} and {a.b}", {}) == "{0} and {a.b}"
+    assert format_summary("{a[0]}", {"a": 3}) == "{a[0]}"
+    assert format_summary("{n:d}", {"n": "not-an-int"}) == "{n:d}"
+    assert format_summary("", {"x": 1}) == ""
 
 
 @pytest.mark.asyncio

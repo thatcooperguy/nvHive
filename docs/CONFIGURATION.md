@@ -213,6 +213,7 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVH_API_URL` | `http://127.0.0.1:8000` | API server the `nvh status --smoke` / `--report` probes exercise (`nvh test --api URL` sets it); requests carry `Authorization: Bearer $HIVE_API_KEY` when that is set |
 | `NVH_SYNC_LEARNING_LOAD`, `NVH_LEARNING_LOAD_TIMEOUT` | `0`, `3` | `1` loads learned routing scores before the engine answers (waiting up to the timeout in seconds) instead of in the background |
 | `NVH_TELEMETRY` | unset | `1` enables the opt-in, local-only install-health log at `$NVH_HOME/telemetry/events.jsonl`; nothing is ever sent ([PRIVACY.md](../PRIVACY.md)) |
+| `NVH_PLATFORM_WARMUP` | unset (on) | `0` skips the one-time platform probe the API runs in the background at startup (cloud-metadata lookup, `sudo -n -k true` for sudo-group members); the Wizard then classifies the machine from local DMI / os-release signals only. Never runs on the chat path either way |
 | `NVH_CATALOG_URL` | GitHub raw URL | remote setup catalog; the bundled copy is the fallback |
 | `NVH_RAG_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for the RAG store |
 | `NVH_RAG_AUTO_PULL` | `1` | `0` stops the embedder pulling a missing embedding model on first use |
@@ -220,6 +221,9 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVH_WIZARD_AUTOFOLD_VAULT` | `1` | `0` stops the Wizard folding a strongly matching vault note into its system prompt |
 | `NVH_SEARXNG_URL`, `BRAVE_API_KEY` | unset | backends for the Wizard's `web_search`: SearXNG wins, then Brave, then key-free DuckDuckGo |
 | `SEARXNG_URL`, `BRAVE_SEARCH_KEY`, `GOOGLE_SEARCH_KEY` + `GOOGLE_CX` | unset | web-search backends for the agent `web_search` tool (DuckDuckGo needs nothing) |
+| `HASS_URL` | unset | Home Assistant instance the Wizard's `home_assistant_*` tools talk to (`HOME_ASSISTANT_URL` is accepted too). Required whenever `HASS_TOKEN` is set — no address is ever guessed, so the token is never sent to whichever host answers an mDNS name. Prefer `https://`; plain `http://` is accepted only for loopback, RFC 1918 / IPv6-ULA addresses and `.local` names, and `home_assistant_status` then reports `insecure_transport: true` |
+| `HASS_TOKEN` | unset | Home Assistant long-lived access token (profile → Security → Long-lived access tokens); unset = the tools explain how to connect instead of calling out (`HOME_ASSISTANT_TOKEN` is accepted too) |
+| `NVH_HASS_ALLOW_ADMIN` | unset | `home_assistant_call` is limited to device-control domains by default (`light`, `switch`, `fan`, `cover`, `climate`, `media_player`, `scene`, `vacuum`, `humidifier`, `water_heater`, `lock`, `input_boolean`/`input_number`/`input_select`, `number`, `select`, `button`, `notify`). `1` also allows every other domain (`script.*`, `automation.*`, `update.*`, …); `all` additionally allows the host-reaching surface — `hassio.*`, `shell_command.*`, `python_script.*`, `homeassistant.restart`/`stop` — which `1` still refuses |
 | `NVAPI_KEY` | unset | NVIDIA-hosted image generation for the Wizard's portrait tool |
 | `NVH_NVIDIA_IMAGE_ENDPOINT`, `NVH_NVIDIA_IMAGE_MODEL` | NVIDIA's hosted SDXL Turbo endpoint, unset | endpoint and model that generation uses |
 | `NVH_COMFYUI_CHECKPOINT` | `sd_xl_base_1.0.safetensors` | checkpoint the local ComfyUI portrait workflow renders with |

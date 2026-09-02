@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import os
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -558,3 +560,60 @@ class TestCheckNvhOnPath:
             assert "full_path" in result
             assert "bin_dir" in result
             assert "shell_rc" in result
+
+
+def _gpu_row(name: str, vram_mb: int, *, unified: bool = False):
+    from nvh.utils.gpu import GPUInfo
+
+    return GPUInfo(
+        name=name, vram_mb=vram_mb, vram_gb=round(vram_mb / 1024, 1), driver_version="580.65",
+        cuda_version="13.0", utilization_pct=0, memory_used_mb=0, memory_free_mb=vram_mb, index=0,
+        unified_memory=unified,
+    )
+
+
+class TestGuidedSetupGpuRows:
+    """Step 1 renders every detected row through gpu.format_gpu_memory: a GPU whose memory could
+    not be read (kept at 0 GB by detect_gpu_status) is named as unreadable — not '(0 GB VRAM)'
+    with 'Total VRAM 0 GB' under it and 'No GPU detected' after it."""
+
+    @staticmethod
+    def _run(monkeypatch, tmp_path, gpus, total_vram: float) -> str:
+        from rich.console import Console
+
+        from nvh.cli import setup as setup_mod
+
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.setattr(setup_mod, "load_env_keys", lambda *a, **k: None)
+        monkeypatch.setattr(setup_mod, "_detect_gpu_info", lambda: (gpus, total_vram, "tier_1", "One local model"))
+        monkeypatch.setattr(setup_mod, "_ollama_running", lambda: (False, []))
+        monkeypatch.setattr(setup_mod, "_ensure_ollama", lambda console: (False, []))
+        monkeypatch.setattr(setup_mod, "_check_provider_key", lambda name, env_var: None)
+        monkeypatch.setattr(setup_mod, "_get_clipboard", lambda: "")
+        monkeypatch.setattr(setup_mod, "_write_config", lambda configured, ollama_enabled: tmp_path / "config.yaml")
+        monkeypatch.setattr(setup_mod, "_check_nvh_on_path", lambda: None)
+        console = Console(file=io.StringIO(), width=200, force_terminal=False, color_system=None)
+        console.input = lambda *a, **k: ""  # every key prompt: skip
+        setup_mod.guided_setup(console)
+        return console.file.getvalue()
+
+    def test_unreadable_row_is_named_not_zeroed(self, monkeypatch, tmp_path):
+        out = self._run(monkeypatch, tmp_path, [_gpu_row("NVIDIA GeForce RTX 4090", 0)], 0.0)
+        assert "NVIDIA GeForce RTX 4090 (memory unreadable)" in out
+        assert "0 GB VRAM" not in out
+        assert re.search(r"Total VRAM\s+memory unreadable", out), out
+        assert re.search(r"Total VRAM\s+0 GB", out) is None
+        assert "GPU memory could not be read" in out
+        assert "No GPU detected" not in out
+
+    def test_readable_rows_render_byte_identically(self, monkeypatch, tmp_path):
+        out = self._run(monkeypatch, tmp_path, [_gpu_row("NVIDIA GeForce RTX 4090", 24576)], 24.0)
+        assert "NVIDIA GeForce RTX 4090 (24 GB VRAM)" in out
+        assert re.search(r"Total VRAM\s+24 GB\s*\n", out), out  # Rich pads the column before the newline
+        assert "memory unreadable" not in out
+
+    def test_unified_row_says_unified(self, monkeypatch, tmp_path):
+        out = self._run(monkeypatch, tmp_path, [_gpu_row("NVIDIA GB10", 131072, unified=True)], 128.0)
+        assert "NVIDIA GB10 (128 GB unified)" in out
+        assert "GB VRAM)" not in out

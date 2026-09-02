@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import sys
 import types
 from decimal import Decimal
 from pathlib import Path
@@ -647,3 +648,89 @@ class TestDispatcher:
 
     def test_no_args_opens_repl(self, dispatch):
         assert dispatch() == (["repl"], None)
+
+
+# ---------------------------------------------------------------------------
+# GPU rows the CLI renders through gpu.format_gpu_memory
+# ---------------------------------------------------------------------------
+
+def _gpu_row(name: str, vram_mb: int, *, unified: bool = False):
+    from nvh.utils.gpu import GPUInfo
+
+    return GPUInfo(
+        name=name, vram_mb=vram_mb, vram_gb=round(vram_mb / 1024, 1), driver_version="580.65",
+        cuda_version="13.0", utilization_pct=0, memory_used_mb=0, memory_free_mb=vram_mb, index=0,
+        unified_memory=unified,
+    )
+
+
+class TestGpuMemoryRendering:
+    """`nvh setup` (Step 3/3) and `nvh bench` (header panel) printed a GPU whose memory could not
+    be read as '(0GB VRAM)' / '(0 GB VRAM)' — a real, empty card. Both sites now spell the row
+    through gpu.format_gpu_memory; readable rows keep their exact old text."""
+
+    @pytest.fixture(autouse=True)
+    def _offline(self, monkeypatch, tmp_path):
+        import httpx
+
+        from nvh.cli import setup as setup_mod
+
+        def no_network(*args, **kwargs):
+            raise httpx.ConnectError("offline under test")
+
+        monkeypatch.setenv("COLUMNS", "200")  # no Rich wrapping of the asserted lines
+        monkeypatch.setattr(httpx, "get", no_network)
+        monkeypatch.setattr(setup_mod, "_ollama_running", lambda: (False, []))
+        monkeypatch.setattr(setup_mod, "_write_config", lambda configured, ollama_enabled: tmp_path / "config.yaml")
+
+    @staticmethod
+    def _setup(runner: CliRunner, monkeypatch, gpus) -> str:
+        stub_keyring = types.SimpleNamespace(get_password=lambda *a, **k: None, set_password=lambda *a, **k: None)
+        monkeypatch.setitem(sys.modules, "keyring", stub_keyring)
+        monkeypatch.setattr("nvh.providers.registry.resolve_provider_key", lambda name: (None, None))
+        monkeypatch.setattr(typer, "confirm", lambda *a, **k: False)              # no provider signups
+        monkeypatch.setattr(typer, "prompt", lambda *a, **k: k.get("default", ""))  # email / model choice: defaults
+        monkeypatch.setattr("nvh.utils.gpu.detect_gpus", lambda: gpus)
+        result = runner.invoke(cli_main.app, ["setup", "--accept-terms"])
+        assert result.exit_code == 0, result.output
+        return _plain(result.output)
+
+    def test_setup_names_an_unreadable_gpu(self, runner: CliRunner, monkeypatch):
+        out = self._setup(runner, monkeypatch, [_gpu_row("NVIDIA GeForce RTX 4090", 0)])
+        assert "Detected: NVIDIA GeForce RTX 4090 (memory unreadable)" in out
+        assert "0GB VRAM" not in out and "0 GB VRAM" not in out
+
+    def test_setup_readable_gpu_line_is_unchanged(self, runner: CliRunner, monkeypatch):
+        out = self._setup(runner, monkeypatch, [_gpu_row("NVIDIA GeForce RTX 4090", 24576)])
+        assert "Detected: NVIDIA GeForce RTX 4090 (24GB VRAM)" in out
+
+    @staticmethod
+    def _bench(runner: CliRunner, monkeypatch, gpus) -> str:
+        import httpx
+
+        from nvh.core import benchmark as bench_mod
+
+        monkeypatch.setattr("nvh.utils.gpu.detect_gpus", lambda: gpus)
+        tags = types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"models": [{"name": "qwen3:8b"}]})
+        monkeypatch.setattr(httpx, "get", lambda *a, **k: tags)
+
+        async def fake_single(provider, model, prompt, max_tokens=512):
+            return bench_mod.BenchmarkResult(
+                model=model, gpu_name=gpus[0].name, vram_gb=gpus[0].vram_gb, prompt_tokens=10,
+                output_tokens=64, time_to_first_token_ms=120, total_time_ms=1000,
+                tokens_per_second=64.0, prompt_eval_rate=200.0,
+            )
+
+        monkeypatch.setattr(bench_mod, "run_single_benchmark", fake_single)
+        result = runner.invoke(cli_main.app, ["bench", "--quick"])
+        assert result.exit_code == 0, result.output
+        return _plain(result.output)
+
+    def test_bench_header_names_an_unreadable_gpu(self, runner: CliRunner, monkeypatch):
+        out = self._bench(runner, monkeypatch, [_gpu_row("NVIDIA GeForce RTX 4090", 0)])
+        assert "GPU:   NVIDIA GeForce RTX 4090 (memory unreadable)" in out
+        assert "0 GB VRAM" not in out
+
+    def test_bench_header_readable_gpu_is_unchanged(self, runner: CliRunner, monkeypatch):
+        out = self._bench(runner, monkeypatch, [_gpu_row("NVIDIA GeForce RTX 4090", 24576)])
+        assert "GPU:   NVIDIA GeForce RTX 4090 (24 GB VRAM)" in out

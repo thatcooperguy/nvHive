@@ -377,9 +377,12 @@ async def test_wizard_chat_enable_followup_false_preserves_oneshot_behavior() ->
         result = await chat_mod.wizard_chat("hi", enable_followup=False)
 
     assert result["iterations"] == 1
-    # Nothing executed server-side when follow-up is off — the call is
-    # surfaced to the caller exactly like before.
+    # Nothing executed server-side when follow-up is off. The auto-class call
+    # is reported as deferred (with the reason) — never offered to the UI as
+    # a confirm card in ``tool_calls``, which the UI would auto-run.
     run_auto.assert_not_called()
     assert result["tool_results"] == []
-    assert len(result["tool_calls"]) == 1
-    assert result["tool_calls"][0]["name"] == "refresh_models"
+    assert result["tool_calls"] == []
+    assert result["deferred_tool_calls"] == [
+        {"name": "refresh_models", "arguments": {}, "reason": "followup_disabled"},
+    ]

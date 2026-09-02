@@ -15,13 +15,19 @@
 
 import { useEffect, useState } from 'react';
 import { getGPUInfo, getStorageStatus } from '@/lib/api';
+import UnifiedMemoryTag, { GpuBlockedSummary, MemoryUnreadableTag, gpuStatusOf, isMemoryUnreadable, primaryGpu } from '@/components/UnifiedMemoryTag';
 import type { GPUDevice, StorageStatus } from '@/lib/types';
 
 interface HardwareSnapshot {
+  /** The primary row — first sized, else first (never blindly gpus[0]); null when none is listed. */
   gpu: GPUDevice | null;
+  /** Every listed row, so the summary line can name an unreadable one beside the primary. */
+  gpus: GPUDevice[];
   storage: StorageStatus | null;
   detection_summary: string;
   gpu_detected: boolean;
+  /** 'ready' | 'blocked' | 'unavailable' | 'not-detected' (or undefined when the API gave neither field). */
+  status: string | undefined;
 }
 
 function shortGpuName(name: string): string {
@@ -58,12 +64,16 @@ function useHardwareSnapshot(refreshMs = 5000): HardwareSnapshot | null {
           getStorageStatus().catch(() => null),
         ]);
         if (cancelled) return;
-        const gpu = gpuInfo && gpuInfo.gpus.length > 0 ? gpuInfo.gpus[0] : null;
+        // The row the API sizes against: on a multi-GPU box whose GPU 0 is
+        // unreadable, that is GPU 1 — not gpus[0].
+        const gpu = primaryGpu(gpuInfo?.gpus);
         setSnap({
           gpu,
+          gpus: gpuInfo?.gpus ?? [],
           storage: storage ?? null,
           detection_summary: gpuInfo?.summary ?? '',
           gpu_detected: !!gpu,
+          status: gpuStatusOf(gpuInfo),
         });
       } catch {
         // Swallow — the widget should gracefully no-op when offline.
@@ -113,6 +123,11 @@ export function HardwareWidgetCompact() {
   const color = utilColor(pct);
   const usedGb = Math.round(gpu.memory_used_mb / 1024 * 10) / 10;
   const totalGb = gpu.vram_gb;
+  // GB10 / DGX Spark reports one CPU/GPU-shared pool, not dedicated VRAM.
+  const poolLabel = gpu.unified_memory ? 'unified memory' : 'VRAM';
+  // Visible but unsized: the API keeps the row at 0 MiB so the GPU's name is
+  // still seen; "0/0 GB" would present that unknown as a figure.
+  const unreadable = isMemoryUnreadable(gpu);
 
   return (
     <div
@@ -121,14 +136,21 @@ export function HardwareWidgetCompact() {
         background: 'var(--bg-card)',
         borderColor: 'var(--border)',
       }}
-      title={`${gpu.name} — ${pct}% util, ${usedGb} / ${totalGb} GB VRAM`}
+      title={unreadable
+        ? `${gpu.name} — ${pct}% util, ${snap.detection_summary || 'memory unreadable'}`
+        : `${gpu.name} — ${pct}% util, ${usedGb} / ${totalGb} GB ${poolLabel}`}
     >
       <span className="nvidia-pulse h-1.5 w-1.5 flex-shrink-0 rounded-full" style={{ background: color }} />
       <span style={{ color: 'var(--text-secondary)' }}>{shortGpuName(gpu.name)}</span>
       <span style={{ color }}>{pct}%</span>
-      <span style={{ color: 'var(--text-muted)' }}>
-        {usedGb}/{totalGb} GB
-      </span>
+      {unreadable ? (
+        <MemoryUnreadableTag summary={snap.detection_summary} />
+      ) : (
+        <span style={{ color: 'var(--text-muted)' }}>
+          {usedGb}/{totalGb} GB
+        </span>
+      )}
+      <UnifiedMemoryTag show={gpu.unified_memory} />
     </div>
   );
 }
@@ -176,7 +198,13 @@ export function HardwareWidgetHero() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3">
             <UtilizationGauge value={snap.gpu!.utilization_pct} />
-            <VramBar used={snap.gpu!.memory_used_mb / 1024} total={snap.gpu!.vram_gb} />
+            <VramBar
+              used={snap.gpu!.memory_used_mb / 1024}
+              total={snap.gpu!.vram_gb}
+              unified={snap.gpu!.unified_memory}
+              unreadable={isMemoryUnreadable(snap.gpu!)}
+              summary={snap.detection_summary}
+            />
           </div>
         </>
       ) : (
@@ -186,6 +214,10 @@ export function HardwareWidgetHero() {
           full local AI.
         </div>
       )}
+
+      {/* Once, under the GPU block: why detection is 'blocked' (e.g. a visible GPU with no readable
+          memory pool), or which secondary row is unreadable on an otherwise ready machine. */}
+      <GpuBlockedSummary status={snap.status} summary={snap.detection_summary} gpus={snap.gpus} className="mt-2" />
 
       {snap.storage && (
         <div className="mt-4 border-t pt-3" style={{ borderColor: 'var(--border-subtle)' }}>
@@ -242,7 +274,17 @@ function UtilizationGauge({ value }: { value: number }) {
   );
 }
 
-function VramBar({ used, total }: { used: number; total: number }) {
+interface VramBarProps {
+  used: number;
+  total: number;
+  unified?: boolean;
+  /** The driver listed the GPU but reported no memory pool — render the tag, not "0 / 0 GB". */
+  unreadable?: boolean;
+  /** Payload summary, used as the tag's tooltip. */
+  summary?: string;
+}
+
+function VramBar({ used, total, unified, unreadable, summary }: VramBarProps) {
   const usedRounded = Math.round(used * 10) / 10;
   const totalRounded = Math.round(total * 10) / 10;
   const pct = total > 0 ? Math.max(0, Math.min(100, (used / total) * 100)) : 0;
@@ -252,14 +294,21 @@ function VramBar({ used, total }: { used: number; total: number }) {
       <div className="text-[10px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>
         VRAM
       </div>
-      <div className="mt-1 flex items-baseline gap-1.5">
-        <span className="text-xl font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>
-          {usedRounded}
-        </span>
-        <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-          / {totalRounded} GB
-        </span>
-      </div>
+      {unreadable ? (
+        <div className="mt-1 flex items-baseline gap-1.5">
+          <MemoryUnreadableTag summary={summary} className="text-sm" />
+        </div>
+      ) : (
+        <div className="mt-1 flex items-baseline gap-1.5">
+          <span className="text-xl font-semibold tabular-nums" style={{ color: 'var(--text-primary)' }}>
+            {usedRounded}
+          </span>
+          <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+            / {totalRounded} GB
+          </span>
+          <UnifiedMemoryTag show={unified} />
+        </div>
+      )}
       <div className="mt-1 h-1 overflow-hidden rounded-full" style={{ background: 'var(--bg-subtle)' }}>
         <div
           className="h-full transition-all duration-500"

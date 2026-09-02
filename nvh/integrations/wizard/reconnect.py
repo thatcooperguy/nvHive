@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from nvh.integrations.diagnostics.boot_preflight import run_boot_preflight
+from nvh.integrations.diagnostics.boot_preflight import host_fingerprint, run_boot_preflight
 
 
 def _label_for(fact_key: str) -> str:
@@ -36,6 +36,7 @@ def _label_for(fact_key: str) -> str:
     labels = {
         "distro": "Base OS",
         "kernel": "Kernel",
+        "machine": "Architecture",
         "python_version": "Python",
         "gpu_name": "GPU",
         "gpu_memory_total_mb": "GPU memory",
@@ -52,12 +53,56 @@ def _label_for(fact_key: str) -> str:
     return labels.get(fact_key, fact_key.replace("_", " ").title())
 
 
+def _change_fact(change: dict[str, Any]) -> str:
+    """Fingerprint key a change record is about.
+
+    ``boot_preflight.diff_fingerprints`` emits ``id`` / ``before`` / ``after``;
+    the older reconnect shape (and the WelcomeBackPanel) uses ``fact`` /
+    ``previous`` / ``current``. Accept both so a real preflight diff is read
+    correctly and a drifted fact is never also listed as "survived".
+    """
+    return str(change.get("fact") or change.get("id") or "")
+
+
+def _change_value(change: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        if key in change:
+            value = change[key]
+            return "—" if value in (None, "", "unknown", "missing") else str(value)
+    return "—"
+
+
+def _fingerprint_from(result: dict[str, Any]) -> dict[str, Any]:
+    """The host fingerprint this boot was checked against.
+
+    ``run_boot_preflight`` returns it as ``fingerprint``. A stubbed or older
+    preflight may carry it under ``compatibility.fingerprint``; failing both,
+    derive it from the compatibility report's ``host`` block with the same
+    ``host_fingerprint`` boot_preflight uses — so ``machine`` (architecture),
+    GPU and storage facts always reach the Welcome-back panel.
+    """
+    fingerprint = result.get("fingerprint")
+    if isinstance(fingerprint, dict) and fingerprint:
+        return fingerprint
+    compat = result.get("compatibility") if isinstance(result.get("compatibility"), dict) else {}
+    fingerprint = compat.get("fingerprint")
+    if isinstance(fingerprint, dict) and fingerprint:
+        return fingerprint
+    if isinstance(compat.get("host"), dict):
+        try:
+            return host_fingerprint(compat)
+        except Exception:
+            return {}
+    return {}
+
+
 def _survived_facts(fingerprint: dict[str, Any], changes: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Return the high-signal facts that did NOT drift since last session."""
-    changed_keys = {change.get("fact") for change in changes if change.get("fact")}
+    changed_keys = {_change_fact(change) for change in changes} - {""}
     high_signal = [
         "gpu_name",
         "gpu_memory_total_mb",
+        "machine",  # aarch64 on DGX Spark — the Welcome-back panel should say so
         "driver_version",
         "cuda_version",
         "storage_home",
@@ -76,18 +121,31 @@ def _survived_facts(fingerprint: dict[str, Any], changes: list[dict[str, Any]]) 
     return survived
 
 
+def _change_label(change: dict[str, Any], fact: str) -> str:
+    """User-facing label for one change record.
+
+    ``boot_preflight.diff_fingerprints`` already supplies a ``label`` from its
+    full ``_FACT_LABELS`` table, which knows preflight-only facts
+    (``gpu_detection_status``, ``libc``, ``python_strategy``, ...). Prefer it;
+    fall back to this module's smaller table, then to a title-cased key — so a
+    preflight-only fact never surfaces as "Gpu Detection Status".
+    """
+    supplied = change.get("label")
+    if isinstance(supplied, str) and supplied.strip():
+        return supplied.strip()
+    return _label_for(fact) if fact else ""
+
+
 def _shape_changes(changes: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Translate raw fingerprint diffs into user-readable change records."""
     shaped: list[dict[str, str]] = []
     for change in changes:
-        fact = change.get("fact", "")
-        prev = change.get("previous")
-        curr = change.get("current")
+        fact = _change_fact(change)
         shaped.append({
             "fact": fact,
-            "label": _label_for(fact),
-            "previous": "—" if prev in (None, "", "unknown") else str(prev),
-            "current": "—" if curr in (None, "", "unknown") else str(curr),
+            "label": _change_label(change, fact),
+            "previous": _change_value(change, "previous", "before"),
+            "current": _change_value(change, "current", "after"),
             "severity": str(change.get("severity", "info")),
         })
     return shaped
@@ -166,19 +224,13 @@ def wizard_reconnect(home_dir: str | Path | None = None) -> dict[str, Any]:
     result = run_boot_preflight(home_dir=home_dir)
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
-    fingerprint: dict[str, Any] = {}
-    # boot_preflight writes state separately; we don't need to read it back here.
-    # The current run produced changes + auto_repair already.
     changes_raw = result.get("changes") or []
     changes = _shape_changes(changes_raw if isinstance(changes_raw, list) else [])
     auto_repaired, needs_attention = _shape_auto_repair(result.get("auto_repair"))
 
-    # Rebuild the survived facts from the compatibility report when present;
-    # boot_preflight already has the fingerprint internally but doesn't include
-    # it in the returned dict.
-    compat = result.get("compatibility") if isinstance(result.get("compatibility"), dict) else {}
-    fingerprint = compat.get("fingerprint") if isinstance(compat.get("fingerprint"), dict) else {}
-
+    # The fingerprint boot_preflight just computed (see _fingerprint_from for
+    # the fallbacks) is the source for "what survived".
+    fingerprint = _fingerprint_from(result)
     survived = _survived_facts(fingerprint, changes_raw if isinstance(changes_raw, list) else [])
 
     summary = _greeting(

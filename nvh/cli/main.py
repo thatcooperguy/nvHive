@@ -3664,13 +3664,13 @@ def setup(
         "[/bold green]\n",
     )
     try:
-        from nvh.utils.gpu import detect_gpus, recommend_models
+        from nvh.utils.gpu import detect_gpus, format_gpu_memory, recommend_models
         gpus = detect_gpus()
         if gpus:
             gpu = gpus[0]
             console.print(
                 f"  [green]Detected:[/green] {gpu.name}"
-                f" ({gpu.vram_gb:.0f}GB VRAM)",
+                f" ({format_gpu_memory(gpu, compact=True)})",
             )
             recs = recommend_models(gpus)
             if recs:
@@ -4839,12 +4839,13 @@ def bench(
             COMMUNITY_BASELINES,
         )
         from nvh.providers.ollama_provider import OllamaProvider
-        from nvh.utils.gpu import detect_gpus
+        from nvh.utils.gpu import detect_gpus, format_gpu_memory
 
         # Detect GPU
         gpus = detect_gpus()
         gpu_name = gpus[0].name if gpus else "CPU"
-        vram_gb = gpus[0].vram_gb if gpus else 0.0
+        # "24 GB VRAM" / "128 GB unified" / "memory unreadable"; CPU-only keeps its 0.
+        gpu_memory = format_gpu_memory(gpus[0]) if gpus else "0 GB VRAM"
 
         # Discover available Ollama models
         try:
@@ -4881,7 +4882,7 @@ def bench(
 
             # Header panel
             console.print(Panel(
-                f"[bold]GPU:[/bold]   {gpu_name} ({vram_gb:.0f} GB VRAM)\n"
+                f"[bold]GPU:[/bold]   {gpu_name} ({gpu_memory})\n"
                 f"[bold]Model:[/bold] {bench_model}",
                 title="[bold cyan]NVHive GPU Benchmark[/bold cyan]",
                 border_style="cyan",
@@ -6758,7 +6759,7 @@ def nvidia():
     async def _nvidia():
         from nvh.config.settings import load_config
         from nvh.core.engine import Engine
-        from nvh.utils.gpu import detect_gpus
+        from nvh.utils.gpu import detect_gpus, format_gpu_memory
 
         config = load_config()
         engine = Engine(config=config)
@@ -6776,7 +6777,7 @@ def nvidia():
                 for gpu in gpus:
                     console.print(
                         f"  {gpu.name}"
-                        f" | {gpu.vram_gb:.0f}GB VRAM"
+                        f" | {format_gpu_memory(gpu, compact=True)}"
                         f" ({gpu.memory_free_mb}MB free)"
                         f" | CUDA {gpu.cuda_version}"
                         f" | Driver {gpu.driver_version}",

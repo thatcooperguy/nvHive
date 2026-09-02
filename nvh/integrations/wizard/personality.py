@@ -14,6 +14,10 @@ The persona is intentional:
   - Translates scary errors into plain English
   - Knows it runs on a rootless cloud GPU desktop OR owned hardware — the
     code path that took the user to nvHive influences tone
+  - On a DGX Spark / RTX Spark (the `platform` block says so) it speaks to
+    an owner, not a renter: one unified memory pool shared with the OS (the
+    platform block carries the measured size — never assume a figure), MoE
+    models over dense 70B, sudo available but always confirmed first
 
 This module exports:
 
@@ -94,6 +98,28 @@ Official project: https://github.com/thatcooperguy/nvHive
 """
 
 
+# Platform booleans that stay in the prompt even when False — "no sudo" and
+# "not unified memory" are decisions the Wizard must respect, not noise.
+# (can_sudo = passwordless; in_sudo_group = "you have sudo, here's the command".)
+_PLATFORM_KEEP_FALSE = frozenset({"has_root", "can_sudo", "in_sudo_group", "unified_memory"})
+
+
+def _compact_platform(platform: dict[str, Any]) -> dict[str, Any]:
+    """Drop empty platform fields; keep decision-relevant False booleans."""
+    out: dict[str, Any] = {}
+    for key, value in platform.items():
+        if value is None or value == "" or value == [] or value == {}:
+            continue
+        if isinstance(value, bool):
+            if value or key in _PLATFORM_KEEP_FALSE:
+                out[key] = value
+            continue
+        if isinstance(value, (int, float)) and value == 0:
+            continue
+        out[key] = value
+    return out
+
+
 def _format_context_block(context: dict[str, Any]) -> str:
     """Render the live wizard_context() snapshot as a compact prompt block.
 
@@ -117,8 +143,18 @@ def _format_context_block(context: dict[str, Any]) -> str:
             "cuda_version": primary.get("cuda_version"),
             "architecture": primary.get("architecture"),
         }
+        # The GPU block only ever says "this GPU shares the system pool". The
+        # pool size and headroom live in ``platform`` (one owner), so a
+        # discrete card's vram_gb is never shown next to system RAM as if
+        # both were GPU memory. False is dropped here; ``platform`` keeps it.
+        if primary.get("unified_memory") or gpu.get("unified_memory"):
+            compact["gpu"]["unified_memory"] = True
     else:
         compact["gpu"] = {"detected": False, "summary": gpu.get("summary", "")}
+
+    platform = _compact_platform(context.get("platform") or {})
+    if platform:
+        compact["platform"] = platform
 
     storage = context.get("storage") or {}
     if storage.get("available"):

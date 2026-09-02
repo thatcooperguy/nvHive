@@ -7,6 +7,7 @@ import BudgetWidget from '@/components/BudgetWidget';
 import ProviderCard from '@/components/ProviderCard';
 import { checkHealth, getProviders, getCacheStats, getGPUInfo, getRecommendations } from '@/lib/api';
 import type { ProviderHealth, CacheStats, GPUInfo, ModelRecommendation } from '@/lib/types';
+import { GpuBlockedSummary, MemoryUnreadableTag, gpuStatusOf, isMemoryUnreadable, primaryGpu } from '@/components/UnifiedMemoryTag';
 
 export default function SystemPage() {
   const [apiStatus, setApiStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking');
@@ -125,9 +126,16 @@ export default function SystemPage() {
             </div>
           ) : gpuInfo && gpuInfo.gpus.length > 0 ? (
             (() => {
-              const g = gpuInfo.gpus[0];
+              // The card shows one row: the primary (first sized, else first), the same row the
+              // API sizes against — not gpus[0], which on a multi-GPU box may be the unreadable
+              // one. The summary line below names any unreadable row that is not shown.
+              const g = primaryGpu(gpuInfo.gpus);
+              if (!g) return null;
               const usedPct = g.vram_mb > 0 ? Math.round((g.memory_used_mb / g.vram_mb) * 100) : 0;
               const barColor = usedPct > 90 ? '#dc2626' : usedPct > 70 ? '#d97706' : '#76B900';
+              // Visible but unsized: the API keeps the row at 0 MiB so the GPU's name is
+              // still seen; "0.0 / 0 GB" would present that unknown as a figure.
+              const unreadable = isMemoryUnreadable(g);
               return (
                 <div>
                   <div className="flex items-center gap-3 mb-3">
@@ -145,9 +153,13 @@ export default function SystemPage() {
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-[10px] font-mono">
                       <span className="text-[#a3a3a3] dark:text-[#737373]">VRAM</span>
-                      <span className="text-[#525252] dark:text-[#a3a3a3]">
-                        {(g.memory_used_mb / 1024).toFixed(1)} / {g.vram_gb} GB ({usedPct}%)
-                      </span>
+                      {unreadable ? (
+                        <MemoryUnreadableTag summary={gpuInfo.summary} />
+                      ) : (
+                        <span className="text-[#525252] dark:text-[#a3a3a3]">
+                          {(g.memory_used_mb / 1024).toFixed(1)} / {g.vram_gb} GB ({usedPct}%)
+                        </span>
+                      )}
                     </div>
                     <div className="progress-bar">
                       <div className="progress-fill transition-all" style={{ width: `${usedPct}%`, backgroundColor: barColor }} />
@@ -158,6 +170,9 @@ export default function SystemPage() {
                     </div>
                     <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">driver {g.driver_version}</div>
                   </div>
+                  {/* Once, under the GPU block: why detection is 'blocked' (a visible GPU with no readable memory
+                      pool), or which row is unreadable beside the sized one shown above. */}
+                  <GpuBlockedSummary status={gpuStatusOf(gpuInfo)} summary={gpuInfo.summary} gpus={gpuInfo.gpus} className="mt-2" />
                   {topRec && (
                     <div className="mt-3 border-t border-[#e5e5e5] pt-2 dark:border-[#262626]">
                       <div className="flex items-center justify-between">

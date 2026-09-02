@@ -1133,3 +1133,24 @@ body:has(.chat-root) {
     padding: 1rem;
   }
 }
+
+/* ============================================================
+   Mascot sprite — components/Mascot.tsx sets the CSS variables
+   (--mascot-start-col / --mascot-end-col / --mascot-fw) per state
+   and walks the strip with steps(). Reduced motion → frame 0.
+   ============================================================ */
+@keyframes mascot-strip {
+  from { background-position-x: calc(var(--mascot-start-col, 0) * var(--mascot-fw, 64px) * -1); }
+  to   { background-position-x: calc(var(--mascot-end-col, 3) * var(--mascot-fw, 64px) * -1); }
+}
+
+@keyframes mascot-bubble-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nvh-mascot-sprite {
+    animation: none !important;
+  }
+}

@@ -1255,11 +1255,29 @@ export async function wizardDiagnostics(homeDir?: string): Promise<WizardDiagnos
 export interface WizardChatTurn {
   role: 'user' | 'assistant';
   content: string;
+  /** Assistant turns only: the specialist that produced the reply (`null` =
+   * the general Wizard). Carries continuity between turns so the concierge
+   * can stay with a specialist on a weak follow-up ("and then?") without the
+   * user pinning anything. Omit when unknown (rows persisted before attribution). */
+  used_profile?: string | null;
 }
 
 export interface WizardChatToolCall {
   name: string;
   arguments: Record<string, unknown>;
+}
+
+/**
+ * An auto-class call the server chose NOT to run this turn — `max_iterations`
+ * was 1 or the profile's cost ceiling fired. Informational only: the UI lists
+ * it as "not run: <reason>" and must never execute it (the user asked for a
+ * shallow / cheap turn). Confirm-class calls travel separately in
+ * `tool_calls` / `confirm_required`.
+ */
+export interface WizardDeferredToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+  reason?: string | null;
 }
 
 export interface WizardChatToolResult {
@@ -1270,8 +1288,16 @@ export interface WizardChatToolResult {
     error?: string;
     result?: unknown;
     safety_class?: string;
+    /** Whitelist refusal: the active profile forbids this tool. It never ran,
+     * so it must not count as a used tool or contribute sources. */
+    not_allowed?: boolean;
     [key: string]: unknown;
   };
+}
+
+/** True for a trace entry the server refused (profile whitelist) — never executed. */
+export function isRefusedToolResult(entry: WizardChatToolResult): boolean {
+  return entry.result?.not_allowed === true;
 }
 
 export interface WizardChatResult {
@@ -1296,6 +1322,10 @@ export interface WizardChatResult {
   // display ("Stopped at $0.05 — profile budget").
   cost_ceiling_hit?: boolean;
   cost_ceiling_usd?: number | null;
+  /** Hidden specialist the concierge picked for this turn; null = the general Wizard. */
+  used_profile?: string | null;
+  profile_reason?: string | null;
+  deferred_tool_calls?: WizardDeferredToolCall[];
 }
 
 /**
@@ -1309,13 +1339,69 @@ export async function wizardChat(
 ): Promise<WizardChatResult> {
   return apiPost<WizardChatResult>('/v1/wizard/chat', {
     question,
-    history: options.history ?? [],
+    history: normalizeWizardHistory(options.history),
     home_dir: options.homeDir,
     conversation_id: options.conversationId,
   });
 }
 
+/**
+ * The history the Wizard endpoints accept: `role` + `content` on every turn,
+ * and `used_profile` ONLY on assistant turns that know it (`null` = the
+ * general Wizard answered). A user turn never carries attribution and an
+ * assistant turn with unknown attribution omits the key rather than sending
+ * `undefined`, so the concierge's continuity tier sees a clean signal.
+ */
+export function normalizeWizardHistory(history: WizardChatTurn[] | undefined): WizardChatTurn[] {
+  return (history ?? []).map(turn => {
+    const base: WizardChatTurn = { role: turn.role, content: turn.content };
+    if (turn.role === 'assistant' && turn.used_profile !== undefined) {
+      base.used_profile = turn.used_profile;
+    }
+    return base;
+  });
+}
+
+/** The `profile` the chat endpoints receive: `auto` for any empty / unset /
+ * auto selection, otherwise the pinned name verbatim. */
+export function wizardProfileParam(profile: string | null | undefined): string {
+  return isAutoProfile(profile) ? AUTO_PROFILE : (profile as string).trim();
+}
+
 // ─── Agent profiles ─────────────────────────────────────────────────────────
+
+/**
+ * Sentinel the composer sends when the user has not pinned a profile: the
+ * concierge picks a hidden specialist per turn (docs/proposals/
+ * SPARK_CONCIERGE_2026-09.md §3.1). The API treats `null`, `""` and `"auto"`
+ * as auto; `"wizard"` is an explicit pin of the general persona.
+ */
+export const AUTO_PROFILE = 'auto';
+/** The general Wizard persona — what an auto turn is attributed to when the
+ * concierge picked no specialist (`used_profile: null`). */
+export const GENERAL_PROFILE = 'wizard';
+
+export function isAutoProfile(name: string | null | undefined): boolean {
+  return !name || name.trim().toLowerCase() === AUTO_PROFILE;
+}
+
+/**
+ * The one `fallback_reason` that is an answer rather than a failure: a
+ * local-only specialist (explicit pin) declined because no local provider was
+ * up. Mirrors `LOCAL_ONLY_FALLBACK_REASON` in nvh/integrations/wizard/chat.py.
+ * Every other reason the server emits (the LLM exception text, "engine not
+ * initialized") means the offline helper answered because the model path
+ * failed — worth telling the user.
+ */
+export const WIZARD_LOCAL_ONLY_FALLBACK_REASON = 'profile_local_only_provider_unavailable';
+
+/** True when a Wizard fallback (stream `error` event or non-stream result) is
+ * a specialist's deliberate refusal, not a model-path failure. */
+export function isWizardDeliberateRefusal(
+  envelope: { fallback_reason?: string | null } | null | undefined,
+): boolean {
+  return envelope?.fallback_reason === WIZARD_LOCAL_ONLY_FALLBACK_REASON;
+}
 
 export interface AgentProfileSchema {
   name: string;
@@ -1463,6 +1549,7 @@ export type WizardStreamEvent =
   | { type: 'token'; text: string }
   | { type: 'tool_call'; name: string; arguments: Record<string, unknown> }
   | { type: 'tool_result'; name: string; result: WizardChatToolResult['result'] }
+  /** Confirm-class calls awaiting the user. Emitted once, immediately before `done`. */
   | { type: 'confirm_required'; tool_calls: WizardChatToolCall[] }
   | {
       type: 'done';
@@ -1470,6 +1557,7 @@ export type WizardStreamEvent =
       used_provider: string | null;
       used_model: string | null;
       routing_reason?: string | null;
+      /** Same confirm-class list as `confirm_required`; non-empty means cards are still pending. */
       tool_calls: WizardChatToolCall[];
       tool_results: WizardChatToolResult[];
       iterations: number;
@@ -1478,8 +1566,29 @@ export type WizardStreamEvent =
       fallback_from?: string | null;
       cost_ceiling_hit?: boolean;
       cost_ceiling_usd?: number | null;
+      /** Hidden specialist the concierge picked for this turn; null = the general Wizard. */
+      used_profile?: string | null;
+      profile_reason?: string | null;
+      /** Auto-class calls skipped server-side (depth 1 / cost ceiling). Display only. */
+      deferred_tool_calls?: WizardDeferredToolCall[];
     }
-  | { type: 'error'; error: string; fallback?: string };
+  | {
+      type: 'error';
+      error: string;
+      /** Deterministic text that saved the turn (offline helper or a specialist's refusal). */
+      fallback?: string;
+      /** Why no LLM answered. The server sets this on EVERY error event that
+       * ended in a deterministic answer, so its presence says nothing about
+       * severity — its value does: `WIZARD_LOCAL_ONLY_FALLBACK_REASON` is a
+       * specialist deliberately declining (no banner); anything else is the
+       * LLM exception text or "engine not initialized", i.e. the offline
+       * helper stood in for a failed model path (banner). See
+       * `isWizardDeliberateRefusal`. */
+      fallback_reason?: string | null;
+      /** Attribution when a specialist itself declined; null = the general Wizard. */
+      used_profile?: string | null;
+      profile_reason?: string | null;
+    };
 
 interface WizardChatStreamOptions {
   history?: WizardChatTurn[];
@@ -1520,10 +1629,12 @@ export async function* wizardChatStream(
         },
         body: JSON.stringify({
           question,
-          history: options.history ?? [],
+          history: normalizeWizardHistory(options.history),
           home_dir: options.homeDir,
           conversation_id: options.conversationId,
-          profile: options.profile,
+          // Same package ships both sides: "auto" is the literal the server
+          // treats as "let the concierge pick"; empty / unset map to it too.
+          profile: wizardProfileParam(options.profile),
           max_iterations: options.maxIterations,
         }),
         signal: options.signal,

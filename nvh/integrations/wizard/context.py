@@ -40,33 +40,100 @@ def _safe_call(label: str, fn: Any, *args: Any, **kwargs: Any) -> Any:
         return None
 
 
-def _gpu_summary(home_dir: str | Path | None) -> dict[str, Any]:
-    """Return the high-signal GPU facts the Wizard needs to reason about."""
-    from nvh.utils.gpu import detect_gpu_status, detect_gpus
+def _field(obj: Any, name: str, default: Any = None) -> Any:
+    """Read ``name`` from a dict row or a dataclass/object row."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
 
-    status = _safe_call("gpu_status", detect_gpu_status) or {}
-    gpus = _safe_call("gpus", detect_gpus) or []
-    primary = gpus[0] if gpus else None
-    return {
-        "detected": bool(primary),
+
+def _gpu_summary(
+    home_dir: str | Path | None,
+    *,
+    status: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the high-signal GPU facts the Wizard needs to reason about.
+
+    ``detect_gpu_status()`` returns ``GPUInfo`` dataclasses (not dicts), so the
+    primary row is read attribute-wise; dict rows are accepted too for callers
+    that pre-serialized. ``status`` can be passed in when the caller already
+    ran detection this turn.
+
+    Memory ownership: this block never reports system RAM. The pool size and
+    headroom (``memory_total_gb`` / ``memory_available_gb``) belong to the
+    ``platform`` block, which reads them once; the GPU block only carries
+    ``unified_memory: True`` when the GPU genuinely shares that pool, so a
+    discrete card's VRAM is never printed next to system RAM as "GPU memory".
+    """
+    from nvh.utils.gpu import detect_gpu_status, gpu_architecture_info
+
+    if status is None:
+        status = _safe_call("gpu_status", detect_gpu_status) or {}
+    gpus = list(status.get("gpus") or [])
+    # Mirror gpu._primary_row: the first row with a readable pool, else the
+    # first row, so one unreadable card on a multi-GPU box never hides the
+    # healthy one from the prompt.
+    primary = next((g for g in gpus if (_field(g, "vram_mb") or 0) > 0), gpus[0] if gpus else None)
+
+    primary_out: dict[str, Any] | None = None
+    if primary is not None:
+        cc = _field(primary, "compute_capability")
+        arch = _field(primary, "architecture")
+        if arch is None and not isinstance(primary, dict):
+            info = _safe_call("gpu_arch", gpu_architecture_info, primary) or {}
+            arch = info.get("architecture")
+            cc = info.get("compute_capability", cc)
+        primary_out = {
+            "name": _field(primary, "name"),
+            "vram_gb": _field(primary, "vram_gb"),
+            "memory_used_mb": _field(primary, "memory_used_mb"),
+            "memory_free_mb": _field(primary, "memory_free_mb"),
+            "utilization_pct": _field(primary, "utilization_pct"),
+            "compute_capability": list(cc) if isinstance(cc, (tuple, list)) else cc,
+            "architecture": arch,
+            "driver_version": _field(primary, "driver_version"),
+            "cuda_version": _field(primary, "cuda_version"),
+            "unified_memory": bool(_field(primary, "unified_memory", False)),
+        }
+
+    out: dict[str, Any] = {
+        "detected": primary is not None,
         "summary": status.get("summary") or "",
         "gpu_count": len(gpus),
-        "primary": (
-            {
-                "name": primary.get("name") if isinstance(primary, dict) else None,
-                "vram_gb": primary.get("vram_gb") if isinstance(primary, dict) else None,
-                "memory_used_mb": primary.get("memory_used_mb") if isinstance(primary, dict) else None,
-                "memory_free_mb": primary.get("memory_free_mb") if isinstance(primary, dict) else None,
-                "utilization_pct": primary.get("utilization_pct") if isinstance(primary, dict) else None,
-                "compute_capability": primary.get("compute_capability") if isinstance(primary, dict) else None,
-                "architecture": primary.get("architecture") if isinstance(primary, dict) else None,
-                "driver_version": primary.get("driver_version") if isinstance(primary, dict) else None,
-                "cuda_version": primary.get("cuda_version") if isinstance(primary, dict) else None,
-            }
-            if isinstance(primary, dict)
-            else None
-        ),
+        "primary": primary_out,
     }
+    if primary_out is not None and primary_out["unified_memory"]:
+        out["unified_memory"] = True
+    return out
+
+
+_PLATFORM_KEYS = (
+    "device_class",
+    "device_label",
+    "os",
+    "arch",
+    "distro",
+    "is_dgx_os",
+    "unified_memory",
+    "memory_total_gb",
+    "memory_available_gb",
+    "has_root",
+    "can_sudo",
+    "in_sudo_group",
+    "windows_on_arm",
+)
+
+
+def _platform_summary(gpus: list[Any] | None) -> dict[str, Any]:
+    """Device class + privilege facts so the Wizard can say "you're on a DGX Spark"."""
+    from nvh.utils.platform_facts import detect_platform_facts
+
+    facts = _safe_call("platform_facts", detect_platform_facts, gpus=gpus)
+    if facts is None:
+        return {"device_class": "unknown"}
+    return {key: getattr(facts, key, None) for key in _PLATFORM_KEYS}
 
 
 def _storage_summary(home_dir: str | Path | None) -> dict[str, Any]:
@@ -197,7 +264,10 @@ def wizard_context(
     Stable shape:
 
       {
-        "gpu": {...},
+        "gpu": {detected, summary, gpu_count, primary[, unified_memory: True]},
+        "platform": {device_class, device_label, os, arch, distro, is_dgx_os,
+                     unified_memory, memory_total_gb, memory_available_gb,
+                     has_root, can_sudo, in_sudo_group, windows_on_arm},
         "storage": {...},
         "providers": [{name, healthy, ...}, ...],
         "ollama_models": [{name, size_bytes, ...}, ...],
@@ -208,8 +278,14 @@ def wizard_context(
 
     All helpers swallow their own exceptions; this function never raises.
     """
+    from nvh.utils.gpu import detect_gpu_status
+
+    # One GPU probe per turn: the same rows feed both the GPU block and the
+    # platform classifier (GB10 → DGX Spark).
+    gpu_status = _safe_call("gpu_status", detect_gpu_status) or {}
     return {
-        "gpu": _gpu_summary(home_dir),
+        "gpu": _gpu_summary(home_dir, status=gpu_status),
+        "platform": _platform_summary(list(gpu_status.get("gpus") or [])),
         "storage": _storage_summary(home_dir),
         "providers": _providers_summary(),
         "ollama_models": _ollama_models(),

@@ -237,3 +237,35 @@ def test_diagnostics_report_uses_requested_home_for_jobs_receipts_and_logs(tmp_p
     assert jobs_data["failed_or_interrupted"] == 1
     assert jobs_data["failed_event_tails"][0]["job_id"] == job_id
     assert report["checks"]["receipts"]["data"]["count"] == 1
+
+
+def test_diagnostics_environment_machine_uses_hw_ids_detect_machine(monkeypatch) -> None:
+    """R5: ``compatibility.host.machine`` comes from ``hw_ids.detect_machine()`` (WOW64-aware);
+    ``environment.machine`` must agree instead of echoing raw ``platform.machine()``, which
+    reports AMD64 for an x64 Python under Windows-on-Arm emulation. The raw value stays
+    alongside as ``machine_raw`` for support triage."""
+    from nvh.integrations import (
+        compatibility,
+        production_readiness,
+        receipts,
+        studio_packs,
+        workspace_state,
+    )
+    from nvh.integrations.services import jobs
+
+    monkeypatch.setattr(production_readiness, "production_readiness_report", lambda home_dir=None: {})
+    monkeypatch.setattr(workspace_state, "workspace_state", lambda home_dir=None: {})
+    monkeypatch.setattr(compatibility, "compatibility_report", lambda home_dir=None: {})
+    monkeypatch.setattr(studio_packs, "ollama_runtime_doctor", lambda home_dir=None: {})
+    monkeypatch.setattr(receipts, "receipt_summary", lambda home_dir=None: {})
+    monkeypatch.setattr(jobs, "list_jobs", lambda limit=8, home_dir=None: [])
+    monkeypatch.setattr(diagnostics, "detect_machine", lambda: "ARM64")
+    monkeypatch.setattr(diagnostics.platform, "machine", lambda: "AMD64")
+
+    report = diagnostics.diagnostics_report(
+        home_dir="/persist/nvhive", include_logs=False,
+        smoke_tests={"ready": True}, registry_checks=_FAKE_REGISTRY,
+    )
+
+    assert report["environment"]["machine"] == "ARM64"
+    assert report["environment"]["machine_raw"] == "AMD64"

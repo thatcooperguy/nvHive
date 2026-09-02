@@ -99,6 +99,28 @@ def probe_installed_models(base_url: str | None = None, timeout: float = 2.0) ->
         return None
 
 
+async def probe_installed_models_async(
+    base_url: str | None = None, timeout: float = 2.0,
+) -> list[str] | None:
+    """Async twin of :func:`probe_installed_models` for callers on an event loop.
+
+    Same contract — installed tags, or ``None`` when the daemon is unreachable
+    or answers anything but 200 — but the wait happens in ``httpx.AsyncClient``
+    so a coroutine (the API server's Wizard chat) never blocks the loop for
+    up to ``timeout`` the way the blocking ``httpx.get`` would. Never raises.
+    """
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(f"{ollama_base_url(base_url)}/api/tags")
+        if resp.status_code != 200:
+            return None
+        return [m.get("name", "") for m in resp.json().get("models", [])]
+    except Exception:
+        return None
+
+
 def list_installed_models(base_url: str | None = None) -> list[str]:
     """Return the list of installed Ollama model tags, or [] on any failure.
 

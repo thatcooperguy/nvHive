@@ -33,9 +33,9 @@ The browser only opens after every service passes a health check — including a
 
 **AI Wizard.** A streaming, tool-using assistant grounded in live workspace state. It can refresh models, run safe repairs, ingest files you drag into chat (PDFs included), and cite web sources — showing cost and latency per response. Attach external [MCP tool servers](docs/INTEGRATIONS.md#nvhive-as-an-mcp-client) and their tools join its toolset.
 
-**Agent Library and council mode.** 100 agent profiles across 38 categories — coding, research, creative, GPU media, ops — each mappable to a local or cloud model. Council mode runs one question through multiple models in parallel and synthesizes the answers: `nvh convene "Redis or Postgres for session storage?"`. [Cabinets →](docs/CONFIGURATION.md#council-cabinets)
+**Agent Library and council mode.** 102 agent profiles across 39 categories — coding, research, creative, GPU media, ops, smart home — each mappable to a local or cloud model. Council mode runs one question through multiple models in parallel and synthesizes the answers: `nvh convene "Redis or Postgres for session storage?"`. [Cabinets →](docs/CONFIGURATION.md#council-cabinets)
 
-![Agent Library — 100 built-in agent profiles](docs/screenshots/agent-library.png)
+![Agent Library — built-in agent profiles grouped by category](docs/screenshots/agent-library.png)
 
 **Chat history that survives.** Conversations persist server-side, browsable and resumable from every page. Pin one and it's waiting for you after a reconnect.
 
@@ -92,6 +92,7 @@ Full reference: [docs/COMMANDS.md](docs/COMMANDS.md)
 | [Integrations](docs/INTEGRATIONS.md) | Python SDK, REST, OpenAI/Anthropic proxies, MCP, Claude Code, NemoClaw, OpenClaw, VS Code |
 | [Architecture](docs/ARCHITECTURE.md) | Request flow, modules, persistence |
 | [Testing](docs/TESTING.md) | Running and writing tests, CI |
+| [Mascot](docs/MASCOT.md) | The WebUI sprite guide: states, manifest, how to swap the art |
 | [Maintainers](docs/MAINTAINERS.md) | Releasing, service order, production readiness |
 | [Roadmap](docs/ROADMAP.md) | Plan by release, feature table, non-goals |
 

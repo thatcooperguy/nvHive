@@ -1268,9 +1268,13 @@ def guided_setup(console: Console | None = None) -> None:
     gpu_table.add_column("Value")
 
     if gpus:
+        from nvh.utils.gpu import format_gpu_memory
+
         for gpu in gpus:
-            gpu_table.add_row("GPU", f"{gpu.name} ({gpu.vram_gb:.0f} GB VRAM)")
-        gpu_table.add_row("Total VRAM", f"{total_vram:.0f} GB")
+            # "24 GB VRAM" / "128 GB unified" / "memory unreadable" — a row kept at
+            # 0 GB because its pool could not be read is not an empty card.
+            gpu_table.add_row("GPU", f"{gpu.name} ({format_gpu_memory(gpu)})")
+        gpu_table.add_row("Total VRAM", f"{total_vram:.0f} GB" if total_vram > 0 else "memory unreadable")
     else:
         gpu_table.add_row("GPU", "None detected (CPU only)")
 
@@ -1351,6 +1355,14 @@ def guided_setup(console: Console | None = None) -> None:
                 console.print(f"    ollama pull {model}")
         elif not recommended:
             console.print("  [dim]No model recommendations for this GPU tier.[/dim]")
+    elif gpus:
+        # Visible GPU(s), none with a readable pool: not "no GPU", but nothing
+        # can be budgeted against them until the driver reports memory.
+        console.print(
+            "\n  [dim]GPU memory could not be read, so no local models are recommended yet."
+            " nvHive will use cloud providers.[/dim]\n"
+            "  [dim]Check the driver (nvidia-smi) and re-run nvh setup.[/dim]"
+        )
     else:
         console.print(
             "\n  [dim]No GPU detected. nvHive will use cloud providers.[/dim]\n"

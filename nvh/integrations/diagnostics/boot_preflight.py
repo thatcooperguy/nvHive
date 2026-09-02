@@ -272,6 +272,9 @@ def run_boot_preflight(home_dir: str | Path | None = None) -> dict[str, Any]:
         "changed": bool(changes),
         "needs_attention": bool(changes) or not compatibility.get("ready", False),
         "fingerprint_id": current_id,
+        # The facts behind fingerprint_id, so consumers (the Wizard's
+        # Welcome-back panel) can show what survived without re-probing.
+        "fingerprint": current_fingerprint,
         "previous_fingerprint_id": previous_id,
         "previous_checked_at": previous_result.get("checked_at") if isinstance(previous_result, dict) else None,
         "summary": _result_summary(first_run=first_run, changes=changes, compatibility=compatibility),
@@ -321,6 +324,7 @@ def boot_preflight_status(
         "changed": False,
         "needs_attention": False,
         "fingerprint_id": None,
+        "fingerprint": None,
         "previous_fingerprint_id": None,
         "previous_checked_at": None,
         "summary": "Boot preflight has not run yet.",

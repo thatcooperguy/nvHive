@@ -48,6 +48,36 @@ def test_missing_gpu_is_info_level() -> None:
     assert gpu.suggested_tool is None
 
 
+def test_missing_gpu_wording_depends_on_ownership() -> None:
+    """Renters check the instance; owners check the driver. Never tell an owner about a 'rented instance'."""
+    rented = next(
+        f for f in derive_findings(_ctx(gpu={"detected": False}, platform={"device_class": "cloud-desktop"}))
+        if f.id == "gpu-missing"
+    )
+    owned = next(
+        f for f in derive_findings(_ctx(gpu={"detected": False}, platform={"device_class": "workstation"}))
+        if f.id == "gpu-missing"
+    )
+    assert "rented instance" in rented.detail
+    assert "rented" not in owned.detail
+    assert "this machine's NVIDIA driver is installed" in owned.detail
+
+
+def test_dgx_spark_hidden_gpu_never_contradicts_itself() -> None:
+    """W1: DGX Spark + GPU not visible (container without NVML) is ONE warn finding —
+    not 'no GPU, check the rented instance' next to 'you have a GB10'."""
+    findings = derive_findings(_ctx(
+        gpu={"detected": False, "summary": "GPU device files present but could not be queried"},
+        platform={"device_class": "dgx-spark", "unified_memory": True, "memory_total_gb": 0.0},
+    ))
+    assert [f.id for f in findings] == ["platform-dgx-spark-gpu-hidden"]
+    hidden = findings[0]
+    assert hidden.severity == "warn"
+    assert hidden.category == "gpu"
+    assert hidden.suggested_tool is None
+    assert "passthrough" in hidden.detail and "--gpus all" in hidden.detail
+
+
 def test_no_providers_suggests_validate_tool() -> None:
     findings = derive_findings(_ctx(providers=[]))
     np = next(f for f in findings if f.id == "no-providers")
@@ -145,3 +175,28 @@ def test_finding_to_dict_is_serializable() -> None:
     assert out["suggested_tool"] == "validate_provider_key"
     # Default-factory dict for empty args.
     assert out["suggested_tool_args"] == {}
+
+
+def test_rtx_spark_wording_follows_the_unified_memory_flag() -> None:
+    """R6: ``rtx-spark`` is provisional and ``platform.unified_memory`` follows the GPU row.
+    The finding must not claim a pool shared with Windows while recommend_models and
+    check_oom_risk budget for discrete VRAM — and must still claim it when the row says so."""
+    def finding(**platform):
+        platform.setdefault("device_class", "rtx-spark")
+        return next(f for f in derive_findings(_ctx(platform=platform)) if f.id == "platform-rtx-spark")
+
+    unified = finding(unified_memory=True, memory_total_gb=64.0)
+    assert "64 GB of unified memory shared with Windows" in unified.detail
+    assert "one shared pool" in unified.detail
+
+    discrete_cases = (finding(unified_memory=False, memory_total_gb=64.0), finding())  # flag False, flag absent
+    for discrete in discrete_cases:
+        assert "unified" not in discrete.detail
+        assert "shared" not in discrete.detail
+        assert "discrete VRAM" in discrete.detail
+        assert "GPU block" in discrete.detail
+
+    for f in (unified, *discrete_cases):
+        assert f.severity == "info" and f.category == "gpu"
+        assert "provisional" in f.detail
+        assert f.title == "Running on NVIDIA RTX Spark (provisional detection)"

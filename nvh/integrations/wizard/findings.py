@@ -161,20 +161,111 @@ def _model_findings(context: dict[str, Any]) -> list[Finding]:
     return out
 
 
+# Device classes where the user owns the box. "Check your rented instance" is
+# the wrong advice there — the driver (or container passthrough) is what to check.
+_OWNED_DEVICE_CLASSES = frozenset({"dgx-spark", "rtx-spark", "dgx", "workstation", "laptop"})
+
+
+def _memory_phrase(platform: dict[str, Any]) -> str:
+    """``"128 GB of "`` when the pool was actually measured, else ``""``.
+
+    The platform block's ``memory_total_gb`` comes from ``/proc/meminfo`` (or
+    the OS equivalent). When it is missing or 0 the finding must not invent a
+    figure — RTX Spark sizes are unknown and a container may hide the host.
+    """
+    mem = platform.get("memory_total_gb")
+    if isinstance(mem, (int, float)) and not isinstance(mem, bool) and mem > 0:
+        return f"{mem:.0f} GB of "
+    return ""
+
+
 def _gpu_findings(context: dict[str, Any]) -> list[Finding]:
-    """GPU presence — informational unless a GPU profile was selected."""
+    """GPU presence + platform class, folded so the findings never contradict.
+
+    Three states:
+
+    * **GPU hidden on a DGX Spark** (a container started without NVML
+      passthrough — platform rule 4) → ONE ``warn`` finding. Emitting both
+      "no GPU, check your rented instance" and "you're on a DGX Spark with a
+      GB10" would be self-contradictory, so neither of those is emitted.
+    * **No GPU anywhere else** → ``info``; the wording says what to check
+      based on whether the user owns the machine or rented it.
+    * **Unified-memory platform with a visible GPU** (DGX Spark / RTX Spark)
+      → ``info`` so the Wizard reasons about one shared pool, quoting the
+      pool size only when it was measured.
+    """
     out: list[Finding] = []
     gpu = context.get("gpu") or {}
-    if not gpu.get("detected"):
+    platform = context.get("platform") or {}
+    device_class = platform.get("device_class")
+    detected = bool(gpu.get("detected"))
+    mem_phrase = _memory_phrase(platform)
+
+    if device_class == "dgx-spark" and not detected:
+        out.append(Finding(
+            id="platform-dgx-spark-gpu-hidden",
+            severity="warn",
+            category="gpu",
+            title="DGX Spark GPU not visible from this process",
+            detail=("This is a DGX Spark, but its GB10 GPU is not visible from this "
+                    "process — usually a container started without GPU passthrough. "
+                    "Check that it was launched with ``--gpus all`` (or the NVIDIA "
+                    "container runtime) so NVML and ``nvidia-smi`` work inside it."),
+        ))
+        return out
+
+    if not detected:
+        if device_class in _OWNED_DEVICE_CLASSES:
+            check = ("check that this machine's NVIDIA driver is installed and "
+                     "``nvidia-smi`` runs")
+        else:
+            check = ("check that the rented instance was provisioned with one and "
+                     "``nvidia-smi`` runs from this shell")
         out.append(Finding(
             id="gpu-missing",
             severity="info",
             category="gpu",
             title="No NVIDIA GPU detected",
             detail=("nvHive still runs in CPU mode — local Ollama uses the CPU "
-                    "(slow but functional). If you expected a GPU, check that the "
-                    "rented instance was provisioned with one and ``nvidia-smi`` "
-                    "runs from this shell."),
+                    f"(slow but functional). If you expected a GPU, {check}."),
+        ))
+
+    if device_class == "dgx-spark":
+        out.append(Finding(
+            id="platform-dgx-spark",
+            severity="info",
+            category="gpu",
+            title="Running on NVIDIA DGX Spark",
+            detail=(f"Running on NVIDIA DGX Spark: {mem_phrase}LPDDR5x unified memory "
+                    "(~273 GB/s) shared between the GB10 GPU and the OS — treat 'VRAM' as "
+                    "system RAM minus ~16 GB for DGX OS and the WebUI. Dense 70B models fit "
+                    "but are bandwidth-bound; prefer MoE models such as nemotron3:33b or "
+                    "gpt-oss:120b. Ollama uses the shared pool automatically — there is no "
+                    "separate CPU-offload budget."),
+        ))
+    elif device_class == "rtx-spark":
+        # Provisional class (#136): ``platform.unified_memory`` follows the GPU
+        # row, so the wording must too — the model recommender and the OOM
+        # check budget against the same rows, and the prompt must not say
+        # "one shared pool" while they plan for discrete VRAM.
+        provisional = ("Detection is provisional until RTX Spark hardware ships, so confirm "
+                       "with the user if it matters. ")
+        if platform.get("unified_memory"):
+            detail = (f"Windows on Arm with an NVIDIA GPU — this looks like an RTX Spark with "
+                      f"{mem_phrase}unified memory shared with Windows. {provisional}"
+                      "Reason about one shared pool: keep ~16 GB for the OS and prefer MoE "
+                      "models (nemotron3:33b, gpt-oss:120b) over dense 70B.")
+        else:
+            detail = ("Windows on Arm with an NVIDIA GPU — this looks like an RTX Spark. "
+                      f"{provisional}"
+                      "The GPU reports discrete VRAM, so budget against the VRAM figures in "
+                      "the GPU block, not against system RAM.")
+        out.append(Finding(
+            id="platform-rtx-spark",
+            severity="info",
+            category="gpu",
+            title="Running on NVIDIA RTX Spark (provisional detection)",
+            detail=detail,
         ))
     return out
 

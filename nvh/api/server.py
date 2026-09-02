@@ -14,6 +14,7 @@ import ipaddress
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from collections import defaultdict
@@ -337,6 +338,57 @@ async def _preload_provider_keys() -> None:
         logger.debug("keyring/.env preload skipped: %s", exc)
 
 
+def _platform_warmup_enabled() -> bool:
+    """``NVH_PLATFORM_WARMUP=0`` (or false/no/off) skips the startup platform probe.
+
+    The kill switch only removes the network-bound warm-up; the request path
+    still builds platform facts lazily from local signals on first use.
+    """
+    return os.environ.get("NVH_PLATFORM_WARMUP", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _warm_platform_facts() -> None:
+    """Body of the startup platform-probe thread. Never raises.
+
+    ``nvh.utils.platform_facts.warm_platform_facts`` fills the process-lifetime
+    cache behind the Wizard's per-turn ``wizard_context()``. The probe includes
+    the curl-based cloud-metadata check and the one-time ``sudo -n -k`` test,
+    both slow, so it must never run on the event loop. Any failure, including
+    the helper not being importable, only logs at debug: hardware awareness is
+    a nicety, never a startup dependency.
+    """
+    try:
+        from nvh.utils.platform_facts import warm_platform_facts
+
+        warm_platform_facts()
+    except Exception as exc:
+        logger.debug("platform facts warm-up skipped: %s", exc)
+
+
+def _start_platform_warmup() -> threading.Thread | None:
+    """Start :func:`_warm_platform_facts` on its own daemon thread; ``None`` when disabled.
+
+    Why a bare ``threading.Thread`` and not ``asyncio.to_thread``: a worker
+    thread cannot be interrupted, and ``to_thread`` borrows the loop's default
+    executor, which ``asyncio.run()`` — uvicorn's shutdown path — joins before
+    it returns. Cancelling the awaiting task at shutdown therefore did nothing,
+    and stopping the server sat through the 4-6 s cloud-metadata timeouts on
+    every non-cloud Linux host (a DGX Spark, exactly). A daemon thread outside
+    any executor is never joined: readiness does not wait for it, shutdown
+    does not wait for it, and it dies with the process. ``NVH_PLATFORM_WARMUP=0``
+    skips it entirely; the request path then builds platform facts lazily from
+    local signals.
+    """
+    if not _platform_warmup_enabled():
+        logger.debug("platform facts warm-up disabled by NVH_PLATFORM_WARMUP")
+        return None
+    thread = threading.Thread(
+        target=_warm_platform_facts, name="nvh-platform-warmup", daemon=True,
+    )
+    thread.start()
+    return thread
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _engine
@@ -345,6 +397,11 @@ async def lifespan(app: FastAPI):
     json_mode = os.environ.get("HIVE_LOG_FORMAT", "text") == "json"
     setup_logging(level=os.environ.get("HIVE_LOG_LEVEL", "INFO"), json_format=json_mode)
     await _preload_provider_keys()
+    # Platform-facts warm-up (2026-09): a daemon thread that is never awaited
+    # and never joined — see _start_platform_warmup for why not to_thread. The
+    # Thread (None under NVH_PLATFORM_WARMUP=0) is kept on app.state for tests
+    # and introspection.
+    app.state.platform_warmup_thread = _start_platform_warmup()
     logger.info("Hive API: initializing engine...")
     try:
         _engine = Engine()
@@ -369,6 +426,8 @@ async def lifespan(app: FastAPI):
         # Don't crash — partial init is fine; requests will fail gracefully.
         yield
     finally:
+        # The platform warm-up thread is deliberately not joined: it is a
+        # daemon and dies with the process (see _start_platform_warmup).
         if boot_task and not boot_task.done():
             boot_task.cancel()
         logger.info("Hive API: shutting down.")
@@ -993,13 +1052,33 @@ async def prometheus_metrics_v1() -> Response:
 # -- /v1/system/gpu -----------------------------------------------------------
 
 def _serialize_gpu_data() -> dict[str, Any]:
-    """Detect GPUs and return serialisable dict. Never raises — returns empty on error."""
+    """Detect GPUs and return serialisable dict. Never raises — returns empty on error.
+
+    The detection state is carried where consumers look, not only inside
+    ``detection.issues``: top-level ``status`` / ``summary`` come from
+    :func:`detect_gpu_status` (``"1 of 2 GPUs ready: …; memory unreadable: …"``,
+    ``"blocked"``), and every row says whether it is listed at 0 GB because its
+    memory could not be read (``memory_unreadable``) — so the UI never renders
+    an unreadable GPU as "0 GB VRAM" while the recommender says no VRAM.
+    """
     try:
         gpu_status = detect_gpu_status()
         gpus = gpu_status["gpus"]
+        issues = list(gpu_status.get("issues", []))
         sys_mem = detect_system_memory()
-        summary = get_gpu_summary()
+        # The detection digest is the headline; a status dict without one falls
+        # back to the CLI summary of the *same* rows (never a second detection).
+        summary = gpu_status.get("summary") or get_gpu_summary(gpus)
         total_vram_gb = round(sum(g.vram_mb for g in gpus) / 1024, 1) if gpus else 0.0
+        # Same predicate check_oom_risk uses: any unified row means the GPU
+        # already owns the system RAM, so there is no second pool to offload
+        # into and "N GB usable for CPU offload" would be a lie under a GB10.
+        unified = any(getattr(g, "unified_memory", False) for g in gpus)
+        # Rows detect_gpu_status kept at 0 GB because their pool could not be
+        # read: the memory-unavailable issue for that index is the evidence.
+        unreadable_indices = {
+            issue.get("index") for issue in issues if issue.get("code") == "memory-unavailable"
+        }
 
         gpu_list = []
         for g in gpus:
@@ -1009,6 +1088,8 @@ def _serialize_gpu_data() -> dict[str, Any]:
                     "name": g.name,
                     "vram_mb": g.vram_mb,
                     "vram_gb": g.vram_gb,
+                    "memory_unreadable": g.vram_mb <= 0 and g.index in unreadable_indices,
+                    "unified_memory": g.unified_memory,
                     "memory_used_mb": g.memory_used_mb,
                     "memory_free_mb": g.memory_free_mb,
                     "memory_reserved_mb": max(g.vram_mb - g.memory_used_mb - g.memory_free_mb, 0),
@@ -1024,25 +1105,29 @@ def _serialize_gpu_data() -> dict[str, Any]:
             )
 
         return {
+            "status": gpu_status.get("status"),
             "gpus": gpu_list,
             "summary": summary,
             "total_vram_gb": total_vram_gb,
             "detection": {
                 "status": gpu_status.get("status"),
                 "source": gpu_status.get("source"),
-                "issues": gpu_status.get("issues", []),
+                "issues": issues,
                 "device_files_present": gpu_status.get("device_files_present", False),
                 "nvidia_smi": gpu_status.get("nvidia_smi", ""),
             },
             "system_ram": {
                 "total_gb": sys_mem.total_ram_gb,
                 "available_gb": sys_mem.available_ram_gb,
-                "effective_for_llm_gb": sys_mem.effective_for_llm_gb,
+                "effective_for_llm_gb": 0.0 if unified else sys_mem.effective_for_llm_gb,
+                # Lets the WebUI hide the CPU-offload line on a unified pool.
+                "unified_memory": unified,
             },
         }
     except Exception as exc:
         logger.warning("GPU detection failed: %s", exc)
         return {
+            "status": "error",
             "gpus": [],
             "summary": "GPU detection unavailable",
             "total_vram_gb": 0.0,
@@ -1053,63 +1138,77 @@ def _serialize_gpu_data() -> dict[str, Any]:
                 "device_files_present": False,
                 "nvidia_smi": "",
             },
-            "system_ram": {"total_gb": 0.0, "available_gb": 0.0, "effective_for_llm_gb": 0.0},
+            "system_ram": {
+                "total_gb": 0.0, "available_gb": 0.0, "effective_for_llm_gb": 0.0, "unified_memory": False,
+            },
         }
 
 
 @app.get("/v1/system/gpu", summary="Detect NVIDIA GPUs and return hardware info")
 async def system_gpu() -> dict[str, Any]:
     """Return detected GPU hardware info. Returns empty GPU list gracefully when
-    nvidia-smi is not available (CPU-only host)."""
-    return _response_envelope(_serialize_gpu_data())
+    nvidia-smi is not available (CPU-only host).
+
+    Detection runs off the event loop: the nvidia-smi fallback is up to three
+    subprocesses (10 s timeout each), and every other request — the Wizard
+    stream, ``/v1/health`` — would otherwise stall behind it."""
+    return _response_envelope(await asyncio.to_thread(_serialize_gpu_data))
 
 
 # -- /v1/system/recommendations -----------------------------------------------
 
+def _serialize_recommendations() -> dict[str, Any]:
+    """Detect GPUs and build the recommendations payload. Blocking — call via ``asyncio.to_thread``."""
+    gpus = detect_gpus()
+    recs = recommend_models(gpus)
+    opts = get_ollama_optimizations(gpus)
+
+    # OOM check for the main model sizes users commonly pull. These are
+    # all registry-backed tags so the wizard does not recommend 404s.
+    oom_models = {
+        "nemotron-mini": 2.0,
+        "qwen3:8b": 6.0,
+        "llama3.2-vision": 7.0,
+        "nemotron": 40.0,
+    }
+    oom_results = {name: check_oom_risk(vram, gpus) for name, vram in oom_models.items()}
+
+    rec_data = [
+        {
+            "model": r.model,
+            "reason": r.reason,
+            "vram_required_gb": r.vram_required_gb,
+            "tier": r.tier,
+            # Unified-memory bandwidth note (DGX Spark); "" elsewhere.
+            "note": r.note,
+        }
+        for r in recs
+    ]
+
+    opt_data = {
+        "flash_attention": opts.flash_attention,
+        "num_parallel": opts.num_parallel,
+        "recommended_ctx": opts.recommended_ctx,
+        "recommended_quant": opts.recommended_quant,
+        "architecture": opts.architecture,
+        "compute_capability": list(opts.compute_capability),
+        "notes": opts.notes,
+    }
+
+    return {
+        "recommendations": rec_data,
+        "optimizations": opt_data,
+        "oom_check": oom_results,
+    }
+
+
 @app.get("/v1/system/recommendations", summary="Model recommendations based on detected GPU")
 async def system_recommendations() -> dict[str, Any]:
     """Return Nemotron model recommendations and Ollama optimisation settings for
-    the detected GPU. Safe to call on CPU-only hosts."""
+    the detected GPU. Safe to call on CPU-only hosts. GPU detection (and its
+    nvidia-smi subprocesses) runs off the event loop."""
     try:
-        gpus = detect_gpus()
-        recs = recommend_models(gpus)
-        opts = get_ollama_optimizations(gpus)
-
-        # OOM check for the main model sizes users commonly pull. These are
-        # all registry-backed tags so the wizard does not recommend 404s.
-        oom_models = {
-            "nemotron-mini": 2.0,
-            "qwen3:8b": 6.0,
-            "llama3.2-vision": 7.0,
-            "nemotron": 40.0,
-        }
-        oom_results = {name: check_oom_risk(vram, gpus) for name, vram in oom_models.items()}
-
-        rec_data = [
-            {
-                "model": r.model,
-                "reason": r.reason,
-                "vram_required_gb": r.vram_required_gb,
-                "tier": r.tier,
-            }
-            for r in recs
-        ]
-
-        opt_data = {
-            "flash_attention": opts.flash_attention,
-            "num_parallel": opts.num_parallel,
-            "recommended_ctx": opts.recommended_ctx,
-            "recommended_quant": opts.recommended_quant,
-            "architecture": opts.architecture,
-            "compute_capability": list(opts.compute_capability),
-            "notes": opts.notes,
-        }
-
-        return _response_envelope({
-            "recommendations": rec_data,
-            "optimizations": opt_data,
-            "oom_check": oom_results,
-        })
+        return _response_envelope(await asyncio.to_thread(_serialize_recommendations))
     except Exception as exc:
         logger.warning("Recommendations endpoint error: %s", exc)
         return _response_envelope({
@@ -1618,7 +1717,8 @@ async def wizard_diagnostics(
     from nvh.integrations.wizard.context import wizard_context
     from nvh.integrations.wizard.findings import derive_findings
 
-    snapshot = wizard_context(home_dir=home_dir)
+    # The snapshot spawns nvidia-smi / reads Ollama; keep it off the event loop.
+    snapshot = await asyncio.to_thread(wizard_context, home_dir=home_dir)
     findings = derive_findings(snapshot)
     return _response_envelope({
         "findings": [f.to_dict() for f in findings],
@@ -1653,6 +1753,11 @@ async def wizard_reconnect(
 class WizardChatTurn(BaseModel):
     role: str = Field(..., min_length=1, max_length=16)
     content: str = Field(..., max_length=20_000)
+    # The specialist profile that produced an assistant turn (``used_profile``
+    # in the chat reply), echoed back by the WebUI so the concierge's
+    # continuity tier can keep a thread on the profile it started with. Absent
+    # on user turns and on turns from before profiles existed.
+    used_profile: str | None = Field(default=None, max_length=64)
 
 
 class WizardChatRequest(BaseModel):
@@ -1671,6 +1776,18 @@ class WizardChatRequest(BaseModel):
     max_iterations: int | None = Field(default=None, ge=1, le=10)
 
 
+def _wizard_history(turns: list[WizardChatTurn]) -> list[dict[str, Any]]:
+    """Plain-dict history for ``wizard_chat`` — ``used_profile`` only on turns that carry one.
+
+    ``chat.py`` passes history through untouched, so this is the one place the
+    concierge's continuity tier depends on for reading the prior profile.
+    """
+    return [
+        {"role": t.role, "content": t.content, **({"used_profile": t.used_profile} if t.used_profile else {})}
+        for t in turns
+    ]
+
+
 @app.post("/v1/wizard/chat", summary="AI Wizard chat — live-state-grounded conversation")
 async def wizard_chat_endpoint(
     request: WizardChatRequest,
@@ -1684,7 +1801,7 @@ async def wizard_chat_endpoint(
     """
     from nvh.integrations.wizard.chat import wizard_chat as _wizard_chat
 
-    history = [{"role": t.role, "content": t.content} for t in request.history]
+    history = _wizard_history(request.history)
     result = await _wizard_chat(
         request.question,
         history=history,
@@ -1710,7 +1827,7 @@ async def wizard_chat_stream_endpoint(
     """
     from nvh.integrations.wizard.chat import wizard_chat_stream
 
-    history = [{"role": t.role, "content": t.content} for t in request.history]
+    history = _wizard_history(request.history)
 
     async def _event_source():
         try:
@@ -2038,7 +2155,7 @@ async def wizard_context_endpoint(
     """
     from nvh.integrations.wizard.context import wizard_context
 
-    return _response_envelope(wizard_context(home_dir=home_dir))
+    return _response_envelope(await asyncio.to_thread(wizard_context, home_dir=home_dir))
 
 
 # Singleton Wizard tool registry — built lazily on first request.
@@ -2668,8 +2785,8 @@ async def system_info(_auth: None = Depends(require_auth)) -> dict[str, Any]:
     cache stats in a single round-trip."""
     engine = get_engine()
 
-    # GPU (never raises)
-    gpu_data = _serialize_gpu_data()
+    # GPU (never raises; off the loop — the nvidia-smi fallback spawns processes)
+    gpu_data = await asyncio.to_thread(_serialize_gpu_data)
 
     # Providers — best-effort, don't crash the whole endpoint on timeouts
     providers_online = 0
@@ -3951,10 +4068,12 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
     """
     import httpx
 
-    # --- GPU detection ---
-    gpus = detect_gpus()
-    recs = recommend_models(gpus)
-    opts = get_ollama_optimizations(gpus)
+    # --- GPU detection (off the loop: nvidia-smi fallback subprocesses) ---
+    def _plan_hardware() -> tuple[list[Any], list[Any], Any]:
+        detected = detect_gpus()
+        return detected, recommend_models(detected), get_ollama_optimizations(detected)
+
+    gpus, recs, opts = await asyncio.to_thread(_plan_hardware)
 
     # --- Installed models ---
     base_url = _get_ollama_base_url()
@@ -4011,6 +4130,7 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
             "model": model_name,
             "reason": rec.reason,
             "tier": rec.tier,
+            "note": rec.note,
             "estimated_size_gb": size_gb,
             "estimated_size_bytes": size_bytes,
             "estimated_download_seconds": eta_seconds,
@@ -4026,6 +4146,7 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
         {
             "name": g.name,
             "vram_gb": g.vram_gb,
+            "unified_memory": g.unified_memory,
             "driver_version": g.driver_version,
             "cuda_version": g.cuda_version,
             "index": g.index,

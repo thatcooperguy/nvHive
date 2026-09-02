@@ -296,6 +296,15 @@ export interface GPUDevice {
   name: string;
   vram_mb: number;
   vram_gb: number;
+  /** True when vram_* describe a CPU/GPU-shared pool (GB10 / DGX Spark), not dedicated VRAM. */
+  unified_memory?: boolean;
+  /**
+   * True when the driver enumerated this GPU but reported no memory pool. vram_*
+   * and memory_*_mb are then all 0 and mean "unknown", not "0 GB": render
+   * "memory unreadable" and budget nothing against the row. Absent on payloads
+   * that predate the flag — `isMemoryUnreadable()` falls back to vram_mb <= 0.
+   */
+  memory_unreadable?: boolean;
   memory_used_mb: number;
   memory_free_mb: number;
   memory_reserved_mb?: number;
@@ -312,11 +321,31 @@ export interface GPUDevice {
 export interface SystemRAM {
   total_gb: number;
   available_gb: number;
+  /** RAM usable for CPU-offloaded layers. 0 on a unified pool — there is no second pool to spill into. */
   effective_for_llm_gb: number;
+  /** True when the GPU shares this pool (GB10 / DGX Spark); there is no separate CPU-offload headroom. */
+  unified_memory?: boolean;
 }
 
+/**
+ * Detection verdict from /v1/system/gpu. 'ready' when at least one row has a
+ * readable memory pool — models are sized against the first such row (see
+ * `primaryGpu()` in lib/gpu.ts; never assume it is gpus[0]). A visible GPU whose
+ * memory could not be read stays in `gpus` (0 GB, memory_unreadable) and is
+ * named in `summary`; the status is 'blocked' only when *no* row is sized.
+ */
+export type GpuDetectionStatus = 'ready' | 'blocked' | 'unavailable' | 'not-detected';
+
 export interface GPUInfo {
+  /** Every visible row in driver order; unreadable rows are kept at 0 GB, so `gpus[0]` need not be the sized one. */
   gpus: GPUDevice[];
+  /** Optional until every API build emits it top-level; mirrors detection.status. Read via `gpuStatusOf()`. */
+  status?: GpuDetectionStatus;
+  /**
+   * One-line human digest, e.g. "1 GPU visible but its memory could not be read: …" or, for a
+   * partial failure, "1 of 2 GPUs ready: …; memory unreadable: NVIDIA A100 (GPU 0)". Tooltip for
+   * the unreadable tag and the GpuBlockedSummary line.
+   */
   summary: string;
   total_vram_gb: number;
   detection?: {
@@ -334,6 +363,8 @@ export interface ModelRecommendation {
   reason: string;
   vram_required_gb: number;
   tier: string;
+  /** Platform caption (unified-memory bandwidth guidance on DGX Spark); "" elsewhere. */
+  note?: string;
 }
 
 export interface OllamaOptimizations {
@@ -349,9 +380,13 @@ export interface OllamaOptimizations {
 export interface OomCheckResult {
   safe: boolean;
   fits_gpu: boolean;
-  fits_hybrid: boolean;
+  /** Fits with CPU offload. Never true on a unified pool and may be omitted there — treat absence as false. */
+  fits_hybrid?: boolean;
   gpu_free_gb: number;
+  /** 0 on a unified pool — those bytes are already counted in gpu_free_gb. */
   ram_free_gb: number;
+  /** True when the GPU shares the system RAM pool (GB10 / DGX Spark). */
+  unified_memory?: boolean;
   recommendation: string;
 }
 

@@ -6,7 +6,18 @@ set -euo pipefail
 
 G='\033[0;32m'; Y='\033[1;33m'; D='\033[0;90m'; R='\033[0;31m'; N='\033[0m'
 REPO_RAW="${NVH_REPO_RAW:-https://raw.githubusercontent.com/thatcooperguy/nvHive/main}"
-LINUX_BINARY_URL="${NVH_BINARY_URL:-https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-linux-x86_64}"
+
+# Pick the release binary for this CPU: x86_64 cloud desktops or aarch64
+# DGX Spark (GB10, DGX OS). NVH_BINARY_URL overrides the choice entirely.
+binary_arch() {
+    case "$(uname -m 2>/dev/null)" in
+        x86_64|amd64) echo "x86_64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) echo "unsupported" ;;
+    esac
+}
+BINARY_ARCH="$(binary_arch)"
+LINUX_BINARY_URL="${NVH_BINARY_URL:-https://github.com/thatcooperguy/nvHive/releases/latest/download/nvh-linux-${BINARY_ARCH}}"
 
 free_gb_for_path() {
     df -Pk "$1" 2>/dev/null | awk 'NR==2 {printf "%d", $4 / 1048576}'
@@ -115,18 +126,71 @@ find_python() {
 }
 
 install_binary() {
-    mkdir -p "$NVH_HOME/bin"
-    echo -e "${Y}Python was not found, so nvHive is using the single-file Linux binary.${N}"
-    echo -e "${D}Downloading: $LINUX_BINARY_URL${N}"
-    if command -v curl >/dev/null 2>&1; then
-        curl -fL "$LINUX_BINARY_URL" -o "$NVH_HOME/bin/nvh"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -O "$NVH_HOME/bin/nvh" "$LINUX_BINARY_URL"
-    else
-        echo -e "${R}Need curl or wget to download the nvHive binary.${N}"
+    if [ "$BINARY_ARCH" = "unsupported" ] && [ -z "${NVH_BINARY_URL:-}" ]; then
+        echo -e "${R}No nvHive binary is published for $(uname -m); install Python 3.11+ or set NVH_BINARY_URL.${N}"
         exit 1
     fi
+    mkdir -p "$NVH_HOME/bin"
+    echo -e "${Y}Python was not found, so nvHive is using the single-file Linux binary (${BINARY_ARCH}).${N}"
+    echo -e "${D}Downloading: $LINUX_BINARY_URL${N}"
+    local tmp="$NVH_HOME/bin/.nvh.download"
+    if ! fetch_url "$LINUX_BINARY_URL" "$tmp"; then
+        rm -f "$tmp"
+        echo -e "${R}Could not download the nvHive binary for ${BINARY_ARCH}.${N}"
+        if [ "$BINARY_ARCH" = "arm64" ] && [ -z "${NVH_BINARY_URL:-}" ]; then
+            echo -e "${Y}arm64 (DGX Spark) binaries ship from nvHive 0.43; the latest release may predate them.${N}"
+        fi
+        echo -e "${Y}Install Python 3.11+ (DGX OS and Ubuntu ship python3) and re-run, or set NVH_BINARY_URL.${N}"
+        exit 1
+    fi
+    verify_binary_checksum "$tmp" || { rm -f "$tmp"; exit 1; }
+    mv -f "$tmp" "$NVH_HOME/bin/nvh"
     chmod +x "$NVH_HOME/bin/nvh"
+}
+
+# fetch_url URL DEST — download with curl or wget; non-zero on any failure
+# (including HTTP 404 for a release that has no binary for this CPU yet).
+fetch_url() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 2 "$1" -o "$2"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$2" "$1"
+    else
+        echo -e "${R}Need curl or wget to download the nvHive binary.${N}"
+        return 1
+    fi
+}
+
+# verify_binary_checksum FILE — check FILE against the release's SHA256SUMS.
+# Releases from 0.43 publish that file; when it is absent (older releases or a
+# custom NVH_BINARY_URL) the download is used unverified with a loud warning.
+verify_binary_checksum() {
+    local file="$1" sums="$1.sums" asset expected actual
+    asset="$(basename "$LINUX_BINARY_URL")"
+    if ! fetch_url "${LINUX_BINARY_URL%/*}/SHA256SUMS" "$sums" 2>/dev/null; then
+        rm -f "$sums"
+        echo -e "${Y}No SHA256SUMS published for this release; using the binary unverified.${N}"
+        return 0
+    fi
+    expected="$(awk -v a="$asset" '$2 == a || $2 == "*" a {print $1}' "$sums" | head -n1)"
+    rm -f "$sums"
+    if [ -z "$expected" ]; then
+        echo -e "${Y}SHA256SUMS has no entry for ${asset}; using the binary unverified.${N}"
+        return 0
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$file" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+    else
+        echo -e "${Y}No sha256sum/shasum available; using the binary unverified.${N}"
+        return 0
+    fi
+    if [ "$actual" != "$expected" ]; then
+        echo -e "${R}Checksum mismatch for ${asset}: expected ${expected}, got ${actual}. Refusing to run it.${N}"
+        return 1
+    fi
+    echo -e "${G}Verified ${asset} against SHA256SUMS.${N}"
 }
 
 if [ -z "${NVH_HOME:-}" ]; then

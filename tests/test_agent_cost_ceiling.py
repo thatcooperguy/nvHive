@@ -55,6 +55,13 @@ _EMPTY = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_home(monkeypatch, tmp_path) -> None:
+    """The profile store and plugin dir resolve to tmp_path, never the
+    developer's real $NVH_HOME."""
+    monkeypatch.setenv("NVH_HOME", str(tmp_path))
+
+
 @pytest.mark.asyncio
 async def test_default_wizard_profile_has_no_ceiling(monkeypatch) -> None:
     """No ceiling = no abort even on a multi-iteration expensive run."""
@@ -107,8 +114,15 @@ async def test_profile_ceiling_aborts_follow_up_loop(monkeypatch, tmp_path) -> N
     assert result["cost_ceiling_hit"] is True
     assert result["cost_ceiling_usd"] == 0.05
     assert result["cost_usd"] >= 0.05
-    # No auto-class tools ran because we aborted before that step.
-    assert result["tool_results"] == []
+    # No auto-class tool ran: the loop aborted before that step, and the
+    # only recorded result is the whitelist refusal (`researcher` may not
+    # call `refresh_models`), never an execution — and it is neither offered
+    # to the UI as a confirm card nor reported as merely deferred.
+    assert [(r["name"], r["result"]["not_allowed"]) for r in result["tool_results"]] == [
+        ("refresh_models", True),
+    ]
+    assert result["tool_calls"] == []
+    assert result["deferred_tool_calls"] == []
 
 
 @pytest.mark.asyncio
@@ -177,6 +191,13 @@ async def test_user_profile_can_set_its_own_ceiling(monkeypatch, tmp_path) -> No
     assert result["cost_ceiling_hit"] is True
     assert result["cost_ceiling_usd"] == 0.02
     assert result["iterations"] == 1
+    # The auto-class call the ceiling stopped is reported as deferred with the
+    # reason — not handed to the UI as a confirm card it would auto-run.
+    assert result["tool_calls"] == []
+    assert result["deferred_tool_calls"] == [
+        {"name": "refresh_models", "arguments": {}, "reason": chat_mod.DEFER_COST_CEILING},
+    ]
+    assert result["tool_results"] == []
 
 
 @pytest.mark.asyncio

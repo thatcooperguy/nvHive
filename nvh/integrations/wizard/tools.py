@@ -32,8 +32,9 @@ so they can chain into other engine async paths cleanly.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,31 @@ logger = logging.getLogger(__name__)
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 SafetyClass = str  # "auto" | "confirm" — "never" is never registered
+
+
+class _MissingArgs(dict):
+    """``format_map`` mapping that renders unknown placeholders as ``?``."""
+
+    def __missing__(self, key: str) -> str:
+        return "?"
+
+
+def format_summary(template: str, arguments: Mapping[str, Any] | None) -> str:
+    """Render a ``summary_template`` against model-supplied arguments; never raises.
+
+    The model decides which arguments it sends, so a required name may be
+    missing (``KeyError``), a placeholder may index into a string
+    (``{a[0]}``), or the template may use positional fields. Missing names
+    render as ``?``; anything else falls back to the raw template so the
+    confirmation card still shows *something* instead of the HTTP layer
+    turning a formatting slip into a 500.
+    """
+    if not template:
+        return ""
+    try:
+        return template.format_map(_MissingArgs(arguments or {}))
+    except Exception:
+        return template
 
 
 @dataclass(frozen=True)
@@ -133,9 +159,7 @@ class WizardToolRegistry:
                 "needs_confirmation": True,
                 "tool": tool.as_public_dict(),
                 "arguments": arguments or {},
-                "summary": (tool.summary_template or tool.description).format(
-                    **(arguments or {})
-                ) if tool.summary_template else tool.description,
+                "summary": format_summary(tool.summary_template, arguments) or tool.description,
             }
 
         try:
@@ -164,7 +188,9 @@ async def _tool_diagnose(args: dict[str, Any]) -> dict[str, Any]:
     from nvh.integrations.wizard.findings import derive_findings
 
     home_dir = args.get("home_dir")
-    snapshot = wizard_context(home_dir=home_dir)
+    # wizard_context spawns nvidia-smi / reads Ollama over HTTP; keep that
+    # off the server's event loop (the chat turn already does the same).
+    snapshot = await asyncio.to_thread(wizard_context, home_dir=home_dir)
     findings = derive_findings(snapshot)
     return {
         "findings": [f.to_dict() for f in findings],
@@ -180,7 +206,7 @@ async def _tool_refresh_models(args: dict[str, Any]) -> dict[str, Any]:
     """Re-query the local Ollama daemon for installed models."""
     from nvh.integrations.wizard.auto_repair import _refresh_ollama_models
 
-    summary = _refresh_ollama_models()
+    summary = await asyncio.to_thread(_refresh_ollama_models)
     return {"summary": summary}
 
 
@@ -189,7 +215,7 @@ async def _tool_repair_workspace(args: dict[str, Any]) -> dict[str, Any]:
     from nvh.integrations.wizard.auto_repair import run_safe_repairs
 
     home_dir = args.get("home_dir")
-    return run_safe_repairs(home_dir=home_dir)
+    return await asyncio.to_thread(run_safe_repairs, home_dir=home_dir)
 
 
 async def _tool_validate_provider_key(args: dict[str, Any]) -> dict[str, Any]:
@@ -557,6 +583,15 @@ def default_registry() -> WizardToolRegistry:
         handler=_tool_web_search,
         summary_template="Search the web for: {query}",
     ))
+
+    # Home Assistant (2026-09-02): four smart-home reads run auto; the one
+    # write (home_assistant_call) is confirm-class so the WebUI shows the
+    # exact service call before anything switches. Registered even when
+    # HASS_URL/HASS_TOKEN are unset — the handlers then return the setup
+    # hint without network I/O, so the Wizard can explain how to connect.
+    from nvh.integrations.home_assistant import register_wizard_tools as _register_home_assistant
+
+    _register_home_assistant(reg)
 
     # Pull in any third-party / workspace-local tools after the stock set so
     # plugins can override (with a logged warning) or extend without forking.

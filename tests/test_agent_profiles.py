@@ -5,8 +5,9 @@ Covers:
   - User profiles round-trip via save → list → get
   - User profile with same name as built-in overrides it at runtime
   - delete_user_profile only removes user files, never built-ins
-  - The wizard chat _apply_profile helper appends the profile persona and
-    surfaces provider/model overrides
+  - ``tools_allowed`` is normalised to ``list[str] | None`` on every load path
+  - The wizard chat ``_resolve_profile_overrides`` helper appends the profile
+    persona and surfaces provider/model overrides
 """
 
 from __future__ import annotations
@@ -14,6 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_home(monkeypatch, tmp_path: Path) -> None:
+    """Default-resolved lookups read tmp_path, never the developer's $NVH_HOME."""
+    monkeypatch.setenv("NVH_HOME", str(tmp_path))
 
 
 def test_built_in_profiles_always_present(tmp_path: Path) -> None:
@@ -99,22 +106,23 @@ def test_delete_user_profile_only_removes_user_files(tmp_path: Path) -> None:
     assert "coder" in names
 
 
-def test_apply_profile_no_op_for_default_wizard() -> None:
-    from nvh.integrations.wizard.chat import _apply_profile
+def test_resolve_profile_overrides_no_op_for_default_wizard() -> None:
+    """None and the explicit ``wizard`` pin both mean the general persona:
+    no addon, no provider/model pin, no ceiling."""
+    from nvh.integrations.wizard.chat import ProfileOverrides, _resolve_profile_overrides
 
     base = "BASE PROMPT"
-    out, prov, model, ceiling = _apply_profile(base, None, None)
-    assert out == base
-    assert prov is None and model is None and ceiling is None
+    for name in (None, "wizard"):
+        prof = _resolve_profile_overrides(name, None)
+        assert prof == ProfileOverrides()
+        assert prof.apply_to_prompt(base) == base
+        assert prof.provider is None and prof.model is None and prof.cost_ceiling_usd is None
 
-    out2, *_ = _apply_profile(base, "wizard", None)
-    assert out2 == base
 
-
-def test_apply_profile_appends_persona_and_routes(tmp_path: Path) -> None:
-    """Resolving a real profile appends its system_prompt and returns its
+def test_resolve_profile_overrides_appends_persona_and_routes(tmp_path: Path) -> None:
+    """Resolving a real profile appends its system_prompt and carries its
     provider/model preferences for the router to honor."""
-    from nvh.integrations.wizard.chat import _apply_profile
+    from nvh.integrations.wizard.chat import _resolve_profile_overrides
     from nvh.integrations.wizard.profiles import AgentProfile, save_user_profile
 
     save_user_profile(
@@ -129,21 +137,65 @@ def test_apply_profile_appends_persona_and_routes(tmp_path: Path) -> None:
         home_dir=tmp_path,
     )
 
-    out, prov, model, ceiling = _apply_profile("BASE", "careful", tmp_path)
+    prof = _resolve_profile_overrides("careful", tmp_path)
+    out = prof.apply_to_prompt("BASE")
     assert "BASE" in out
     assert "Careful Reviewer" in out
     assert "skeptical" in out
-    assert prov == "ollama"
-    assert model == "ollama/qwen2.5-coder:7b"
-    assert ceiling is None
+    assert prof.provider == "ollama"
+    assert prof.model == "ollama/qwen2.5-coder:7b"
+    assert prof.cost_ceiling_usd is None
+    assert prof.local_only is False
 
 
-def test_apply_profile_unknown_name_is_safe() -> None:
-    from nvh.integrations.wizard.chat import _apply_profile
+def test_resolve_profile_overrides_unknown_name_is_safe() -> None:
+    from nvh.integrations.wizard.chat import ProfileOverrides, _resolve_profile_overrides
 
-    out, prov, model, ceiling = _apply_profile("BASE", "this-profile-does-not-exist", None)
-    assert out == "BASE"
-    assert prov is None and model is None and ceiling is None
+    prof = _resolve_profile_overrides("this-profile-does-not-exist", None)
+    assert prof == ProfileOverrides()
+    assert prof.apply_to_prompt("BASE") == "BASE"
+
+
+def test_tools_allowed_is_normalised_on_every_load_path(tmp_path: Path) -> None:
+    """``tools_allowed`` reaches the chat layer as ``list[str] | None`` whether
+    it came from hand-written YAML (a bare string), the library JSON, or code
+    (a tuple) — so the whitelist check needs no special cases."""
+    from nvh.integrations.wizard.chat import _resolve_profile_overrides
+    from nvh.integrations.wizard.profiles import (
+        AgentProfile,
+        _library_profile,
+        get_profile,
+        normalise_tools_allowed,
+    )
+
+    pdir = tmp_path / "agent-profiles"
+    pdir.mkdir()
+    (pdir / "notes.yaml").write_text(
+        "title: Notes\nsystem_prompt: ''\ntools_allowed: web_search\n", encoding="utf-8",
+    )
+    (pdir / "open.yaml").write_text("title: Open\ntools_allowed: null\n", encoding="utf-8")
+
+    notes = get_profile("notes", home_dir=tmp_path)
+    assert notes is not None and notes.tools_allowed == ["web_search"]
+    open_ = get_profile("open", home_dir=tmp_path)
+    assert open_ is not None and open_.tools_allowed is None
+
+    assert _library_profile({"name": "x", "tools_allowed": "rag_ask"}).tools_allowed == ["rag_ask"]
+    assert _library_profile({"name": "y"}).tools_allowed is None
+    assert AgentProfile(
+        name="t", title="t", description="", system_prompt="", tools_allowed=("a", "b"),
+    ).tools_allowed == ["a", "b"]
+
+    assert normalise_tools_allowed(None) is None
+    assert normalise_tools_allowed("") == []
+    assert normalise_tools_allowed(" web_search ") == ["web_search"]
+    assert normalise_tools_allowed({"b", "a"}) == ["a", "b"] or normalise_tools_allowed({"b", "a"}) == ["b", "a"]
+    with pytest.raises(TypeError):
+        normalise_tools_allowed(3)
+
+    # The chat layer just freezes the list — no str special case left.
+    assert _resolve_profile_overrides("notes", tmp_path).tools_allowed == frozenset({"web_search"})
+    assert _resolve_profile_overrides("open", tmp_path).tools_allowed is None
 
 
 def test_prompt_template_round_trips_and_renders(tmp_path: Path) -> None:
@@ -191,7 +243,9 @@ def test_library_entries_keep_prompt_template_and_max_tokens() -> None:
 
 
 def test_apply_prompt_template_wraps_user_message_only_for_real_profiles(tmp_path: Path) -> None:
-    from nvh.integrations.wizard.chat import _apply_prompt_template
+    """The template is applied from the already-resolved profile (no second
+    catalog load); the general Wizard and unknown names resolve to None."""
+    from nvh.integrations.wizard.chat import _apply_prompt_template, _resolve_profile
     from nvh.integrations.wizard.profiles import AgentProfile, save_user_profile
 
     save_user_profile(
@@ -199,10 +253,16 @@ def test_apply_prompt_template_wraps_user_message_only_for_real_profiles(tmp_pat
                      prompt_template="Q: {{input}}"),
         home_dir=tmp_path,
     )
-    assert _apply_prompt_template("why?", "wrap", tmp_path) == "Q: why?"
-    assert _apply_prompt_template("why?", None, tmp_path) == "why?"
-    assert _apply_prompt_template("why?", "wizard", tmp_path) == "why?"
-    assert _apply_prompt_template("why?", "missing-profile", tmp_path) == "why?"
+    assert _apply_prompt_template("why?", _resolve_profile("wrap", tmp_path)) == "Q: why?"
+    assert _apply_prompt_template("why?", None) == "why?"
+    assert _resolve_profile("wizard", tmp_path) is None
+    assert _resolve_profile("missing-profile", tmp_path) is None
+    # A preloaded catalog is honoured over the store.
+    from nvh.integrations.wizard.profiles import list_profiles
+
+    catalog = list_profiles(home_dir=tmp_path)
+    assert _resolve_profile("wrap", tmp_path, profiles=catalog).prompt_template == "Q: {{input}}"
+    assert _resolve_profile("wrap", tmp_path, profiles=()) is None
 
 
 @pytest.mark.asyncio

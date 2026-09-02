@@ -27,6 +27,7 @@ from nvh.integrations.installs.studio_packs import (
 from nvh.integrations.services.runtime import runtime_status
 from nvh.integrations.workspace.storage import storage_status
 from nvh.utils.gpu import detect_gpu_status, gpu_architecture_info
+from nvh.utils.hw_ids import detect_machine
 
 
 @dataclass(frozen=True)
@@ -119,11 +120,19 @@ def python_version() -> str:
 
 
 def platform_summary() -> dict[str, str]:
-    """The four platform facts every report and bundle header carries."""
+    """The four platform facts every report and bundle header carries.
+
+    ``machine`` comes from :func:`nvh.utils.hw_ids.detect_machine`, the same
+    WOW64-aware probe :mod:`nvh.utils.platform_facts` uses, so the boot
+    fingerprint's ``machine`` fact (built from this dict by
+    ``boot_preflight.host_fingerprint``) and the Wizard's platform block agree
+    on an Arm Windows box running an x64 Python — raw ``platform.machine()``
+    reports ``AMD64`` there.
+    """
     return {
         "system": platform.system(),
         "release": platform.release(),
-        "machine": platform.machine(),
+        "machine": detect_machine(),
         "python": python_version(),
     }
 

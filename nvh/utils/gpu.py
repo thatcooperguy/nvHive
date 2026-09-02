@@ -18,9 +18,33 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+import sys
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+
+from nvh.utils.hw_ids import is_gb10_name
+
+# GB10 (DGX Spark / RTX Spark class) is the first NVIDIA part whose "VRAM" is the
+# system's LPDDR5x pool.  The GPU shares it with the OS, so model budgets must
+# leave headroom and must never add system RAM on top as a CPU-offload bonus.
+UNIFIED_MEMORY_OS_RESERVE_GB = 16.0     # OS + WebUI + desktop headroom on a unified pool
+UNIFIED_MEMORY_BANDWIDTH_GBPS = 273     # GB10 LPDDR5x, per NVIDIA's DGX Spark spec sheet
+
+
+def is_unified_memory_gpu_name(name: str | None) -> bool:
+    """True when the GPU name is a known unified-memory part (GB10 today).
+
+    Public alias of :func:`nvh.utils.hw_ids.is_gb10_name`, the one shared GB10
+    predicate. Its callers are inside this module — ``_resolve_memory_pool``
+    (system RAM as the pool) and ``_parse_compute_capability`` (sm_121) — and
+    the test suites; :mod:`nvh.utils.platform_facts` imports
+    ``hw_ids.is_gb10_name`` directly. Kept under this name for API stability.
+    """
+    return is_gb10_name(name)
 
 
 @dataclass
@@ -44,6 +68,10 @@ class GPUInfo:
     pcie_width: int = 0          # PCIe lane width
     compute_capability: tuple[int, int] = (0, 0)  # e.g. (8, 9) for Ada
     processes: list[dict] = field(default_factory=list)  # running GPU processes
+    # True when vram_* describe a CPU/GPU-shared pool (GB10 / DGX Spark). Set
+    # only from the GPU name (nvh.utils.hw_ids.is_gb10_name) — a driver that
+    # fails to report memory on a discrete GPU never flips this on.
+    unified_memory: bool = False
 
 
 @dataclass
@@ -52,6 +80,7 @@ class ModelRecommendation:
     reason: str             # e.g. "8GB+ VRAM available — good quality/speed balance"
     vram_required_gb: float
     tier: str               # "mini", "small", "full", "multi-gpu"
+    note: str = ""          # optional platform note (e.g. unified-memory bandwidth guidance)
 
 
 def _append_gpu_issue(
@@ -62,18 +91,22 @@ def _append_gpu_issue(
     message: str,
     severity: str = "warning",
     detail: str = "",
+    index: int | None = None,
 ) -> None:
     if issues is None:
         return
-    issues.append(
-        {
-            "source": source,
-            "code": code,
-            "message": message,
-            "severity": severity,
-            "detail": detail[:300],
-        }
-    )
+    issue: dict[str, Any] = {
+        "source": source,
+        "code": code,
+        "message": message,
+        "severity": severity,
+        "detail": detail[:300],
+    }
+    if index is not None:
+        # Row-scoped issues (``memory-unavailable``) carry the GPU index so a
+        # consumer can pair the issue with its row without parsing the message.
+        issue["index"] = index
+    issues.append(issue)
 
 
 def _nvidia_device_files_present() -> bool:
@@ -84,19 +117,267 @@ def _nvidia_device_files_present() -> bool:
         return False
 
 
+def _system_ram_pool_mb() -> tuple[int, int, int]:
+    """(total_mb, used_mb, free_mb) of system RAM, for unified-memory GPUs.
+
+    GB10 exposes no dedicated VRAM, so the LPDDR5x pool *is* the GPU memory.
+    ``free_mb`` comes from ``MemAvailable`` (via :func:`detect_system_memory`)
+    rather than CUDA/NVML's free figure, which ignores reclaimable page cache
+    on a unified pool — NVIDIA's DGX Spark guidance for "how much can I load".
+    Returns zeros when RAM cannot be measured.
+    """
+    try:
+        mem = detect_system_memory()
+    except Exception:
+        return 0, 0, 0
+    total_mb = int(mem.total_ram_gb * 1024)
+    free_mb = int(mem.available_ram_gb * 1024) if mem.available_ram_gb else total_mb
+    return total_mb, max(total_mb - free_mb, 0), free_mb
+
+
+def _resolve_memory_pool(
+    name: str,
+    index: int,
+    read_driver_pool: Callable[[], tuple[int, int, int]],
+    *,
+    source: str,
+    issues: list[dict[str, Any]] | None,
+) -> tuple[tuple[int, int, int], bool]:
+    """``((total_mb, used_mb, free_mb), unified)`` for one GPU row.
+
+    One rule for both detection paths:
+
+    * Discrete GPUs: the driver's own (total, used, free) is the pool. A read
+      that raises or reports 0 MiB means the row cannot be sized — it is never
+      padded with system RAM.
+    * Unified-memory GPUs (GB10, by name): system RAM *is* the pool —
+      ``MemTotal`` is the honest total and ``MemAvailable`` the honest "how much
+      can I load" (the driver prints ``[N/A]``, or a free figure that ignores
+      reclaimable page cache). If RAM cannot be measured the driver's figures
+      are used when it printed any.
+
+    A row that cannot be sized comes back as ``((0, 0, 0), False)`` with a
+    ``memory-unavailable`` issue recorded (carrying the row's ``index``), and
+    the caller **keeps** it: the GPU is visible, and its *name* is what
+    :func:`nvh.utils.platform_facts.classify` keys on — a visible non-GB10 GPU
+    on a DGX-OS arm64 box is not a Spark — so dropping the row before the
+    classifier saw it turned a Grace Hopper node with an unreadable memory
+    cell into ``dgx-spark`` / unified. What must not happen instead is
+    treating the row as ready: :func:`detect_gpu_status` reports ``blocked``
+    when *no* row is sized, names the unreadable rows in ``summary`` when
+    other rows are, and the budget helpers count only sized rows — an
+    unreadable row is never system RAM, never a tier, never a GPU Ollama can
+    use.
+
+    ``read_driver_pool`` is only invoked when needed, so a GB10 with readable
+    RAM never touches the driver's memory query.
+    """
+    unified = is_unified_memory_gpu_name(name)
+    pool: tuple[int, int, int] | None = _system_ram_pool_mb() if unified else None
+    detail = ""
+    if pool is None or pool[0] <= 0:
+        try:
+            pool = read_driver_pool()
+        except Exception as exc:
+            pool, detail = None, str(exc)
+    if pool is not None and pool[0] > 0:
+        return pool, unified
+
+    if unified:
+        message = (
+            f"{name} (GPU {index}) shares system RAM with the CPU, "
+            "but system RAM could not be measured."
+        )
+    else:
+        message = f"{source} could not report memory for {name} (GPU {index})."
+    _append_gpu_issue(
+        issues,
+        source=source,
+        code="memory-unavailable",
+        message=message,
+        detail=detail or "No memory figures were reported; the GPU is listed at 0 GB as memory unreadable.",
+        index=index,
+    )
+    return (0, 0, 0), False
+
+
+def _sized_rows(gpus: list[GPUInfo]) -> list[GPUInfo]:
+    """Rows with a readable memory pool — the only rows anything may budget against."""
+    return [g for g in gpus if g.vram_mb > 0]
+
+
+def _unsized_rows(gpus: list[GPUInfo]) -> list[GPUInfo]:
+    """Rows whose memory pool could not be read (``_resolve_memory_pool`` gave 0 MiB)."""
+    return [g for g in gpus if g.vram_mb <= 0]
+
+
+def _primary_row(gpus: list[GPUInfo]) -> GPUInfo | None:
+    """The row that architecture and memory-model decisions key on.
+
+    The first *sized* row when there is one: a 0 GB row's ``unified_memory``
+    is always False, so letting it lead would budget a GB10 listed behind it
+    as a discrete card (and add a CPU-offload bonus on top of its own RAM). A
+    lone unreadable GPU still has a real name and compute capability, so it
+    stays the primary for architecture guidance when nothing is sized.
+    """
+    sized = _sized_rows(gpus)
+    if sized:
+        return sized[0]
+    return gpus[0] if gpus else None
+
+
+def _ready_label(sized: list[GPUInfo]) -> str:
+    """``"NVIDIA GB10, 128 GB unified"`` / ``"NVIDIA A100 80GB PCIe x2, 160 GB VRAM total"``."""
+    primary = sized[0]
+    pool = "unified" if primary.unified_memory else "VRAM"
+    if len(sized) == 1:
+        return f"{primary.name}, {primary.vram_gb:.0f} GB {pool}"
+    total_gb = sum(g.vram_gb for g in sized)
+    names = {g.name for g in sized}
+    label = f"{primary.name} x{len(sized)}" if len(names) == 1 else ", ".join(sorted(names))
+    return f"{label}, {total_gb:.0f} GB {pool} total"
+
+
+def _gpu_status_summary(status: str, gpus: list[GPUInfo], issues: list[dict[str, Any]]) -> str:
+    """One line a human (or the Wizard prompt) can read without parsing issues."""
+    sized = _sized_rows(gpus)
+    unsized = _unsized_rows(gpus)
+    unreadable = ", ".join(f"{g.name} (GPU {g.index})" for g in unsized)
+    if gpus and not sized:
+        reason = next((i.get("message", "") for i in issues if i.get("code") == "memory-unavailable"), "")
+        if len(gpus) == 1:
+            head = f"1 GPU visible but its memory could not be read: {unreadable}"
+        else:
+            head = f"{len(gpus)} GPUs visible but memory unreadable: {unreadable}"
+        return head + (f" — {reason}" if reason else "")
+    if sized:
+        ready = _ready_label(sized)
+        if unsized:
+            # Usable machine with a bad row: say which GPU is out, and size only the rest.
+            return f"{len(sized)} of {len(gpus)} GPUs ready: {ready}; memory unreadable: {unreadable}"
+        if len(sized) == 1:
+            return f"1 GPU ready: {ready}"
+        return f"{len(sized)} GPUs ready: {ready}"
+    if status == "blocked":
+        return "NVIDIA device files present but the GPU could not be queried (NVML and nvidia-smi blocked)"
+    if status == "unavailable":
+        detail = next(
+            (i.get("message", "") for i in issues if i.get("severity") not in (None, "info")),
+            "",
+        )
+        return "nvidia-smi is present but reported no usable GPU" + (f" ({detail})" if detail else "")
+    return "no NVIDIA GPU detected (nvidia-smi missing)"
+
+
+def format_gpu_memory(gpu: GPUInfo, *, precision: int = 0, compact: bool = False) -> str:
+    """One spelling of a GPU row's memory pool for CLI / UI labels.
+
+    ``"24 GB VRAM"`` for a discrete card, ``"128 GB unified"`` for a GB10 (the
+    pool is the system's LPDDR5x, shared with the OS), and
+    ``"memory unreadable"`` for a row :func:`detect_gpu_status` kept at 0 GB
+    because its pool could not be read — never ``"0 GB VRAM"``, which reads as
+    a real, empty card while the recommender says there is no VRAM to budget.
+    ``precision`` is the number of decimals (``1`` → ``"24.0 GB VRAM"``);
+    ``compact=True`` drops the space before the unit (``"24GB VRAM"``) for the
+    dense one-line CLI rows.
+    """
+    if gpu.vram_mb <= 0:
+        return "memory unreadable"
+    amount = f"{gpu.vram_gb:.{precision}f}{'' if compact else ' '}GB"
+    return f"{amount} {'unified' if gpu.unified_memory else 'VRAM'}"
+
+
+# nvidia-smi fallback memo: (monotonic timestamp, rows, issues). detect_gpu_status
+# runs the fallback whenever NVML sized nothing — so on a box where NVML
+# enumerates the GPU but cannot read its memory (or is not installed) every
+# status call used to spawn three processes: the row query, bare ``nvidia-smi``
+# for the CUDA header, and ``--query-gpu=compute_cap``. Status is polled in
+# bursts (dashboard, Wizard turn, /v1/system/info right after /v1/system/gpu),
+# so the result is kept for a few seconds; the first call in a burst is exactly
+# the old call. Process-wide: the GPU set does not change between polls.
+SMI_FALLBACK_TTL_S = 5.0
+_smi_fallback_lock = threading.Lock()
+_smi_fallback_cache: tuple[float, list[GPUInfo], list[dict[str, Any]]] | None = None
+
+
+def clear_gpu_detection_cache() -> None:
+    """Forget the memoised nvidia-smi fallback (tests; after a driver reload)."""
+    global _smi_fallback_cache
+    with _smi_fallback_lock:
+        _smi_fallback_cache = None
+
+
+def _smi_fallback_cached(issues: list[dict[str, Any]]) -> list[GPUInfo]:
+    """:func:`_detect_gpus_smi` with its rows *and* issues memoised for :data:`SMI_FALLBACK_TTL_S`.
+
+    The lock is held across the subprocesses so concurrent callers in a burst
+    coalesce onto one spawn instead of racing to fill the memo. Callers get
+    their own row objects and issue dicts; the memo is never handed out.
+    """
+    global _smi_fallback_cache
+    with _smi_fallback_lock:
+        now = time.monotonic()
+        cached = _smi_fallback_cache
+        if cached is None or now - cached[0] >= SMI_FALLBACK_TTL_S:
+            fresh_issues: list[dict[str, Any]] = []
+            rows = _detect_gpus_smi(issues=fresh_issues)
+            cached = _smi_fallback_cache = (now, rows, fresh_issues)
+        issues.extend(dict(issue) for issue in cached[2])
+        return [replace(row) for row in cached[1]]
+
+
 def detect_gpu_status() -> dict[str, Any]:
-    """Detect NVIDIA GPUs and preserve rootless failure details for nvWizard."""
-    issues: list[dict[str, Any]] = []
-    gpus = _detect_gpus_pynvml(issues=issues)
+    """Detect NVIDIA GPUs and preserve rootless failure details for nvWizard.
+
+    Returns ``{status, source, gpus, issues, device_files_present, nvidia_smi,
+    summary}`` where ``summary`` is a one-line human-readable digest such as
+    ``"1 GPU ready: NVIDIA GB10, 128 GB unified"`` or ``"no NVIDIA GPU detected
+    (nvidia-smi missing)"``.
+
+    ``status`` is ``ready`` when at least one row has a readable memory pool —
+    the machine is usable on its sized GPUs, exactly as when detection used to
+    drop the bad row. A visible GPU whose memory could not be read stays in
+    ``gpus`` at 0 GB, with a ``memory-unavailable`` issue carrying its
+    ``index``, and is named in ``summary`` as memory unreadable; the budget
+    helpers count only sized rows. ``blocked`` means GPUs are visible but *no*
+    row could be sized (or device files exist and nothing could be queried) —
+    so the platform classifier still sees every GPU's name while nothing
+    budgets against a pool that was never measured.
+    """
+    nvml_issues: list[dict[str, Any]] = []
+    smi_issues: list[dict[str, Any]] = []
+    gpus = _detect_gpus_pynvml(issues=nvml_issues)
     source = "pynvml" if gpus else ""
-    if not gpus:
-        gpus = _detect_gpus_smi(issues=issues)
-        if gpus:
-            source = "nvidia-smi"
+    if not _sized_rows(gpus):
+        # NVML sized nothing (no rows, or only unreadable ones): nvidia-smi gets
+        # a turn. Its rows win when NVML had none, or when they carry a pool.
+        # The fallback is three subprocesses; within a burst of status calls
+        # (dashboard poll, Wizard turn, /v1/system/info) it runs once.
+        smi_gpus = _smi_fallback_cached(smi_issues)
+        if smi_gpus and (not gpus or _sized_rows(smi_gpus)):
+            gpus, source = smi_gpus, "nvidia-smi"
+    # Row-scoped issues describe the rows of the source that produced them, and
+    # only the winning source's rows are returned — so only its
+    # ``memory-unavailable`` entries are kept. A losing source's memory warnings
+    # would otherwise sit next to rows nvidia-smi *did* size, or double up per
+    # GPU when both sources failed. Source-level issues (module missing, init
+    # failed, binary missing, timeout) always stay: they explain the fallback.
+    issues = [
+        issue
+        for issue in nvml_issues + smi_issues
+        if issue.get("code") != "memory-unavailable" or issue.get("source") == source
+    ]
 
     device_files_present = _nvidia_device_files_present()
-    if gpus:
+    if _sized_rows(gpus):
+        # At least one pool is readable: ready on those rows. Unreadable rows
+        # stay in the list at 0 GB, named in issues and summary.
         status = "ready"
+    elif gpus:
+        # Visible but nothing sized: the GPUs enumerate (their names are real
+        # and feed the platform classifier) but nothing can be budgeted against
+        # them, so it is not "ready" — recommend_models / check_oom_risk see 0 GB.
+        status = "blocked"
     elif device_files_present:
         status = "blocked"
         _append_gpu_issue(
@@ -118,6 +399,7 @@ def detect_gpu_status() -> dict[str, Any]:
         "issues": issues,
         "device_files_present": device_files_present,
         "nvidia_smi": shutil.which("nvidia-smi") or "",
+        "summary": _gpu_status_summary(status, gpus, issues),
     }
 
 
@@ -185,25 +467,17 @@ def _detect_gpus_pynvml(*, issues: list[dict[str, Any]] | None = None) -> list[G
             if isinstance(name, bytes):
                 name = name.decode()
 
-            try:
+            def _nvml_memory_pool(handle=handle) -> tuple[int, int, int]:
                 mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                vram_mb = mem_info.total // (1024 * 1024)
-                memory_used = mem_info.used // (1024 * 1024)
-                memory_free = mem_info.free // (1024 * 1024)
-            except Exception:
-                # Unified memory GPUs (GB10/DGX Spark) may not
-                # report VRAM via nvmlDeviceGetMemoryInfo.
-                # Fall back to system RAM as the memory pool.
-                import os
-                try:
-                    total_ram = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-                    vram_mb = total_ram // (1024 * 1024)
-                    memory_free = vram_mb  # conservative
-                    memory_used = 0
-                except Exception:
-                    vram_mb = 0
-                    memory_free = 0
-                    memory_used = 0
+                mib = 1024 * 1024
+                return mem_info.total // mib, mem_info.used // mib, mem_info.free // mib
+
+            # An unreadable pool keeps the row at 0 GB (issue recorded) so the
+            # GPU's name still reaches the platform classifier; detect_gpu_status
+            # reports it as blocked, and nvidia-smi gets a turn if nothing sized.
+            (vram_mb, memory_used, memory_free), unified = _resolve_memory_pool(
+                name, i, _nvml_memory_pool, source="pynvml", issues=issues,
+            )
 
             try:
                 util = pynvml.nvmlDeviceGetUtilizationRates(handle)
@@ -279,6 +553,7 @@ def _detect_gpus_pynvml(*, issues: list[dict[str, Any]] | None = None) -> list[G
                 pcie_width=pcie_width,
                 compute_capability=cc,
                 processes=processes,
+                unified_memory=unified,
             ))
 
         return gpus
@@ -370,11 +645,20 @@ def _detect_gpus_smi(*, issues: list[dict[str, Any]] | None = None) -> list[GPUI
         try:
             index         = int(parts[0])
             name          = parts[1]
-            vram_mb       = int(float(parts[2]))
-            memory_used   = int(float(parts[3]))
-            memory_free   = int(float(parts[4]))
             utilization   = int(float(re.sub(r"[^\d.]", "", parts[5]) or "0"))
             driver_ver    = parts[6]
+
+            # memory.* cells are "[N/A]" on GB10 (the pool comes from system RAM)
+            # and numeric on discrete GPUs; a discrete row with no readable
+            # total is kept at 0 GB with an issue (status 'blocked'), never
+            # listed as ready.
+            (vram_mb, memory_used, memory_free), unified = _resolve_memory_pool(
+                name,
+                index,
+                lambda cells=parts[2:5]: tuple(_smi_int(c) for c in cells),
+                source="nvidia-smi",
+                issues=issues,
+            )
             vram_gb       = round(vram_mb / 1024, 1)
 
             gpus.append(
@@ -389,12 +673,21 @@ def _detect_gpus_smi(*, issues: list[dict[str, Any]] | None = None) -> list[GPUI
                     memory_free_mb=memory_free,
                     index=index,
                     compute_capability=compute_caps[row_index] if row_index < len(compute_caps) else (0, 0),
+                    unified_memory=unified,
                 )
             )
         except (ValueError, IndexError):
             continue
 
     return gpus
+
+
+def _smi_int(value: str) -> int:
+    """Parse an nvidia-smi numeric cell; ``[N/A]``/``[Not Supported]`` become 0."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _parse_compute_capability_value(value: str) -> tuple[int, int]:
@@ -454,6 +747,64 @@ def get_total_vram_mb() -> int:
     return sum(g.vram_mb for g in gpus)
 
 
+@dataclass(frozen=True)
+class MemoryBudget:
+    """How much memory model recommendations may plan against.
+
+    On discrete GPUs ``model_budget_gb`` is the raw VRAM and ``combined_gb``
+    adds a capped CPU-offload bonus. On unified-memory parts (GB10 / DGX
+    Spark) the pool is shared with the OS, so the budget is RAM minus
+    :data:`UNIFIED_MEMORY_OS_RESERVE_GB` and no offload bonus is added — the
+    same bytes must not be counted twice.
+    """
+
+    total_vram_gb: float
+    model_budget_gb: float
+    cpu_offload_gb: float
+    combined_gb: float
+    unified_memory: bool
+
+
+def _memory_budget(gpus: list[GPUInfo], sys_mem: SystemMemoryInfo) -> MemoryBudget:
+    # Only rows with a readable pool count; an unreadable row is 0 GB and must
+    # not decide the memory model either (see _primary_row).
+    sized = _sized_rows(gpus)
+    total_vram_gb = sum(g.vram_mb for g in sized) / 1024
+    unified = bool(sized) and bool(getattr(sized[0], "unified_memory", False))
+    if unified:
+        budget = max(total_vram_gb - UNIFIED_MEMORY_OS_RESERVE_GB, 0.0)
+        return MemoryBudget(
+            total_vram_gb=total_vram_gb,
+            model_budget_gb=budget,
+            cpu_offload_gb=0.0,
+            combined_gb=budget,
+            unified_memory=True,
+        )
+    # Factor in system RAM for CPU offload — but be conservative.
+    # On gaming/student rigs RAM is often 16-32GB, and the OS + apps use ~4-6GB.
+    # CPU offloaded layers are 5-10x slower than GPU, so only helpful for
+    # "barely doesn't fit" scenarios, not as a primary strategy.
+    cpu_offload_gb = min(sys_mem.effective_for_llm_gb, 16.0)  # cap benefit at 16GB
+    return MemoryBudget(
+        total_vram_gb=total_vram_gb,
+        model_budget_gb=total_vram_gb,
+        cpu_offload_gb=cpu_offload_gb,
+        combined_gb=total_vram_gb + cpu_offload_gb,
+        unified_memory=False,
+    )
+
+
+def unified_memory_note(budget: MemoryBudget) -> str:
+    """Bandwidth guidance for a unified-memory (GB10-class) machine."""
+    return (
+        f"Unified memory: {budget.total_vram_gb:.0f} GB LPDDR5x shared by CPU and GPU at "
+        f"~{UNIFIED_MEMORY_BANDWIDTH_GBPS} GB/s; ~{UNIFIED_MEMORY_OS_RESERVE_GB:.0f} GB is reserved "
+        f"for the OS and WebUI, leaving ~{budget.model_budget_gb:.0f} GB for models. "
+        "Dense 70B models fit but are bandwidth-bound; MoE models such as nemotron3:33b "
+        "or gpt-oss:120b are the better fit. System RAM is not an extra CPU-offload pool here."
+    )
+
+
 def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendation]:
     """Recommend local models based on available GPU VRAM.
 
@@ -468,20 +819,27 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
     - 24-40 GB         : llama3.2-vision + qwen/coder fallbacks
     - 40 GB+           : nemotron first, then multimodal and coding fallbacks
     - Multi-GPU        : Ollama uses all GPUs automatically
+
+    Unified memory (GB10 / DGX Spark): the tiers above are applied to the
+    shared pool minus :data:`UNIFIED_MEMORY_OS_RESERVE_GB`, no CPU-offload
+    bonus is added, hybrid tiers are skipped, and the primary recommendation
+    carries a ``note`` explaining the bandwidth trade-off.
+
+    Rows whose memory could not be read (0 GB, ``memory-unavailable``) are not
+    GPUs Ollama can load onto: VRAM totals and the multi-GPU note count only
+    sized rows, exactly as when detection dropped such rows.
     """
     if gpus is None:
         gpus = detect_gpus()
 
-    total_vram_mb  = sum(g.vram_mb for g in gpus)
-    total_vram_gb  = total_vram_mb / 1024
-    multi_gpu      = len(gpus) > 1
-
-    # Factor in system RAM for CPU offload — but be conservative.
-    # On gaming/student rigs RAM is often 16-32GB, and the OS + apps use ~4-6GB.
-    # CPU offloaded layers are 5-10x slower than GPU, so only helpful for
-    # "barely doesn't fit" scenarios, not as a primary strategy.
+    sized_gpus = _sized_rows(gpus)
+    multi_gpu = len(sized_gpus) > 1
     sys_mem = detect_system_memory()
-    cpu_offload_gb = min(sys_mem.effective_for_llm_gb, 16.0)  # cap benefit at 16GB
+    budget = _memory_budget(gpus, sys_mem)
+    # Tiering below runs against the model budget: identical to raw VRAM on
+    # discrete GPUs, RAM minus the OS reserve on unified-memory parts.
+    total_vram_gb = budget.model_budget_gb
+    cpu_offload_gb = budget.cpu_offload_gb
 
     recommendations: list[ModelRecommendation] = []
 
@@ -669,9 +1027,10 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
         )
 
     # Check if CPU offload could unlock a larger model
-    # Only suggest if the model is "close" (within CPU offload budget)
-    combined_gb = total_vram_gb + cpu_offload_gb
-    if recommendations:
+    # Only suggest if the model is "close" (within CPU offload budget).
+    # Skipped on unified memory: there is no second pool to offload into.
+    combined_gb = budget.combined_gb
+    if recommendations and not budget.unified_memory:
         top_tier = recommendations[0].tier
         # If we're on "small" tier but combined VRAM+RAM could fit 70B Q4 (~45GB)
         if top_tier in ("small",) and combined_gb >= 45 and total_vram_gb >= 12:
@@ -706,10 +1065,18 @@ def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendat
         last = recommendations[0]
         recommendations[0] = ModelRecommendation(
             model=last.model,
-            reason=last.reason + f" (Ollama will use all {len(gpus)} GPUs automatically)",
+            reason=last.reason + f" (Ollama will use all {len(sized_gpus)} GPUs automatically)",
             vram_required_gb=last.vram_required_gb,
             tier="multi-gpu",
         )
+
+    if budget.unified_memory and recommendations:
+        primary = recommendations[0]
+        primary.reason += (
+            f" (unified memory: ~{budget.model_budget_gb:.0f} GB of "
+            f"{budget.total_vram_gb:.0f} GB usable after the OS reserve)"
+        )
+        primary.note = unified_memory_note(budget)
 
     # Vision model — appended so the desktop-agent screenshot path works.
     # Ollama loads models on demand, so co-residency with the text models is
@@ -740,8 +1107,9 @@ def _recommend_vision_model(
     if total_vram_gb < 4:
         return None
 
-    # Compute capability for arch-aware swap. Use primary GPU.
-    cc = gpu_architecture_info(gpus[0])["compute_capability"] if gpus else (0, 0)
+    # Compute capability for arch-aware swap. Use the primary (first sized) GPU.
+    primary = _primary_row(gpus)
+    cc = gpu_architecture_info(primary)["compute_capability"] if primary is not None else (0, 0)
     turing_or_older = cc < (8, 0) and cc != (0, 0)
 
     if total_vram_gb < 12:
@@ -823,6 +1191,33 @@ def detect_system_memory() -> SystemMemoryInfo:
         except Exception:
             pass
 
+    if total_gb == 0 and sys.platform == "win32":
+        try:
+            # Windows (incl. Windows on Arm / RTX Spark): GlobalMemoryStatusEx
+            # is the only dependency-free way to read physical RAM.
+            import ctypes
+
+            class _MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = _MemoryStatusEx()
+            stat.dwLength = ctypes.sizeof(stat)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                total_gb = stat.ullTotalPhys / (1024 ** 3)
+                avail_gb = stat.ullAvailPhys / (1024 ** 3)
+        except Exception:
+            pass
+
     if total_gb == 0:
         try:
             # Last resort: subprocess
@@ -850,23 +1245,31 @@ def check_oom_risk(model_vram_gb: float, gpus: list[GPUInfo] | None = None) -> d
     Returns a dict with:
       safe: bool — True if model fits safely
       fits_gpu: bool — model fits entirely in GPU VRAM
-      fits_hybrid: bool — model fits with CPU offload
-      gpu_free_gb: float — current free VRAM
-      ram_free_gb: float — current free system RAM
+      fits_hybrid: bool — model fits with CPU offload (never True on unified memory)
+      gpu_free_gb: float — current free VRAM (MemAvailable on a unified pool)
+      ram_free_gb: float — current free system RAM; 0 on unified memory, where
+                   the bytes are already counted in gpu_free_gb
+      unified_memory: bool — True when the GPU shares the system RAM pool
       recommendation: str — what to do
     """
     if gpus is None:
         gpus = detect_gpus()
 
-    sys_mem = detect_system_memory()
+    unified = any(getattr(g, "unified_memory", False) for g in gpus)
 
     # GPU free VRAM (use memory_free_mb from nvidia-smi)
     gpu_free_gb = sum(g.memory_free_mb for g in gpus) / 1024 if gpus else 0.0
     # Reserve 15% for KV cache and overhead
     gpu_usable_gb = gpu_free_gb * 0.85
 
-    ram_free_gb = sys_mem.available_ram_gb
-    ram_usable_gb = sys_mem.effective_for_llm_gb
+    if unified:
+        # One pool: gpu_free_gb above already *is* system RAM (MemAvailable), so
+        # there is no second pool to spill into and nothing extra to report.
+        ram_free_gb = ram_usable_gb = 0.0
+    else:
+        sys_mem = detect_system_memory()
+        ram_free_gb = sys_mem.available_ram_gb
+        ram_usable_gb = sys_mem.effective_for_llm_gb
 
     result = {
         "safe": False,
@@ -874,23 +1277,33 @@ def check_oom_risk(model_vram_gb: float, gpus: list[GPUInfo] | None = None) -> d
         "fits_hybrid": False,
         "gpu_free_gb": round(gpu_free_gb, 1),
         "ram_free_gb": round(ram_free_gb, 1),
+        "unified_memory": unified,
         "recommendation": "",
     }
 
     if model_vram_gb <= gpu_usable_gb:
         result["safe"] = True
         result["fits_gpu"] = True
+        pool = "unified memory" if unified else "GPU VRAM"
         result["recommendation"] = (
-            f"Model fits in GPU VRAM ({model_vram_gb:.0f} GB needed, "
+            f"Model fits in {pool} ({model_vram_gb:.0f} GB needed, "
             f"{gpu_free_gb:.0f} GB free) — full GPU acceleration"
         )
-    elif model_vram_gb <= gpu_usable_gb + ram_usable_gb:
+    elif not unified and model_vram_gb <= gpu_usable_gb + ram_usable_gb:
         result["safe"] = True
         result["fits_hybrid"] = True
         overflow = model_vram_gb - gpu_usable_gb
         result["recommendation"] = (
             f"Model needs hybrid mode: {gpu_usable_gb:.0f} GB on GPU + "
             f"{overflow:.0f} GB on CPU RAM. Expect 30-50% slower than full GPU"
+        )
+    elif unified:
+        needed = model_vram_gb - gpu_usable_gb
+        result["recommendation"] = (
+            f"OOM RISK: Model needs {model_vram_gb:.0f} GB but only "
+            f"{gpu_usable_gb:.0f} GB of the unified memory pool is available "
+            "(system RAM is the GPU memory — no CPU-offload headroom). "
+            f"Short by {needed:.0f} GB. Use a smaller model or lower quantization"
         )
     else:
         needed = model_vram_gb - gpu_usable_gb - ram_usable_gb
@@ -917,6 +1330,7 @@ class OllamaOptimization:
 
 def architecture_from_compute_capability(cc: tuple[int, int]) -> str:
     if cc >= (10, 0):
+        # Datacenter/consumer Blackwell (10.x) and GB10 (12.1, sm_121 in CUDA 13).
         return "Blackwell"
     if cc >= (9, 0):
         return "Hopper"
@@ -963,15 +1377,25 @@ def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimiz
             notes=["No GPU detected — running on CPU. Inference will be slow."],
         )
 
-    # Use primary GPU for architecture decisions
-    gpu = gpus[0]
+    # Use the primary GPU (first sized row; a lone unreadable row still names
+    # its architecture) for architecture and memory-model decisions.
+    gpu = _primary_row(gpus) or gpus[0]
+    unified = bool(getattr(gpu, "unified_memory", False))
     total_vram_gb = sum(g.vram_mb for g in gpus) / 1024
+    if unified:
+        # Shared pool: size parallelism/context against what's left after the OS.
+        total_vram_gb = max(total_vram_gb - UNIFIED_MEMORY_OS_RESERVE_GB, 0.0)
     arch_info = gpu_architecture_info(gpu)
     cc = arch_info["compute_capability"]
 
     notes: list[str] = []
     if arch_info["heuristic"]:
         notes.append("Compute capability is name-based; confirm after driver/NVML access improves.")
+    if _unsized_rows(gpus):
+        notes.append(
+            "GPU memory could not be read (see detection issues) — parallelism and "
+            "context are sized as if no VRAM were available."
+        )
 
     # Flash Attention: CC >= 8.0 (Ampere+)
     flash_attention = cc >= (8, 0)
@@ -991,7 +1415,13 @@ def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimiz
     elif cc >= (10, 0):
         arch = "Blackwell"
         notes.append("FP4 Tensor Cores available (not yet used by Ollama)")
-        notes.append("GDDR7 provides high memory bandwidth")
+        if unified:
+            notes.append(
+                f"Unified LPDDR5x memory (~{UNIFIED_MEMORY_BANDWIDTH_GBPS} GB/s) shared with the CPU "
+                "— dense models are bandwidth-bound; MoE models run best"
+            )
+        else:
+            notes.append("GDDR7 provides high memory bandwidth")
     elif cc >= (9, 0):
         arch = "Hopper"
         notes.append("Transformer Engine available (not used by Ollama — use vLLM for FP8)")
@@ -1027,8 +1457,18 @@ def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimiz
     else:
         ctx = 4096
 
-    # Quantization recommendation
-    if cc >= (9, 0) and total_vram_gb >= 80:
+    # Quantization recommendation — the memory pool decides before the compute
+    # tier does: a unified LPDDR5x pool is bandwidth-bound regardless of how
+    # new the SMs are, so it must not inherit the Hopper/HBM "Q8_0 or F16" tier.
+    if unified:
+        quant = "Q4_K_M"
+        notes.append(
+            f"Q4_K_M on the unified pool — Q8_0/F16 would be bandwidth-bound at "
+            f"~{UNIFIED_MEMORY_BANDWIDTH_GBPS} GB/s; MoE models (nemotron3:33b, gpt-oss:120b) first; "
+            f"context {ctx} sized to the ~{total_vram_gb:.0f} GB left after the "
+            f"{UNIFIED_MEMORY_OS_RESERVE_GB:.0f} GB OS reserve"
+        )
+    elif cc >= (9, 0) and total_vram_gb >= 80:
         quant = "Q8_0 or F16"  # Hopper+ with HBM bandwidth can handle it
         notes.append("High bandwidth — Q8_0 or F16 recommended for best quality")
     elif cc >= (10, 0):
@@ -1041,7 +1481,12 @@ def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimiz
 
     # System RAM for CPU offload
     sys_mem = detect_system_memory()
-    if sys_mem.total_ram_gb > 0:
+    if unified:
+        notes.append(
+            f"Unified memory: {sys_mem.total_ram_gb:.0f} GB shared by CPU and GPU — no separate "
+            f"CPU-offload pool; keep ~{UNIFIED_MEMORY_OS_RESERVE_GB:.0f} GB free for the OS and WebUI"
+        )
+    elif sys_mem.total_ram_gb > 0:
         notes.append(f"System RAM: {sys_mem.total_ram_gb:.0f} GB total, "
                      f"~{sys_mem.effective_for_llm_gb:.0f} GB usable for CPU offload")
 
@@ -1063,6 +1508,11 @@ def _parse_compute_capability(gpu_name: str) -> tuple[int, int]:
     doesn't expose CC. This covers the common consumer/pro/datacenter GPUs.
     """
     name = gpu_name.upper()
+
+    # GB10 — Grace Blackwell superchip in DGX Spark / RTX Spark. sm_121 in
+    # CUDA 13 (unified LPDDR5x memory, not GDDR7).
+    if is_unified_memory_gpu_name(name):
+        return (12, 1)
 
     # Blackwell (CC 10.0)
     if any(x in name for x in ["RTX 50", "RTX PRO 6000", "B100", "B200", "GB200"]):
@@ -1107,21 +1557,26 @@ def get_gpu_summary(gpus: list[GPUInfo] | None = None) -> str:
 
     if len(gpus) == 1:
         g = gpus[0]
-        return (
-            f"{g.name} ({g.vram_gb:.1f} GB VRAM) — "
-            f"driver {g.driver_version} / CUDA {g.cuda_version}"
-        )
+        pool = f"{g.vram_gb:.1f} GB VRAM" if g.vram_mb > 0 else "memory unreadable"
+        return f"{g.name} ({pool}) — driver {g.driver_version} / CUDA {g.cuda_version}"
 
     # Multi-GPU
     total_gb = sum(g.vram_gb for g in gpus)
     names = {g.name for g in gpus}
+    sized = _sized_rows(gpus)
+    unreadable = _unsized_rows(gpus)
+    suffix = f" ({len(unreadable)} GPU(s) memory unreadable)" if unreadable else ""
     if len(names) == 1:
         name = next(iter(names))
+        each_gb = sized[0].vram_gb if sized else 0.0
         return (
             f"{len(gpus)}x GPU: {name} "
-            f"({gpus[0].vram_gb:.1f} GB each, {total_gb:.1f} GB total) — "
+            f"({each_gb:.1f} GB each, {total_gb:.1f} GB total) — "
             f"driver {gpus[0].driver_version} / CUDA {gpus[0].cuda_version}"
-        )
+        ) + suffix
     # Mixed GPU types
-    gpu_list = ", ".join(f"{g.name} ({g.vram_gb:.1f} GB)" for g in gpus)
-    return f"{len(gpus)}x GPU: {gpu_list} — {total_gb:.1f} GB total VRAM"
+    gpu_list = ", ".join(
+        f"{g.name} ({g.vram_gb:.1f} GB)" if g.vram_mb > 0 else f"{g.name} (memory unreadable)"
+        for g in gpus
+    )
+    return f"{len(gpus)}x GPU: {gpu_list} — {total_gb:.1f} GB total VRAM" + suffix

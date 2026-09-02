@@ -8,11 +8,71 @@ cloud-aware startup paths.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from nvh.utils.hw_ids import detect_machine, is_gb10_name
+from nvh.utils.hw_ids import normalize_arch as _normalize_arch
+
+__all__ = [
+    "DGX_SPARK_RE",
+    "EnvironmentInfo",
+    "detect_cloud_provider",
+    "detect_environment",
+    "detect_machine",
+    "get_environment_summary",
+    "is_dgx_hardware",
+    "is_gb10_name",
+    "is_nvidia_cloud_desktop_dmi",
+    "is_virtual_machine",
+    "normalize_arch",
+]
+
+# 32-bit x86 spellings this module has always collapsed to "x86".
+_X86_32_ALIASES = frozenset({"i386", "i686", "x86"})
+
+# The "DGX" token with an explicit non-alphanumeric left boundary and any run
+# of space / underscore / hyphen before the model word. Boundaries are explicit,
+# not ``\b``: some firmware joins the tokens with underscores
+# ("NVIDIA_DGX_Spark"), and ``_`` is a word character, so ``\bDGX`` never
+# matched there.
+_DGX_TOKEN = r"(?<![A-Za-z0-9])DGX[\s_-]*"
+
+# The DGX Spark product name in any separator spelling — "DGX Spark",
+# "DGX_Spark", "DGX-Spark" — and nothing else: "DGX Station" and "DGX Sparkle"
+# do not match. This is the one Spark-by-DMI predicate; platform_facts
+# classification rule 1 uses it so an underscore-joined Spark can never again
+# miss a literal "DGX SPARK" substring test and fall through to plain ``dgx``.
+DGX_SPARK_RE = re.compile(_DGX_TOKEN + r"SPARK(?![A-Za-z0-9])", re.IGNORECASE)
+
+# DMI strings that identify DGX *hardware*: the GB10 superchip, the named
+# desk-side products, or "DGX" followed by a model token that carries a digit
+# (H100, A100, B200, GB200, -1, -2, "DGXA100 920-..."). A bare "DGX" — as in
+# a DGX-branded cloud image or "DGX Cloud" — is deliberately NOT enough.
+_DGX_MODEL_RE = re.compile(
+    _DGX_TOKEN + r"(?:SPARK|STATION|[A-Z]{0,2}\d{1,4}[A-Z]?(?![A-Za-z0-9]))",
+    re.IGNORECASE,
+)
+
+# sys_vendor / product_name fragments that mean "this is a virtual machine".
+# Microsoft is handled separately: the vendor string alone also appears on
+# Surface hardware, so it needs the "Virtual Machine" product to count.
+_HYPERVISOR_MARKERS = (
+    "qemu",
+    "kvm",
+    "vmware",
+    "xen",
+    "amazon ec2",
+    "google compute engine",
+    "openstack",
+    "parallels",
+    "virtualbox",
+    "bochs",
+)
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -24,6 +84,9 @@ class EnvironmentInfo:
 
     # OS platform
     platform: str = "unknown"          # "linux", "macos", "windows"
+    machine: str = ""                  # hw_ids.detect_machine(): platform.machine() with the
+                                       # Windows-on-Arm x64-emulation lie corrected ("ARM64")
+    arch: str = ""                     # normalized: "x86_64" | "arm64" | other
 
     # Container
     is_docker: bool = False            # running inside a Docker container
@@ -47,7 +110,7 @@ class EnvironmentInfo:
 
     def __str__(self) -> str:  # pragma: no cover
         lines = [
-            f"Platform:       {self.platform}",
+            f"Platform:       {self.platform}" + (f" ({self.arch})" if self.arch else ""),
             f"In Docker:      {self.is_docker}",
             f"Cloud:          {self.is_cloud} ({self.cloud_provider})",
             f"Instance type:  {self.instance_type}",
@@ -114,6 +177,88 @@ def _detect_platform() -> str:
     if sys.platform.startswith("win"):
         return "windows"
     return sys.platform
+
+
+def normalize_arch(machine: str | None) -> str:
+    """:func:`nvh.utils.hw_ids.normalize_arch` with this module's legacy contract.
+
+    Delegates the alias table to the shared helper (``AMD64``/``x64`` →
+    ``x86_64``; ``aarch64``/``ARM64`` → ``arm64``) and keeps the two promises
+    callers of this module rely on: 32-bit x86 spellings collapse to
+    ``"x86"`` and an empty machine string is ``"unknown"`` rather than ``""``.
+    Kept exported from this module for its existing importers and tests.
+    """
+    value = _normalize_arch(machine)
+    if value in _X86_32_ALIASES:
+        return "x86"
+    return value or "unknown"
+
+
+def _read_dmi(key: str) -> str:
+    """Read one ``/sys/class/dmi/id/<key>`` value; empty string off-Linux or on error."""
+    path = Path("/sys/class/dmi/id") / key
+    try:
+        if not path.exists():
+            return ""
+        return path.read_text(errors="ignore").strip()
+    except OSError:
+        return ""
+
+
+def is_virtual_machine() -> bool:
+    """True when DMI ``sys_vendor`` / ``product_name`` name a hypervisor.
+
+    QEMU/KVM, VMware, Xen, Hyper-V ("Microsoft Corporation" + "Virtual
+    Machine"), Amazon EC2, Google Compute Engine, OpenStack, Parallels and
+    VirtualBox. A VM is never DGX hardware, whatever product string the image
+    was given — that is what keeps a DGX-branded cloud desktop classified as
+    cloud.
+    """
+    vendor = _read_dmi("sys_vendor").lower()
+    product = _read_dmi("product_name").lower()
+    blob = f"{vendor} {product}"
+    if any(marker in blob for marker in _HYPERVISOR_MARKERS):
+        return True
+    return "microsoft corporation" in vendor and "virtual machine" in product
+
+
+def is_dgx_hardware() -> bool:
+    """True when DMI identifies physical NVIDIA DGX hardware, DGX Spark included.
+
+    DGX systems ship with NVIDIA as the board vendor, exactly like NVIDIA's
+    cloud Linux Desktop vGPU images do — so the cloud heuristic below must
+    check this first or a DGX Spark on a desk would be mistaken for a rented
+    cloud instance. The match is deliberately narrow: the GB10 superchip, or
+    ``DGX Spark`` / ``DGX Station`` / ``DGX <model>`` (``DGX H100``,
+    ``DGXA100 ...``, ``DGX-2``). A bare ``DGX`` substring — a DGX-branded
+    cloud image, "DGX Cloud" — does not count, and a machine that reports a
+    hypervisor in DMI is virtual, never DGX hardware.
+    """
+    if is_virtual_machine():
+        return False
+    blob = " ".join(_read_dmi(k) for k in ("product_name", "board_name", "product_family"))
+    return is_gb10_name(blob) or bool(_DGX_MODEL_RE.search(blob))
+
+
+def is_nvidia_cloud_desktop_dmi(
+    board_vendor: str | None = None, *, dgx_hardware: bool | None = None,
+) -> bool:
+    """NVIDIA as the DMI board vendor on something that is *not* DGX hardware.
+
+    That combination is NVIDIA's cloud Linux desktop vGPU image. DGX and DGX
+    Spark systems report NVIDIA as the board vendor too, so the DGX check has
+    to win or a Spark on a desk is mistaken for a rented instance. This is the
+    one implementation of that heuristic: the network-bound cloud probe here
+    and the local-only one in :mod:`nvh.utils.platform_facts` both call it.
+    Pass ``board_vendor`` / ``dgx_hardware`` when they are already known to
+    avoid re-reading DMI; either defaults to being probed.
+    """
+    vendor = _read_dmi("board_vendor") if board_vendor is None else board_vendor
+    if "nvidia" not in (vendor or "").lower():
+        return False
+    if dgx_hardware is None:
+        dgx_hardware = is_dgx_hardware()
+    return not dgx_hardware
 
 
 def _detect_docker() -> bool:
@@ -236,17 +381,27 @@ def _detect_cloud_provider() -> tuple[bool, str, str, str]:
             pip = _curl_metadata("https://api.ipify.org", timeout=3)
             return True, provider, "unknown", pip
 
-    # NVIDIA vGPU (Linux Desktop and similar)
-    board_vendor = Path("/sys/class/dmi/id/board_vendor")
-    if board_vendor.exists():
-        try:
-            if "nvidia" in board_vendor.read_text().lower():
-                pip = _curl_metadata("https://api.ipify.org", timeout=3)
-                return True, "cloud_desktop", "unknown", pip
-        except OSError:
-            pass
+    # NVIDIA vGPU (Linux Desktop and similar) — shared with platform_facts so
+    # the two cloud paths cannot drift; see is_nvidia_cloud_desktop_dmi().
+    if is_nvidia_cloud_desktop_dmi():
+        pip = _curl_metadata("https://api.ipify.org", timeout=3)
+        return True, "cloud_desktop", "unknown", pip
 
     return False, "unknown", "unknown", ""
+
+
+def detect_cloud_provider() -> tuple[bool, str, str, str]:
+    """Public cloud probe: ``(is_cloud, provider, instance_type, public_ip)``.
+
+    Only meaningful on Linux (metadata endpoints, DMI, hostnames); other
+    platforms return the not-cloud tuple immediately without network calls.
+    """
+    if _detect_platform() != "linux":
+        return False, "unknown", "unknown", ""
+    try:
+        return _detect_cloud_provider()
+    except Exception:
+        return False, "unknown", "unknown", ""
 
 
 def _detect_gpu() -> tuple[bool, bool, list[str], int, float]:
@@ -298,8 +453,14 @@ def detect_environment() -> EnvironmentInfo:
     """
     info = EnvironmentInfo()
 
-    # Platform
+    # Platform. detect_machine() is the WOW64-aware probe platform_facts uses
+    # too, so an x64 Python on an Arm Windows box reports ARM64 in both places.
     info.platform = _detect_platform()
+    try:
+        info.machine = detect_machine() or ""
+    except Exception:
+        info.machine = ""
+    info.arch = normalize_arch(info.machine)
 
     # Docker
     info.is_docker = _detect_docker()

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import PageHeader from '@/components/PageHeader';
 import ProviderCard from '@/components/ProviderCard';
+import UnifiedMemoryTag, { GpuBlockedSummary, MemoryUnreadableTag, gpuStatusOf, isMemoryUnreadable, isUnifiedMemoryPool } from '@/components/UnifiedMemoryTag';
 import {
   getModels,
   getGPUInfo,
@@ -761,6 +762,9 @@ export default function ProvidersPage() {
                     {gpuInfo.gpus.map((g, i) => {
                       const usedPct = g.vram_mb > 0 ? Math.round((g.memory_used_mb / g.vram_mb) * 100) : 0;
                       const barColor = usedPct > 90 ? '#dc2626' : usedPct > 70 ? '#d97706' : '#76B900';
+                      // Visible but unsized: the API keeps the row at 0 MiB so the GPU's name is
+                      // still seen; "0.0 / 0 GB" would present that unknown as a figure.
+                      const unreadable = isMemoryUnreadable(g);
                       return (
                         <div key={i} className="border border-[#76B900]/30 bg-[#76B900]/5 p-4">
                           <div className="flex items-start gap-4">
@@ -787,16 +791,23 @@ export default function ProvidersPage() {
                               <div className="space-y-1">
                                 <div className="flex justify-between text-[10px] font-mono">
                                   <span className="text-[#a3a3a3] dark:text-[#737373]">VRAM</span>
-                                  <span className="text-[#525252] dark:text-[#a3a3a3]">
-                                    {(g.memory_used_mb / 1024).toFixed(1)} / {g.vram_gb} GB ({usedPct}% used)
-                                  </span>
+                                  {unreadable ? (
+                                    <MemoryUnreadableTag summary={gpuInfo.summary} />
+                                  ) : (
+                                    <span className="text-[#525252] dark:text-[#a3a3a3]">
+                                      {(g.memory_used_mb / 1024).toFixed(1)} / {g.vram_gb} GB ({usedPct}% used)
+                                      <UnifiedMemoryTag show={g.unified_memory} className="ml-1" />
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="progress-bar">
                                   <div className="progress-fill" style={{ width: `${usedPct}%`, backgroundColor: barColor }} />
                                 </div>
-                                <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
-                                  {(g.memory_free_mb / 1024).toFixed(1)} GB free
-                                </div>
+                                {!unreadable && (
+                                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
+                                    {(g.memory_free_mb / 1024).toFixed(1)} GB free
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -804,7 +815,12 @@ export default function ProvidersPage() {
                       );
                     })}
 
-                    {/* System RAM summary */}
+                    {/* Once, under the list: why detection is 'blocked' (a visible GPU with no readable memory
+                        pool), or which row is unreadable beside sized ones on an otherwise ready machine. */}
+                    <GpuBlockedSummary status={gpuStatusOf(gpuInfo)} summary={gpuInfo.summary} gpus={gpuInfo.gpus} />
+
+                    {/* System RAM summary. On a unified pool (GB10 / DGX Spark) the RAM *is* the
+                        GPU memory, so the "LLM Offload" tile would advertise headroom that does not exist. */}
                     {gpuInfo.system_ram && (
                       <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 grid grid-cols-3 gap-3 text-center dark:bg-[#0a0a0a] dark:border-[#262626]">
                         <div>
@@ -815,10 +831,17 @@ export default function ProvidersPage() {
                           <div className="text-sm font-bold font-mono text-[#76B900]">{gpuInfo.system_ram.available_gb} GB</div>
                           <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 dark:text-[#737373]">Available</div>
                         </div>
-                        <div>
-                          <div className="text-sm font-bold font-mono text-[#d97706]">{gpuInfo.system_ram.effective_for_llm_gb} GB</div>
-                          <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 dark:text-[#737373]">LLM Offload</div>
-                        </div>
+                        {isUnifiedMemoryPool(gpuInfo) ? (
+                          <div>
+                            <div className="text-sm font-bold font-mono text-[#0a0a0a] dark:text-[#fafafa]">Unified pool</div>
+                            <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 dark:text-[#737373]">No separate CPU-offload headroom</div>
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="text-sm font-bold font-mono text-[#d97706]">{gpuInfo.system_ram.effective_for_llm_gb} GB</div>
+                            <div className="text-[10px] font-mono text-[#a3a3a3] mt-0.5 dark:text-[#737373]">LLM Offload</div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

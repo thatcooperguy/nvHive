@@ -5,6 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { HardwareWidgetHero } from '@/components/HardwareWidget';
+import UnifiedMemoryTag, { GpuBlockedSummary, MemoryUnreadableTag, describeUnreadableGpus, gpuStatusOf, isGpuReady, isMemoryUnreadable, isUnifiedMemoryPool, primaryGpu } from '@/components/UnifiedMemoryTag';
 import {
   checkHealth,
   query,
@@ -1906,8 +1907,14 @@ export default function SetupPage() {
     .filter(model => modelIds.includes(model.id))
     .reduce((total, model) => total + model.estimated_disk_gb, 0);
   const hasCatalogSizing = studioPacks.length > 0 || studioModels.length > 0;
-  const gpuDetectionStatus = gpuInfo?.detection?.status ?? 'checking';
+  // Top-level `status` when the API emits it, `detection.status` otherwise — same verdict either way.
+  const gpuDetectionStatus = gpuStatusOf(gpuInfo) ?? 'checking';
   const gpuDetectionIssue = gpuInfo?.detection?.issues?.[0]?.message ?? '';
+  // The row the API sizes against — its first *sized* row, not gpus[0]: on a
+  // multi-GPU box whose GPU 0 is unreadable the API is 'ready' on GPU 1.
+  const primaryGpuRow = primaryGpu(gpuInfo?.gpus);
+  // '' when every row is sized; "GPU 0 memory unreadable" names a bad secondary row.
+  const unreadableGpuNote = describeUnreadableGpus(gpuInfo?.gpus);
   const githubPack = studioPacks.find(pack => pack.id === 'github-login-helper') ?? null;
   const missionProfiles: Array<{
     id: WizardProfile;
@@ -2217,10 +2224,17 @@ export default function SetupPage() {
       label: 'GPU',
       value: gpuLoading
         ? 'scanning'
-        : gpuInfo?.gpus?.length
-          ? `${gpuInfo.gpus[0].name} / ${gpuInfo.gpus[0].vram_gb} GB`
+        : primaryGpuRow
+          ? isMemoryUnreadable(primaryGpuRow)
+            // The primary row is unreadable only when every row is: nothing is sized.
+            ? `${primaryGpuRow.name} / memory unreadable`
+            // Sized primary; a bad secondary row is named here rather than demoting the state.
+            : `${primaryGpuRow.name} / ${primaryGpuRow.vram_gb} GB${primaryGpuRow.unified_memory ? ' unified' : ''}${unreadableGpuNote ? ` / ${unreadableGpuNote}` : ''}`
           : 'CPU fallback',
-      state: gpuLoading ? 'checking' : gpuInfo?.gpus?.length ? 'ready' : 'warn',
+      // 'ready' is the API's own verdict — at least one row has a readable pool and
+      // models are sized against it. A secondary unreadable row does not make that
+      // 'warn'; a lone GPU with no readable pool does (nothing can be sized against it).
+      state: gpuLoading ? 'checking' : isGpuReady(gpuInfo) ? 'ready' : 'warn',
     },
     {
       label: 'Models',
@@ -2533,9 +2547,20 @@ export default function SetupPage() {
       return;
     }
     if (label === 'GPU') {
-      const gpu = gpuInfo?.gpus?.[0];
-      if (gpu) {
-        setWizardBuildMessage(`GPU detected: ${gpu.name} with ${gpu.vram_gb} GB VRAM. AI Wizard will use that to recommend model sizes and GPU-fit installs.`);
+      // The primary row (first sized), the same one the mission row and the API key on.
+      const gpu = primaryGpuRow;
+      if (gpu && isMemoryUnreadable(gpu)) {
+        // Visible but unsized: quote the payload's own explanation rather than
+        // "0 GB VRAM" — nothing can be sized against a pool that was never read.
+        const why = gpuInfo?.summary || `GPU detected: ${gpu.name}, but its memory could not be read`;
+        setWizardBuildMessage(`${why.endsWith('.') ? why : `${why}.`} AI Wizard will not size models against it until the driver reports a memory pool.`);
+      } else if (gpu) {
+        const sized = `GPU detected: ${gpu.name} with ${gpu.vram_gb} GB VRAM. AI Wizard will use that to recommend model sizes and GPU-fit installs.`;
+        // A sized primary beside an unreadable secondary: say which row is out and that
+        // it is not budgeted against, instead of hiding it behind the primary's figure.
+        setWizardBuildMessage(unreadableGpuNote
+          ? `${sized} ${unreadableGpuNote} — that GPU will not be sized against until the driver reports its memory pool.`
+          : sized);
       } else {
         // No GPU detected — let the Wizard explain root cause (driver,
         // container config, instance type) rather than dead-end the user.
@@ -4511,6 +4536,9 @@ export default function SetupPage() {
                 {gpuInfo.gpus.map((g, i) => {
                   const usedPct = g.vram_mb > 0 ? Math.round((g.memory_used_mb / g.vram_mb) * 100) : 0;
                   const barColor = usedPct > 90 ? '#dc2626' : usedPct > 70 ? '#d97706' : '#76B900';
+                  // Visible but unsized: the API keeps the row at 0 MiB so the GPU's name is
+                  // still seen; "0.0 / 0 GB" would present that unknown as a figure.
+                  const unreadable = isMemoryUnreadable(g);
                   return (
                     <div key={i} className="border border-[#76B900]/40 bg-[#76B900]/5 p-4">
                       <div className="flex items-start gap-4">
@@ -4537,15 +4565,24 @@ export default function SetupPage() {
                           <div className="mt-2 space-y-1">
                             <div className="flex justify-between text-[10px] font-mono">
                               <span className="text-[#a3a3a3] dark:text-[#737373]">VRAM</span>
-                              <span className="text-[#525252] dark:text-[#a3a3a3]">
-                                {(g.memory_used_mb / 1024).toFixed(1)} used / {g.vram_gb} GB total
-                              </span>
+                              {unreadable ? (
+                                <MemoryUnreadableTag summary={gpuInfo.summary} />
+                              ) : (
+                                <span className="text-[#525252] dark:text-[#a3a3a3]">
+                                  {(g.memory_used_mb / 1024).toFixed(1)} used / {g.vram_gb} GB total
+                                  <UnifiedMemoryTag show={g.unified_memory} className="ml-1" />
+                                </span>
+                              )}
                             </div>
                             <div className="progress-bar">
                               <div className="progress-fill" style={{ width: `${usedPct}%`, backgroundColor: barColor }} />
                             </div>
                             <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
-                              {(g.memory_free_mb / 1024).toFixed(1)} GB free / Utilization {g.utilization_pct}%
+                              {unreadable ? (
+                                <>Utilization {g.utilization_pct}%</>
+                              ) : (
+                                <>{(g.memory_free_mb / 1024).toFixed(1)} GB free / Utilization {g.utilization_pct}%</>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -4554,12 +4591,21 @@ export default function SetupPage() {
                   );
                 })}
 
-                {/* System RAM */}
+                {/* Once, under the list: why detection is 'blocked' (a visible GPU with no readable memory
+                    pool), or which row is unreadable beside sized ones on an otherwise ready machine. */}
+                <GpuBlockedSummary status={gpuDetectionStatus} summary={gpuInfo.summary} gpus={gpuInfo.gpus} />
+
+                {/* System RAM. On a unified pool (GB10 / DGX Spark) the RAM *is* the GPU memory,
+                    so there is no separate CPU-offload headroom to advertise. */}
                 <div className="bg-[#ffffff] border border-[#e5e5e5] p-3 dark:bg-[#0a0a0a] dark:border-[#262626]">
                   <div className="text-[10px] font-mono text-[#a3a3a3] mb-1 uppercase tracking-wider dark:text-[#737373]">System RAM</div>
                   <div className="text-xs font-mono text-[#525252] dark:text-[#a3a3a3]">
                     {gpuInfo.system_ram.total_gb} GB total / {gpuInfo.system_ram.available_gb} GB available /{' '}
-                    {gpuInfo.system_ram.effective_for_llm_gb} GB usable for CPU offload
+                    {isUnifiedMemoryPool(gpuInfo) ? (
+                      <>unified pool — no separate CPU-offload headroom</>
+                    ) : (
+                      <>{gpuInfo.system_ram.effective_for_llm_gb} GB usable for CPU offload</>
+                    )}
                   </div>
                 </div>
               </div>

@@ -127,9 +127,11 @@ GPU_DATABASE: dict[str, GPUSpec] = {
         (10, 0),
     ),
     # DGX Spark
+    # GB10 is sm_121 (compute capability 12.1) in CUDA 13, not the GB100/GB200
+    # (10, 0) family; nvh.utils.gpu parses the name the same way.
     "gb10": GPUSpec(
         "DGX Spark (GB10)", "blackwell", 2048, 128, 273, 100,
-        16, 4, (10, 0),
+        16, 4, (12, 1),
     ),
 }
 

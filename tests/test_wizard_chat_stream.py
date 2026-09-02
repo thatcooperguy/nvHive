@@ -73,6 +73,14 @@ _EMPTY_SNAPSHOT = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_home(monkeypatch, tmp_path) -> None:
+    """The concierge's profile catalog and the plugin dir resolve to tmp_path,
+    never the developer's real $NVH_HOME; no vault recall."""
+    monkeypatch.setenv("NVH_HOME", str(tmp_path))
+    monkeypatch.setenv("NVH_WIZARD_AUTOFOLD_VAULT", "0")
+
+
 @pytest.mark.asyncio
 async def test_stream_plain_answer_yields_token_events_and_done() -> None:
     """A response with no tool calls should stream as token events and end
@@ -100,6 +108,7 @@ async def test_stream_plain_answer_yields_token_events_and_done() -> None:
     done = next(e for e in events if e["type"] == "done")
     assert done["iterations"] == 1
     assert done["tool_results"] == []
+    assert done["tool_calls"] == [] and done["deferred_tool_calls"] == []
 
 
 @pytest.mark.asyncio

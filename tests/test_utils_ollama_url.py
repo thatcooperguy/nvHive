@@ -43,3 +43,51 @@ def test_probe_distinguishes_unreachable_from_empty():
     # Nothing listens on port 1; the probe says "unreachable", the list says "none".
     assert probe_installed_models("http://127.0.0.1:1", timeout=0.5) is None
     assert list_installed_models("http://127.0.0.1:1") == []
+
+
+@pytest.mark.asyncio
+async def test_async_probe_matches_the_sync_contract_without_blocking(monkeypatch):
+    """``probe_installed_models_async`` is the event-loop twin: same URL, same
+    verdicts (200 → tags, other status / connection error → None), never
+    raises, and never touches the blocking ``httpx.get``."""
+    import httpx
+
+    from nvh.utils.ollama import probe_installed_models_async
+
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: pytest.fail("blocking httpx.get called"))
+    outcome = {"status": 200}
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if outcome["status"] == "refused":
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(outcome["status"], json={"models": [{"name": "llama3:latest"}, {"name": "qwen:7b"}]})
+
+    real_client = httpx.AsyncClient
+    timeouts: list = []
+
+    def client(*args, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+
+    assert await probe_installed_models_async("localhost:11434", timeout=0.7) == ["llama3:latest", "qwen:7b"]
+    assert str(seen[-1].url) == "http://127.0.0.1:11434/api/tags"  # normalised like the sync probe
+    assert timeouts == [0.7]
+    outcome["status"] = 503
+    assert await probe_installed_models_async() is None
+    outcome["status"] = "refused"
+    assert await probe_installed_models_async() is None
+
+
+@pytest.mark.asyncio
+async def test_async_probe_distinguishes_unreachable_from_empty():
+    # Nothing listens on port 1: the async probe says "unreachable" too, without raising.
+    from nvh.utils.ollama import probe_installed_models_async
+
+    assert await probe_installed_models_async("http://127.0.0.1:1", timeout=0.5) is None
