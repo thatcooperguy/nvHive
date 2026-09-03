@@ -44,6 +44,14 @@ Policies (design brief 2026-09-03 §9, from the upstream research):
   - The DGX Dashboard **Update Now** path (apt upgrade + firmware + reboot) is
     never automated; ``HF_TOKEN`` / ``NGC_API_KEY`` are declared prerequisites
     nvHive never prompts for or stores.
+  - **Model tags are never hand-typed.** The ollama playbook carries
+    ``@MODEL_CHAT@`` (title, pull, check and the laptop's curl), rendered at
+    compile time from the tier table (:mod:`nvh.core.local_models`) for this
+    host's platform facts -- a 128 GB unified Spark gets the top chat pick that
+    fits the pool after its OS reserve, a host the facts cannot size gets the
+    table's default -- so a tag the registry retires cannot outlive the table
+    (``tests/test_no_retired_model_tags.py``). LM Studio's catalogue ids are
+    not Ollama tags, so its model step is manual prose that names no tag.
 
 Every run that touched the host writes an install receipt (kind ``playbook``,
 honest ``no_root = not any sudo step ran``, repair plan
@@ -61,8 +69,10 @@ import shlex
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import nvh.core.local_models as lm
 from nvh.integrations.services import receipts as _receipts
 from nvh.integrations.wizard import system_settings as ss
 from nvh.integrations.wizard.system_settings import Plan, Step, run_host_command
@@ -111,6 +121,11 @@ LOG_TAIL_LINES = 20
 PLAYBOOK_DIR_TOKEN = "@PLAYBOOK_DIR@"
 USER_TOKEN = "@USER@"
 HOME_TOKEN = "@HOME@"
+#: This host's ``chat`` pick from the tier table (:mod:`nvh.core.local_models`) and its size on
+#: disk in GB. The catalogue is static data and the machine is only known at compile time, and a
+#: hand-typed tag is exactly what the registry retires -- see :func:`_chat_model_pick`.
+MODEL_CHAT_TOKEN = "@MODEL_CHAT@"
+MODEL_CHAT_GB_TOKEN = "@MODEL_CHAT_GB@"
 
 UNPINNED_NOTE = "pipe-to-shell: unpinned"
 #: An ``unpinned`` step whose upstream is not a pipe: a vendor artifact with no version pin or checksum.
@@ -362,9 +377,13 @@ PLAYBOOKS: tuple[Playbook, ...] = (
                 sudo=True, check=("systemctl", "is-enabled", "ollama"),
             ),
             _step(
-                "Download and verify a language model (qwen2.5:32b, about 18 GB)",
-                "ollama", "pull", "qwen2.5:32b",
-                check=("ollama", "show", "qwen2.5:32b"), timeout=LONG_TIMEOUT_S,
+                f"Download and verify a language model ({MODEL_CHAT_TOKEN}, about {MODEL_CHAT_GB_TOKEN} GB)",
+                "ollama", "pull", MODEL_CHAT_TOKEN,
+                check=("ollama", "show", MODEL_CHAT_TOKEN), timeout=LONG_TIMEOUT_S,
+                description=(
+                    "The tag is this host's chat pick from nvHive's tier table (nvh.core.local_models), sized from "
+                    "the memory the platform facts report, rather than the README's fixed example model."
+                ),
             ),
             _manual(
                 "Configure the Ollama custom app in NVIDIA Sync (laptop)",
@@ -373,7 +392,7 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             ),
             _manual(
                 "Validate API connectivity from the laptop",
-                "curl http://localhost:11434/api/chat -d '{\"model\": \"qwen2.5:32b\", \"messages\": "
+                f"curl http://localhost:11434/api/chat -d '{{\"model\": \"{MODEL_CHAT_TOKEN}\", \"messages\": "
                 "[{\"role\": \"user\", \"content\": \"Write me a haiku about GPUs and AI.\"}], \"stream\": false}'",
             ),
         ),
@@ -385,6 +404,7 @@ PLAYBOOKS: tuple[Playbook, ...] = (
         undo=_OLLAMA_UNDO,
         notes=(
             "The README says 'no system-level changes', but install.sh installs a system service and a user; the undo above is the README's own Step 9.",
+            f"The model step pulls {MODEL_CHAT_TOKEN} — this host's chat pick from nvHive's tier table — where the README pulls one fixed 32B example.",
             "Rootless instead: the `rootless-ollama` studio pack installs Ollama under NVH_HOME with no sudo.",
         ),
         estimated_minutes=15,
@@ -933,7 +953,8 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             ),
             _manual(
                 "Download and load a model (about 65 GB)",
-                "lms get nvidia/nemotron-3-nano-omni && lms load nvidia/nemotron-3-nano-omni   # `lms ls` lists what you have",
+                "lms get <publisher/model> && lms load <model>   # choose a current Nemotron Nano build from LM Studio's "
+                "model catalogue (the upstream guide used NVIDIA's Nemotron 3 Nano Omni); `lms ls` lists what you have",
             ),
             _manual("(Optional) Connect with LM Link", "Sign in at https://lmstudio.ai/link on the Spark and on your laptop."),
         ),
@@ -1115,16 +1136,54 @@ def _user_home() -> str:
     return Path.home().as_posix()
 
 
-def _needs_user(playbook: Playbook) -> bool:
-    texts = [*playbook.undo]
+def _texts(playbook: Playbook) -> list[str]:
+    """Every string a playbook renders: titles, argv, checks, manual text, halt notes, descriptions, verify, undo, notes."""
+    texts: list[str] = [*playbook.undo, *playbook.notes]
     for step in playbook.steps:
-        texts += [*step.argv, step.manual or "", step.halt_after]
+        texts += [step.title, *step.argv, step.manual or "", step.halt_after, step.description]
         if step.check:
             texts += step.check
-    return any(USER_TOKEN in text for text in texts)
+    for argv in playbook.verify:
+        texts += argv
+    return texts
 
 
-def _context(playbook: Playbook, home_dir: str | Path | None = None) -> dict[str, str]:
+def _uses(playbook: Playbook, *tokens: str) -> bool:
+    return any(token in text for text in _texts(playbook) for token in tokens)
+
+
+def _default_chat_pick() -> lm.LocalModelPick:
+    """The table's default chat pick -- the one ``hive config init`` names before any hardware is known."""
+    from nvh.config.settings import _DEFAULT_LOCAL_BUDGET_GB
+
+    return lm.pick(_DEFAULT_LOCAL_BUDGET_GB, "chat") or lm.LOCAL_MODEL_TIERS[0].picks["chat"]
+
+
+def _chat_model_pick() -> lm.LocalModelPick:
+    """This host's ``chat`` pick from the tier table, sized from the platform facts.
+
+    A unified pool (GB10 / DGX Spark, Apple Silicon) is planned through
+    :func:`nvh.core.local_models.tier_budget` -- the pool minus its OS reserve,
+    the same maths ``nvh.utils.gpu`` uses -- so a 128 GB Spark gets the top chat
+    pick that fits. Facts that size no pool (a discrete card the facts do not
+    measure, no GPU, a pool of 0 GB, a probe that failed) fall back to
+    :func:`_default_chat_pick`. Never raises: the catalogue must render on any box.
+    """
+    try:
+        facts = ss._facts()
+        total_gb = float(getattr(facts, "memory_total_gb", 0.0) or 0.0)
+        if getattr(facts, "unified_memory", False) and total_gb > 0:
+            pool = SimpleNamespace(vram_mb=total_gb * 1024, unified_memory=True)
+            chosen = lm.pick(lm.tier_budget([pool]), "chat")
+            if chosen is not None:
+                return chosen
+    except Exception:  # the facts are a sizing hint here, not a requirement
+        logger.debug("platform facts unavailable; rendering the default chat pick", exc_info=True)
+    return _default_chat_pick()
+
+
+def _base_context(playbook: Playbook, home_dir: str | Path | None = None) -> dict[str, str]:
+    """The placeholders that always render: paths, home and -- where the playbook names one -- the model."""
     ctx = {
         # POSIX form: argv never sees a shell, and the Spark is Linux; on a
         # Windows dev box this keeps the rendered commands quoting-free.
@@ -1132,7 +1191,16 @@ def _context(playbook: Playbook, home_dir: str | Path | None = None) -> dict[str
         HOME_TOKEN: _user_home(),
         USER_TOKEN: "",
     }
-    if _needs_user(playbook):
+    if _uses(playbook, MODEL_CHAT_TOKEN, MODEL_CHAT_GB_TOKEN):
+        chosen = _chat_model_pick()
+        ctx[MODEL_CHAT_TOKEN] = chosen.tag
+        ctx[MODEL_CHAT_GB_TOKEN] = f"{chosen.weights_gb:g}"
+    return ctx
+
+
+def _context(playbook: Playbook, home_dir: str | Path | None = None) -> dict[str, str]:
+    ctx = _base_context(playbook, home_dir)
+    if _uses(playbook, USER_TOKEN):
         user = ss._current_user()
         if not ss.USERNAME_RE.match(user or ""):
             raise PlaybookError("could not determine a valid login name for the current user")
@@ -1152,7 +1220,7 @@ def _render_argv(argv: Sequence[str], ctx: Mapping[str, str]) -> tuple[str, ...]
 
 def _manual_lines(playbook: Playbook, ctx: Mapping[str, str]) -> list[str]:
     """The manual steps as ``title — text`` lines (plan notes, plan_dict, catalogue and the run events share them)."""
-    return [f"{step.title} — {_render(step.manual or '', ctx)}" for step in playbook.manual_steps()]
+    return [f"{_render(step.title, ctx)} — {_render(step.manual or '', ctx)}" for step in playbook.manual_steps()]
 
 
 def _unpinned_note(step: PlaybookStep, ctx: Mapping[str, str]) -> str:
@@ -1203,7 +1271,7 @@ def compile_plan(
             seen_upstream.add(step.upstream)
             notes.append(_unpinned_note(step, ctx))
         if step.halt_after:
-            notes.append(f"After '{step.title}' runs, the run stops. MANUAL: {_render(step.halt_after, ctx)}")
+            notes.append(f"After '{_render(step.title, ctx)}' runs, the run stops. MANUAL: {_render(step.halt_after, ctx)}")
     notes += [f"MANUAL: {line}" for line in manual]
     return Plan(
         name=playbook.id,
@@ -1234,7 +1302,7 @@ def _step_dicts(playbook: Playbook, plan: Plan, ctx: Mapping[str, str]) -> list[
     for index, (pstep, step) in enumerate(zip(playbook.executable_steps(), plan.steps, strict=True)):
         out.append({
             "index": index,
-            "title": pstep.title,
+            "title": _render(pstep.title, ctx),
             "command": step.render(),
             "sudo": step.sudo,
             "check": shlex.join(_render_argv(pstep.check, ctx)) if pstep.check else None,
@@ -1243,7 +1311,7 @@ def _step_dicts(playbook: Playbook, plan: Plan, ctx: Mapping[str, str]) -> list[
             "upstream": pstep.upstream,
             "timeout_s": pstep.timeout_s,
             "halts_run": bool(pstep.halt_after),
-            "description": pstep.description,
+            "description": _render(pstep.description, ctx),
         })
     return out
 
@@ -1335,7 +1403,7 @@ def catalogue(home_dir: str | Path | None = None) -> list[dict[str, Any]]:
         try:
             ctx = _context(playbook, home_dir)
         except PlaybookError:
-            ctx = {PLAYBOOK_DIR_TOKEN: str(playbooks_root(home_dir) / playbook.id), HOME_TOKEN: _user_home(), USER_TOKEN: "<user>"}
+            ctx = {**_base_context(playbook, home_dir), USER_TOKEN: "<user>"}
         receipt = by_item.get(playbook.id)
         executable = playbook.executable_steps()
         manual = _manual_lines(playbook, ctx)
@@ -1347,7 +1415,7 @@ def catalogue(home_dir: str | Path | None = None) -> list[dict[str, Any]]:
             "source_urls": list(playbook.source_urls),
             "requires_sudo": playbook.requires_sudo,
             "sudo_steps": playbook.sudo_steps,
-            "sudo_step_titles": [step.title for step in executable if step.sudo],
+            "sudo_step_titles": [_render(step.title, ctx) for step in executable if step.sudo],
             "steps_total": len(executable),
             "manual_steps": len(manual),
             "manual": manual,
@@ -1565,23 +1633,23 @@ async def _engine(
     in_flight: dict[str, Any] | None = None  # set while a host command runs; the one thing a cancel cannot stop
     try:
         for index, (pstep, step) in enumerate(zip(executable, plan.steps, strict=True)):
-            position, title = index, pstep.title
+            position, title = index, _render(pstep.title, ctx)
             command = step.render()
-            head = {**base, "step": index, "steps_total": total, "title": pstep.title, "command": command, "sudo": step.sudo}
-            yield {**head, "event": "step", "status": "running", "message": f"Step {index + 1}/{total}: {pstep.title}"}
+            head = {**base, "step": index, "steps_total": total, "title": title, "command": command, "sudo": step.sudo}
+            yield {**head, "event": "step", "status": "running", "message": f"Step {index + 1}/{total}: {title}"}
             if pstep.check:
                 probe = await check_cmd(_render_argv(pstep.check, ctx))
                 if probe.get("ok"):
-                    yield {**head, "event": "log", "status": "running", "message": f"already done — skipped: {pstep.title}", "skipped": True}
+                    yield {**head, "event": "log", "status": "running", "message": f"already done — skipped: {title}", "skipped": True}
                     yield {**head, "event": "step", "status": "complete", "skipped": True, "message": f"Step {index + 1}/{total} skipped (already done)"}
                     continue
-            in_flight = {"step": index, "title": pstep.title, "command": command, "sudo": step.sudo}
+            in_flight = {"step": index, "title": title, "command": command, "sudo": step.sudo}
             result = await run_cmd(step)
             in_flight = None
             if result.get("needs_terminal"):
                 outcome = "needs_terminal"
                 remaining = total - index
-                error_msg = f"sudo needs a password for step {index + 1} ({pstep.title}) — run `{handoff}` in a terminal"
+                error_msg = f"sudo needs a password for step {index + 1} ({title}) — run `{handoff}` in a terminal"
                 yield {
                     **head, "event": "needs_terminal", "status": "running", "message": error_msg,
                     "command": handoff, "step_command": result.get("command"), "hint": ss.NEEDS_TERMINAL_HINT,
@@ -1594,7 +1662,7 @@ async def _engine(
                 yield {**head, "event": "step", "status": "failed", "message": error_msg, "error": error_msg, "denied": bool(result.get("denied"))}
                 break
             executed.append({
-                "step": index, "title": pstep.title, "command": result["command"], "exit_code": result["exit_code"],
+                "step": index, "title": title, "command": result["command"], "exit_code": result["exit_code"],
                 "stdout": result.get("stdout", ""), "stderr": result.get("stderr", ""),
             })
             if step.sudo:
@@ -1608,7 +1676,7 @@ async def _engine(
                 error_msg = f"`{result['command']}` exited {result['exit_code']}"
                 yield {**head, "event": "step", "status": "failed", "message": error_msg, "error": error_msg, "exit_code": result["exit_code"]}
                 break
-            yield {**head, "event": "step", "status": "complete", "message": f"Step {index + 1}/{total} done: {pstep.title}", "exit_code": 0}
+            yield {**head, "event": "step", "status": "complete", "message": f"Step {index + 1}/{total} done: {title}", "exit_code": 0}
             if pstep.halt_after:
                 outcome = "halted"
                 remaining = total - index - 1

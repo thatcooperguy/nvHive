@@ -28,6 +28,7 @@ Invariants pinned (design brief phase 2b §2-4, §9):
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import shlex
 import threading
@@ -37,8 +38,10 @@ from typing import Any
 
 import pytest
 
+import nvh.core.local_models as lm
 import nvh.integrations.installs.playbooks as pb
 import nvh.integrations.wizard.system_settings as ss
+from nvh.config.settings import _DEFAULT_LOCAL_BUDGET_GB
 from nvh.integrations.services import jobs, receipts
 from nvh.integrations.wizard.tools import PRIVILEGED_ENV, audit_privileged_change, default_registry
 from nvh.utils import platform_facts as pf
@@ -228,20 +231,100 @@ def test_playbook_invariants(playbook_id: str) -> None:
 
 
 def test_shell_scripts_take_paths_as_positional_parameters(tmp_path: Path) -> None:
-    """An apostrophe, a space or `$` in NVH_HOME neither breaks a `bash -c` step nor injects into it."""
-    odd = tmp_path / "it's $HOME; touch pwned #"
+    """An apostrophe, a space, `;`, `#` or a `$(…)` in NVH_HOME neither breaks a `bash -c` step nor injects into it.
+
+    ``nvh_home`` expands ``$VAR`` references on purpose (``NVH_HOME=$HOME/.nvh`` is a supported
+    setting), so a ``$HOME`` in this directory name is consumed by that layer and never reaches
+    the shell -- on Linux CI it became ``/home/runner`` and a literal expectation mismatched.
+    A command substitution survives the expansion, so it is the honest injection probe, and
+    the expected path goes through the same resolution as the rendered one on both platforms.
+    """
+    odd = tmp_path / "it's $(touch pwned); #"
     comfy = pb.get_playbook("comfy-ui")
     plan = pb.compile_plan(comfy, home_dir=odd)
     assert plan.denied() is None
     verify_setup = plan.steps[2]
     assert verify_setup.argv[:2] == ("bash", "-c") and "$1" in verify_setup.argv[2] and "@" not in verify_setup.argv[2]
-    assert verify_setup.argv[3:] == ("sha256sum", f"{(odd / 'playbooks' / 'comfy-ui').as_posix()}/setup.sh")
+    expected = f"{(odd.resolve() / 'playbooks' / 'comfy-ui').as_posix()}/setup.sh"
+    assert expected == f"{(pb.playbooks_root(odd) / 'comfy-ui').as_posix()}/setup.sh"  # the NVH_HOME resolution
+    assert "$(touch pwned)" in expected  # the probe survived nvh_home's $VAR expansion
+    assert verify_setup.argv[3:] == ("sha256sum", expected)
     assert "touch pwned" not in verify_setup.argv[2]  # the path is data, not script
     assert shlex.split(verify_setup.render()) == list(verify_setup.argv)  # the card shows exactly the argv that runs
     lm = pb.get_playbook("lm-studio")
     ctx = pb._context(lm, odd)
     check = pb._render_argv(lm.executable_steps()[0].check, ctx)
     assert check[:2] == ("bash", "-c") and "$1/.lmstudio/bin/lms" in check[2] and check[-1] == "/home/alice"
+
+
+def _rendered_pull_tag(plan: ss.Plan) -> str:
+    """The one ``ollama pull <tag>`` command of a compiled plan, as the tag."""
+    pulls = [shlex.split(c) for c in plan.commands() if shlex.split(c)[:2] == ["ollama", "pull"]]
+    assert len(pulls) == 1 and len(pulls[0]) == 3, plan.commands()
+    return pulls[0][2]
+
+
+def test_ollama_model_tag_comes_from_the_tier_table(monkeypatch) -> None:
+    """The ollama playbook pulls this host's chat pick from nvh.core.local_models -- never a hand-typed tag.
+
+    The catalogue carries the ``@MODEL_CHAT@`` placeholder (title, pull, check and the laptop's
+    curl) and ``compile_plan`` renders it from the platform facts: the seeded 128 GB unified
+    Spark gets the table's top chat pick that fits the pool after its OS reserve, neutral facts
+    (no unified pool, or one the facts could not size) get the table's default -- the tag
+    ``hive config init`` names -- and facts that blow up still render, never crash.
+    """
+    ollama = pb.get_playbook("ollama")
+    pull = next(s for s in ollama.executable_steps() if s.argv[:2] == ("ollama", "pull"))
+    assert pull.argv == ("ollama", "pull", pb.MODEL_CHAT_TOKEN) and pull.check == ("ollama", "show", pb.MODEL_CHAT_TOKEN)
+    assert pb.MODEL_CHAT_TOKEN in pull.title and pb.MODEL_CHAT_GB_TOKEN in pull.title
+    curl_step = next(s for s in ollama.manual_steps() if s.title.startswith("Validate API connectivity"))
+    assert f'"model": "{pb.MODEL_CHAT_TOKEN}"' in curl_step.manual
+    for step in ollama.steps:  # no literal tag anywhere: every `ollama pull|show` word is the placeholder
+        for argv in (step.argv, step.check or ()):
+            if argv[:1] == ("ollama",) and argv[1:2] in {("pull",), ("show",)}:
+                assert argv[2:] == (pb.MODEL_CHAT_TOKEN,), (step.title, argv)
+
+    # Seeded Spark facts (128 GB unified, 16 GB OS reserve -> 112 GB budget): the top chat pick that fits.
+    spark = lm.tier_budget([SimpleNamespace(vram_mb=128 * 1024, unified_memory=True)])
+    expected = lm.pick(spark, "chat")
+    assert spark.unified and spark.budget_gb == 112.0 and expected is lm.tier_for(spark).picks["chat"]
+    tag = _rendered_pull_tag(pb.compile_plan(ollama))
+    assert tag == expected.tag and tag in lm.all_tags() and lm.pick_for_tag(tag) is expected
+    detail = pb.plan_dict("ollama")
+    step = next(s for s in detail["steps"] if s["command"] == f"ollama pull {tag}")
+    assert step["check"] == f"ollama show {tag}"
+    assert step["title"] == f"Download and verify a language model ({tag}, about {expected.weights_gb:g} GB)"
+    curl = [m for m in detail["manual_steps"] if m.startswith("Validate API connectivity")]
+    assert len(curl) == 1 and f'"model": "{tag}"' in curl[0]
+    assert any(tag in note for note in detail["notes"])  # the card says where the tag came from
+    assert "@" not in json.dumps(detail, default=str)  # every placeholder resolved, titles and notes included
+    rows = {row["id"]: row for row in pb.catalogue()}
+    assert "@" not in json.dumps(rows["ollama"], default=str)
+
+    # Neutral facts (no unified pool, no sized GPU): the table's default, and never the Spark's pick.
+    pf.seed_platform_facts(pf.PlatformFacts(os="linux", arch="x86_64"))
+    fallback = lm.pick(_DEFAULT_LOCAL_BUDGET_GB, "chat")
+    assert fallback.tag != expected.tag and fallback.tag in lm.all_tags()
+    assert _rendered_pull_tag(pb.compile_plan(ollama)) == fallback.tag
+
+    # A unified pool the facts could not size is neutral too.
+    pf.seed_platform_facts(pf.PlatformFacts(os="linux", arch="arm64", unified_memory=True, memory_total_gb=0.0))
+    assert _rendered_pull_tag(pb.compile_plan(ollama)) == fallback.tag
+
+    def boom():
+        raise RuntimeError("facts exploded")
+
+    monkeypatch.setattr(ss, "_facts", boom)
+    assert _rendered_pull_tag(pb.compile_plan(ollama)) == fallback.tag
+
+
+def test_lm_studio_model_step_is_manual_prose_without_a_pinned_tag() -> None:
+    """LM Studio's catalogue ids are not Ollama tags, so the table cannot pick for it: the step is words."""
+    lm_studio = pb.get_playbook("lm-studio")
+    model = next(s for s in lm_studio.manual_steps() if s.title.startswith("Download and load a model"))
+    assert "lms get" in model.manual and "lms load" in model.manual and "lms ls" in model.manual
+    assert "Nemotron" in model.manual and "nemotron-" not in model.manual.lower()  # a family in words, not a tag
+    assert "@" not in model.manual and "nvidia/" not in model.manual
 
 
 def test_pipe_to_shell_is_download_then_run_and_flagged(tmp_path: Path) -> None:

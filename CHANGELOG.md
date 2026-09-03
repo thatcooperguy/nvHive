@@ -156,6 +156,14 @@
   in-band error shapes are shared; an account that cannot elevate is
   refused before anything spawns. The agent sandbox's shell guardrails
   block `nvh playbook install` (list and plan stay allowed).
+- **Playbooks never hand-type a model tag.** The `ollama` playbook's pull,
+  check, title and verify steps carry an `@MODEL_CHAT@` placeholder that
+  `compile_plan` renders from the local-model tier table for the host's
+  platform facts (a 128 GB Spark gets the table's top chat pick; unsized
+  hosts get its default), and LM Studio's model step is manual prose instead
+  of a pinned id. Step titles render through the same context everywhere
+  they surface (cards, catalogue, run events). The repo-wide retired-tag
+  guard now covers the catalogue.
 
 ## [0.43.0] - 2026-09-03
 
