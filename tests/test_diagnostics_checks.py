@@ -214,9 +214,17 @@ def test_budget_rows_serialise_to_json():
 # ---------------------------------------------------------------------------
 
 
-def _sunset_ctx():
+def _sunset_ctx(monkeypatch):
+    # A synthetic spec: no shipped row carries a sunset today (perplexity moved
+    # to the Agent API), and the mechanism must stay pinned regardless.
+    from nvh.providers.specs import PROVIDER_SPECS, ProviderSpec
+
+    monkeypatch.setitem(PROVIDER_SPECS, "sunsetco", ProviderSpec(
+        "sunsetco", "sunsetco/big", "sunsetco/small",
+        sunset_date="2026-09-27", sunset_note="Legacy Chat API",
+    ))
     return _ctx(_config=SimpleNamespace(providers={
-        "perplexity": SimpleNamespace(enabled=True, type="", default_model="perplexity/sonar-pro", fallback_model=""),
+        "sunsetco": SimpleNamespace(enabled=True, type="", default_model="sunsetco/big", fallback_model=""),
         "groq": SimpleNamespace(enabled=True, type="", default_model="groq/openai/gpt-oss-120b", fallback_model=""),
     }))
 
@@ -224,8 +232,8 @@ def _sunset_ctx():
 @pytest.mark.parametrize(
     ("today", "expected"),
     [
-        (date(2026, 9, 2), "Sonar Chat Completions retires 2026-09-27 (25 day(s))"),
-        (date(2026, 10, 1), "Sonar Chat Completions retired 2026-09-27"),
+        (date(2026, 9, 2), "Legacy Chat API retires 2026-09-27 (25 day(s))"),
+        (date(2026, 10, 1), "Legacy Chat API retired 2026-09-27"),
     ],
 )
 def test_sunset_within_30_days_or_past_warns(monkeypatch, today, expected):
@@ -236,8 +244,8 @@ def test_sunset_within_30_days_or_past_warns(monkeypatch, today, expected):
 
     monkeypatch.setattr(diag, "date", FrozenDate)
     monkeypatch.setattr("nvh.cli.setup.stale_default_models", lambda providers: [])
-    rows = asyncio.run(_rows("retired_models", _sunset_ctx()))
-    assert [(r.title, r.status, r.detail) for r in rows] == [("Advisor perplexity", "warn", expected)]
+    rows = asyncio.run(_rows("retired_models", _sunset_ctx(monkeypatch)))
+    assert [(r.title, r.status, r.detail) for r in rows] == [("Advisor sunsetco", "warn", expected)]
     assert rows[0].data["sunset_date"] == "2026-09-27"
 
 
@@ -249,7 +257,7 @@ def test_sunset_far_away_is_silent(monkeypatch):
 
     monkeypatch.setattr(diag, "date", FrozenDate)
     monkeypatch.setattr("nvh.cli.setup.stale_default_models", lambda providers: [])
-    assert asyncio.run(_rows("retired_models", _sunset_ctx())) == []
+    assert asyncio.run(_rows("retired_models", _sunset_ctx(monkeypatch))) == []
 
 
 # ---------------------------------------------------------------------------

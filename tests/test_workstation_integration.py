@@ -2,17 +2,94 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+from nvh.core import local_models as lm
 from nvh.integrations import workstation
 from nvh.integrations.workspace.storage import ensure_storage
 
 
-def test_model_recommendations_scale_with_vram() -> None:
+def _gb10() -> SimpleNamespace:
+    return SimpleNamespace(name="NVIDIA GB10", vram_mb=128 * 1024, unified_memory=True)
+
+
+def test_model_recommendations_follow_the_local_model_table() -> None:
     assert workstation._recommend_chat_models(0) == []
-    assert workstation._recommend_chat_models(6) == ["gemma3:4b", "moondream"]
-    assert "gemma3:4b" in workstation._recommend_chat_models(8)
-    assert "llama3.1:8b" in workstation._recommend_chat_models(8)
-    assert workstation._recommend_chat_models(24)[0] == "llama3.2-vision"
-    assert workstation._recommend_chat_models(47)[0] == "nemotron"
+    for gb in (6, 8, 24, 47, 96):
+        recs = workstation._recommend_chat_models(gb)
+        assert recs == [p.tag for p in lm.recommended(float(gb))], gb
+        assert recs[0] == lm.pick(float(gb), "chat").tag
+        assert lm.pick(float(gb), "embed").tag in recs
+        assert any(lm.pick_for_tag(tag).vision for tag in recs), gb
+    # the 40 GB tier leads with the multimodal Nemotron 3 Nano Omni MoE
+    lead = lm.pick_for_tag(workstation._recommend_chat_models(47)[0])
+    assert lead is not None and lead.vision and lead.moe
+    retired = {"nemotron", "llama3.1:8b", "minicpm-v", "llava:7b", "nemotron-omni"}
+    for gb in (6, 8, 24, 47, 96):
+        assert not retired & set(workstation._recommend_chat_models(gb))
+
+
+def test_model_recommendations_are_unified_aware() -> None:
+    budget = lm.tier_budget([_gb10()], None)
+    assert budget.budget_gb == 128 - lm.UNIFIED_MEMORY_OS_RESERVE_GB
+    recs = workstation._recommend_chat_models(budget)
+    assert recs == [p.tag for p in lm.recommended(budget)]
+    assert lm.pick_for_tag(recs[0]).moe  # MoE leads on a bandwidth-bound pool
+    unsized = lm.tier_budget([SimpleNamespace(name="NVIDIA Ghost", vram_mb=0)], None)
+    assert workstation._recommend_chat_models(unsized) == []
+
+
+def test_workstation_profile_plans_against_the_budget(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(workstation, "_detect_gpu_rows", lambda: [_gb10()])
+    monkeypatch.setattr(workstation, "_system_memory", lambda: None)
+
+    profile = workstation.detect_workstation_profile(home_dir=tmp_path / "persist")
+
+    assert profile.has_gpu and profile.gpu_name == "NVIDIA GB10"
+    assert profile.vram_gb == 128            # what the card reports
+    assert profile.budget_gb == 112          # what the ladders plan against
+    assert profile.unified_memory is True
+    budget = lm.tier_budget([_gb10()], None)
+    assert profile.recommended_chat_models == workstation._recommend_chat_models(budget)
+    assert profile.recommended_comfy_profiles == workstation._recommend_comfy_profiles(112)
+    assert any("Unified memory" in note for note in profile.notes)
+    assert workstation.asdict(profile)["budget_gb"] == 112
+
+
+def test_unified_note_names_the_pools_own_reserve(tmp_path, monkeypatch) -> None:
+    """The note prints the reserve the budget took (lm.unified_os_reserve_gb, an eighth of the
+    pool between 4 and 16 GB): 8 GB on a 64 GB pool, 16 GB on the GB10 -- not 16 GB for every
+    unified machine."""
+    monkeypatch.setattr(workstation, "_system_memory", lambda: None)
+
+    mac = SimpleNamespace(name="Apple M4 Max", vram_mb=64 * 1024, unified_memory=True)
+    monkeypatch.setattr(workstation, "_detect_gpu_rows", lambda: [mac])
+    profile = workstation.detect_workstation_profile(home_dir=tmp_path / "persist")
+    assert profile.unified_memory and profile.vram_gb == 64 and profile.budget_gb == 56
+    (note,) = [n for n in profile.notes if n.startswith("Unified memory")]
+    assert note == (
+        "Unified memory: 64 GB shared by CPU and GPU; "
+        "56 GB is planned for models after the 8 GB OS reserve."
+    )
+
+    monkeypatch.setattr(workstation, "_detect_gpu_rows", lambda: [_gb10()])
+    profile = workstation.detect_workstation_profile(home_dir=tmp_path / "persist")
+    (note,) = [n for n in profile.notes if n.startswith("Unified memory")]
+    reserve = lm.unified_os_reserve_gb(128)
+    assert reserve == lm.UNIFIED_MEMORY_OS_RESERVE_GB == 16.0
+    assert note.endswith(f"112 GB is planned for models after the {reserve:.0f} GB OS reserve.")
+
+
+def test_workstation_profile_without_gpu_recommends_nothing_local(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(workstation, "_detect_gpu_rows", lambda: [])
+    monkeypatch.setattr(workstation.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(workstation, "_system_memory", lambda: None)
+
+    profile = workstation.detect_workstation_profile(home_dir=tmp_path / "persist")
+
+    assert profile.has_gpu is False and profile.vram_gb == 0 and profile.budget_gb == 0
+    assert profile.recommended_chat_models == []
+    assert profile.recommended_comfy_profiles == ["starter"]
 
 
 def test_comfy_profiles_scale_with_vram() -> None:

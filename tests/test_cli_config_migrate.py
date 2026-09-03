@@ -165,6 +165,24 @@ class TestRenameTable:
         assert rename_retired_model("mistral", "mistral/mistral-large-latest") is None
         assert rename_retired_model("openai", "gpt-5.6-terra") is None
 
+    def test_perplexity_sonar_moved_to_the_agent_api_presets(self):
+        # Perplexity retired Sonar for the Agent API presets (0.43): sonar-pro
+        # -> preset/low, sonar -> preset/fast. The llama-3.1 IDs 0.41 renamed
+        # *to* sonar now point at the presets directly -- a target is never
+        # itself retired (test_targets_are_never_retired_themselves).
+        assert rename_retired_model("perplexity", "perplexity/sonar-pro") == "perplexity/preset/low"
+        assert rename_retired_model("perplexity", "perplexity/sonar") == "perplexity/preset/fast"
+        assert rename_retired_model(
+            "perplexity", "perplexity/llama-3.1-sonar-large-128k-online",
+        ) == "perplexity/preset/low"
+        assert rename_retired_model(
+            "perplexity", "perplexity/llama-3.1-sonar-small-128k-online",
+        ) == "perplexity/preset/fast"
+        assert rename_retired_model("perplexity", "perplexity/preset/low") is None
+        assert rename_retired_model("perplexity", "perplexity/preset/fast") is None
+        # A bare "sonar" under another provider is not Perplexity's.
+        assert rename_retired_model("openrouter", "perplexity/sonar") is None
+
 
 # ---------------------------------------------------------------------------
 # migrate_config_data

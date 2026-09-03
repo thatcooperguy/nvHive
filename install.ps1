@@ -153,13 +153,38 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---------------------------------------------------------------------------
+# Resolve the local model from the installed package
+# ---------------------------------------------------------------------------
+# nvh.core.local_models is the one VRAM-tier -> Ollama-tag table every ladder
+# reads. `nvh models tiers --pick chat` sizes THIS machine's budget (nvidia-smi
+# VRAM, or a unified pool minus the table's OS reserve) and prints the chat
+# tag, so this installer never types a model name. History: until 0.42 this
+# file carried its own three-rung nemotron / llama3.1:8b / nemotron-mini ladder.
+$venvPython   = "$NVH_VENV\Scripts\python.exe"
+$DefaultModel = ""
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    $picked = & $venvPython -m nvh.cli.main models tiers --pick chat 2>$null
+    if ($LASTEXITCODE -eq 0 -and $picked) {
+        $DefaultModel = (@($picked) | Select-Object -Last 1).ToString().Trim()
+    }
+} catch { $DefaultModel = "" }
+$ErrorActionPreference = $prevEap
+if ($DefaultModel) {
+    Write-Gray "Local model for this machine: $DefaultModel (nvh models tiers --pick chat)"
+} else {
+    Write-Yellow "Could not read the local model table from the installed nvh; pick a model later with 'nvh models pull --recommended'."
+}
+
+# ---------------------------------------------------------------------------
 # Auto-config
 # ---------------------------------------------------------------------------
 New-Item -ItemType Directory -Force -Path $HIVE_DIR | Out-Null
 $configFile = "$HIVE_DIR\config.yaml"
 if (-not (Test-Path $configFile)) {
     Write-Blue "Creating auto-config..."
-    @'
+    $configText = @'
 version: "1"
 
 defaults:
@@ -173,7 +198,7 @@ defaults:
 advisors:
   ollama:
     base_url: http://localhost:11434
-    default_model: ollama/nemotron-mini
+    default_model: ollama/__NVH_DEFAULT_OLLAMA_MODEL__
     type: ollama
     enabled: true
 
@@ -206,7 +231,14 @@ cache:
   enabled: true
   ttl_seconds: 86400
   max_size: 1000
-'@ | Set-Content -Path $configFile -Encoding UTF8
+'@
+    if ($DefaultModel) {
+        $configText = $configText.Replace("__NVH_DEFAULT_OLLAMA_MODEL__", $DefaultModel)
+    } else {
+        # No tier resolved: drop the line so nvh's own default applies.
+        $configText = (($configText -split "`r?`n") | Where-Object { $_ -notmatch "__NVH_DEFAULT_OLLAMA_MODEL__" }) -join "`n"
+    }
+    $configText | Set-Content -Path $configFile -Encoding UTF8
     Write-Green "Config created: $configFile"
 }
 
@@ -256,15 +288,13 @@ if ($GPU_NAME) {
             Start-Sleep -Seconds 3
         }
 
-        # Pick model based on VRAM. Only real Ollama registry tags —
-        # earlier tiers referenced nemotron:120b / nemotron-small which
-        # return 404 on the registry.
-        $model = if     ($VRAM_GB -ge 24) { "nemotron" }
-                 elseif ($VRAM_GB -ge 8 ) { "llama3.1:8b" }
-                 else                     { "nemotron-mini" }
+        # The model is the tier table's chat pick for this machine (resolved
+        # above via `nvh models tiers --pick chat`); nothing is typed here,
+        # so a retired registry tag can never come back.
+        $model = $DefaultModel
 
         $ollamaRunning = try { (Invoke-WebRequest "http://localhost:11434/api/tags" -UseBasicParsing -TimeoutSec 2).StatusCode -eq 200 } catch { $false }
-        if ($ollamaRunning) {
+        if ($ollamaRunning -and $model) {
             $modelList = ollama list 2>$null
             if ($modelList -notlike "*$model*") {
                 Write-Blue "Pulling $model in background (you can start using nvh now)..."

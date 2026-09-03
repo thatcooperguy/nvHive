@@ -45,6 +45,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, field_validator
 
 from nvh.api.services import QueryService
+from nvh.core import local_models
 from nvh.core.agents import generate_agents, get_preset_agents, list_presets
 from nvh.core.engine import BudgetExceededError, Engine
 from nvh.providers.base import (
@@ -1163,14 +1164,13 @@ def _serialize_recommendations() -> dict[str, Any]:
     recs = recommend_models(gpus)
     opts = get_ollama_optimizations(gpus)
 
-    # OOM check for the main model sizes users commonly pull. These are
-    # all registry-backed tags so the wizard does not recommend 404s.
-    oom_models = {
-        "nemotron-mini": 2.0,
-        "qwen3:8b": 6.0,
-        "llama3.2-vision": 7.0,
-        "nemotron": 40.0,
-    }
+    # OOM check keyed by the recommended tags -- the WebUI reads
+    # ``oom_check[rec.model]``. Each size is the recommendation's
+    # ``vram_required_gb`` (the tier table's ``runtime_gb``: weights plus
+    # KV-cache / CUDA headroom); a rec that carries none falls back to the
+    # table itself. No hand-typed tag or GB figure lives here.
+    table_sizes = local_models.size_table()
+    oom_models = {r.model: (r.vram_required_gb or table_sizes.get(r.model, 0.0)) for r in recs}
     oom_results = {name: check_oom_risk(vram, gpus) for name, vram in oom_models.items()}
 
     rec_data = [
@@ -1181,6 +1181,9 @@ def _serialize_recommendations() -> dict[str, Any]:
             "tier": r.tier,
             # Unified-memory bandwidth note (DGX Spark); "" elsewhere.
             "note": r.note,
+            # The tier-table column the pick came from (chat/code/reasoning/
+            # cpu_fallback/vision/embed); "" for a rec built outside the table.
+            "use_case": r.use_case,
         }
         for r in recs
     ]
@@ -4094,24 +4097,17 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
         pass
 
     # --- Build plan ---
-    # Rough size estimates in GB (used for ETA when exact size is unknown).
-    # Only tags that actually exist on Ollama's registry — earlier entries
-    # included invented high-tier tags which returned 404 on pull.
-    size_estimates: dict[str, float] = {
-        "nemotron-mini": 2.0,
-        "llama3.1:8b": 4.7,
-        "qwen3:8b": 6.0,
-        "qwen2.5-coder:7b": 5.0,
-        "qwen2.5-coder:32b": 18.0,
-        "nemotron": 40.0,
-        "codellama": 3.8,
-        "llama3.2:3b": 2.0,
-        "llama3.2-vision": 7.0,
-        "minicpm-v": 5.0,
-        "moondream": 2.0,
-        "gemma3:4b": 3.0,
-        "llama3.3:70b-instruct-q4_K_M": 40.0,
-    }
+    # Download size per tag comes from the tier table: what ``ollama pull``
+    # fetches is the pick's on-disk ``weights_gb`` (the figure ``ollama list``
+    # prints). A rec the table does not know -- a mocked or future tag --
+    # falls back to its own ``vram_required_gb``, then to a 4 GB guess. No
+    # hand-typed tag -> GB entries live here.
+    def _download_size_gb(rec: Any) -> float:
+        pick = local_models.pick_for_tag(rec.model)
+        if pick is not None:
+            return pick.weights_gb
+        return rec.vram_required_gb or 4.0
+
     # Assume ~200 Mbps download (typical cloud / consumer broadband)
     download_mbps = 200.0
 
@@ -4122,7 +4118,7 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
         model_name = rec.model
         is_installed = model_name in installed_names or model_name.split(":")[0] in installed_names
 
-        size_gb = size_estimates.get(model_name, rec.vram_required_gb or 4.0)
+        size_gb = _download_size_gb(rec)
         size_bytes = int(size_gb * 1024 ** 3)
         eta_seconds = int((size_gb * 8 * 1024) / download_mbps)  # GB -> Gb -> Mb -> s
 
@@ -4131,6 +4127,7 @@ async def system_auto_setup(_auth: None = Depends(require_auth)) -> dict[str, An
             "reason": rec.reason,
             "tier": rec.tier,
             "note": rec.note,
+            "use_case": rec.use_case,
             "estimated_size_gb": size_gb,
             "estimated_size_bytes": size_bytes,
             "estimated_download_seconds": eta_seconds,
@@ -5221,8 +5218,8 @@ _PROVIDER_DEFAULT_CONFIG = {
         "base_url": "https://api.x.ai/v1",
     },
     "perplexity": {
-        "default_model": "perplexity/sonar-pro",
-        "fallback_model": "perplexity/sonar",
+        "default_model": "perplexity/preset/low",
+        "fallback_model": "perplexity/preset/fast",
     },
     "together": {
         "default_model": "together_ai/openai/gpt-oss-120b",

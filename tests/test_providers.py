@@ -218,6 +218,38 @@ class TestMockProvider:
         assert status.healthy is True
 
 
+class TestOllamaProviderBaseUrl:
+    """The adapter's address goes through ``nvh.utils.ollama.ollama_base_url``: an IPv6 loopback
+    literal survives it bracketed and counts as this machine; any other IPv6 host is remote."""
+
+    @pytest.fixture(autouse=True)
+    def _no_env(self, monkeypatch):
+        monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+
+    def test_ipv6_loopback_is_kept_bracketed_and_local(self):
+        from nvh.providers import ollama_provider as op
+
+        provider = op.OllamaProvider(base_url="http://[::1]:11434")
+        assert provider._base_url == "http://[::1]:11434"
+        assert op._daemon_is_local(provider._base_url)
+
+    def test_other_ipv6_literals_are_remote(self):
+        from nvh.providers import ollama_provider as op
+
+        provider = op.OllamaProvider(base_url="http://[fd00::5]:11434")
+        assert provider._base_url == "http://[fd00::5]:11434"
+        assert not op._daemon_is_local(provider._base_url)
+
+    def test_default_is_ipv4_loopback_and_a_table_model(self):
+        from nvh.core import local_models
+        from nvh.providers import ollama_provider as op
+
+        provider = op.OllamaProvider()
+        assert provider._base_url == "http://127.0.0.1:11434"
+        assert local_models.pick_for_tag(provider._default_model.removeprefix("ollama/")) is not None
+
+
 class TestQuotaInfo:
     def test_import(self):
         from nvh.providers import quota_info

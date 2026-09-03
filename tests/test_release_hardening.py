@@ -3,15 +3,40 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
+
+import nvh.core.local_models as lm
 from nvh.storage import repository
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 _SELF_EXTRA = re.compile(r"^nvhive\[(?P<names>[^\]]+)\]$")
+
+# Ollama names that left the registry or the tier table. No installer may
+# carry one as a pull target; comments explaining history are exempt.
+RETIRED_TAGS = (
+    "nemotron-omni", "nemotron-3-nano-omni", "nemotron:70b", "nemotron-3-super", "nemotron-mini",
+    "nemotron", "qwen2.5-coder", "qwen2.5", "minicpm-v", "llava", "bakllava", "llama3.3:70b",
+    "llama3.1", "deepseek-r1", "codellama", "gemma2", "phi4", "mistral:7b", "llama3.2:3b",
+)
+_INLINE_COMMENT = re.compile(r"\s+#\s.*$", re.MULTILINE)
+
+
+def _shell_code_only(text: str) -> str:
+    """Drop full-line and trailing ``# ...`` comments (bash and PowerShell share the syntax)."""
+    lines = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    return _INLINE_COMMENT.sub("", "\n".join(lines))
+
+
+def _tag_in_code(tag: str, code: str) -> bool:
+    return re.search(rf"(?<![A-Za-z0-9_.-]){re.escape(tag)}(?![A-Za-z0-9_.-])", code) is not None
 
 
 def _resolve_extra(extras: dict[str, list[str]], name: str) -> list[str]:
@@ -100,36 +125,60 @@ def test_linux_installer_autodetects_persistent_home_and_installs_reset_helper()
 def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     install = (ROOT / "install.sh").read_text(encoding="utf-8")
 
-    # The Wizard's user-facing default is multimodal at every VRAM tier
-    # so the AI Wizard can see screenshots, images, and documents from
-    # the first install. NVIDIA Nemotron Omni leads on 40+ GB rigs;
-    # progressively smaller vision-capable models fall through to
-    # moondream (~2 GB) which still runs on CPU-only hosts.
-    assert 'DEFAULT_OLLAMA_MODEL="nemotron-omni"' in install
-    assert 'DEFAULT_OLLAMA_MODEL="nemotron-3-nano-omni"' in install
-    assert 'DEFAULT_OLLAMA_MODEL="llama3.2-vision"' in install
-    assert 'DEFAULT_OLLAMA_MODEL="minicpm-v"' in install
-    assert 'DEFAULT_OLLAMA_MODEL="moondream"' in install
-    # Soft-fallback chain in pull_nvwizard_model_cli — when the
-    # preferred Omni tag 404s on Ollama, walk down vision-capable
-    # alternatives instead of failing the install.
+    # 0.43: the installer carries no model ladder of its own. After
+    # `pip install` it sources `nvh models tiers --shell` — the
+    # nvh.core.local_models table rendered as NVH_TIER_<n>_* assignments —
+    # and walks the variables: the tier's CHAT pick becomes
+    # DEFAULT_OLLAMA_MODEL and the pull loop's fallback chain is the lower
+    # tiers' chat picks down to the CPU fallback. Every tag and boundary
+    # therefore comes from one Python table (ROADMAP: derive, don't type).
+    assert "models tiers --shell" in install
+    assert "load_local_model_tiers" in install
+    assert "resolve_default_ollama_model" in install
+    assert 'nvh_tier_var "$NVH_TIER_INDEX" CHAT' in install
+    assert "NVH_TIER_COUNT" in install
+    # GB10 / DGX Spark: nvidia-smi prints "[N/A]" for memory.total, so the
+    # pool is MemTotal and the table's own OS reserve comes off it.
+    assert "/proc/meminfo" in install
+    assert "NVH_UNIFIED_OS_RESERVE_GB" in install
+    assert "tr -cd '0-9'" in install
+    # The snippet is rendered before config.yaml exists: the call promises no
+    # keyboard, so nvh's first-run gate can never write its prompts into it
+    # (nvh/cli/main.py exempts `models tiers` by argv as well).
+    assert 'NVH_NONINTERACTIVE=1 "$py" -m nvh.cli.main models tiers --shell' in install
+    # The budget maths come from the snippet too: the tier snap and the
+    # unified OS-reserve curve (min / max / fraction) that tier_table_shell
+    # exports. The 512 is only the fallback for a snippet from an older nvh.
+    snippet = lm.tier_table_shell()
+    for var in (
+        "NVH_TIER_SNAP_MB", "NVH_UNIFIED_OS_RESERVE_MIN_GB",
+        "NVH_UNIFIED_OS_RESERVE_MAX_GB", "NVH_UNIFIED_OS_RESERVE_FRACTION",
+    ):
+        assert f"{var}=" in snippet, var
+        assert f"${{{var}" in install, var
+    assert 'snap_mb="${NVH_TIER_SNAP_MB:-512}"' in install
+    assert "nvh_unified_os_reserve_gb" in install
+    assert re.search(r"^\s*budget_gb=\$\(\( \(\$\{NVH_GPU_POOL_MB:-0\} \+ 512\)", install, re.M) is None
+    # Soft-fallback chain in pull_nvwizard_model_cli — walks the sourced
+    # tiers downward instead of failing the install on a 404.
     assert "_nvwizard_fallback_chain" in install
-    # HuggingFace → Ollama Modelfile bootstrap — when the Omni tag 404s
-    # on the Ollama library, download the official GGUF + mmproj from
-    # the ggml-org HuggingFace repo and register it locally before
-    # falling through to llama3.2-vision. Lands the actual NVIDIA
-    # Nemotron Omni model end users were promised.
-    assert "bootstrap_omni_via_hf" in install
-    assert "_nvwizard_hf_gguf_source" in install
-    assert "ggml-org/NVIDIA-Nemotron-3-Nano-Omni" in install
-    assert "mmproj-nemotron-3-nano-omni-ga_v1.0.gguf" in install
-    assert "nemotron-3-nano-omni-ga_v1.0-Q4_K_M.gguf" in install
-    assert "nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf" in install
-    # The bootstrap must respect the user opt-out env knob.
+    assert 'nvh_tier_var "$n" CHAT' in install
+    assert "CPU_FALLBACK" in install
+    # The user opt-out env knob and the skip countdown survive the rewrite.
     assert "NVH_INSTALL_MODEL_DOWNLOAD" in install
-    # ollama create wires the downloaded GGUF + mmproj into a usable
-    # local tag.
-    assert '"$OLLAMA_BIN" create "$target_tag" -f "$modelfile"' in install
+    # The HuggingFace GGUF bootstrap for the never-published Omni tags is gone.
+    assert "bootstrap_omni_via_hf" not in install
+    assert "_nvwizard_hf_gguf_source" not in install
+    assert "ggml-org" not in install
+    assert "huggingface.co" not in install
+    # No literal Ollama tag — current or retired — survives outside comments.
+    code = _shell_code_only(install)
+    for tag in (*lm.all_tags(), *RETIRED_TAGS):
+        assert not _tag_in_code(tag, code), f"install.sh hard-codes {tag!r}"
+    assert 'DEFAULT_OLLAMA_MODEL=""' in install
+    assert re.search(r'DEFAULT_OLLAMA_MODEL="[A-Za-z]', code) is None
+    # The model pull is skipped, never guessed, when the table cannot be read.
+    assert '[ -n "$DEFAULT_OLLAMA_MODEL" ] && curl -sf http://localhost:11434/api/tags' in install
     # Original config/auto-launch contract — preserved from before the
     # multimodal refactor so refactoring this code path requires an
     # intentional update.
@@ -154,6 +203,89 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     # construct (echo statement) rather than the substring.
     # See test_install_sh_installs_ollama_and_pulls_model_unconditionally.
     assert 'echo -e "${B}WebUI will show AI Wizard model download' not in install
+
+
+_TIER_MATH_FUNCTIONS = ("nvh_tier_var", "nvh_unified_os_reserve_gb", "resolve_local_model_tier")
+
+
+def _install_sh_functions(install: str, names: tuple[str, ...]) -> str:
+    """The named top-level ``name() { ... }`` blocks of install.sh, verbatim."""
+    blocks = []
+    for name in names:
+        match = re.search(rf"^{re.escape(name)}\(\) \{{\n.*?^\}}\n", install, re.M | re.S)
+        assert match, f"install.sh no longer defines {name}()"
+        blocks.append(match.group(0))
+    return "\n".join(blocks)
+
+
+_TIER_MATH_CASES = [
+    # (pool MiB, unified) -- what nvidia-smi / MemTotal hand install.sh.
+    (8192, False),          # 8 GB card, exact
+    (24564, False),         # RTX 4090: 23.99 GB reported, 24 GB tier via the snap
+    (81559, False),         # H100 80 GB: 79.65 GB reported
+    (0, False),             # no GPU / memory unreadable
+    (8 * 1024, True),       # 8 GB unified laptop: reserve floors at 4
+    (16 * 1024, True),      # 16 GB Apple Silicon: 12 GB budget, not 0
+    (36 * 1024, True),      # 36 GB: 4.5 rounds half-to-even -> 4, like Python
+    (64 * 1024, True),      # 64 GB: 8
+    (96 * 1024, True),      # 96 GB: 12
+    (128 * 1024, True),     # GB10 / DGX Spark: 16, 112 GB budget
+    (131060, True),         # a GB10 MemTotal a few MiB under 128 GiB
+    (192 * 1024, True),     # curve capped at the GB10 figure
+]
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash to run install.sh's tier maths")
+def test_install_sh_tier_maths_reproduce_tier_budget(tmp_path: Path) -> None:
+    """install.sh sources `nvh models tiers --shell` and resolves the tier in
+    shell arithmetic; the result must be the tier ``local_models.tier_budget``
+    + ``tier_for`` pick for the same pool -- snap, OS-reserve curve and
+    half-to-even rounding included -- or the installer pulls a different
+    model than every Python ladder recommends."""
+    install = (ROOT / "install.sh").read_text(encoding="utf-8")
+    snippet = tmp_path / "local-model-tiers.sh"
+    snippet.write_text(lm.tier_table_shell(), encoding="utf-8", newline="\n")
+    lines = ["set -eu", f"source '{snippet.as_posix()}'", _install_sh_functions(install, _TIER_MATH_FUNCTIONS)]
+    for pool_mb, unified in _TIER_MATH_CASES:
+        lines.append(
+            f"NVH_GPU_POOL_MB={pool_mb} NVH_GPU_UNIFIED={int(unified)}; resolve_local_model_tier; "
+            f'echo "{pool_mb} {int(unified)} $NVH_MODEL_BUDGET_GB $NVH_TIER_INDEX $NVH_TIER_LABEL"'
+        )
+    script = tmp_path / "tier-maths.sh"
+    script.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    proc = subprocess.run(["bash", script.as_posix()], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    rows = [line.split() for line in proc.stdout.splitlines() if line.strip()]
+    assert len(rows) == len(_TIER_MATH_CASES), proc.stdout
+    for (pool_mb, unified), (got_pool, got_unified, got_budget, got_index, got_label) in zip(
+        _TIER_MATH_CASES, rows, strict=True,
+    ):
+        assert (int(got_pool), int(got_unified)) == (pool_mb, int(unified))
+        rows_py = [SimpleNamespace(vram_mb=pool_mb, unified_memory=unified)] if pool_mb else []
+        budget = lm.tier_budget(rows_py, None)
+        tier = lm.tier_for(budget)
+        assert int(got_index) == lm.LOCAL_MODEL_TIERS.index(tier), (pool_mb, unified, tier.label)
+        assert got_label == tier.label, (pool_mb, unified)
+        # The shell budget is the snapped whole-GB figure the tier compare uses.
+        assert int(got_budget) == int(budget.budget_gb + lm.TIER_SNAP_GB), (pool_mb, unified)
+
+
+def test_windows_and_mac_installers_read_the_tier_table() -> None:
+    """install.ps1 / install-mac.sh ask the installed nvh for this machine's
+    chat pick (`nvh models tiers --pick chat`) instead of carrying a ladder of
+    their own; the Mac pool is unified (hw.memsize), so it is passed in and
+    the table takes its OS reserve off it exactly as it does for a GB10.
+    """
+    for name in ("install.ps1", "install-mac.sh"):
+        text = (ROOT / name).read_text(encoding="utf-8")
+        assert "models tiers --pick chat" in text, name
+        assert "__NVH_DEFAULT_OLLAMA_MODEL__" in text, name
+        code = _shell_code_only(text)
+        for tag in (*lm.all_tags(), *RETIRED_TAGS):
+            assert not _tag_in_code(tag, code), f"{name} hard-codes {tag!r}"
+    mac = (ROOT / "install-mac.sh").read_text(encoding="utf-8")
+    assert '--unified-gb "$MEM_GB"' in mac
+    assert "hw.memsize" in mac
 
 
 def test_install_ollama_startup_has_health_wait_and_logging() -> None:
@@ -1378,11 +1510,14 @@ def test_model_download_countdown_surfaces_size_and_skip_options() -> None:
     """
     install = (ROOT / "install.sh").read_text(encoding="utf-8")
 
-    # Size-hint helper exists with the right tier values.
+    # Size-hint helper exists and reads the size from the tier table row
+    # (pick_for_tag(...).weights_gb) instead of a hand-typed case table, so
+    # the countdown can never describe a different model than the pull.
     assert "nvwizard_model_size_hint()" in install
-    assert "~32 GB" in install   # nemotron-omni
-    assert "~7.9 GB" in install  # llama3.2-vision
-    assert "~1.7 GB" in install  # moondream
+    assert "pick_for_tag" in install
+    assert "weights_gb" in install
+    assert "~32 GB" not in install
+    assert "~7.9 GB" not in install
 
     # New banner copy.
     assert "AI Wizard local brain:" in install

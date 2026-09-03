@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
+from nvh.core import local_models as lm
 from nvh.integrations.wizard import context as context_module
 from nvh.integrations.wizard.context import _gpu_summary, wizard_context
 from nvh.integrations.wizard.findings import derive_findings
@@ -257,15 +258,21 @@ def test_memory_budget_does_not_double_count_unified_memory() -> None:
 
 
 def test_recommend_models_unified_has_note_and_no_hybrid_tiers() -> None:
-    with patch.object(gpu_mod, "detect_system_memory", return_value=SystemMemoryInfo(128.0, 100.0, 70.0)):
+    sys_mem = SystemMemoryInfo(128.0, 100.0, 70.0)
+    with patch.object(gpu_mod, "detect_system_memory", return_value=sys_mem):
         recs = recommend_models(gpus=[GB10])
+    budget = _memory_budget([GB10], sys_mem)
 
     assert recs, "128 GB unified pool must still yield recommendations"
     primary = recs[0]
-    assert primary.model == "nemotron"  # 112 GB budget lands in the 80 GB+ tier — thresholds unchanged
-    assert "273" in primary.note
+    table = lm.recommended(budget)
+    assert primary.model == table[0].tag and table[0].moe  # 112 GB budget: the table's MoE-first pick leads
+    assert primary.note == gpu_mod.unified_memory_note(budget)
+    assert f"~{gpu_mod.UNIFIED_MEMORY_BANDWIDTH_GBPS} GB/s" in primary.note
     assert "MoE" in primary.note
-    assert "nemotron3:33b" in primary.note and "gpt-oss:120b" in primary.note
+    for pick in table:
+        if pick.moe:
+            assert pick.tag in primary.note
     assert "unified memory" in primary.reason
     assert not any(r.tier.endswith("-hybrid") for r in recs)
 
@@ -278,31 +285,44 @@ def test_recommend_models_discrete_gpu_has_no_note() -> None:
 
 
 def test_recommend_models_unified_reserve_can_change_tier_only_via_budget() -> None:
-    """Tiering follows ``model_budget_gb = total - OS reserve``; the thresholds are untouched.
+    """Tiering follows ``model_budget_gb = total - unified_os_reserve_gb(total)``; the table's boundaries are untouched.
 
-    40 GB unified -> 24 GB budget -> lands exactly on the 24 GB "full" threshold.
-    36 GB unified -> 20 GB budget -> "small", although 36 GB raw VRAM would be "full".
+    The reserve is an eighth of the pool, floored at 4 GB and capped at the GB10's 16
+    (``gpu_mod.unified_os_reserve_gb``), not the flat 16 GB for every pool:
+    40 GB unified -> 5 GB reserve -> 35 GB budget -> the 24-40 tier, although 40 GB raw VRAM would be the 40-48 tier.
+    36 GB unified -> 4 GB reserve (4.5 rounds half-to-even) -> 32 GB budget -> the same 24-40 tier.
     """
-    reserve = gpu_mod.UNIFIED_MEMORY_OS_RESERVE_GB
+    reserve_40 = gpu_mod.unified_os_reserve_gb(40.0)
+    reserve_36 = gpu_mod.unified_os_reserve_gb(36.0)
+    assert (reserve_40, reserve_36) == (5.0, 4.0)
+    assert reserve_40 < gpu_mod.UNIFIED_MEMORY_OS_RESERVE_GB  # the flat 16 GB is the curve's ceiling, not its value here
     forty = _gpu("NVIDIA GB10", 40 * 1024, unified=True)
     thirty_six = _gpu("NVIDIA GB10", 36 * 1024, unified=True)
     sys_mem = SystemMemoryInfo(40.0, 30.0, 21.0)
 
     budget_40 = _memory_budget([forty], sys_mem)
     budget_36 = _memory_budget([thirty_six], sys_mem)
-    assert budget_40.model_budget_gb == 40.0 - reserve == 24.0
-    assert budget_36.model_budget_gb == 36.0 - reserve == 20.0
+    assert budget_40.model_budget_gb == 40.0 - reserve_40 == 35.0
+    assert budget_36.model_budget_gb == 36.0 - reserve_36 == 32.0
+    assert (budget_40.os_reserve_gb, budget_36.os_reserve_gb) == (reserve_40, reserve_36)
     assert budget_40.combined_gb == budget_40.model_budget_gb  # no CPU-offload bonus on a unified pool
     assert budget_40.cpu_offload_gb == 0.0
+    assert lm.tier_for(budget_40) is lm.tier_for(35.0)      # the budget picks the tier ...
+    assert lm.tier_for(budget_40) is not lm.tier_for(40.0)  # ... not the raw pool, which would be a tier up
+    assert lm.tier_for(budget_36) is lm.tier_for(32.0)
+    assert lm.tier_for(budget_36) is lm.tier_for(budget_40)  # both budgets sit in the same 24-40 band
+    assert (lm.tier_for(budget_40).min_gb, lm.tier_for(40.0).min_gb) == (24, 40)
 
     with patch.object(gpu_mod, "detect_system_memory", return_value=sys_mem):
         recs_40 = recommend_models(gpus=[forty])
         recs_36 = recommend_models(gpus=[thirty_six])
 
-    assert recs_40[0].tier == "full"    # 24 GB budget meets the 24 GB "full" threshold
-    assert recs_36[0].tier == "small"   # 20 GB budget does not, despite 36 GB raw
-    assert "~24 GB of 40 GB usable" in recs_40[0].reason
-    assert "~20 GB of 36 GB usable" in recs_36[0].reason
+    assert recs_40[0].model == lm.recommended(budget_40)[0].tag
+    assert recs_36[0].model == lm.recommended(budget_36)[0].tag
+    assert recs_40[0].tier == gpu_mod.recommendation_tier(lm.recommended(budget_40)[0]) == "full"
+    assert recs_36[0].tier == gpu_mod.recommendation_tier(lm.recommended(budget_36)[0]) == "full"
+    assert "~35 GB of 40 GB usable after the 5 GB OS reserve" in recs_40[0].reason
+    assert "~32 GB of 36 GB usable after the 4 GB OS reserve" in recs_36[0].reason
     assert not any(r.tier.endswith("-hybrid") for r in recs_40 + recs_36)
 
 

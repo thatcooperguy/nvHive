@@ -325,9 +325,34 @@ def save_config(config: CouncilConfig, path: Path | None = None) -> Path:
     return target
 
 
+# Budget the generated config's local default is sized for: the smallest GPU
+# tier of the table (4-8 GB), whose chat pick also runs from system RAM on a
+# CPU-only box. ``hive config init`` runs before any hardware is known.
+_DEFAULT_LOCAL_BUDGET_GB = 4.0
+
+
+def _default_local_model() -> str:
+    """``ollama/<tag>`` a freshly generated config names as the local default.
+
+    The tag is :func:`nvh.core.local_models.pick` for
+    :data:`_DEFAULT_LOCAL_BUDGET_GB` and the ``chat`` column, so the template
+    never carries a hand-typed tag that the registry may since have retired.
+    Imported lazily: loading settings must not pull the tier table in.
+    """
+    from nvh.core.local_models import pick
+
+    chosen = pick(_DEFAULT_LOCAL_BUDGET_GB, "chat")
+    assert chosen is not None  # every tier has a chat pick
+    return f"ollama/{chosen.tag}"
+
+
 def generate_default_config() -> str:
-    """Generate a default config YAML string for `hive config init`."""
-    return """\
+    """Generate a default config YAML string for `hive config init`.
+
+    The Ollama ``default_model`` is filled from the tier table at call time
+    (:func:`_default_local_model`); everything else is the literal template.
+    """
+    template = """\
 version: "1"
 
 defaults:
@@ -360,7 +385,7 @@ advisors:
 
   ollama:
     base_url: http://localhost:11434
-    default_model: ollama/gemma3:4b
+    default_model: @OLLAMA_DEFAULT_MODEL@
     type: ollama
     enabled: false
 
@@ -404,8 +429,8 @@ advisors:
 
   perplexity:
     api_key: ${PERPLEXITY_API_KEY}
-    default_model: perplexity/sonar-pro
-    fallback_model: perplexity/sonar
+    default_model: perplexity/preset/low
+    fallback_model: perplexity/preset/fast
     enabled: false
 
   together:
@@ -509,3 +534,4 @@ cache:
 logging:
   level: INFO
 """
+    return template.replace("@OLLAMA_DEFAULT_MODEL@", _default_local_model())

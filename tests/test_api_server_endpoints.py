@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import nvh.api.server as server_module
+import nvh.core.local_models as local_models
 from nvh.api.server import (
     _check_auth_rate_limit,
     _prom_escape,
@@ -1148,3 +1149,102 @@ class TestGpuDetectionRunsOffTheEventLoop:
         body = asyncio.run(server_module.system_recommendations())
         assert body["data"]["recommendations"] == []
         assert body["data"]["optimizations"]["notes"] == ["GPU detection unavailable"]
+
+
+# ---------------------------------------------------------------------------
+# Sizes and the OOM probe set come from the tier table, never a hand-typed dict
+# ---------------------------------------------------------------------------
+
+def _probe(vram: float, gpus: list) -> dict:
+    """Stand-in for check_oom_risk that records the GB figure it was asked about."""
+    return {"probe_gb": vram}
+
+
+class TestRecommendationSizesComeFromTheTable:
+    """/v1/system/recommendations: oom_check is keyed by the recommended tags (the
+    WebUI reads ``oom_check[rec.model]``), each probed at the rec's own size, and
+    every rec carries the table column it came from."""
+
+    def test_oom_check_is_keyed_by_the_recommended_tags(self, client):
+        recs = [
+            ModelRecommendation("qwen3:30b-a3b", "chat pick", 20.5, "full", use_case="chat"),
+            ModelRecommendation("nomic-embed-text", "embed pick", 0.4, "embed", use_case="embed"),
+        ]
+        gpus = [_gpu("NVIDIA GeForce RTX 4090", 24.0, unified=False)]
+        with patch("nvh.api.server.detect_gpus", return_value=gpus), \
+             patch("nvh.api.server.recommend_models", return_value=recs), \
+             patch("nvh.api.server.check_oom_risk", side_effect=_probe):
+            r = client.get("/v1/system/recommendations")
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["oom_check"] == {
+            "qwen3:30b-a3b": {"probe_gb": 20.5},
+            "nomic-embed-text": {"probe_gb": 0.4},
+        }
+        assert [rec["use_case"] for rec in data["recommendations"]] == ["chat", "embed"]
+
+    def test_oom_probe_falls_back_to_the_table_size(self, client):
+        """A rec that carries no size is probed at the table's runtime_gb for its tag."""
+        recs = [ModelRecommendation("gemma3:4b", "no size given", 0.0, "mini")]
+        with patch("nvh.api.server.detect_gpus", return_value=[]), \
+             patch("nvh.api.server.recommend_models", return_value=recs), \
+             patch("nvh.api.server.check_oom_risk", side_effect=_probe):
+            r = client.get("/v1/system/recommendations")
+        data = r.json()["data"]
+        assert data["oom_check"] == {"gemma3:4b": {"probe_gb": local_models.size_table()["gemma3:4b"]}}
+        assert data["recommendations"][0]["use_case"] == ""  # always a string, never missing
+
+    def test_real_recommender_probes_every_rec_at_its_runtime_size(self, client):
+        gpus = [_gpu("NVIDIA GeForce RTX 4090", 24.0, unified=False)]
+        with patch("nvh.api.server.detect_gpus", return_value=gpus), \
+             patch("nvh.api.server.check_oom_risk", side_effect=_probe):
+            r = client.get("/v1/system/recommendations")
+        data = r.json()["data"]
+        sizes = local_models.size_table()
+        assert data["recommendations"]
+        assert set(data["oom_check"]) == {rec["model"] for rec in data["recommendations"]}
+        for rec in data["recommendations"]:
+            assert rec["model"] in sizes, rec["model"]
+            assert rec["vram_required_gb"] == sizes[rec["model"]]
+            assert data["oom_check"][rec["model"]] == {"probe_gb": sizes[rec["model"]]}
+            assert rec["use_case"] in local_models.USE_CASES
+
+
+class TestAutoSetupPlanSizesComeFromTheTable:
+    """/v1/system/auto-setup: the download estimate is the pick's on-disk weights."""
+
+    def test_download_size_is_the_table_weights_and_use_case_is_forwarded(self, client, monkeypatch):
+        monkeypatch.setattr(server_module, "_get_ollama_base_url", lambda: "http://127.0.0.1:9")  # closed port
+        recs = [
+            ModelRecommendation("qwen3:8b", "chat pick", 6.2, "small", use_case="chat"),
+            ModelRecommendation("made-up:1b", "unknown to the table", 3.5, "small", use_case="chat"),
+            ModelRecommendation("no-size:1b", "unknown, no size", 0.0, "small"),
+        ]
+        with patch("nvh.api.server.detect_gpus", return_value=[]), \
+             patch("nvh.api.server.recommend_models", return_value=recs):
+            r = client.post("/v1/system/auto-setup")
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["ollama_reachable"] is False
+        plan = {entry["model"]: entry for entry in data["plan"]["to_pull"]}
+        weights = local_models.pick_for_tag("qwen3:8b").weights_gb
+        assert plan["qwen3:8b"]["estimated_size_gb"] == weights
+        assert plan["qwen3:8b"]["estimated_size_bytes"] == int(weights * 1024 ** 3)
+        assert plan["qwen3:8b"]["estimated_download_seconds"] == int((weights * 8 * 1024) / 200.0)
+        assert plan["qwen3:8b"]["use_case"] == "chat"
+        assert plan["made-up:1b"]["estimated_size_gb"] == 3.5  # falls back to the rec's own size
+        assert plan["no-size:1b"]["estimated_size_gb"] == 4.0  # then to the 4 GB guess
+        assert plan["no-size:1b"]["use_case"] == ""
+        assert data["plan"]["total_estimated_gb"] == round(weights + 3.5 + 4.0, 1)
+
+    def test_every_real_plan_entry_is_a_table_tag(self, client, monkeypatch):
+        monkeypatch.setattr(server_module, "_get_ollama_base_url", lambda: "http://127.0.0.1:9")
+        with patch("nvh.api.server.detect_gpus", return_value=[_gpu("NVIDIA GB10", 128.0, unified=True)]):
+            r = client.post("/v1/system/auto-setup")
+        assert r.status_code == 200
+        entries = r.json()["data"]["plan"]["to_pull"]
+        assert entries
+        for entry in entries:
+            pick = local_models.pick_for_tag(entry["model"])
+            assert pick is not None, entry["model"]
+            assert entry["estimated_size_gb"] == pick.weights_gb

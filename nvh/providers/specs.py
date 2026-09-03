@@ -43,6 +43,9 @@ class ProviderSpec:
     # Model the one-token health ping uses when the provider has no free
     # /models endpoint; empty means ``default_model``.
     health_model: str = ""
+    # LiteLLM surface the adapter calls: "chat" (``litellm.acompletion``) or
+    # "responses" (``litellm.aresponses``, the OpenAI Responses API shape).
+    api_surface: str = "chat"
 
     def route(self, model: str) -> str:
         """``model`` with :attr:`litellm_prefix` applied exactly once."""
@@ -111,16 +114,18 @@ _SPECS: tuple[ProviderSpec, ...] = (
         base_url="https://api.deepseek.com",
         env_keys=("HIVE_DEEPSEEK_API_KEY",),
     ),
-    # Sonar Chat Completions is retired on this date (docs.perplexity.ai/getting-started/models).
+    # Sonar Chat Completions retires 2026-09-27; the Agent API (Responses
+    # shape, POST /v1/responses) replaces it. LiteLLM sends "preset/<name>" as
+    # {"preset": name}; Perplexity maps Sonar Pro -> "low" and Sonar -> "fast"
+    # (docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview).
     ProviderSpec(
         "perplexity",
-        "perplexity/sonar-pro",
-        "perplexity/sonar",
+        "perplexity/preset/low",
+        "perplexity/preset/fast",
         litellm_prefix="perplexity/",
         env_keys=("PERPLEXITYAI_API_KEY", "HIVE_PERPLEXITY_API_KEY"),
-        sunset_date="2026-09-27",
-        sunset_note="Sonar Chat Completions",
         timeout=600,
+        api_surface="responses",
     ),
     ProviderSpec(
         "together",

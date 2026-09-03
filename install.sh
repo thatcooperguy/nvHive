@@ -724,37 +724,51 @@ fi
 # ---------------------------------------------------------------------------
 # Detect GPU
 # ---------------------------------------------------------------------------
-GPU_NAME=""; VRAM_GB=0
+# The Wizard's local model is chosen AFTER `pip install` by the installed
+# package — nvh.core.local_models is the one VRAM-tier table every ladder
+# reads (see "Local model tier" below). This block only gathers the raw
+# facts: the GPU name, the memory pool in MiB summed over every card, and
+# whether that pool is unified. On GB10 (DGX Spark) nvidia-smi prints
+# "[N/A]" for memory.total because the LPDDR5x pool IS system RAM, so
+# MemTotal from /proc/meminfo is the pool and the table's OS reserve comes
+# off it when the tier is resolved.
+GPU_NAME=""; VRAM_GB=0; NVH_GPU_POOL_MB=0; NVH_GPU_UNIFIED=0
 if command -v nvidia-smi &>/dev/null; then
     GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | xargs)
-    VRAM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | xargs)
-    VRAM_GB=$(( ${VRAM_MB:-0} / 1024 ))
-    [ -n "$GPU_NAME" ] && echo -e "${G}GPU: $GPU_NAME (${VRAM_GB}GB VRAM)${N}"
+    # "[N/A]" / "[Not Supported]" cells reduce to an empty string and add 0.
+    while IFS= read -r cell; do
+        cell="$(printf '%s' "$cell" | tr -cd '0-9')"
+        NVH_GPU_POOL_MB=$(( NVH_GPU_POOL_MB + ${cell:-0} ))
+    done < <(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null || true)
+    case "$GPU_NAME" in
+        *GB10*|*gb10*|*Gb10*)
+            NVH_GPU_UNIFIED=1
+            if [ "$NVH_GPU_POOL_MB" -eq 0 ] && [ -r /proc/meminfo ]; then
+                NVH_GPU_POOL_MB="$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
+                NVH_GPU_POOL_MB="${NVH_GPU_POOL_MB:-0}"
+            fi
+            ;;
+    esac
+    VRAM_GB=$(( NVH_GPU_POOL_MB / 1024 ))
+    if [ -n "$GPU_NAME" ]; then
+        if [ "$NVH_GPU_UNIFIED" = "1" ]; then
+            echo -e "${G}GPU: $GPU_NAME (${VRAM_GB}GB unified memory)${N}"
+        else
+            echo -e "${G}GPU: $GPU_NAME (${VRAM_GB}GB VRAM)${N}"
+        fi
+    fi
 fi
 [ -z "$GPU_NAME" ] && echo -e "${Y}No NVIDIA GPU detected - CPU mode${N}"
-if [ -n "$GPU_NAME" ]; then
-    # Default the AI Wizard to an NVIDIA multimodal model so it can see
-    # screenshots, images, and documents — not just read text. Downgrade
-    # by VRAM tier; smallest tier still gets a vision-capable model so
-    # the Wizard's multimodal tools stay functional.
-    if   [ "$VRAM_GB" -ge 40 ]; then DEFAULT_OLLAMA_MODEL="nemotron-omni"          # NVIDIA Nemotron Omni — full multimodal flagship
-    elif [ "$VRAM_GB" -ge 24 ]; then DEFAULT_OLLAMA_MODEL="nemotron-3-nano-omni"   # Nemotron 3 Nano Omni (30B MoE, 3B active) — multimodal
-    elif [ "$VRAM_GB" -ge 16 ]; then DEFAULT_OLLAMA_MODEL="llama3.2-vision"        # Llama 3.2 11B Vision — multimodal
-    elif [ "$VRAM_GB" -ge 12 ]; then DEFAULT_OLLAMA_MODEL="minicpm-v"              # MiniCPM-V — small multimodal
-    elif [ "$VRAM_GB" -ge 6  ]; then DEFAULT_OLLAMA_MODEL="moondream"              # Moondream — tiny multimodal (~2 GB)
-    else DEFAULT_OLLAMA_MODEL="moondream"; fi
-else
-    # CPU-only fallback. moondream is still small enough to run usefully
-    # on CPU for the multimodal tools.
-    DEFAULT_OLLAMA_MODEL="moondream"
-fi
-echo -e "${D}Recommended local model: $DEFAULT_OLLAMA_MODEL${N}"
+# Filled in by resolve_default_ollama_model once the package is importable;
+# stays empty (and the model pull is skipped) if the table cannot be read.
+DEFAULT_OLLAMA_MODEL=""
 
 # ---------------------------------------------------------------------------
 # GPU capability advisor + opt-in auto-staging
 # ---------------------------------------------------------------------------
-# The DEFAULT_OLLAMA_MODEL picker above handles the AI Wizard's chat +
-# vision tier. But nvHive supports OTHER capabilities — image generation
+# The local model tier (resolved after pip install from the package's
+# nvh.core.local_models table) covers the AI Wizard's chat model. But
+# nvHive supports OTHER capabilities — image generation
 # (ComfyUI), video generation, speech (WhisperX), music (ACE-Step) — that
 # are also VRAM-gated and that big-GPU users almost always want.
 #
@@ -911,6 +925,139 @@ stage_full_capability_for_vram_tier() {
     esac
 }
 
+# ---------------------------------------------------------------------------
+# Local model tier — read from the installed package, never typed here
+# ---------------------------------------------------------------------------
+# nvh.core.local_models is the one VRAM-tier -> Ollama-tag table: a chat,
+# code, vision, reasoning, embed and cpu_fallback pick per budget band plus
+# the band's num_ctx / num_parallel. `nvh models tiers --shell` renders it
+# as NVH_TIER_<n>_* assignments; this installer sources that snippet and
+# walks the variables, so a retired tag or a moved boundary is fixed once,
+# in Python, and lands here on the next run (docs/ROADMAP.md: nothing
+# derivable from the table is typed twice).
+#
+# History: until 0.42 this file carried its own five-rung ladder
+# (nemotron-omni / nemotron-3-nano-omni / llama3.2-vision / minicpm-v /
+# moondream), its own size hints and a HuggingFace GGUF bootstrap for the
+# two Omni tags the registry never published. All of that is gone; the
+# Nemotron 3 Nano Omni the ladder promised ships as the table's
+# nemotron3:33b rows.
+NVH_TIER_SNIPPET=""
+NVH_TIER_INDEX=0
+NVH_TIER_LABEL=""
+NVH_MODEL_BUDGET_GB=0
+
+nvh_env_python() {
+    env_python_path 2>/dev/null || echo "$PYTHON"
+}
+
+load_local_model_tiers() {
+    # Render the table with the freshly installed nvh and source it.
+    # Returns 1 when the package is not importable (callers then leave
+    # DEFAULT_OLLAMA_MODEL empty and skip the Wizard model pull).
+    local py snippet
+    py="$(nvh_env_python)"
+    mkdir -p "$NVH_CACHE" "$NVH_LOGS"
+    snippet="$NVH_CACHE/local-model-tiers.sh"
+    # NVH_NONINTERACTIVE: config.yaml does not exist yet, so without it nvh's
+    # first-run gate could launch the interactive guided setup with its
+    # prompts captured into the snippet (nvh/cli/main.py exempts `models
+    # tiers` outright as well; the variable is belt and braces for older nvh).
+    if ! NVH_NONINTERACTIVE=1 "$py" -m nvh.cli.main models tiers --shell >"$snippet" 2>>"$NVH_LOGS/pip-install.log"; then
+        rm -f "$snippet"
+        return 1
+    fi
+    # Defensive: the snippet is sourced, so every non-comment line must be
+    # a plain NVH_* assignment of an integer or a double-quoted tag.
+    if ! grep -q '^NVH_TIER_COUNT=' "$snippet" \
+        || grep -Ev '^(#.*|NVH_[A-Z0-9_]+=([0-9]+|"[A-Za-z0-9._:-]*")|)$' "$snippet" | grep -q .; then
+        echo "Rejected malformed tier snippet:" >>"$NVH_LOGS/pip-install.log"
+        cat "$snippet" >>"$NVH_LOGS/pip-install.log" 2>/dev/null || true
+        rm -f "$snippet"
+        return 1
+    fi
+    # shellcheck disable=SC1090
+    source "$snippet"
+    NVH_TIER_SNIPPET="$snippet"
+    return 0
+}
+
+nvh_tier_var() {
+    # nvh_tier_var 3 CHAT -> value of NVH_TIER_3_CHAT (empty when unset).
+    local name="NVH_TIER_$1_$2"
+    printf '%s' "${!name:-}"
+}
+
+nvh_unified_os_reserve_gb() {
+    # nvh_unified_os_reserve_gb <pool MiB> -> whole GB a unified pool keeps
+    # for the OS, WebUI and desktop: the curve of
+    # nvh.core.local_models.unified_os_reserve_gb(),
+    #     min(MAX, max(MIN, round(total_gb * FRACTION)))
+    # with the three numbers the sourced snippet exports
+    # (NVH_UNIFIED_OS_RESERVE_MIN_GB / _MAX_GB / _FRACTION), so a 16 GB pool
+    # keeps 4 and a 128 GB GB10 keeps 16 without either figure typed here.
+    # round() is Python's half-to-even (a 36 GB pool: 4.5 -> 4, not 5). A
+    # snippet from an older nvh exports only the flat NVH_UNIFIED_OS_RESERVE_GB
+    # (the GB10 figure); that is the fallback.
+    local pool_mb="${1:-0}"
+    if [ -z "${NVH_UNIFIED_OS_RESERVE_FRACTION:-}" ]; then
+        printf '%s' "${NVH_UNIFIED_OS_RESERVE_GB:-0}"
+        return 0
+    fi
+    awk -v mb="$pool_mb" -v frac="$NVH_UNIFIED_OS_RESERVE_FRACTION" \
+        -v lo="${NVH_UNIFIED_OS_RESERVE_MIN_GB:-0}" \
+        -v hi="${NVH_UNIFIED_OS_RESERVE_MAX_GB:-${NVH_UNIFIED_OS_RESERVE_GB:-0}}" '
+        function rhe(x,   f, d) {
+            f = int(x); d = x - f
+            if (d > 0.5) return f + 1
+            if (d < 0.5) return f
+            return (f % 2 == 0) ? f : f + 1
+        }
+        BEGIN {
+            r = rhe((mb / 1024) * frac)
+            if (r < lo) r = lo
+            if (r > hi) r = hi
+            printf "%d", r
+        }'
+}
+
+resolve_local_model_tier() {
+    # The budget the way nvh.core.local_models.tier_budget counts it: a
+    # unified pool minus the table's OS reserve (nvh_unified_os_reserve_gb),
+    # discrete VRAM as is. The snap added before the integer divide is
+    # TIER_SNAP_GB, exported by the snippet as NVH_TIER_SNAP_MB: a "24 GB"
+    # card the driver reports as 24564 MiB lands in the 24 GB band, not the
+    # one below. The 512 is only the fallback for a snippet rendered by an
+    # older nvh that does not export it yet.
+    local budget_gb n tier_min tier_max snap_mb reserve_gb
+    snap_mb="${NVH_TIER_SNAP_MB:-512}"
+    reserve_gb=0
+    if [ "${NVH_GPU_UNIFIED:-0}" = "1" ]; then
+        reserve_gb="$(nvh_unified_os_reserve_gb "${NVH_GPU_POOL_MB:-0}")"
+    fi
+    budget_gb=$(( (${NVH_GPU_POOL_MB:-0} + snap_mb - reserve_gb * 1024) / 1024 ))
+    if [ "$budget_gb" -lt 0 ]; then budget_gb=0; fi
+    NVH_MODEL_BUDGET_GB="$budget_gb"
+    NVH_TIER_INDEX=0
+    n=0
+    while [ "$n" -lt "${NVH_TIER_COUNT:-0}" ]; do
+        tier_min="$(nvh_tier_var "$n" MIN)"
+        tier_max="$(nvh_tier_var "$n" MAX)"
+        if [ "$budget_gb" -ge "${tier_min:-0}" ] && [ "$budget_gb" -lt "${tier_max:-0}" ]; then
+            NVH_TIER_INDEX="$n"
+        fi
+        n=$((n + 1))
+    done
+    NVH_TIER_LABEL="$(nvh_tier_var "$NVH_TIER_INDEX" LABEL)"
+}
+
+resolve_default_ollama_model() {
+    [ -n "$NVH_TIER_SNIPPET" ] || return 1
+    resolve_local_model_tier
+    DEFAULT_OLLAMA_MODEL="$(nvh_tier_var "$NVH_TIER_INDEX" CHAT)"
+    [ -n "$DEFAULT_OLLAMA_MODEL" ]
+}
+
 set_config_ollama_model() {
     local cfg="$1"
     local model="$2"
@@ -922,6 +1069,12 @@ from pathlib import Path
 path = Path(os.environ["CFG"])
 model = os.environ["MODEL"]
 text = path.read_text(encoding="utf-8")
+if not model:
+    # No tier could be resolved: drop the placeholder line so nvh's own
+    # default applies instead of a literal "__NVH_DEFAULT_OLLAMA_MODEL__".
+    keep = [line for line in text.split("\n") if "__NVH_DEFAULT_OLLAMA_MODEL__" not in line]
+    path.write_text("\n".join(keep), encoding="utf-8")
+    raise SystemExit(0)
 updated = text.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model)
 # Replace the entire `default_model:` line for ollama/* values rather
 # than substring-matching. The previous partial-match regex (#63) fixed
@@ -950,6 +1103,7 @@ PY
 sync_ollama_default_model_config() {
     local cfg="$HIVE_CONFIG_HOME/config.yaml"
     [ -n "$GPU_NAME" ] || return 0
+    [ -n "$DEFAULT_OLLAMA_MODEL" ] || return 0
     [ -f "$cfg" ] || return 0
     # Trigger sync if ANY ollama/* default_model line is present, including
     # corruption-recovery cases like the pre-#63 `ollama/nemotron-omni"-omni"`
@@ -1204,20 +1358,18 @@ ollama_model_installed() {
         END { exit !found }'
 }
 
-# Rough size estimates for the AI Wizard models we ship. Sourced from
-# the Ollama library + the HF Q4_K_M / Q8 GGUFs the install pulls. Used
-# by the countdown copy so users see "this is a ~7.9 GB download" not
-# just "downloading model X in 10s". Values are approximate; better to
-# slightly over-estimate so users on metered links don't feel ambushed.
+# Download size for the countdown copy ("this is a ~5.2 GB download", not
+# just "downloading model X in 10s"). Read from the same table row the tag
+# came from — weights_gb is the registry manifest size `ollama list` will
+# print — so the hint can never describe a different model than the pull.
 nvwizard_model_size_hint() {
-    case "$1" in
-        nemotron-omni)             echo "~32 GB" ;;
-        nemotron-3-nano-omni)      echo "~17 GB" ;;
-        llama3.2-vision)           echo "~7.9 GB" ;;
-        minicpm-v)                 echo "~5 GB" ;;
-        moondream)                 echo "~1.7 GB" ;;
-        *)                         echo "size TBD" ;;
-    esac
+    local py size
+    py="$(nvh_env_python)"
+    size="$("$py" -c 'import sys
+from nvh.core.local_models import pick_for_tag
+p = pick_for_tag(sys.argv[1])
+print(f"~{p.weights_gb:g} GB" if p else "size TBD")' "$1" 2>/dev/null)" || size=""
+    echo "${size:-size TBD}"
 }
 
 nvwizard_model_download_countdown() {
@@ -1295,114 +1447,33 @@ nvwizard_model_download_countdown() {
     return 0
 }
 
-# Fallback chain for a preferred Wizard model. NVIDIA's Nemotron Omni
-# tags aren't published to the public Ollama library yet (verified
-# 2026-05-17: `ollama pull nemotron-omni` 404s) but the Wizard surface
-# is designed multimodal-first — so when the preferred tag is one of
-# the multimodal targets, fall through progressively smaller vision-
-# capable models so the install never breaks. Other tags keep their
-# current single-pull behavior.
+# Fallback chain for the Wizard model: the preferred tag, then the CHAT
+# pick of every lower tier, then the tier's CPU fallback — each one a real
+# registry tag from the sourced table, progressively smaller, de-duplicated
+# in order. A pull that 404s or times out walks one rung down instead of
+# failing the install. Without the snippet the chain is the tag alone.
+_nvh_chain_append() {
+    # _nvh_chain_append "<chain so far>" "<tag>" -> chain with tag appended once
+    local chain="$1" tag="$2"
+    [ -n "$tag" ] || { printf '%s' "$chain"; return 0; }
+    case " $chain " in
+        *" $tag "*) printf '%s' "$chain" ;;
+        *) printf '%s' "${chain:+$chain }$tag" ;;
+    esac
+}
+
 _nvwizard_fallback_chain() {
-    case "$1" in
-        nemotron-omni)         echo "nemotron-omni nemotron-3-nano-omni llama3.2-vision minicpm-v moondream" ;;
-        nemotron-3-nano-omni)  echo "nemotron-3-nano-omni llama3.2-vision minicpm-v moondream" ;;
-        llama3.2-vision*)      echo "$1 llama3.2-vision minicpm-v moondream" ;;
-        *)                     echo "$1" ;;
-    esac
-}
-
-# HuggingFace GGUF source for the Nemotron Omni models. The ggml-org
-# org is maintained by the llama.cpp / GGUF team — most authoritative
-# community quantization currently published. Quant is picked by VRAM
-# tier (Q8_0 on 40 GB+, Q4_K_M on 24-40 GB; smaller GPUs fall through
-# to Path 2 fallbacks since the model itself doesn't fit).
-_nvwizard_hf_gguf_source() {
-    local preferred="$1"
-    case "$preferred" in
-        nemotron-omni|nemotron-3-nano-omni)
-            if [ "${VRAM_GB:-0}" -ge 40 ]; then
-                echo "ggml-org/NVIDIA-Nemotron-3-Nano-Omni nemotron-3-nano-omni-ga_v1.0-Q8_0.gguf mmproj-nemotron-3-nano-omni-ga_v1.0.gguf 32"
-            elif [ "${VRAM_GB:-0}" -ge 24 ]; then
-                echo "ggml-org/NVIDIA-Nemotron-3-Nano-Omni nemotron-3-nano-omni-ga_v1.0-Q4_K_M.gguf mmproj-nemotron-3-nano-omni-ga_v1.0.gguf 24"
-            fi
-            ;;
-    esac
-}
-
-# Try to bootstrap a Nemotron Omni model into the local Ollama library
-# by downloading the GGUF + vision projector from HuggingFace and
-# registering them via an Ollama Modelfile. Returns 0 on success, 1 if
-# unsupported / disabled / failed (in which case the caller continues
-# the Path 2 fallback chain).
-bootstrap_omni_via_hf() {
-    local preferred="$1"
-    local target_tag="$1"
-    local spec repo gguf mmproj need_gb
-    spec="$(_nvwizard_hf_gguf_source "$preferred")"
-    [ -n "$spec" ] || return 1
-    # shellcheck disable=SC2086
-    set -- $spec
-    repo="$1"; gguf="$2"; mmproj="$3"; need_gb="$4"
-
-    # User opt-out via env
-    case "${NVH_INSTALL_MODEL_DOWNLOAD:-1}" in
-        0|false|False|no|No|off|Off) return 1 ;;
-    esac
-
-    local target_dir="$NVH_HOME/models/${target_tag}"
-    mkdir -p "$target_dir"
-
-    # Disk-space check (rough: GGUF + mmproj + 5 GB headroom)
-    local free_gb=0
-    if free_gb="$(df -BG "$target_dir" 2>/dev/null | awk 'NR==2 {gsub("G","",$4); print $4}')"; then
-        if [ "${free_gb:-0}" -lt "$((need_gb + 5))" ]; then
-            echo -e "${Y}Skipping Omni HuggingFace bootstrap: need ~${need_gb} GB free under $NVH_HOME, found ${free_gb} GB.${N}"
-            return 1
-        fi
+    local preferred="$1" chain n
+    chain="$(_nvh_chain_append "" "$preferred")"
+    if [ -n "$NVH_TIER_SNIPPET" ]; then
+        n="${NVH_TIER_INDEX:-0}"
+        while [ "$n" -ge 0 ]; do
+            chain="$(_nvh_chain_append "$chain" "$(nvh_tier_var "$n" CHAT)")"
+            n=$((n - 1))
+        done
+        chain="$(_nvh_chain_append "$chain" "$(nvh_tier_var "${NVH_TIER_INDEX:-0}" CPU_FALLBACK)")"
     fi
-
-    local base="https://huggingface.co/${repo}/resolve/main"
-    local gguf_local="${target_dir}/${gguf}"
-    local mmproj_local="${target_dir}/${mmproj}"
-
-    echo -e "${B}Bootstrapping NVIDIA Nemotron Omni from HuggingFace (${repo})...${N}"
-    echo -e "${D}  Will download: ${gguf} (~${need_gb} GB) + ${mmproj} (~1.5 GB)${N}"
-    echo -e "${D}  Skip with: NVH_INSTALL_MODEL_DOWNLOAD=0${N}"
-
-    # Resumable downloads (-C - resumes if interrupted). curl --fail
-    # treats HTTP 4xx/5xx as errors so partial 404 pages don't pose as
-    # complete files.
-    if ! curl -L --fail -C - --progress-bar -o "$gguf_local" "${base}/${gguf}"; then
-        echo -e "${Y}HuggingFace GGUF download failed for ${repo}/${gguf}.${N}"
-        return 1
-    fi
-    if ! curl -L --fail -C - --progress-bar -o "$mmproj_local" "${base}/${mmproj}"; then
-        echo -e "${Y}HuggingFace mmproj download failed for ${repo}/${mmproj}.${N}"
-        return 1
-    fi
-
-    # Write the Modelfile. Ollama supports multimodal models via two
-    # FROM directives (one for the LLM, one for the mmproj projector)
-    # — this is the same pattern used by the published llama3.2-vision
-    # tag. If a future Ollama version changes the syntax, this falls
-    # through to Path 2 cleanly via the surrounding chain.
-    local modelfile="${target_dir}/Modelfile"
-    cat >"$modelfile" <<EOF
-# Generated by nvHive install.sh — registers NVIDIA Nemotron Omni from
-# the local GGUF + vision projector downloaded from HuggingFace
-# (${repo}). Ollama exposes the result as the tag below; the AI Wizard
-# will use it just like a tag pulled from the Ollama library.
-FROM ${gguf_local}
-FROM ${mmproj_local}
-EOF
-
-    echo -e "${B}Registering ${target_tag} in Ollama (this is fast)...${N}"
-    if ! OLLAMA_MODELS="$OLLAMA_MODELS" "$OLLAMA_BIN" create "$target_tag" -f "$modelfile" 2>&1 | tee -a "$NVH_LOGS/model-pull.log"; then
-        echo -e "${Y}ollama create failed for ${target_tag}. Falling back to the next chain entry.${N}"
-        return 1
-    fi
-    echo -e "${G}NVIDIA Nemotron Omni (${target_tag}) registered locally from HuggingFace.${N}"
-    return 0
+    echo "$chain"
 }
 
 pull_nvwizard_model_cli() {
@@ -1445,7 +1516,7 @@ pull_nvwizard_model_cli() {
         set -e
         if [ "$pull_rc" -eq 0 ]; then
             if [ "$model" != "$preferred" ]; then
-                echo -e "${G}Wizard is using $model. Multimodal tools (vision/reasoning) still work.${N}"
+                echo -e "${G}Wizard is using $model; switch later with 'nvh models pull' or from the WebUI.${N}"
             else
                 echo -e "${G}Model $model ready for AI Wizard.${N}"
             fi
@@ -1456,19 +1527,6 @@ pull_nvwizard_model_cli() {
         # of the loop will surface the actual user-facing "switching to
         # smaller model" message.
         echo -e "${D}  ($model not available; trying the next option…)${N}"
-        # If the failed pull is one of the NVIDIA Omni tags (the Ollama
-        # library doesn't publish them yet as of 2026-05-17), try the
-        # HuggingFace → Modelfile bootstrap before walking further down
-        # the fallback chain. This lands the actual NVIDIA Nemotron
-        # Omni model — vision + reasoning — instead of degrading to a
-        # generic llama3.2-vision.
-        case "$model" in
-            nemotron-omni|nemotron-3-nano-omni)
-                if bootstrap_omni_via_hf "$model"; then
-                    return 0
-                fi
-                ;;
-        esac
     done
     echo -e "${Y}AI Wizard model download did not complete. Log: $NVH_LOGS/model-pull.log${N}"
     return "$pull_rc"
@@ -1778,7 +1836,14 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
 
     install_uninstall_script
     install_command_shims
-    sync_ollama_default_model_config
+    # Re-read the tier table from the (re)installed package so an existing
+    # config follows a moved boundary or a retired tag; soft-fail keeps the
+    # reconnect path alive when the table cannot be read.
+    if load_local_model_tiers && resolve_default_ollama_model; then
+        sync_ollama_default_model_config
+    else
+        echo -e "${Y}Could not read the local model table; leaving the Ollama default model as configured.${N}"
+    fi
     install_shell_hook
 
     echo ""
@@ -1842,6 +1907,23 @@ command -v nvh &>/dev/null || {
 }
 
 export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:$PATH"
+
+# ---------------------------------------------------------------------------
+# Resolve the local model tier from the installed package
+# ---------------------------------------------------------------------------
+# `nvh models tiers --shell` (nvh.core.local_models) is sourced and walked;
+# DEFAULT_OLLAMA_MODEL becomes the tier's chat pick and the pull loop's
+# fallback chain comes from the same snippet. See "Local model tier" above.
+if load_local_model_tiers && resolve_default_ollama_model; then
+    if [ -n "$GPU_NAME" ]; then
+        echo -e "${D}Local model tier: $NVH_TIER_LABEL (${NVH_MODEL_BUDGET_GB} GB budget) — recommended model: $DEFAULT_OLLAMA_MODEL${N}"
+    else
+        echo -e "${D}Local model tier: $NVH_TIER_LABEL (CPU) — recommended model: $DEFAULT_OLLAMA_MODEL${N}"
+    fi
+else
+    echo -e "${Y}Could not read the local model table from the installed nvh; skipping the Wizard model pull.${N}"
+    echo -e "${D}  Pick one later with 'nvh models pull --recommended' or from the WebUI /setup page.${N}"
+fi
 
 # ---------------------------------------------------------------------------
 # Auto-create config with zero-signup providers enabled
@@ -1934,8 +2016,8 @@ fi
 # never called.
 #
 # The rootless Ollama tarball runs CPU-only on hosts without a GPU
-# (slow but functional), and the Wizard's multimodal fallback chain
-# (moondream at ~2 GB) keeps it usable. Wasting ~600 MB on a no-GPU host
+# (slow but functional), and the Wizard's fallback chain (down to the
+# table's CPU tier) keeps it usable. Wasting ~600 MB on a no-GPU host
 # beats shipping a non-working install on every cloud GPU rig where the
 # driver tooling is unusual.
 OLLAMA_BIN="$NVH_BIN/ollama"
@@ -1972,12 +2054,13 @@ fi
 # install ended with no model, Wizard had nothing to route to, falling
 # back to cloud providers (which aren't configured).
 #
-# The fix: always run pull_nvwizard_model_cli on first install. It has
-# the HF→Modelfile bootstrap for Omni tags that aren't in the Ollama
-# library, the multi-step fallback chain to llama3.2-vision → minicpm-v
-# → moondream, the 10s countdown so users on metered connections can
-# press 's' to skip, and the NVH_INSTALL_MODEL_DOWNLOAD=0 opt-out.
-if [ -n "$OLLAMA_BIN" ] && curl -sf http://localhost:11434/api/tags &>/dev/null; then
+# The fix: always run pull_nvwizard_model_cli on first install. It walks
+# the sourced tier table's fallback chain (the tier's chat pick, then each
+# lower tier's, down to the CPU fallback), shows the 10s countdown so users
+# on metered connections can press 's' to skip, and honours the
+# NVH_INSTALL_MODEL_DOWNLOAD=0 opt-out. Skipped when the table could not be
+# read (DEFAULT_OLLAMA_MODEL empty) — nothing is guessed here.
+if [ -n "$OLLAMA_BIN" ] && [ -n "$DEFAULT_OLLAMA_MODEL" ] && curl -sf http://localhost:11434/api/tags &>/dev/null; then
     MODEL="$DEFAULT_OLLAMA_MODEL"
     if ollama_model_installed "$MODEL"; then
         echo -e "${G}Model $MODEL ready.${N}"

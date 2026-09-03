@@ -19,6 +19,9 @@ the subprocess tests instead so we can apply real timeouts.
 
 from __future__ import annotations
 
+import re
+import sys
+
 import pytest
 from typer.testing import CliRunner
 
@@ -162,3 +165,100 @@ class TestKnownCommandsLookup:
         from typer.main import get_command
 
         assert cli_main._known_commands() == set(get_command(cli_main.app).commands)
+
+
+# ---------------------------------------------------------------------------
+# First-run gate — machine-readable verbs never launch guided_setup()
+# ---------------------------------------------------------------------------
+
+class TestFirstRunGate:
+    """install.sh sources `nvh models tiers --shell` before config.yaml exists
+    and rejects the snippet unless every line is a KEY=VALUE assignment; a
+    guided_setup() launched in front of the verb would land its prompts in
+    that file. The gate therefore exempts machine-readable verbs by argv, and
+    NVH_NONINTERACTIVE disarms it for any scripted caller."""
+
+    @pytest.mark.parametrize("argv", [
+        ["models", "tiers", "--shell"],
+        ["models", "tiers", "--json"],
+        ["models", "tiers"],
+        ["MODELS", "TIERS", "--shell"],
+        ["version"],
+        ["completions", "bash"],
+        ["status", "--json"],
+        ["status", "--smoke", "--json"],
+        ["ask", "--help"],
+        ["models", "-h"],
+        ["--version"],
+    ])
+    def test_machine_readable_verbs_are_exempt(self, argv):
+        assert cli_main._first_run_exempt(argv)
+
+    @pytest.mark.parametrize("argv", [
+        [],
+        ["ask", "hello"],
+        ["models"],
+        ["models", "list"],
+        ["models", "pull", "--recommended"],
+        ["status"],
+        ["tiers"],
+        ["what is a shell"],
+    ])
+    def test_interactive_verbs_are_not_exempt(self, argv):
+        assert not cli_main._first_run_exempt(argv)
+
+    def test_exemption_lists_name_real_verbs(self):
+        from typer.main import get_command
+
+        root = get_command(cli_main.app)
+        assert cli_main._FIRST_RUN_EXEMPT_COMMANDS <= set(root.commands)
+        for group, sub in cli_main._FIRST_RUN_EXEMPT_SUBCOMMANDS:
+            assert sub in root.commands[group].commands, (group, sub)
+
+    @staticmethod
+    def _fresh_box(monkeypatch, tmp_path) -> None:
+        """No config, no provider keys, none of the CI / pytest escape hatches.
+
+        Called from the test body, not a fixture: pytest re-exports
+        PYTEST_CURRENT_TEST for the call phase after fixtures have run.
+        """
+        for var in (
+            "CI", "GITHUB_ACTIONS", "PYTEST_CURRENT_TEST",
+            cli_main._NONINTERACTIVE_ENV, *cli_main._FIRST_RUN_ENV_KEYS,
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setattr(cli_main, "DEFAULT_CONFIG_PATH", tmp_path / "missing" / "config.yaml")
+
+    def test_fresh_box_is_a_first_run(self, monkeypatch, tmp_path):
+        # Control: it is the exemption, not the environment, that spares the verbs below.
+        self._fresh_box(monkeypatch, tmp_path)
+        assert cli_main._is_first_run()
+
+    def test_noninteractive_env_disarms_the_gate(self, monkeypatch, tmp_path):
+        self._fresh_box(monkeypatch, tmp_path)
+        monkeypatch.setenv(cli_main._NONINTERACTIVE_ENV, "1")
+        assert not cli_main._is_first_run()
+
+    def test_models_tiers_shell_prints_only_assignments_on_a_fresh_box(
+        self, monkeypatch, tmp_path, capsys,
+    ):
+        import nvh.cli.setup as cli_setup
+
+        self._fresh_box(monkeypatch, tmp_path)
+        assert cli_main._is_first_run()  # the gate is armed; only the exemption stands in its way
+
+        def _no_setup(*_args, **_kwargs):
+            raise AssertionError("guided_setup() launched in front of `models tiers --shell`")
+
+        monkeypatch.setattr(cli_setup, "guided_setup", _no_setup)
+        monkeypatch.setattr(cli_setup, "load_env_keys", lambda *a, **k: None)
+        monkeypatch.setattr(sys, "argv", ["nvh", "models", "tiers", "--shell"])
+        with pytest.raises(SystemExit) as exc:
+            cli_main.main()
+        assert exc.value.code in (0, None)
+        lines = [line for line in capsys.readouterr().out.splitlines() if line and not line.startswith("#")]
+        assert any(line.startswith("NVH_TIER_COUNT=") for line in lines)
+        # install.sh's own acceptance grep: an integer or a double-quoted value, nothing else.
+        assignment = re.compile(r'^NVH_[A-Z0-9_]+=([0-9]+|"[A-Za-z0-9._:-]*")$')
+        rejected = [line for line in lines if not assignment.match(line)]
+        assert not rejected, rejected

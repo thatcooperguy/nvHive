@@ -1,16 +1,21 @@
 """Agentic coding — tier-aware multi-model coding agent (beta).
 
 A hierarchical agent loop that:
-1. **Plans** using the strongest available model (cloud or local 70B)
+1. **Plans** using the strongest available model (cloud, or the local chat pick)
 2. **Executes** using local models (sized by GPU tier)
-3. **Verifies** using the orchestrator model
+3. **Verifies** using the orchestrator model (or a separate local reviewer)
 
-Scales automatically based on detected GPU VRAM:
+Scales automatically with detected GPU VRAM (total across GPUs). The six
+tiers are the agent's coarse ladder over :mod:`nvh.core.local_models`; every
+model a tier loads is that table's pick at the tier's floor, so the tags here
+cannot drift from install.sh or the Wizard:
 
-  Tier 3 (128 GB+, DGX Spark):  70B local orchestrator + workers, minimal cloud
-  Tier 2 (48 GB, RTX 6000 Pro): cloud orchestrator, 32B local workers
-  Tier 1 (24 GB, RTX 3090):     cloud orchestrator, 14B local worker
-  Tier 0 (<24 GB / no GPU):     fully cloud
+  Tier 5 (128 GB+, DGX Spark / multi-GPU): fully local planner + coder + reviewer
+  Tier 4 (96-127 GB, RTX PRO 6000):         cloud planner, local coder + reviewer
+  Tier 3 (48-95 GB, A6000 / A100):          cloud planner, local coder (--mode multi adds a reviewer)
+  Tier 2 (24-47 GB, RTX 3090 / 4090):       cloud planner, local coder
+  Tier 1 (16-23 GB, RTX 4060 Ti 16 GB):     cloud planner, local coder
+  Tier 0 (<16 GB / no GPU):                 fully cloud
 
 Usage (CLI):
     nvh agent run "Fix the streaming hang bug in council.py"
@@ -33,6 +38,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from nvh.core import local_models
 from nvh.core.agent_loop import AgentResult, run_agent_loop
 from nvh.core.tools import ToolRegistry
 
@@ -47,25 +53,30 @@ logger = logging.getLogger(__name__)
 class AgentTier(enum.StrEnum):
     """GPU tier — 6 levels from no-GPU to DGX Spark.
 
-    Each tier determines which models can be loaded simultaneously,
-    how many parallel workers to use, and how much to rely on cloud.
+    The agent's ladder is coarser than the ten bands of
+    :data:`nvh.core.local_models.LOCAL_MODEL_TIERS`; each tier's floor
+    (:data:`TIER_BUDGET_GB`) is the budget the table is asked for, so the
+    models a tier loads are the rows install.sh and the Wizard pull. Each
+    tier decides which roles run locally, how many parallel workers to use,
+    and how much to rely on cloud.
     """
     TIER_0 = "tier_0"  # no GPU or <16 GB — fully cloud
-    TIER_1 = "tier_1"  # 16-23 GB (RTX 4060 Ti 16GB) — cloud orch, 7B local worker
-    TIER_2 = "tier_2"  # 24-47 GB (RTX 3090, RTX 4090) — cloud orch, 27B local worker
-    TIER_3 = "tier_3"  # 48-95 GB (A100 80GB, RTX A6000 48GB) — cloud orch, 70B worker, user-configurable single/multi
-    TIER_4 = "tier_4"  # 96-127 GB (RTX 6000 Pro BSE 96GB) — cloud orch, dual-model: 70B + 32B
-    TIER_5 = "tier_5"  # 128+ GB (DGX Spark, multi-GPU) — fully local: 3 models, parallel workers
+    TIER_1 = "tier_1"  # 16-23 GB (RTX 4060 Ti 16GB) — cloud orchestrator, local coder from the 16 GB row
+    TIER_2 = "tier_2"  # 24-47 GB (RTX 3090, RTX 4090) — cloud orchestrator, local coder from the 24 GB row
+    TIER_3 = "tier_3"  # 48-95 GB (A100 80GB, RTX A6000 48GB) — cloud orchestrator, local coder; --mode multi adds a reviewer
+    TIER_4 = "tier_4"  # 96-127 GB (RTX PRO 6000 96GB) — cloud orchestrator, dual-model: coder + reviewer
+    TIER_5 = "tier_5"  # 128+ GB (DGX Spark, multi-GPU) — fully local: planner + coder + reviewer, parallel workers
 
 
-# Tier description for display
-TIER_DESCRIPTIONS: dict[AgentTier, str] = {
-    AgentTier.TIER_0: "Fully cloud (no local GPU)",
-    AgentTier.TIER_1: "Cloud orchestrator + 7B local coding worker",
-    AgentTier.TIER_2: "Cloud orchestrator + multimodal local worker",
-    AgentTier.TIER_3: "Cloud orchestrator + 70B local worker (single/multi configurable)",
-    AgentTier.TIER_4: "Cloud orchestrator + dual-model: 70B planner + 32B coder",
-    AgentTier.TIER_5: "Fully local: Nemotron planner + Llama 70B coder + Qwen reviewer",
+# The VRAM floor of each tier in GB: detect_agent_tier's thresholds and the
+# budget handed to nvh.core.local_models. 16 / 24 / 48 / 96 are row starts in
+# the table; 128 sits inside its open-ended 96+ row. TIER_0 has no local budget.
+TIER_BUDGET_GB: dict[AgentTier, float] = {
+    AgentTier.TIER_1: 16.0,
+    AgentTier.TIER_2: 24.0,
+    AgentTier.TIER_3: 48.0,
+    AgentTier.TIER_4: 96.0,
+    AgentTier.TIER_5: 128.0,
 }
 
 
@@ -75,16 +86,9 @@ def detect_agent_tier(total_vram_gb: float) -> AgentTier:
     Uses total across all GPUs so multi-GPU setups get a higher tier
     even if no single card hits the threshold alone.
     """
-    if total_vram_gb >= 128:
-        return AgentTier.TIER_5
-    if total_vram_gb >= 96:
-        return AgentTier.TIER_4
-    if total_vram_gb >= 48:
-        return AgentTier.TIER_3
-    if total_vram_gb >= 24:
-        return AgentTier.TIER_2
-    if total_vram_gb >= 16:
-        return AgentTier.TIER_1
+    for tier, floor_gb in sorted(TIER_BUDGET_GB.items(), key=lambda item: -item[1]):
+        if total_vram_gb >= floor_gb:
+            return tier
     return AgentTier.TIER_0
 
 
@@ -93,69 +97,87 @@ def detect_agent_tier(total_vram_gb: float) -> AgentTier:
 # ---------------------------------------------------------------------------
 
 
-# Model recommendations per tier. Each key maps to (provider, model).
-# None means "use whatever the engine routes to by default" (cloud).
+# Which roles run locally at each tier. A role that is not listed is cloud:
+# (None, None) means "use whatever the engine routes to by default".
 #
-# "reviewer" is optional — only used in multi-model mode (Tier 4-5).
-# When present, a DIFFERENT model verifies the coder's output, which
-# catches bugs the coder's architecture has blind spots for.
-#
-# The build_agent_config() function validates these against the
-# registry and falls back to engine defaults when not available.
-_TIER_MODELS: dict[AgentTier, dict[str, tuple[str | None, str | None]]] = {
-    AgentTier.TIER_5: {
-        # DGX Spark (128 GB+): three models loaded simultaneously.
-        # Nemotron 70B for planning (NVIDIA-optimized reasoning),
-        # Llama 3.3 70B for coding (strong general + coding, 128K ctx),
-        # Qwen 2.5 Coder 72B for review (different architecture catches
-        # different bugs). 3 × 40 GB Q4 = 120 GB, 8 GB headroom.
-        "orchestrator": ("ollama", "ollama/nemotron"),
-        "worker": ("ollama", "ollama/llama3.3:70b"),
-        "reviewer": ("ollama", "ollama/qwen2.5-coder:32b"),
-    },
-    AgentTier.TIER_4: {
-        # RTX 6000 Pro BSE (96 GB): dual-model — 70B planner/reviewer +
-        # 32B coder. 70B Q4 (40 GB) + 32B Q8 (34 GB) = 74 GB, 22 GB
-        # headroom. Cloud handles planning for complex tasks.
-        "orchestrator": (None, None),
-        "worker": ("ollama", "ollama/llama3.3:70b"),
-        "reviewer": ("ollama", "ollama/qwen2.5-coder:32b"),
-    },
-    AgentTier.TIER_3: {
-        # 48-95 GB: single 70B model by default. Can be overridden
-        # to multi-model (Qwen 32B + Gemma 9B) via --mode multi.
-        # Single: Llama 70B Q4 (~40 GB) — one strong model.
-        # Multi: Qwen 32B Q8 (34 GB) + Gemma 9B Q8 (9 GB) = 43 GB.
-        "orchestrator": (None, None),
-        "worker": ("ollama", "ollama/llama3.3:70b"),
-        # Reviewer only used in --mode multi:
-        "reviewer": ("ollama", "ollama/qwen3:8b"),
-    },
-    AgentTier.TIER_2: {
-        # RTX 3090 / RTX 4090 (24 GB): single local model.
-        # Gemma 2 27B Q4 (~16 GB) — strong coder in 24 GB envelope.
-        "orchestrator": (None, None),
-        "worker": ("ollama", "ollama/llama3.2-vision"),
-    },
-    AgentTier.TIER_1: {
-        # RTX 4060 Ti 16 GB: single small model.
-        # Qwen 2.5 Coder 7B Q8 (~8 GB) — fits with room for context.
-        "orchestrator": (None, None),
-        "worker": ("ollama", "ollama/qwen2.5-coder:7b"),
-    },
-    AgentTier.TIER_0: {
-        # No GPU: everything goes to cloud
-        "orchestrator": (None, None),
-        "worker": (None, None),
-    },
+# "reviewer" is only used in multi-model mode (Tier 3 --mode multi, Tier 4-5).
+# When present, a DIFFERENT model verifies the coder's output, which catches
+# bugs the coder's architecture has blind spots for.
+_LOCAL_ROLES: dict[AgentTier, tuple[str, ...]] = {
+    AgentTier.TIER_0: (),
+    AgentTier.TIER_1: ("worker",),
+    AgentTier.TIER_2: ("worker",),
+    AgentTier.TIER_3: ("worker", "reviewer"),
+    AgentTier.TIER_4: ("worker", "reviewer"),
+    AgentTier.TIER_5: ("orchestrator", "worker", "reviewer"),
 }
 
-# Multi-model alternate models for Tier 3 --mode multi
-_TIER_3_MULTI_MODELS: dict[str, tuple[str | None, str | None]] = {
-    "orchestrator": (None, None),
-    "worker": ("ollama", "ollama/qwen2.5-coder:32b"),
-    "reviewer": ("ollama", "ollama/qwen3:8b"),
+# Role -> table use case. Roles fill in this order, each taking the table's
+# pick for what is *left* of the tier budget after the roles before it, so a
+# tier's models always load side by side (tests/test_agentic.py checks the sum).
+_ROLE_USE_CASES: tuple[tuple[str, str], ...] = (
+    ("orchestrator", "chat"),   # the strongest general model plans and verifies
+    ("worker", "code"),         # the coder
+    ("reviewer", "reasoning"),  # a different architecture re-checks the coder
+)
+
+
+def _tier_models(tier: AgentTier) -> dict[str, tuple[str | None, str | None]]:
+    """(provider, model) per role for ``tier``; every model is a row of the local-model table."""
+    remaining = TIER_BUDGET_GB.get(tier, 0.0)
+    local_roles = _LOCAL_ROLES.get(tier, ())
+    models: dict[str, tuple[str | None, str | None]] = {}
+    for role, use_case in _ROLE_USE_CASES:
+        chosen = local_models.pick(remaining, use_case) if role in local_roles else None
+        if chosen is None:
+            models[role] = (None, None)
+            continue
+        models[role] = ("ollama", f"ollama/{chosen.tag}")
+        remaining -= chosen.runtime_gb
+    return models
+
+
+# Model recommendations per tier. Each key maps to (provider, model).
+# build_agent_config() validates these against the registry and falls back
+# to engine defaults (cloud) when Ollama is not available.
+_TIER_MODELS: dict[AgentTier, dict[str, tuple[str | None, str | None]]] = {
+    tier: _tier_models(tier) for tier in AgentTier
 }
+
+# Tier 3's reviewer only loads under --mode multi; the row is the same either
+# way now that the worker is picked from the full budget first. Kept under the
+# old name for callers that imported it.
+_TIER_3_MULTI_MODELS: dict[str, tuple[str | None, str | None]] = _TIER_MODELS[AgentTier.TIER_3]
+
+
+def _role_tag(tier: AgentTier, role: str) -> str:
+    return (_TIER_MODELS[tier].get(role, (None, None))[1] or "").removeprefix("ollama/")
+
+
+def _describe_tier(tier: AgentTier) -> str:
+    if tier is AgentTier.TIER_0:
+        return "Fully cloud (no local GPU)"
+    if tier is AgentTier.TIER_5:
+        return (
+            f"Fully local: {_role_tag(tier, 'orchestrator')} planner + "
+            f"{_role_tag(tier, 'worker')} coder + {_role_tag(tier, 'reviewer')} reviewer"
+        )
+    if tier is AgentTier.TIER_4:
+        return (
+            f"Cloud orchestrator + dual-model: {_role_tag(tier, 'worker')} coder + "
+            f"{_role_tag(tier, 'reviewer')} reviewer"
+        )
+    if tier is AgentTier.TIER_3:
+        return (
+            f"Cloud orchestrator + {_role_tag(tier, 'worker')} local worker "
+            f"(single/multi configurable; --mode multi adds a {_role_tag(tier, 'reviewer')} reviewer)"
+        )
+    return f"Cloud orchestrator + {_role_tag(tier, 'worker')} local coding worker"
+
+
+# Tier description for display — names the table's picks, so the text can
+# never describe a model the tier does not load.
+TIER_DESCRIPTIONS: dict[AgentTier, str] = {tier: _describe_tier(tier) for tier in AgentTier}
 
 
 class AgentMode(enum.StrEnum):
@@ -195,12 +217,11 @@ def build_agent_config(
     are actually available and falls back to engine defaults (cloud)
     when they're not. This means a Tier 1 user without Ollama installed
     still gets a working agent — just fully cloud.
+
+    The reviewer row is only kept when the effective mode is multi, so Tier 3
+    stays single-model unless ``--mode multi`` asks for its reviewer.
     """
-    # For Tier 3 in multi-mode, use the alternate model set
-    if tier == AgentTier.TIER_3 and mode == AgentMode.MULTI:
-        tier_models = _TIER_3_MULTI_MODELS
-    else:
-        tier_models = _TIER_MODELS[tier]
+    tier_models = _TIER_MODELS[tier]
 
     def _resolve(role: str) -> tuple[str | None, str | None]:
         provider, model = tier_models.get(role, (None, None))
@@ -239,15 +260,11 @@ def build_agent_config(
 
 
 def _parallel_workers(tier: AgentTier) -> int:
-    """Max concurrent workers per tier."""
-    return {
-        AgentTier.TIER_0: 1,
-        AgentTier.TIER_1: 1,
-        AgentTier.TIER_2: 1,
-        AgentTier.TIER_3: 1,
-        AgentTier.TIER_4: 2,
-        AgentTier.TIER_5: 4,
-    }[tier]
+    """Max concurrent workers per tier: the table's ``num_parallel`` at the tier floor; 1 with no local budget."""
+    floor_gb = TIER_BUDGET_GB.get(tier)
+    if floor_gb is None:
+        return 1
+    return local_models.num_parallel_for(floor_gb)
 
 
 def auto_detect_config(

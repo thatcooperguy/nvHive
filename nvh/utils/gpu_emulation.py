@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from nvh.core import local_models
+
 
 @dataclass
 class GPUSpec:
@@ -147,25 +149,29 @@ _MEASURED_BASELINES: dict[tuple[str, str], float] = {
     ("gb10", "nemotron-3-super"): 24.8,
 }
 
-# Model memory requirements (approximate, quantized)
-_MODEL_MEMORY_GB: dict[str, float] = {
+# Loaded size (GB) of the measured-baseline models the tier table does not
+# carry. They stay only so those measurements remain usable as scaling
+# references; nothing recommends or pulls them. "gemma3" is gemma3:latest,
+# i.e. the 4b measured under both names, so it takes the table's figure.
+_MEASURED_ONLY_MEMORY_GB: dict[str, float] = {
     "nemotron-mini": 2.7,
-    "llama3.1:8b": 5.0,
-    "gemma3": 3.3,
-    "gemma3:4b": 3.0,
-    "qwen3:8b": 6.0,
-    "qwen2.5-coder:7b": 4.0,
-    "qwen2.5-coder:32b": 18.0,
-    "llama3.2-vision": 7.0,
-    "minicpm-v": 5.0,
-    "moondream": 2.0,
+    "gemma3": local_models.size_table()["gemma3:4b"],
     "llama3.1": 4.9,
-    "llama3.3:70b": 40.0,
-    "llama3.1:70b": 40.0,
-    "nemotron": 40.0,
     "nemotron-3-super": 86.0,
-    "codellama": 4.0,
 }
+
+# Every model the emulator knows: the tier table's runtime_gb (the single
+# source of model sizes) plus the measured-only keys above.
+_MODEL_MEMORY_GB: dict[str, float] = {**_MEASURED_ONLY_MEMORY_GB, **local_models.size_table()}
+
+
+def _model_memory_gb(model: str) -> float | None:
+    """Loaded size for ``model``; a ``name:latest`` tag resolves through the table."""
+    value = _MODEL_MEMORY_GB.get(model)
+    if value is not None:
+        return value
+    pick = local_models.pick_for_tag(model)
+    return pick.runtime_gb if pick is not None else None
 
 
 @dataclass
@@ -194,7 +200,7 @@ def estimate_performance(
     if not gpu:
         return None
 
-    model_mem = _MODEL_MEMORY_GB.get(model)
+    model_mem = _model_memory_gb(model)
     if model_mem is None:
         return None
 

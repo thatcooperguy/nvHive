@@ -1,12 +1,19 @@
-"""Tests for nvh.utils.gpu — detection status, model recommendations, Ollama tuning."""
+"""Tests for nvh.utils.gpu — detection status, model recommendations, Ollama tuning.
+
+recommend_models / get_ollama_optimizations read nvh.core.local_models; the
+recommendation tests derive every expected tag, size, reason and ladder value
+from that table so they cannot drift from it.
+"""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from nvh.core import local_models as lm
 from nvh.utils import gpu
 
 
@@ -58,171 +65,479 @@ def test_gpu_architecture_info_marks_name_heuristic() -> None:
     assert arch["heuristic"] is True
 
 
-class TestGPURecommendations:
-    """GPU recommendation and Ollama optimizations (mocked)."""
+RAM_16 = gpu.SystemMemoryInfo(16.0, 12.0, 8.0)
+RAM_32 = gpu.SystemMemoryInfo(32.0, 24.0, 16.0)
+RAM_64 = gpu.SystemMemoryInfo(64.0, 48.0, 32.0)
+RAM_128 = gpu.SystemMemoryInfo(128.0, 100.0, 70.0)
 
-    def _make_gpu(self, name: str, vram_mb: int, index: int = 0):
-        from nvh.utils.gpu import GPUInfo
+# Tags that used to be pull targets somewhere in the six ladders and are gone
+# from the registry (or never existed). None may come back out of gpu.py.
+RETIRED_TAG_PREFIXES = (
+    "nemotron-omni", "nemotron-3-nano-omni", "nemotron:70b", "nemotron-3-super", "nemotron-mini",
+    "qwen2.5-coder", "minicpm-v", "llava", "bakllava", "llama3.3:70b", "deepseek-r1:8b",
+    "codellama", "gemma2", "phi4", "qwen2.5", "mistral:7b", "llama3.2:3b", "llama3.1:8b",
+)
+LEGACY_BANDS = ("mini", "small", "medium", "full")
 
-        return GPUInfo(
-            name=name,
-            vram_mb=vram_mb,
-            vram_gb=round(vram_mb / 1024, 1),
-            driver_version="535.0",
-            cuda_version="12.2",
-            utilization_pct=0,
-            memory_used_mb=0,
-            memory_free_mb=vram_mb,
-            index=index,
+
+def _card(name: str, vram_gb: float, *, cc: tuple[int, int] = (0, 0), unified: bool = False, index: int = 0) -> gpu.GPUInfo:
+    vram_mb = int(vram_gb * 1024)
+    return gpu.GPUInfo(
+        name=name, vram_mb=vram_mb, vram_gb=round(vram_mb / 1024, 2), driver_version="580.65",
+        cuda_version="13.0", utilization_pct=0, memory_used_mb=0, memory_free_mb=vram_mb, index=index,
+        compute_capability=cc, unified_memory=unified,
+    )
+
+
+def _recommend(gpus: list[gpu.GPUInfo], sys_mem: gpu.SystemMemoryInfo) -> tuple[gpu.MemoryBudget, list[gpu.ModelRecommendation]]:
+    with patch.object(gpu, "detect_system_memory", return_value=sys_mem):
+        return gpu._memory_budget(gpus, sys_mem), gpu.recommend_models(gpus=gpus)
+
+
+def _optimize(gpus: list[gpu.GPUInfo], sys_mem: gpu.SystemMemoryInfo) -> gpu.OllamaOptimization:
+    with patch.object(gpu, "detect_system_memory", return_value=sys_mem):
+        return gpu.get_ollama_optimizations(gpus=gpus)
+
+
+def _table_order(budget: lm.TierBudget) -> list[str]:
+    """recommend_models' order minus the hybrid pick: the table's text picks, then vision, then embed."""
+    picks = [p.tag for p in lm.recommended(budget)]
+    tail = [p.tag for u in ("vision", "embed") if (p := lm.pick(budget, u)) is not None and p.tag in picks]
+    return [t for t in picks if t not in tail] + tail
+
+
+def _expected_hybrid(budget: lm.TierBudget) -> lm.LocalModelPick | None:
+    """The rule recommend_models applies, restated from the table: a card of HYBRID_MIN_BUDGET_GB or
+    more, the tier combined_gb reaches, its chat (else code) pick, when that pick needs more than
+    VRAM, fits VRAM + RAM bonus and leaves at most HYBRID_MAX_RAM_SHARE of itself in RAM."""
+    if budget.unified or budget.offload_gb <= 0 or budget.sized_gpus == 0:
+        return None
+    home = lm.tier_for(budget)
+    reach = replace(budget, budget_gb=budget.combined_gb, offload_gb=0.0)
+    if home.min_gb < gpu.HYBRID_MIN_BUDGET_GB or lm.tier_for(reach) is home:
+        return None
+    ceiling = min(budget.combined_gb, budget.budget_gb / (1 - gpu.HYBRID_MAX_RAM_SHARE))
+    listed = set(_table_order(budget))
+    for use_case in ("chat", "code"):
+        pick = lm.pick(reach, use_case)
+        if pick is not None and pick.tag not in listed and budget.budget_gb < pick.runtime_gb <= ceiling:
+            return pick
+    return None
+
+
+class TestTierVocabulary:
+    """gpu.py's one contribution the table does not make: the tier words consumers read."""
+
+    def test_tier_labels_cover_every_table_tier(self) -> None:
+        assert set(gpu.TIER_LABELS) == {t.label for t in lm.LOCAL_MODEL_TIERS}
+        assert set(gpu.TIER_LABELS.values()) <= set(LEGACY_BANDS)
+        # Bands never go down as the table goes up.
+        ranks = [LEGACY_BANDS.index(gpu.TIER_LABELS[t.label]) for t in lm.LOCAL_MODEL_TIERS]
+        assert ranks == sorted(ranks)
+        assert gpu.TIER_LABELS[lm.LOCAL_MODEL_TIERS[0].label] == "mini"
+        assert gpu.TIER_LABELS[lm.LOCAL_MODEL_TIERS[-1].label] == "full"
+
+    def test_recommendation_tier_is_the_home_tier_band(self) -> None:
+        for pick in lm.all_picks():
+            home = next(t for t in lm.LOCAL_MODEL_TIERS if pick.tag in {p.tag for p in t.picks.values()})
+            assert gpu.recommendation_tier(pick) == gpu.TIER_LABELS[home.label]
+        with pytest.raises(KeyError):
+            gpu.recommendation_tier(replace(lm.all_picks()[0], tag="not-in-the-table"))
+
+    def test_shared_constants_are_the_tables(self) -> None:
+        assert gpu.UNIFIED_MEMORY_OS_RESERVE_GB == lm.UNIFIED_MEMORY_OS_RESERVE_GB
+        assert gpu.UNIFIED_MEMORY_BANDWIDTH_GBPS == lm.UNIFIED_MEMORY_BANDWIDTH_GBPS
+
+
+class TestMemoryBudget:
+    def test_memory_budget_is_a_tier_budget_view(self) -> None:
+        rtx = _card("NVIDIA GeForce RTX 4090", 24)
+        budget = gpu._memory_budget([rtx], RAM_64)
+        table = lm.tier_budget([rtx], RAM_64)
+
+        assert isinstance(budget, lm.TierBudget)
+        assert (budget.model_budget_gb, budget.cpu_offload_gb, budget.unified_memory, budget.total_vram_gb) == (
+            budget.budget_gb, budget.offload_gb, budget.unified, budget.total_gb,
         )
+        assert (budget.budget_gb, budget.offload_gb, budget.unified, budget.total_gb, budget.combined_gb) == (
+            table.budget_gb, table.offload_gb, table.unified, table.total_gb, table.combined_gb,
+        )
+        assert budget.combined_gb == budget.budget_gb + budget.offload_gb
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_recommend_models_no_gpu(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+    def test_memory_budget_reads_compute_capability_off_the_name_when_unreported(self) -> None:
+        """The table never guesses; gpu.py's name heuristic fills the gap so the Turing swap and Hopper quant work."""
+        assert gpu._memory_budget([_card("NVIDIA GeForce RTX 4090", 24)], RAM_64).compute_capability == (8, 9)
+        assert gpu._memory_budget([_card("RTX 2080 Ti", 24)], RAM_64).compute_capability == (7, 5)
+        assert gpu._memory_budget([_card("NVIDIA H100 80GB HBM3", 80)], RAM_64).compute_capability == (9, 0)
+        # A reported capability wins over the name.
+        assert gpu._memory_budget([_card("NVIDIA GeForce RTX 4090", 24, cc=(8, 6))], RAM_64).compute_capability == (8, 6)
+        assert gpu._memory_budget([], RAM_64).compute_capability == (0, 0)
 
-        mock_mem.return_value = SystemMemoryInfo(16.0, 12.0, 8.0)
-        recs = recommend_models(gpus=[])
-        assert len(recs) >= 1
-        model_names = [r.model for r in recs]
-        assert "nemotron-mini" in model_names
+    def test_memory_budget_accepts_no_system_memory(self) -> None:
+        budget = gpu._memory_budget([_card("NVIDIA GeForce RTX 4090", 24)])
+        assert (budget.budget_gb, budget.offload_gb) == (24.0, 0.0)
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_recommend_models_8gb(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
 
-        mock_mem.return_value = SystemMemoryInfo(32.0, 24.0, 16.0)
-        gpu = self._make_gpu("RTX 4060", 8192)
-        recs = recommend_models(gpus=[gpu])
-        assert len(recs) >= 1
-        tiers = {r.tier for r in recs}
-        assert "small" in tiers or "mini" in tiers
+class TestGPURecommendations:
+    """recommend_models / get_ollama_optimizations read nvh.core.local_models.
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_recommend_models_24gb(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+    Every expectation here is derived from the table (picks, runtime sizes,
+    reason_for, num_ctx / num_parallel / quant) so a table edit cannot desync
+    it; what the tests pin is gpu.py's own contribution -- the tier words, the
+    ordering, the hybrid / multi-GPU / unified decorations, the snap and the
+    name-heuristic compute capability.
+    """
 
-        mock_mem.return_value = SystemMemoryInfo(32.0, 24.0, 16.0)
-        gpu = self._make_gpu("RTX 4090", 24576)
-        recs = recommend_models(gpus=[gpu])
-        model_names = [r.model for r in recs]
-        # 24 GB lands in the "full" branch (nemotron 70B) at the boundary,
-        # or "small" for <24 — either llama3.1:8b (the real mid-tier) or
-        # nemotron should appear in the list.
-        assert any(m in model_names for m in ("nemotron", "llama3.1:8b"))
+    def test_recommend_models_no_gpu(self) -> None:
+        budget, recs = _recommend([], RAM_16)
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_recommend_models_multi_gpu(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+        assert (budget.total_gpus, budget.sized_gpus) == (0, 0)
+        assert budget.offload_gb > 0, "RAM bonus is computed but there is no GPU to be hybrid with"
+        assert [r.model for r in recs] == _table_order(budget)
+        assert not any(r.tier.endswith("-hybrid") for r in recs)
+        assert recs[0].tier == gpu.recommendation_tier(lm.recommended(budget)[0]) == "mini"
+        assert "no GPU detected" in recs[0].reason
+        assert all(r.note == "" for r in recs)
 
-        mock_mem.return_value = SystemMemoryInfo(64.0, 48.0, 32.0)
-        gpus = [
-            self._make_gpu("RTX 3090", 24576, 0),
-            self._make_gpu("RTX 3090", 24576, 1),
+    @pytest.mark.parametrize(
+        "gpus, sys_mem",
+        [
+            ([], RAM_16),
+            ([_card("RTX 4060", 8)], RAM_32),
+            ([_card("RTX 4070 Ti", 16)], RAM_32),
+            ([_card("NVIDIA GeForce RTX 4090", 24)], RAM_64),
+            ([_card("RTX 2080 Ti", 24)], RAM_64),
+            ([_card("RTX 6000 Ada", 48)], RAM_64),
+            ([_card("H100", 80)], RAM_128),
+            ([_card("NVIDIA GB10", 128, unified=True, cc=(12, 1))], RAM_128),
+            ([_card("RTX 3090", 24), _card("RTX 3090", 24, index=1)], RAM_64),
+        ],
+        ids=["cpu", "8gb", "16gb", "4090", "turing-24gb", "48gb", "h100", "gb10", "2x3090"],
+    )
+    def test_every_rec_is_a_table_row(self, gpus, sys_mem) -> None:
+        budget, recs = _recommend(gpus, sys_mem)
+
+        assert recs and len({r.model for r in recs}) == len(recs), "unique tags"
+        text = [r for r in recs if not r.tier.endswith("-hybrid")]
+        assert [r.model for r in text] == _table_order(budget)
+        vision, embed = lm.pick(budget, "vision"), lm.pick(budget, "embed")
+        for i, rec in enumerate(recs):
+            pick = lm.pick_for_tag(rec.model)
+            assert pick is not None and rec.model in lm.all_tags()
+            assert rec.vram_required_gb == pick.runtime_gb
+            assert rec.use_case in lm.USE_CASES
+            if rec.tier.endswith("-hybrid"):
+                assert rec.tier == gpu.recommendation_tier(pick) + "-hybrid"
+                assert rec.reason.startswith(lm.reason_for(budget, pick))
+                continue
+            assert rec.reason == lm.reason_for(budget, pick)
+            if rec.model == vision.tag:
+                assert (rec.tier, rec.use_case) == ("vision", "vision")
+            elif rec.model == embed.tag:
+                assert (rec.tier, rec.use_case) == ("embed", "embed")
+            elif i == 0 and budget.sized_gpus > 1:
+                assert rec.tier == "multi-gpu"
+            else:
+                assert rec.tier == gpu.recommendation_tier(pick)
+        assert recs[0].model == lm.recommended(budget)[0].tag
+        # The embedding pick is last: callers take recs[1] as the chat fallback.
+        assert recs[-1].model == embed.tag and recs[-1].tier == "embed"
+        assert [r for r in recs if r.tier.startswith("vision")] == [r for r in recs if r.model == vision.tag]
+
+    def test_recommend_models_8gb(self) -> None:
+        budget, recs = _recommend([_card("RTX 4060", 8)], RAM_32)
+        assert recs[0].model == lm.pick(budget, "chat").tag
+        assert recs[0].tier == gpu.recommendation_tier(lm.pick(budget, "chat")) == "small"
+        assert {r.tier.removesuffix("-hybrid") for r in recs} <= {*LEGACY_BANDS, "vision", "embed"}
+
+    def test_recommend_models_24gb(self) -> None:
+        budget, recs = _recommend([_card("NVIDIA GeForce RTX 4090", 24)], RAM_64)
+        assert lm.tier_for(budget) is lm.tier_for(24.0)
+        assert recs[0].model == lm.recommended(budget)[0].tag
+        assert recs[0].tier == "full"
+
+    # ---- hybrid (CPU offload) pick ----
+
+    def test_hybrid_pick_needs_offload_and_fits_combined(self) -> None:
+        budget, recs = _recommend([_card("NVIDIA GeForce RTX 4090", 24)], RAM_64)
+        expected = _expected_hybrid(budget)
+        assert expected is not None and budget.budget_gb < expected.runtime_gb <= budget.combined_gb
+
+        hybrids = [r for r in recs if r.tier.endswith("-hybrid")]
+        assert [(r.model, r.tier, r.vram_required_gb) for r in hybrids] == [
+            (expected.tag, gpu.recommendation_tier(expected) + "-hybrid", expected.runtime_gb),
         ]
-        recs = recommend_models(gpus=gpus)
-        assert any("multi-gpu" in r.tier for r in recs)
+        reason = hybrids[0].reason
+        assert reason.startswith(lm.reason_for(budget, expected))
+        assert (
+            f"partial CPU offload: {budget.budget_gb:.0f} GB VRAM + {budget.offload_gb:.0f} GB RAM = "
+            f"{budget.combined_gb:.0f} GB combined"
+        ) in reason
+        # It sits after the text picks and before the vision / embed picks.
+        text_end = max(i for i, r in enumerate(recs) if r.tier in LEGACY_BANDS)
+        assert recs.index(hybrids[0]) == text_end + 1
+        assert recs.index(hybrids[0]) < min(i for i, r in enumerate(recs) if r.tier in ("vision", "embed"))
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_get_ollama_optimizations_no_gpu(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, get_ollama_optimizations
+    def test_hybrid_follows_the_table_rule_across_budgets(self) -> None:
+        for vram_gb in (6, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96):
+            budget, recs = _recommend([_card("NVIDIA GPU", vram_gb, cc=(8, 9))], RAM_64)
+            expected = _expected_hybrid(budget)
+            hybrids = [r for r in recs if r.tier.endswith("-hybrid")]
+            assert [r.model for r in hybrids] == ([expected.tag] if expected else []), f"{vram_gb} GB"
+            for rec in hybrids:
+                spill = rec.vram_required_gb - budget.budget_gb
+                assert 0 < spill <= gpu.HYBRID_MAX_RAM_SHARE * rec.vram_required_gb, f"{vram_gb} GB"
+                assert budget.budget_gb >= gpu.HYBRID_MIN_BUDGET_GB, f"{vram_gb} GB"
 
-        mock_mem.return_value = SystemMemoryInfo(16.0, 12.0, 8.0)
-        opt = get_ollama_optimizations(gpus=[])
+    def test_no_hybrid_when_combined_stays_in_the_tier(self) -> None:
+        budget, recs = _recommend([_card("RTX 6000 Ada", 48)], RAM_64)
+        assert lm.tier_for(budget.combined_gb) is lm.tier_for(budget)
+        assert not any(r.tier.endswith("-hybrid") for r in recs)
+
+    def test_no_hybrid_from_the_cpu_tier(self) -> None:
+        """A 2 GB card runs the CPU tier's models from RAM already: nothing to offload *from*."""
+        budget, recs = _recommend([_card("GTX 1050", 2)], RAM_64)
+        assert lm.tier_for(budget) is lm.LOCAL_MODEL_TIERS[0] and budget.offload_gb > 0
+        assert not any(r.tier.endswith("-hybrid") for r in recs)
+
+    def test_no_hybrid_on_unified_memory(self) -> None:
+        budget, recs = _recommend([_card("NVIDIA GB10", 128, unified=True, cc=(12, 1))], RAM_128)
+        assert budget.offload_gb == 0.0
+        assert not any(r.tier.endswith("-hybrid") for r in recs)
+
+    def test_hybrid_limits_are_read_off_the_table(self) -> None:
+        """12 GB is the small-plus floor: the first tier whose num_ctx rises above the entry tiers'."""
+        small_plus = next(t for t in lm.LOCAL_MODEL_TIERS if t.label == "small-plus")
+        assert gpu.HYBRID_MIN_BUDGET_GB == small_plus.min_gb == 12.0
+        entry_ctx = lm.LOCAL_MODEL_TIERS[0].num_ctx
+        assert all(t.num_ctx == entry_ctx for t in lm.LOCAL_MODEL_TIERS if t.min_gb < gpu.HYBRID_MIN_BUDGET_GB)
+        assert small_plus.num_ctx > entry_ctx
+        assert gpu.HYBRID_MAX_RAM_SHARE == 0.4
+
+    @pytest.mark.parametrize(
+        "vram_gb, expected",
+        [
+            (6, None),               # below the floor: the old rule offered qwen3:14b with 5.2 of its 11.2 GB in RAM
+            (8, None),               # below the floor: the old rule offered qwen3:30b-a3b with 12.5 of 20.5 GB (61%) in RAM
+            (12, None),              # on the floor, but the 30B MoE the reached tier names would spill 8.5 of 20.5 GB (41%)
+            (16, "qwen3:30b-a3b"),   # 4.5 of 20.5 GB (22%) in RAM
+            (24, "nemotron3:33b"),   # 6.4 of 30.4 GB (21%) in RAM
+        ],
+        ids=["6gb", "8gb", "12gb", "16gb", "24gb"],
+    )
+    def test_hybrid_needs_a_card_with_headroom(self, vram_gb, expected) -> None:
+        """A hybrid pick must sit mostly in VRAM: no card under 12 GB, no pick over 40% in RAM."""
+        budget, recs = _recommend([_card("NVIDIA GPU", vram_gb, cc=(8, 9))], RAM_64)
+        assert budget.offload_gb == 16.0 and budget.combined_gb == vram_gb + 16
+        hybrids = [r for r in recs if r.tier.endswith("-hybrid")]
+        assert [r.model for r in hybrids] == ([expected] if expected else [])
+        reach = replace(budget, budget_gb=budget.combined_gb, offload_gb=0.0)
+        assert lm.tier_for(reach) is not lm.tier_for(budget)          # RAM reaches a higher tier every time...
+        assert lm.pick(reach, "chat").runtime_gb > budget.budget_gb   # ...whose chat pick does not fit VRAM,
+        if expected is None:                                          # so only the guards said no.
+            return
+        pick = lm.pick_for_tag(expected)
+        spill = pick.runtime_gb - budget.budget_gb
+        assert 0 < spill <= gpu.HYBRID_MAX_RAM_SHARE * pick.runtime_gb
+        assert hybrids[0].reason.startswith(lm.reason_for(budget, pick))
+        assert f"~{round(spill, 1):g} GB ({spill / pick.runtime_gb:.0%}) in RAM" in hybrids[0].reason
+        assert hybrids[0].tier == gpu.recommendation_tier(pick) + "-hybrid" == "full-hybrid"
+
+    # ---- unified pools: the OS reserve follows the pool ----
+
+    @pytest.mark.parametrize("pool_gb, reserve_gb", [(8, 4), (16, 4), (32, 4), (64, 8), (128, 16)])
+    def test_unified_budget_reserve_follows_the_pool(self, pool_gb, reserve_gb) -> None:
+        """A 16 GB unified pool loses 4 GB, not the GB10's 16: the budget, reason, note and Ollama notes agree."""
+        pool = [_card("NVIDIA GB10", pool_gb, unified=True, cc=(12, 1))]
+        budget, recs = _recommend(pool, RAM_128)
+        assert budget.os_reserve_gb == gpu.unified_os_reserve_gb(pool_gb) == reserve_gb
+        assert (budget.model_budget_gb, budget.cpu_offload_gb) == (pool_gb - reserve_gb, 0.0)
+        assert f"~{pool_gb - reserve_gb} GB of {pool_gb} GB usable after the {reserve_gb} GB OS reserve" in recs[0].reason
+        assert f"~{reserve_gb} GB is reserved for the OS" in recs[0].note
+        assert f"leaving ~{pool_gb - reserve_gb} GB for models" in recs[0].note
+        assert not any(r.tier.endswith("-hybrid") for r in recs)
+        opt = _optimize(pool, RAM_128)
+        assert any(f"after the {reserve_gb} GB OS reserve" in n for n in opt.notes)
+        assert any(f"keep ~{reserve_gb} GB free for the OS" in n for n in opt.notes)
+        assert (opt.recommended_ctx, opt.num_parallel) == (lm.num_ctx_for(budget), lm.num_parallel_for(budget))
+
+    # ---- multi-GPU ----
+
+    def test_recommend_models_multi_gpu(self) -> None:
+        pair = [_card("RTX 3090", 24), _card("RTX 3090", 24, index=1)]
+        budget, recs = _recommend(pair, RAM_64)
+        _, single = _recommend([_card("RTX 3090", 48)], RAM_64)
+
+        assert budget.sized_gpus == 2 and budget.budget_gb == 48.0
+        assert recs[0].tier == "multi-gpu"
+        assert recs[0].model == lm.recommended(budget)[0].tag
+        assert all("Ollama will use all 2 GPUs automatically" in r.reason for r in recs)
+        assert [r.model for r in recs] == [r.model for r in single]
+        assert [r.tier for r in recs[1:]] == [r.tier for r in single[1:]]
+
+    def test_recommend_models_250gb_vram(self) -> None:
+        trio = [_card("A100 80GB", 80, index=i) for i in range(3)]
+        budget, recs = _recommend(trio, gpu.SystemMemoryInfo(256.0, 200.0, 140.0))
+        assert lm.tier_for(budget) is lm.LOCAL_MODEL_TIERS[-1]
+        assert recs[0].tier == "multi-gpu"
+        assert "Ollama will use all 3 GPUs automatically" in recs[0].reason
+
+    def test_recommend_models_large_vram(self) -> None:
+        budget, recs = _recommend([_card("H100", 80)], RAM_128)
+        assert budget.compute_capability == (9, 0)
+        assert recs[0].model == lm.recommended(budget)[0].tag
+        assert recs[0].tier == "full"
+
+    # ---- vision pick ----
+
+    @pytest.mark.parametrize(
+        "gpus, sys_mem",
+        [
+            ([], RAM_16),
+            ([_card("GTX 1050", 2)], gpu.SystemMemoryInfo(8.0, 4.0, 2.0)),
+            ([_card("RTX 4060", 8)], RAM_32),
+            ([_card("RTX 4070 Ti", 16)], RAM_32),
+            ([_card("RTX 2080 Ti", 24)], RAM_64),
+            ([_card("RTX 6000 Ada", 48)], RAM_64),
+        ],
+        ids=["cpu", "2gb", "8gb", "16gb", "turing-24gb", "48gb"],
+    )
+    def test_vision_rec_is_the_tables_vision_pick(self, gpus, sys_mem) -> None:
+        budget, recs = _recommend(gpus, sys_mem)
+        vision = lm.pick(budget, "vision")
+        assert [(r.model, r.tier) for r in recs if r.tier.startswith("vision")] == [(vision.tag, "vision")]
+        assert lm.pick_for_tag(vision.tag).vision is True
+
+    def test_vision_model_turing_swap(self) -> None:
+        """On Turing (CC 7.5, no BF16) the table's compute floor sends the vision pick a tier down."""
+        floors = [p for p in lm.all_picks() if p.vision and p.min_compute_capability is not None]
+        assert floors, "the table carries a vision pick with a compute floor"
+        turing, turing_recs = _recommend([_card("RTX 2080 Ti", 24)], RAM_64)
+        ada, ada_recs = _recommend([_card("NVIDIA GeForce RTX 4090", 24)], RAM_64)
+        assert turing.compute_capability == (7, 5) and ada.compute_capability == (8, 9)
+
+        turing_vision = [r.model for r in turing_recs if r.tier.startswith("vision")]
+        ada_vision = [r.model for r in ada_recs if r.tier.startswith("vision")]
+        assert turing_vision == [lm.pick(turing, "vision").tag]
+        assert ada_vision == [lm.pick(ada, "vision").tag]
+        assert turing_vision != ada_vision
+        for pick in floors:
+            if pick.min_compute_capability > (7, 5):
+                assert pick.tag not in [r.model for r in turing_recs]
+
+    # ---- Ollama optimizations ----
+
+    def test_get_ollama_optimizations_no_gpu(self) -> None:
+        opt = _optimize([], RAM_16)
+        budget = gpu._memory_budget([], None)
         assert opt.architecture == "CPU"
         assert opt.flash_attention is False
-        assert opt.num_parallel == 1
+        assert (opt.num_parallel, opt.recommended_ctx, opt.recommended_quant) == (
+            lm.num_parallel_for(budget), lm.num_ctx_for(budget), lm.quant_for(budget),
+        )
+        assert opt.recommended_ctx == lm.CPU_ONLY_NUM_CTX
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_get_ollama_optimizations_rtx4090(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, get_ollama_optimizations
-
-        mock_mem.return_value = SystemMemoryInfo(32.0, 24.0, 16.0)
-        gpu = self._make_gpu("NVIDIA GeForce RTX 4090", 24576)
-        opt = get_ollama_optimizations(gpus=[gpu])
+    def test_get_ollama_optimizations_rtx4090(self) -> None:
+        rtx = _card("NVIDIA GeForce RTX 4090", 24)
+        opt = _optimize([rtx], RAM_32)
+        budget = gpu._memory_budget([rtx], RAM_32)
         assert opt.flash_attention is True
         assert opt.architecture == "Ada Lovelace"
-        assert opt.recommended_ctx >= 16384
+        assert (opt.recommended_ctx, opt.num_parallel, opt.recommended_quant) == (
+            lm.num_ctx_for(budget), lm.num_parallel_for(budget), lm.quant_for(budget),
+        )
+        tier = lm.tier_for(budget)
+        assert (opt.recommended_ctx, opt.num_parallel) == (tier.num_ctx, tier.num_parallel)
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_recommend_models_large_vram(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+    def test_get_ollama_optimizations_hopper_gets_the_tables_hbm_quant(self) -> None:
+        h100 = _card("NVIDIA H100 80GB HBM3", 80)
+        opt = _optimize([h100], RAM_128)
+        budget = gpu._memory_budget([h100], RAM_128)
+        assert budget.compute_capability == (9, 0), "read off the name"
+        assert opt.recommended_quant == lm.quant_for(budget) == lm.tier_for(budget).default_quant
+        assert opt.recommended_quant != "Q4_K_M"
+        assert any("Q8_0 or F16 recommended" in n for n in opt.notes)
 
-        mock_mem.return_value = SystemMemoryInfo(128.0, 100.0, 70.0)
-        gpu = self._make_gpu("H100", 81920)
-        recs = recommend_models(gpus=[gpu])
-        model_names = [r.model for r in recs]
-        # High-VRAM tier recommends a real primary Nemotron model.
-        assert "nemotron" in model_names
+    # ---- the tier snap ----
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_recommend_models_250gb_vram(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+    @pytest.mark.parametrize(
+        "name, reported_mib, nominal_gb, cc",
+        [
+            ("NVIDIA GeForce RTX 4090", 24564, 24, (8, 9)),
+            ("NVIDIA H100 80GB HBM3", 81559, 80, (9, 0)),
+            ("NVIDIA A100-SXM4-40GB", 40536, 40, (8, 0)),
+        ],
+        ids=["4090-23.99", "h100-79.65", "a100-39.59"],
+    )
+    def test_driver_reported_sizes_land_in_the_nominal_tier(self, name, reported_mib, nominal_gb, cc) -> None:
+        """A 23.99 GB card is the 24 GB tier now: recommendations and optimizations both snap."""
+        reported = _card(name, reported_mib / 1024, cc=cc)
+        nominal = _card(name, nominal_gb, cc=cc)
+        budget = gpu._memory_budget([reported], RAM_64)
+        assert budget.total_gb < nominal_gb <= budget.total_gb + lm.TIER_SNAP_GB
+        assert lm.tier_for(budget) is lm.tier_for(float(nominal_gb))
 
-        mock_mem.return_value = SystemMemoryInfo(256.0, 200.0, 140.0)
-        gpus = [
-            self._make_gpu("A100 80GB", 81920, 0),
-            self._make_gpu("A100 80GB", 81920, 1),
-            self._make_gpu("A100 80GB", 81920, 2),
-        ]
-        recs = recommend_models(gpus=gpus)
-        tiers = {r.tier for r in recs}
-        assert "multi-gpu" in tiers
+        _, recs_reported = _recommend([reported], RAM_64)
+        _, recs_nominal = _recommend([nominal], RAM_64)
+        assert [(r.model, r.tier) for r in recs_reported] == [(r.model, r.tier) for r in recs_nominal]
 
-    # ---- Vision model tier tests ----
+        opt_reported, opt_nominal = _optimize([reported], RAM_64), _optimize([nominal], RAM_64)
+        assert (opt_reported.recommended_ctx, opt_reported.num_parallel, opt_reported.recommended_quant) == (
+            opt_nominal.recommended_ctx, opt_nominal.num_parallel, opt_nominal.recommended_quant,
+        ) == (lm.num_ctx_for(budget), lm.num_parallel_for(budget), lm.quant_for(budget))
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_vision_model_included_on_8gb(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+    # ---- every tag gpu.py can emit ----
 
-        mock_mem.return_value = SystemMemoryInfo(32.0, 24.0, 16.0)
-        gpu = self._make_gpu("RTX 4060", 8192)
-        recs = recommend_models(gpus=[gpu])
-        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
-        assert "moondream" in vision_models
+    def test_every_emitted_tag_is_in_the_table(self) -> None:
+        """Sweep budgets x pool types x architectures x RAM x GPU counts: every tag recommend_models
+        can emit is a registry-verified table tag, no retired tag survives, and the tier words stay
+        in the vocabulary consumers read; get_ollama_optimizations agrees with the table throughout."""
+        budgets = (0, 2, 3.9, 4, 6, 8, 11, 12, 15, 16, 20, 23.99, 24, 32, 39.59, 40, 47, 48, 64, 79.65, 80, 95, 96, 112, 128, 192)
+        capabilities = ((0, 0), (7, 5), (8, 0), (8, 6), (8, 9), (9, 0), (10, 0), (12, 1))
+        emitted_tags: set[str] = set()
+        emitted_tiers: set[str] = set()
+        for vram_gb in budgets:
+            for cc in capabilities:
+                for unified in (False, True):
+                    for sys_mem in (RAM_16, RAM_64):
+                        for count in (1, 2):
+                            name = "NVIDIA GB10" if unified else "NVIDIA GPU"
+                            gpus = [_card(name, vram_gb, cc=cc, unified=unified, index=i) for i in range(count)] if vram_gb else []
+                            budget, recs = _recommend(gpus, sys_mem)
+                            emitted_tags |= {r.model for r in recs}
+                            emitted_tiers |= {r.tier for r in recs}
+                            for rec in recs:
+                                assert rec.vram_required_gb == lm.pick_for_tag(rec.model).runtime_gb
+                            opt = _optimize(gpus, sys_mem)
+                            assert (opt.recommended_ctx, opt.num_parallel, opt.recommended_quant) == (
+                                lm.num_ctx_for(budget), lm.num_parallel_for(budget), lm.quant_for(budget),
+                            ), (vram_gb, cc, unified, sys_mem, count)
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_vision_model_on_16gb_is_minicpm(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
+        assert emitted_tags <= set(lm.all_tags()), emitted_tags - set(lm.all_tags())
+        retired = {t for t in emitted_tags if t.startswith(RETIRED_TAG_PREFIXES)}
+        assert not retired, retired
+        assert emitted_tiers <= {*LEGACY_BANDS, *(f"{b}-hybrid" for b in LEGACY_BANDS), "vision", "embed", "multi-gpu"}
+        assert {"mini", "small", "medium", "full", "vision", "embed", "multi-gpu"} <= emitted_tiers
+        assert any(t.endswith("-hybrid") for t in emitted_tiers)
 
-        mock_mem.return_value = SystemMemoryInfo(32.0, 24.0, 16.0)
-        gpu = self._make_gpu("RTX 4070 Ti", 16384)
-        recs = recommend_models(gpus=[gpu])
-        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
-        assert "minicpm-v" in vision_models
+    def test_unified_memory_note_names_the_tables_moe_picks(self) -> None:
+        budget = gpu._memory_budget([_card("NVIDIA GB10", 128, unified=True, cc=(12, 1))], RAM_128)
+        note = gpu.unified_memory_note(budget)
+        moe = [p.tag for p in lm.recommended(budget) if p.moe]
+        assert moe and all(tag in note for tag in moe)
+        assert f"{budget.total_gb:.0f} GB LPDDR5x" in note
+        assert f"~{gpu.UNIFIED_MEMORY_BANDWIDTH_GBPS} GB/s" in note
+        assert f"leaving ~{budget.budget_gb:.0f} GB for models" in note
+        assert "not an extra CPU-offload pool" in note
 
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_vision_model_on_48gb_is_llama32_vision(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
-
-        mock_mem.return_value = SystemMemoryInfo(64.0, 48.0, 32.0)
-        gpu = self._make_gpu("RTX 6000 Ada", 48 * 1024)
-        recs = recommend_models(gpus=[gpu])
-        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
-        assert "llama3.2-vision" in vision_models
-
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_vision_model_turing_swap(self, mock_mem):
-        """On Turing (CC 7.5), high-VRAM tier should swap to minicpm-v
-        because llama3.2-vision BF16 paths degrade badly without tensor cores."""
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
-
-        mock_mem.return_value = SystemMemoryInfo(64.0, 48.0, 32.0)
-        # RTX 2080 Ti = Turing, CC 7.5
-        gpu = self._make_gpu("RTX 2080 Ti", 24 * 1024)
-        recs = recommend_models(gpus=[gpu])
-        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
-        assert "minicpm-v" in vision_models
-        assert "llama3.2-vision" not in vision_models
-
-    @patch("nvh.utils.gpu.detect_system_memory")
-    def test_no_vision_model_below_4gb(self, mock_mem):
-        from nvh.utils.gpu import SystemMemoryInfo, recommend_models
-
-        mock_mem.return_value = SystemMemoryInfo(8.0, 4.0, 2.0)
-        gpu = self._make_gpu("GTX 1050", 2 * 1024)
-        recs = recommend_models(gpus=[gpu])
-        vision_models = [r.model for r in recs if r.tier.startswith("vision")]
-        assert vision_models == []
+        # A pool too small for any MoE pick says so instead of naming one -- and it loses what a
+        # 16 GB pool actually reserves (4 GB), not the GB10's 16.
+        tiny = gpu._memory_budget([_card("NVIDIA GB10", 16, unified=True, cc=(12, 1))], RAM_16)
+        assert (tiny.os_reserve_gb, tiny.budget_gb) == (4.0, 12.0)
+        assert not any(p.moe for p in lm.recommended(tiny))
+        tiny_note = gpu.unified_memory_note(tiny)
+        assert "no MoE model fits this budget yet" in tiny_note
+        assert "~4 GB is reserved for the OS" in tiny_note and "leaving ~12 GB for models" in tiny_note
 
 
 class TestGPUDetection:

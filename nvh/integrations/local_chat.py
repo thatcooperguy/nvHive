@@ -15,26 +15,23 @@ from typing import Any
 
 import httpx
 
+from nvh.core import local_models
 from nvh.integrations.workspace.storage import storage_layout
 from nvh.utils.ollama import ollama_base_url
 
-PREFERRED_CHAT_MODELS = (
-    "nemotron-3-nano-omni",
-    "nemotron-omni",
-    "nemotron",
-    "llama3.3:70b",
-    "qwen2.5-coder:32b",
-    "llama3.2-vision",
-    "qwen3:8b",
-    "deepseek-r1:8b",
-    "qwen2.5-coder:7b",
-    "llama3.1:8b",
-    "gemma3:4b",
-    "llava:7b",
-    "minicpm-v",
-    "moondream",
-    "nemotron-mini",
-)
+
+def _preferred_chat_models() -> tuple[str, ...]:
+    """The tier table's chat and code picks, largest loaded size first.
+
+    The probe wants the strongest installed model to answer, so the ranking is
+    :func:`nvh.core.local_models.ordered_picks` over the whole table -- the
+    table's own ``runtime_gb``, never a hand-typed ladder, which is how this
+    list once carried tags the registry no longer serves.
+    """
+    return tuple(p.tag for p in local_models.ordered_picks(None, "chat", "code"))
+
+
+PREFERRED_CHAT_MODELS: tuple[str, ...] = _preferred_chat_models()
 
 
 def _checked_at() -> str:

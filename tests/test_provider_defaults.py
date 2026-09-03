@@ -32,7 +32,7 @@ EXPECTED_DEFAULTS = {
     "mistral": ("mistral/mistral-large-latest", "mistral/mistral-small-latest"),
     "cohere": ("command-a-03-2025", "command-r-08-2024"),
     "deepseek": ("deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"),
-    "perplexity": ("perplexity/sonar-pro", "perplexity/sonar"),
+    "perplexity": ("perplexity/preset/low", "perplexity/preset/fast"),
     "together": ("together_ai/openai/gpt-oss-120b", "together_ai/openai/gpt-oss-20b"),
     "fireworks": (
         "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",

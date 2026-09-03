@@ -109,18 +109,41 @@ def mission_profile_model_ids(profile: str) -> list[str]:
     return recommended
 
 
+def _unknown_vram_planning_gb() -> int:
+    """VRAM to plan ComfyUI examples against when none was detected.
+
+    Read off ``nvh.core.local_models``: the floor of the first tier whose
+    vision pick outgrows the CPU tier's -- the smallest card the table treats
+    as able to run a real vision model (12 GB today) -- so a session whose
+    GPU memory could not be read is offered that tier's starter examples
+    rather than nothing.
+    """
+    from nvh.core.local_models import LOCAL_MODEL_TIERS
+
+    cpu_vision = LOCAL_MODEL_TIERS[0].picks["vision"].tag
+    for tier in LOCAL_MODEL_TIERS:
+        if tier.picks["vision"].tag != cpu_vision:
+            return int(tier.min_gb)
+    return int(LOCAL_MODEL_TIERS[-1].min_gb)
+
+
 def mission_profile_example_ids(profile: str, *, vram_gb: int | None = None) -> list[str]:
-    """Return ComfyUI example ids that fit the detected or supplied VRAM."""
+    """Return ComfyUI example ids that fit the detected or supplied VRAM.
+
+    The detected figure is ``studio_packs._detect_vram_gb()`` -- the
+    ``local_models.tier_budget`` the model ladder plans against, so a unified
+    pool is already net of the OS reserve.
+    """
     if not mission_profile_needs_comfy(profile):
         return []
 
     from nvh.integrations.installs.comfyui import examples_as_dicts
-    from nvh.integrations.installs.studio_packs import model_catalog_with_status
+    from nvh.integrations.installs.studio_packs import _detect_vram_gb
 
     detected_vram = vram_gb
     if detected_vram is None:
-        detected_vram = int(model_catalog_with_status().get("detected_vram_gb", 0) or 0)
-    vram_limit = detected_vram or 12
+        detected_vram = int(_detect_vram_gb() or 0)
+    vram_limit = detected_vram or _unknown_vram_planning_gb()
     return [
         example["id"] for example in examples_as_dicts()
         if int(example.get("recommended_vram_gb", 0) or 0) <= vram_limit

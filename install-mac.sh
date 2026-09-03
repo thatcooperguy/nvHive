@@ -139,6 +139,27 @@ command -v nvh &>/dev/null || { echo -e "${R}nvh command not found after install
 export PATH="$NVH_VENV/bin:$PATH"
 
 # ---------------------------------------------------------------------------
+# Resolve the local model from the installed package
+# ---------------------------------------------------------------------------
+# nvh.core.local_models is the one VRAM-tier -> Ollama-tag table every ladder
+# reads. On Apple Silicon the unified pool (hw.memsize) is passed in so the
+# table takes its OS reserve off it exactly as it does for a GB10; an Intel
+# Mac has no Metal Ollama and gets the table's CPU tier. Nothing is typed
+# here — until 0.42 this file carried its own nemotron / llama3.1:8b /
+# nemotron-mini ladder.
+DEFAULT_OLLAMA_MODEL=""
+if [ "$APPLE_SILICON" = "true" ] && [ "$MEM_GB" -gt 0 ]; then
+    DEFAULT_OLLAMA_MODEL="$("$NVH_VENV/bin/python" -m nvh.cli.main models tiers --pick chat --unified-gb "$MEM_GB" 2>/dev/null | tail -n 1)" || DEFAULT_OLLAMA_MODEL=""
+else
+    DEFAULT_OLLAMA_MODEL="$("$NVH_VENV/bin/python" -m nvh.cli.main models tiers --pick chat --vram-gb 0 2>/dev/null | tail -n 1)" || DEFAULT_OLLAMA_MODEL=""
+fi
+if [ -n "$DEFAULT_OLLAMA_MODEL" ]; then
+    echo -e "${D}Local model for this Mac: $DEFAULT_OLLAMA_MODEL (nvh models tiers --pick chat)${N}"
+else
+    echo -e "${Y}Could not read the local model table from the installed nvh; pick a model later with 'nvh models pull --recommended'.${N}"
+fi
+
+# ---------------------------------------------------------------------------
 # Auto-config
 # ---------------------------------------------------------------------------
 HIVE_DIR="$HOME/.hive"
@@ -159,7 +180,7 @@ defaults:
 advisors:
   ollama:
     base_url: http://localhost:11434
-    default_model: ollama/nemotron-mini
+    default_model: ollama/__NVH_DEFAULT_OLLAMA_MODEL__
     type: ollama
     enabled: true
 
@@ -193,6 +214,20 @@ cache:
   ttl_seconds: 86400
   max_size: 1000
 CFGEOF
+    CFG="$HIVE_DIR/config.yaml" MODEL="$DEFAULT_OLLAMA_MODEL" "$NVH_VENV/bin/python" - <<'PY'
+import os
+from pathlib import Path
+
+path = Path(os.environ["CFG"])
+model = os.environ["MODEL"]
+lines = path.read_text(encoding="utf-8").split("\n")
+if model:
+    lines = [line.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model) for line in lines]
+else:
+    # No tier resolved: drop the line so nvh's own default applies.
+    lines = [line for line in lines if "__NVH_DEFAULT_OLLAMA_MODEL__" not in line]
+path.write_text("\n".join(lines), encoding="utf-8")
+PY
     echo -e "${G}Config created: $HIVE_DIR/config.yaml${N}"
 fi
 
@@ -235,15 +270,10 @@ if [ "$APPLE_SILICON" = "true" ]; then
         sleep 3
     fi
 
-    # Pick model based on unified memory
-    # Apple Silicon unified memory: more is available than NVIDIA VRAM
-    # because Metal can address a larger portion of system RAM
-    if curl -sf http://localhost:11434/api/tags &>/dev/null; then
-        if [ "$MEM_GB" -ge 64 ]; then   MODEL="nemotron"       # 70B Q4 fits in 64GB
-        elif [ "$MEM_GB" -ge 32 ]; then MODEL="nemotron"       # 70B Q4
-        elif [ "$MEM_GB" -ge 16 ]; then MODEL="llama3.1:8b"    # no real mid-Nemotron
-        else                             MODEL="nemotron-mini"; fi
-
+    # The model is the tier table's chat pick for this pool (resolved above
+    # via `nvh models tiers --pick chat --unified-gb $MEM_GB`).
+    MODEL="$DEFAULT_OLLAMA_MODEL"
+    if [ -n "$MODEL" ] && curl -sf http://localhost:11434/api/tags &>/dev/null; then
         if ! ollama list 2>/dev/null | grep -q "$MODEL"; then
             echo -e "${B}Pulling $MODEL in background (you can start using nvh now)...${N}"
             ollama pull "$MODEL" &>/dev/null &

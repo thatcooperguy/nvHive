@@ -201,6 +201,7 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVH_OLLAMA_PRELOAD` | `1` | `0` skips the post-boot warm-up |
 | `NVH_OLLAMA_START_WAIT` | `10` | seconds the engine waits for a starting Ollama |
 | `NVH_OLLAMA_HTTP_TIMEOUT` | `0.5` | seconds for the engine's Ollama liveness probe |
+| `NVH_OLLAMA_NUM_CTX` | unset (detected) | `num_ctx` the Ollama provider sends with every request. Unset: for a loopback `OLLAMA_BASE_URL` with a visible GPU, the detected VRAM tier's value from the [tier table](MODELS.md#local-models-by-vram); with no visible GPU, or a daemon on another host (non-loopback `OLLAMA_BASE_URL`), nothing is sent and Ollama's own default applies. A positive integer overrides all of that (still capped at the model's own context length); `0` sends no `num_ctx` |
 | `NVH_OLLAMA_VERSION`, `NVH_OLLAMA_URL`, `NVH_OLLAMA_DOWNLOAD_BASE` | latest, unset, `https://ollama.com/download` | pin or redirect the rootless Ollama download |
 | `NVH_OLLAMA_BOOT_TIMEOUT`, `NVH_API_BOOT_TIMEOUT`, `NVH_WEBUI_BOOT_TIMEOUT` | `15`, `20`, `30` | health-gate windows for `nvh services start` ([MAINTAINERS.md](MAINTAINERS.md#service-order)) |
 | `NVH_BROWSER` | unset | browser command for `nvh webui`, e.g. `firefox --new-window {url}` |

@@ -72,24 +72,95 @@ Apple Silicon runs through Ollama's Metal backend without the pynvml detail.
 
 ## Local models by VRAM
 
-The installer's picker, `nvh setup`, the setup wizard and `nvh studio
---models` all use the same tiering:
+One table decides which local model every ladder gets:
+`nvh.core.local_models.LOCAL_MODEL_TIERS`. `install.sh` sources it as shell
+variables (`nvh models tiers --shell`); `install.ps1` and `install-mac.sh`
+ask it for this machine's pick (`nvh models tiers --pick chat`); `nvh setup`,
+the setup wizard and `nvh studio --models` read the same module. The budget
+is discrete VRAM as the driver reports it, or a unified pool (GB10 / DGX
+Spark, Apple Silicon) minus the OS reserve. Sizes are the registry manifest
+in decimal GB — the number `ollama list` prints — and "loaded" adds KV-cache
+and CUDA-context headroom. `nvh models tiers` prints the tables embedded here.
 
-| VRAM | Primary local model | Vision / fallback | Typical use |
-|---|---|---|---|
-| none / < 4 GB | cloud and free providers | optional tiny local | CPU mode |
-| 4–8 GB | `gemma3:4b` | `moondream` | lightweight local chat |
-| 8–12 GB | `qwen3:8b` or `llama3.1:8b` | `moondream`, `llava:7b` | student chat and code |
-| 12–24 GB | `qwen3:8b`, `qwen2.5-coder:7b` | `minicpm-v` | coding plus image help |
-| 24–40 GB | `llama3.2-vision`, `nemotron-3-nano-omni` | `qwen3:8b` | multimodal desktop assistant |
-| 40 GB+ | `nemotron-omni`, `nemotron` 70B | `llama3.2-vision` + a coder | strongest local AI first |
+<!-- BEGIN GENERATED: local-model-tiers -->
+| Budget (GB) | Tier | num_ctx | parallel | quant | chat | code | vision | reasoning | embed | CPU fallback |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0-4 | cpu | 4096 | 1 | Q4_K_M | `gemma3:1b` | `qwen3:1.7b` | `moondream` | `qwen3:1.7b` | `nomic-embed-text` | `gemma3:1b` |
+| 4-8 | mini | 4096 | 1 | Q4_K_M | `gemma3:4b` | `qwen3:4b` | `moondream` | `qwen3:4b` | `nomic-embed-text` | `gemma3:1b` |
+| 8-12 | small | 4096 | 1 | Q4_K_M | `qwen3:8b` | `qwen3:8b` | `moondream` | `qwen3:8b` | `nomic-embed-text` | `gemma3:4b` |
+| 12-16 | small-plus | 8192 | 1 | Q4_K_M | `qwen3:8b` | `qwen3:8b` | `qwen3-vl:8b` | `qwen3:8b` | `nomic-embed-text` | `gemma3:4b` |
+| 16-24 | medium | 16384 | 1 | Q4_K_M | `qwen3:14b` | `qwen3:14b` | `llama3.2-vision` | `gpt-oss:20b` | `nomic-embed-text` | `gemma3:4b` |
+| 24-40 | large | 32768 | 2 | Q4_K_M | `qwen3:30b-a3b` | `qwen3-coder:30b` | `llama3.2-vision` | `gpt-oss:20b` | `nomic-embed-text` | `gemma3:4b` |
+| 40-48 | xl | 32768 | 2 | Q4_K_M | `nemotron3:33b` | `qwen3-coder:30b` | `llama3.2-vision` | `gpt-oss:20b` | `nomic-embed-text` | `gemma3:4b` |
+| 48-80 | workstation | 65536 | 4 | Q4_K_M | `nemotron3:33b-q8` | `qwen3-coder:30b` | `llama3.2-vision` | `gpt-oss:20b` | `nomic-embed-text` | `gemma3:4b` |
+| 80-96 | datacenter | 65536 | 4 | Q8_0 or F16 | `nemotron3:33b-q8` | `qwen3-coder:30b` | `llama3.2-vision` | `gpt-oss:120b` | `nomic-embed-text` | `gemma3:4b` |
+| 96+ | max | 131072 | 4 | Q8_0 or F16 | `nemotron3:33b-q8` | `qwen3-coder:30b` | `llama3.2-vision` | `gpt-oss:120b` | `nomic-embed-text` | `gemma3:4b` |
 
-The strongest fitting primary model is pulled first, then smaller multimodal
-and coding fallbacks so the Wizard keeps working when the largest model is
-busy. `nvh studio --install-models recommended -y` pulls the tier's set;
-`nvh studio --install-models gemma3-4b,qwen25-coder-7b -y` picks by id.
+| Tag | Catalog id | Quant | On disk (GB) | Loaded (GB) | MoE | Vision | Min CC |
+|---|---|---|---|---|---|---|---|
+| `gemma3:1b` | gemma3-1b | Q4_K_M | 0.8 | 1 |  |  |  |
+| `gemma3:4b` | gemma3-4b | Q4_K_M | 3.3 | 4 |  | yes |  |
+| `gpt-oss:120b` | gpt-oss-120b | MXFP4 | 65.4 | 71.9 | yes |  |  |
+| `gpt-oss:20b` | gpt-oss-20b | MXFP4 | 13.8 | 15.2 | yes |  |  |
+| `llama3.2-vision` | llama32-vision | Q4_K_M | 7.8 | 9.4 |  | yes | 8.0 |
+| `moondream` | moondream | Q4_0 | 1.7 | 2 |  | yes |  |
+| `nemotron3:33b` | nemotron3-33b | Q4_K_M | 27.6 | 30.4 | yes | yes |  |
+| `nemotron3:33b-q8` | nemotron3-33b-q8 | Q8_0 | 36.5 | 40.2 | yes | yes |  |
+| `nomic-embed-text` | nomic-embed-text | F16 | 0.3 | 0.4 |  |  |  |
+| `qwen3-coder:30b` | qwen3-coder-30b | Q4_K_M | 18.6 | 20.5 | yes |  |  |
+| `qwen3-vl:8b` | qwen3-vl-8b | Q4_K_M | 6.1 | 7.3 |  | yes |  |
+| `qwen3:1.7b` | qwen3-1.7b | Q4_K_M | 1.4 | 1.7 |  |  |  |
+| `qwen3:14b` | qwen3-14b | Q4_K_M | 9.3 | 11.2 |  |  |  |
+| `qwen3:30b-a3b` | qwen3-30b-a3b | Q4_K_M | 18.6 | 20.5 | yes |  |  |
+| `qwen3:4b` | qwen3-4b | Q4_K_M | 2.5 | 3 |  |  |  |
+| `qwen3:8b` | qwen3-8b | Q4_K_M | 5.2 | 6.2 |  |  |  |
+<!-- END GENERATED: local-model-tiers -->
 
-ComfyUI profiles follow the same ladder: `starter` on 8 GB, `edit` on 12 GB,
+A unified pool does not lose a flat 16 GB. Its OS reserve is an eighth of
+the pool, never under 4 GB and never over the GB10's 16 GB
+(`nvh.core.local_models.unified_os_reserve_gb`), so a 16 GB Apple Silicon
+Mac keeps 4 GB for the OS and a 128 GB DGX Spark keeps 16; the budget is
+what is left. `install.sh` reproduces the curve from the
+`NVH_UNIFIED_OS_RESERVE_MIN_GB` / `_MAX_GB` / `_FRACTION` values the tier
+snippet exports, so neither side types the numbers.
+
+<!-- BEGIN GENERATED: unified-os-reserve -->
+| Unified pool (GB) | OS reserve (GB) | Budget (GB) | Tier | First `recommended()` pick |
+|---|---|---|---|---|
+| 8 | 4 | 4 | 4-8 (mini) | `gemma3:4b` |
+| 16 | 4 | 12 | 12-16 (small-plus) | `qwen3:8b` |
+| 24 | 4 | 20 | 16-24 (medium) | `gpt-oss:20b` |
+| 32 | 4 | 28 | 24-40 (large) | `qwen3:30b-a3b` |
+| 48 | 6 | 42 | 40-48 (xl) | `nemotron3:33b` |
+| 64 | 8 | 56 | 48-80 (workstation) | `nemotron3:33b-q8` |
+| 96 | 12 | 84 | 80-96 (datacenter) | `nemotron3:33b-q8` |
+| 128 | 16 | 112 | 96+ (max) | `nemotron3:33b-q8` |
+| 192 | 16 | 176 | 96+ (max) | `nemotron3:33b-q8` |
+<!-- END GENERATED: unified-os-reserve -->
+
+`install.sh` pulls the tier's chat pick and, if that tag cannot be pulled,
+walks the chain below one rung at a time; `nvh models pull --recommended`
+and `nvh studio --install-models recommended -y` pull the `recommended()`
+set. On a unified pool MoE models lead that set because dense weights are
+bandwidth-bound there; that column is computed on the smallest pool whose
+budget after the OS reserve is the tier's floor, and each cell names it.
+
+<!-- BEGIN GENERATED: installer-pull-ladder -->
+| Budget (GB) | Tier | `install.sh` pull chain (first success wins) | `recommended()` — discrete card | `recommended()` — unified pool (MoE first) |
+|---|---|---|---|---|
+| 0-4 | cpu | `gemma3:1b` | `gemma3:1b`, `qwen3:1.7b`, `moondream`, `nomic-embed-text` | 4 GB pool: `gemma3:1b`, `qwen3:1.7b`, `moondream`, `nomic-embed-text` |
+| 4-8 | mini | `gemma3:4b` → `gemma3:1b` | `gemma3:4b`, `qwen3:4b`, `moondream`, `nomic-embed-text`, `gemma3:1b` | 8 GB pool: `gemma3:4b`, `qwen3:4b`, `moondream`, `nomic-embed-text`, `gemma3:1b` |
+| 8-12 | small | `qwen3:8b` → `gemma3:4b` → `gemma3:1b` | `qwen3:8b`, `moondream`, `nomic-embed-text`, `gemma3:4b` | 12 GB pool: `qwen3:8b`, `moondream`, `nomic-embed-text`, `gemma3:4b` |
+| 12-16 | small-plus | `qwen3:8b` → `gemma3:4b` → `gemma3:1b` | `qwen3:8b`, `qwen3-vl:8b`, `nomic-embed-text`, `gemma3:4b` | 16 GB pool: `qwen3:8b`, `qwen3-vl:8b`, `nomic-embed-text`, `gemma3:4b` |
+| 16-24 | medium | `qwen3:14b` → `qwen3:8b` → `gemma3:4b` → `gemma3:1b` | `qwen3:14b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` | 20 GB pool: `gpt-oss:20b`, `qwen3:14b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` |
+| 24-40 | large | `qwen3:30b-a3b` → `qwen3:14b` → `qwen3:8b` → `gemma3:4b` → `gemma3:1b` | `qwen3:30b-a3b`, `qwen3-coder:30b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` | 28 GB pool: `qwen3:30b-a3b`, `qwen3-coder:30b`, `gpt-oss:20b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` |
+| 40-48 | xl | `nemotron3:33b` → `qwen3:30b-a3b` → `qwen3:14b` → `qwen3:8b` → `gemma3:4b` → `gemma3:1b` | `nemotron3:33b`, `qwen3-coder:30b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` | 46 GB pool: `nemotron3:33b`, `qwen3-coder:30b`, `gpt-oss:20b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` |
+| 48-80 | workstation | `nemotron3:33b-q8` → `nemotron3:33b` → `qwen3:30b-a3b` → `qwen3:14b` → `qwen3:8b` → `gemma3:4b` → `gemma3:1b` | `nemotron3:33b-q8`, `qwen3-coder:30b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` | 55 GB pool: `nemotron3:33b-q8`, `qwen3-coder:30b`, `gpt-oss:20b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` |
+| 80-96 | datacenter | `nemotron3:33b-q8` → `nemotron3:33b` → `qwen3:30b-a3b` → `qwen3:14b` → `qwen3:8b` → `gemma3:4b` → `gemma3:1b` | `nemotron3:33b-q8`, `qwen3-coder:30b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` | 91 GB pool: `nemotron3:33b-q8`, `qwen3-coder:30b`, `gpt-oss:120b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` |
+| 96+ | max | `nemotron3:33b-q8` → `nemotron3:33b` → `qwen3:30b-a3b` → `qwen3:14b` → `qwen3:8b` → `gemma3:4b` → `gemma3:1b` | `nemotron3:33b-q8`, `qwen3-coder:30b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` | 110 GB pool: `nemotron3:33b-q8`, `qwen3-coder:30b`, `gpt-oss:120b`, `llama3.2-vision`, `nomic-embed-text`, `gemma3:4b` |
+<!-- END GENERATED: installer-pull-ladder -->
+
+ComfyUI profiles follow their own ladder: `starter` on 8 GB, `edit` on 12 GB,
 `control` on 16 GB, `video` on 24 GB, `video-pro` on 40 GB.
 
 ## The capability matrix
@@ -100,20 +171,37 @@ download tens of gigabytes.
 
 ### What is "Nemotron Omni", really?
 
-`nemotron-omni` and `nemotron-3-nano-omni` are NVIDIA's multimodal *language*
-models. They give the Wizard sight — screenshots, uploaded images and
-documents alongside text — and reason about them. They do **not** generate
-images (that is ComfyUI plus a diffusion model), synthesise speech (Edge TTS /
-Piper / XTTS) or recognise speech (Whisper / WhisperX). When this codebase says
-"Omni", read "the Wizard's vision".
+`nemotron3:33b` and `nemotron3:33b-q8` are NVIDIA's Nemotron 3 Nano Omni — a
+multimodal *language* model. It gives the Wizard sight — screenshots,
+uploaded images and documents alongside text — and reasons about them. It
+does **not** generate images (that is ComfyUI plus a diffusion model),
+synthesise speech (Edge TTS / Piper / XTTS) or recognise speech (Whisper /
+WhisperX). When this codebase says "Omni", read "the Wizard's vision".
+
+The Wizard chat and vision rows come straight from the tier table — every
+tag it picks as `chat` or `vision`, with the first tier and the smallest
+budget that gets it:
+
+<!-- BEGIN GENERATED: wizard-chat-matrix -->
+| Tag | Ladder role | First tier | Min budget (GB) | Sees images | Pulled by `install.sh` |
+|---|---|---|---|---|---|
+| `gemma3:1b` | chat | cpu | 0 |  | yes — chat pick from the cpu tier |
+| `moondream` | vision | cpu | 0 | yes | no — `nvh models pull moondream` |
+| `gemma3:4b` | chat | mini | 4 | yes | yes — chat pick from the mini tier |
+| `qwen3:8b` | chat | small | 8 |  | yes — chat pick from the small tier |
+| `qwen3-vl:8b` | vision | small-plus | 12 | yes | no — `nvh models pull qwen3-vl:8b` |
+| `llama3.2-vision` | vision | medium | 16 | yes | no — `nvh models pull llama3.2-vision` |
+| `qwen3:14b` | chat | medium | 16 |  | yes — chat pick from the medium tier |
+| `qwen3:30b-a3b` | chat | large | 24 |  | yes — chat pick from the large tier |
+| `nemotron3:33b` | chat | xl | 40 | yes | yes — chat pick from the xl tier |
+| `nemotron3:33b-q8` | chat | workstation | 48 | yes | yes — chat pick from the workstation tier |
+<!-- END GENERATED: wizard-chat-matrix -->
+
+The remaining backends are hand-maintained in `studio_packs.py` and
+`comfyui.py`:
 
 | Capability | Backend | Min VRAM | Enabled by `install.sh` | Manual |
 |---|---|---|---|---|
-| Chat — tiny vision | Ollama + `moondream` | 0 GB | always (CPU OK) | Wizard chat picker |
-| Chat — small vision | Ollama + `minicpm-v` | 12 GB | 12+ GB tier | Wizard chat picker |
-| Chat — vision | Ollama + `llama3.2-vision` | 16 GB | 16+ GB tier | Wizard chat picker |
-| Chat — Omni Nano | Ollama + `nemotron-3-nano-omni` | 24 GB | 24+ GB tier (HF fallback) | Wizard chat picker |
-| Chat — Omni flagship | Ollama + `nemotron-omni` | 40 GB | 40+ GB tier (HF fallback) | Wizard chat picker |
 | Image generation (starter) | ComfyUI + Z-Image-Turbo | 8 GB | opt-in | `nvh studio --install comfy -y` |
 | Image editing | ComfyUI + Qwen Image Edit | 12 GB | opt-in | `comfy` pack + Qwen Edit template |
 | Image control | ComfyUI + FLUX.1 ControlNet | 16 GB | opt-in | `comfy` pack + FLUX template |
@@ -125,15 +213,13 @@ Piper / XTTS) or recognise speech (Whisper / WhisperX). When this codebase says
 | Music generation | ACE-Step | 6 GB | opt-in, 24+ GB tier | `nvh studio --install music -y` |
 
 "Opt-in" means `NVH_INSTALL_FULL_CAPABILITY=1` at install time. With it set
-the installer *stages* the qualifying packs by VRAM:
-
-```
->=  8 GB  ComfyUI starter (Z-Image-Turbo)
->= 12 GB  + image-edit profile
->= 16 GB  + control profile
->= 24 GB  + video profile, speech pack (music-producer-lab), music pack (ACE-Step)
->= 40 GB  + video-pro profile (Wan 2.2 14B)
-```
+the installer *stages* the packs cumulatively by the tier the detected VRAM
+lands in — the same budget the [generated tier table](#local-models-by-vram)
+is keyed on. The `Enabled by install.sh` column above names each pack's tier:
+the ComfyUI starter arrives with the `small` tier, `small-plus` adds image
+editing, `medium` adds ControlNet, `large` adds the video, speech and music
+packs and `xl` adds the 14B video profile. The thresholds themselves live in
+`install.sh` (`nvh_capability_tiers_for_vram`) and are not repeated here.
 
 Staging writes `$NVH_HOME/state/capability/auto-enable.json` and nothing else;
 the marker is for a future Wizard consumer. The companion
@@ -147,8 +233,10 @@ Edge TTS plus Groq Whisper, which works on any GPU including none. Cloud
 GRID/virtual GPUs report VRAM through `nvidia-smi` like real cards; the matrix
 applies as written.
 
-Source of truth in code: `install.sh` (`DEFAULT_OLLAMA_MODEL` picker,
-`stage_full_capability_for_vram_tier`),
+Source of truth in code: `nvh/core/local_models.py` (`LOCAL_MODEL_TIERS`,
+rendered by `nvh models tiers` and regenerated into this page by
+`scripts/gen_models_doc.py`), `install.sh`
+(`stage_full_capability_for_vram_tier`),
 `nvh/integrations/installs/studio_packs.py` (`STUDIO_PACKS`, `STUDIO_MODELS`
 with `recommended_vram_gb`), `nvh/integrations/installs/comfyui.py`
 (`TRENDING_COMFYUI_EXAMPLES`).
@@ -196,17 +284,24 @@ recommendation).
 
 ```bash
 nvh bench                     # GPU tokens/s plus an AI-quality pass in one command
-nvh bench --model nemotron    # a specific model; shows VRAM use during the run
+nvh bench --model qwen3:8b    # a specific model; shows VRAM use during the run
 ```
 
-Measured on a DGX Spark (GB10, 120 GB unified memory):
+Measured on a DGX Spark (GB10, 120 GB unified memory) —
+`nvh/utils/gpu_emulation.py` `_MEASURED_BASELINES`. Some of these tags have
+since left the tier table; they stay here as measurements, not as picks:
 
-| Model | Size | tok/s |
+<!-- BEGIN GENERATED: gb10-baselines -->
+| Model | Size (GB) | tok/s |
 |---|---|---|
-| nemotron-mini | 2.7 GB | 86.6 |
-| gemma3 | 3.3 GB | 73.4 |
-| llama3.1 | 4.9 GB | 48.1 |
-| nemotron-3-super | 86 GB | 24.8 |
+| `nemotron-mini` | 2.7 | 86.6 |
+| `gemma3` | 4 | 73.4 |
+| `gemma3:4b` | 3.3 | 73.4 |
+| `llama3.1` | 4.9 | 48.1 |
+| `qwen3:8b` | 5.2 | 44 |
+| `llama3.2-vision` | 7.8 | 30 |
+| `nemotron-3-super` | 86 | 24.8 |
+<!-- END GENERATED: gb10-baselines -->
 
 `nvh estimate` projects throughput for other GPUs; `nvh bench` measures yours.
 

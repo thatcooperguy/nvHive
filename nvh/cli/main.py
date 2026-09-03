@@ -976,7 +976,7 @@ FOCUS_MODES: dict[str, tuple[str, list[str]]] = {
         "You are a thorough research assistant. Synthesize information from multiple sources. "
         "Always cite your sources. Highlight areas of consensus and disagreement. "
         "Provide a balanced, well-structured summary.",
-        ["perplexity", "anthropic", "openai", "google"],
+        ["anthropic", "openai", "google"],
     ),
     "math": (
         "You are an expert mathematician. Solve problems step by step, showing all work. "
@@ -986,6 +986,10 @@ FOCUS_MODES: dict[str, tuple[str, list[str]]] = {
     ),
 }
 FAST_PROVIDERS = ["groq", "deepseek", "ollama"]
+# Advisors whose models search the web themselves. `--focus research` skips
+# nvHive's own grounding step when one of these is pinned with -p or is the
+# only advisor enabled, and never routes an already-grounded prompt to one.
+SEARCH_NATIVE_PROVIDERS = frozenset({"perplexity"})
 _JSON_ONLY_SYSTEM = (
     "You must respond with valid JSON only. No markdown, no explanation outside the JSON. "
     "Use an appropriate JSON structure for the request."
@@ -1101,7 +1105,11 @@ def _ask(
         parts_to_join.append(stdin_content)
     full_prompt = "\n\n".join(parts_to_join)
 
-    # RAG: prepend chunks retrieved from the local index if requested
+    # RAG: chunks retrieved from the local index, looked up against the user's
+    # own words. Injected in _run_query: ahead of the prompt, or -- for a
+    # grounded --focus research turn -- under the same instruction as the web
+    # sources, so neither block is introduced by "use only the other".
+    rag_context = ""
     if knowledge:
         from nvh.integrations.rag import ask as rag_ask
         from nvh.integrations.rag import format_context_block
@@ -1112,15 +1120,14 @@ def _ask(
             if rag_result.get("ok") else ""
         )
         if rag_context:
-            full_prompt = rag_context + "\n\n" + full_prompt
             if not quiet:
-                console.print("[dim][rag context injected][/dim]")
+                _dim_line("[rag context injected]")
         elif not rag_result.get("ok"):
-            console.print(f"[dim][rag unavailable: {rag_result.get('error')}][/dim]")
+            _dim_line(f"[rag unavailable: {rag_result.get('error')}]")
         else:
-            console.print(
-                "[dim][rag: no relevant chunks — add documents with"
-                " 'nvh rag add <file>' or 'nvh rag ingest <folder>'][/dim]"
+            _dim_line(
+                "[rag: no relevant chunks — add documents with"
+                " 'nvh rag add <file>' or 'nvh rag ingest <folder>']"
             )
 
     def _copy_result(text: str) -> None:
@@ -1152,20 +1159,40 @@ def _ask(
             raise typer.Exit(1)
         chosen = provider or next((p for p in preferred if p in enabled), None)
 
-        if focus == "research" and provider is None and "perplexity" not in enabled:
-            await _research_council(engine, full_prompt, system, output=output, quiet=quiet)
-            return
+        # What the advisor is sent: the prompt behind the RAG block, or -- for
+        # --focus research -- the prompt grounded on nvHive's web search. When
+        # a search was attempted and no backend answered, `research_search_error`
+        # says why and an unpinned turn falls back to the council.
+        query_prompt = f"{rag_context}\n\n{full_prompt}" if rag_context else full_prompt
+        if focus == "research":
+            chosen, query_prompt, research_search_error = await _research_turn(
+                engine, question=prompt, body=full_prompt, local_context=rag_context,
+                chosen=chosen, enabled=enabled, local=local, privacy=privacy,
+                model=model, strategy=strategy, quiet=quiet,
+            )
+            if research_search_error is not None:
+                if provider is None:
+                    await _research_council(
+                        engine, query_prompt, system,
+                        output=output, quiet=quiet, reason=research_search_error,
+                    )
+                    return
+                if not quiet:
+                    _dim_line(
+                        f"[research → web search unavailable ({research_search_error}),"
+                        f" asking {provider} without sources]"
+                    )
 
         if local:
-            console.print("[dim][local mode — Ollama only, nothing leaves this machine, nothing stored][/dim]")
+            _dim_line("[local mode — Ollama only, nothing leaves this machine, nothing stored]")
         elif privacy:
-            console.print("[dim][privacy mode — no data stored][/dim]")
+            _dim_line("[privacy mode — no data stored]")
         if focus and not quiet:
-            console.print(f"[dim][focus: {focus} → {chosen or 'auto'}][/dim]")
+            _dim_line(f"[focus: {focus} → {chosen or 'auto'}]")
 
         if verbose:
             from nvh.core.router import classify_task
-            classification = classify_task(full_prompt)
+            classification = classify_task(query_prompt)
             console.print(
                 f"[dim]Task type: {classification.task_type.value}"
                 f" (confidence: {classification.confidence:.2f})[/dim]"
@@ -1174,7 +1201,7 @@ def _ask(
         if stream and output == "text":
             # Stream the response
             decision = engine.router.route(
-                full_prompt,
+                query_prompt,
                 provider_override=chosen,
                 model_override=model,
                 strategy=strategy,
@@ -1191,7 +1218,7 @@ def _ask(
             pmodel = model or decision.model or (pconfig.default_model if pconfig else "")
 
             from nvh.providers.base import Message
-            msgs = [Message(role="user", content=full_prompt)]
+            msgs = [Message(role="user", content=query_prompt)]
             if system:
                 msgs.insert(0, Message(role="system", content=system))
 
@@ -1233,7 +1260,7 @@ def _ask(
             try:
                 with console.status(f"Querying {chosen or 'advisor'}...", spinner="dots"):
                     resp = await engine.query(
-                        prompt=full_prompt,
+                        prompt=query_prompt,
                         provider=chosen,
                         model=model,
                         system_prompt=system,
@@ -1292,11 +1319,122 @@ def _ask(
     _run(_run_query())
 
 
-async def _research_council(engine, prompt: str, system: str | None, *, output: str, quiet: bool) -> None:
-    """`--focus research` without Perplexity: the pre-0.42 `nvh research` path —
-    an auto-agent council whose synthesis and agreement summary are printed."""
+def _dim_line(text: str) -> None:
+    """Print a dim status line such as ``[focus: research → openai]``.
+
+    Escaped first: Rich reads ``[lowercase…]`` as a style tag and would
+    otherwise swallow the whole banner, printing a blank line."""
+    from rich.markup import escape
+
+    console.print(f"[dim]{escape(text)}[/dim]")
+
+
+async def _research_turn(
+    engine,
+    *,
+    question: str | None,
+    body: str,
+    local_context: str,
+    chosen: str | None,
+    enabled: list[str],
+    local: bool,
+    privacy: bool,
+    model: str | None,
+    strategy: str,
+    quiet: bool,
+) -> tuple[str | None, str, str | None]:
+    """Prepare a `--focus research` turn: ``(advisor, prompt, search_error)``.
+
+    ``question`` is the positional prompt, ``body`` the whole text the user
+    supplied (prompt plus pasted --file / stdin / clipboard) and
+    ``local_context`` the --knowledge RAG block or "". The prompt returned
+    is what the advisor gets: ``body`` grounded on nvHive's web search with
+    the RAG block under the same instruction, or -- when grounding is
+    skipped -- ``body`` behind the RAG block. ``search_error`` is set only
+    when a search was attempted and no backend answered, so `_ask` can
+    convene the council and say why.
+
+    Grounding is skipped, with a banner saying why, when:
+
+    * ``--local`` / ``--privacy`` is on -- the question must not go to a
+      search engine, so the advisor answers from what it knows;
+    * the advisor searches on its own (:data:`SEARCH_NATIVE_PROVIDERS`):
+      pinned with -p, or the only advisor enabled;
+    * the input holds nothing searchable (a pasted body of fences and blanks).
+
+    A grounded prompt is never left to the router when that could land on a
+    search-native advisor: ``chosen`` comes back pinned to another advisor.
+    """
+    from nvh.integrations.web_search import web_search
+    from nvh.integrations.web_search.grounding import (
+        RESEARCH_TOP_K,
+        build_grounding_prompt,
+        research_query,
+        with_local_context,
+    )
+
+    ungrounded = with_local_context(body, local_context)
+    if local or privacy:
+        if not quiet:
+            why = (
+                "local mode, web search skipped so nothing leaves this machine"
+                if local else
+                "privacy mode, web search skipped so the question is not sent to a search engine"
+            )
+            _dim_line(f"[research → {why}]")
+        return chosen, ungrounded, None
+    if chosen in SEARCH_NATIVE_PROVIDERS:
+        return chosen, ungrounded, None  # a pinned Perplexity searches on its own
+    candidates = [p for p in enabled if p not in SEARCH_NATIVE_PROVIDERS]
+    if chosen is None and not candidates:
+        native = next((p for p in enabled if p in SEARCH_NATIVE_PROVIDERS), None)
+        if native is not None:
+            if not quiet:
+                _dim_line(f"[research → {native} is the only advisor enabled and searches on its own]")
+            return native, ungrounded, None
+    query = research_query(question, body)
+    if not query:
+        if not quiet:
+            _dim_line("[research → nothing searchable in the input, answering without web sources]")
+        return chosen, ungrounded, None
+    hits = await web_search(query, top_k=RESEARCH_TOP_K)
+    results = hits.get("results") or []
+    if not hits.get("ok") or not results:
+        return chosen, ungrounded, str(hits.get("error") or "no results")
+    if chosen is None:
+        chosen = _grounded_advisor(engine, body, candidates, model=model, strategy=strategy)
     if not quiet:
-        console.print("[dim][research → no Perplexity advisor, synthesizing from multiple advisors][/dim]\n")
+        _dim_line(
+            f"[research → grounded on {len(results)} web sources via {hits.get('backend', 'web search')}]"
+        )
+    return chosen, build_grounding_prompt(body, results, local_context=local_context), None
+
+
+def _grounded_advisor(
+    engine, prompt: str, candidates: list[str], *, model: str | None, strategy: str,
+) -> str | None:
+    """The advisor a grounded research prompt is pinned to when none was preferred.
+
+    The router's pick for the user's own words, unless that pick would search
+    again (:data:`SEARCH_NATIVE_PROVIDERS`); then the first other enabled
+    advisor. ``None`` only when ``candidates`` is empty, which the engine
+    reports as usual.
+    """
+    if not candidates:
+        return None
+    decision = engine.router.route(prompt, model_override=model, strategy=strategy)
+    return decision.provider if decision.provider in candidates else candidates[0]
+
+
+async def _research_council(
+    engine, prompt: str, system: str | None, *, output: str, quiet: bool, reason: str,
+) -> None:
+    """`--focus research` when no web-search backend answered: the pre-0.42
+    `nvh research` path — an auto-agent council whose synthesis and agreement
+    summary are printed. ``reason`` is the search error shown in the banner."""
+    if not quiet:
+        _dim_line(f"[research → web search unavailable ({reason}), synthesizing from multiple advisors]")
+        console.print()
     try:
         with console.status("Convening research council...", spinner="dots"):
             result = await engine.run_council(
@@ -1633,7 +1771,7 @@ def convene_cmd(
         await engine.initialize()
 
         if privacy:
-            console.print("[dim][privacy mode — no data stored][/dim]")
+            _dim_line("[privacy mode — no data stored]")
 
         member_list = members.split(",") if members else None
         weight_dict = None
@@ -3395,6 +3533,12 @@ ACCOUNT_SIGNUP = [
 ]
 
 
+# The table columns whose picks are chat-capable text models -- what the
+# "Both models for local council" prompt in `nvh setup` may list. The vision
+# pick and the RAG embedder are pulled too, but never sit on a council.
+_COUNCIL_USE_CASES: frozenset[str] = frozenset({"chat", "code", "reasoning", "cpu_fallback"})
+
+
 @app.command(rich_help_panel="Admin")
 def setup(
     email: str | None = typer.Option(None, "--email", "-e", help="Your email for provider signups"),
@@ -3678,8 +3822,15 @@ def setup(
                 # user's preference when there's a real
                 # tradeoff (one big model vs two smaller)
                 total_vram = sum(g.vram_gb for g in gpus)
+                # Only the text picks make a council: the vision
+                # pick and the RAG embedder are pulled below but
+                # are not chat models, so the prompt never lists them.
+                council = [
+                    r for r in recs
+                    if r.use_case in _COUNCIL_USE_CASES
+                ]
                 if (
-                    len(recs) > 1
+                    len(council) > 1
                     and total_vram >= 12
                     and total_vram < 48
                 ):
@@ -3690,12 +3841,12 @@ def setup(
                     console.print(
                         f"    1. Both models for"
                         f" local council:"
-                        f" {', '.join(r.model for r in recs)}"
+                        f" {', '.join(r.model for r in council)}"
                         f" [green](recommended)[/green]",
                     )
                     # Find the largest single model
                     # that fits
-                    single = recs[0]
+                    single = council[0]
                     console.print(
                         f"    2. Single larger model:"
                         f" {single.model} only"
@@ -3728,8 +3879,8 @@ def setup(
                     if _r.status_code == 200:
                         daemon_reachable = True
                         # Keep both full name and base for comparison —
-                        # rec.model might be tag-less (`nemotron`) while
-                        # Ollama returns `nemotron:latest`.
+                        # rec.model might be tag-less (`moondream`) while
+                        # Ollama returns `moondream:latest`.
                         for m in _r.json().get("models", []):
                             nm = m.get("name", "")
                             existing.append(nm)
@@ -6848,8 +6999,7 @@ def nvidia():
                     else:
                         console.print(
                             "  [dim]No models installed."
-                            " Run: ollama pull"
-                            " nemotron-mini[/dim]",
+                            f" Run: ollama pull {_starter_local_model_tag()}[/dim]",
                         )
             except Exception:
                 console.print(
@@ -12026,14 +12176,49 @@ _FIRST_RUN_ENV_KEYS = (
 )
 
 
+# Set to any non-empty value to promise "nobody is at the keyboard": the
+# first-run gate never launches the interactive guided_setup(). install.sh sets
+# it on the `nvh models tiers --shell` call whose stdout it sources.
+_NONINTERACTIVE_ENV = "NVH_NONINTERACTIVE"
+
+# Verbs the first-run gate must never wrap in guided_setup(): their stdout is
+# read by a program, not a person. install.sh sources `models tiers --shell`
+# and rejects the snippet unless every line is a KEY=VALUE assignment; CI
+# parses `status --json`; `version` is grepped by scripts; `completions` is
+# piped into a shell rc. Any `--json` / `--help` / `--version` flag marks the
+# invocation machine-readable (or documentation) whatever the verb.
+_FIRST_RUN_EXEMPT_COMMANDS: frozenset[str] = frozenset({"version", "completions"})
+_FIRST_RUN_EXEMPT_SUBCOMMANDS: frozenset[tuple[str, str]] = frozenset({("models", "tiers")})
+_FIRST_RUN_EXEMPT_FLAGS: frozenset[str] = frozenset({"--help", "-h", "--json", "--version"})
+
+
+def _first_run_exempt(args: list[str]) -> bool:
+    """True when ``args`` names a maintenance / introspection verb (see the lists above).
+
+    Pure argv inspection -- no environment, no filesystem -- so the answer is
+    the same on a fresh box and a configured one.
+    """
+    if not args:
+        return False
+    if any(arg in _FIRST_RUN_EXEMPT_FLAGS for arg in args):
+        return True
+    head = args[0].lower()
+    if head in _FIRST_RUN_EXEMPT_COMMANDS:
+        return True
+    return len(args) > 1 and (head, args[1].lower()) in _FIRST_RUN_EXEMPT_SUBCOMMANDS
+
+
 def _is_first_run() -> bool:
     """Return True when no config file exists and no provider API keys are set.
 
     Skips on CI and in test environments to avoid triggering setup()
-    on fresh CI runners where no config exists by design.
+    on fresh CI runners where no config exists by design, and whenever
+    :data:`_NONINTERACTIVE_ENV` is set (an installer or script is driving).
     """
-    # Never trigger in CI or test environments
+    # Never trigger in CI or test environments, nor for a scripted caller
     if os.environ.get("CI") or os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("GITHUB_ACTIONS"):
+        return False
+    if os.environ.get(_NONINTERACTIVE_ENV):
         return False
     if DEFAULT_CONFIG_PATH.exists():
         return False
@@ -12116,9 +12301,11 @@ def main():
         sys.argv = [sys.argv[0]] + args
     else:
         # First-run detection: if no config and no API keys, run guided setup.
-        # Skip when the user passed flags (--help, --version) or explicit subcommands.
+        # Skip when the user passed flags (--help, --version), and for the
+        # machine-readable verbs in _first_run_exempt (`models tiers --shell`
+        # is sourced by install.sh before config.yaml exists).
         if not args or (args and not args[0].startswith("-")):
-            if _is_first_run():
+            if not _first_run_exempt(args) and _is_first_run():
                 from nvh.cli.setup import guided_setup
                 guided_setup()
                 # If no args were given the setup is all we needed; exit.
@@ -12252,21 +12439,41 @@ def models_list(
                       "or `nvh models pull <name>` to install one.[/dim]")
 
 
+def _detected_memory_line(budget) -> str:
+    """The pool `nvh models pull --recommended` plans against, in the pool's own terms.
+
+    Every figure is the :class:`~nvh.core.local_models.TierBudget`'s own:
+    ``total_gb`` is what the driver reported, ``budget_gb`` what the ladder
+    plans against. A unified pool (GB10 / DGX Spark) names both -- "Detected
+    128 GB unified memory (112 GB model budget after the OS reserve)" -- so
+    the 112 is never mistaken for a 112 GB card; a discrete card prints its
+    VRAM as before, and a box with no sized GPU is the CPU tier.
+    """
+    if budget.unified:
+        return (
+            f"Detected {budget.total_gb:.0f} GB unified memory "
+            f"({budget.budget_gb:.0f} GB model budget after the OS reserve)"
+        )
+    vram = int(budget.budget_gb)
+    return f"Detected {vram} GB VRAM" if vram else "No GPU detected (CPU tier)"
+
+
 def _recommended_pull_targets() -> list[str]:
     """VRAM tier → catalog models recommended for this GPU that are not installed yet."""
     from nvh.integrations.installs.studio_packs import (
         STUDIO_MODELS,
-        _detect_vram_gb,
+        _detect_tier_budget,
         _ollama_models,
         _recommended_model_ids,
     )
 
-    vram = _detect_vram_gb()
-    wanted = _recommended_model_ids(vram)
+    # The TierBudget itself, not its GB figure: the table's MoE-first order
+    # and reasoning pick apply only when it knows the pool is unified.
+    budget = _detect_tier_budget()
+    wanted = _recommended_model_ids(budget)
     installed = _ollama_models()
     picks = [m for m in sorted(STUDIO_MODELS, key=lambda m: m.priority) if m.id in wanted]
-    tier = f"Detected {vram} GB VRAM" if vram else "No GPU detected (CPU tier)"
-    console.print(f"[bold]{tier}[/bold] — {len(picks)} recommended model(s):")
+    console.print(f"[bold]{_detected_memory_line(budget)}[/bold] — {len(picks)} recommended model(s):")
     targets: list[str] = []
     for m in picks:
         have = m.install_target in installed or m.install_target.split(":")[0] in installed
@@ -12353,6 +12560,130 @@ def models_rm(
         console.print(f"[red]Could not reach Ollama: {exc}[/red]")
         raise typer.Exit(1)
     console.print(f"[green]✓[/green] Removed {name}.")
+
+
+def _local_model_budget(*, unified_gb: float | None = None, vram_gb: float | None = None):
+    """This machine's :class:`TierBudget`, or one built from an installer-supplied pool.
+
+    ``unified_gb`` is a CPU/GPU-shared pool (macOS ``hw.memsize``, a GB10's
+    ``MemTotal``) — the table takes its OS reserve off it; ``vram_gb`` is
+    discrete VRAM taken as is. With neither, the GPU list and system memory
+    are detected the same way ``nvh.utils.gpu`` does it.
+    """
+    from types import SimpleNamespace
+
+    from nvh.core import local_models as lm
+
+    if unified_gb is not None:
+        row = SimpleNamespace(vram_mb=max(float(unified_gb), 0.0) * 1024, unified_memory=True)
+        return lm.tier_budget([row], None)
+    if vram_gb is not None:
+        row = SimpleNamespace(vram_mb=max(float(vram_gb), 0.0) * 1024, unified_memory=False)
+        return lm.tier_budget([row], None)
+    from nvh.utils.gpu import detect_gpus, detect_system_memory
+
+    gpus = detect_gpus()
+    try:
+        sys_mem = detect_system_memory()
+    except Exception:
+        sys_mem = None
+    return lm.tier_budget(gpus, sys_mem)
+
+
+def _starter_local_model_tag() -> str:
+    """The tag ``nvh nvidia`` tells a user with no local models to ``ollama pull``.
+
+    This machine's tier ``chat`` pick from :mod:`nvh.core.local_models`; the
+    ``cpu_fallback`` pick when no GPU is seen at all (``TierBudget.total_gpus
+    == 0``). Never raises: when detection itself fails the answer is the CPU
+    tier's fallback, which runs anywhere. It used to be a literal
+    ``nemotron-mini``, a tag the registry retired.
+    """
+    from nvh.core import local_models as lm
+
+    chosen = None
+    try:
+        budget = _local_model_budget()
+        chosen = lm.pick(budget, "chat" if budget.total_gpus > 0 else "cpu_fallback")
+    except Exception:
+        chosen = None
+    if chosen is None:
+        chosen = lm.pick(0.0, "cpu_fallback")
+    assert chosen is not None  # every tier fills every use case
+    return chosen.tag
+
+
+@models_app.command("tiers", hidden=True)
+def models_tiers(
+    as_json: bool = typer.Option(False, "--json", help="Dump LOCAL_MODEL_TIERS as JSON."),
+    shell: bool = typer.Option(
+        False, "--shell", help="POSIX-sh NVH_TIER_<n>_* assignments — what install.sh sources.",
+    ),
+    markdown: bool = typer.Option(
+        False, "--markdown", help="Markdown tables — what docs/MODELS.md embeds (default).",
+    ),
+    pick_use_case: str | None = typer.Option(
+        None, "--pick", metavar="USE_CASE",
+        help=(
+            "Print only the tag picked for this machine's budget: chat, code, vision, "
+            "reasoning, embed or cpu_fallback."
+        ),
+    ),
+    unified_gb: float | None = typer.Option(
+        None, "--unified-gb",
+        help="With --pick: size the budget as a unified CPU/GPU pool of this many GB instead of detecting.",
+    ),
+    vram_gb: float | None = typer.Option(
+        None, "--vram-gb",
+        help="With --pick: size the budget as this much discrete VRAM instead of detecting.",
+    ),
+) -> None:
+    """Print the VRAM-tier -> local-model table (maintenance verb).
+
+    install.sh, install.ps1, install-mac.sh and scripts/gen_models_doc.py read
+    nvh.core.local_models through this command, so no installer or doc types a
+    tag or a boundary of its own. Plain stdout, no Rich markup: the --shell form
+    is sourced by a shell and --pick prints a bare tag for scripts.
+    """
+    import dataclasses
+    import json
+
+    from nvh.core import local_models as lm
+
+    if sum(map(bool, (as_json, shell, markdown, pick_use_case is not None))) > 1:
+        typer.echo("Pick one of --json, --shell, --markdown or --pick.", err=True)
+        raise typer.Exit(2)
+    if pick_use_case is not None:
+        use_case = pick_use_case.strip().lower().replace("-", "_")
+        if use_case not in lm.USE_CASES:
+            typer.echo(
+                f"Unknown use case {pick_use_case!r}; expected one of {', '.join(lm.USE_CASES)}.",
+                err=True,
+            )
+            raise typer.Exit(2)
+        chosen = lm.pick(_local_model_budget(unified_gb=unified_gb, vram_gb=vram_gb), use_case)
+        if chosen is None:
+            raise typer.Exit(1)
+        typer.echo(chosen.tag)
+        return
+    if shell:
+        typer.echo(lm.tier_table_shell(), nl=False)
+    elif as_json:
+        payload = {
+            "use_cases": list(lm.USE_CASES),
+            # The GB10 figure (the curve's ceiling) plus the curve itself, so a
+            # reader can reproduce tier_budget() for any unified pool.
+            "unified_os_reserve_gb": lm.UNIFIED_MEMORY_OS_RESERVE_GB,
+            "unified_os_reserve_min_gb": lm.UNIFIED_OS_RESERVE_MIN_GB,
+            "unified_os_reserve_max_gb": lm.UNIFIED_OS_RESERVE_MAX_GB,
+            "unified_os_reserve_fraction": lm.UNIFIED_OS_RESERVE_FRACTION,
+            "tier_snap_gb": lm.TIER_SNAP_GB,
+            "tier_snap_mb": int(lm.TIER_SNAP_GB * 1024),
+            "tiers": [dataclasses.asdict(tier) for tier in lm.LOCAL_MODEL_TIERS],
+        }
+        typer.echo(json.dumps(payload, indent=2))
+    else:
+        typer.echo(lm.tier_table_markdown(), nl=False)
 
 
 # ---------------------------------------------------------------------------

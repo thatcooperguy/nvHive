@@ -14,7 +14,8 @@ Regression coverage for the review findings on the Spark diff:
   Hopper/HBM "Q8_0 or F16" tier.
 * G5 — one GB10 predicate (``nvh.utils.hw_ids.is_gb10_name``).
 * G6 — ``detect_gpu_status()['summary']`` and ``recommend_models`` budgets on
-  GB10 vs an x86 RTX 4090 (numbers identical to the pre-diff code).
+  GB10 vs an x86 RTX 4090; picks, sizes, reasons and the num_ctx / num_parallel
+  / quant ladder are derived from ``nvh.core.local_models`` so they cannot drift.
 * R4 — a row whose pool cannot be read is *kept* (0 GB, ``memory-unavailable``
   carrying the row's ``index``) so its name still reaches the platform
   classifier; when *no* row is sized ``detect_gpu_status`` reports ``blocked``
@@ -27,16 +28,21 @@ Regression coverage for the review findings on the Spark diff:
 * R6 — detection issues are scoped to the source whose rows won: NVML's
   ``memory-unavailable`` warnings do not survive into a ``ready`` nvidia-smi
   result, and a GPU both sources fail to size is reported once, not twice.
+* Reserve curve — a unified pool loses ``local_models.unified_os_reserve_gb``
+  of itself (4 GB at 16 GB, 16 GB at 128 GB), not the GB10's flat 16 GB, so a
+  16 GB pool keeps a 12 GB budget instead of none.
 """
 
 from __future__ import annotations
 
 import sys
 import types
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
+from nvh.core import local_models as lm
 from nvh.utils import gpu, hw_ids
 from nvh.utils.gpu import GPUInfo, SystemMemoryInfo
 
@@ -530,17 +536,21 @@ def test_status_both_sources_unsized_reports_the_gpu_once(monkeypatch) -> None:
 
 def test_budget_helpers_treat_an_unsized_row_as_no_usable_vram(monkeypatch) -> None:
     """recommend_models / check_oom_risk / get_ollama_optimizations on a kept 0 GB row:
-    no division by zero, no VRAM tier, no unified claim — the same answers as 'no GPU'."""
+    no division by zero, no VRAM tier, no unified claim — the table's 0-4 GB tier, as for 'no GPU'."""
     monkeypatch.setattr(gpu, "detect_system_memory", lambda: X86_RAM)
     unsized = _gpu("NVIDIA GH200 480GB", 0, cc=(9, 0))
 
     budget = gpu._memory_budget([unsized], X86_RAM)
     assert (budget.total_vram_gb, budget.model_budget_gb, budget.unified_memory) == (0.0, 0.0, False)
+    assert (budget.total_gpus, budget.sized_gpus, budget.gpu_memory_unreadable) == (1, 0, True)
+    assert lm.tier_for(budget) is lm.LOCAL_MODEL_TIERS[0]
 
     recs = gpu.recommend_models(gpus=[unsized])
     assert [r.model for r in recs] == [r.model for r in gpu.recommend_models(gpus=[])]
-    assert all(r.vram_required_gb == 0.0 for r in recs)
-    assert not any(r.tier.endswith("-hybrid") for r in recs)
+    assert [r.vram_required_gb for r in recs] == [lm.pick_for_tag(r.model).runtime_gb for r in recs]
+    assert not any(r.tier.endswith("-hybrid") for r in recs)  # no sized GPU to offload from
+    assert "GPU detected but its memory could not be read" in recs[0].reason
+    assert "no GPU detected" in gpu.recommend_models(gpus=[])[0].reason
 
     oom = gpu.check_oom_risk(8.0, gpus=[unsized])
     assert oom["gpu_free_gb"] == 0.0 and oom["fits_gpu"] is False and oom["unified_memory"] is False
@@ -548,7 +558,9 @@ def test_budget_helpers_treat_an_unsized_row_as_no_usable_vram(monkeypatch) -> N
 
     opt = gpu.get_ollama_optimizations(gpus=[unsized])
     assert opt.architecture == "Hopper" and opt.compute_capability == (9, 0)
-    assert (opt.num_parallel, opt.recommended_ctx) == (1, 4096)
+    assert (opt.num_parallel, opt.recommended_ctx) == (lm.num_parallel_for(budget), lm.num_ctx_for(budget))
+    assert (opt.num_parallel, opt.recommended_ctx) == (lm.LOCAL_MODEL_TIERS[0].num_parallel, lm.LOCAL_MODEL_TIERS[0].num_ctx)
+    assert opt.recommended_ctx != lm.CPU_ONLY_NUM_CTX, "a listed card is not 'no GPU'"
     assert any("memory could not be read" in n for n in opt.notes)
 
 
@@ -561,6 +573,7 @@ def test_budget_helpers_count_only_sized_rows(monkeypatch) -> None:
 
     budget = gpu._memory_budget([healthy, lost], X86_RAM)
     assert (budget.total_vram_gb, budget.model_budget_gb, budget.unified_memory) == (80.0, 80.0, False)
+    assert (budget.total_gpus, budget.sized_gpus) == (2, 1)
 
     recs = gpu.recommend_models(gpus=[healthy, lost])
     assert [(r.model, r.tier) for r in recs] == [(r.model, r.tier) for r in gpu.recommend_models(gpus=[healthy])]
@@ -569,7 +582,7 @@ def test_budget_helpers_count_only_sized_rows(monkeypatch) -> None:
     second = _gpu("NVIDIA A100 80GB PCIe", 80 * 1024, cc=(8, 0), index=2)
     recs = gpu.recommend_models(gpus=[healthy, second, lost])
     assert recs[0].tier == "multi-gpu"
-    assert recs[0].reason.endswith("(Ollama will use all 2 GPUs automatically)")
+    assert all("Ollama will use all 2 GPUs automatically" in r.reason for r in recs)
 
     # A 0 GB row listed first must not decide the memory model for the sized GB10 behind it
     # (its unified_memory is always False, which would add a CPU-offload bonus on top of RAM).
@@ -578,13 +591,29 @@ def test_budget_helpers_count_only_sized_rows(monkeypatch) -> None:
     budget = gpu._memory_budget([_gpu("NVIDIA GB10", 0, cc=(12, 1)), gb10], SPARK_RAM)
     assert (budget.unified_memory, budget.model_budget_gb, budget.cpu_offload_gb) == (True, 112.0, 0.0)
     opt = gpu.get_ollama_optimizations(gpus=[_gpu("NVIDIA GB10", 0, cc=(12, 1)), gb10])
-    assert opt.recommended_quant == "Q4_K_M" and opt.architecture == "Blackwell"
+    assert opt.recommended_quant == lm.quant_for(budget) == "Q4_K_M" and opt.architecture == "Blackwell"
     assert any("memory could not be read" in n for n in opt.notes)
 
 
 # ---------------------------------------------------------------------------
-# recommend_models budgets
+# recommend_models budgets — picks, sizes and reasons come from the table
 # ---------------------------------------------------------------------------
+
+
+def _expected_hybrid(budget: lm.TierBudget, listed: set[str]) -> lm.LocalModelPick | None:
+    """recommend_models' hybrid rule restated from the table: a card of HYBRID_MIN_BUDGET_GB or more,
+    the tier combined_gb reaches, its chat (else code) pick, when it needs more than VRAM, fits VRAM +
+    the capped RAM bonus and leaves at most HYBRID_MAX_RAM_SHARE of itself in RAM."""
+    home = lm.tier_for(budget)
+    reach = replace(budget, budget_gb=budget.combined_gb, offload_gb=0.0)
+    if budget.unified or budget.sized_gpus == 0 or home.min_gb < gpu.HYBRID_MIN_BUDGET_GB or lm.tier_for(reach) is home:
+        return None
+    ceiling = min(budget.combined_gb, budget.budget_gb / (1 - gpu.HYBRID_MAX_RAM_SHARE))
+    for use_case in ("chat", "code"):
+        pick = lm.pick(reach, use_case)
+        if pick is not None and pick.tag not in listed and budget.budget_gb < pick.runtime_gb <= ceiling:
+            return pick
+    return None
 
 
 def test_recommend_models_gb10_budget_is_pool_minus_reserve_with_note_on_primary_only(monkeypatch) -> None:
@@ -599,19 +628,30 @@ def test_recommend_models_gb10_budget_is_pool_minus_reserve_with_note_on_primary
     assert budget.cpu_offload_gb == 0.0
     assert budget.model_budget_gb == 128.0 - gpu.UNIFIED_MEMORY_OS_RESERVE_GB == 112.0
     assert budget.combined_gb == 112.0
+    assert lm.moe_first(budget) is True
 
+    table = lm.recommended(budget)
     primary = recs[0]
-    assert primary.model == "nemotron" and primary.tier == "full"
-    assert primary.reason.startswith("112 GB VRAM")
-    assert "~112 GB of 128 GB usable after the OS reserve" in primary.reason
-    assert "273" in primary.note and "MoE" in primary.note
+    assert primary.model == table[0].tag and table[0].moe, "a MoE model leads on a unified pool"
+    assert primary.tier == gpu.recommendation_tier(table[0]) == "full"
+    assert primary.reason == lm.reason_for(budget, table[0])
+    assert primary.reason.startswith(f"{primary.model} — ")
+    assert "unified memory: ~112 GB of 128 GB usable after the 16 GB OS reserve" in primary.reason
+    assert primary.note == gpu.unified_memory_note(budget)
+    assert f"~{gpu.UNIFIED_MEMORY_BANDWIDTH_GBPS} GB/s" in primary.note and "MoE" in primary.note
+    for pick in table:
+        if pick.moe:
+            assert pick.tag in primary.note
     assert all(r.note == "" for r in recs[1:]), "the unified note is attached to the primary rec only"
     assert not any(r.tier.endswith("-hybrid") for r in recs)
-    assert "llama3.2-vision" in [r.model for r in recs]
+    vision = lm.pick(budget, "vision")
+    assert [(r.model, r.tier) for r in recs if r.use_case == "vision"] == [(vision.tag, "vision")]
+    assert {r.model for r in recs} == {p.tag for p in table}
 
 
-def test_recommend_models_x86_rtx4090_numbers_match_pre_diff(monkeypatch) -> None:
-    """(ii) 24 GB RTX 4090 + 64 GB RAM: raw VRAM tiering, 16 GB capped offload, hybrid tier — as at HEAD."""
+def test_recommend_models_x86_rtx4090_reads_the_table(monkeypatch) -> None:
+    """(ii) 24 GB RTX 4090 + 64 GB RAM: raw VRAM tiering, 16 GB capped offload, one hybrid pick —
+    the whole list, in order, derived from the table."""
     monkeypatch.setattr(gpu, "detect_system_memory", lambda: X86_RAM)
     rtx = _gpu("NVIDIA GeForce RTX 4090", 24576)
 
@@ -622,20 +662,60 @@ def test_recommend_models_x86_rtx4090_numbers_match_pre_diff(monkeypatch) -> Non
     assert budget.model_budget_gb == 24.0
     assert budget.cpu_offload_gb == 16.0           # min(33.6, 16.0)
     assert budget.combined_gb == 40.0
+    assert budget.compute_capability == (8, 9)      # read off the name: NVML gave (0, 0)
 
-    assert [(r.model, r.tier, r.vram_required_gb, r.reason) for r in recs] == [
-        ("nemotron", "full", 40.0, "24 GB VRAM — full Nemotron 70B (quantized) fits"),
-        ("qwen3:8b", "small", 6.0, "Gemma 4 E4B — lightweight companion for local council"),
-        (
-            "qwen2.5-coder:32b",
-            "medium-hybrid",
-            20.0,
-            "Partial CPU offload: 24 GB VRAM + 16 GB RAM = 40 GB combined. "
-            "Qwen 2.5 Coder 32B fits for diversified council",
-        ),
-        ("llama3.2-vision", "vision", 7.0, "llama3.2-vision — 7 GB, best spatial grounding for desktop agent"),
+    vision, embed = lm.pick(budget, "vision"), lm.pick(budget, "embed")
+    text = [p for p in lm.recommended(budget) if p.tag not in (vision.tag, embed.tag)]
+    hybrid = _expected_hybrid(budget, {p.tag for p in text})
+    assert hybrid is not None
+    expected = [
+        *((p.tag, gpu.recommendation_tier(p), p.runtime_gb, lm.reason_for(budget, p)) for p in text),
+        (hybrid.tag, gpu.recommendation_tier(hybrid) + "-hybrid", hybrid.runtime_gb, None),
+        (vision.tag, "vision", vision.runtime_gb, lm.reason_for(budget, vision)),
+        (embed.tag, "embed", embed.runtime_gb, lm.reason_for(budget, embed)),
     ]
+    got = [(r.model, r.tier, r.vram_required_gb, None if r.tier.endswith("-hybrid") else r.reason) for r in recs]
+    assert got == expected
+    assert [r.tier for r in recs[:len(text)]] == ["full", "full", "mini"]
+
+    hybrid_rec = next(r for r in recs if r.tier.endswith("-hybrid"))
+    assert hybrid_rec.reason.startswith(lm.reason_for(budget, hybrid))
+    assert "partial CPU offload: 24 GB VRAM + 16 GB RAM = 40 GB combined" in hybrid_rec.reason
+    spill = hybrid.runtime_gb - budget.budget_gb
+    assert f"~{round(spill, 1):g} GB ({spill / hybrid.runtime_gb:.0%}) in RAM" in hybrid_rec.reason
     assert all(r.note == "" for r in recs)
+    assert all(r.model in lm.all_tags() for r in recs)
+
+
+def test_recommend_models_16gb_unified_pool_keeps_a_real_budget(monkeypatch) -> None:
+    """(iii) 16 GB unified (an Apple Silicon Mac through `nvh models tiers --unified-gb`, or a small
+    GB10-class part): the reserve follows the pool -- 4 GB, not the GB10's 16 -- so the budget is
+    12 GB and the primary is an 8B model, where the flat reserve used to plan against 0 GB."""
+    ram = SystemMemoryInfo(total_ram_gb=16.0, available_ram_gb=10.0, effective_for_llm_gb=7.0)
+    monkeypatch.setattr(gpu, "detect_system_memory", lambda: ram)
+    pool = _gpu("NVIDIA GB10", 16 * 1024, unified=True, cc=(12, 1))
+
+    budget = gpu._memory_budget([pool], ram)
+    recs = gpu.recommend_models(gpus=[pool])
+    opt = gpu.get_ollama_optimizations(gpus=[pool])
+
+    assert (budget.unified_memory, budget.total_vram_gb, budget.model_budget_gb, budget.cpu_offload_gb) == (
+        True, 16.0, 12.0, 0.0,
+    )
+    assert budget.os_reserve_gb == lm.unified_os_reserve_gb(16.0) == gpu.unified_os_reserve_gb(16.0) == 4.0
+    assert lm.tier_for(budget).label == "small-plus"
+    assert recs[0].model == lm.pick(budget, "chat").tag == "qwen3:8b"
+    assert recs[0].tier == "small" and recs[0].use_case == "chat"
+    assert "~12 GB of 16 GB usable after the 4 GB OS reserve" in recs[0].reason
+    assert "~4 GB is reserved for the OS" in recs[0].note and "leaving ~12 GB for models" in recs[0].note
+    assert "no MoE model fits this budget yet" in recs[0].note
+    assert not any(r.tier.endswith("-hybrid") for r in recs)
+    assert (opt.recommended_ctx, opt.num_parallel, opt.recommended_quant) == (8192, 1, "Q4_K_M")
+    assert any("after the 4 GB OS reserve" in note for note in opt.notes)
+    assert any("keep ~4 GB free for the OS" in note for note in opt.notes)
+    # The 128 GB GB10 is untouched by the curve: same 16 GB reserve, same 112 GB budget.
+    spark = gpu._memory_budget([_gpu("NVIDIA GB10", 128 * 1024, unified=True, cc=(12, 1))], SPARK_RAM)
+    assert (spark.os_reserve_gb, spark.model_budget_gb) == (gpu.UNIFIED_MEMORY_OS_RESERVE_GB, 112.0)
 
 
 # ---------------------------------------------------------------------------
@@ -647,25 +727,34 @@ def test_recommend_models_x86_rtx4090_numbers_match_pre_diff(monkeypatch) -> Non
 def test_ollama_optimizations_gb10_is_not_the_hbm_tier(monkeypatch, cc) -> None:
     monkeypatch.setattr(gpu, "detect_system_memory", lambda: SPARK_RAM)
     gb10 = _gpu("NVIDIA GB10", 128 * 1024, unified=True, cc=cc)
+    budget = gpu._memory_budget([gb10], SPARK_RAM)
 
     opt = gpu.get_ollama_optimizations(gpus=[gb10])
 
     assert opt.architecture == "Blackwell" and opt.compute_capability == (12, 1)
-    assert opt.recommended_quant == "Q4_K_M"
-    assert opt.recommended_ctx == 131072 and opt.num_parallel == 4   # sized to 128 - 16 = 112 GB
+    assert opt.recommended_quant == lm.quant_for(budget) == "Q4_K_M"
+    assert (opt.recommended_ctx, opt.num_parallel) == (lm.num_ctx_for(budget), lm.num_parallel_for(budget))
+    tier = lm.tier_for(budget)   # sized to 128 - 16 = 112 GB
+    assert tier is lm.tier_for(112.0)
+    assert (opt.recommended_ctx, opt.num_parallel) == (tier.num_ctx, tier.num_parallel)
+    assert tier.default_quant != "Q4_K_M", "the unified pool overrides the tier's HBM quant"
     joined = " ".join(opt.notes)
     assert "Q8_0 or F16 recommended" not in joined
     assert "GDDR7" not in joined
-    assert "MoE" in joined and "131072" in joined and "16 GB OS reserve" in joined
+    assert "MoE" in joined and str(opt.recommended_ctx) in joined and "16 GB OS reserve" in joined
+    for pick in lm.recommended(budget):
+        if pick.moe:
+            assert pick.tag in joined
 
 
 def test_ollama_optimizations_h100_keeps_hbm_tier(monkeypatch) -> None:
     monkeypatch.setattr(gpu, "detect_system_memory", lambda: X86_RAM)
     h100 = _gpu("NVIDIA H100 80GB HBM3", 80 * 1024, cc=(9, 0))
+    budget = gpu._memory_budget([h100], X86_RAM)
 
     opt = gpu.get_ollama_optimizations(gpus=[h100])
 
-    assert opt.recommended_quant == "Q8_0 or F16"
+    assert opt.recommended_quant == lm.quant_for(budget) == lm.tier_for(budget).default_quant == "Q8_0 or F16"
     assert any("Q8_0 or F16 recommended" in n for n in opt.notes)
 
 

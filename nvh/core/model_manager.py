@@ -1,7 +1,7 @@
 """Model lifecycle manager — handles loading, unloading, and swapping
 models to fit within GPU framebuffer (VRAM) constraints.
 
-On GPUs with limited VRAM (24-96 GB), running multiple 70B models
+On GPUs with limited VRAM (24-96 GB), running several 30B-class models
 simultaneously isn't always possible. This module manages the model
 lifecycle:
 
@@ -19,9 +19,9 @@ Model swaps are transparent to the agent.
 
 Usage:
     manager = ModelManager(vram_gb=96)
-    await manager.ensure_loaded("llama3.3:70b")  # loads if not present
-    await manager.swap("llama3.3:70b", "qwen2.5-coder:32b")  # unload + load
-    status = await manager.get_status()  # what's loaded, VRAM usage
+    plan = manager.plan_swap("qwen3-coder:30b")  # what must unload for it to fit
+    await manager.execute_swap(plan)              # unload + load, context preserved
+    status = await manager.get_vram_status()      # what's loaded, VRAM usage
 """
 
 from __future__ import annotations
@@ -31,42 +31,32 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from nvh.core import local_models
+
 logger = logging.getLogger(__name__)
 
 
-# Approximate VRAM requirements per model (Q4 quantization)
-# These are conservative estimates — actual usage depends on
-# context length and batch size.
-MODEL_VRAM_GB: dict[str, float] = {
-    # 70B class
-    "llama3.3:70b": 40.0,
-    "nemotron": 40.0,
-    "nemotron:70b": 40.0,
-    "qwen2.5:72b": 40.0,
-    "deepseek-coder-v2:236b": 120.0,
-    # 32B class
-    "qwen2.5-coder:32b": 18.0,
-    "codellama:34b": 20.0,
-    # Multimodal / vision class
-    "llama3.2-vision": 7.0,
-    "minicpm-v": 5.0,
-    "llava:7b": 4.0,
-    "moondream": 2.0,
-    # 14B class
-    "qwen2.5-coder:14b": 8.0,
-    # 8B class
-    "qwen3:8b": 6.0,
-    "llama3.1:8b": 5.0,
-    "deepseek-r1:8b": 6.0,
-    # 7B class
-    "qwen2.5-coder:7b": 4.0,
-    "mistral:7b": 4.0,
-    # Small fallback
-    "gemma3:4b": 3.0,
-}
+# Loaded size per model tag in GB — the tier table's ``runtime_gb`` (weights
+# plus KV-cache and CUDA-context headroom), so this manager, the emulator and
+# the Wizard agree on what a model costs. Kept a plain dict for callers that
+# ``.get()`` it; the lookups below go through _model_size_gb() so a
+# ``name:latest`` tag from ``ollama ps`` resolves too.
+MODEL_VRAM_GB: dict[str, float] = dict(local_models.size_table())
 
-# VRAM overhead for KV cache, CUDA context, etc.
+# Daemon-wide overhead (Ollama runner, CUDA context) counted once on top of
+# the loaded models.
 VRAM_OVERHEAD_GB = 2.0
+
+# What a tag the table does not know is assumed to take.
+DEFAULT_MODEL_VRAM_GB = 5.0
+
+
+def _model_size_gb(name: str) -> float:
+    """Loaded size for an Ollama tag: its table row (``moondream:latest`` finds ``moondream``) or the default."""
+    if name in MODEL_VRAM_GB:
+        return MODEL_VRAM_GB[name]
+    pick = local_models.pick_for_tag(name)
+    return pick.runtime_gb if pick is not None else DEFAULT_MODEL_VRAM_GB
 
 
 @dataclass
@@ -127,7 +117,7 @@ class ModelManager:
                 parts = line.split()
                 if parts:
                     name = parts[0]
-                    size_gb = MODEL_VRAM_GB.get(name, 5.0)
+                    size_gb = _model_size_gb(name)
                     models.append(ModelStatus(
                         name=name, loaded=True, size_gb=size_gb,
                         last_used=time.time(),
@@ -184,7 +174,7 @@ class ModelManager:
         Returns a SwapPlan explaining what needs to happen. Does NOT
         execute — call execute_swap() to actually do it.
         """
-        target_size = MODEL_VRAM_GB.get(target_model, 5.0)
+        target_size = _model_size_gb(target_model)
         used = sum(m.size_gb for m in self._loaded.values()) + VRAM_OVERHEAD_GB
         available = max(0, self.vram_gb - used)
 
@@ -293,7 +283,7 @@ class ModelManager:
                 stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
-                target_size = MODEL_VRAM_GB.get(plan.target_model, 5.0)
+                target_size = _model_size_gb(plan.target_model)
                 self._loaded[plan.target_model] = ModelStatus(
                     name=plan.target_model,
                     loaded=True,

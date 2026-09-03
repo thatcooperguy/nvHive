@@ -32,6 +32,12 @@ from nvh.providers.registry import BESPOKE_ADAPTERS, ProviderRegistry, lazy_adap
 PROVIDERS = sorted(PROVIDER_SPECS)
 
 _ACOMPLETION = "nvh.providers.openai_compatible.litellm.acompletion"
+_ARESPONSES = "nvh.providers.openai_compatible.litellm.aresponses"
+
+
+def _transport(name: str) -> str:
+    """The LiteLLM entry point the spec's ``api_surface`` routes through."""
+    return _ARESPONSES if PROVIDER_SPECS[name].api_surface == "responses" else _ACOMPLETION
 
 # One-release compat shims (removed in 0.43): ``nvh.providers.<name>_provider``.
 COMPAT_SHIM_CLASSES = {
@@ -85,6 +91,53 @@ def _make_completion_response(
         ),
         model=model,
     )
+
+
+def _make_responses_response(
+    content: str = "mock response",
+    model: str = "mock-model",
+    prompt_tokens: int = 10,
+    completion_tokens: int = 20,
+):
+    """Build a fake litellm Responses API result."""
+    return SimpleNamespace(
+        status="completed",
+        incomplete_details=None,
+        error=None,
+        model=model,
+        output=[SimpleNamespace(
+            type="message",
+            content=[SimpleNamespace(type="output_text", text=content)],
+        )],
+        usage=SimpleNamespace(
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            cost=None,
+        ),
+    )
+
+
+async def _make_responses_stream(text: str = "hello world"):
+    """Responses API events: created, one text delta, then completed with usage."""
+    yield SimpleNamespace(type="response.created")
+    yield SimpleNamespace(type="response.output_text.delta", delta=text)
+    yield SimpleNamespace(
+        type="response.completed",
+        response=_make_responses_response(text, prompt_tokens=5, completion_tokens=10),
+    )
+
+
+def _completion_fake(name: str):
+    if PROVIDER_SPECS[name].api_surface == "responses":
+        return _make_responses_response()
+    return _make_completion_response()
+
+
+def _stream_fake(name: str, text: str):
+    if PROVIDER_SPECS[name].api_surface == "responses":
+        return _make_responses_stream(text)
+    return _make_stream_iterator(text)
 
 
 async def _make_stream_iterator(text: str = "hello world"):
@@ -151,7 +204,7 @@ class TestProviderContract:
         """complete() returns a CompletionResponse when litellm succeeds."""
         provider = _provider(name)
 
-        with patch(_ACOMPLETION, new=AsyncMock(return_value=_make_completion_response())):
+        with patch(_transport(name), new=AsyncMock(return_value=_completion_fake(name))):
             resp = await provider.complete(
                 messages=[Message(role="user", content="hi")],
                 temperature=0.0,
@@ -170,7 +223,7 @@ class TestProviderContract:
         """When litellm raises, the provider must wrap in ProviderError."""
         provider = _provider(name)
 
-        with patch(_ACOMPLETION, new=AsyncMock(side_effect=Exception("upstream is down"))):
+        with patch(_transport(name), new=AsyncMock(side_effect=Exception("upstream is down"))):
             with pytest.raises(ProviderError) as exc_info:
                 await provider.complete(
                     messages=[Message(role="user", content="hi")],
@@ -185,8 +238,8 @@ class TestProviderContract:
         """stream() must yield at least one StreamChunk and one final."""
         provider = _provider(name)
 
-        # litellm.acompletion in stream mode returns an async iterator
-        with patch(_ACOMPLETION, new=AsyncMock(return_value=_make_stream_iterator("hi there"))):
+        # litellm.acompletion / aresponses in stream mode return an async iterator
+        with patch(_transport(name), new=AsyncMock(return_value=_stream_fake(name, "hi there"))):
             chunks: list[StreamChunk] = []
             async for chunk in provider.stream(
                 messages=[Message(role="user", content="hi")],

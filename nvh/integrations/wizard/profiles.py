@@ -158,7 +158,9 @@ BUILT_IN_PROFILES: tuple[AgentProfile, ...] = (
             "advice. If you're unsure, ask one clarifying question."
         ),
         provider="ollama",
-        model="ollama/qwen2.5-coder:7b",
+        # No pin: the local default -- the tier table's pick for this machine
+        # -- applies, so the profile never names a tag the registry retired.
+        model="",
         temperature=0.2,
         built_in=True,
         tags=["code", "review"],

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -76,6 +77,37 @@ class TestAnalyzeImage:
         # real analysis (cloud/local) or fallback "Image loaded" / "No vision model"
         assert result  # non-empty response
         assert "Image not found" not in result
+
+
+class TestNoVisionModelMessage:
+    """The "install one locally" hint names the table's vision pick for this box, never a retired tag."""
+
+    @pytest.mark.asyncio
+    async def test_hint_names_the_tables_vision_pick(self, registry, tmp_path, monkeypatch):
+        import nvh.utils.gpu as gpu
+        from nvh.core import local_models, vision_tools
+
+        img = tmp_path / "blank.png"
+        img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+        row = SimpleNamespace(vram_mb=24 * 1024, vram_gb=24.0, unified_memory=False, compute_capability=(8, 6))
+        mem = SimpleNamespace(effective_for_llm_gb=14.8, available_ram_gb=21.2)
+        monkeypatch.setattr(gpu, "detect_gpus", lambda: [row])
+        monkeypatch.setattr(gpu, "detect_system_memory", lambda: mem)
+        monkeypatch.setattr(vision_tools, "_detect_ollama_vision_model", lambda: None)
+
+        async def _no_cloud(*_a, **_kw):
+            return None
+
+        monkeypatch.setattr(vision_tools, "_analyze_with_cloud", _no_cloud)
+
+        result = await registry.get("analyze_image").handler(image_path=str(img))
+
+        expected = local_models.pick(local_models.tier_budget([row], mem), "vision").tag
+        assert "No vision model available" in result
+        assert f"ollama pull {expected}" in result
+        assert expected in local_models.all_tags()
+        for retired in ("llava", "minicpm-v", "bakllava"):
+            assert retired not in result
 
 
 class TestDesktopControl:

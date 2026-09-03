@@ -7,10 +7,20 @@ import io
 import subprocess
 import sys
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
+from nvh.core import local_models as lm
 from nvh.integrations import studio_packs
+
+# Retired or never-published Ollama tags and their old catalog ids: none may
+# survive as a picker row, an install target or a pack model.
+RETIRED = {
+    "nemotron-omni", "nemotron-3-nano-omni", "nemotron-70b", "nemotron", "nemotron:70b",
+    "llama31-8b", "llama3.1:8b", "qwen25-coder-7b", "qwen2.5-coder:7b",
+    "deepseek-r1-8b", "deepseek-r1:8b", "llava-7b", "llava:7b", "minicpm-v",
+}
 
 
 def test_catalog_is_rootless_and_grouped() -> None:
@@ -67,18 +77,93 @@ def test_pack_bundles_expand_without_duplicates() -> None:
     assert music == ["ace-step-music", "music-producer-lab", "music-daw-helper", "github-login-helper"]
 
 
+def test_studio_models_mirror_the_local_model_table() -> None:
+    by_tag = {model.install_target: model for model in studio_packs.STUDIO_MODELS}
+    assert sorted(by_tag) == lm.all_tags()
+    assert len(by_tag) == len(studio_packs.STUDIO_MODELS)
+    for pick in lm.all_picks():
+        model = by_tag[pick.tag]
+        assert model.id == pick.catalog_id
+        assert model.provider == "ollama"
+        assert model.estimated_disk_gb == pick.weights_gb
+        first_tier = next(
+            tier for tier in lm.LOCAL_MODEL_TIERS
+            if pick.tag in {candidate.tag for candidate in tier.picks.values()}
+        )
+        assert model.recommended_vram_gb == int(first_tier.min_gb)
+        assert model.source_url.endswith(f"/library/{pick.name}")
+        assert ("vision" in model.capabilities) is pick.vision
+        assert ("moe" in model.capabilities) is pick.moe
+        assert model.title and model.why_recommended and model.license_note
+    # strongest first: distinct priorities that follow the tier a pick first fits
+    priorities = [model.priority for model in studio_packs.STUDIO_MODELS]
+    assert priorities == sorted(priorities) and len(set(priorities)) == len(priorities)
+    assert by_tag[lm.pick(96.0, "chat").tag].priority < by_tag[lm.pick(8.0, "chat").tag].priority
+    # the mission builder and model_fit read these category / capability words
+    assert by_tag[lm.pick(24.0, "code").tag].category == "code"
+    assert "coding" in by_tag[lm.pick(24.0, "code").tag].capabilities
+    assert by_tag[lm.pick(0.0, "embed").tag].category == "embedding"
+    assert "embedding" in by_tag[lm.pick(0.0, "embed").tag].capabilities
+
+
+def test_retired_and_phantom_tags_are_gone() -> None:
+    targets = {model.install_target for model in studio_packs.STUDIO_MODELS}
+    targets |= {model.id for model in studio_packs.STUDIO_MODELS}
+    for pack in studio_packs.STUDIO_PACKS:
+        targets |= set(pack.models)
+        assert set(pack.models) <= set(lm.all_tags()), pack.id
+    assert not RETIRED & targets
+
+
+def test_model_packs_are_cut_from_the_table() -> None:
+    starter = studio_packs._find_pack("llm-starter")
+    assert starter.models == [p.tag for p in lm.recommended(float(starter.recommended_vram_gb))]
+    assert starter.estimated_disk_gb == round(
+        sum(lm.pick_for_tag(tag).weights_gb for tag in starter.models), 1,
+    )
+    assert lm.pick(float(starter.recommended_vram_gb), "embed").tag in starter.models
+
+    coder = studio_packs._find_pack("llm-coder-reasoner")
+    gb = float(coder.recommended_vram_gb)
+    assert set(coder.models) == {lm.pick(gb, "code").tag, lm.pick(gb, "reasoning").tag}
+    assert coder.recommended_vram_gb > starter.recommended_vram_gb  # below it code == the starter's chat
+    assert any(lm.pick_for_tag(tag).moe for tag in coder.models)
+
+    omni = studio_packs._find_pack("nvidia-omni-agent")
+    assert omni.models
+    for tag in omni.models:
+        pick = lm.pick_for_tag(tag)
+        assert pick is not None and pick.vision and pick.moe, tag
+    assert omni.recommended_vram_gb == min(
+        model.recommended_vram_gb
+        for model in studio_packs.STUDIO_MODELS
+        if model.install_target in omni.models
+    )
+    assert studio_packs._OMNI_MIN_FREE_GB >= max(lm.pick_for_tag(t).weights_gb for t in omni.models)
+    assert set(studio_packs._omni_model_sizes_gb().values()) == {
+        lm.pick_for_tag(t).weights_gb for t in omni.models
+    }
+
+
 def test_model_catalog_marks_vram_recommendations(monkeypatch) -> None:
+    fallback = lm.pick(8.0, "cpu_fallback")
     monkeypatch.setattr(studio_packs, "_detect_vram_gb", lambda: 8)
-    monkeypatch.setattr(studio_packs, "_ollama_models", lambda: {"gemma3:4b"})
+    monkeypatch.setattr(studio_packs, "_ollama_models", lambda: {fallback.tag})
     monkeypatch.setattr(studio_packs, "_ollama_binary", lambda: "ollama")
     monkeypatch.setattr(studio_packs, "_ollama_reachable", lambda: True)
 
     catalog = studio_packs.model_catalog_with_status()
     by_id = {model["id"]: model for model in catalog["models"]}
 
-    assert by_id["gemma3-4b"]["installed"] is True
-    assert by_id["qwen3-8b"]["recommended"] is True
-    assert by_id["deepseek-r1-8b"]["fits_vram"] is False
+    assert catalog["detected_vram_gb"] == 8
+    assert by_id[fallback.catalog_id]["installed"] is True
+    assert set(catalog["recommended_ids"]) == {p.catalog_id for p in lm.recommended(8.0)}
+    assert by_id[lm.pick(8.0, "chat").catalog_id]["recommended"] is True
+    for model in catalog["models"]:
+        assert model["fits_vram"] is (model["recommended_vram_gb"] == 0 or model["recommended_vram_gb"] <= 8)
+    too_big = lm.pick(12.0, "vision")  # first fits the 12 GB tier
+    assert by_id[too_big.catalog_id]["fits_vram"] is False
+    assert by_id[too_big.catalog_id]["recommended"] is False
 
 
 def test_model_catalog_prefers_large_and_multimodal_models_on_big_gpus(monkeypatch) -> None:
@@ -90,11 +175,32 @@ def test_model_catalog_prefers_large_and_multimodal_models_on_big_gpus(monkeypat
     catalog = studio_packs.model_catalog_with_status()
     by_id = {model["id"]: model for model in catalog["models"]}
 
-    assert catalog["recommended_ids"][0] == "nemotron-70b"
-    assert by_id["nemotron-70b"]["recommended"] is True
-    assert by_id["nemotron-70b"]["fits_vram"] is True
-    assert by_id["llama32-vision"]["recommended"] is True
-    assert by_id["llama32-vision"]["fits_vram"] is True
+    chat = lm.pick(47.0, "chat")
+    assert chat.vision and chat.moe  # Nemotron 3 Nano Omni leads the 40 GB tier
+    assert catalog["recommended_ids"][0] == chat.catalog_id
+    assert by_id[chat.catalog_id]["recommended"] is True
+    assert by_id[chat.catalog_id]["fits_vram"] is True
+    vision = lm.pick(47.0, "vision")
+    assert by_id[vision.catalog_id]["recommended"] is True
+    assert by_id[vision.catalog_id]["fits_vram"] is True
+    assert set(catalog["recommended_ids"]) == {p.catalog_id for p in lm.recommended(47.0)}
+
+
+def test_detect_vram_gb_plans_against_the_unified_budget(monkeypatch) -> None:
+    gb10 = SimpleNamespace(name="NVIDIA GB10", vram_mb=128 * 1024, unified_memory=True)
+    monkeypatch.setattr(studio_packs, "detect_gpus", lambda: [gb10])
+    monkeypatch.setattr(studio_packs, "detect_system_memory", lambda: None)
+    assert studio_packs._detect_tier_budget().unified is True
+    assert studio_packs._detect_vram_gb() == 128 - int(lm.UNIFIED_MEMORY_OS_RESERVE_GB)
+
+    rtx = SimpleNamespace(name="NVIDIA GeForce RTX 4090", vram_mb=24 * 1024, unified_memory=False)
+    monkeypatch.setattr(studio_packs, "detect_gpus", lambda: [rtx])
+    assert studio_packs._detect_vram_gb() == 24
+
+    monkeypatch.setattr(studio_packs, "detect_gpus", lambda: [])
+    monkeypatch.setattr(studio_packs, "_nvidia_smi_rows", lambda: [])
+    assert studio_packs._detect_vram_gb() == 0
+    assert studio_packs._recommended_model_ids(0) == {p.catalog_id for p in lm.recommended(0.0)}
 
 
 def test_ollama_binary_ignores_unusable_local_file(tmp_path, monkeypatch) -> None:

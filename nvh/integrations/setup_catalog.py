@@ -23,6 +23,17 @@ DEFAULT_CATALOG_URL = (
 CATALOG_ENV = "NVH_CATALOG_URL"
 SCHEMA_VERSION = 1
 
+# Budgets the setup profiles are sized for -- the 8-12 GB student card they
+# were written around: the smallest GPU tier's chat pick, the 8 GB tier's
+# code pick and the 12 GB tier's vision pick (below that the vision column is
+# the moondream fallback, not a creative tool). Ids come from the tier table
+# (nvh/core/local_models.py) so a retired tag can never reappear here; the
+# bundled nvh/catalog/nvhive-catalog.json carries the same ids and
+# tests/test_setup_catalog.py pins the two together.
+PROFILE_CHAT_BUDGET_GB = 4.0
+PROFILE_CODE_BUDGET_GB = 8.0
+PROFILE_VISION_BUDGET_GB = 12.0
+
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -48,6 +59,71 @@ def _validate_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
     return catalog
 
 
+def table_model_ids(*picks: tuple[float, str]) -> list[str]:
+    """Catalog ids of tier-table picks, unique and in order: ``(budget_gb, use_case)`` pairs."""
+    from nvh.core import local_models
+
+    ids: list[str] = []
+    for budget_gb, use_case in picks:
+        chosen = local_models.pick(budget_gb, use_case)
+        if chosen is not None and chosen.catalog_id not in ids:
+            ids.append(chosen.catalog_id)
+    return ids
+
+
+def fallback_profiles() -> list[dict[str, Any]]:
+    """The setup profiles, their ``model_ids`` derived from the tier table."""
+    chat = (PROFILE_CHAT_BUDGET_GB, "chat")
+    chat_plus = (PROFILE_CODE_BUDGET_GB, "chat")
+    code = (PROFILE_CODE_BUDGET_GB, "code")
+    vision = (PROFILE_VISION_BUDGET_GB, "vision")
+    embed = (PROFILE_CHAT_BUDGET_GB, "embed")
+    return [
+        {
+            "id": "student",
+            "title": "AI Starter",
+            "pack_ids": ["starter"],
+            "model_ids": table_model_ids(chat, chat_plus, embed),
+            "description": "First-time local AI lab for chat, homework, coding help, GitHub, and the helper agent.",
+        },
+        {
+            "id": "creator",
+            "title": "Graphics Creator Studio",
+            "pack_ids": ["creative", "comfy"],
+            "model_ids": table_model_ids(chat, vision),
+            "description": "ComfyUI, Blender, image/video workflows, and vision helpers for graphics projects.",
+        },
+        {
+            "id": "music",
+            "title": "Music Producer Studio",
+            "pack_ids": ["music"],
+            "model_ids": table_model_ids(chat),
+            "description": "AI music generation, stems, transcription, and rootless DAW helpers.",
+        },
+        {
+            "id": "agent",
+            "title": "Agent Builder",
+            "pack_ids": ["agents"],
+            "model_ids": table_model_ids(code, embed),
+            "description": "Local agent libraries, coding model, and embeddings.",
+        },
+        {
+            "id": "game",
+            "title": "Game Dev Lab",
+            "pack_ids": ["game", "creative"],
+            "model_ids": table_model_ids(code, vision),
+            "description": "Game prototyping, Blender assets, and mod helper workspace.",
+        },
+        {
+            "id": "full",
+            "title": "Power User Workstation",
+            "pack_ids": ["all"],
+            "model_ids": ["recommended"],
+            "description": "Everything nvHive can install without root access, guarded by host checks.",
+        },
+    ]
+
+
 def _generated_fallback_catalog() -> dict[str, Any]:
     from nvh.integrations.installs.comfyui import examples_as_dicts
     from nvh.integrations.installs.studio_packs import (
@@ -65,43 +141,7 @@ def _generated_fallback_catalog() -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "updated_at": _now(),
         "channel": "generated-fallback",
-        "profiles": [
-            {
-                "id": "student",
-                "title": "AI Starter",
-                "pack_ids": ["starter"],
-                "model_ids": ["gemma3-4b", "qwen3-8b", "nomic-embed-text"],
-                "description": "First-time local AI lab for chat, homework, coding help, GitHub, and the helper agent.",
-            },
-            {
-                "id": "creator",
-                "title": "Graphics Creator Studio",
-                "pack_ids": ["creative", "comfy"],
-                "model_ids": ["gemma3-4b", "llava-7b"],
-                "description": "ComfyUI, Blender, image/video workflows, and vision helpers for graphics projects.",
-            },
-            {
-                "id": "music",
-                "title": "Music Producer Studio",
-                "pack_ids": ["music"],
-                "model_ids": ["gemma3-4b"],
-                "description": "AI music generation, stems, transcription, and rootless DAW helpers.",
-            },
-            {
-                "id": "agent",
-                "title": "Agent Builder",
-                "pack_ids": ["agents"],
-                "model_ids": ["qwen25-coder-7b", "nomic-embed-text"],
-                "description": "Local agent libraries, coding model, and embeddings.",
-            },
-            {
-                "id": "full",
-                "title": "Power User Workstation",
-                "pack_ids": ["all"],
-                "model_ids": ["recommended"],
-                "description": "Everything nvHive can install without root access, guarded by host checks.",
-            },
-        ],
+        "profiles": fallback_profiles(),
         "packs": packs,
         "models": model_catalog_as_dicts(),
         "comfyui_examples": examples_as_dicts(),

@@ -19,6 +19,7 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 import nvh.cli.main as cli_main
+from nvh.core import local_models as lm
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -199,10 +200,18 @@ class TestSmokeCommand:
 
 
 class TestModelsPullRecommended:
-    def _patch_studio(self, monkeypatch, *, vram: int, installed: set[str]):
+    @staticmethod
+    def _budget(pool_gb: int, *, unified: bool = False) -> lm.TierBudget:
+        """The TierBudget `models pull --recommended` plans against for a pool of this size."""
+        rows = [types.SimpleNamespace(vram_mb=pool_gb * 1024, unified_memory=unified)] if pool_gb else []
+        return lm.tier_budget(rows, None)
+
+    def _patch_studio(self, monkeypatch, *, vram: int, installed: set[str], unified: bool = False):
         import nvh.integrations.installs.studio_packs as sp
 
-        monkeypatch.setattr(sp, "_detect_vram_gb", lambda: vram)
+        # The command reads the TierBudget object, not a bare GB figure, so a
+        # unified pool keeps its pool type (MoE-first order, reasoning pick).
+        monkeypatch.setattr(sp, "_detect_tier_budget", lambda: self._budget(vram, unified=unified))
         monkeypatch.setattr(sp, "_ollama_models", lambda home_dir=None: installed)
         monkeypatch.setattr(sp, "_ollama_binary", lambda home_dir=None: "ollama")
         calls: list[list[str]] = []
@@ -215,14 +224,18 @@ class TestModelsPullRecommended:
         return calls
 
     def test_pulls_vram_tier_models_that_are_missing(self, runner: CliRunner, monkeypatch):
-        calls = self._patch_studio(monkeypatch, vram=8, installed={"gemma3:4b"})
+        installed = lm.pick(8.0, "cpu_fallback")  # the small always-fits pick of the 8 GB tier
+        calls = self._patch_studio(monkeypatch, vram=8, installed={installed.tag})
         result = runner.invoke(cli_main.app, ["models", "pull", "--recommended"])
         assert result.exit_code == 0, result.output
         pulled = [argv[2] for argv in calls]
-        assert "gemma3:4b" not in pulled          # already installed -> skipped
-        assert "nomic-embed-text" in pulled       # RAG embedder is in every tier
-        assert "qwen3:8b" in pulled               # 8 GB tier
-        assert "nemotron" not in pulled           # 40 GB+ tier
+        # the 8 GB tier of nvh.core.local_models, minus what is installed
+        expected = [p.tag for p in lm.recommended(8.0) if p.tag != installed.tag]
+        assert sorted(pulled) == sorted(expected)
+        assert installed.tag not in pulled                 # already installed -> skipped
+        assert lm.pick(8.0, "embed").tag in pulled         # RAG embedder is in every tier
+        assert lm.pick(8.0, "chat").tag in pulled          # 8 GB tier
+        assert lm.pick(47.0, "chat").tag not in pulled     # 40 GB+ tier (Nemotron 3 Nano Omni)
         assert "Detected 8 GB VRAM" in _plain(result.output)
 
     def test_nothing_to_pull_when_all_installed(self, runner: CliRunner, monkeypatch):
@@ -234,6 +247,31 @@ class TestModelsPullRecommended:
         assert result.exit_code == 0, result.output
         assert calls == []
         assert "already installed" in _plain(result.output)
+        assert "No GPU detected (CPU tier)" in _plain(result.output)
+
+    def test_unified_pool_names_the_pool_and_the_budget(self, runner: CliRunner, monkeypatch):
+        # A 128 GB GB10 / DGX Spark: the ladder plans against the pool minus the
+        # OS reserve. Printing that figure as "112 GB VRAM" read like a 112 GB
+        # card; both numbers come from the TierBudget and are named for what
+        # they are. Discrete cards keep the "Detected N GB VRAM" line above.
+        calls = self._patch_studio(monkeypatch, vram=128, installed=set(), unified=True)
+        result = runner.invoke(cli_main.app, ["models", "pull", "--recommended"])
+        assert result.exit_code == 0, result.output
+        budget = self._budget(128, unified=True)
+        assert budget.unified and budget.budget_gb == 128 - lm.unified_os_reserve_gb(128)
+        out = _plain(result.output)
+        assert (
+            f"Detected {budget.total_gb:.0f} GB unified memory "
+            f"({budget.budget_gb:.0f} GB model budget after the OS reserve)"
+        ) in out
+        assert "GB VRAM" not in out
+        # The pull list is the table's for the *budget* object: MoE-first, and
+        # the reasoning MoE joins -- neither happens for a bare 112.0 figure.
+        pulled = [argv[2] for argv in calls]
+        assert sorted(pulled) == sorted(p.tag for p in lm.recommended(budget))
+        reasoning = lm.pick(budget, "reasoning")
+        assert reasoning is not None and reasoning.moe and reasoning.tag in pulled
+        assert reasoning.tag not in {p.tag for p in lm.recommended(budget.budget_gb)}
 
     def test_name_and_flag_are_exclusive(self, runner: CliRunner):
         assert runner.invoke(cli_main.app, ["models", "pull"]).exit_code == 1

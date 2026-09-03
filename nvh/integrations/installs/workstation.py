@@ -8,8 +8,11 @@ import stat
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+from nvh.core import local_models
+from nvh.core.local_models import TierBudget
 from nvh.integrations.workspace.storage import StorageStatus, ensure_storage, storage_status
 
 
@@ -32,6 +35,10 @@ class WorkstationProfile:
     storage_free_gb: float | None
     storage_env_file: str
     notes: list[str]
+    # What the model ladders plan against (nvh.core.local_models.tier_budget):
+    # the pool minus the OS reserve on unified memory, the summed VRAM otherwise.
+    budget_gb: int = 0
+    unified_memory: bool = False
 
 
 def _first_existing_command(*names: str) -> str:
@@ -42,12 +49,27 @@ def _first_existing_command(*names: str) -> str:
     return ""
 
 
-def _detect_gpu() -> tuple[bool, str, int]:
+def _detect_gpu_rows() -> list[Any]:
+    """GPU rows to budget against: ``nvh.utils.gpu`` first, nvidia-smi as the fallback.
+
+    Rows only need ``name`` / ``vram_mb`` / ``unified_memory``;
+    ``local_models.tier_budget`` reads them through ``getattr``.
+    """
+    try:
+        from nvh.utils.gpu import detect_gpus
+
+        rows: list[Any] = list(detect_gpus())
+    except Exception:
+        rows = []
+    if rows:
+        return rows
+
     nvidia_smi = shutil.which("nvidia-smi")
     if not nvidia_smi:
-        return False, "", 0
-
+        return []
     try:
+        from nvh.utils.gpu import is_unified_memory_gpu_name
+
         result = subprocess.run(
             [
                 nvidia_smi,
@@ -58,30 +80,68 @@ def _detect_gpu() -> tuple[bool, str, int]:
             text=True,
             timeout=5,
         )
-        if result.returncode != 0 or not result.stdout.strip():
-            return True, "", 0
-        first = result.stdout.strip().splitlines()[0]
-        name, _, memory = first.partition(",")
-        vram_mb = int(memory.strip() or "0")
-        return True, name.strip(), max(0, vram_mb // 1024)
     except Exception:
-        return True, "", 0
+        return []
+    if result.returncode != 0:
+        return []
+    for line in result.stdout.splitlines():
+        name, _, memory = line.partition(",")
+        memory = memory.strip()
+        if not memory.isdigit():
+            continue
+        rows.append(
+            SimpleNamespace(
+                name=name.strip(),
+                vram_mb=int(memory),
+                unified_memory=is_unified_memory_gpu_name(name.strip()),
+            )
+        )
+    return rows
 
 
-def _recommend_chat_models(vram_gb: int) -> list[str]:
-    if vram_gb >= 40:
-        return ["nemotron", "llama3.2-vision", "qwen3:8b", "llama3.1:8b", "gemma3:4b"]
-    if vram_gb >= 24:
-        return ["llama3.2-vision", "qwen3:8b", "llama3.1:8b", "gemma3:4b"]
-    if vram_gb >= 12:
-        return ["minicpm-v", "qwen3:8b", "llama3.1:8b", "gemma3:4b"]
-    if vram_gb >= 8:
-        return ["qwen3:8b", "llama3.1:8b", "gemma3:4b", "llava:7b"]
-    if vram_gb >= 4:
-        return ["gemma3:4b", "moondream"]
-    if vram_gb > 0:
-        return ["gemma3:4b"]
-    return []
+def _system_memory() -> Any:
+    """SystemMemoryInfo for the CPU-offload bonus, or None when it cannot be read."""
+    try:
+        from nvh.utils.gpu import detect_system_memory
+
+        return detect_system_memory()
+    except Exception:
+        return None
+
+
+def _detect_gpu(rows: list[Any] | None = None) -> tuple[bool, str, int]:
+    """``(has_gpu, name, total_gb)`` for the detected rows.
+
+    ``total_gb`` is what the cards report; the recommendations read the
+    :class:`TierBudget` instead (see :func:`detect_workstation_profile`).
+    """
+    rows = _detect_gpu_rows() if rows is None else rows
+    if not rows:
+        # nvidia-smi on PATH but no row could be read: a GPU with no usable data.
+        return bool(shutil.which("nvidia-smi")), "", 0
+    budget = local_models.tier_budget(rows, None)
+    sized = [row for row in rows if float(getattr(row, "vram_mb", 0) or 0) > 0]
+    primary = sized[0] if sized else rows[0]
+    return True, str(getattr(primary, "name", "") or ""), int(budget.total_gb)
+
+
+def _recommend_chat_models(vram_gb: int | float | TierBudget) -> list[str]:
+    """Pull list for the budget from the one VRAM-tier table (nvh.core.local_models).
+
+    Chat first, then code, vision, embeddings and the small always-fits
+    fallback; MoE picks lead on a unified pool. No GPU (0 GB, or a budget
+    with no sized rows) means no local pulls: the workstation leaves CPU-only
+    sessions to cloud providers.
+    """
+    if isinstance(vram_gb, TierBudget):
+        if vram_gb.sized_gpus == 0:
+            return []
+        budget: TierBudget | float = vram_gb
+    else:
+        if vram_gb <= 0:
+            return []
+        budget = float(vram_gb)
+    return [pick.tag for pick in local_models.recommended(budget)]
 
 
 def _recommend_comfy_profiles(vram_gb: int) -> list[str]:
@@ -96,7 +156,13 @@ def _recommend_comfy_profiles(vram_gb: int) -> list[str]:
 
 def detect_workstation_profile(home_dir: str | Path | None = None) -> WorkstationProfile:
     """Detect a student-friendly Linux GPU workstation profile."""
-    has_gpu, gpu_name, vram_gb = _detect_gpu()
+    rows = _detect_gpu_rows()
+    has_gpu, gpu_name, vram_gb = _detect_gpu(rows)
+    # The recommendations read the budget, not the raw total: a unified pool
+    # loses the OS reserve (a 128 GB GB10 plans 112 GB), a discrete card's
+    # summed VRAM stands as is.
+    budget = local_models.tier_budget(rows, _system_memory())
+    budget_gb = int(budget.budget_gb)
     storage = storage_status(home_dir=home_dir)
     has_gui = bool(
         os.environ.get("DISPLAY")
@@ -107,8 +173,16 @@ def detect_workstation_profile(home_dir: str | Path | None = None) -> Workstatio
 
     if not has_gpu:
         notes.append("No NVIDIA GPU detected; local models will be CPU/cloud fallback.")
-    elif vram_gb and vram_gb < 8:
+    elif budget_gb and budget_gb < 8:
         notes.append("Small VRAM GPU detected; prefer compact chat and starter image workflows.")
+    if budget.unified:
+        # The reserve is the pool's own (local_models.unified_os_reserve_gb):
+        # 16 GB on a 128 GB GB10, 8 GB on a 64 GB pool -- not the flat GB10 figure.
+        notes.append(
+            f"Unified memory: {budget.total_gb:.0f} GB shared by CPU and GPU; "
+            f"{budget.budget_gb:.0f} GB is planned for models after the "
+            f"{budget.os_reserve_gb:.0f} GB OS reserve."
+        )
 
     if not has_gui:
         notes.append("No desktop session detected; WebUI can still run over a forwarded port.")
@@ -126,13 +200,15 @@ def detect_workstation_profile(home_dir: str | Path | None = None) -> Workstatio
         python=_first_existing_command("python3.13", "python3.12", "python3.11", "python3"),
         nvh=_first_existing_command("nvh", "nvhive"),
         ollama=_first_existing_command("ollama"),
-        recommended_chat_models=_recommend_chat_models(vram_gb),
-        recommended_comfy_profiles=_recommend_comfy_profiles(vram_gb),
+        recommended_chat_models=_recommend_chat_models(budget),
+        recommended_comfy_profiles=_recommend_comfy_profiles(budget_gb),
         storage_home=str(storage.layout.home),
         storage_ok=storage.ok,
         storage_free_gb=storage.free_gb,
         storage_env_file=str(storage.env_file),
         notes=notes,
+        budget_gb=budget_gb,
+        unified_memory=budget.unified,
     )
 
 

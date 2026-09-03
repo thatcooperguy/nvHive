@@ -13,9 +13,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import nvh.core.agentic as agentic_module
+from nvh.core import local_models
 from nvh.core.agent_loop import AgentResult, AgentStep
 from nvh.core.agentic import (
+    _TIER_3_MULTI_MODELS,
+    _TIER_MODELS,
     CODING_SYSTEM_PROMPT,
+    TIER_BUDGET_GB,
     TIER_DESCRIPTIONS,
     AgentConfig,
     AgentMode,
@@ -33,12 +38,35 @@ from nvh.core.tools import ToolResult
 from nvh.providers.base import CompletionResponse, Usage
 from nvh.providers.registry import ProviderRegistry
 
+
+def _tag(model: str | None) -> str:
+    return (model or "").removeprefix("ollama/")
+
+
 # ---------------------------------------------------------------------------
 # Tier detection
 # ---------------------------------------------------------------------------
 
 
 class TestTierDetection:
+    def test_thresholds_are_table_row_starts(self):
+        """The agent's floors are where the local-model table starts a row (128 sits in its 96+ row)."""
+        row_starts = {tier.min_gb for tier in local_models.LOCAL_MODEL_TIERS}
+        assert TIER_BUDGET_GB == {
+            AgentTier.TIER_1: 16.0, AgentTier.TIER_2: 24.0, AgentTier.TIER_3: 48.0,
+            AgentTier.TIER_4: 96.0, AgentTier.TIER_5: 128.0,
+        }
+        for tier, floor_gb in TIER_BUDGET_GB.items():
+            assert detect_agent_tier(floor_gb) == tier
+            assert detect_agent_tier(floor_gb - 0.1) != tier
+            if floor_gb < 128:
+                assert floor_gb in row_starts
+            assert local_models.tier_for(floor_gb).min_gb <= floor_gb
+
+    def test_docstring_no_longer_says_tier_0_is_under_24(self):
+        assert "Tier 0 (<24" not in (agentic_module.__doc__ or "")
+        assert "Tier 0 (<16" in (agentic_module.__doc__ or "")
+
     def test_tier_0_no_gpu(self):
         assert detect_agent_tier(0) == AgentTier.TIER_0
 
@@ -102,48 +130,95 @@ class TestConfigBuilding:
         assert config.worker_provider is None
         assert config.max_parallel_workers == 1
 
-    def test_tier_1_cloud_orch_small_worker(self):
+    def test_tier_1_cloud_orch_table_coder(self):
         config = build_agent_config(AgentTier.TIER_1)
         assert config.orchestrator_provider is None
         assert config.worker_provider == "ollama"
-        assert config.worker_model is not None
-        assert "7b" in (config.worker_model or "").lower()
+        assert _tag(config.worker_model) == local_models.pick(TIER_BUDGET_GB[AgentTier.TIER_1], "code").tag
+        assert config.reviewer_model is None
 
-    def test_tier_2_cloud_orch_multimodal_worker(self):
+    def test_tier_2_cloud_orch_table_coder(self):
         config = build_agent_config(AgentTier.TIER_2)
         assert config.orchestrator_provider is None
         assert config.worker_provider == "ollama"
-        assert "vision" in (config.worker_model or "").lower()
+        assert _tag(config.worker_model) == local_models.pick(TIER_BUDGET_GB[AgentTier.TIER_2], "code").tag
+        # no reviewer row below 48 GB, even when multi is asked for
+        multi = build_agent_config(AgentTier.TIER_2, mode=AgentMode.MULTI)
+        assert multi.reviewer_provider is None and multi.reviewer_model is None
 
     def test_tier_3_single_mode_default(self):
         config = build_agent_config(AgentTier.TIER_3)
         assert config.orchestrator_provider is None
         assert config.worker_provider == "ollama"
-        assert "70b" in (config.worker_model or "").lower()
+        assert _tag(config.worker_model) == local_models.pick(TIER_BUDGET_GB[AgentTier.TIER_3], "code").tag
+        assert config.mode == AgentMode.SINGLE
         assert config.reviewer_model is None  # single mode by default
 
     def test_tier_3_multi_mode(self):
         config = build_agent_config(AgentTier.TIER_3, mode=AgentMode.MULTI)
+        floor_gb = TIER_BUDGET_GB[AgentTier.TIER_3]
+        worker = local_models.pick(floor_gb, "code")
+        reviewer = local_models.pick(floor_gb - worker.runtime_gb, "reasoning")
         assert config.worker_provider == "ollama"
+        assert _tag(config.worker_model) == worker.tag
         assert config.reviewer_provider == "ollama"
-        assert config.reviewer_model is not None
+        assert _tag(config.reviewer_model) == reviewer.tag
+        assert config.reviewer_model != config.worker_model
+        # the old alternate dict is the same row now
+        assert _TIER_3_MULTI_MODELS == _TIER_MODELS[AgentTier.TIER_3]
 
     def test_tier_4_dual_model(self):
         config = build_agent_config(AgentTier.TIER_4)
+        floor_gb = TIER_BUDGET_GB[AgentTier.TIER_4]
+        assert config.orchestrator_provider is None
         assert config.worker_provider == "ollama"
-        assert config.max_parallel_workers == 2
+        assert _tag(config.worker_model) == local_models.pick(floor_gb, "code").tag
+        assert config.max_parallel_workers == local_models.num_parallel_for(floor_gb)
         # Auto mode on Tier 4 → multi
         assert config.mode == AgentMode.MULTI
+        assert config.reviewer_provider == "ollama"
         assert config.reviewer_model is not None
 
     def test_tier_5_fully_local_triple(self):
         config = build_agent_config(AgentTier.TIER_5)
+        floor_gb = TIER_BUDGET_GB[AgentTier.TIER_5]
         assert config.orchestrator_provider == "ollama"
         assert config.worker_provider == "ollama"
         assert config.reviewer_provider == "ollama"
-        assert config.max_parallel_workers == 4
+        assert config.max_parallel_workers == local_models.num_parallel_for(floor_gb)
+        assert _tag(config.orchestrator_model) == local_models.pick(floor_gb, "chat").tag
         # Three different models
-        assert config.orchestrator_model != config.worker_model
+        assert len({config.orchestrator_model, config.worker_model, config.reviewer_model}) == 3
+
+    def test_local_models_fit_side_by_side(self):
+        """Every tier's local roles load together within the tier floor (a Spark's 112 GB budget too)."""
+        sizes = local_models.size_table()
+        for tier, floor_gb in TIER_BUDGET_GB.items():
+            local_tags = [_tag(model) for _provider, model in _TIER_MODELS[tier].values() if model]
+            assert local_tags, tier
+            total = sum(sizes[tag] for tag in local_tags)
+            assert total <= floor_gb, (tier, local_tags, total)
+        spark_budget = 128.0 - local_models.UNIFIED_MEMORY_OS_RESERVE_GB
+        tier_5 = [_tag(model) for _p, model in _TIER_MODELS[AgentTier.TIER_5].values() if model]
+        assert sum(sizes[tag] for tag in tier_5) <= spark_budget
+
+    def test_every_model_is_a_table_tag(self):
+        tags = set(local_models.all_tags())
+        for tier_models in _TIER_MODELS.values():
+            for provider, model in tier_models.values():
+                if provider is None:
+                    assert model is None
+                else:
+                    assert provider == "ollama"
+                    assert _tag(model) in tags, model
+        assert _TIER_MODELS[AgentTier.TIER_0] == {
+            "orchestrator": (None, None), "worker": (None, None), "reviewer": (None, None),
+        }
+
+    def test_parallel_workers_follow_the_table(self):
+        assert build_agent_config(AgentTier.TIER_0).max_parallel_workers == 1
+        for tier, floor_gb in TIER_BUDGET_GB.items():
+            assert build_agent_config(tier).max_parallel_workers == local_models.num_parallel_for(floor_gb)
 
     def test_fallback_when_ollama_not_in_registry(self):
         registry = ProviderRegistry()
@@ -259,10 +334,11 @@ class TestCodingAgentLoop:
     @pytest.mark.asyncio
     async def test_result_tracks_tier_and_models(self, tmp_path: Path):
         engine = _MockEngine()
+        worker = f"ollama/{local_models.pick(24.0, 'code').tag}"
         config = AgentConfig(
             tier=AgentTier.TIER_2,
             orchestrator_model="gpt-4o-mini",
-            worker_model="ollama/qwen2.5-coder:32b",
+            worker_model=worker,
         )
 
         result = await run_coding_agent(
@@ -274,7 +350,7 @@ class TestCodingAgentLoop:
 
         assert result.tier == AgentTier.TIER_2
         assert result.orchestrator_model == "gpt-4o-mini"
-        assert result.worker_model == "ollama/qwen2.5-coder:32b"
+        assert result.worker_model == worker
         assert result.duration_ms >= 0
 
 
@@ -501,6 +577,16 @@ class TestAgenticModuleSurface:
         for tier in AgentTier:
             assert tier in TIER_DESCRIPTIONS
             assert len(TIER_DESCRIPTIONS[tier]) > 10
+
+    def test_tier_descriptions_name_the_table_picks(self):
+        """The display text is generated from the same rows, so it cannot name a model the tier does not load."""
+        assert "cloud" in TIER_DESCRIPTIONS[AgentTier.TIER_0].lower()
+        for tier in TIER_BUDGET_GB:
+            for _provider, model in _TIER_MODELS[tier].values():
+                if model:
+                    assert _tag(model) in TIER_DESCRIPTIONS[tier], (tier, model)
+        for retired in ("70B", "7B", "Llama", "Nemotron planner", "Qwen reviewer"):
+            assert not any(retired in text for text in TIER_DESCRIPTIONS.values()), retired
 
     def test_agent_mode_enum(self):
         assert AgentMode.AUTO == "auto"

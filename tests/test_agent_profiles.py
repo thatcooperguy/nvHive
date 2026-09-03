@@ -48,7 +48,7 @@ def test_save_then_get_round_trip(tmp_path: Path) -> None:
         description="My local profile",
         system_prompt="Be concise.",
         provider="ollama",
-        model="ollama/qwen2.5:7b",
+        model="ollama/qwen3:8b",
         temperature=0.3,
     )
     path = save_user_profile(profile, home_dir=tmp_path)
@@ -132,7 +132,7 @@ def test_resolve_profile_overrides_appends_persona_and_routes(tmp_path: Path) ->
             description="",
             system_prompt="Be skeptical and ask one clarifying question.",
             provider="ollama",
-            model="ollama/qwen2.5-coder:7b",
+            model="ollama/qwen3:8b",
         ),
         home_dir=tmp_path,
     )
@@ -143,7 +143,7 @@ def test_resolve_profile_overrides_appends_persona_and_routes(tmp_path: Path) ->
     assert "Careful Reviewer" in out
     assert "skeptical" in out
     assert prof.provider == "ollama"
-    assert prof.model == "ollama/qwen2.5-coder:7b"
+    assert prof.model == "ollama/qwen3:8b"
     assert prof.cost_ceiling_usd is None
     assert prof.local_only is False
 
@@ -314,3 +314,20 @@ async def test_wizard_chat_accepts_profile_argument(monkeypatch, tmp_path: Path)
         )
 
     assert result["mode"] == "llm"
+
+
+def test_core_coder_profile_leaves_the_model_to_the_local_default() -> None:
+    """The built-in coder pinned ``ollama/qwen2.5-coder:7b`` until 2026-09-02, when
+    the tag had left the registry. It keeps provider ``ollama`` and pins no model,
+    so the tier table's pick for this machine applies; no built-in may pin a tag
+    the table does not carry."""
+    import nvh.core.local_models as lm
+    from nvh.integrations.wizard.profiles import BUILT_IN_PROFILES
+
+    by_name = {p.name: p for p in BUILT_IN_PROFILES}
+    assert by_name["coder"].provider == "ollama"
+    assert by_name["coder"].model == ""
+    for p in BUILT_IN_PROFILES:
+        if p.model:
+            assert p.model.startswith("ollama/"), p.name
+            assert lm.pick_for_tag(p.model.removeprefix("ollama/")) is not None, (p.name, p.model)

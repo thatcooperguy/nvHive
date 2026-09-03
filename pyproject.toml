@@ -131,6 +131,9 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "network: probes registry.ollama.ai or other remote services; opt in with NVH_NETWORK_TESTS=1",
+]
 # 2026-06-10 audit: without this, a CI image (or dev env) missing
 # pytest-timeout silently drops the `timeout`/`timeout_method` options
 # below — pytest emits a yellow "Unknown config option: timeout"

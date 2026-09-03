@@ -69,6 +69,8 @@ export default function CreateAgentModal({ open, onClose, onCreated, toolNames }
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Declared before the early return below so hook order is stable.
+  const pendingUpload = useRef<File | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -110,7 +112,6 @@ export default function CreateAgentModal({ open, onClose, onCreated, toolNames }
     }
   };
 
-  const pendingUpload = useRef<File | null>(null);
 
   const handleGenerate = async () => {
     if (!slug) {

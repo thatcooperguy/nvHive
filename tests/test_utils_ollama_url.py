@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 import pytest
 
 from nvh.utils.ollama import (
@@ -37,6 +39,35 @@ def test_explicit_value_wins(monkeypatch):
     assert ollama_base_url("http://127.0.0.1:11434") == "http://127.0.0.1:11434"
     # An out-of-range port is kept verbatim rather than rejected (tests use one as "down").
     assert ollama_base_url("http://localhost:99999") == "http://127.0.0.1:99999"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("http://[::1]:11434", "http://[::1]:11434"),
+        ("[::1]:11434", "http://[::1]:11434"),
+        ("http://[::1]", "http://[::1]:11434"),
+        ("::1", "http://[::1]:11434"),  # a bare literal, as OLLAMA_HOST=::1 (ollama itself accepts it)
+        ("fd00::5", "http://[fd00::5]:11434"),
+        ("http://[fd00::5]:11434/ollama/", "http://[fd00::5]:11434/ollama"),
+        ("http://[::1]:99999", "http://[::1]:99999"),  # the out-of-range port passes through, brackets intact
+        ("http://[::]:11434", "http://127.0.0.1:11434"),  # the IPv6 wildcard bind is not a target
+    ],
+)
+def test_ipv6_literals_keep_their_brackets(no_env, value, expected):
+    """``urlsplit`` strips the brackets off ``[::1]``; the netloc used to be rebuilt without them
+    as the unparsable ``http://::1:11434`` (hostname None), which the adapter then took for a
+    remote box. ``::1`` is a literal -- nothing to resolve -- so it is kept, not rewritten."""
+    out = ollama_base_url(value)
+    assert out == expected
+    assert urlsplit(out).hostname is not None  # parsable again
+
+
+def test_ipv6_literal_from_the_env(no_env, monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "[::1]:11434")
+    assert ollama_base_url() == "http://[::1]:11434"
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://[::1]:11435/")
+    assert ollama_base_url() == "http://[::1]:11435"
 
 
 def test_probe_distinguishes_unreachable_from_empty():

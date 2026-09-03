@@ -80,7 +80,10 @@ inference:
 
     fast-local:
       provider: ollama-direct
-      model: "nemotron-mini"
+      # The small chat pick of the nvh.core.local_models tier table -- the 4-8 GB
+      # "mini" tier's chat model and the CPU fallback of every larger tier, so it
+      # runs on any box. `nvh models tiers --pick chat` prints this machine's pick.
+      model: "gemma3:4b"
       description: "Direct Ollama for minimum latency"
 
 # --- Guardrails ---

@@ -21,6 +21,7 @@ from rich.table import Table
 from rich.text import Text
 
 from nvh.config.settings import DEFAULT_CONFIG_DIR
+from nvh.core import local_models
 from nvh.providers.registry import RETIRED_PROVIDERS, resolve_provider_key
 from nvh.providers.specs import PROVIDER_SPECS
 from nvh.utils.ollama import ollama_base_url
@@ -70,8 +71,14 @@ RETIRED_MODEL_RENAMES: dict[str, dict[str, str]] = {
         "deepseek/deepseek-reasoner": "deepseek/deepseek-v4-pro",
     },
     "perplexity": {
-        "perplexity/llama-3.1-sonar-large-128k-online": "perplexity/sonar-pro",
-        "perplexity/llama-3.1-sonar-small-128k-online": "perplexity/sonar",
+        # Sonar retired for the Agent API presets (0.43; see
+        # docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview). The
+        # llama-3.1 IDs used to chain through sonar-pro / sonar; a rename target
+        # may never itself be retired, so they point at the presets directly.
+        "perplexity/llama-3.1-sonar-large-128k-online": "perplexity/preset/low",
+        "perplexity/llama-3.1-sonar-small-128k-online": "perplexity/preset/fast",
+        "perplexity/sonar-pro": "perplexity/preset/low",
+        "perplexity/sonar": "perplexity/preset/fast",
     },
     "together": {
         "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo": "together_ai/openai/gpt-oss-120b",
@@ -478,10 +485,41 @@ def stale_default_models(providers: Mapping[str, Any]) -> list[tuple[str, str, s
     return stale
 
 
+def _system_memory() -> Any:
+    """SystemMemoryInfo for the CPU-offload bonus, or None when it cannot be read."""
+    try:
+        from nvh.utils.gpu import detect_system_memory
+
+        return detect_system_memory()
+    except Exception:
+        return None
+
+
+def _detect_tier_budget() -> local_models.TierBudget | None:
+    """``local_models.tier_budget`` for the detected GPUs, or None when detection fails.
+
+    The budget is what every model ladder in ``nvh.core.local_models`` plans
+    against: on a unified pool (GB10 / DGX Spark) the pool minus the OS
+    reserve, on discrete cards the summed VRAM plus a capped CPU-offload bonus.
+    """
+    try:
+        from nvh.utils.gpu import detect_gpus
+
+        return local_models.tier_budget(detect_gpus(), _system_memory())
+    except Exception:
+        return None
+
+
 def _detect_gpu_info() -> tuple[list, float, str, str]:
     """Detect GPUs and return (gpu_list, total_vram, tier_name, tier_desc).
 
-    Returns safe defaults if detection fails.
+    ``total_vram`` is the memory the detected cards report -- the figure the
+    hardware table prints -- read through ``local_models.tier_budget`` so only
+    rows whose pool could be read count. The agent tier keys on that same
+    total: ``nvh.core.agentic`` defines TIER_5 as the 128 GB DGX Spark, so the
+    unified OS reserve is applied by the model ladder (see
+    :func:`_get_recommended_models`), not here. Returns safe defaults if
+    detection fails.
     """
     try:
         from nvh.core.agentic import (
@@ -491,7 +529,7 @@ def _detect_gpu_info() -> tuple[list, float, str, str]:
         from nvh.utils.gpu import detect_gpus
 
         gpus = detect_gpus()
-        total_vram = sum(g.vram_gb for g in gpus) if gpus else 0.0
+        total_vram = local_models.tier_budget(gpus, _system_memory()).total_gb
         tier = detect_agent_tier(total_vram)
         tier_desc = TIER_DESCRIPTIONS.get(tier, "Unknown")
         return gpus, total_vram, tier.value, tier_desc
@@ -895,52 +933,54 @@ def _ensure_ollama(console: Console) -> tuple[bool, list[str]]:
     return False, []
 
 
-# Known vision-capable Ollama model tags. Used for pull ordering so the
-# desktop-agent screenshot assist is available during API-key setup even
-# if the large text models are still downloading.
-_VISION_MODEL_TAGS = {
-    "nemotron-3-nano-omni",
-    "nemotron-omni",
-    "moondream",
-    "minicpm-v",
-    "llama3.2-vision",
-    "llama3.2-vision:11b",
-    "llama3.2-vision:90b",
-    "llava",
-    "llava:7b",
-    "llava:13b",
-    "llava:34b",
-    "bakllava",
-}
+# The table's dedicated vision tags -- local_models.vision_picks(), the
+# ``vision`` column of every tier -- so a tag can never be "vision" here and
+# absent there. Not every pick that *can* see images: ``gemma3:4b`` (a CPU
+# fallback) and ``nemotron3:33b`` (a chat pick) accept images too, but they are
+# text models in the ladder, and promoting them ahead of a tier's primary picks
+# would defeat the point of pulling the small screenshot model first. Used for
+# pull ordering so the desktop-agent screenshot assist is available during
+# API-key setup even if the large text models are still downloading.
+_VISION_MODEL_TAGS: frozenset[str] = frozenset(pick.tag for pick in local_models.vision_picks())
 
-_MODEL_PULL_PREFERENCE = [
-    "nemotron-3-nano-omni",
-    "nemotron-omni",
-    "nemotron",
-    "nemotron:70b",
-    "llama3.3:70b",
-    "qwen2.5-coder:32b",
-    "llama3.2-vision",
-    "qwen3:8b",
-    "qwen2.5-coder:7b",
-    "llama3.1:8b",
-    "minicpm-v",
-    "llava:7b",
-    "gemma3:4b",
-    "moondream",
-    "nemotron-mini",
-]
+# Registry names of those picks: any quant of ``qwen3-vl`` or ``moondream`` is
+# a vision model here; ``gemma3`` and ``nemotron3`` are not (they see images
+# but sit in the ladder's chat / CPU-fallback columns).
+_VISION_MODEL_NAMES: frozenset[str] = frozenset(pick.name for pick in local_models.vision_picks())
+
+
+def _first_tier_index(pick: local_models.LocalModelPick) -> int:
+    """Index of the lowest tier that lists ``pick`` -- the budget it first fits."""
+    for index, tier in enumerate(local_models.LOCAL_MODEL_TIERS):
+        if any(candidate.tag == pick.tag for candidate in tier.picks.values()):
+            return index
+    return len(local_models.LOCAL_MODEL_TIERS)
+
+
+# Strongest-first pull preference: every table tag, the highest tier's picks
+# first. Tags that first appear in the same tier share a rank, so the stable
+# sort in _prefer_largest_fitting_models keeps the table's own order between
+# them (MoE picks lead on a bandwidth-bound pool; see local_models.recommended).
+_MODEL_PULL_RANK: dict[str, int] = {
+    pick.tag: len(local_models.LOCAL_MODEL_TIERS) - _first_tier_index(pick)
+    for pick in local_models.all_picks()
+}
+_MODEL_PULL_PREFERENCE: list[str] = sorted(_MODEL_PULL_RANK, key=_MODEL_PULL_RANK.__getitem__)
 
 
 def _is_vision_model(tag: str) -> bool:
-    """Return True if the tag refers to a vision-capable model.
+    """Return True if the tag is one of the table's dedicated vision picks (or says so).
 
-    Matches exact known tags and any tag whose base (before ':') is known.
+    Matches the ``vision`` column exactly, any tag of one of those registry
+    names (``qwen3-vl:4b``, ``llama3.2-vision:11b``) and names that say so
+    (``*-vision``). Chat and CPU-fallback picks that happen to accept images
+    (``nemotron3:33b``, ``gemma3:4b``) are text models here, so pull ordering
+    never promotes them ahead of a tier's primary picks.
     """
     if tag in _VISION_MODEL_TAGS:
         return True
     base = tag.split(":", 1)[0]
-    return base in _VISION_MODEL_TAGS or "-vision" in base or "llava" in base
+    return base in _VISION_MODEL_TAGS or base in _VISION_MODEL_NAMES or "-vision" in base
 
 
 def _reorder_vision_first(models: list[str]) -> list[str]:
@@ -954,53 +994,40 @@ def _reorder_vision_first(models: list[str]) -> list[str]:
 
 
 def _prefer_largest_fitting_models(models: list[str]) -> list[str]:
-    """Order model tags by nvHive's strongest-first local preference."""
-    preference = {model: i for i, model in enumerate(_MODEL_PULL_PREFERENCE)}
+    """Order model tags strongest-first: the tier a tag first fits in, highest first.
+
+    The rank is :data:`_MODEL_PULL_RANK` (from the table); tags the table does
+    not know follow the known ones in their input order. The sort is stable,
+    so within one tier the caller's order survives.
+    """
     unique_models = list(dict.fromkeys(models))
-    return sorted(
-        unique_models,
-        key=lambda model: preference.get(model, len(preference) + unique_models.index(model)),
+    unknown = len(local_models.LOCAL_MODEL_TIERS) + 1
+    return sorted(unique_models, key=lambda model: _MODEL_PULL_RANK.get(model, unknown))
+
+
+def _get_recommended_models(
+    total_vram: float,
+    budget: local_models.TierBudget | None = None,
+) -> list[str]:
+    """Recommended Ollama tags for the detected VRAM, strongest tier first.
+
+    Every tag is a ``nvh.core.local_models`` pick -- the one VRAM-tier table --
+    so nothing here can name a model the registry no longer carries. A
+    ``budget`` from :func:`local_models.tier_budget` makes the list
+    unified-aware: a 128 GB GB10 plans against 112 GB and leads with MoE
+    picks. Without one the budget is read from the detected GPUs, and when
+    nothing can be detected ``total_vram`` is planned as a bare discrete
+    figure. 0 GB (no GPU, or a GPU whose memory could not be read) yields no
+    local pulls: the guided setup leaves those machines to cloud providers.
+    """
+    if total_vram <= 0:
+        return []
+    if budget is None or budget.sized_gpus == 0:
+        budget = _detect_tier_budget()
+    plan: local_models.TierBudget | float = (
+        budget if budget is not None and budget.sized_gpus > 0 else float(total_vram)
     )
-
-
-def _get_recommended_models(total_vram: float) -> list[str]:
-    """Return recommended Ollama model tags for the detected VRAM."""
-    try:
-        from nvh.utils.gpu import detect_gpus, recommend_models
-        gpus = detect_gpus()
-        recs = recommend_models(gpus) if gpus else []
-        models = [r.model for r in recs]
-        if total_vram >= 4 and "gemma3:4b" not in models:
-            models.append("gemma3:4b")
-        return _prefer_largest_fitting_models(models)
-    except Exception:
-        pass
-
-    # Fallback: manual recommendations by VRAM, all names verified against
-    # Ollama's registry. Each tier fits text + vision
-    # model concurrently:
-    #   llama3.2-vision (~7GB) — best spatial grounding for desktop agent
-    #   minicpm-v (~5GB) — good vision, smaller footprint
-    #   moondream (~2GB) — basic vision for very tight VRAM
-    if total_vram >= 128:
-        return ["nemotron", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision", "gemma3:4b"]
-    if total_vram >= 96:
-        return ["nemotron", "llama3.3:70b", "qwen2.5-coder:32b", "llama3.2-vision", "gemma3:4b"]
-    if total_vram >= 48:
-        return ["nemotron", "llama3.3:70b", "llama3.2-vision", "qwen3:8b", "gemma3:4b"]
-    if total_vram >= 40:
-        return ["nemotron", "llama3.2-vision", "qwen3:8b", "gemma3:4b"]
-    if total_vram >= 24:
-        return ["llama3.2-vision", "qwen3:8b", "qwen2.5-coder:7b", "gemma3:4b"]
-    if total_vram >= 16:
-        return ["minicpm-v", "qwen2.5-coder:7b", "qwen3:8b", "gemma3:4b"]
-    if total_vram >= 12:
-        return ["minicpm-v", "qwen2.5-coder:7b", "gemma3:4b"]
-    if total_vram >= 8:
-        return ["qwen3:8b", "llama3.1:8b", "gemma3:4b", "llava:7b"]
-    if total_vram >= 4:
-        return ["gemma3:4b", "moondream"]
-    return []
+    return _prefer_largest_fitting_models([pick.tag for pick in local_models.recommended(plan)])
 
 
 def _open_in_browser(url: str) -> bool:
@@ -1181,24 +1208,29 @@ def _write_config(
         },
     }
 
-    # Pick the Ollama default/fallback for THIS machine — was hardcoded to
-    # recommender ensures the config always references real models.
+    # Pick the Ollama default/fallback for THIS machine from the one VRAM-tier
+    # table (nvh.core.local_models): the tier's chat pick leads and its small
+    # always-fits CPU-fallback pick backs it up, so the config points at
+    # models that exist on the registry AND fit the detected pool -- the
+    # budget is unified-aware, so a DGX Spark plans against 112 GB, not 128.
     try:
-        from nvh.utils.gpu import detect_gpus, recommend_models
-        recs = recommend_models(detect_gpus())
-        text_recs = [r.model for r in recs if not r.tier.startswith("vision")]
-        if text_recs:
-            advisor_defs["ollama"]["model"] = f"ollama/{text_recs[0]}"
-            if len(text_recs) > 1:
-                advisor_defs["ollama"]["fallback"] = f"ollama/{text_recs[1]}"
+        budget = _detect_tier_budget()
+        if budget is not None:
+            chat = local_models.pick(budget, "chat")
+            fallback = local_models.pick(budget, "cpu_fallback")
+            if chat is not None:
+                advisor_defs["ollama"]["model"] = f"ollama/{chat.tag}"
+                if fallback is not None and fallback.tag != chat.tag:
+                    advisor_defs["ollama"]["fallback"] = f"ollama/{fallback.tag}"
     except Exception:
         pass
 
-    # Sensible default if the recommender fails or returns nothing — use
-    # the first-run bootstrap model that install.sh pulls by default.
+    # Detection failed outright: the CPU tier's chat pick runs on any box --
+    # the same model install.sh pulls first when it finds no GPU.
     if not advisor_defs["ollama"]["model"]:
-        advisor_defs["ollama"]["model"] = "ollama/gemma3:4b"
-        advisor_defs["ollama"]["fallback"] = "ollama/gemma3:4b"
+        cpu_chat = local_models.LOCAL_MODEL_TIERS[0].picks["chat"]
+        advisor_defs["ollama"]["model"] = f"ollama/{cpu_chat.tag}"
+        advisor_defs["ollama"]["fallback"] = f"ollama/{cpu_chat.tag}"
 
     for name, info in advisor_defs.items():
         if name == "ollama":
@@ -1262,6 +1294,9 @@ def guided_setup(console: Console | None = None) -> None:
     console.print("[bold green]Step 1/3:[/bold green] Hardware + Local AI\n")
 
     gpus, total_vram, tier_name, tier_desc = _detect_gpu_info()
+    # What the model ladder plans against: a unified pool minus the OS reserve
+    # (a 128 GB GB10 budgets 112 GB), a discrete card's summed VRAM otherwise.
+    budget = local_models.tier_budget(gpus, _system_memory())
 
     gpu_table = Table(show_header=False, box=None, padding=(0, 2))
     gpu_table.add_column("Label", style="dim")
@@ -1275,6 +1310,14 @@ def guided_setup(console: Console | None = None) -> None:
             # 0 GB because its pool could not be read is not an empty card.
             gpu_table.add_row("GPU", f"{gpu.name} ({format_gpu_memory(gpu)})")
         gpu_table.add_row("Total VRAM", f"{total_vram:.0f} GB" if total_vram > 0 else "memory unreadable")
+        if budget.unified:
+            # The reserve scales with the pool (local_models.unified_os_reserve_gb):
+            # 16 GB on a 128 GB GB10, 8 GB on a 64 GB Mac -- never the flat GB10 figure.
+            gpu_table.add_row(
+                "Model budget",
+                f"{budget.budget_gb:.0f} GB unified after the "
+                f"{budget.os_reserve_gb:.0f} GB OS reserve",
+            )
     else:
         gpu_table.add_row("GPU", "None detected (CPU only)")
 
@@ -1293,11 +1336,14 @@ def guided_setup(console: Console | None = None) -> None:
             ollama_up, ollama_models = _ensure_ollama(console)
             console.print()
 
-        recommended = _get_recommended_models(total_vram)
+        recommended = _get_recommended_models(total_vram, budget=budget)
         if recommended and ollama_up:
-            console.print(
-                f"  Recommended models for your GPU ({total_vram:.0f} GB VRAM):\n"
+            pool = (
+                f"{budget.budget_gb:.0f} GB unified budget"
+                if budget.unified
+                else f"{total_vram:.0f} GB VRAM"
             )
+            console.print(f"  Recommended models for your GPU ({pool}):\n")
             for model in recommended:
                 installed = any(model in m for m in ollama_models)
                 if installed:

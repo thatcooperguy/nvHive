@@ -3,10 +3,16 @@
 Per-provider facts live in :mod:`nvh.providers.specs`; this module holds the
 behaviour once. The ``nvh.providers.<name>_provider`` modules are one-release
 compat shims over :class:`OpenAICompatibleProvider`.
+
+A spec's ``api_surface`` picks the LiteLLM call: ``"chat"`` goes through
+``litellm.acompletion``; ``"responses"`` (Perplexity's Agent API) through
+``litellm.aresponses`` and is folded into the same ``CompletionResponse`` /
+``StreamChunk`` shapes here.
 """
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
@@ -32,7 +38,7 @@ from nvh.providers.base import (
     TokenLimitError,
     Usage,
 )
-from nvh.providers.registry import resolve_provider_key
+from nvh.providers.registry import ProviderRegistry, resolve_provider_key
 from nvh.providers.specs import PROVIDER_SPECS, ProviderSpec
 
 __all__ = ["PROVIDER_SPECS", "OpenAICompatibleProvider", "ProviderSpec"]
@@ -45,6 +51,12 @@ _FINISH_REASONS = {
     "content_filter": FinishReason.CONTENT_FILTER,
     "tool_calls": FinishReason.TOOL_CALLS,
     "function_call": FinishReason.TOOL_CALLS,
+}
+
+# Responses API ``incomplete_details.reason`` -> finish reason.
+_INCOMPLETE_REASONS = {
+    "max_output_tokens": FinishReason.LENGTH,
+    "content_filter": FinishReason.CONTENT_FILTER,
 }
 
 
@@ -127,8 +139,137 @@ def _build_messages(
     return result
 
 
+def _responses_content(role: str, content: Any) -> Any:
+    """Chat-style content parts converted to Responses API input parts.
+
+    A plain string passes through. A list of parts -- what the API server
+    builds for image attachments (``{"type": "text"}`` / ``{"type":
+    "image_url", "image_url": {"url": ...}}``) -- becomes ``input_text`` /
+    ``input_image`` items (``output_text`` for an assistant turn, which is
+    what the Responses API expects there). Parts already in Responses shape
+    pass through untouched.
+    """
+    if not isinstance(content, list):
+        return content
+    text_type = "output_text" if role == "assistant" else "input_text"
+    parts: list[Any] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append({"type": text_type, "text": part})
+            continue
+        if not isinstance(part, dict):
+            parts.append({"type": text_type, "text": str(part)})
+            continue
+        kind = str(part.get("type", "")).lower()
+        if kind == "text":
+            parts.append({"type": text_type, "text": str(part.get("text", ""))})
+        elif kind == "image_url":
+            image_url = part.get("image_url")
+            if isinstance(image_url, dict):
+                url, detail = image_url.get("url", ""), image_url.get("detail")
+            else:
+                url, detail = image_url, None
+            parts.append({"type": "input_image", "image_url": str(url or ""), "detail": detail or "auto"})
+        else:
+            parts.append(part)
+    return parts
+
+
+def _build_input(messages: list[Message]) -> list[dict[str, Any]]:
+    """Convert our Message models to Responses API input items.
+
+    The system prompt travels separately as ``instructions``; ``name`` has no
+    Responses counterpart and is dropped. Multimodal content parts go through
+    :func:`_responses_content`.
+    """
+    return [
+        {"role": msg.role, "content": _responses_content(msg.role, msg.content)}
+        for msg in messages
+    ]
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    """Field access that works on LiteLLM's pydantic objects and on plain dicts."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _responses_text(response: Any) -> str:
+    """Concatenate the ``output_text`` parts of a Responses API result."""
+    parts: list[str] = []
+    for item in _get(response, "output") or []:
+        if _get(item, "type") != "message":
+            continue
+        for part in _get(item, "content") or []:
+            if _get(part, "type") == "output_text":
+                parts.append(_get(part, "text", "") or "")
+    return "".join(parts)
+
+
+def _responses_usage(response: Any) -> tuple[Usage, Decimal | None]:
+    """Usage plus, when the provider bills the request itself, its exact cost.
+
+    Perplexity returns ``usage.cost`` (a ``{"total_cost": ...}`` dict, which
+    LiteLLM may already have flattened to a float); that beats a per-token
+    estimate because presets bill per request as well as per token.
+    """
+    data = _get(response, "usage")
+    if data is None:
+        return Usage(), None
+    usage = Usage(
+        input_tokens=_get(data, "input_tokens", 0) or 0,
+        output_tokens=_get(data, "output_tokens", 0) or 0,
+        total_tokens=_get(data, "total_tokens", 0) or 0,
+    )
+    cost = _get(data, "cost")
+    if isinstance(cost, dict):
+        cost = cost.get("total_cost")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        return usage, Decimal(str(round(cost, 6)))
+    return usage, None
+
+
+def _responses_finish(response: Any) -> FinishReason:
+    if _get(response, "status") != "incomplete":
+        return FinishReason.STOP
+    reason = _get(_get(response, "incomplete_details"), "reason")
+    return _INCOMPLETE_REASONS.get(reason or "", FinishReason.LENGTH)
+
+
+def _responses_error(obj: Any) -> str:
+    """Message of a failed response or an ``error`` stream event."""
+    err = _get(obj, "error")
+    return str(_get(err, "message", err) or "response failed")
+
+
+@functools.lru_cache(maxsize=1)
+def _catalog() -> ProviderRegistry:
+    """A registry holding only the shipped capabilities.yaml catalog (loaded once)."""
+    registry = ProviderRegistry()
+    registry.load_capabilities()
+    return registry
+
+
+def _catalog_cost(model: str, usage: Usage) -> Decimal:
+    """``usage`` priced at the capabilities.yaml per-1M-token rates for ``model``; $0 without a row."""
+    info = _catalog().get_model_info(model)
+    if info is None:
+        return Decimal("0")
+    cost = (
+        Decimal(usage.input_tokens) * info.input_cost_per_1m_tokens
+        + Decimal(usage.output_tokens) * info.output_cost_per_1m_tokens
+    ) / Decimal(1_000_000)
+    return cost.quantize(Decimal("0.000001"))
+
+
 def _calc_cost(model: str, usage: Usage) -> Decimal:
-    """Calculate cost using LiteLLM's cost tracking."""
+    """Cost of ``usage``: LiteLLM's price table, else the capabilities.yaml rates, else $0.
+
+    LiteLLM raises for a model it has not mapped (Perplexity's Agent API
+    presets, for one); the catalog row nvHive ships for that model then
+    prices the request instead of it being recorded as free.
+    """
     try:
         prompt_cost, completion_cost = litellm.cost_per_token(
             model=model,
@@ -137,7 +278,7 @@ def _calc_cost(model: str, usage: Usage) -> Decimal:
         )
         return Decimal(str(round(prompt_cost + completion_cost, 6)))
     except Exception:
-        return Decimal("0")
+        return _catalog_cost(model, usage)
 
 
 def _resolve_api_key(spec: ProviderSpec, api_key: str, provider_name: str) -> str:
@@ -214,6 +355,136 @@ class OpenAICompatibleProvider:
     def _cost(self, model: str, usage: Usage) -> Decimal:
         return Decimal("0") if self._spec.zero_cost else _calc_cost(model, usage)
 
+    @property
+    def _responses(self) -> bool:
+        return self._spec.api_surface == "responses"
+
+    def _responses_cost(self, model: str, usage: Usage, billed: Decimal | None) -> Decimal:
+        if billed is None or self._spec.zero_cost:
+            return self._cost(model, usage)
+        return billed
+
+    def _responses_kwargs(
+        self,
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        system_prompt: str | None,
+    ) -> dict[str, Any]:
+        kw: dict[str, Any] = {
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+            "timeout": self._timeout,
+            **self._kwargs(model),
+        }
+        if system_prompt:
+            kw["instructions"] = system_prompt
+        return kw
+
+    async def _complete_responses(
+        self,
+        messages: list[Message],
+        model_name: str,
+        temperature: float,
+        max_tokens: int,
+        system_prompt: str | None,
+        **kwargs: Any,
+    ) -> CompletionResponse:
+        start = time.monotonic()
+        try:
+            response = await litellm.aresponses(
+                input=_build_input(messages),
+                **self._responses_kwargs(model_name, temperature, max_tokens, system_prompt),
+                **kwargs,
+            )
+        except Exception as e:
+            raise _map_error(e, self._provider_name) from e
+        if _get(response, "status") == "failed":
+            raise ProviderError(_responses_error(response), provider=self._provider_name)
+
+        usage, billed = _responses_usage(response)
+        return CompletionResponse(
+            content=_responses_text(response),
+            model=_get(response, "model") or model_name,
+            provider=self._provider_name,
+            usage=usage,
+            cost_usd=self._responses_cost(model_name, usage, billed),
+            latency_ms=int((time.monotonic() - start) * 1000),
+            finish_reason=_responses_finish(response),
+        )
+
+    def _final_responses_chunk(
+        self, response: Any, model_name: str, accumulated: str
+    ) -> StreamChunk:
+        if response is not None:
+            usage, billed = _responses_usage(response)
+            finish = _responses_finish(response)
+        else:
+            # Stream ended without a terminal event: estimate, as the chat path does.
+            est_out = self.estimate_tokens(accumulated)
+            usage = Usage(input_tokens=0, output_tokens=est_out, total_tokens=est_out)
+            billed, finish = None, FinishReason.STOP
+        return StreamChunk(
+            delta="",
+            is_final=True,
+            accumulated_content=accumulated,
+            model=model_name,
+            provider=self._provider_name,
+            usage=usage,
+            cost_usd=self._responses_cost(model_name, usage, billed),
+            finish_reason=finish,
+        )
+
+    async def _stream_responses(
+        self,
+        messages: list[Message],
+        model_name: str,
+        temperature: float,
+        max_tokens: int,
+        system_prompt: str | None,
+        **kwargs: Any,
+    ) -> AsyncIterator[StreamChunk]:
+        accumulated = ""
+        try:
+            events = await litellm.aresponses(
+                input=_build_input(messages),
+                stream=True,
+                **self._responses_kwargs(model_name, temperature, max_tokens, system_prompt),
+                **kwargs,
+            )
+        except Exception as e:
+            raise _map_error(e, self._provider_name) from e
+
+        final: StreamChunk | None = None
+        try:
+            async for event in events:
+                etype = _get(event, "type", "")
+                etype = getattr(etype, "value", etype)  # str enum -> its value
+                if etype == "response.output_text.delta":
+                    delta = _get(event, "delta", "") or ""
+                    accumulated += delta
+                    yield StreamChunk(
+                        delta=delta,
+                        accumulated_content=accumulated,
+                        model=model_name,
+                        provider=self._provider_name,
+                    )
+                elif etype in ("response.completed", "response.incomplete"):
+                    final = self._final_responses_chunk(
+                        _get(event, "response"), model_name, accumulated
+                    )
+                elif etype == "response.failed":
+                    raise ProviderError(
+                        _responses_error(_get(event, "response")), provider=self._provider_name
+                    )
+                elif etype == "error":
+                    raise ProviderError(_responses_error(event), provider=self._provider_name)
+        except ProviderError:
+            raise
+        except Exception as e:
+            raise _map_error(e, self._provider_name) from e
+        yield final or self._final_responses_chunk(None, model_name, accumulated)
+
     async def complete(
         self,
         messages: list[Message],
@@ -224,6 +495,10 @@ class OpenAICompatibleProvider:
         **kwargs: Any,
     ) -> CompletionResponse:
         model_name = self._get_model(model)
+        if self._responses:
+            return await self._complete_responses(
+                messages, model_name, temperature, max_tokens, system_prompt, **kwargs
+            )
         msgs = _build_messages(messages, system_prompt)
         start = time.monotonic()
 
@@ -269,6 +544,12 @@ class OpenAICompatibleProvider:
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         model_name = self._get_model(model)
+        if self._responses:
+            async for chunk in self._stream_responses(
+                messages, model_name, temperature, max_tokens, system_prompt, **kwargs
+            ):
+                yield chunk
+            return
         msgs = _build_messages(messages, system_prompt)
         accumulated = ""
 
@@ -377,12 +658,21 @@ class OpenAICompatibleProvider:
                 return self._health(start, False, f"HTTP {resp.status_code} from {models_url}")
             # No /models on this host: fall through to the billed ping.
         try:
-            await litellm.acompletion(
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=1,
-                timeout=_HEALTH_TIMEOUT,
-                **self._kwargs(self._health_model),
-            )
+            if self._responses:
+                # The Responses API floors max_output_tokens at 16.
+                await litellm.aresponses(
+                    input="ping",
+                    max_output_tokens=16,
+                    timeout=_HEALTH_TIMEOUT,
+                    **self._kwargs(self._health_model),
+                )
+            else:
+                await litellm.acompletion(
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=1,
+                    timeout=_HEALTH_TIMEOUT,
+                    **self._kwargs(self._health_model),
+                )
         except Exception as e:
             return self._health(start, False, str(e))
         return self._health(start, True)

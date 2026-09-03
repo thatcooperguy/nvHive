@@ -266,13 +266,21 @@ class TestAskFlags:
         assert "Provider unavailable" not in result.stdout
         assert "Provider unavailable" in result.stderr and "groq is down" in result.stderr
 
-    def _council_engine(self, monkeypatch, enabled, seen):
+    def _council_engine(self, monkeypatch, enabled, seen, router_pick="perplexity"):
         class FakeRegistry:
             def has(self, name):
                 return name in enabled
 
+        class FakeRouter:
+            # What the engine's router would pick for an unpinned turn; defaults to
+            # the one advisor a grounded research prompt must never land on.
+            def route(self, query, **kwargs):
+                seen["route"] = {"query": query, **kwargs}
+                return types.SimpleNamespace(provider=router_pick, model="m", reason="fake", scores={})
+
         class FakeEngine:
             registry = FakeRegistry()
+            router = FakeRouter()
 
             def __init__(self, config=None):
                 pass
@@ -282,9 +290,10 @@ class TestAskFlags:
 
             async def query(self, **kwargs):
                 seen["query"] = kwargs
+                chosen = kwargs.get("provider") or "router"
                 return types.SimpleNamespace(
-                    content="from perplexity", metadata={}, fallback_from=None, provider="perplexity",
-                    model="sonar", cost_usd=0, latency_ms=1, cache_hit=False,
+                    content=f"answer from {chosen}", metadata={}, fallback_from=None, provider=chosen,
+                    model="m", cost_usd=0, latency_ms=1, cache_hit=False,
                     usage=types.SimpleNamespace(total_tokens=0, input_tokens=0, output_tokens=0),
                 )
 
@@ -302,25 +311,252 @@ class TestAskFlags:
         monkeypatch.setattr(engine_mod, "Engine", FakeEngine)
         monkeypatch.setattr(cli_main, "_read_stdin", lambda: "")
 
-    def test_research_focus_without_perplexity_runs_the_council(self, monkeypatch, capsys):
+    _HITS = {
+        "ok": True, "backend": "searxng", "query": "state of fusion power",
+        "results": [
+            {"title": "ITER schedule update", "url": "https://iter.org/news", "snippet": "First plasma now 2034."},
+            {"title": "Helion signs PPA", "url": "https://example.com/helion", "snippet": "Microsoft deal for 2028."},
+            {"title": "NIF ignition", "url": "https://llnl.gov/nif", "snippet": "Repeat ignition shots in 2025."},
+        ],
+    }
+    _SEARCH_DOWN = {"ok": False, "backend": "duckduckgo", "error": "ConnectError: refused"}
+
+    def _fake_web_search(self, monkeypatch, envelope):
+        """Replace the web_search backend dispatch with a canned envelope; returns the calls."""
+        import nvh.integrations.web_search as web_search_pkg
+
+        calls: list[dict] = []
+
+        async def fake_web_search(query, *, top_k=5, timeout=10.0):
+            calls.append({"query": query, "top_k": top_k})
+            return envelope
+
+        monkeypatch.setattr(web_search_pkg, "web_search", fake_web_search)
+        return calls
+
+    def test_research_focus_grounds_the_chosen_advisor_on_web_sources(self, monkeypatch, capsys):
         seen: dict = {}
         self._council_engine(monkeypatch, ["groq", "openai"], seen)
+        calls = self._fake_web_search(monkeypatch, self._HITS)
+        cli_main._ask("state of fusion power", focus="research", stream=False)
+        assert "council" not in seen
+        assert calls == [{"query": "state of fusion power", "top_k": 6}]
+        sent = seen["query"]["prompt"]
+        assert "[1] ITER schedule update\n    https://iter.org/news\n    First plasma now 2034." in sent
+        assert "[2] Helion signs PPA" in sent and "[3] NIF ignition" in sent
+        assert sent.endswith("Question: state of fusion power")
+        assert seen["query"]["provider"] == "openai"  # preference order; perplexity no longer in it
+        assert seen["query"]["system_prompt"].startswith("You are a thorough research assistant")
+        out = " ".join(_plain(capsys.readouterr().out).split())
+        assert "[research → grounded on 3 web sources via searxng]" in out
+        # Both banners must be escaped: Rich reads a bare `[focus: …]` as a style tag and prints nothing.
+        assert "[focus: research → openai]" in out
+        assert "answer from openai" in out
+
+    def test_research_focus_searches_the_question_but_grounds_the_full_prompt(self, monkeypatch):
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["openai"], seen)
+        calls = self._fake_web_search(monkeypatch, self._HITS)
+        monkeypatch.setattr(cli_main, "_read_stdin", lambda: "PASTED CONTEXT")
+        cli_main._ask("what changed", focus="research", output="raw", quiet=True)
+        assert calls[0]["query"] == "what changed"
+        sent = seen["query"]["prompt"]
+        assert "[1] ITER schedule update" in sent
+        assert sent.endswith("Question: what changed\n\nPASTED CONTEXT")
+
+    def test_research_focus_no_longer_prefers_perplexity(self, monkeypatch):
+        assert "perplexity" not in cli_main.FOCUS_MODES["research"][1]
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["perplexity", "openai"], seen)
+        self._fake_web_search(monkeypatch, self._HITS)
+        cli_main._ask("state of fusion power", focus="research", output="raw", quiet=True)
+        assert seen["query"]["provider"] == "openai"
+
+    def test_research_focus_pinned_perplexity_skips_grounding(self, monkeypatch, capsys):
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["perplexity", "groq"], seen)
+        calls = self._fake_web_search(monkeypatch, self._HITS)
+        cli_main._ask(
+            "state of fusion power", provider="perplexity", focus="research", output="raw", quiet=True,
+        )
+        assert calls == [] and "council" not in seen
+        assert seen["query"]["provider"] == "perplexity"
+        assert seen["query"]["prompt"] == "state of fusion power"  # Sonar searches on its own
+        assert "answer from perplexity" in capsys.readouterr().out
+
+    def test_research_focus_falls_back_to_the_council_when_search_is_down(self, monkeypatch, capsys):
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["groq", "openai"], seen)
+        self._fake_web_search(monkeypatch, self._SEARCH_DOWN)
         cli_main._ask("state of fusion power", focus="research")
         assert "query" not in seen
         assert seen["council"]["auto_agents"] is True and seen["council"]["synthesize"] is True
         assert seen["council"]["prompt"] == "state of fusion power"
         assert seen["council"]["system_prompt"].startswith("You are a thorough research assistant")
-        out = _plain(capsys.readouterr().out)
+        out = " ".join(_plain(capsys.readouterr().out).split())
+        assert (
+            "[research → web search unavailable (ConnectError: refused),"
+            " synthesizing from multiple advisors]"
+        ) in out
         assert "council synthesis" in out
         assert "Historian, Economist" in out and "80%" in out and "strong agreement" in out
 
-    def test_research_focus_with_perplexity_stays_single_provider(self, monkeypatch, capsys):
+    def test_research_focus_empty_results_also_fall_back_to_the_council(self, monkeypatch, capsys):
         seen: dict = {}
-        self._council_engine(monkeypatch, ["perplexity", "groq"], seen)
+        self._council_engine(monkeypatch, ["openai"], seen)
+        self._fake_web_search(monkeypatch, {"ok": True, "backend": "duckduckgo", "results": []})
+        cli_main._ask("state of fusion power", focus="research")
+        assert "query" not in seen and "council" in seen
+        out = " ".join(_plain(capsys.readouterr().out).split())
+        assert "web search unavailable (no results)" in out
+
+    def test_research_focus_pinned_advisor_answers_ungrounded_when_search_is_down(self, monkeypatch, capsys):
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["groq", "openai"], seen)
+        self._fake_web_search(monkeypatch, self._SEARCH_DOWN)
+        cli_main._ask("state of fusion power", provider="groq", focus="research", stream=False)
+        assert "council" not in seen  # -p pins the advisor; the council would ignore it
+        assert seen["query"]["provider"] == "groq"
+        assert seen["query"]["prompt"] == "state of fusion power"
+        out = " ".join(_plain(capsys.readouterr().out).split())
+        assert "web search unavailable (ConnectError: refused), asking groq without sources" in out
+
+    def test_research_focus_local_skips_web_search_and_says_why(self, monkeypatch, capsys):
+        # --local promises nothing leaves this machine, so the question never
+        # reaches a search engine. The banners must also render: Rich reads a
+        # bare `[local mode — ...]` as a style tag and prints an empty line.
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["ollama", "openai"], seen)
+        calls = self._fake_web_search(monkeypatch, self._HITS)
+        cli_main._ask("state of fusion power", focus="research", local=True, stream=False)
+        assert calls == [] and "council" not in seen
+        assert seen["query"]["provider"] == "ollama" and seen["query"]["privacy"] is True
+        assert seen["query"]["prompt"] == "state of fusion power"
+        out = " ".join(_plain(capsys.readouterr().out).split())
+        assert "[research → local mode, web search skipped so nothing leaves this machine]" in out
+        assert "[local mode — Ollama only, nothing leaves this machine, nothing stored]" in out
+        assert "[focus: research → ollama]" in out
+
+    def test_research_focus_privacy_skips_web_search(self, monkeypatch, capsys):
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["openai"], seen)
+        calls = self._fake_web_search(monkeypatch, self._HITS)
+        cli_main._ask("state of fusion power", focus="research", privacy=True, stream=False)
+        assert calls == [] and "council" not in seen
+        assert seen["query"]["provider"] == "openai"
+        assert seen["query"]["prompt"] == "state of fusion power"
+        out = " ".join(_plain(capsys.readouterr().out).split())
+        assert "[research → privacy mode, web search skipped" in out
+        assert "[privacy mode — no data stored]" in out
+
+    def test_research_focus_folds_rag_and_web_sources_under_one_instruction(self, monkeypatch, capsys):
+        # The RAG block used to sit above "answer using only the numbered sources
+        # below", which told the advisor to ignore the local documents.
+        import nvh.integrations.rag as rag_pkg
+        from nvh.integrations.web_search.grounding import GROUNDING_INSTRUCTIONS
+
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["openai"], seen)
+        self._fake_web_search(monkeypatch, self._HITS)
+        rag_queries: list[str] = []
+
+        async def fake_rag_ask(query, **kwargs):
+            rag_queries.append(query)
+            return {"ok": True, "chunks": [{
+                "source": "notes/fusion.md", "text": "Our lab note: tokamak budget doubled.",
+                "chunk_index": 0, "score": 0.9,
+            }]}
+
+        monkeypatch.setattr(rag_pkg, "ask", fake_rag_ask)
+        cli_main._ask("state of fusion power", focus="research", knowledge=True, stream=False)
+        assert rag_queries == ["state of fusion power"]  # retrieval sees the user's words, not web snippets
+        sent = seen["query"]["prompt"]
+        assert GROUNDING_INSTRUCTIONS not in sent  # one instruction, not two
+        head = sent.split("\n\n", 1)[0]
+        assert "local documents" in head and "numbered web sources" in head
+        assert "Cite [n] for web sources" in head
+        assert (
+            sent.index("Local documents:")
+            < sent.index("Our lab note: tokamak budget doubled.")
+            < sent.index("Web sources:")
+            < sent.index("[1] ITER schedule update")
+        )
+        assert sent.endswith("Question: state of fusion power")
+        out = " ".join(_plain(capsys.readouterr().out).split())
+        assert "[rag context injected]" in out
+        assert "[research → grounded on 3 web sources via searxng]" in out
+
+    def test_research_focus_rag_block_leads_the_prompt_when_search_is_skipped(self, monkeypatch):
+        import nvh.integrations.rag as rag_pkg
+
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["openai"], seen)
+        self._fake_web_search(monkeypatch, self._SEARCH_DOWN)
+
+        async def fake_rag_ask(query, **kwargs):
+            return {"ok": True, "chunks": [{"source": "n.md", "text": "local fact", "chunk_index": 0, "score": 1}]}
+
+        monkeypatch.setattr(rag_pkg, "ask", fake_rag_ask)
+        cli_main._ask("state of fusion power", provider="openai", focus="research", knowledge=True, output="raw", quiet=True)
+        sent = seen["query"]["prompt"]
+        assert sent.startswith("Retrieved context from your indexed folder:")
+        assert "local fact" in sent and sent.endswith("\n\nstate of fusion power")
+
+    def test_research_focus_searches_the_first_line_of_a_pasted_file_when_no_prompt(self, monkeypatch, tmp_path):
+        # With no positional prompt the query used to be the fenced body itself,
+        # opening with ``` -- junk to a search engine and a spurious council fallback.
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["openai"], seen)
+        calls = self._fake_web_search(monkeypatch, self._HITS)
+        doc = tmp_path / "fusion.md"
+        doc.write_text("\n\nFusion power roadmap 2030\n\nITER first plasma slips again.\n", encoding="utf-8")
+        cli_main._ask(None, focus="research", file=str(doc), output="raw", quiet=True)
+        assert calls == [{"query": "Fusion power roadmap 2030", "top_k": 6}]
+        sent = seen["query"]["prompt"]
+        assert "[1] ITER schedule update" in sent
+        assert sent.endswith(
+            "Question: ```\n\n\nFusion power roadmap 2030\n\nITER first plasma slips again.\n\n```"
+        )
+
+    def test_research_focus_skips_grounding_when_the_pasted_text_has_nothing_to_search(self, monkeypatch, capsys):
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["openai"], seen)
+        calls = self._fake_web_search(monkeypatch, self._HITS)
+        monkeypatch.setattr(cli_main, "_read_stdin", lambda: "```\n---\n```")
+        cli_main._ask(None, focus="research", stream=False)
+        assert calls == [] and "council" not in seen  # nothing was searched, so nothing "failed"
+        assert seen["query"]["provider"] == "openai" and seen["query"]["prompt"] == "```\n---\n```"
+        out = " ".join(_plain(capsys.readouterr().out).split())
+        assert "[research → nothing searchable in the input, answering without web sources]" in out
+
+    def test_research_focus_never_routes_a_grounded_prompt_to_perplexity(self, monkeypatch):
+        # No research-preferred advisor is enabled, so the router would pick; it
+        # must not land the already-grounded prompt on Perplexity, which searches again.
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["perplexity", "groq"], seen, router_pick="perplexity")
+        self._fake_web_search(monkeypatch, self._HITS)
         cli_main._ask("state of fusion power", focus="research", output="raw", quiet=True)
-        assert "council" not in seen
+        assert seen["route"]["query"] == "state of fusion power"  # routed on the user's words, not the sources
+        assert seen["query"]["provider"] == "groq"
+        assert "[1] ITER schedule update" in seen["query"]["prompt"]
+
+    def test_research_focus_keeps_the_router_pick_when_it_is_not_search_native(self, monkeypatch):
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["perplexity", "groq", "deepseek"], seen, router_pick="deepseek")
+        self._fake_web_search(monkeypatch, self._HITS)
+        cli_main._ask("state of fusion power", focus="research", output="raw", quiet=True)
+        assert seen["query"]["provider"] == "deepseek"
+
+    def test_research_focus_with_only_perplexity_enabled_lets_it_search_itself(self, monkeypatch, capsys):
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["perplexity"], seen)
+        calls = self._fake_web_search(monkeypatch, self._HITS)
+        cli_main._ask("state of fusion power", focus="research", stream=False)
+        assert calls == [] and "council" not in seen
         assert seen["query"]["provider"] == "perplexity"
-        assert "from perplexity" in capsys.readouterr().out
+        assert seen["query"]["prompt"] == "state of fusion power"
+        out = " ".join(_plain(capsys.readouterr().out).split())
+        assert "[research → perplexity is the only advisor enabled and searches on its own]" in out
 
 
 # ---------------------------------------------------------------------------

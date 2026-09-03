@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import platform
 import re
@@ -26,16 +27,19 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import quote
 
+from nvh.core import local_models
+from nvh.core.local_models import LocalModelPick, LocalModelTier
 from nvh.integrations.installs.node_runtime import (
     find_fnm_binary,
     find_rootless_node_bin,
     install_node_tarball,
 )
 from nvh.integrations.workspace.storage import storage_layout
-from nvh.utils.gpu import detect_gpus
+from nvh.utils.gpu import detect_gpus, detect_system_memory, is_unified_memory_gpu_name
 
 OLLAMA_PORT = 11434
 BLENDER_VERSION = "4.5.4"
@@ -114,210 +118,238 @@ class StudioModel:
     license_note: str
 
 
-STUDIO_MODELS: list[StudioModel] = [
-    StudioModel(
-        id="nemotron-omni",
-        title="NVIDIA Nemotron Omni (Multimodal)",
-        provider="ollama",
-        install_target="nemotron-omni",
-        category="agent",
-        recommended_vram_gb=40,
-        estimated_disk_gb=42.0,
-        priority=1,
-        capabilities=[
-            "chat", "reasoning", "coding", "agent",
-            "vision", "multimodal", "large-model",
-        ],
-        why_recommended=(
-            "NVIDIA's flagship multimodal Wizard model — see images, screenshots, "
-            "and documents alongside text. The Wizard's preferred default on 40 GB+ "
-            "NVIDIA GPUs; downgrades to Nemotron 3 Nano Omni or vision-only fallbacks "
-            "on smaller GPUs."
-        ),
-        source_url=NVIDIA_OMNI_BLOG_URL,
-        license_note="NVIDIA Open Model License and Ollama library terms apply.",
+# --- local model catalog: rows generated from nvh.core.local_models ----------
+#
+# Every tag, size, VRAM floor and category below is read off LOCAL_MODEL_TIERS,
+# the one registry-verified VRAM-tier table. Only the prose is written here,
+# keyed by the table's catalog id; a pick the table adds later still gets a
+# row (with a generated title and reason) so the WebUI picker never lags the
+# ladder, and a tag the table drops disappears from the picker with it.
+
+_LICENSE_BY_NAME: dict[str, str] = {
+    "llama3.2-vision": "Meta Llama license and Ollama library terms apply.",
+    "nemotron3": "NVIDIA Open Model License and Ollama library terms apply.",
+}
+_DEFAULT_LICENSE_NOTE = "Ollama library terms apply."
+
+# catalog_id -> (title, why_recommended, extra capability words)
+_MODEL_PROSE: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "gemma3-1b": (
+        "Gemma 3 1B",
+        "Tiny chat model that runs from system RAM on CPU-only sessions.",
+        ("small",),
     ),
-    StudioModel(
-        id="nemotron-3-nano-omni",
-        title="NVIDIA Nemotron 3 Nano Omni (Multimodal, 30B MoE)",
-        provider="ollama",
-        install_target="nemotron-3-nano-omni",
-        category="agent",
-        recommended_vram_gb=24,
-        estimated_disk_gb=20.0,
-        priority=2,
-        capabilities=[
-            "chat", "reasoning", "coding", "agent",
-            "vision", "multimodal", "moe",
-        ],
-        why_recommended=(
-            "NVIDIA Nemotron 3 Nano Omni — 30B MoE (3B active) multimodal agent "
-            "tuned for reasoning. The Wizard's preferred default on 24-40 GB GPUs "
-            "where the full Nemotron Omni doesn't fit."
-        ),
-        source_url=NVIDIA_OMNI_TECH_BLOG_URL,
-        license_note="NVIDIA Open Model License and Ollama library terms apply.",
+    "qwen3-1.7b": (
+        "Qwen 3 1.7B",
+        "Smallest coder and step-by-step reasoner; runs on the CPU.",
+        ("homework helper", "small"),
     ),
-    StudioModel(
-        id="nemotron-70b",
-        title="NVIDIA Nemotron 70B (text-only)",
-        provider="ollama",
-        install_target="nemotron",
-        category="agent",
-        recommended_vram_gb=40,
-        estimated_disk_gb=40.0,
-        priority=5,
-        capabilities=["chat", "reasoning", "coding", "agent", "large-model"],
-        why_recommended=(
-            "Largest high-accuracy local reasoning tier for 40 GB+ NVIDIA GPUs. "
-            "Text-only; prefer Nemotron Omni if you need multimodal."
-        ),
-        source_url="https://ollama.com/library/nemotron",
-        license_note="NVIDIA Open Model License and Ollama library terms apply.",
+    "moondream": (
+        "Moondream",
+        "Tiny vision fallback for constrained GPUs or CPU-only sessions.",
+        ("image Q&A", "desktop screenshots", "small"),
     ),
-    StudioModel(
-        id="llama32-vision",
-        title="Llama 3.2 Vision",
-        provider="ollama",
-        install_target="llama3.2-vision",
-        category="vision",
-        recommended_vram_gb=24,
-        estimated_disk_gb=7.0,
-        priority=8,
-        capabilities=["vision", "image Q&A", "desktop screenshots", "multimodal"],
-        why_recommended=(
-            "Best local vision fallback for screenshots and uploaded images on 24 GB+ GPUs."
-        ),
-        source_url="https://ollama.com/library/llama3.2-vision",
-        license_note="Meta Llama license and Ollama library terms apply.",
+    "nomic-embed-text": (
+        "Nomic Embed Text",
+        "Small embedding model for local search and document experiments.",
+        ("search", "RAG"),
     ),
-    StudioModel(
-        id="gemma3-4b",
-        title="Gemma 3 4B",
-        provider="ollama",
-        install_target="gemma3:4b",
-        category="chat",
-        recommended_vram_gb=6,
-        estimated_disk_gb=3.3,
-        priority=10,
-        capabilities=["chat", "vision-capable family", "fast"],
-        why_recommended="Best first local model for small student GPUs.",
-        source_url="https://ollama.com/library/gemma3",
-        license_note="Ollama library terms apply.",
+    "gemma3-4b": (
+        "Gemma 3 4B",
+        "Best first local model for small student GPUs; it sees images too.",
+        (),
     ),
-    StudioModel(
-        id="qwen3-8b",
-        title="Qwen 3 8B",
-        provider="ollama",
-        install_target="qwen3:8b",
-        category="chat",
-        recommended_vram_gb=8,
-        estimated_disk_gb=5.2,
-        priority=20,
-        capabilities=["chat", "reasoning", "multilingual"],
-        why_recommended="Strong general-purpose reasoning model for 8 GB+ GPUs.",
-        source_url="https://ollama.com/library/qwen3",
-        license_note="Ollama library terms apply.",
+    "qwen3-4b": (
+        "Qwen 3 4B",
+        "Compact coder and reasoner for 4-6 GB entry cards.",
+        ("debugging", "homework helper"),
     ),
-    StudioModel(
-        id="llama31-8b",
-        title="Llama 3.1 8B",
-        provider="ollama",
-        install_target="llama3.1:8b",
-        category="chat",
-        recommended_vram_gb=8,
-        estimated_disk_gb=4.9,
-        priority=30,
-        capabilities=["chat", "long context", "general"],
-        why_recommended="Reliable baseline model for comparing answers in class.",
-        source_url="https://ollama.com/library/llama3.1",
-        license_note="Meta Llama license and Ollama library terms apply.",
+    "qwen3-8b": (
+        "Qwen 3 8B",
+        "Strong general-purpose chat, coding and reasoning model for 8 GB+ GPUs.",
+        ("multilingual",),
     ),
-    StudioModel(
-        id="qwen25-coder-7b",
-        title="Qwen 2.5 Coder 7B",
-        provider="ollama",
-        install_target="qwen2.5-coder:7b",
-        category="code",
-        recommended_vram_gb=8,
-        estimated_disk_gb=4.7,
-        priority=40,
-        capabilities=["code", "debugging", "homework helper"],
-        why_recommended="Good local coding tutor without sending code to a cloud API.",
-        source_url="https://ollama.com/library/qwen2.5-coder",
-        license_note="Ollama library terms apply.",
+    "qwen3-vl-8b": (
+        "Qwen 3 VL 8B",
+        "Real vision model that fits next to an 8B chat model on 12 GB cards.",
+        ("image Q&A", "desktop screenshots"),
     ),
-    StudioModel(
-        id="deepseek-r1-8b",
-        title="DeepSeek R1 8B",
-        provider="ollama",
-        install_target="deepseek-r1:8b",
-        category="reasoning",
-        recommended_vram_gb=10,
-        estimated_disk_gb=5.2,
-        priority=50,
-        capabilities=["reasoning", "math", "step-by-step"],
-        why_recommended="Useful when students want slower, more deliberate reasoning.",
-        source_url="https://ollama.com/library/deepseek-r1",
-        license_note="Ollama library terms apply.",
+    "qwen3-14b": (
+        "Qwen 3 14B",
+        "Larger dense chat and coding model for 16 GB cards.",
+        ("multilingual",),
     ),
-    StudioModel(
-        id="nomic-embed-text",
-        title="Nomic Embed Text",
-        provider="ollama",
-        install_target="nomic-embed-text",
-        category="embedding",
-        recommended_vram_gb=0,
-        estimated_disk_gb=0.3,
-        priority=60,
-        capabilities=["embeddings", "search", "RAG"],
-        why_recommended="Small embedding model for local search and document experiments.",
-        source_url="https://ollama.com/library/nomic-embed-text",
-        license_note="Ollama library terms apply.",
+    "llama32-vision": (
+        "Llama 3.2 Vision",
+        "Best local vision fallback for screenshots and uploaded images on 16 GB+ GPUs.",
+        ("image Q&A", "desktop screenshots"),
     ),
-    StudioModel(
-        id="llava-7b",
-        title="LLaVA 7B",
-        provider="ollama",
-        install_target="llava:7b",
-        category="vision",
-        recommended_vram_gb=8,
-        estimated_disk_gb=4.5,
-        priority=70,
-        capabilities=["vision", "image Q&A", "desktop screenshots"],
-        why_recommended="Adds local image understanding for screenshots and creative media.",
-        source_url="https://ollama.com/library/llava",
-        license_note="Ollama library terms apply.",
+    "gpt-oss-20b": (
+        "gpt-oss 20B (MoE)",
+        "Open-weight reasoning MoE from OpenAI; the first MoE that fits a 16 GB card.",
+        ("math", "step-by-step", "agent"),
     ),
-    StudioModel(
-        id="minicpm-v",
-        title="MiniCPM-V",
-        provider="ollama",
-        install_target="minicpm-v",
-        category="vision",
-        recommended_vram_gb=12,
-        estimated_disk_gb=5.0,
-        priority=80,
-        capabilities=["vision", "image Q&A", "fallback"],
-        why_recommended="Smaller local vision fallback when Llama 3.2 Vision is too heavy.",
-        source_url="https://ollama.com/library/minicpm-v",
-        license_note="Ollama library terms apply.",
+    "qwen3-30b-a3b": (
+        "Qwen 3 30B-A3B (MoE)",
+        "30B-class chat quality with 3B active parameters per token on 24 GB+ GPUs.",
+        ("multilingual", "large-model"),
     ),
-    StudioModel(
-        id="moondream",
-        title="Moondream",
-        provider="ollama",
-        install_target="moondream",
-        category="vision",
-        recommended_vram_gb=4,
-        estimated_disk_gb=2.0,
-        priority=90,
-        capabilities=["vision", "image Q&A", "small"],
-        why_recommended="Tiny vision fallback for constrained GPUs or CPU-only sessions.",
-        source_url="https://ollama.com/library/moondream",
-        license_note="Ollama library terms apply.",
+    "qwen3-coder-30b": (
+        "Qwen 3 Coder 30B (MoE)",
+        "Dedicated coding MoE for programming, debugging and agent planning on 24 GB+ GPUs.",
+        ("debugging", "agent", "large-model"),
     ),
+    "nemotron3-33b": (
+        "NVIDIA Nemotron 3 Nano Omni 30B (MoE, multimodal)",
+        "NVIDIA's multimodal Wizard model: images, screenshots and documents "
+        "alongside text, tool calling and 128K context. Leads the 40 GB tier.",
+        ("agent", "large-model"),
+    ),
+    "nemotron3-33b-q8": (
+        "NVIDIA Nemotron 3 Nano Omni 30B (MoE, multimodal, Q8_0)",
+        "Nemotron 3 Nano Omni at Q8_0 for 48 GB+ workstations and unified pools.",
+        ("agent", "large-model"),
+    ),
+    "gpt-oss-120b": (
+        "gpt-oss 120B (MoE)",
+        "The largest open-weight reasoning MoE from OpenAI; fits 80 GB datacenter cards.",
+        ("math", "agent", "large-model"),
+    ),
+}
+
+# Table use case -> picker category / capability word. model_fit scores
+# "coding" / "reasoning" / "embedding" / "vision" / "fast" / "agent" /
+# "large-model"; the mission builder filters on the "code" and "embedding"
+# categories.
+_CATEGORY_BY_USE_CASE: dict[str, str] = {
+    "chat": "chat",
+    "code": "code",
+    "vision": "vision",
+    "reasoning": "reasoning",
+    "embed": "embedding",
+    "cpu_fallback": "chat",
+}
+_CAPABILITY_BY_USE_CASE: dict[str, str] = {
+    "chat": "chat",
+    "code": "coding",
+    "vision": "vision",
+    "reasoning": "reasoning",
+    "embed": "embedding",
+    "cpu_fallback": "fast",
+}
+
+
+def _first_tier_index(pick: LocalModelPick) -> int:
+    """Index of the lowest tier that lists ``pick`` -- the budget it first fits."""
+    for index, tier in enumerate(local_models.LOCAL_MODEL_TIERS):
+        if any(candidate.tag == pick.tag for candidate in tier.picks.values()):
+            return index
+    return len(local_models.LOCAL_MODEL_TIERS) - 1
+
+
+def _use_cases_for(pick: LocalModelPick) -> list[str]:
+    """Use cases the pick fills anywhere in the table, in ``USE_CASES`` order."""
+    served = {
+        use_case
+        for tier in local_models.LOCAL_MODEL_TIERS
+        for use_case, candidate in tier.picks.items()
+        if candidate.tag == pick.tag
+    }
+    return [use_case for use_case in local_models.USE_CASES if use_case in served]
+
+
+def _studio_model_from_pick(pick: LocalModelPick) -> StudioModel:
+    tier_index = _first_tier_index(pick)
+    tier = local_models.LOCAL_MODEL_TIERS[tier_index]
+    use_cases = _use_cases_for(pick) or ["chat"]
+    primary = use_cases[0]
+    title, why, extra = _MODEL_PROSE.get(
+        pick.catalog_id,
+        (pick.tag, local_models.reason_for(tier.min_gb, pick), ()),
+    )
+    capabilities = list(dict.fromkeys(
+        [_CAPABILITY_BY_USE_CASE[use_case] for use_case in use_cases]
+        + (["vision", "multimodal"] if pick.vision else [])
+        + (["moe"] if pick.moe else [])
+        + list(extra)
+    ))
+    return StudioModel(
+        id=pick.catalog_id,
+        title=title,
+        provider="ollama",
+        install_target=pick.tag,
+        category=_CATEGORY_BY_USE_CASE[primary],
+        recommended_vram_gb=int(tier.min_gb),
+        estimated_disk_gb=pick.weights_gb,
+        # Strongest first: the top tier's picks rank lowest (1..), the CPU
+        # tier's highest -- the order the picker and `nvh models pull
+        # --recommended` present rows in, and what model_fit scores from.
+        priority=(len(local_models.LOCAL_MODEL_TIERS) - 1 - tier_index) * 10
+        + local_models.USE_CASES.index(primary)
+        + 1,
+        capabilities=capabilities,
+        why_recommended=why,
+        source_url=f"https://ollama.com/library/{pick.name}",
+        license_note=_LICENSE_BY_NAME.get(pick.name, _DEFAULT_LICENSE_NOTE),
+    )
+
+
+STUDIO_MODELS: list[StudioModel] = sorted(
+    (_studio_model_from_pick(pick) for pick in local_models.all_picks()),
+    key=lambda model: model.priority,
+)
+
+
+def _tier_by_label(label: str) -> LocalModelTier:
+    for tier in local_models.LOCAL_MODEL_TIERS:
+        if tier.label == label:
+            return tier
+    raise KeyError(f"Unknown local model tier: {label}")
+
+
+def _unique_picks(picks: list[LocalModelPick | None]) -> list[LocalModelPick]:
+    seen: dict[str, LocalModelPick] = {}
+    for pick in picks:
+        if pick is not None and pick.tag not in seen:
+            seen[pick.tag] = pick
+    return list(seen.values())
+
+
+def _pack_disk_gb(picks: list[LocalModelPick]) -> float:
+    return round(sum(pick.weights_gb for pick in picks), 1)
+
+
+def _library_urls(picks: list[LocalModelPick]) -> list[str]:
+    return sorted({f"https://ollama.com/library/{pick.name}" for pick in picks})
+
+
+# The model packs are cut from the table. The starter pack is the pull list
+# of the first tier with a real 8B chat model ("small", 8 GB); the coder /
+# reasoner pack adds the dedicated code and reasoning picks of the first tier
+# that carries a reasoning MoE ("medium", 16 GB) -- below it code and
+# reasoning are the starter's own chat model.
+_STARTER_TIER = _tier_by_label("small")
+_STARTER_PICKS = local_models.recommended(_STARTER_TIER.min_gb)
+_CODER_TIER = _tier_by_label("medium")
+_CODER_PICKS = _unique_picks([_CODER_TIER.picks["code"], _CODER_TIER.picks["reasoning"]])
+
+# Nemotron 3 Nano Omni for the NVIDIA Omni Agent pack: every quant the table
+# carries, smallest first, and the tier the smallest one first fits.
+_OMNI_PICKS: list[LocalModelPick] = sorted(
+    (pick for pick in local_models.all_picks() if pick.name == "nemotron3"),
+    key=lambda pick: pick.weights_gb,
+) or [pick for pick in local_models.all_picks() if pick.vision and pick.moe][:1]
+_OMNI_TIER = local_models.LOCAL_MODEL_TIERS[
+    min((_first_tier_index(pick) for pick in _OMNI_PICKS), default=len(local_models.LOCAL_MODEL_TIERS) - 1)
 ]
+# Free persistent storage the Wizard wants before recommending local Omni
+# weights: room for every published quant of the model at once.
+_OMNI_MIN_FREE_GB: int = math.ceil(sum(pick.weights_gb for pick in _OMNI_PICKS))
+
+
+def _omni_model_sizes_gb() -> dict[str, float]:
+    """``{quant: GB on disk}`` for the Omni picks -- what the plan and pack status report."""
+    return {pick.quant: pick.weights_gb for pick in _OMNI_PICKS}
 
 
 STUDIO_PACKS: list[StudioPack] = [
@@ -374,24 +406,21 @@ STUDIO_PACKS: list[StudioPack] = [
         category="llm",
         tagline="Chat, vision, coding, and embeddings",
         description=(
-            "Pulls compact, broadly useful Ollama models for student work: Gemma 3, "
-            "Qwen 3, Llama 3.1, and Nomic embeddings."
+            "Pulls compact, broadly useful Ollama models for student work -- the "
+            f"{_STARTER_TIER.range_label} GB tier of the nvHive model table: "
+            + ", ".join(pick.tag for pick in _STARTER_PICKS) + "."
         ),
-        recommended_vram_gb=8,
-        estimated_disk_gb=18.0,
+        recommended_vram_gb=int(_STARTER_TIER.min_gb),
+        estimated_disk_gb=_pack_disk_gb(_STARTER_PICKS),
         install_kind="ollama_models",
         no_root=True,
-        models=["gemma3:4b", "qwen3:8b", "llama3.1:8b", "nomic-embed-text"],
+        models=[pick.tag for pick in _STARTER_PICKS],
         python_packages=[],
         comfy_nodes=[],
         launchers=[],
-        source_urls=[
-            "https://ollama.com/library",
-            "https://ollama.com/library/gemma3",
-            "https://ollama.com/library/qwen3",
-        ],
+        source_urls=["https://ollama.com/library", *_library_urls(_STARTER_PICKS)],
         notes=[
-            "Good default pack for 8 GB and larger NVIDIA GPUs.",
+            f"Good default pack for {_STARTER_TIER.min_gb:g} GB and larger NVIDIA GPUs.",
             "Model pulls can be several GB and may take a while on school Wi-Fi.",
         ],
     ),
@@ -401,18 +430,20 @@ STUDIO_PACKS: list[StudioPack] = [
         category="llm",
         tagline="Code help, math, and slower thinking",
         description=(
-            "Adds Qwen coder and DeepSeek reasoning models for programming, math, "
-            "debugging, and agent planning."
+            "Adds the dedicated coding and reasoning picks of the "
+            f"{_CODER_TIER.range_label} GB tier ("
+            + ", ".join(pick.tag for pick in _CODER_PICKS)
+            + ") for programming, math, debugging, and agent planning."
         ),
-        recommended_vram_gb=12,
-        estimated_disk_gb=12.0,
+        recommended_vram_gb=int(_CODER_TIER.min_gb),
+        estimated_disk_gb=_pack_disk_gb(_CODER_PICKS),
         install_kind="ollama_models",
         no_root=True,
-        models=["qwen2.5-coder:7b", "deepseek-r1:8b"],
+        models=[pick.tag for pick in _CODER_PICKS],
         python_packages=[],
         comfy_nodes=[],
         launchers=[],
-        source_urls=["https://ollama.com/library", "https://ollama.com/library/qwen3"],
+        source_urls=["https://ollama.com/library", *_library_urls(_CODER_PICKS)],
         notes=[
             "Use with nvHive Compare or Council mode when students want multiple opinions.",
             "Reasoning models can be slower; that is expected.",
@@ -466,15 +497,13 @@ STUDIO_PACKS: list[StudioPack] = [
             "and only recommends local Nemotron 3 Nano Omni weights when GPU VRAM and persistent "
             "storage are large enough."
         ),
-        recommended_vram_gb=24,
+        recommended_vram_gb=int(_OMNI_TIER.min_gb),
         estimated_disk_gb=0.2,
         install_kind="scaffold",
         no_root=True,
-        models=[
-            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16",
-            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-FP8",
-            "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4",
-        ],
+        # The registry-verified Ollama tags of Nemotron 3 Nano Omni, smallest
+        # quant first; the local path is `ollama pull <tag>`, not a GGUF fetch.
+        models=[pick.tag for pick in _OMNI_PICKS],
         python_packages=[],
         comfy_nodes=[],
         launchers=["nvhive-omni-agent"],
@@ -483,11 +512,15 @@ STUDIO_PACKS: list[StudioPack] = [
             NVIDIA_OMNI_TECH_BLOG_URL,
             NVIDIA_OMNI_HF_URL,
             NVIDIA_BUILD_URL,
+            *_library_urls(_OMNI_PICKS),
         ],
         notes=[
             "AI Starter installs this as a lightweight guide and launcher, not a default model download.",
             "Use NVIDIA NIM/build.nvidia.com first on smaller student VMs.",
-            "Local BF16 weights are roughly 61.5 GB; FP8 is roughly 32.8 GB; NVFP4 is roughly 20.9 GB.",
+            "Local weights via Ollama: " + "; ".join(
+                f"{pick.tag} ({pick.quant}) is roughly {pick.weights_gb:g} GB on disk"
+                for pick in _OMNI_PICKS
+            ) + ".",
             "AI Wizard should require persistent storage headroom before recommending local weights.",
         ],
     ),
@@ -1256,40 +1289,69 @@ def bundles_as_dict() -> dict[str, list[str]]:
     return {key: list(value) for key, value in PACK_BUNDLES.items()}
 
 
-def _detect_vram_gb() -> int:
-    try:
-        gpus = detect_gpus()
-    except Exception:
-        gpus = []
-    if gpus:
-        return int(sum(gpu.vram_mb for gpu in gpus) // 1024)
+def _nvidia_smi_rows() -> list[Any]:
+    """Duck-typed GPU rows parsed from nvidia-smi when ``nvh.utils.gpu`` found none.
 
+    ``local_models.tier_budget`` only needs ``vram_mb`` and ``unified_memory``.
+    """
     nvidia_smi = shutil.which("nvidia-smi")
     if not nvidia_smi:
-        return 0
+        return []
     try:
         result = subprocess.run(
             [
                 nvidia_smi,
-                "--query-gpu=memory.total",
+                "--query-gpu=name,memory.total",
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
             text=True,
             timeout=5,
         )
-        if result.returncode != 0:
-            return 0
-        values = [
-            int(line.strip())
-            for line in result.stdout.splitlines()
-            if line.strip().isdigit()
-        ]
-        if not values:
-            return 0
-        return max(values) // 1024
     except Exception:
-        return 0
+        return []
+    if result.returncode != 0:
+        return []
+    rows: list[Any] = []
+    for line in result.stdout.splitlines():
+        name, _, memory = line.partition(",")
+        memory = memory.strip()
+        if not memory.isdigit():
+            continue
+        rows.append(
+            SimpleNamespace(
+                name=name.strip(),
+                vram_mb=int(memory),
+                unified_memory=is_unified_memory_gpu_name(name.strip()),
+            )
+        )
+    return rows
+
+
+def _detect_tier_budget() -> local_models.TierBudget:
+    """``local_models.tier_budget`` for this machine -- what every model ladder plans against.
+
+    Unified-aware: a 128 GB GB10 / DGX Spark budgets 112 GB (the pool minus
+    the OS reserve), the same figure ``nvh.utils.gpu.recommend_models`` uses,
+    so the catalog's ``fits_vram`` and ``recommended`` flags cannot disagree
+    with it. Discrete cards budget their summed VRAM.
+    """
+    try:
+        gpus: list[Any] = list(detect_gpus())
+    except Exception:
+        gpus = []
+    if not gpus:
+        gpus = _nvidia_smi_rows()
+    try:
+        sys_mem: Any = detect_system_memory()
+    except Exception:
+        sys_mem = None
+    return local_models.tier_budget(gpus, sys_mem)
+
+
+def _detect_vram_gb() -> int:
+    """Whole GB the model ladder may plan against (see :func:`_detect_tier_budget`)."""
+    return int(_detect_tier_budget().budget_gb)
 
 
 def _fits_vram(model: StudioModel, vram_gb: int) -> bool:
@@ -1298,25 +1360,14 @@ def _fits_vram(model: StudioModel, vram_gb: int) -> bool:
     )
 
 
-def _recommended_model_ids(vram_gb: int) -> set[str]:
-    recommended: set[str] = {"nomic-embed-text"}
-    if vram_gb >= 40:
-        recommended.add("nemotron-70b")
-    if vram_gb >= 24:
-        recommended.add("llama32-vision")
-    if vram_gb >= 6:
-        recommended.add("gemma3-4b")
-    if vram_gb >= 8:
-        recommended.update({"qwen3-8b", "llama31-8b", "qwen25-coder-7b", "llava-7b"})
-    if vram_gb >= 10:
-        recommended.add("deepseek-r1-8b")
-    if 12 <= vram_gb < 24:
-        recommended.add("minicpm-v")
-    if 4 <= vram_gb < 12:
-        recommended.add("moondream")
-    if vram_gb == 0:
-        recommended.add("gemma3-4b")
-    return recommended
+def _recommended_model_ids(vram_gb: int | float | local_models.TierBudget) -> set[str]:
+    """Catalog ids of ``local_models.recommended`` for the budget.
+
+    0 GB is the CPU tier (tiny models that run from system RAM), so a box with
+    no GPU still gets a working starter set. A :class:`TierBudget` keeps the
+    pool type, so a unified GB10 also gets the tier's reasoning MoE.
+    """
+    return {pick.catalog_id for pick in local_models.recommended(vram_gb)}
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -1705,7 +1756,7 @@ def pack_status(pack: StudioPack, context: dict[str, Any] | None = None) -> dict
         if pack.id == "nvidia-omni-agent":
             vram_gb = _detect_vram_gb()
             layout = storage_layout()
-            min_local_gb = 70.0
+            min_local_gb = float(_OMNI_MIN_FREE_GB)
             free_gb = None
             try:
                 usage = shutil.disk_usage(layout.home)
@@ -1723,7 +1774,7 @@ def pack_status(pack: StudioPack, context: dict[str, Any] | None = None) -> dict
                 "detected_vram_gb": vram_gb,
                 "free_gb": free_gb,
                 "min_local_free_gb": min_local_gb,
-                "model_sizes_gb": {"BF16": 61.5, "FP8": 32.8, "NVFP4": 20.9},
+                "model_sizes_gb": _omni_model_sizes_gb(),
                 "recommended_path": "local" if local_ok else "nvidia-nim",
             })
         if pack.id == "music-daw-helper":
@@ -2985,6 +3036,11 @@ exec "$target"
 def _write_omni_agent_helper(pack: StudioPack) -> None:
     root = _pack_root(pack.id)
     root.mkdir(parents=True, exist_ok=True)
+    size_lines = "\n".join(
+        f"- `ollama pull {pick.tag}` ({pick.quant}): {pick.weights_gb:g} GB on disk, "
+        f"~{pick.runtime_gb:g} GB loaded"
+        for pick in _OMNI_PICKS
+    )
     readme = f"""# {pack.title}
 
 {pack.description}
@@ -2998,11 +3054,10 @@ Nemotron 3 Nano Omni workflow.
 ## Local Path
 
 Only try a local download when AI Wizard reports enough persistent storage and
-GPU headroom. The current published footprints are approximately:
+GPU headroom ({pack.recommended_vram_gb} GB of model budget, {_OMNI_MIN_FREE_GB} GB
+free). The Ollama registry carries these quants (sizes as `ollama list` prints them):
 
-- BF16: 61.5 GB
-- FP8: 32.8 GB
-- NVFP4: 20.9 GB
+{size_lines}
 
 The local path should be treated as an advanced option for large NVIDIA GPUs or
 cloud instances with ample block storage.
@@ -3026,9 +3081,9 @@ cloud instances with ample block storage.
         "name": "nvidia-omni-agent",
         "default_path": "nvidia-nim",
         "local_guardrails": {
-            "min_free_gb": 70,
+            "min_free_gb": _OMNI_MIN_FREE_GB,
             "recommended_vram_gb": pack.recommended_vram_gb,
-            "model_sizes_gb": {"BF16": 61.5, "FP8": 32.8, "NVFP4": 20.9},
+            "model_sizes_gb": _omni_model_sizes_gb(),
         },
         "models": pack.models,
         "sources": pack.source_urls,

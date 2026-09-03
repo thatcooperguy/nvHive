@@ -1,5 +1,10 @@
 """NVIDIA GPU detection and model recommendation.
 
+Detection lives here; every model tag, size, ``num_ctx`` / ``num_parallel`` /
+quant figure and tier boundary that recommendations use is read from the tier
+table in :mod:`nvh.core.local_models` (see :func:`recommend_models`,
+:func:`get_ollama_optimizations`, :class:`MemoryBudget`).
+
 Uses pynvml (NVML Python bindings) when available for direct GPU access.
 Falls back to nvidia-smi subprocess if pynvml is not installed.
 
@@ -22,17 +27,23 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
+from nvh.core import local_models as lm
 from nvh.utils.hw_ids import is_gb10_name
 
 # GB10 (DGX Spark / RTX Spark class) is the first NVIDIA part whose "VRAM" is the
 # system's LPDDR5x pool.  The GPU shares it with the OS, so model budgets must
 # leave headroom and must never add system RAM on top as a CPU-offload bonus.
-UNIFIED_MEMORY_OS_RESERVE_GB = 16.0     # OS + WebUI + desktop headroom on a unified pool
-UNIFIED_MEMORY_BANDWIDTH_GBPS = 273     # GB10 LPDDR5x, per NVIDIA's DGX Spark spec sheet
+# All three are defined once, in the tier table, and re-exported here for the
+# callers and tests that have always read them off this module. The reserve
+# constant is the 128 GB GB10 figure -- what a pool actually loses scales with
+# its size (lm.unified_os_reserve_gb; TierBudget.os_reserve_gb on a budget).
+UNIFIED_MEMORY_OS_RESERVE_GB = lm.UNIFIED_MEMORY_OS_RESERVE_GB     # OS + WebUI + desktop headroom, 128 GB pool
+UNIFIED_MEMORY_BANDWIDTH_GBPS = lm.UNIFIED_MEMORY_BANDWIDTH_GBPS   # GB10 LPDDR5x, DGX Spark spec sheet
+unified_os_reserve_gb = lm.unified_os_reserve_gb                    # reserve for a pool of N GB (4 .. 16)
 
 
 def is_unified_memory_gpu_name(name: str | None) -> bool:
@@ -76,11 +87,14 @@ class GPUInfo:
 
 @dataclass
 class ModelRecommendation:
-    model: str              # e.g. "qwen3:8b"
-    reason: str             # e.g. "8GB+ VRAM available — good quality/speed balance"
-    vram_required_gb: float
-    tier: str               # "mini", "small", "full", "multi-gpu"
-    note: str = ""          # optional platform note (e.g. unified-memory bandwidth guidance)
+    """One pull target from :func:`recommend_models`; every field but ``tier`` is read off the table."""
+
+    model: str              # the pick's Ollama tag, e.g. "qwen3:8b" (always in local_models.all_tags())
+    reason: str             # local_models.reason_for(budget, pick), plus the hybrid sentence on a -hybrid rec
+    vram_required_gb: float  # the pick's runtime_gb (weights + KV/CUDA headroom); RAM on the CPU tier
+    tier: str               # TIER_LABELS band, "vision", "embed", "multi-gpu" or "<band>-hybrid"
+    note: str = ""          # unified_memory_note() on the primary rec of a GB10-class pool, else ""
+    use_case: str = ""      # the table column the pick came from: chat/code/reasoning/cpu_fallback/vision/embed
 
 
 def _append_gpu_issue(
@@ -747,402 +761,293 @@ def get_total_vram_mb() -> int:
     return sum(g.vram_mb for g in gpus)
 
 
-@dataclass(frozen=True)
-class MemoryBudget:
-    """How much memory model recommendations may plan against.
+# ---------------------------------------------------------------------------
+# Memory budget and model recommendations. Every tag, size and number below is
+# read from the tier table in nvh.core.local_models (ROADMAP non-goal #7): this
+# module adds the GPU-detection facts the table cannot know (the name-heuristic
+# compute capability) and the tier vocabulary its consumers already read.
+# ---------------------------------------------------------------------------
 
-    On discrete GPUs ``model_budget_gb`` is the raw VRAM and ``combined_gb``
-    adds a capped CPU-offload bonus. On unified-memory parts (GB10 / DGX
-    Spark) the pool is shared with the OS, so the budget is RAM minus
-    :data:`UNIFIED_MEMORY_OS_RESERVE_GB` and no offload bonus is added — the
-    same bytes must not be counted twice.
+# The table's tier labels -> the tier vocabulary recommend_models consumers
+# read (nvh/cli/setup.py filters "vision*", web/GPURecommenderCard prints it,
+# diagnostics lists it). Four bands: 0-8 GB "mini", 8-16 GB "small", 16-24 GB
+# "medium", 24 GB+ "full". A rec's tier is the label of its pick's *home* tier
+# (the first table tier that lists the tag), so a 24 GB card's gemma3:4b
+# fallback is still "mini". Three values live outside this map: "vision" and
+# "embed" name a use case, "multi-gpu" replaces the primary's label when more
+# than one GPU is sized, and "<label>-hybrid" marks a CPU-offload pick.
+TIER_LABELS: dict[str, str] = {
+    "cpu": "mini",
+    "mini": "mini",
+    "small": "small",
+    "small-plus": "small",
+    "medium": "medium",
+    "large": "full",
+    "xl": "full",
+    "workstation": "full",
+    "datacenter": "full",
+    "max": "full",
+}
+VISION_TIER = "vision"
+EMBED_TIER = "embed"
+MULTI_GPU_TIER = "multi-gpu"
+HYBRID_SUFFIX = "-hybrid"
+
+
+@dataclass(frozen=True)
+class MemoryBudget(lm.TierBudget):
+    """This module's view of :class:`nvh.core.local_models.TierBudget`.
+
+    One object, two vocabularies: the table's fields (``budget_gb``,
+    ``offload_gb``, ``unified``, ``total_gb``, ``sized_gpus`` ...) plus the
+    names gpu.py callers have always read -- ``model_budget_gb``,
+    ``cpu_offload_gb``, ``unified_memory`` and ``total_vram_gb``.
+    ``combined_gb`` means the same in both. Being a ``TierBudget`` it goes
+    straight into ``local_models.pick`` / ``recommended`` / ``reason_for``.
+
+    The maths are the table's: on discrete GPUs ``model_budget_gb`` is the
+    raw VRAM and ``combined_gb`` adds a capped CPU-offload bonus; on unified
+    memory (GB10 / DGX Spark, Apple Silicon) the pool is shared with the OS,
+    so the budget is RAM minus a pool-sized reserve (``os_reserve_gb``:
+    :func:`~nvh.core.local_models.unified_os_reserve_gb`, 16 GB on a 128 GB
+    GB10, 4 GB on a 16 GB laptop) and no offload bonus is added -- the same
+    bytes must not be counted twice.
     """
 
-    total_vram_gb: float
-    model_budget_gb: float
-    cpu_offload_gb: float
-    combined_gb: float
-    unified_memory: bool
+    @property
+    def total_vram_gb(self) -> float:
+        return self.total_gb
+
+    @property
+    def model_budget_gb(self) -> float:
+        return self.budget_gb
+
+    @property
+    def cpu_offload_gb(self) -> float:
+        return self.offload_gb
+
+    @property
+    def unified_memory(self) -> bool:
+        return self.unified
+
+    @classmethod
+    def from_tier_budget(cls, budget: lm.TierBudget) -> MemoryBudget:
+        return cls(**{f.name: getattr(budget, f.name) for f in fields(budget)})
 
 
-def _memory_budget(gpus: list[GPUInfo], sys_mem: SystemMemoryInfo) -> MemoryBudget:
-    # Only rows with a readable pool count; an unreadable row is 0 GB and must
-    # not decide the memory model either (see _primary_row).
-    sized = _sized_rows(gpus)
-    total_vram_gb = sum(g.vram_mb for g in sized) / 1024
-    unified = bool(sized) and bool(getattr(sized[0], "unified_memory", False))
-    if unified:
-        budget = max(total_vram_gb - UNIFIED_MEMORY_OS_RESERVE_GB, 0.0)
-        return MemoryBudget(
-            total_vram_gb=total_vram_gb,
-            model_budget_gb=budget,
-            cpu_offload_gb=0.0,
-            combined_gb=budget,
-            unified_memory=True,
-        )
-    # Factor in system RAM for CPU offload — but be conservative.
-    # On gaming/student rigs RAM is often 16-32GB, and the OS + apps use ~4-6GB.
-    # CPU offloaded layers are 5-10x slower than GPU, so only helpful for
-    # "barely doesn't fit" scenarios, not as a primary strategy.
-    cpu_offload_gb = min(sys_mem.effective_for_llm_gb, 16.0)  # cap benefit at 16GB
-    return MemoryBudget(
-        total_vram_gb=total_vram_gb,
-        model_budget_gb=total_vram_gb,
-        cpu_offload_gb=cpu_offload_gb,
-        combined_gb=total_vram_gb + cpu_offload_gb,
-        unified_memory=False,
-    )
+def _memory_budget(gpus: list[GPUInfo], sys_mem: SystemMemoryInfo | None = None) -> MemoryBudget:
+    """:func:`nvh.core.local_models.tier_budget` plus gpu.py's compute-capability heuristic.
+
+    The memory maths live in the table (only sized rows count, the first
+    sized row decides the memory model, a unified pool loses the OS reserve
+    and gets no offload bonus). The one fact added here is the compute
+    capability: when no row reported one, :func:`gpu_architecture_info` reads
+    it off the primary row's name, so the Turing vision swap and the Hopper
+    quant tier still work on an nvidia-smi-only box.
+    """
+    budget = lm.tier_budget(gpus, sys_mem)
+    primary = _primary_row(gpus)
+    if primary is not None and not budget.compute_capability_known:
+        budget = replace(budget, compute_capability=gpu_architecture_info(primary)["compute_capability"])
+    return MemoryBudget.from_tier_budget(budget)
 
 
-def unified_memory_note(budget: MemoryBudget) -> str:
-    """Bandwidth guidance for a unified-memory (GB10-class) machine."""
+def recommendation_tier(pick: lm.LocalModelPick) -> str:
+    """The :data:`TIER_LABELS` band of a pick's home tier -- the first table tier that lists its tag."""
+    for tier in lm.LOCAL_MODEL_TIERS:
+        if any(candidate.tag == pick.tag for candidate in tier.picks.values()):
+            return TIER_LABELS[tier.label]
+    raise KeyError(f"{pick.tag} is not a LOCAL_MODEL_TIERS pick")
+
+
+def unified_memory_note(budget: lm.TierBudget) -> str:
+    """Bandwidth guidance for a unified-memory (GB10-class) machine, naming the table's MoE picks."""
+    bandwidth = budget.bandwidth_gbps or UNIFIED_MEMORY_BANDWIDTH_GBPS
+    moe_tags = [p.tag for p in lm.recommended(budget) if p.moe]
+    if moe_tags:
+        fit = f"MoE models such as {', '.join(moe_tags)} are the better fit"
+    else:
+        fit = "no MoE model fits this budget yet, so expect dense models to run bandwidth-bound"
     return (
-        f"Unified memory: {budget.total_vram_gb:.0f} GB LPDDR5x shared by CPU and GPU at "
-        f"~{UNIFIED_MEMORY_BANDWIDTH_GBPS} GB/s; ~{UNIFIED_MEMORY_OS_RESERVE_GB:.0f} GB is reserved "
-        f"for the OS and WebUI, leaving ~{budget.model_budget_gb:.0f} GB for models. "
-        "Dense 70B models fit but are bandwidth-bound; MoE models such as nemotron3:33b "
-        "or gpt-oss:120b are the better fit. System RAM is not an extra CPU-offload pool here."
+        f"Unified memory: {budget.total_gb:.0f} GB LPDDR5x shared by CPU and GPU at "
+        f"~{bandwidth:.0f} GB/s; ~{budget.os_reserve_gb:.0f} GB is reserved for the OS and "
+        f"WebUI, leaving ~{budget.budget_gb:.0f} GB for models. Dense models are bandwidth-bound "
+        f"here; {fit}. System RAM is not an extra CPU-offload pool here."
     )
 
 
 def recommend_models(gpus: list[GPUInfo] | None = None) -> list[ModelRecommendation]:
-    """Recommend local models based on available GPU VRAM.
+    """Recommend local models for the detected GPUs -- every tag, size and reason from the table.
 
-    Recommends the strongest pullable local model first, then smaller
-    multimodal, coding, and fallback models for resilient local routing.
+    The list is :func:`nvh.core.local_models.recommended` for the machine's
+    :func:`_memory_budget`: each rec's ``reason`` is
+    :func:`~nvh.core.local_models.reason_for` (so tag and prose come from one
+    row), ``vram_required_gb`` is the pick's ``runtime_gb`` and ``use_case``
+    the table column it came from. Order:
 
-    Tier rules (total VRAM across all GPUs):
-    - No GPU or < 4 GB : lightweight CPU fallback
-    - 4-8 GB           : gemma3:4b + moondream
-    - 8-12 GB          : qwen3:8b / llama3.1:8b + small vision fallback
-    - 12-24 GB         : qwen3:8b + MiniCPM-V + coding fallback
-    - 24-40 GB         : llama3.2-vision + qwen/coder fallbacks
-    - 40 GB+           : nemotron first, then multimodal and coding fallbacks
-    - Multi-GPU        : Ollama uses all GPUs automatically
+    1. the text picks in the table's order -- chat, code, reasoning on a
+       MoE-first pool, CPU fallback -- so index 0 is the primary and, on a
+       unified pool, a MoE model wherever one fits;
+    2. at most one CPU-offload pick (``"<tier>-hybrid"``), discrete GPUs of
+       :data:`HYBRID_MIN_BUDGET_GB` and up only: the chat (else code) pick of
+       the tier ``combined_gb`` reaches, when it needs more than the VRAM
+       budget, fits VRAM plus the capped RAM bonus, and spills at most
+       :data:`HYBRID_MAX_RAM_SHARE` of itself to RAM;
+    3. the vision pick (``tier="vision"``) -- ``pick(budget, "vision")`` walks
+       down a tier on Turing instead of handing out llama3.2-vision;
+    4. the embedding pick (``tier="embed"``), last so callers that take
+       ``recs[1]`` as the chat fallback never get an embedder.
 
-    Unified memory (GB10 / DGX Spark): the tiers above are applied to the
-    shared pool minus :data:`UNIFIED_MEMORY_OS_RESERVE_GB`, no CPU-offload
-    bonus is added, hybrid tiers are skipped, and the primary recommendation
-    carries a ``note`` explaining the bandwidth trade-off.
-
-    Rows whose memory could not be read (0 GB, ``memory-unavailable``) are not
-    GPUs Ollama can load onto: VRAM totals and the multi-GPU note count only
-    sized rows, exactly as when detection dropped such rows.
+    ``tier`` maps the table's labels through :data:`TIER_LABELS` (cpu/mini ->
+    "mini", small/small-plus -> "small", medium -> "medium", large and up ->
+    "full"); with more than one sized GPU the primary's tier becomes
+    "multi-gpu" and every reason says Ollama will use them all. Budgets snap
+    up by :data:`~nvh.core.local_models.TIER_SNAP_GB` inside the table, so a
+    24 GB card the driver reports as 23.99 GB is the 24 GB tier. On unified
+    memory (GB10 / DGX Spark) the budget is the pool minus its OS reserve
+    (``budget.os_reserve_gb``: 16 GB on 128 GB, less on smaller pools), there
+    is no hybrid pick, and the primary carries :func:`unified_memory_note` in
+    ``note``. A row whose
+    memory could not be read (0 GB, ``memory-unavailable``) is a detected GPU
+    with no VRAM to plan against: the 0-4 GB tier, and the reason says so.
     """
     if gpus is None:
         gpus = detect_gpus()
+    budget = _memory_budget(gpus, detect_system_memory())
+    by_use_case = {use_case: lm.pick(budget, use_case) for use_case in lm.USE_CASES}
 
-    sized_gpus = _sized_rows(gpus)
-    multi_gpu = len(sized_gpus) > 1
-    sys_mem = detect_system_memory()
-    budget = _memory_budget(gpus, sys_mem)
-    # Tiering below runs against the model budget: identical to raw VRAM on
-    # discrete GPUs, RAM minus the OS reserve on unified-memory parts.
-    total_vram_gb = budget.model_budget_gb
-    cpu_offload_gb = budget.cpu_offload_gb
+    def _use_case(pick: lm.LocalModelPick) -> str:
+        # USE_CASES order: a tag that is both the chat and the vision pick is "chat".
+        return next(
+            use_case
+            for use_case in lm.USE_CASES
+            if by_use_case[use_case] is not None and by_use_case[use_case].tag == pick.tag
+        )
 
-    recommendations: list[ModelRecommendation] = []
-
-    # NOTE on Nemotron sizes: Ollama's registry currently only ships
-    #   nemotron-mini (4B)  and  nemotron / nemotron:70b  (70B)
-    # Keep this list to pullable registry-backed tags.
-    # Earlier versions of this function referenced both — pull attempts
-    # returned 404 and the resulting "model not found" error from litellm
-    # was misdiagnosed as "Ollama is not running". For mid-tier VRAM where
-    # mid-tier GPUs should use real 8B/coder/vision models instead.
-    if not gpus or total_vram_gb < 4:
-        # CPU-only: system RAM is the constraint
-        if sys_mem.available_ram_gb >= 8:
-            recommendations.append(
-                ModelRecommendation(
-                    model="llama3.1:8b",
-                    reason=(
-                        f"No GPU but {sys_mem.available_ram_gb:.0f} GB RAM available — "
-                        f"llama3.1:8b runs on CPU (slow but functional)"
-                    ),
-                    vram_required_gb=0.0,
-                    tier="small",
-                )
-            )
-        recommendations.append(
+    recs: list[ModelRecommendation] = []
+    for pick in lm.recommended(budget):
+        use_case = _use_case(pick)
+        if use_case in ("vision", "embed"):
+            continue  # appended below, after the text picks and the hybrid pick
+        recs.append(
             ModelRecommendation(
-                model="nemotron-mini",
-                reason=(
-                    f"No GPU detected or < 4 GB VRAM — running on CPU "
-                    f"({sys_mem.available_ram_gb:.0f} GB RAM available)"
-                ),
-                vram_required_gb=0.0,
-                tier="mini",
-            )
-        )
-        recommendations.append(
-            ModelRecommendation(
-                model="gemma3:4b",
-                reason="Gemma 4 E2B — Google/NVIDIA optimized, tiny edge model",
-                vram_required_gb=0.0,
-                tier="mini",
-            )
-        )
-    elif total_vram_gb < 6:
-        recommendations.append(
-            ModelRecommendation(
-                model="nemotron-mini",
-                reason=f"{total_vram_gb:.0f} GB VRAM — nemotron-mini fits with GPU acceleration",
-                vram_required_gb=2.0,
-                tier="mini",
-            )
-        )
-        recommendations.append(
-            ModelRecommendation(
-                model="gemma3:4b",
-                reason="Gemma 4 E4B — NVIDIA-optimized, fits alongside nemotron-mini",
-                vram_required_gb=3.0,
-                tier="mini",
-            )
-        )
-    elif total_vram_gb < 12:
-        recommendations.append(
-            ModelRecommendation(
-                model="qwen3:8b",
-                reason=(
-                    f"{total_vram_gb:.0f} GB VRAM — llama3.1:8b is the sweet spot"
-                    " (no mid-sized Nemotron exists in the Ollama registry)"
-                ),
-                vram_required_gb=5.0,
-                tier="small",
-            )
-        )
-        recommendations.append(
-            ModelRecommendation(
-                model="gemma3:4b",
-                reason="Gemma 4 E4B — pairs with llama3.1:8b for local council",
-                vram_required_gb=3.0,
-                tier="small",
-            )
-        )
-    elif total_vram_gb < 24:
-        recommendations.append(
-            ModelRecommendation(
-                model="minicpm-v",
-                reason=(
-                    f"{total_vram_gb:.0f} GB VRAM — llama3.1:8b gives good"
-                    " quality/speed balance at this tier"
-                ),
-                vram_required_gb=5.0,
-                tier="small",
-            )
-        )
-        if total_vram_gb >= 20:
-            recommendations.append(
-                ModelRecommendation(
-                    model="qwen3:8b",
-                    reason=(
-                        "Gemma 4 26B — NVIDIA-optimized"
-                        " reasoning + code + multimodal"
-                    ),
-                    vram_required_gb=6.0,
-                    tier="small",
-                )
-            )
-        else:
-            recommendations.append(
-                ModelRecommendation(
-                    model="qwen2.5-coder:7b",
-                    reason=(
-                        "Gemma 4 E4B — fits alongside"
-                        " llama3.1:8b for local council"
-                    ),
-                    vram_required_gb=5.0,
-                    tier="small",
-                )
-            )
-    elif total_vram_gb < 48:
-        recommendations.append(
-            ModelRecommendation(
-                model="nemotron",
-                reason=f"{total_vram_gb:.0f} GB VRAM — full Nemotron 70B (quantized) fits",
-                vram_required_gb=40.0,
-                tier="full",
-            )
-        )
-        # Gemma 4 26B fits alongside Nemotron 70B only on 40GB+
-        if total_vram_gb >= 40:
-            recommendations.append(
-                ModelRecommendation(
-                    model="llama3.2-vision",
-                    reason=(
-                        "Gemma 4 26B — fits alongside"
-                        " Nemotron 70B for local council"
-                    ),
-                    vram_required_gb=7.0,
-                    tier="vision",
-                )
-            )
-        else:
-            recommendations.append(
-                ModelRecommendation(
-                    model="qwen3:8b",
-                    reason=(
-                        "Gemma 4 E4B — lightweight"
-                        " companion for local council"
-                    ),
-                    vram_required_gb=6.0,
-                    tier="small",
-                )
-            )
-    elif total_vram_gb < 80:
-        recommendations.append(
-            ModelRecommendation(
-                model="nemotron",
-                reason=f"{total_vram_gb:.0f} GB VRAM — full Nemotron 70B at high quality",
-                vram_required_gb=40.0,
-                tier="full",
-            )
-        )
-    else:
-        # 80GB+ VRAM. Note: Ollama's registry currently tops out at
-        # keep this tier on pullable tags and pair the primary model with
-        # multimodal and coding fallbacks for a stronger local council.
-        recommendations.append(
-            ModelRecommendation(
-                model="nemotron",
-                reason=(
-                    f"{total_vram_gb:.0f} GB VRAM — Nemotron 70B "
-                    "(largest Nemotron available in the Ollama registry)"
-                ),
-                vram_required_gb=40.0,
-                tier="full",
-            )
-        )
-        recommendations.append(
-            ModelRecommendation(
-                model="qwen2.5-coder:32b",
-                reason=(
-                    "Gemma 4 31B — pairs with Nemotron 70B for a strong"
-                    " local council at high-VRAM tiers"
-                ),
-                vram_required_gb=20.0,
-                tier="medium",
+                model=pick.tag,
+                reason=lm.reason_for(budget, pick),
+                vram_required_gb=pick.runtime_gb,
+                tier=recommendation_tier(pick),
+                use_case=use_case,
             )
         )
 
-    # Check if CPU offload could unlock a larger model
-    # Only suggest if the model is "close" (within CPU offload budget).
-    # Skipped on unified memory: there is no second pool to offload into.
-    combined_gb = budget.combined_gb
-    if recommendations and not budget.unified_memory:
-        top_tier = recommendations[0].tier
-        # If we're on "small" tier but combined VRAM+RAM could fit 70B Q4 (~45GB)
-        if top_tier in ("small",) and combined_gb >= 45 and total_vram_gb >= 12:
-            recommendations.append(
-                ModelRecommendation(
-                    model="nemotron",
-                    reason=(
-                        f"Partial CPU offload: {total_vram_gb:.0f} GB VRAM + "
-                        f"{cpu_offload_gb:.0f} GB RAM = {combined_gb:.0f} GB combined. "
-                        f"70B fits but ~30-50% slower than full GPU"
-                    ),
-                    vram_required_gb=45.0,
-                    tier="full-hybrid",
-                )
-            )
-        # Qwen 2.5 Coder 32B fits as a hybrid on mid-VRAM tiers (~20GB VRAM + CPU)
-        elif top_tier in ("full",) and combined_gb >= 35 and total_vram_gb >= 24:
-            recommendations.append(
-                ModelRecommendation(
-                    model="qwen2.5-coder:32b",
-                    reason=(
-                        f"Partial CPU offload: {total_vram_gb:.0f} GB VRAM + "
-                        f"{cpu_offload_gb:.0f} GB RAM = {combined_gb:.0f} GB combined. "
-                        f"Qwen 2.5 Coder 32B fits for diversified council"
-                    ),
-                    vram_required_gb=20.0,
-                    tier="medium-hybrid",
-                )
-            )
+    hybrid = _recommend_hybrid_model(budget, {r.model for r in recs})
+    if hybrid is not None:
+        recs.append(hybrid)
 
-    if multi_gpu and recommendations:
-        last = recommendations[0]
-        recommendations[0] = ModelRecommendation(
-            model=last.model,
-            reason=last.reason + f" (Ollama will use all {len(sized_gpus)} GPUs automatically)",
-            vram_required_gb=last.vram_required_gb,
-            tier="multi-gpu",
-        )
+    for extra in (_recommend_vision_model(budget), _recommend_embed_model(budget)):
+        if extra is not None and extra.model not in {r.model for r in recs}:
+            recs.append(extra)
 
-    if budget.unified_memory and recommendations:
-        primary = recommendations[0]
-        primary.reason += (
-            f" (unified memory: ~{budget.model_budget_gb:.0f} GB of "
-            f"{budget.total_vram_gb:.0f} GB usable after the OS reserve)"
-        )
-        primary.note = unified_memory_note(budget)
+    if budget.sized_gpus > 1 and recs:
+        # reason_for already ends every reason with "Ollama will use all N GPUs automatically".
+        recs[0] = replace(recs[0], tier=MULTI_GPU_TIER)
 
-    # Vision model — appended so the desktop-agent screenshot path works.
-    # Ollama loads models on demand, so co-residency with the text models is
-    # not required (Ollama will swap them in/out as needed).
-    vision_rec = _recommend_vision_model(total_vram_gb, gpus)
-    if vision_rec is not None:
-        recommendations.append(vision_rec)
+    if budget.unified and recs:
+        recs[0].note = unified_memory_note(budget)
 
-    return recommendations
+    return recs
 
 
-def _recommend_vision_model(
-    total_vram_gb: float,
-    gpus: list[GPUInfo],
-) -> ModelRecommendation | None:
-    """Pick a vision-capable Ollama model appropriate for the GPU tier.
-
-    Tier rules (approximate Q4 sizes):
-      - < 4 GB   : skip (cloud vision only)
-      - 4 – 12 GB: moondream (~2 GB) — basic vision, fits alongside small text
-      - 12 – 24  : minicpm-v (~5 GB) — better quality, still light
-      - 24 – 80  : llama3.2-vision (~7 GB, 11B) — strong spatial grounding
-      - 80 GB+   : llama3.2-vision (safer than 90B which is flaky in Ollama)
-
-    Architecture swap: on Turing (CC < 8.0), llama3.2-vision uses BF16
-    paths that degrade badly, so prefer minicpm-v there.
-    """
-    if total_vram_gb < 4:
+def _use_case_recommendation(budget: lm.TierBudget, use_case: str, tier: str) -> ModelRecommendation | None:
+    pick = lm.pick(budget, use_case)
+    if pick is None:
         return None
-
-    # Compute capability for arch-aware swap. Use the primary (first sized) GPU.
-    primary = _primary_row(gpus)
-    cc = gpu_architecture_info(primary)["compute_capability"] if primary is not None else (0, 0)
-    turing_or_older = cc < (8, 0) and cc != (0, 0)
-
-    if total_vram_gb < 12:
-        return ModelRecommendation(
-            model="moondream",
-            reason="moondream — 2 GB vision model, fits alongside small text models",
-            vram_required_gb=2.0,
-            tier="vision-mini",
-        )
-    if total_vram_gb < 24:
-        return ModelRecommendation(
-            model="minicpm-v",
-            reason="minicpm-v — 5 GB vision model, good quality for the tier",
-            vram_required_gb=5.0,
-            tier="vision-small",
-        )
-    # 24 GB+ tier — prefer llama3.2-vision unless Turing
-    if turing_or_older:
-        return ModelRecommendation(
-            model="minicpm-v",
-            reason=(
-                "minicpm-v — Turing lacks BF16 acceleration, "
-                "so llama3.2-vision would be slow here"
-            ),
-            vram_required_gb=5.0,
-            tier="vision-small",
-        )
     return ModelRecommendation(
-        model="llama3.2-vision",
-        reason="llama3.2-vision — 7 GB, best spatial grounding for desktop agent",
-        vram_required_gb=7.0,
-        tier="vision",
+        model=pick.tag,
+        reason=lm.reason_for(budget, pick),
+        vram_required_gb=pick.runtime_gb,
+        tier=tier,
+        use_case=use_case,
     )
+
+
+def _recommend_vision_model(budget: lm.TierBudget) -> ModelRecommendation | None:
+    """The table's vision pick for the budget (``tier="vision"``).
+
+    ``local_models.pick`` refuses a pick whose compute floor the primary GPU
+    is known not to meet and walks down the ladder, so a 24 GB Turing card
+    (CC 7.5, no BF16) gets the 12-16 tier's vision model instead of
+    llama3.2-vision -- the swap this function used to hand-code.
+    """
+    return _use_case_recommendation(budget, "vision", VISION_TIER)
+
+
+def _recommend_embed_model(budget: lm.TierBudget) -> ModelRecommendation | None:
+    """The table's embedding pick (``tier="embed"``) -- the last rec, never a chat fallback."""
+    return _use_case_recommendation(budget, "embed", EMBED_TIER)
+
+
+# A hybrid (CPU-offload) pick is for a card with headroom, never a substitute
+# for VRAM: CPU-offloaded layers run 5-10x slower than the GPU's. Two limits,
+# both read off the table:
+#
+# * HYBRID_MIN_BUDGET_GB -- the floor of the first tier whose num_ctx rises
+#   above the entry tiers' (small-plus, 12 GB). Below it the card holds one
+#   8B model at the default context; the old rule handed an 8 GB card with
+#   16 GB of RAM qwen3:30b-a3b with 12.5 of its 20.5 GB in RAM (61%) -- a CPU
+#   model with a GPU cache, not a hybrid.
+# * HYBRID_MAX_RAM_SHARE -- at most this share of the pick's runtime_gb may
+#   spill to RAM, i.e. runtime_gb <= budget_gb / (1 - share). At 40% the GPU
+#   still holds most of the layers and the "30-50% slower" the reason promises
+#   holds; past it the promise does not.
+HYBRID_MIN_BUDGET_GB: float = next(
+    tier.min_gb for tier in lm.LOCAL_MODEL_TIERS if tier.num_ctx > lm.LOCAL_MODEL_TIERS[0].num_ctx
+)
+HYBRID_MAX_RAM_SHARE: float = 0.4
+
+
+def _recommend_hybrid_model(budget: lm.TierBudget, already: set[str]) -> ModelRecommendation | None:
+    """One CPU-offload pick when VRAM plus the capped RAM bonus reaches a higher tier.
+
+    Never on unified memory (one pool: nothing to offload into), never
+    without a sized GPU, and never below :data:`HYBRID_MIN_BUDGET_GB` (the
+    12 GB small-plus tier, after the snap): the CPU tier already runs from
+    RAM and a 4-8 GB card would run the pick mostly from RAM. The candidate
+    is the reached tier's chat pick, else its code pick, and only when it
+    needs more than the VRAM budget, fits ``combined_gb`` and spills at most
+    :data:`HYBRID_MAX_RAM_SHARE` of its ``runtime_gb`` to RAM --
+    CPU-offloaded layers are 5-10x slower, so this is for "barely doesn't
+    fit", not a primary strategy. The reason states the spill.
+    """
+    if budget.unified or budget.offload_gb <= 0 or budget.sized_gpus == 0:
+        return None
+    home = lm.tier_for(budget)
+    if home.min_gb < HYBRID_MIN_BUDGET_GB:
+        return None
+    reach = replace(budget, budget_gb=budget.combined_gb, offload_gb=0.0)
+    if lm.tier_for(reach) is home:
+        return None
+    max_runtime_gb = min(budget.combined_gb, budget.budget_gb / (1.0 - HYBRID_MAX_RAM_SHARE))
+    for use_case in ("chat", "code"):
+        candidate = lm.pick(reach, use_case)
+        if candidate is None or candidate.tag in already:
+            continue
+        if not (budget.budget_gb < candidate.runtime_gb <= max_runtime_gb):
+            continue
+        spill_gb = candidate.runtime_gb - budget.budget_gb
+        return ModelRecommendation(
+            model=candidate.tag,
+            reason=(
+                lm.reason_for(budget, candidate)
+                + f"; partial CPU offload: {budget.budget_gb:.0f} GB VRAM + {budget.offload_gb:.0f} GB RAM = "
+                f"{budget.combined_gb:.0f} GB combined — ~{candidate.runtime_gb:g} GB loaded fits with "
+                f"~{round(spill_gb, 1):g} GB ({spill_gb / candidate.runtime_gb:.0%}) in RAM, "
+                "expect 30-50% slower than full GPU"
+            ),
+            vram_required_gb=candidate.runtime_gb,
+            tier=recommendation_tier(candidate) + HYBRID_SUFFIX,
+            use_case=use_case,
+        )
+    return None
 
 
 @dataclass
@@ -1355,23 +1260,31 @@ def gpu_architecture_info(gpu: GPUInfo) -> dict[str, Any]:
 
 
 def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimization:
-    """Return architecture-aware Ollama settings based on detected GPU.
+    """Architecture-aware Ollama settings; the numbers are the tier table's.
 
-    Parses compute capability to determine:
-    - Flash Attention support (CC >= 8.0)
-    - Recommended parallelism
-    - Context window sizing based on VRAM
-    - Best quantization format for the architecture
+    ``num_parallel`` / ``recommended_ctx`` / ``recommended_quant`` are
+    :func:`~nvh.core.local_models.num_parallel_for` / ``num_ctx_for`` /
+    ``quant_for`` of :func:`_memory_budget`, so they snap like every other
+    table accessor: a 24 GB card the driver reports as 23.99 GB is the 24 GB
+    tier (32768 ctx, 2 parallel) and an 80 GB H100 at 79.65 GB is the 80 GB
+    tier -- the raw compare that put them a tier low is gone. Flash Attention
+    (CC >= 8.0) and the architecture come from the primary row's compute
+    capability, reported by NVML or read off the name. An empty GPU list is
+    CPU-only (2048 ctx); a listed GPU whose memory could not be read is the
+    0-4 GB tier (4096 ctx) and says so in ``notes``. On a unified pool the
+    quant never inherits the Hopper "Q8_0 or F16" tier and the MoE note names
+    the table's MoE picks for the budget.
     """
     if gpus is None:
         gpus = detect_gpus()
 
     if not gpus:
+        budget = _memory_budget([], None)
         return OllamaOptimization(
             flash_attention=False,
-            num_parallel=1,
-            recommended_ctx=2048,
-            recommended_quant="Q4_K_M",
+            num_parallel=lm.num_parallel_for(budget),
+            recommended_ctx=lm.num_ctx_for(budget),
+            recommended_quant=lm.quant_for(budget),
             architecture="CPU",
             compute_capability=(0, 0),
             notes=["No GPU detected — running on CPU. Inference will be slow."],
@@ -1380,13 +1293,13 @@ def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimiz
     # Use the primary GPU (first sized row; a lone unreadable row still names
     # its architecture) for architecture and memory-model decisions.
     gpu = _primary_row(gpus) or gpus[0]
-    unified = bool(getattr(gpu, "unified_memory", False))
-    total_vram_gb = sum(g.vram_mb for g in gpus) / 1024
-    if unified:
-        # Shared pool: size parallelism/context against what's left after the OS.
-        total_vram_gb = max(total_vram_gb - UNIFIED_MEMORY_OS_RESERVE_GB, 0.0)
     arch_info = gpu_architecture_info(gpu)
     cc = arch_info["compute_capability"]
+    sys_mem = detect_system_memory()
+    budget = _memory_budget(gpus, sys_mem)
+    unified = budget.unified
+    budget_gb = budget.budget_gb
+    bandwidth = budget.bandwidth_gbps or UNIFIED_MEMORY_BANDWIDTH_GBPS
 
     notes: list[str] = []
     if arch_info["heuristic"]:
@@ -1417,7 +1330,7 @@ def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimiz
         notes.append("FP4 Tensor Cores available (not yet used by Ollama)")
         if unified:
             notes.append(
-                f"Unified LPDDR5x memory (~{UNIFIED_MEMORY_BANDWIDTH_GBPS} GB/s) shared with the CPU "
+                f"Unified LPDDR5x memory (~{bandwidth:.0f} GB/s) shared with the CPU "
                 "— dense models are bandwidth-bound; MoE models run best"
             )
         else:
@@ -1435,56 +1348,32 @@ def get_ollama_optimizations(gpus: list[GPUInfo] | None = None) -> OllamaOptimiz
         arch = "Turing"
         notes.append("No BF16 support — avoid BF16 models, use Q4_K_M/Q8_0")
 
-    # Parallelism based on VRAM tier
-    if total_vram_gb >= 48:
-        num_parallel = 4
-    elif total_vram_gb >= 24:
-        num_parallel = 2
-    else:
-        num_parallel = 1
+    # Parallelism, context and quant: the budget's tier row in the table.
+    num_parallel = lm.num_parallel_for(budget)
+    ctx = lm.num_ctx_for(budget)
+    quant = lm.quant_for(budget)
 
-    # Context window based on VRAM
-    if total_vram_gb >= 96:
-        ctx = 131072
-    elif total_vram_gb >= 48:
-        ctx = 65536
-    elif total_vram_gb >= 24:
-        ctx = 32768
-    elif total_vram_gb >= 16:
-        ctx = 16384
-    elif total_vram_gb >= 12:
-        ctx = 8192
-    else:
-        ctx = 4096
-
-    # Quantization recommendation — the memory pool decides before the compute
-    # tier does: a unified LPDDR5x pool is bandwidth-bound regardless of how
-    # new the SMs are, so it must not inherit the Hopper/HBM "Q8_0 or F16" tier.
     if unified:
-        quant = "Q4_K_M"
+        # The pool decides before the SMs do: a unified LPDDR5x pool is
+        # bandwidth-bound however new the SMs are (quant_for never hands it
+        # the Hopper/HBM tier), and the MoE picks are the table's for this budget.
+        moe_tags = ", ".join(p.tag for p in lm.recommended(budget) if p.moe) or "none fit this budget yet"
         notes.append(
-            f"Q4_K_M on the unified pool — Q8_0/F16 would be bandwidth-bound at "
-            f"~{UNIFIED_MEMORY_BANDWIDTH_GBPS} GB/s; MoE models (nemotron3:33b, gpt-oss:120b) first; "
-            f"context {ctx} sized to the ~{total_vram_gb:.0f} GB left after the "
-            f"{UNIFIED_MEMORY_OS_RESERVE_GB:.0f} GB OS reserve"
+            f"{quant} on the unified pool — Q8_0/F16 would be bandwidth-bound at "
+            f"~{bandwidth:.0f} GB/s; MoE models ({moe_tags}) first; "
+            f"context {ctx} sized to the ~{budget_gb:.0f} GB left after the "
+            f"{budget.os_reserve_gb:.0f} GB OS reserve"
         )
-    elif cc >= (9, 0) and total_vram_gb >= 80:
-        quant = "Q8_0 or F16"  # Hopper+ with HBM bandwidth can handle it
-        notes.append("High bandwidth — Q8_0 or F16 recommended for best quality")
+    elif quant.startswith("Q8"):
+        notes.append("High bandwidth — Q8_0 or F16 recommended for best quality")  # Hopper+ with HBM
     elif cc >= (10, 0):
-        quant = "Q4_K_M"  # Blackwell consumer (GDDR7) — Q4 is optimal balance
         notes.append("Future: FP4 GGUF format will leverage Blackwell natively")
-    elif cc < (8, 0):
-        quant = "Q4_K_M"  # Turing — avoid BF16, stick with integer quants
-    else:
-        quant = "Q4_K_M"  # Ampere/Ada — standard recommendation
 
     # System RAM for CPU offload
-    sys_mem = detect_system_memory()
     if unified:
         notes.append(
             f"Unified memory: {sys_mem.total_ram_gb:.0f} GB shared by CPU and GPU — no separate "
-            f"CPU-offload pool; keep ~{UNIFIED_MEMORY_OS_RESERVE_GB:.0f} GB free for the OS and WebUI"
+            f"CPU-offload pool; keep ~{budget.os_reserve_gb:.0f} GB free for the OS and WebUI"
         )
     elif sys_mem.total_ram_gb > 0:
         notes.append(f"System RAM: {sys_mem.total_ram_gb:.0f} GB total, "

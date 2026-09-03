@@ -6,8 +6,10 @@ Gives the agent eyes and hands:
   read text from images (OCR-like via LLM)
 - HANDS: move mouse, click, type text, press keys, scroll
 
-Vision analysis tries local Ollama vision models first (llama3.2-vision,
-minicpm-v, llava), then falls back to cloud APIs (GPT-4o, Gemini, Claude).
+Vision analysis tries a local Ollama vision model first -- whichever installed
+tag ranks highest in the ``nvh.core.local_models`` tier table's image-capable
+picks, with llava-era tags recognised when already installed -- then falls
+back to cloud APIs (GPT, Gemini, Claude).
 
 Desktop control uses pyautogui (cross-platform) with safety bounds:
 - 0.5-second pause before mouse/keyboard actions
@@ -20,17 +22,116 @@ from __future__ import annotations
 import base64
 import logging
 import time as _time
+from collections.abc import Iterable
 from pathlib import Path
 
+from nvh.core import local_models
 from nvh.utils.ollama import ollama_base_url
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Which installed model sees images
+# ---------------------------------------------------------------------------
+#
+# The preference ladder is derived from the tier table, never typed here:
+# every pick flagged ``vision`` -- the dedicated ``local_models.vision_picks()``
+# plus image-capable chat picks such as nemotron3 and gemma3:4b -- in
+# ``local_models.ordered_picks`` order (largest loaded size first), so the
+# strongest installed image model wins and a stale default can only ever be a
+# tag the registry still serves. The llava-era names below are *recognised*
+# when a user already has one installed -- an old install keeps working -- but
+# are never recommended: no retired tag is ever suggested for a pull.
+
+
+def _vision_ladder() -> tuple[local_models.LocalModelPick, ...]:
+    """Every table pick that sees images, strongest (largest loaded size) first."""
+    return tuple(p for p in local_models.ordered_picks(None) if p.vision)
+
+
+_VISION_LADDER: tuple[local_models.LocalModelPick, ...] = _vision_ladder()
+
+# Registry names every pick of which sees images ("qwen3-vl", "nemotron3",
+# "llama3.2-vision", "moondream"): any tag of these is a vision model, so an
+# installed ``llama3.2-vision:11b`` or ``qwen3-vl:4b`` counts. "gemma3" is
+# absent on purpose -- gemma3:1b is text-only -- so only its exact vision tag
+# matches.
+_VISION_NAMES: frozenset[str] = frozenset(
+    name
+    for name in {p.name for p in local_models.all_picks()}
+    if all(p.vision for p in local_models.all_picks() if p.name == name)
+)
+
+# The pre-table ladder, kept only so an existing install is still usable.
+LEGACY_VISION_NAMES: tuple[str, ...] = ("llava", "llava-llama3", "llava-phi3", "minicpm-v", "bakllava")
+
+
+def _canonical_tag(tag: str) -> str:
+    """``"moondream"`` is ``"moondream:latest"`` -- the registry's own convention."""
+    return tag if ":" in tag else f"{tag}:latest"
+
+
+def _same_tag(installed: str, wanted: str) -> bool:
+    return _canonical_tag(installed) == _canonical_tag(wanted)
+
+
+def pick_vision_model(installed: Iterable[str]) -> str | None:
+    """The installed tag the vision tools should use, or None when nothing on the box sees images.
+
+    Walks the table ladder (:func:`_vision_ladder`) and returns the first
+    installed match -- the exact tag, else any tag of a name that is vision
+    throughout -- so the strongest image-capable model the user has wins.
+    Only when no table pick is installed does it fall back to
+    :data:`LEGACY_VISION_NAMES`, which keeps an older llava / minicpm-v /
+    bakllava install working without ever recommending those tags.
+    """
+    names = [str(n).strip() for n in installed if str(n).strip()]
+    if not names:
+        return None
+    for pick in _VISION_LADDER:
+        for name in names:
+            if _same_tag(name, pick.tag):
+                return name
+        if pick.name in _VISION_NAMES:
+            for name in names:
+                if name.partition(":")[0] == pick.name:
+                    return name
+    for legacy in LEGACY_VISION_NAMES:
+        for name in names:
+            if name.partition(":")[0] == legacy:
+                return name
+    return None
+
+
+def _suggested_vision_pull() -> str:
+    """The table's vision pick for this machine's budget -- what to tell the user to ``ollama pull``.
+
+    GPU detection is lazy and guarded; when it fails (or finds no GPU) the
+    answer is the CPU tier's vision pick, which runs anywhere.
+    """
+    try:
+        from nvh.utils.gpu import detect_gpus, detect_system_memory
+
+        budget = local_models.tier_budget(detect_gpus(), detect_system_memory())
+        chosen = local_models.pick(budget, "vision")
+        if chosen is not None:
+            return chosen.tag
+    except Exception:
+        pass
+    return local_models.LOCAL_MODEL_TIERS[0].picks["vision"].tag
+
 
 # ---------------------------------------------------------------------------
 # Vision model cache (avoids querying /api/tags on every analyze_image call)
 # ---------------------------------------------------------------------------
 _vision_model_cache: tuple[float, str | None] = (0.0, None)
 _VISION_CACHE_TTL = 60.0  # seconds
+
+
+def _reset_vision_model_cache() -> None:
+    """Forget the cached detection result (tests; a caller that just pulled a model)."""
+    global _vision_model_cache
+    _vision_model_cache = (0.0, None)
 
 
 def _ensure_display() -> bool:
@@ -64,7 +165,11 @@ def _ensure_display() -> bool:
 
 
 def _detect_ollama_vision_model() -> str | None:
-    """Check if Ollama has a vision-capable model installed (cached)."""
+    """The installed Ollama tag to use for images, or None (cached for :data:`_VISION_CACHE_TTL`).
+
+    Reads ``/api/tags`` and hands the names to :func:`pick_vision_model`; a
+    daemon that is down or answers anything but 200 counts as "no model".
+    """
     global _vision_model_cache
 
     now = _time.monotonic()
@@ -76,20 +181,7 @@ def _detect_ollama_vision_model() -> str | None:
         import httpx
         resp = httpx.get(f"{ollama_base_url()}/api/tags", timeout=3)
         if resp.status_code == 200:
-            models = [m.get("name", "") for m in resp.json().get("models", [])]
-            # Known vision-capable models, in preference order
-            # llama3.2-vision first — best spatial/coordinate grounding
-            vision_models = [
-                "llama3.2-vision", "minicpm-v", "llava", "bakllava",
-                "llava-llama3", "llava-phi3", "moondream",
-            ]
-            for vm in vision_models:
-                for installed in models:
-                    if vm in installed:
-                        result = installed
-                        break
-                if result:
-                    break
+            result = pick_vision_model(m.get("name", "") for m in resp.json().get("models", []))
     except Exception:
         pass
 
@@ -278,8 +370,9 @@ def register_vision_tools(registry) -> None:
     async def analyze_image(image_path: str, question: str = "Describe what you see in this image.") -> str:
         """Analyze an image using a vision-capable LLM.
 
-        Tries local Ollama vision model first (llama3.2-vision, minicpm-v, etc.),
-        then falls back to cloud APIs (GPT-4o, Gemini, Claude).
+        Tries the strongest installed local Ollama vision model first (the
+        tier table's image-capable picks, see :func:`pick_vision_model`),
+        then falls back to cloud APIs (GPT, Gemini, Claude).
 
         Args:
             image_path: Path to the image file
@@ -326,7 +419,7 @@ def register_vision_tools(registry) -> None:
             return (
                 f"[Image loaded: {path.name}, {size_kb:.1f} KB]\n"
                 "No vision model available. Install one locally:\n"
-                "  ollama pull llama3.2-vision\n"
+                f"  ollama pull {_suggested_vision_pull()}\n"
                 "Or configure a cloud API key (OpenAI, Google, Anthropic)."
             )
         except Exception as e:

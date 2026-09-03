@@ -106,6 +106,10 @@ jobs:
         run: npm ci
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.json
+      - name: Unit tests (node --test)
+        # web/lib/*.test.mjs import the .ts helpers directly via Node's type
+        # stripping (unflagged since 22.18 / 23.6); no test framework in web/.
+        run: npm test
       - name: Lint
         # 2026-06-10 audit: the old `npm run lint || echo warning` swallowed
         # ESLint CRASHES (exit 2: bad config / version incompatibility) exactly

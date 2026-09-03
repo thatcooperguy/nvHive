@@ -28,7 +28,7 @@ that file until 0.43 generates it.
 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | paid | `claude-sonnet-5` |
 | DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | paid, very cheap | `deepseek/deepseek-v4-pro` |
 | Grok (xAI) | `grok` | `XAI_API_KEY` | paid | `xai/grok-4.6` |
-| Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | paid — Chat Completions sunsets 2026-09-27 | `perplexity/sonar-pro` |
+| Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | paid — Agent API (Responses shape); Sonar Chat Completions retires 2026-09-27 | `perplexity/preset/low` |
 | Together AI | `together` | `TOGETHER_API_KEY` | paid | `together_ai/openai/gpt-oss-120b` |
 | OpenRouter | `openrouter` | `OPENROUTER_API_KEY` | paid | `openrouter/openai/gpt-oss-120b` |
 | Triton | `triton` | `TRITON_URL` | your own inference server | — |
@@ -82,6 +82,12 @@ capability, cost, latency and health (`routing.weights` in `config.yaml`) and
 - **Ollama** is discovered at `OLLAMA_BASE_URL` (default
   `http://localhost:11434`); the rootless binary under `$NVH_HOME/bin` is
   managed by `nvh services` and `nvh models`. See [MODELS.md](MODELS.md).
+  Every request to a loopback daemon carries this machine's VRAM tier
+  `num_ctx`, capped at the model's own context; with no visible GPU or a
+  non-loopback `OLLAMA_BASE_URL` nothing is sent and Ollama's default
+  applies, unless `NVH_OLLAMA_NUM_CTX` is set — a positive integer
+  overrides the tier (still capped) and `0` sends none
+  ([CONFIGURATION.md](CONFIGURATION.md#environment-variables)).
 - **NVIDIA NIM** IDs carry the `nvidia_nim/` prefix so LiteLLM routes them to
   `integrate.api.nvidia.com`; the adapter adds it to any ID you pass.
 - **Triton** talks to a TensorRT-LLM / Triton Inference Server at `TRITON_URL`

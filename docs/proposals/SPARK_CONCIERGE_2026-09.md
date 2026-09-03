@@ -107,9 +107,9 @@ and documents. New profiles are added only where a tool set is new.
 
 | Specialist | Exists? | Tools it binds | Trigger examples |
 |---|---|---|---|
-| **Setup concierge** — first-run guide, one step at a time | new | diagnose, refresh_models, repair_workspace, save_provider_key | first launch, "how do I start", `platform.device_class` + no models |
+| **Setup concierge** — first-run guide, one step at a time | `setup-concierge` (shipped) | diagnose, refresh_models, repair_workspace, validate_provider_key, save_provider_key, rag_ask_vault | first launch, "how do I get started", `platform.device_class` + no models |
 | **Rig doctor** | `gpu-triage` + `install-medic` | diagnose, repair_workspace, refresh_models, rag_ask_vault | errors pasted, "not working", failed job in context |
-| **Model sommelier** — what fits, MoE-first on unified memory | `vram-planner` + `model-librarian` | refresh_models, pull_model (new, confirm), web_search | "which model", "fits", "slow", "out of memory" |
+| **Model sommelier** — what fits, MoE-first on unified memory | `model-sommelier` (shipped); `vram-planner` keeps sizing arithmetic, `model-librarian` the shelf | refresh_models, diagnose, web_search, rag_ask_vault | "which model", "fits", "best model for coding", "MoE vs dense" |
 | **Device settings** — DGX OS / Windows settings with sudo | new, privileged | `system_settings_*` (§3.4) | "enable ssh", "auto login", "update", "firewall", "sleep" |
 | **App installer** — Spark playbooks as packs | new, privileged | `install_pack`, `playbook_*` (§3.5) | "install docker", "comfyui", "jupyter", "vllm", "open webui" |
 | **Home Assistant operator** | new | `home_assistant_*` (§3.6) | "lights", "thermostat", entity ids, "automation" |

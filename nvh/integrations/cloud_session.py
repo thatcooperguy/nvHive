@@ -12,10 +12,15 @@ CLOUD Detection Methods:
 3. Hardware fingerprint: cloud-specific GPU names (Tesla T10, RTX virtual GPUs)
 4. File markers: /etc/nvidia/cloud_session.conf, ~/.nvidia/cloud_session_session
 
-CLOUD Tiers and GPUs:
+CLOUD Tiers and GPUs (:data:`CLOUD_TIER_VRAM_GB`):
 - Priority: RTX 3060 class (8GB VRAM)
 - Performance: RTX 3080 class (10GB VRAM)
 - Ultimate: RTX 4080 class (16GB VRAM)
+
+The GB figure is all this module knows about models: it is looked up in
+:mod:`nvh.core.local_models`, so the default model, the pull list and the
+Ollama ``num_parallel`` / ``num_ctx`` come from the same tier row as the
+installer's and never hand a 16 GB card a model that does not fit.
 """
 
 from __future__ import annotations
@@ -27,7 +32,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from nvh.core import local_models
+
 logger = logging.getLogger(__name__)
+
+# The GPU class behind each cloud tier, in GB of VRAM (see the module
+# docstring). Everything model-shaped is derived from this figure.
+CLOUD_TIER_VRAM_GB: dict[str, float] = {
+    "priority": 8.0,      # RTX 3060 class
+    "performance": 10.0,  # RTX 3080 class
+    "ultimate": 16.0,     # RTX 4080 class
+}
 
 
 @dataclass
@@ -179,39 +194,27 @@ def get_cloud_recommended_config(session: CLOUDSession) -> dict[str, Any]:
     if not session.is_cloud_session:
         return config
 
-    # Model selection based on tier. Only real Ollama registry tags —
-    # Keep these to pullable tags so first-run setup does not queue 404s.
-    tier_models = {
-        "priority": {
-            "default_model": "ollama/gemma3:4b",
-            "recommended_models": ["gemma3:4b", "moondream"],
-        },
-        "performance": {
-            "default_model": "ollama/llama3.2-vision",
-            "recommended_models": ["llama3.2-vision", "qwen3:8b", "gemma3:4b"],
-        },
-        "ultimate": {
-            "default_model": "ollama/nemotron",
-            "recommended_models": ["nemotron", "llama3.2-vision", "qwen3:8b", "gemma3:4b"],
-        },
-    }
-
-    tier_config = tier_models.get(session.tier, tier_models["priority"])
-    config["ollama_default_model"] = tier_config["default_model"]
-    config["recommended_models"] = tier_config["recommended_models"]
+    # Model selection: the tier's VRAM looked up in the local-model table, so
+    # the tags are the registry-verified rows every other ladder pulls and an
+    # "ultimate" 16 GB card is never handed a 40 GB model. Unknown tiers get
+    # the smallest class.
+    vram_gb = CLOUD_TIER_VRAM_GB.get(session.tier, CLOUD_TIER_VRAM_GB["priority"])
+    recommended = [p.tag for p in local_models.recommended(vram_gb)]
+    chat = local_models.pick(vram_gb, "chat")
+    default_model = chat.tag if chat is not None else recommended[0]
+    config["tier_vram_gb"] = vram_gb
+    config["ollama_default_model"] = f"ollama/{default_model}"
+    config["recommended_models"] = recommended
 
     # Session-aware settings
     config["auto_save"] = True  # auto-save conversations (session could end)
     config["cache_aggressive"] = True  # cache more to survive session restarts
     config["budget_daily_limit"] = 5.0  # conservative default for students
 
-    # Performance tuning
-    if session.tier == "ultimate":
-        config["ollama_num_parallel"] = 2
-        config["ollama_flash_attention"] = True
-    else:
-        config["ollama_num_parallel"] = 1
-        config["ollama_flash_attention"] = True
+    # Performance tuning, from the same table row as the models
+    config["ollama_num_parallel"] = local_models.num_parallel_for(vram_gb)
+    config["ollama_num_ctx"] = local_models.num_ctx_for(vram_gb)
+    config["ollama_flash_attention"] = True
 
     return config
 

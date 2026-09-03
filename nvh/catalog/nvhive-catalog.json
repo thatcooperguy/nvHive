@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-04-28T00:00:00Z",
+  "updated_at": "2026-09-02T00:00:00Z",
   "channel": "bundled",
   "profiles": [
     {
@@ -15,7 +15,7 @@
       "title": "Graphics Creator Studio",
       "description": "ComfyUI, Blender, and vision helpers for graphics, image, video, and 3D projects.",
       "pack_ids": ["creative", "comfy"],
-      "model_ids": ["gemma3-4b", "llava-7b"]
+      "model_ids": ["gemma3-4b", "qwen3-vl-8b"]
     },
     {
       "id": "music",
@@ -29,14 +29,14 @@
       "title": "Agent Builder",
       "description": "Local agent libraries, a coding model, and embeddings.",
       "pack_ids": ["agents"],
-      "model_ids": ["qwen25-coder-7b", "nomic-embed-text"]
+      "model_ids": ["qwen3-8b", "nomic-embed-text"]
     },
     {
       "id": "game",
       "title": "Game Dev Lab",
       "description": "Game prototyping, Blender assets, and mod helper workspace.",
       "pack_ids": ["game", "creative"],
-      "model_ids": ["qwen25-coder-7b", "llava-7b"]
+      "model_ids": ["qwen3-8b", "qwen3-vl-8b"]
     },
     {
       "id": "full",
@@ -111,7 +111,7 @@
       "title": "Gemma 3 4B",
       "provider": "ollama",
       "install_target": "gemma3:4b",
-      "recommended_vram_gb": 6,
+      "recommended_vram_gb": 4,
       "category": "chat"
     },
     {
@@ -123,12 +123,12 @@
       "category": "chat"
     },
     {
-      "id": "qwen25-coder-7b",
-      "title": "Qwen 2.5 Coder 7B",
+      "id": "qwen3-vl-8b",
+      "title": "Qwen 3 VL 8B",
       "provider": "ollama",
-      "install_target": "qwen2.5-coder:7b",
-      "recommended_vram_gb": 8,
-      "category": "code"
+      "install_target": "qwen3-vl:8b",
+      "recommended_vram_gb": 12,
+      "category": "vision"
     },
     {
       "id": "nomic-embed-text",

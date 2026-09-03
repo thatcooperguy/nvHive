@@ -731,7 +731,10 @@ export default function WizardChat() {
         // Stamp the URL so a reload resumes this thread. replaceState (not
         // router.replace) so the resume effect doesn't re-fire and hydrate
         // over the live in-memory messages; belt-and-braces, also mark the
-        // id as handled.
+        // id as handled. (Ref mutation inside an event handler, not during
+        // render — the compiler rule cannot see that `send` only runs on
+        // submit, so it is silenced here on purpose.)
+        // eslint-disable-next-line react-hooks/immutability
         resumeHandledRef.current = conv.id;
         if (typeof window !== 'undefined') {
           const url = new URL(window.location.href);

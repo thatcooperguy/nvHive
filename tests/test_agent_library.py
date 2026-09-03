@@ -1,16 +1,18 @@
 """Contract + behavioral tests for the packaged Agent Library.
 
 The library (nvh/catalog/agent-library.json, added 2026-08-05) ships 100
-original in-house-authored agent profiles across ~38 categories. These
-tests pin the catalog's integrity invariants and the loader's ordering
-contract so a bad regeneration or a packaging slip fails CI instead of
-shipping a broken /agents page.
+original in-house-authored agent profiles across ~38 categories, plus the
+Smart Home pair, the Setup Concierge and the Model Sommelier added
+2026-09-02. These tests pin the catalog's integrity invariants and the
+loader's ordering contract so a bad regeneration or a packaging slip fails
+CI instead of shipping a broken /agents page.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 from nvh.integrations.wizard.profiles import (
@@ -29,16 +31,35 @@ VALID_TOOLS = {
     "home_assistant_status", "home_assistant_entities", "home_assistant_state",
     "home_assistant_services", "home_assistant_call",
 }
-# 100 original profiles (2026-08-05) + the two Smart Home profiles (2026-09-02).
-LIBRARY_SIZE = 102
+# 100 original profiles (2026-08-05) + the two Smart Home profiles + the
+# Setup Concierge + the Model Sommelier (all 2026-09-02).
+LIBRARY_SIZE = 104
+# Distinct categories; Setup is the newest and, for now, has one member.
+# The sommelier joined Ops (now nine members) and added no category.
+CATEGORY_COUNT = 40
+OPS_COUNT = 9
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+# The first-run guide (proposal §3.2). The concierge routes onboarding
+# questions here; it must bind exactly the tools its four steps use.
+SETUP_CONCIERGE_TOOLS = [
+    "diagnose", "refresh_models", "repair_workspace",
+    "validate_provider_key", "save_provider_key", "rag_ask_vault",
+]
+# The model sommelier (2026-09-02): reads the platform block, checks the
+# shelf, recommends, and hands over the pull command without running it.
+MODEL_SOMMELIER_TOOLS = ["refresh_models", "diagnose", "web_search", "rag_ask_vault"]
 # Ops specialists the concierge routes trouble reports to: each must be able
 # to run `diagnose`, the tool whose description says to run it when the user
 # reports trouble.
 OPS_TROUBLESHOOTERS = {
     "install-medic", "gpu-triage", "provider-keysmith",
-    "latency-tuner", "model-librarian", "vram-planner",
+    "latency-tuner", "model-sommelier", "model-librarian", "vram-planner",
 }
+# Profiles whose prompt reasons about the machine's memory: they must take
+# the figure from the platform block, never hard-code one (the Spark ships
+# in more than one memory size). Bandwidth figures ("273 GB/s") are fine.
+PLATFORM_AWARE_PROFILES = {"setup-concierge", "model-sommelier"}
+MEMORY_FIGURE_RE = re.compile(r"\b\d+(?:\.\d+)?\s?(?:GB|GiB|TB|gigabytes?)\b(?!/s)", re.IGNORECASE)
 # Profiles whose context is the user's home (occupancy, locks, cameras):
 # pinned to the local provider and tagged so chat.py refuses cloud routing.
 LOCAL_ONLY_PROFILES = {"home-assistant", "home-automation-planner"}
@@ -69,6 +90,82 @@ def test_smart_home_profiles_are_local_only() -> None:
         assert p["provider"] == "ollama", name
         assert p["model"] == "", f"{name}: leave the model to the router"
         assert "local-only" in p["tags"], name
+
+
+def test_setup_concierge_profile_contract() -> None:
+    profiles = _catalog()["profiles"]
+    p = {x["name"]: x for x in profiles}["setup-concierge"]
+    assert p["title"] == "Setup Concierge"
+    assert p["category"] == "Setup"
+    assert p["tools_allowed"] == SETUP_CONCIERGE_TOOLS
+    assert p["provider"] == "" and p["model"] == "", "leave routing to the router"
+    assert p["temperature"] == 0.3
+    assert p["tags"] == ["setup", "first-run", "spark"]
+    prompt = p["system_prompt"]
+    # The five duties of the brief: platform-aware, one step at a time in
+    # order, diagnose on trouble, honest about sudo, short with a next action.
+    for phrase in (
+        "platform", "DGX Spark", "unified pool", "MoE", "cloud desktop", "NVH_HOME",
+        "ONE step at a time", "refresh_models", "apt upgrade", "validate_provider_key",
+        "save_provider_key", "diagnose", "can_sudo", "in_sudo_group", "next single action",
+    ):
+        assert phrase in prompt, phrase
+    # Setup is its own category with the concierge as its only member.
+    categories = Counter(x["category"] for x in profiles)
+    assert categories["Setup"] == 1
+    assert len(categories) == CATEGORY_COUNT
+
+
+def test_model_sommelier_profile_contract() -> None:
+    profiles = _catalog()["profiles"]
+    by_name = {x["name"]: x for x in profiles}
+    p = by_name["model-sommelier"]
+    assert p["title"] == "Model Sommelier"
+    assert p["category"] == "Ops"
+    assert "\n" not in p["description"] and len(p["description"]) < 260
+    assert p["tools_allowed"] == MODEL_SOMMELIER_TOOLS
+    assert p["provider"] == "" and p["model"] == "", "leave routing to the router"
+    assert p["temperature"] == 0.2
+    assert p["tags"] == ["models", "spark", "ops"]
+    prompt = p["system_prompt"]
+    # The brief: which model for THIS machine, from the platform block;
+    # bandwidth-aware (MoE first on a unified pool); reads the shelf; at most
+    # two picks with quant and context; two-sentence trade-off; ends with the
+    # pull command and never pulls.
+    for phrase in (
+        "WHICH local model", "THIS machine", "platform block", "unified pool minus the OS reserve",
+        "memory_available_gb", "MemAvailable", "never quote a memory figure", "273 GB/s",
+        "dense 70B", "MoE", "Nemotron 3", "gpt-oss", "refresh_models", "at most two picks",
+        "quantization", "context length", "two sentences", "`nvh models pull <tag>`",
+        "do not pull the model yourself",
+    ):
+        assert phrase in prompt, phrase
+    # Ops gained a member and no category was added; the shelf next door is
+    # still the librarian's.
+    categories = Counter(x["category"] for x in profiles)
+    assert categories["Ops"] == OPS_COUNT
+    assert len(categories) == CATEGORY_COUNT
+    assert by_name["model-librarian"]["category"] == "Ops"
+
+
+def test_platform_aware_prompts_quote_no_memory_figure() -> None:
+    """Review 2026-09-02 (4): the concierge said '128 GB on the standard
+    unit'. Memory comes from the platform block; only bandwidth may be a
+    number."""
+    by_name = {x["name"]: x for x in _catalog()["profiles"]}
+    for name in sorted(PLATFORM_AWARE_PROFILES):
+        prompt = by_name[name]["system_prompt"]
+        hit = MEMORY_FIGURE_RE.search(prompt)
+        assert hit is None, f"{name} hard-codes a memory figure: {hit.group(0)!r}"
+        assert "128" not in prompt, name
+        assert "memory_total_gb" in prompt, f"{name} must read the platform block"
+    # The concierge names the pool the platform block reports, not a size.
+    concierge = by_name["setup-concierge"]["system_prompt"]
+    assert "unified pool shared with the OS" in concierge
+    assert "reports as memory_total_gb" in concierge
+    # The regex itself lets a bandwidth figure through and catches a size.
+    assert MEMORY_FIGURE_RE.search("a 273 GB/s unified pool") is None
+    assert MEMORY_FIGURE_RE.search("128 GB on the standard unit")
 
 
 def test_catalog_has_exactly_the_pinned_profile_count() -> None:
@@ -146,3 +243,42 @@ def test_catalog_ships_in_package_data() -> None:
         encoding="utf-8"
     )
     assert '"profiles"' in text
+
+
+# Local specialists that pinned ``ollama/qwen2.5-coder:7b`` or ``ollama/nemotron``
+# until 2026-09-02, when both tags had left the registry. They keep provider
+# ``ollama`` and pin no model, so the tier table's pick for this machine applies.
+LOCAL_UNPINNED_PROFILES = {
+    "deep-reviewer", "legacy-cartographer", "appsec-auditor", "meeting-distiller",
+    "vault-gardener", "daily-notes-coach", "zettelkasten-clerk", "sql-explainer",
+    "contract-reader", "comfyui-workflow-debugger", "transcript-cleaner",
+    "blender-assistant", "resume-editor", "meeting-scribe", "accessibility-reviewer",
+}
+# The vision trio keeps its pin: llama3.2-vision is a live tier-table pick.
+LOCAL_VISION_PROFILES = {"chart-advisor", "render-critique", "alt-text-writer"}
+
+
+def test_library_pins_no_model_outside_the_tier_table() -> None:
+    """A profile either leaves the model to the router (``""``) or pins a tag the
+    tier table carries; no profile may name a tag the registry retired."""
+    import nvh.core.local_models as lm
+
+    table = {f"ollama/{tag}" for tag in lm.all_tags()}
+    for p in _catalog()["profiles"]:
+        model = p["model"]
+        if p["provider"] == "ollama":
+            assert model == "" or model in table, f"{p['name']} pins {model!r}, not a table tag"
+        else:
+            assert not model.startswith("ollama/"), f"{p['name']} pins a local model on {p['provider']!r}"
+
+
+def test_local_specialists_defer_to_the_table_pick() -> None:
+    by_name = {p["name"]: p for p in _catalog()["profiles"]}
+    for name in sorted(LOCAL_UNPINNED_PROFILES):
+        p = by_name[name]
+        assert p["provider"] == "ollama", name
+        assert p["model"] == "", f"{name}: leave the model to the local default"
+    for name in sorted(LOCAL_VISION_PROFILES):
+        assert by_name[name]["model"] == "ollama/llama3.2-vision", name
+    pinned = {p["name"] for p in by_name.values() if p["model"]}
+    assert pinned == LOCAL_VISION_PROFILES, pinned ^ LOCAL_VISION_PROFILES

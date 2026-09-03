@@ -8,6 +8,7 @@ deps. Centralizing avoids the call sites drifting from each other.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit, urlunsplit
@@ -19,13 +20,35 @@ DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 # Ollama's own OLLAMA_HOST is honoured after OLLAMA_BASE_URL; it may be a
 # bare "host:port" or a bind address like 0.0.0.0.
 _URL_ENV_VARS = ("OLLAMA_BASE_URL", "OLLAMA_HOST")
+# Names that mean "this machine" but are not addresses a client should dial:
+# ``localhost`` resolves IPv6-first on some hosts and stalls every probe, and
+# the wildcard binds (``0.0.0.0`` / ``::``) are what a *daemon* listens on.
+# ``::1`` is not here on purpose -- it is a literal, so there is nothing to
+# resolve, and a daemon bound to IPv6 loopback only does not answer on
+# 127.0.0.1; it is kept as ``[::1]`` and the adapter knows it is local.
+_LOOPBACK_ALIASES = frozenset({"localhost", "0.0.0.0", "::", "[::]"})
+
+
+def _bracket_bare_ipv6(raw: str) -> str:
+    """``"::1"`` / ``"fd00::5/ollama"`` -> ``"[::1]"`` / ``"[fd00::5]/ollama"`` (a scheme-less literal has no port)."""
+    hostport, slash, path = raw.partition("/")
+    try:
+        is_ipv6 = ipaddress.ip_address(hostport).version == 6
+    except ValueError:
+        is_ipv6 = False
+    return f"[{hostport}]{slash}{path}" if is_ipv6 else raw
 
 
 def ollama_base_url(value: str | None = None) -> str:
     """The daemon's base URL: ``value``, else the env override, else the default.
 
-    Loopback is always spelled ``127.0.0.1`` — ``localhost`` resolves through
-    IPv6 first on some hosts and adds hundreds of ms to every probe.
+    Loopback is spelled ``127.0.0.1`` -- ``localhost`` resolves through IPv6
+    first on some hosts and adds hundreds of ms to every probe, and the
+    wildcard binds ``0.0.0.0`` / ``::`` are not dialable. An IPv6 literal is
+    kept and re-bracketed (``http://[::1]:11434`` stays exactly that;
+    ``urlsplit`` strips the brackets and the netloc needs them back, or the
+    result is the unparsable ``http://::1:11434``), and a bare ``::1`` / ``fd00::5``
+    gains its brackets before the default port is added.
     """
     raw = (value or "").strip()
     if not raw:
@@ -36,15 +59,17 @@ def ollama_base_url(value: str | None = None) -> str:
     if not raw:
         return DEFAULT_OLLAMA_URL
     if "://" not in raw:
-        raw = f"http://{raw}"
+        raw = f"http://{_bracket_bare_ipv6(raw)}"
     parts = urlsplit(raw)
     host = parts.hostname or "127.0.0.1"
-    if host in ("localhost", "0.0.0.0", "::", "[::]"):
+    if host in _LOOPBACK_ALIASES:
         host = "127.0.0.1"
     try:
         port: int | str | None = parts.port
     except ValueError:  # out-of-range ports are passed through, e.g. a deliberately dead :99999
         port = parts.netloc.rpartition(":")[2]
+    if ":" in host:  # an IPv6 literal: ``hostname`` dropped the brackets the netloc needs
+        host = f"[{host}]"
     netloc = f"{host}:{port or 11434}"
     return urlunsplit((parts.scheme or "http", netloc, parts.path.rstrip("/"), "", ""))
 

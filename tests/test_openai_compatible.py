@@ -434,11 +434,24 @@ class TestCalcCost:
         assert cost == Decimal("0.001234")
         cpt.assert_called_once_with(model="gpt-4o", prompt_tokens=100, completion_tokens=50)
 
-    def test_returns_zero_on_exception(self) -> None:
+    def test_returns_zero_when_neither_litellm_nor_the_catalog_prices_the_model(self) -> None:
         usage = Usage(input_tokens=10, output_tokens=5, total_tokens=15)
         with patch("litellm.cost_per_token", side_effect=Exception("nope")):
-            cost = _calc_cost("gpt-4o", usage)
+            cost = _calc_cost("nowhere/unmapped-model", usage)
         assert cost == Decimal("0")
+
+    def test_falls_back_to_the_capabilities_rates_when_litellm_has_no_price(self) -> None:
+        # gpt-4o is a capabilities.yaml row; when LiteLLM cannot price it the
+        # catalog's per-1M rates do, instead of the request being recorded as free.
+        from nvh.providers.openai_compatible import _catalog
+
+        info = _catalog().get_model_info("gpt-4o")
+        assert info is not None and (info.input_cost_per_1m_tokens or info.output_cost_per_1m_tokens)
+        usage = Usage(input_tokens=1_000_000, output_tokens=2_000_000, total_tokens=3_000_000)
+        with patch("litellm.cost_per_token", side_effect=Exception("This model isn't mapped yet")):
+            cost = _calc_cost("gpt-4o", usage)
+        assert cost == info.input_cost_per_1m_tokens + 2 * info.output_cost_per_1m_tokens
+        assert cost > Decimal("0")
 
     def test_priced_default_is_nonzero(self) -> None:
         # Regression guard: the old completion_cost(prompt_tokens=...) call raised
@@ -714,7 +727,9 @@ async def test_provider_health_check_success(name):
     """Every litellm provider returns healthy=True when its probe succeeds."""
     provider = _spec_provider(name)
     client, _ = _fake_http(200, {"data": []})
+    # No key here, so /models is skipped and the ping runs on the spec's surface.
     with patch(_ASYNC_CLIENT, client), \
-            patch("litellm.acompletion", new_callable=AsyncMock, return_value=_litellm_resp()):
+            patch("litellm.acompletion", new_callable=AsyncMock, return_value=_litellm_resp()), \
+            patch("litellm.aresponses", new_callable=AsyncMock, return_value=_litellm_resp()):
         result = await provider.health_check()
     assert isinstance(result, HealthStatus) and result.healthy is True

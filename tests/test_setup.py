@@ -10,19 +10,33 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from nvh.cli.setup import (
+    _MODEL_PULL_PREFERENCE,
+    _VISION_MODEL_TAGS,
     CORE_PROVIDERS,
     _check_provider_key,
     _detect_gpu_info,
+    _detect_tier_budget,
     _env_key_files,
     _get_recommended_models,
     _is_vision_model,
     _layout_config_dir,
     _ollama_running,
+    _prefer_largest_fitting_models,
     _reorder_vision_first,
     _store_key,
     _validate_key,
     load_env_keys,
 )
+from nvh.core import local_models as lm
+
+# Tags that left the Ollama registry or never existed there; none may come out
+# of any ladder in nvh.cli.setup (the table in nvh.core.local_models is the
+# only source of pull targets).
+RETIRED_TAGS = {
+    "nemotron-omni", "nemotron-3-nano-omni", "nemotron-3-super", "nemotron:70b",
+    "llama3.3:70b", "qwen2.5-coder:32b", "qwen2.5-coder:7b", "llama3.1:8b",
+    "minicpm-v", "llava", "llava:7b", "bakllava", "deepseek-r1:8b", "nemotron-mini",
+}
 
 
 class TestCheckProviderKey:
@@ -102,6 +116,27 @@ class TestDetectGpuInfo:
         assert tier == "tier_0"
         assert "cloud" in desc.lower() or "no local" in desc.lower()
 
+    def test_total_is_the_pool_and_the_budget_is_unified_aware(self, monkeypatch):
+        """The hardware table prints the pool a GB10 reports (128 GB, agentic's TIER_5);
+        the model ladder plans against local_models.tier_budget (112 GB after the OS reserve)."""
+        import nvh.utils.gpu as gpu_mod
+
+        rows = [_gpu_row("NVIDIA GB10", 131072, unified=True)]
+        monkeypatch.setattr(gpu_mod, "detect_gpus", lambda: rows)
+        monkeypatch.setattr(gpu_mod, "detect_system_memory", lambda: None)
+        gpus, vram, tier, _desc = _detect_gpu_info()
+        assert gpus == rows
+        assert vram == 128.0
+        assert tier == "tier_5"
+        budget = _detect_tier_budget()
+        assert budget is not None and budget.unified
+        assert budget.budget_gb == 128.0 - lm.UNIFIED_MEMORY_OS_RESERVE_GB
+        assert lm.tier_for(budget).label == "max"
+
+    def test_budget_is_none_when_detection_fails(self):
+        with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
+            assert _detect_tier_budget() is None
+
 
 class TestOllamaRunning:
     def test_returns_false_when_not_running(self):
@@ -130,44 +165,99 @@ class TestOllamaRunning:
         assert "llama3.3:70b" in models
 
 
+def _table_order(budget) -> list[str]:
+    """What _get_recommended_models must return for a budget: the table's pull list, strongest tier first."""
+    return _prefer_largest_fitting_models([p.tag for p in lm.recommended(budget)])
+
+
 class TestGetRecommendedModels:
-    def test_high_vram_gets_large_models(self):
-        # Force the fallback path by making the import fail
+    """Every tag comes from nvh.core.local_models; setup only orders them.
+
+    Blocking ``nvh.utils.gpu`` makes the bare figure the whole budget (a
+    discrete pool of that size), so the expectations below are the table's.
+    """
+
+    @pytest.mark.parametrize("gb", [6.0, 8.0, 16.0, 24.0, 47.0, 48.0, 96.0, 128.0])
+    def test_matches_the_table_for_a_bare_vram_figure(self, gb):
+        with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
+            recs = _get_recommended_models(gb)
+        assert recs == _table_order(gb)
+        assert recs and len(recs) == len(set(recs))
+        assert set(recs) <= set(lm.all_tags())
+        assert not RETIRED_TAGS & set(recs)
+
+    def test_strongest_tier_pick_leads_and_every_role_is_covered(self):
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
             recs = _get_recommended_models(128.0)
-        assert len(recs) >= 2
-        assert recs[0] == "nemotron"
-        assert any("70b" in m or m == "nemotron" for m in recs)
+        assert recs[0] == lm.pick(128.0, "chat").tag
+        for use_case in ("chat", "code", "vision", "embed", "cpu_fallback"):
+            assert lm.pick(128.0, use_case).tag in recs, use_case
 
-    def test_medium_vram(self):
+    def test_24gb_pulls_the_vision_pick_first(self):
+        # _get_recommended_models is strongest-first; guided_setup reorders the
+        # pull vision-first so the desktop-agent screenshot assist is ready early.
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
-            recs = _get_recommended_models(48.0)
-        assert len(recs) >= 1
-        assert recs[0] == "nemotron"
-
-    def test_low_vram_gets_small_model(self):
-        with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
-            recs = _get_recommended_models(16.0)
-        assert len(recs) >= 1
-        assert any("7b" in m for m in recs)
+            recs = _get_recommended_models(24.0)
+        vision = lm.pick(24.0, "vision")
+        assert vision is not None and vision.tag in recs
+        assert _is_vision_model(_reorder_vision_first(recs)[0])
+        assert lm.pick(24.0, "cpu_fallback").tag in recs
 
     def test_no_vram_returns_empty(self):
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
             recs = _get_recommended_models(0.0)
         assert recs == []
 
-    def test_24gb_vram_gets_multimodal_first(self):
+    def test_unified_budget_plans_112gb_and_leads_with_moe(self):
+        budget = lm.tier_budget([_gpu_row("NVIDIA GB10", 131072, unified=True)], None)
+        assert budget.budget_gb == 128.0 - lm.UNIFIED_MEMORY_OS_RESERVE_GB
+        recs = _get_recommended_models(128.0, budget=budget)
+        assert recs == _table_order(budget)
+        assert lm.pick_for_tag(recs[0]).moe
+        reasoning = lm.pick(budget, "reasoning")
+        assert reasoning is not None and reasoning.moe
+        assert reasoning.tag in recs  # the reasoning MoE joins only on a bandwidth-bound pool
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
-            recs = _get_recommended_models(24.0)
-        assert recs[0] == "llama3.2-vision"
-        assert "gemma3:4b" in recs
+            assert reasoning.tag not in _get_recommended_models(128.0)
 
-    def test_96gb_gets_multiple_models(self):
+    def test_unsized_budget_falls_back_to_the_figure(self):
+        # A GPU whose memory could not be read carries no budget; the caller's
+        # figure is planned as a discrete pool instead of returning nothing.
+        unsized = lm.tier_budget([_gpu_row("NVIDIA GeForce RTX 4090", 0)], None)
         with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
-            recs = _get_recommended_models(96.0)
-        assert len(recs) >= 2
-        assert recs[0] == "nemotron"
-        assert any(v in recs for v in ["llama3.2-vision", "minicpm-v"])  # vision model included
+            assert _get_recommended_models(24.0, budget=unsized) == _table_order(24.0)
+
+
+def _first_tier_of(tag: str) -> int:
+    """Index of the lowest table tier that lists ``tag``."""
+    return next(
+        i for i, tier in enumerate(lm.LOCAL_MODEL_TIERS)
+        if tag in {p.tag for p in tier.picks.values()}
+    )
+
+
+class TestPullPreference:
+    def test_preference_is_every_table_tag_strongest_tier_first(self):
+        assert sorted(_MODEL_PULL_PREFERENCE) == lm.all_tags()
+        assert not RETIRED_TAGS & set(_MODEL_PULL_PREFERENCE)
+        ranks = [_first_tier_of(tag) for tag in _MODEL_PULL_PREFERENCE]
+        assert ranks == sorted(ranks, reverse=True)
+
+    def test_unknown_tags_trail_in_input_order(self):
+        weakest, strongest = _MODEL_PULL_PREFERENCE[-1], _MODEL_PULL_PREFERENCE[0]
+        assert _prefer_largest_fitting_models(["zzz", weakest, strongest, "aaa", weakest]) == [
+            strongest, weakest, "zzz", "aaa",
+        ]
+
+    def test_sort_is_stable_within_a_tier(self):
+        # Same-tier picks keep the caller's order, so recommended()'s MoE-first
+        # order on a unified pool survives the strongest-first sort.
+        by_tier: dict[int, list[str]] = {}
+        for tag in _MODEL_PULL_PREFERENCE:
+            by_tier.setdefault(_first_tier_of(tag), []).append(tag)
+        pair = next(tags[:2] for tags in by_tier.values() if len(tags) >= 2)
+        assert _prefer_largest_fitting_models(pair) == pair
+        assert _prefer_largest_fitting_models(pair[::-1]) == pair[::-1]
 
 
 class TestValidateKey:
@@ -387,29 +477,51 @@ class TestNoKeyringFallback:
         assert _layout_config_dir().resolve() == storage_layout().config_dir
 
 
+# The table's vision *column* (lm.vision_picks) versus everything else -- which
+# includes picks that see images but sit in the chat / CPU-fallback columns.
+VISION_TAGS = [p.tag for p in lm.vision_picks()]
+TEXT_TAGS = [p.tag for p in lm.all_picks() if p.tag not in VISION_TAGS]
+
+
 class TestVisionModelDetection:
-    """Tests for _is_vision_model — identifies vision-capable model tags."""
+    """_is_vision_model reads the table's vision column, plus the ``*-vision`` naming convention."""
 
-    def test_known_vision_tags(self):
-        assert _is_vision_model("llama3.2-vision")
-        assert _is_vision_model("minicpm-v")
-        assert _is_vision_model("moondream")
-        assert _is_vision_model("llava")
-        assert _is_vision_model("bakllava")
-        assert _is_vision_model("nemotron-3-nano-omni")
-        assert _is_vision_model("nemotron-omni")
+    def test_vision_tag_set_is_the_table_s_vision_column(self):
+        assert set(_VISION_MODEL_TAGS) == set(VISION_TAGS)
+        assert set(_VISION_MODEL_TAGS) == {tier.picks["vision"].tag for tier in lm.LOCAL_MODEL_TIERS}
+        assert not RETIRED_TAGS & set(_VISION_MODEL_TAGS)
+        assert len(VISION_TAGS) >= 2 and len(TEXT_TAGS) >= 2
 
-    def test_versioned_tags(self):
-        assert _is_vision_model("llama3.2-vision:11b")
-        assert _is_vision_model("llama3.2-vision:90b")
-        assert _is_vision_model("llava:7b")
-        assert _is_vision_model("llava:34b")
+    def test_image_capable_text_picks_are_not_vision(self):
+        # gemma3:4b (the CPU fallback from 8 GB up) and the nemotron3 chat builds
+        # accept images, but they are text picks: treating them as "vision" put
+        # the 4 GB fallback ahead of every tier's primary pull.
+        sees_images_but_text = [p for p in lm.all_picks() if p.vision and p.tag not in VISION_TAGS]
+        assert sees_images_but_text, "no image-capable text pick left in the table; drop this test"
+        for pick in sees_images_but_text:
+            assert pick.tag not in _VISION_MODEL_TAGS
+            assert not _is_vision_model(pick.tag), pick.tag
+
+    @pytest.mark.parametrize("pick", lm.all_picks(), ids=lambda p: p.tag)
+    def test_table_picks_follow_the_vision_column(self, pick):
+        assert _is_vision_model(pick.tag) is (pick.tag in VISION_TAGS)
+
+    def test_other_tags_of_a_vision_family(self):
+        # An untagged vision pick ("llama3.2-vision") covers every tag of that name ...
+        for pick in lm.vision_picks():
+            if pick.version == "latest":
+                assert _is_vision_model(f"{pick.name}:11b"), pick.tag
+        # ... and so does any quant of a vision-column name (qwen3-vl:4b) -- but
+        # not of a chat name that happens to see images (nemotron3:33b-q8).
+        vision_names = {p.name for p in lm.vision_picks()}
+        for pick in lm.all_picks():
+            assert _is_vision_model(f"{pick.name}:some-other-quant") is (pick.name in vision_names), pick.name
 
     def test_text_models_not_vision(self):
         assert not _is_vision_model("nemotron")
-        assert not _is_vision_model("nemotron:70b")
         assert not _is_vision_model("qwen2.5-coder:32b")
-        assert not _is_vision_model("qwen2.5-coder:7b")
+        for tag in TEXT_TAGS:
+            assert not _is_vision_model(tag), tag
 
     def test_vision_substring_match(self):
         # Should still match even with unusual prefix
@@ -420,25 +532,35 @@ class TestReorderVisionFirst:
     """Tests for _reorder_vision_first — pull ordering."""
 
     def test_vision_moved_to_front(self):
-        result = _reorder_vision_first(["nemotron:70b", "llama3.2-vision", "qwen2.5-coder:32b"])
-        assert result[0] == "llama3.2-vision"
-        assert result[1:] == ["nemotron:70b", "qwen2.5-coder:32b"]
+        result = _reorder_vision_first([TEXT_TAGS[0], VISION_TAGS[0], TEXT_TAGS[1]])
+        assert result[0] == VISION_TAGS[0]
+        assert result[1:] == [TEXT_TAGS[0], TEXT_TAGS[1]]
 
     def test_no_vision_preserved(self):
-        result = _reorder_vision_first(["nemotron", "qwen2.5-coder:32b"])
-        assert result == ["nemotron", "qwen2.5-coder:32b"]
+        assert _reorder_vision_first(TEXT_TAGS[:2]) == TEXT_TAGS[:2]
 
     def test_only_vision(self):
-        result = _reorder_vision_first(["moondream"])
-        assert result == ["moondream"]
+        assert _reorder_vision_first(VISION_TAGS[:1]) == VISION_TAGS[:1]
 
     def test_empty_list(self):
         assert _reorder_vision_first([]) == []
 
     def test_multiple_vision_preserves_order(self):
         # When there are multiple vision models, they stay in original order
-        result = _reorder_vision_first(["nemotron", "moondream", "qwen2.5-coder:32b", "minicpm-v"])
-        assert result == ["moondream", "minicpm-v", "nemotron", "qwen2.5-coder:32b"]
+        mixed = [TEXT_TAGS[0], VISION_TAGS[0], TEXT_TAGS[1], VISION_TAGS[1]]
+        assert _reorder_vision_first(mixed) == [VISION_TAGS[0], VISION_TAGS[1], TEXT_TAGS[0], TEXT_TAGS[1]]
+
+    @pytest.mark.parametrize("gb", [8.0, 12.0, 16.0, 24.0, 47.0, 48.0, 96.0, 128.0])
+    def test_promotes_only_the_tier_s_vision_pick(self, gb):
+        # Only the tier's vision pick jumps the queue; the image-capable CPU
+        # fallback (gemma3:4b) stays behind the primary chat pick on every tier.
+        with patch.dict("sys.modules", {"nvh.utils.gpu": None}):
+            recs = _get_recommended_models(gb)
+        order = _reorder_vision_first(recs)
+        assert order[0] == lm.pick(gb, "vision").tag
+        assert order[1:] == [tag for tag in recs if tag != order[0]]
+        chat, fallback = lm.pick(gb, "chat").tag, lm.pick(gb, "cpu_fallback").tag
+        assert order.index(chat) < order.index(fallback)
 
 
 class TestWriteConfig:
@@ -617,3 +739,17 @@ class TestGuidedSetupGpuRows:
         out = self._run(monkeypatch, tmp_path, [_gpu_row("NVIDIA GB10", 131072, unified=True)], 128.0)
         assert "NVIDIA GB10 (128 GB unified)" in out
         assert "GB VRAM)" not in out
+
+    def test_unified_reserve_is_the_pools_own(self, monkeypatch, tmp_path):
+        """The Model budget row prints the reserve the ladder actually took, which scales with
+        the pool (local_models.unified_os_reserve_gb): 16 GB on a 128 GB GB10, 8 GB on a 64 GB
+        Mac -- not the flat GB10 figure for every unified pool."""
+        out = self._run(monkeypatch, tmp_path, [_gpu_row("NVIDIA GB10", 131072, unified=True)], 128.0)
+        assert re.search(r"Model budget\s+112 GB unified after the 16 GB OS reserve", out), out
+
+        mac = _gpu_row("Apple M4 Max", 65536, unified=True)
+        budget = lm.tier_budget([mac], None)
+        assert budget.os_reserve_gb == lm.unified_os_reserve_gb(64.0) == 8.0 and budget.budget_gb == 56.0
+        out = self._run(monkeypatch, tmp_path, [mac], 64.0)
+        assert re.search(r"Model budget\s+56 GB unified after the 8 GB OS reserve", out), out
+        assert f"{lm.UNIFIED_MEMORY_OS_RESERVE_GB:.0f} GB OS reserve" not in out

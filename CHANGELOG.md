@@ -101,6 +101,139 @@ under the hood, a mascot, and privileged setup with approval.
   the server's event loop, the cloud fallback for a dead local model
   honours the router's health and model gating, and tests stub the
   local probe so no test reaches the network.
+- **Setup Concierge** (`setup-concierge`, a new Setup category in the Agent
+  Library): a patient first-run guide for DGX Spark / RTX Spark owners and
+  any fresh install. It reads the `platform` block, walks storage → first
+  model → optional provider key → first test question one step at a time,
+  runs `diagnose` on trouble and never claims sudo it does not have. The
+  concierge routes onboarding intent ("how do I get started", "just got my
+  DGX Spark, what should I do first", "install nvhive") to it, with
+  first-run, no-models and Spark boosts, while "set up ssh keys / docker /
+  home assistant" stay with their own specialists; `model-librarian` keeps
+  every "which model" question.
+- **`nvh ask --focus research` no longer depends on Perplexity.** It runs
+  nvHive's own `web_search` first (SearXNG → Brave → DuckDuckGo), grounds
+  the router-chosen model on the numbered sources with inline `[n]`
+  citations and a Sources list, and falls back to the multi-advisor council
+  only when no search backend is reachable (the banner says which happened).
+  Perplexity answers only when pinned explicitly with `-p perplexity`, and a
+  grounded prompt is never auto-routed to it. `--local` and `--privacy` skip
+  web grounding entirely and say so, so nothing leaves the machine;
+  `--knowledge` folds the local RAG block and the numbered web sources under
+  one instruction; with no positional prompt the search query is the pasted
+  text's first meaningful line (or grounding is skipped); grounding fields
+  are flattened to one line with control characters stripped, only http(s)
+  URLs are shown, and the model is told the sources are untrusted data.
+  The `[local mode]`, `[privacy mode]` and `[rag …]` banners render again
+  (Rich had been swallowing them as style tags). The grounding-prompt
+  builder lives in `nvh/integrations/web_search/grounding.py` so the Wizard
+  can reuse it.
+- **Perplexity speaks the Agent API.** Its Sonar Chat Completions surface
+  retires on 2026-09-27; the `perplexity` provider now routes through
+  LiteLLM's `aresponses` (OpenAI Responses shape) via a new
+  `ProviderSpec.api_surface` field (`"chat"` default, `"responses"`), with
+  Responses results and stream events converted into the same
+  `CompletionResponse` / `StreamChunk` shapes (an `incomplete` response maps
+  to `length`) and cost taken from Perplexity's own per-request
+  `usage.cost`. Defaults move to `perplexity/preset/low` (was `sonar-pro`)
+  and `perplexity/preset/fast` (was `sonar`); `nvh config migrate` rewrites
+  the old ids and the four legacy Sonar catalogue rows are gone. Chat-style
+  text and image parts convert to Responses `input_text` / `input_image`,
+  and when a response carries no `usage.cost` the catalogue's per-token
+  rates price it instead of recording $0. The sunset warning for Perplexity
+  is gone because it no longer applies; the sunset mechanism itself stays
+  tested with a synthetic provider.
+- **One local-model tier table.** `nvh.core.local_models` holds the single
+  VRAM ladder (0–4 … 96+ GB) with a chat / code / vision / reasoning / embed
+  / CPU-fallback pick per tier plus the tier's `num_ctx`, `num_parallel` and
+  quant; `tier_budget()` reproduces the unified-memory maths (pool minus
+  the 16 GB OS reserve, no CPU-offload bonus; discrete VRAM plus a capped
+  RAM bonus) for any GPU row, `moe_first()` prefers MoE models on
+  bandwidth-bound pools, and `reason_for()` generates the explanation from
+  the row so a tag and its prose can never disagree. Every tag is verified
+  against the Ollama registry by `scripts/verify_local_model_tags.py`
+  (sizes come from the manifests): `nemotron3:33b` / `nemotron3:33b-q8`
+  lead from 40 GB, `qwen3:30b-a3b` and `qwen3-coder:30b` cover 24–40 GB,
+  `gpt-oss:20b` / `gpt-oss:120b` are the MoE reasoning picks, `qwen3-vl:8b`
+  and `llama3.2-vision` the vision picks, `gemma3` and `qwen3` the small
+  tiers. Every former ladder now reads it: `gpu.py` (`recommend_models`,
+  `get_ollama_optimizations`, the vision pick and the unified note — six
+  reasons that described a different model than they recommended are gone,
+  and budgets snap to the nominal size so a 23.99 GB card is the 24 GB
+  tier), `cli/setup.py`, `workstation.py`, `studio_packs.py` (the Studio
+  model picker is generated from the table and `_detect_vram_gb` is
+  unified-aware, ending the 128-vs-112 GB disagreement with the
+  recommender), the local-chat and Ollama preference lists, the agentic
+  tiers, the cloud-session map, `model_manager` and `gpu_emulation` size
+  tables. `install.sh` sources `nvh models tiers --shell` after the pip
+  install and picks the tier's chat model from the detected memory (GB10:
+  `MemTotal` minus the OS reserve; `[N/A]` cells no longer abort it);
+  `install.ps1` / `install-mac.sh` ask `nvh models tiers --pick chat`; the
+  HuggingFace GGUF Omni bootstrap and every phantom tag are gone.
+  `docs/MODELS.md`'s tables are generated by `scripts/gen_models_doc.py`
+  with a parity test. Recommendations carry an embedding model
+  (`nomic-embed-text`, last) and a `use_case`. The `network` pytest marker
+  (opt in with `NVH_NETWORK_TESTS=1`) runs the registry check.
+- **Ollama receives `num_ctx`.** Native chat calls send the tier's context
+  length, resolved once per provider instance and capped at the model's own
+  context from `/api/show`; `NVH_OLLAMA_NUM_CTX` overrides it (`0` sends
+  none); when no GPU is visible to the client, or the daemon is not on
+  loopback, nothing is sent and Ollama's default applies (ROADMAP 0.43).
+- **The unified-memory OS reserve scales with the pool** (an eighth of it,
+  4 GB floor, 16 GB ceiling for GB10-class pools), so a 16 GB Apple Silicon
+  Mac plans against 12 GB instead of 0 GB; the installer reads the curve and
+  the tier snap from the `nvh models tiers --shell` snippet instead of
+  typing them. Hybrid CPU-offload picks need a 12 GB+ card and keep at most
+  40 % of the model in RAM. The Wizard's desktop vision detection, the
+  Ollama vision preference, the setup wizard's vision-first ordering, the
+  API's OOM probe set and download-size estimates, the generated default
+  config, the setup catalog's profile model ids and every `ollama/*`
+  capabilities row now come from the table; fourteen Agent Library profiles
+  and the built-in `coder` no longer pin retired Ollama tags; a repo-wide
+  guard test forbids retired tags as values. Maintenance commands such as
+  `nvh models tiers`, `nvh version` and anything with `--json` no longer
+  trigger the first-run guided setup, so the installer's tier snippet is
+  always clean. The Ollama provider's automatic model pick matches installed
+  tags exactly before falling back to a family (an installed `gpt-oss:20b`
+  no longer stands in for `gpt-oss:120b`, a text-only `gemma3:1b` never
+  satisfies a vision rung) and still recognises llava-era installs as
+  vision models, ranks installed tags by their own size against this
+  machine's budget (an installed `gemma3:27b` beats `qwen3:8b` on a 24 GB
+  card and yields to it on 12 GB), never falls back to an embedding model,
+  and treats Ollama's "does not support chat" 400 as model-unavailable so
+  the retry swaps the model out; the tier's `num_ctx` is sent only to table
+  picks (custom Modelfiles keep their own context); `OLLAMA_BASE_URL` may
+  be an IPv6 literal such as `http://[::1]:11434`; `nvh nvidia`'s pull hint and the setup, workstation
+  and NemoClaw blueprint copy take their model and reserve figures from the
+  table.
+- **Model Sommelier** (`model-sommelier`, Ops): recommends which local model
+  to run for the task on this machine — reads the platform block (unified
+  pool minus the OS reserve, `MemAvailable`, bandwidth), calls
+  `refresh_models`, proposes at most two picks with quant and context
+  length, and ends with the exact `nvh models pull` command. The concierge
+  sends recommendation and fit questions to it; `vram-planner` keeps pure
+  sizing arithmetic and `model-librarian` the shelf. The setup-concierge
+  rule no longer stacks its state boosts, its veto vocabulary is derived
+  from the rig-doctor rules (any trouble phrase disables onboarding), and
+  phrases score once; recommendation questions may name a model by size or
+  family; shelf verbs veto the sizing planner; ties resolve by the rule with
+  more distinct signals before table order; fact-check patterns need a
+  claim-shaped object so "my GPU is running really hot" reaches the rig
+  doctor; sizing arithmetic that names a model family or size goes to the
+  planner and picks to the sommelier; "set up my spark" / "get my box
+  ready" reach the setup concierge; "pull qwen3" / "download the 70b" reach
+  the shelf; bare device nouns (gb10, blackwell, grace) no longer count as
+  trouble. The latency tuner's Spark and unified-memory boosts are one
+  group and install-medic vocabulary vetoes it ("vllm install failed with
+  exit code 1" is a repair, not a speed question); fine-tune vocabulary
+  vetoes the planner and the sommelier; vague trouble words ("broken", "not
+  working", "fix this") need a rig noun beside them, so "fix this sentence"
+  never reaches the troubleshooter; the shell teacher scores a phrase once
+  and the Docker daemon socket error routes to the container wrangler. A
+  70-question routing probe is now a parametrised test.
+  `TierBudget` distinguishes GPUs seen from GPUs whose memory could be
+  read, so an unreadable card is sized as no VRAM rather than as a
+  CPU-only machine.
 - **Platform facts** (`nvh/utils/platform_facts.py`): `detect_platform_facts()`
   classifies the machine — `dgx-spark`, `rtx-spark` (provisional until the
   hardware ships), `dgx`, `cloud-desktop`, `laptop`, `workstation` — and
@@ -112,6 +245,10 @@ under the hood, a mascot, and privileged setup with approval.
   shows the architecture.
 
 ### Fixed
+- **WebUI lint is clean again**: the create-agent modal declared a hook after
+  an early return and the Wizard's resume-guard ref mutation tripped the
+  React Compiler rule; CI's `webui` job now also runs the `node --test`
+  unit suites under `web/lib/`.
 - **Agent profiles now bind in Wizard chat**, on both the streaming and
   non-streaming paths. `tools_allowed` filters the tool catalogue the model
   sees and refuses any other tool (`not_allowed: true`, never executed,
