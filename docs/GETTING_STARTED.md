@@ -136,14 +136,18 @@ set it to `false` to warn instead.
 
 ## Hardware
 
-| GPU | VRAM | What runs locally |
+| GPU | Memory | Tier |
 |---|---|---|
 | none | — | cloud free tiers only (LLM7, Groq, Gemini, ...) |
-| GTX 1660 / RTX 2060 / RTX 4060 | 6–8 GB | `gemma3:4b` + `moondream` vision |
-| RTX 3060 / 4070 | 12 GB | `qwen3:8b` or `llama3.1:8b` + `minicpm-v` |
-| RTX 4070 Ti / 4080 | 16 GB | `qwen2.5-coder:7b` + `llama3.2-vision` |
-| RTX 3090 / 4090 / 5090 | 24–32 GB | `llama3.2-vision`, `nemotron-3-nano-omni` |
-| A100 / H100 / RTX 6000 Pro | 40 GB+ | `nemotron-omni`, 70B-class coders |
+| GTX 1660 / RTX 2060 / RTX 4060 | 6–8 GB | small local models plus a small vision model |
+| RTX 3060 / 4070 | 12 GB | mid-size local models |
+| RTX 4070 Ti / 4080 | 16 GB | mid-size coder plus vision |
+| RTX 3090 / 4090 / 5090 | 24–32 GB | large local models, vision |
+| A100 / H100 / RTX 6000 Pro | 40 GB+ | the largest single-GPU models |
+| DGX Spark (GB10) | 128 GB unified | MoE-first picks sized to the pool minus the OS reserve |
+
+The exact model tags per tier are generated from the local-model tier table:
+see [MODELS.md](MODELS.md) or run `nvh models tiers`.
 
 CPU-only machines work: the installer skips the local model and `nvh setup`
 configures the free cloud tiers. RAM 8 GB minimum (16 GB recommended); disk

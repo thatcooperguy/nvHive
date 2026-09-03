@@ -164,6 +164,9 @@
   of a pinned id. Step titles render through the same context everywhere
   they surface (cards, catalogue, run events). The repo-wide retired-tag
   guard now covers the catalogue.
+- `docs/GETTING_STARTED.md`: the hardware table no longer hand-types model
+  tags (it carried four retired ones); it names tiers and points at the
+  generated [MODELS.md](docs/MODELS.md) table and `nvh models tiers`.
 
 ## [0.43.0] - 2026-09-03
 
