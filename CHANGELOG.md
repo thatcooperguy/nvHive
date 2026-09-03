@@ -2,6 +2,89 @@
 
 ## [Unreleased]
 
+### Added
+- **Privileged Wizard tools (Spark concierge Phase 2a).** A third safety
+  class, `privileged`, for changes to the machine nvHive runs on. An
+  unconfirmed call returns a red-card payload with the exact command plan; a
+  confirmed call runs and is recorded under the vault's `Decisions/` with the
+  commands, exit codes, redacted output and the device label, and the result
+  is fitted to the tool-result window. `NVH_ALLOW_PRIVILEGED=0` (or
+  false/no/off) disables the tier at the single enforcement point
+  (`WizardToolRegistry.execute`) on both the card and the confirmed path;
+  the tools stay listed with `enabled: false`, and `/v1/wizard/tools`
+  reports `privileged_count` / `privileged_enabled`
+  ([proposal](docs/proposals/SPARK_CONCIERGE_2026-09.md) §3.4, #137).
+- **System settings tools** (`nvh/integrations/wizard/system_settings.py`):
+  `system_settings_get` and `system_settings_plan` (auto, read-only) plus
+  `system_settings_apply`, `apt_install`, `snap_install` and
+  `service_enable` (privileged) over a fixed catalogue — the headless
+  auto-suspend fix, the docker group, SSH, a Tailscale-only firewall, the
+  hostname, and an `apt-mark hold` of the installed NVIDIA driver packages.
+  The host runner uses `sudo -n` only where passwordless sudo was probed,
+  hands sudo-group users the exact command for a terminal, refuses
+  shutdown/reboot, disk formatting, firewall-off, driver removal, a bare
+  `apt upgrade` and `rm` outside `NVH_HOME` in code, and never prompts for,
+  sees or stores a password. `apt_install` refuses NVIDIA driver,
+  `cuda-drivers` and kernel packages with the DGX OS warning. 78 hermetic
+  tests (faked subprocess, seeded platform facts, `NVH_HOME` in tmp).
+- **Red approval card in the WebUI.** A privileged call renders a red card:
+  a PRIVILEGED badge, a "runs with sudo on this machine" note, the exact
+  commands in a `<pre>` block and an "Approve and run" button. The card
+  never auto-runs and never previews: showing the plan costs no execute
+  call, so the browser never sends an unconfirmed privileged call. When
+  sudo needs a password, nvHive hands over the exact command in a copyable
+  block instead of running it (a hand-off, not an error);
+  `NVH_ALLOW_PRIVILEGED=0` greys the card and removes its Run button; an
+  unknown safety class still renders as an ordinary confirm card. Pure
+  helpers in `web/lib/privileged.ts` with 22 node tests; the mascot's bubble
+  says the Wizard needs approval for a privileged change.
+- **`device-settings` Agent Library profile** (Ops; the library is now 105
+  profiles): a protective DGX OS / Windows settings helper that reads the
+  platform block, says whether it can elevate or only hand over the
+  command, and walks get → plan → apply with the undo shown before the red
+  card. It knows the DGX OS traps — no bare `apt upgrade`, the GDM greeter
+  suspending a headless Spark, the OOBE user's missing docker group, UFW
+  scoped to `tailscale0`, per-user Wi-Fi — and never asks for or accepts a
+  password.
+
+### Changed
+- The Wizard concierge routes settings questions to `device-settings`: the
+  docker *group* moves there from the container wrangler (the daemon and
+  its socket errors stay), while hardware faults, pip installs, model picks
+  and claims stay with their own specialists. A new `privileged_allowed`
+  state predicate honours `NVH_ALLOW_PRIVILEGED` and `in_sudo_group`, so a
+  stock DGX OS owner who needs a password is still offered the change. The
+  routing probe grows from 70 to 82 rows.
+- The Wizard's tools-block rule for `privileged` tools: explain the exact
+  command and why, the user approves a red card, show a hand-off command
+  verbatim, never ask for a password. `docs/CONFIGURATION.md` documents
+  `NVH_ALLOW_PRIVILEGED`.
+
+### Security
+- **The red-card click is verifiable server-side.** Every surfaced
+  privileged call carries an HMAC approval token (15 minutes, single use,
+  bound to the exact tool name and arguments shown on the card); the
+  confirmed execute must return it or nothing runs. The API also refuses
+  confirmed privileged calls in open mode (no `HIVE_API_KEY`) when the
+  server is bound to a non-loopback address, and from a foreign `Host` or
+  `Origin` (DNS-rebinding defence). Same-user local processes are out of
+  scope by design: they already hold the user's sudo.
+- **The card shows the server's dry-run plan, never the model's.** The
+  Wizard attaches the registry's plan to the surfaced call; a `plan`
+  argument emitted by the model (or by a prompt-injected tool result) is
+  never rendered. Sudo hand-offs and in-band refusals now render as such
+  (the handler result is unwrapped from the execute envelope), and the
+  outcome of every approved tool reaches the model on the next turn as a
+  `TOOL_RESULT` line, so the persona rule finally matches the real flow.
+- **Hardening after review:** apt package names must end alphanumeric
+  (apt treats a trailing `-` as *remove*); `systemd-suspend`,
+  `systemd-poweroff` and the other power units are refused by full name;
+  the audit note ignores a model-supplied `home_dir`; failed and partial
+  applies are recorded under `Decisions/` with their exit codes; the
+  tool-result window fit keeps the hand-off fields; `TOOL_RESULT` text is
+  redacted before it is cut, and `redact_secrets` now catches dash-separated
+  keys such as `sk-ant-…`.
+
 ## [0.43.0] - 2026-09-03
 
 The concierge release. nvHive turns toward NVIDIA's owned unified-memory

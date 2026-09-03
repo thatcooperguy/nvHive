@@ -52,6 +52,15 @@ const TOOL_OPTIONS = [
   'home_assistant_state',
   'home_assistant_services',
   'home_assistant_call',
+  // Device settings (proposal §3.4). The first two are read-only / dry-run;
+  // the rest are the privileged (sudo) tier — whitelisting one here still
+  // leaves it gated by the red approval card and by NVH_ALLOW_PRIVILEGED.
+  'system_settings_get',
+  'system_settings_plan',
+  'system_settings_apply',
+  'apt_install',
+  'snap_install',
+  'service_enable',
 ];
 
 export default function CreateAgentModal({ open, onClose, onCreated, toolNames }: Props) {

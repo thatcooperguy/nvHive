@@ -15,12 +15,60 @@ Safety classes
                    button and the caller must pass ``confirmed=True``.
                    Examples: install a pack, save a provider key, restart a
                    service.
+  - ``privileged`` — changes the *machine* nvHive runs on, usually through
+                   ``sudo`` (system settings, apt/snap installs, enabling a
+                   service). Everything ``confirm`` requires, plus: the
+                   unconfirmed answer carries the exact ``plan`` (the commands
+                   a dry run says it would execute) so the UI can render a red
+                   approval card; the ``NVH_ALLOW_PRIVILEGED`` kill switch
+                   (:func:`privileged_enabled`) is re-checked on *both* the
+                   card and the confirmed path; the card carries an
+                   ``approval_token`` the confirmed call must bring back
+                   (below); an apply that touched the host — complete,
+                   partial or failed — is written to the vault under
+                   ``Decisions/`` (:func:`record_privileged_change`); and the
+                   result is cut to the tool-result window
+                   (:func:`fit_tool_window`). No auto-approve path exists —
+                   ``chat.py`` buckets anything that is not exactly ``auto``
+                   as needing a click, and so does the WebUI.
   - ``never``    — disabled at the registry level. Not exposed. Examples:
                    uninstall user data, delete the vault, change RBAC.
 
-The registry only exposes ``auto`` + ``confirm`` tools. ``never``-class
-operations never appear in the registry at all — they're admin-only paths
-on the server side.
+The registry only exposes ``auto`` + ``confirm`` + ``privileged`` tools.
+``never``-class operations never appear in the registry at all — they're
+admin-only paths on the server side. Privileged tools stay *registered* when
+the kill switch is off (so the catalogue can explain what they would do) but
+``execute()`` refuses them, naming the variable.
+
+Sudo reality (docs/proposals/SPARK_CONCIERGE_2026-09.md §3.4, §5): nvHive
+never prompts for, sees or stores a password. Privileged handlers use
+``sudo -n`` only where :mod:`nvh.utils.platform_facts` found passwordless
+sudo; a sudo-group member without it gets the exact command to run in a
+terminal. There is no password parameter anywhere in this module or in
+:mod:`nvh.integrations.wizard.system_settings`.
+
+Approval tokens — what the red card's click proves
+==================================================
+
+``confirmed=True`` is a JSON field any client can send, and the default
+install runs the API in open mode (no ``HIVE_API_KEY``), so on its own it
+proves nothing about a human having read the card. A privileged card
+therefore carries an ``approval_token``: an HMAC-SHA256 over the exact tool
+name and canonical arguments plus the issue time, keyed with a secret drawn
+once per process (:func:`issue_approval`). The confirmed path
+(:meth:`WizardToolRegistry.execute`) *requires* a valid token for that exact
+call (:func:`verify_approval`: constant-time compare, 15-minute TTL, single
+use) and refuses with ``approval_required`` otherwise — nothing runs. The
+model never sees the token: it rides on the surfaced call to the WebUI and
+comes back with the click, so a ``TOOL_CALL`` cannot mint one, a blind CSRF
+POST cannot forge one, and a captured one cannot be replayed or re-aimed at
+different arguments.
+
+Out of scope, deliberately: another process running as the same local user.
+It already holds the user's sudo and needs nothing from nvHive. The token
+binds the click to the card that was shown; the HTTP layer's Host/Origin
+check (``nvh.api.server.wizard_tools_execute``) defeats DNS rebinding, and
+open mode over a non-loopback bind is refused outright there.
 
 Wire-up
 =======
@@ -33,7 +81,13 @@ so they can chain into other engine async paths cleanly.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hmac
+import json
 import logging
+import os
+import secrets
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -41,7 +95,117 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
-SafetyClass = str  # "auto" | "confirm" — "never" is never registered
+SafetyClass = str  # "auto" | "confirm" | "privileged" — "never" is never registered
+
+#: The safety classes ``register()`` accepts, in the order ``list_tools()`` uses.
+SAFETY_CLASSES: tuple[str, ...] = ("auto", "confirm", "privileged")
+_SAFETY_ORDER = {name: index for index, name in enumerate(SAFETY_CLASSES)}
+
+#: Kill switch for the ``privileged`` class. Unset means on; the falsy
+#: vocabulary matches ``_platform_warmup_enabled`` in nvh/api/server.py.
+PRIVILEGED_ENV = "NVH_ALLOW_PRIVILEGED"
+_FALSY = frozenset({"0", "false", "no", "off"})
+PRIVILEGED_DISABLED_ERROR = f"privileged tools are disabled ({PRIVILEGED_ENV}=0)"
+
+#: Characters a tool result may occupy in the model's ``TOOL_RESULT`` message
+#: (chat.py imports this for its cut); privileged results are fitted to it
+#: *before* they leave ``execute()`` so the cut never lands mid-JSON.
+TOOL_RESULT_CHARS = 1500
+#: Per-command output kept in the vault audit note (redacted first).
+AUDIT_OUTPUT_CHARS = 4000
+
+#: How long a red card's approval token stays valid (seconds). A card left
+#: open across lunch has to be re-issued; a leaked token dies with it.
+APPROVAL_TTL_S = 15 * 60
+#: Refusal for a confirmed privileged call that did not bring its card's token.
+APPROVAL_REQUIRED_ERROR = "privileged call needs the approval token from its card"
+#: Process-lifetime HMAC key for approval tokens. Never persisted, never
+#: exposed; a restart invalidates every outstanding card, which is the point.
+_APPROVAL_SECRET = secrets.token_bytes(32)
+#: Tokens already spent, token → expiry. Bounded so a flood cannot grow it.
+_CONSUMED_APPROVALS: dict[str, float] = {}
+_CONSUMED_MAX = 1024
+
+
+def privileged_enabled() -> bool:
+    """``NVH_ALLOW_PRIVILEGED=0`` (or false/no/off) disables every ``privileged`` tool.
+
+    Default on. Registration is unaffected — the catalogue still lists the
+    tools with ``enabled: false`` so the Wizard can explain what they would
+    do — but ``execute()`` refuses them on the card path and the confirmed
+    path alike, naming the variable.
+    """
+    return os.environ.get(PRIVILEGED_ENV, "1").strip().lower() not in _FALSY
+
+
+def _canonical_call(name: str, arguments: Mapping[str, Any] | None) -> str:
+    """``name`` + newline + the arguments as sorted, compact JSON — the bytes a token signs."""
+    return name + "\n" + json.dumps(
+        dict(arguments or {}), sort_keys=True, separators=(",", ":"), default=str,
+    )
+
+
+def _approval_mac(name: str, arguments: Mapping[str, Any] | None, issued: int, nonce: str) -> str:
+    message = f"{_canonical_call(name, arguments)}\n{issued}\n{nonce}".encode()
+    digest = hmac.new(_APPROVAL_SECRET, message, "sha256").digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def issue_approval(
+    name: str, arguments: Mapping[str, Any] | None, *, now: float | None = None,
+) -> dict[str, Any]:
+    """Mint the token a privileged card carries: ``{approval_token, approval_expires_at}``.
+
+    ``approval_token`` is ``base64url(HMAC-SHA256(secret, name \\n canonical
+    arguments \\n issued \\n nonce)) . issued . nonce`` with ``issued`` in
+    whole seconds since the epoch and a random ``nonce`` so two cards for
+    the same call in the same second are still two tokens (each spent
+    separately); ``approval_expires_at`` is ``issued + APPROVAL_TTL_S``.
+    Bound to the exact name and arguments shown on the card, so a token
+    cannot be re-aimed. ``now`` exists for tests.
+    """
+    issued = int(now if now is not None else time.time())
+    nonce = secrets.token_urlsafe(8)
+    return {
+        "approval_token": f"{_approval_mac(name, arguments, issued, nonce)}.{issued}.{nonce}",
+        "approval_expires_at": issued + APPROVAL_TTL_S,
+    }
+
+
+def _prune_consumed(current: float) -> None:
+    for token, expires in list(_CONSUMED_APPROVALS.items()):
+        if expires <= current:
+            del _CONSUMED_APPROVALS[token]
+    while len(_CONSUMED_APPROVALS) > _CONSUMED_MAX:
+        _CONSUMED_APPROVALS.pop(next(iter(_CONSUMED_APPROVALS)))
+
+
+def verify_approval(
+    name: str, arguments: Mapping[str, Any] | None, token: Any, *, now: float | None = None,
+) -> bool:
+    """Is ``token`` a live, unspent approval for exactly this call? Spends it when so.
+
+    Constant-time MAC comparison; refuses anything older than
+    :data:`APPROVAL_TTL_S`, issued in the future, malformed, minted for a
+    different name or different arguments, or already used. Never raises.
+    """
+    if not isinstance(token, str) or token.count(".") != 2:
+        return False
+    mac, issued_raw, nonce = token.split(".")
+    if not mac or not nonce or not issued_raw.isdigit():
+        return False
+    issued = int(issued_raw)
+    current = now if now is not None else time.time()
+    if issued > current + 5 or current - issued > APPROVAL_TTL_S:
+        return False
+    expected = _approval_mac(name, arguments, issued, nonce)
+    if not hmac.compare_digest(mac.encode("ascii", "replace"), expected.encode("ascii")):
+        return False
+    _prune_consumed(current)
+    if token in _CONSUMED_APPROVALS:
+        return False
+    _CONSUMED_APPROVALS[token] = issued + APPROVAL_TTL_S
+    return True
 
 
 class _MissingArgs(dict):
@@ -76,11 +240,17 @@ class WizardTool:
     Attributes:
         name: Stable identifier the LLM emits when it wants to call this tool.
         description: One-line user-facing description; shown in confirm cards.
-        safety_class: "auto" (run without asking) or "confirm" (user clicks).
+        safety_class: "auto" (run without asking), "confirm" (user clicks) or
+            "privileged" (user clicks a red card; sudo-class host change).
         parameters: JSON-schema-ish dict of {param_name: {type, description, required?}}.
         handler: Async callable that takes the param dict and returns a result dict.
         summary_template: User-facing one-liner that gets formatted with the
             executed args. The UI shows this on the confirmation card.
+        planner: Optional dry run with the handler's signature. For
+            ``privileged`` tools ``execute()`` calls it on the unconfirmed
+            path and puts its answer on the card as ``plan`` — the exact
+            commands, whether sudo is needed, what changes, how to undo —
+            without running anything.
     """
 
     name: str
@@ -89,6 +259,12 @@ class WizardTool:
     parameters: dict[str, Any]
     handler: ToolHandler
     summary_template: str = ""
+    planner: ToolHandler | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """False only for a ``privileged`` tool while the kill switch is off."""
+        return self.safety_class != "privileged" or privileged_enabled()
 
     def as_public_dict(self) -> dict[str, Any]:
         """Return the schema fields the LLM and UI can see (no handler)."""
@@ -98,6 +274,7 @@ class WizardTool:
             "safety_class": self.safety_class,
             "parameters": self.parameters,
             "summary_template": self.summary_template,
+            "enabled": self.enabled,
         }
 
 
@@ -106,8 +283,12 @@ class WizardToolRegistry:
 
     Safety enforcement lives here, not in the handlers: registering a tool
     with ``safety_class="never"`` raises immediately so the constant can't
-    drift past code review. ``execute()`` rejects ``confirm`` calls that
-    arrive without ``confirmed=True``.
+    drift past code review. ``execute()`` rejects ``confirm`` and
+    ``privileged`` calls that arrive without ``confirmed=True``, and refuses
+    ``privileged`` calls outright while :func:`privileged_enabled` is False.
+    ``execute()`` is the only enforcement point — the HTTP layer and the chat
+    loop both call it and add nothing — so the kill switch is checked here on
+    every call, not at registration.
     """
 
     def __init__(self) -> None:
@@ -119,10 +300,10 @@ class WizardToolRegistry:
                 f"Tool '{tool.name}' has safety_class=never — never-class operations "
                 "are admin-only paths, not registry tools.",
             )
-        if tool.safety_class not in ("auto", "confirm"):
+        if tool.safety_class not in SAFETY_CLASSES:
             raise ValueError(
                 f"Tool '{tool.name}' has unknown safety_class '{tool.safety_class}'. "
-                "Allowed: 'auto', 'confirm'.",
+                "Allowed: 'auto', 'confirm', 'privileged'.",
             )
         if tool.name in self._tools:
             logger.warning("Overwriting wizard tool '%s'", tool.name)
@@ -132,7 +313,25 @@ class WizardToolRegistry:
         return self._tools.get(name)
 
     def list_tools(self) -> list[WizardTool]:
-        return sorted(self._tools.values(), key=lambda t: (t.safety_class, t.name))
+        """Tools ordered auto, confirm, privileged (then by name) — an explicit key,
+        so the classes' spelling never decides the catalogue order."""
+        return sorted(
+            self._tools.values(),
+            key=lambda t: (_SAFETY_ORDER.get(t.safety_class, len(SAFETY_CLASSES)), t.name),
+        )
+
+    async def plan(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """The dry run for ``name`` — what a privileged tool *would* execute.
+
+        Runs nothing. ``None`` for an unknown tool or one without a planner;
+        a planner that raises becomes ``{ok: False, error, commands: []}``.
+        This is what the unconfirmed card carries as ``plan`` and what
+        ``chat.py`` puts on a surfaced privileged call.
+        """
+        tool = self.get(name)
+        if tool is None:
+            return None
+        return await _dry_run(tool, arguments or {})
 
     async def execute(
         self,
@@ -140,6 +339,7 @@ class WizardToolRegistry:
         *,
         arguments: dict[str, Any] | None = None,
         confirmed: bool = False,
+        approval_token: str | None = None,
     ) -> dict[str, Any]:
         """Run a tool by name. Returns ``{ok, result?, error?, needs_confirmation?}``.
 
@@ -147,27 +347,271 @@ class WizardToolRegistry:
         - ``confirm`` tools require ``confirmed=True``; otherwise return a
           structured "I need a confirmation" response so the UI can render
           the button card.
+        - ``privileged`` tools: refused (``disabled=True``) whenever the kill
+          switch is off, confirmed or not. Unconfirmed, the confirmation shape
+          above plus ``privileged=True``, ``plan`` (the tool's dry run, or
+          ``None`` when it has no planner) and the card's ``approval_token``
+          / ``approval_expires_at`` (:func:`issue_approval`). Confirmed, the
+          call must bring a token valid for exactly this name and these
+          arguments (:func:`verify_approval`) or it is refused with
+          ``approval_required=True`` and nothing runs; then the handler runs,
+          an apply that changed the host (complete, partial or failed) is
+          recorded in the vault (``audit``) and the result is fitted to the
+          tool-result window.
         - Unknown tools return ``ok=False`` with an error.
+
+        Handlers never raise out of here: an exception becomes ``ok=False``.
         """
         tool = self.get(name)
         if tool is None:
             return {"ok": False, "error": f"Unknown tool: {name}"}
 
-        if tool.safety_class == "confirm" and not confirmed:
+        privileged = tool.safety_class == "privileged"
+        if privileged and not privileged_enabled():
             return {
+                "ok": False,
+                "error": PRIVILEGED_DISABLED_ERROR,
+                "disabled": True,
+                "tool": name,
+                "safety_class": tool.safety_class,
+            }
+
+        if tool.safety_class != "auto" and not confirmed:
+            card: dict[str, Any] = {
                 "ok": False,
                 "needs_confirmation": True,
                 "tool": tool.as_public_dict(),
                 "arguments": arguments or {},
                 "summary": format_summary(tool.summary_template, arguments) or tool.description,
             }
+            if privileged:
+                card["privileged"] = True
+                card["plan"] = await self.plan(name, arguments or {})
+                card.update(issue_approval(name, arguments or {}))
+            return card
+
+        if privileged and not verify_approval(name, arguments or {}, approval_token):
+            return {
+                "ok": False,
+                "error": APPROVAL_REQUIRED_ERROR,
+                "approval_required": True,
+                "tool": name,
+                "safety_class": tool.safety_class,
+            }
 
         try:
             result = await tool.handler(arguments or {})
-            return {"ok": True, "result": result, "tool": name, "safety_class": tool.safety_class}
         except Exception as exc:
             logger.warning("Wizard tool '%s' raised: %s", name, exc)
             return {"ok": False, "error": str(exc)[:300], "tool": name}
+
+        envelope: dict[str, Any] = {"ok": True, "result": result, "tool": name, "safety_class": tool.safety_class}
+        if privileged:
+            if _privileged_applied(result):
+                envelope["audit"] = record_privileged_change(tool, arguments or {}, result)
+            if isinstance(result, dict):
+                envelope["result"] = fit_tool_window(result)
+        return envelope
+
+
+async def _dry_run(tool: WizardTool, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    """The plan a privileged tool would execute; ``None`` without a planner, never raises."""
+    if tool.planner is None:
+        return None
+    try:
+        plan = await tool.planner(arguments)
+    except Exception as exc:
+        logger.warning("Wizard tool '%s' planner raised: %s", tool.name, exc)
+        return {"ok": False, "error": f"dry run failed: {str(exc)[:200]}", "commands": []}
+    return plan if isinstance(plan, dict) else {"ok": True, "commands": [], "detail": str(plan)[:300]}
+
+
+def _privileged_applied(result: Any) -> bool:
+    """Did a privileged handler actually change the host?
+
+    ``applied: True`` is authoritative whatever ``ok`` says — a plan that
+    failed at step 3 changed the host in steps 1–2, and a single command
+    that exited non-zero may have changed it before failing (``systemctl
+    enable --now`` with a bad ExecStart enables the unit, ``apt-get`` exiting
+    100 after unpacking); both get a vault note. Otherwise refusals
+    (``ok: False``), terminal hand-offs (``needs_terminal``) and non-dict
+    answers are not applies and get none.
+    """
+    if not isinstance(result, dict):
+        return False
+    if result.get("applied") is True:
+        return True
+    return result.get("ok", True) is not False and not result.get("needs_terminal")
+
+
+def _dumps(value: Any) -> str:
+    try:
+        return json.dumps(value, default=str)
+    except Exception:
+        return str(value)
+
+
+def _shrink_text(value: Any, budget: int) -> Any:
+    if not isinstance(value, str) or len(value) <= budget:
+        return value
+    return value[:budget] + "…"
+
+
+def _shrink_list(value: Any, keep: int) -> Any:
+    if not isinstance(value, list) or len(value) <= keep:
+        return value
+    return value[:keep] + [f"… {len(value) - keep} more"]
+
+
+#: Free text that is shrunk first, top level and inside ``steps``.
+_WINDOW_TEXT_KEYS = ("stdout", "stderr", "output", "changes")
+#: Lists that are shortened before anything is dropped.
+_WINDOW_LIST_KEYS = ("undo", "notes", "commands")
+#: What the last resort keeps: the verdict and every field the hand-off and
+#: refusal contracts depend on. ``command`` is never cut — a truncated command
+#: pasted into a terminal is worse than a long tool window.
+_WINDOW_KEEP_KEYS = (
+    "ok", "error", "summary", "setting", "needs_terminal", "command", "commands", "hint",
+    "denied", "disabled", "applied", "partial", "truncated", "note",
+)
+
+
+def fit_tool_window(result: dict[str, Any], limit: int = TOOL_RESULT_CHARS) -> dict[str, Any]:
+    """Cut a tool result so its JSON fits the model's tool-result window.
+
+    Shrinks the free-text fields first (top-level ``stdout`` / ``stderr`` /
+    ``output`` / ``changes`` and the same keys inside ``steps``) and shortens
+    the list fields (``undo``, ``notes``, ``commands``) in ever smaller
+    budgets, marking the result ``truncated`` with a note pointing at the
+    vault note. The last resort keeps the verdict plus the hand-off and
+    refusal fields (``needs_terminal``, ``command``, ``hint``, ``denied``,
+    ``applied``, ``partial``, …) and drops the rest, listing them in
+    ``dropped_keys``; if even that is over the limit, ``commands`` (a copy of
+    ``command`` for a one-step plan) goes too, but ``command`` itself is
+    never shortened. Returns the input untouched when it already fits.
+    Never raises.
+    """
+    if len(_dumps(result)) <= limit:
+        return result
+    out: dict[str, Any] = dict(result)
+    out["truncated"] = True
+    out["note"] = f"output cut to fit the {limit}-char tool window; the vault Decisions note keeps more"
+    for budget, keep_items in ((600, 12), (300, 6), (120, 3), (40, 1), (0, 1)):
+        for key in _WINDOW_TEXT_KEYS:
+            if key in out:
+                out[key] = _shrink_text(out[key], budget)
+        steps = out.get("steps")
+        if isinstance(steps, list):
+            out["steps"] = [
+                {k: (_shrink_text(v, budget) if k in _WINDOW_TEXT_KEYS else v) for k, v in step.items()}
+                if isinstance(step, dict) else step
+                for step in steps
+            ]
+        for key in _WINDOW_LIST_KEYS:
+            if key in out:
+                out[key] = _shrink_list(out[key], keep_items)
+        if len(_dumps(out)) <= limit:
+            return out
+    # Still too big (a handler stuffed something else in): keep the verdict
+    # and the fields the hand-off / refusal contracts need.
+    keep = {k: out[k] for k in _WINDOW_KEEP_KEYS if k in out}
+    keep["dropped_keys"] = sorted(k for k in out if k not in keep)
+    if len(_dumps(keep)) > limit and "commands" in keep:
+        del keep["commands"]
+        keep["dropped_keys"] = sorted([*keep["dropped_keys"], "commands"])
+    return keep
+
+
+def _audit_body(tool: WizardTool, arguments: dict[str, Any], result: dict[str, Any]) -> str:
+    """Markdown body of the vault note for one privileged apply."""
+    from nvh.core.agent_guardrails import redact_secrets
+
+    try:
+        from nvh.utils.platform_facts import detect_platform_facts
+
+        device = detect_platform_facts().device_label or "unknown device"
+    except Exception:
+        device = "unknown device"
+
+    lines = [
+        f"Tool: `{tool.name}`",
+        f"Device: {device}",
+        f"Arguments: `{redact_secrets(_dumps(arguments))[:500]}`",
+        f"Outcome: {_audit_outcome(result)}",
+    ]
+    summary = result.get("summary")
+    if isinstance(summary, str) and summary.strip():
+        lines.append(f"Summary: {redact_secrets(summary.strip())[:500]}")
+    steps = result.get("steps")
+    if isinstance(steps, list) and steps:
+        lines += ["", "## Commands", ""]
+        for index, step in enumerate(steps, 1):
+            if not isinstance(step, dict):
+                lines.append(f"{index}. `{redact_secrets(str(step))[:500]}`")
+                continue
+            command = redact_secrets(str(step.get("command", "")))[:500]
+            exit_code = step.get("exit_code", "n/a")
+            lines.append(f"{index}. `{command}` — exit {exit_code}")
+            for stream in ("stdout", "stderr"):
+                text = step.get(stream)
+                if isinstance(text, str) and text.strip():
+                    body = redact_secrets(text.strip())
+                    if len(body) > AUDIT_OUTPUT_CHARS:
+                        body = body[:AUDIT_OUTPUT_CHARS] + f"\n[cut at {AUDIT_OUTPUT_CHARS} chars]"
+                    lines += ["", f"{stream}:", "", "```text", body, "```"]
+        lines.append("")
+    else:
+        lines += ["", "## Result", "", "```json", redact_secrets(_dumps(result))[:AUDIT_OUTPUT_CHARS], "```"]
+    return "\n".join(lines)
+
+
+def _audit_verdict(result: dict[str, Any]) -> str:
+    """``""`` for a clean apply, ``" (partial)"`` or ``" (failed)"`` otherwise — the title suffix."""
+    if result.get("ok") is False:
+        return " (partial)" if result.get("partial") else " (failed)"
+    return ""
+
+
+def _audit_outcome(result: dict[str, Any]) -> str:
+    verdict = _audit_verdict(result).strip(" ()") or "applied"
+    error = result.get("error")
+    if verdict != "applied" and isinstance(error, str) and error.strip():
+        from nvh.core.agent_guardrails import redact_secrets
+
+        return f"{verdict} — {redact_secrets(error.strip())[:300]}"
+    return verdict
+
+
+def record_privileged_change(
+    tool: WizardTool, arguments: dict[str, Any], result: dict[str, Any],
+) -> dict[str, Any]:
+    """Write the audit note for a privileged apply that touched the host. Never raises.
+
+    ``Decisions/`` in the vault (``append_vault_memory``), titled
+    ``Privileged change: <summary>`` — ``Privileged change (partial): …`` when
+    later steps never ran, ``Privileged change (failed): …`` when the command
+    that ran exited non-zero — body with the outcome, the commands, exit
+    codes, truncated redacted output and the platform's device label; tags
+    ``privileged`` and the tool name. The vault is the one under ``NVH_HOME``
+    (``append_vault_memory``'s default): nothing in ``arguments`` — the model
+    wrote those — can point the note anywhere else. Returns the writer's
+    status (``saved``/``path``) or ``{saved: False, error}``.
+    """
+    try:
+        from nvh.integrations.workspace.vault import append_vault_memory
+
+        summary = result.get("summary") if isinstance(result.get("summary"), str) else ""
+        summary = (summary or format_summary(tool.summary_template, arguments) or tool.name).strip()
+        note = append_vault_memory(
+            f"Privileged change{_audit_verdict(result)}: {summary[:80]}",
+            _audit_body(tool, arguments, result),
+            category="Decisions",
+            tags=["privileged", tool.name],
+        )
+        return {"saved": bool(note.get("saved")), "path": note.get("path"), "category": note.get("category")}
+    except Exception as exc:
+        logger.warning("privileged audit note for '%s' not written: %s", tool.name, exc)
+        return {"saved": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -592,6 +1036,17 @@ def default_registry() -> WizardToolRegistry:
     from nvh.integrations.home_assistant import register_wizard_tools as _register_home_assistant
 
     _register_home_assistant(reg)
+
+    # System settings (2026-09-03, the Spark concierge's privileged tier):
+    # two read-only auto tools (facts, dry-run plan) and four ``privileged``
+    # ones (apply, apt/snap install, enable a service). Registered even with
+    # NVH_ALLOW_PRIVILEGED=0 — execute() refuses them, the catalogue can
+    # still explain them.
+    from nvh.integrations.wizard.system_settings import (
+        register_wizard_tools as _register_system_settings,
+    )
+
+    _register_system_settings(reg)
 
     # Pull in any third-party / workspace-local tools after the stock set so
     # plugins can override (with a logged warning) or extend without forking.

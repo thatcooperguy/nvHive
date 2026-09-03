@@ -14,6 +14,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -1753,6 +1754,19 @@ async def wizard_reconnect(
     return _response_envelope(run_reconnect(home_dir=request.home_dir))
 
 
+class WizardChatToolOutcome(BaseModel):
+    """What the user did with one tool card of a prior assistant turn.
+
+    Confirm / privileged cards run from the WebUI after the turn ended, so the
+    model never saw the result; the next turn carries it here and ``chat.py``
+    renders it as a ``TOOL_RESULT`` block (redacted, cut to 300 chars).
+    """
+
+    name: str = Field(..., min_length=1, max_length=64)
+    ok: bool = False
+    summary: str = Field(default="", max_length=300)
+
+
 class WizardChatTurn(BaseModel):
     role: str = Field(..., min_length=1, max_length=16)
     content: str = Field(..., max_length=20_000)
@@ -1761,6 +1775,9 @@ class WizardChatTurn(BaseModel):
     # continuity tier can keep a thread on the profile it started with. Absent
     # on user turns and on turns from before profiles existed.
     used_profile: str | None = Field(default=None, max_length=64)
+    # Assistant turns only: outcomes of that turn's tool cards (ran, refused,
+    # handed to a terminal, skipped). At most eight reach the prompt.
+    tool_results: list[WizardChatToolOutcome] | None = Field(default=None, max_length=16)
 
 
 class WizardChatRequest(BaseModel):
@@ -1786,7 +1803,12 @@ def _wizard_history(turns: list[WizardChatTurn]) -> list[dict[str, Any]]:
     concierge's continuity tier depends on for reading the prior profile.
     """
     return [
-        {"role": t.role, "content": t.content, **({"used_profile": t.used_profile} if t.used_profile else {})}
+        {
+            "role": t.role,
+            "content": t.content,
+            **({"used_profile": t.used_profile} if t.used_profile else {}),
+            **({"tool_results": [o.model_dump() for o in t.tool_results]} if t.tool_results else {}),
+        }
         for t in turns
     ]
 
@@ -2180,14 +2202,22 @@ async def wizard_tools_list(_auth: None = Depends(require_auth)) -> dict[str, An
     """Return the publicly-exposed Wizard tool catalog.
 
     Each entry includes its safety_class so the UI knows whether to surface
-    a confirmation card before calling /v1/wizard/tools/execute.
+    a confirmation card before calling /v1/wizard/tools/execute — a plain
+    card for ``confirm``, a red one for ``privileged``. ``privileged_enabled``
+    mirrors the ``NVH_ALLOW_PRIVILEGED`` kill switch (each privileged entry
+    also carries ``enabled``); the tools stay listed when it is off so the
+    catalogue can explain them, and execute refuses them.
     """
+    from nvh.integrations.wizard.tools import privileged_enabled
+
     registry = _get_wizard_tools()
     tools = [tool.as_public_dict() for tool in registry.list_tools()]
     return _response_envelope({
         "tools": tools,
         "auto_count": sum(1 for t in tools if t["safety_class"] == "auto"),
         "confirm_count": sum(1 for t in tools if t["safety_class"] == "confirm"),
+        "privileged_count": sum(1 for t in tools if t["safety_class"] == "privileged"),
+        "privileged_enabled": privileged_enabled(),
     })
 
 
@@ -2195,11 +2225,107 @@ class WizardToolExecuteRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
     arguments: dict[str, Any] = Field(default_factory=dict)
     confirmed: bool = False
+    # The token the privileged card carried (``approval_token`` on the
+    # unconfirmed answer / the surfaced call). Required with ``confirmed`` for
+    # a privileged tool; the registry verifies it against this exact call.
+    approval_token: str | None = Field(default=None, max_length=256)
+
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _bare_host(value: str) -> str:
+    """A ``Host`` header or bind host without port or IPv6 brackets, lower-cased."""
+    host = value.strip().lower()
+    if host.startswith("["):
+        host = host[1:host.index("]")] if "]" in host else host[1:]
+    elif host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    return host
+
+
+def _allowed_origin_hosts() -> frozenset[str]:
+    """Hostnames of ``ALLOWED_ORIGINS`` (the WebUI origins CORS trusts)."""
+    hosts = {parsed.hostname.lower() for parsed in map(urlparse, ALLOWED_ORIGINS) if parsed.hostname}
+    return frozenset(hosts)
+
+
+def _api_bind_host() -> str | None:
+    """The host ``run_server`` bound to; ``None`` when unknown (tests, embedding)."""
+    return getattr(app.state, "bind_host", None) or os.environ.get("NVH_API_BIND_HOST") or None
+
+
+def _origin_allowed(origin: str) -> bool:
+    if origin in ALLOWED_ORIGINS:
+        return True
+    try:
+        return re.match(LOCAL_WEBUI_ORIGIN_REGEX, origin) is not None
+    except re.error:
+        return False
+
+
+async def _auth_open_mode() -> bool:
+    """True when ``require_auth`` would let an unauthenticated request through."""
+    if _get_council_api_key():
+        return False
+    try:
+        from nvh.auth.auth import get_user_count
+
+        return await get_user_count() == 0
+    except Exception:
+        return True
+
+
+async def _privileged_network_refusal(http_request: Request) -> dict[str, Any] | None:
+    """Why a *confirmed* privileged call must not run from where it came, or ``None``.
+
+    The approval token proves the click matched the card; this proves the
+    click came from the owner's own browser on this machine:
+
+    - open mode (no ``HIVE_API_KEY``, no users) on a non-loopback bind means
+      anything on the network could click for the owner — refused, naming
+      the fix;
+    - a ``Host`` header that is neither loopback nor a host CORS already
+      trusts (``ALLOWED_ORIGINS`` / ``HIVE_CORS_ORIGINS``) is a DNS-rebound
+      page talking to 127.0.0.1 under its own name — refused;
+    - an ``Origin`` header outside the CORS allow-list is a cross-site page —
+      refused (CORS would hide the answer, not stop the request).
+    """
+    bind_host = _api_bind_host()
+    if bind_host and _bare_host(bind_host) not in _LOOPBACK_HOSTS and await _auth_open_mode():
+        return {
+            "ok": False,
+            "refused": True,
+            "error": (
+                f"privileged tools are refused: the API is bound to {bind_host} in open mode "
+                "(no HIVE_API_KEY), so anything on the network could approve for you. Set "
+                "HIVE_API_KEY, or bind to 127.0.0.1."
+            ),
+        }
+    host = http_request.headers.get("host")
+    if host and _bare_host(host) not in _LOOPBACK_HOSTS and _bare_host(host) not in _allowed_origin_hosts():
+        return {
+            "ok": False,
+            "refused": True,
+            "error": (
+                f"privileged tools are refused for Host {host!r}: approve from localhost, "
+                "127.0.0.1 or [::1], or add the host to HIVE_CORS_ORIGINS (DNS-rebinding guard)"
+            ),
+        }
+    origin = http_request.headers.get("origin")
+    if origin and not _origin_allowed(origin):
+        return {
+            "ok": False,
+            "refused": True,
+            "error": f"privileged tools are refused for Origin {origin!r}: not in the CORS allow-list",
+        }
+    return None
 
 
 @app.post("/v1/wizard/tools/execute", summary="Execute an AI Wizard tool with safety enforcement")
 async def wizard_tools_execute(
     request: WizardToolExecuteRequest,
+    http_request: Request,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
     """Run a Wizard tool. Safety enforcement happens server-side.
@@ -2207,13 +2333,29 @@ async def wizard_tools_execute(
     Returns ``{ok, result?, error?, needs_confirmation?, tool?, ...}``. When
     ``needs_confirmation`` is true the UI should render a confirmation card
     with the included ``summary`` and re-call this endpoint with
-    ``confirmed=true``.
+    ``confirmed=true``. A ``privileged`` tool's card additionally carries
+    ``privileged: true``, ``plan`` (the exact commands) and an
+    ``approval_token`` the confirmed call must send back (the registry
+    refuses with ``approval_required`` otherwise); with
+    ``NVH_ALLOW_PRIVILEGED=0`` the registry answers ``{ok: false,
+    disabled: true}`` on both paths. Refusals are 200s with ``ok: false``.
+
+    The registry enforces everything about the *call*; this layer adds the
+    one thing only HTTP can see — where a confirmed privileged call came from
+    (:func:`_privileged_network_refusal`) — and otherwise returns the
+    registry's result unchanged.
     """
     registry = _get_wizard_tools()
+    tool = registry.get(request.name)
+    if tool is not None and tool.safety_class == "privileged" and request.confirmed:
+        refusal = await _privileged_network_refusal(http_request)
+        if refusal is not None:
+            return _response_envelope({**refusal, "tool": request.name, "safety_class": tool.safety_class})
     result = await registry.execute(
         request.name,
         arguments=request.arguments,
         confirmed=request.confirmed,
+        approval_token=request.approval_token,
     )
     return _response_envelope(result)
 
@@ -5011,6 +5153,11 @@ def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) ->
 
     os.environ["NVH_API_PORT"] = str(port)
     os.environ["NVH_API_SERVER_PROCESS"] = "1"
+    # Where we listen decides whether a confirmed privileged Wizard call may
+    # run in open mode (``_privileged_network_refusal``). The env copy survives
+    # uvicorn's reload subprocess, where ``app.state`` does not.
+    app.state.bind_host = host
+    os.environ["NVH_API_BIND_HOST"] = host
 
     uvicorn.run(
         "nvh.api.server:app",

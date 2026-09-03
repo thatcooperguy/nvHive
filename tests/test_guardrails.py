@@ -128,6 +128,21 @@ class TestSecretsRedaction:
         assert "sk-abc" not in result
         assert "[REDACTED" in result
 
+    def test_redacts_dash_separated_key_prefixes(self):
+        """sk-ant-…, sk-proj-…, sk-or-v1-…: the plain ``sk-`` pattern stops at
+        the second dash and would leave the key body in the clear."""
+        for key in (
+            "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdEf",
+            "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+            "sk-or-v1-abcdef0123456789abcdef0123456789abcdef",
+        ):
+            result = redact_secrets(f"ANTHROPIC_API_KEY={key} rejected")
+            assert key not in result, key
+            assert key[12:40] not in result, key  # no partial body survives either
+            assert "[REDACTED:" in result
+        # A short dashed token is not a key.
+        assert redact_secrets("sk-ant-short") == "sk-ant-short"
+
     def test_redacts_github_pat(self):
         text = "token: ghp_abcdefghijklmnopqrstuvwxyz1234567890"
         result = redact_secrets(text)

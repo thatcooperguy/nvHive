@@ -30,14 +30,21 @@ VALID_TOOLS = {
     "web_search",
     "home_assistant_status", "home_assistant_entities", "home_assistant_state",
     "home_assistant_services", "home_assistant_call",
+    # The privileged tier (proposal §3.4). ``system_settings_get`` / ``_plan``
+    # are auto (read-only facts and a dry run); ``_apply``, ``apt_install``,
+    # ``snap_install`` and ``service_enable`` render a red approval card.
+    "system_settings_get", "system_settings_plan", "system_settings_apply",
+    "apt_install", "snap_install", "service_enable",
 }
 # 100 original profiles (2026-08-05) + the two Smart Home profiles + the
-# Setup Concierge + the Model Sommelier (all 2026-09-02).
-LIBRARY_SIZE = 104
+# Setup Concierge + the Model Sommelier (all 2026-09-02) + Device Settings
+# (2026-09-03).
+LIBRARY_SIZE = 105
 # Distinct categories; Setup is the newest and, for now, has one member.
-# The sommelier joined Ops (now nine members) and added no category.
+# The sommelier and the settings desk joined Ops (now ten members) and added
+# no category.
 CATEGORY_COUNT = 40
-OPS_COUNT = 9
+OPS_COUNT = 10
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # The first-run guide (proposal §3.2). The concierge routes onboarding
 # questions here; it must bind exactly the tools its four steps use.
@@ -48,12 +55,21 @@ SETUP_CONCIERGE_TOOLS = [
 # The model sommelier (2026-09-02): reads the platform block, checks the
 # shelf, recommends, and hands over the pull command without running it.
 MODEL_SOMMELIER_TOOLS = ["refresh_models", "diagnose", "web_search", "rag_ask_vault"]
+# The device settings desk (2026-09-03, proposal §3.4): the privileged tier's
+# read / plan / apply triple, the three package-and-service actions, and
+# diagnose. Order is the contract — the read comes first because the prompt
+# must call it first.
+DEVICE_SETTINGS_TOOLS = [
+    "system_settings_get", "system_settings_plan", "system_settings_apply",
+    "apt_install", "snap_install", "service_enable", "diagnose",
+]
 # Ops specialists the concierge routes trouble reports to: each must be able
 # to run `diagnose`, the tool whose description says to run it when the user
 # reports trouble.
 OPS_TROUBLESHOOTERS = {
     "install-medic", "gpu-triage", "provider-keysmith",
     "latency-tuner", "model-sommelier", "model-librarian", "vram-planner",
+    "device-settings",
 }
 # Profiles whose prompt reasons about the machine's memory: they must take
 # the figure from the platform block, never hard-code one (the Spark ships
@@ -146,6 +162,69 @@ def test_model_sommelier_profile_contract() -> None:
     assert categories["Ops"] == OPS_COUNT
     assert len(categories) == CATEGORY_COUNT
     assert by_name["model-librarian"]["category"] == "Ops"
+
+
+def test_device_settings_profile_contract() -> None:
+    """The privileged tier's specialist (proposal §3.4 and §5 "Sudo reality").
+
+    Its prompt is the safety contract the model is held to: read the state
+    before planning, plan before applying, never ask for a password, and know
+    the DGX OS traps that a generic Linux answer would walk into.
+    """
+    profiles = _catalog()["profiles"]
+    by_name = {x["name"]: x for x in profiles}
+    p = by_name["device-settings"]
+    assert p["title"] == "Device Settings"
+    assert p["category"] == "Ops"
+    assert "\n" not in p["description"] and len(p["description"]) < 260
+    assert p["tools_allowed"] == DEVICE_SETTINGS_TOOLS
+    assert p["provider"] == "" and p["model"] == "", "leave routing to the router"
+    assert p["temperature"] == 0.2
+    # ``strict-tools`` keeps the whitelist exactly these seven when the
+    # concierge routes the turn: without it chat.py unions the core auto
+    # tools onto a concierge-chosen profile (refresh_models, rag_ask_vault).
+    assert p["tags"] == ["ops", "spark", "privileged", "strict-tools"]
+    prompt = p["system_prompt"]
+    for phrase in (
+        # (a) reads the platform block and is honest about what it can do.
+        "platform block", "can_sudo", "in_sudo_group", "their own terminal",
+        # (b) get, then plan, then apply behind the red card.
+        "system_settings_get first", "system_settings_plan", "system_settings_apply",
+        "undo", "red card",
+        # (c) the DGX OS traps.
+        "apt upgrade", "stranded the GPU driver", "validated update channel",
+        "hold_nvidia_driver_packages", "GDM greeter", "headless",
+        "disable_headless_suspend", "OOBE user", "docker group",
+        "usermod -aG docker $USER", "tailscale0", "lock the user out",
+        "Wi-Fi profiles are per user",
+        # (d) never a password. (e) short, one change at a time.
+        "Never ask for, accept, or repeat back a password", "no password parameter",
+        "one change at a time", "single next action", "diagnose",
+    ):
+        assert phrase in prompt, phrase
+    # It must not promise to run something it cannot: no bare "I will run
+    # sudo" and no invented password prompt.
+    assert "your password" not in prompt.lower()
+    # Ops gained a member and no category was added.
+    categories = Counter(x["category"] for x in profiles)
+    assert categories["Ops"] == OPS_COUNT
+    assert len(categories) == CATEGORY_COUNT
+
+
+def test_privileged_tools_are_bound_only_by_the_settings_desk() -> None:
+    """The privileged tier is one profile's, so a stray library edit cannot
+    hand ``system_settings_apply`` to a general-purpose persona. A profile
+    with no whitelist (``null``) is filtered by the registry instead."""
+    privileged = {
+        "system_settings_get", "system_settings_plan", "system_settings_apply",
+        "apt_install", "snap_install", "service_enable",
+    }
+    for p in _catalog()["profiles"]:
+        tools = p.get("tools_allowed")
+        if tools is None:
+            continue
+        overlap = privileged & set(tools)
+        assert not overlap or p["name"] == "device-settings", (p["name"], sorted(overlap))
 
 
 def test_platform_aware_prompts_quote_no_memory_figure() -> None:

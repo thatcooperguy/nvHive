@@ -1,3 +1,7 @@
+// The one runtime import from the pure card-helper module: the cut applied to
+// history tool outcomes. privileged.ts itself imports only types from here, so
+// there is no runtime cycle and it still runs under plain `node --test`.
+import { WIZARD_TOOL_OUTCOME_CHARS } from './privileged';
 import type {
   ApiEnvelope,
   QueryRequest,
@@ -1252,6 +1256,19 @@ export async function wizardDiagnostics(homeDir?: string): Promise<WizardDiagnos
 
 // ─── AI Wizard chat ──────────────────────────────────────────────────────────
 
+/**
+ * What the user did with one tool card of a prior assistant turn. Confirm and
+ * privileged cards run from this UI after the turn ended, so the model never
+ * saw the outcome; the next turn's history carries it and the server renders
+ * it as a `TOOL_RESULT` line. A `needs a terminal: <command>` summary is how
+ * the model learns which exact command to repeat.
+ */
+export interface WizardChatToolOutcome {
+  name: string;
+  ok: boolean;
+  summary: string;
+}
+
 export interface WizardChatTurn {
   role: 'user' | 'assistant';
   content: string;
@@ -1260,11 +1277,29 @@ export interface WizardChatTurn {
    * can stay with a specialist on a weak follow-up ("and then?") without the
    * user pinning anything. Omit when unknown (rows persisted before attribution). */
   used_profile?: string | null;
+  /** Assistant turns only: outcomes of that turn's tool cards (ran, refused,
+   * handed to a terminal, skipped). Omitted when none has settled. */
+  tool_results?: WizardChatToolOutcome[];
 }
 
+/**
+ * One confirm-bucket call the server surfaced for a card. A `privileged` call
+ * arrives with its red card's payload: the server's dry-run `plan` (the exact
+ * commands — never read from the model's `arguments`), and the
+ * `approval_token` the confirmed execute must send back, which binds the
+ * click to exactly this name and these arguments for fifteen minutes, once.
+ * `disabled` (with `error`) means the kill switch is off for this workspace.
+ */
 export interface WizardChatToolCall {
   name: string;
   arguments: Record<string, unknown>;
+  privileged?: boolean;
+  plan?: WizardToolPlan | null;
+  approval_token?: string;
+  /** Unix seconds after which the token is refused and the card must be re-issued. */
+  approval_expires_at?: number;
+  disabled?: boolean;
+  error?: string;
 }
 
 /**
@@ -1357,6 +1392,16 @@ export function normalizeWizardHistory(history: WizardChatTurn[] | undefined): W
     const base: WizardChatTurn = { role: turn.role, content: turn.content };
     if (turn.role === 'assistant' && turn.used_profile !== undefined) {
       base.used_profile = turn.used_profile;
+    }
+    if (turn.role === 'assistant' && Array.isArray(turn.tool_results)) {
+      const outcomes = turn.tool_results
+        .filter(o => o && typeof o.name === 'string' && o.name.trim() !== '')
+        .map(o => ({
+          name: o.name.trim().slice(0, 64),
+          ok: o.ok === true,
+          summary: (typeof o.summary === 'string' ? o.summary : '').slice(0, WIZARD_TOOL_OUTCOME_CHARS),
+        }));
+      if (outcomes.length > 0) base.tool_results = outcomes;
     }
     return base;
   });
@@ -1713,7 +1758,21 @@ export async function getWizardContext(homeDir?: string): Promise<Record<string,
 
 // ─── AI Wizard tool registry ─────────────────────────────────────────────────
 
-export type WizardToolSafetyClass = 'auto' | 'confirm';
+/**
+ * How much human involvement a tool needs.
+ *
+ * - `auto` — the server runs it inside the chat loop without asking.
+ * - `confirm` — the user clicks Run on a card.
+ * - `privileged` — the sudo tier (proposal §3.4): changes the machine, gets a
+ *   red approval card, can never be auto-approved, and is switched off
+ *   entirely by `NVH_ALLOW_PRIVILEGED=0`.
+ *
+ * The union is open on purpose in the UI's handling, not in its type: any
+ * value that is not exactly `auto` is treated as needing a click (the server
+ * buckets it the same way), so a class this build has never heard of degrades
+ * to an ordinary confirm card rather than to red chrome or to an auto-run.
+ */
+export type WizardToolSafetyClass = 'auto' | 'confirm' | 'privileged';
 
 export interface WizardToolSchema {
   name: string;
@@ -1721,12 +1780,43 @@ export interface WizardToolSchema {
   safety_class: WizardToolSafetyClass;
   parameters: Record<string, unknown>;
   summary_template: string;
+  /** False when the tool is registered but switched off (privileged tools
+   * under `NVH_ALLOW_PRIVILEGED=0`). Absent on builds that never disable a
+   * registered tool — treat that as enabled. */
+  enabled?: boolean;
 }
 
 export interface WizardToolListResult {
   tools: WizardToolSchema[];
   auto_count: number;
   confirm_count: number;
+  /** How many privileged (sudo) tools the registry holds. Absent on builds
+   * that predate the tier. */
+  privileged_count?: number;
+  /** Whether privileged tools may run at all (`NVH_ALLOW_PRIVILEGED`).
+   * Advisory only: the registry is a per-process singleton, so a switch read
+   * at registration time is restart-scoped. A refusal from execute
+   * (`disabled`) is always authoritative. */
+  privileged_enabled?: boolean;
+}
+
+/**
+ * A privileged tool's dry run (`Plan.to_dict()` on the server): the exact
+ * commands, in order, plus what changes and how to undo it. `ok: false` with
+ * `error` is a plan the deny list or validation refused (`commands` is then
+ * empty). Displayed verbatim, never re-derived client-side.
+ */
+export interface WizardToolPlan {
+  ok: boolean;
+  setting?: string;
+  title?: string;
+  commands: string[];
+  sudo?: boolean;
+  changes?: string;
+  undo?: string[];
+  notes?: string[];
+  warning?: string;
+  error?: string;
 }
 
 export interface WizardToolExecuteResult {
@@ -1738,6 +1828,37 @@ export interface WizardToolExecuteResult {
   arguments?: Record<string, unknown>;
   summary?: string;
   safety_class?: WizardToolSafetyClass;
+  /** This ran (or would run) with sudo — the UI draws the red card even when
+   * its local catalog predates the tool. */
+  privileged?: boolean;
+  /** The dry run the user is approving (older builds sent a bare command
+   * list). Displayed verbatim, never re-derived client-side. */
+  plan?: WizardToolPlan | string[] | null;
+  /** Issued with a privileged card; the confirmed execute must send it back. */
+  approval_token?: string;
+  approval_expires_at?: number;
+  /** A confirmed privileged call arrived without a valid token: nothing ran. */
+  approval_required?: boolean;
+  /** The HTTP layer refused a confirmed privileged call for where it came
+   * from (open mode on the network, foreign Host / Origin): nothing ran. */
+  refused?: boolean;
+  /** sudo needs a password, so nvHive did NOT run it: `command` is the exact
+   * line for the user to run themselves. A successful hand-off, not a
+   * failure — the card shows it copyable, never as an error. nvHive never
+   * prompts for, sees or stores a password. */
+  needs_terminal?: boolean;
+  command?: string;
+  /** One line of context for `needs_terminal` (e.g. why a password is
+   * needed, or what to do afterwards). */
+  hint?: string;
+  /** The deny list refused the command before anything spawned. */
+  denied?: boolean;
+  /** Something ran and may have changed the host (`partial`: later steps did not). */
+  applied?: boolean;
+  partial?: boolean;
+  /** Privileged tools are switched off (`NVH_ALLOW_PRIVILEGED=0`); the card
+   * says so and offers no Run button. */
+  disabled?: boolean;
 }
 
 /** Fetch the Wizard tool catalog with safety classes. */
@@ -1748,16 +1869,19 @@ export async function listWizardTools(): Promise<WizardToolListResult> {
 /**
  * Execute a Wizard tool. For confirm-class tools, omit/pass false for
  * `confirmed` first to surface the structured confirmation card, then re-call
- * with `confirmed: true` once the user clicks the confirmation button.
+ * with `confirmed: true` once the user clicks the confirmation button. A
+ * privileged call must also send back the `approval_token` its card carried;
+ * the server refuses a confirmed privileged call without one.
  */
 export async function executeWizardTool(
   name: string,
-  args: { arguments?: Record<string, unknown>; confirmed?: boolean } = {},
+  args: { arguments?: Record<string, unknown>; confirmed?: boolean; approvalToken?: string } = {},
 ): Promise<WizardToolExecuteResult> {
   return apiPost<WizardToolExecuteResult>('/v1/wizard/tools/execute', {
     name,
     arguments: args.arguments ?? {},
     confirmed: args.confirmed ?? false,
+    ...(args.approvalToken ? { approval_token: args.approvalToken } : {}),
   });
 }
 

@@ -81,7 +81,8 @@ confirm cards were still waiting.
 | `iteration` | thinking |
 | `tool_call`, `tool_result` | working |
 | `confirm_required` | asking |
-| `done` with non-empty `tool_calls` (confirm cards pending) | asking — stays until every card is run or skipped |
+| `confirm_required` carrying a `privileged` (sudo) card | asking, and the bubble says "the Wizard needs your approval for a privileged change" (`mascotAskingLabel` / `MASCOT_ASKING_PRIVILEGED_LABEL`) — once per tool per session; any other class, known or not, keeps the plain confirmation wording |
+| `done` with non-empty `tool_calls` (confirm cards pending) | asking — stays until every card is run or skipped; a privileged card the kill switch has turned off starts settled (`disabled`, Skip only) and does not count |
 | `done` with no pending calls | happy → idle after 1.5 s |
 | user clicks **Run** on a card | working → happy / error (or back to asking while sibling cards still wait) |
 | user clicks **Skip** on a card | idle (or asking while sibling cards still wait) |

@@ -42,7 +42,7 @@ from nvh.providers.base import TaskType
 RULE_PROFILES: tuple[str, ...] = tuple(dict.fromkeys(r.profile for r in SPECIALIST_RULES))
 OPS_PROFILES = {
     "install-medic", "gpu-triage", "model-sommelier", "model-librarian", "vram-planner",
-    "provider-keysmith",
+    "provider-keysmith", "device-settings",
 }
 MODEL_DESK = ("model-sommelier", "vram-planner", "model-librarian")
 CODING_PROFILES = {"bug-hunter", "deep-reviewer", "backend-implementer"}
@@ -541,7 +541,10 @@ def test_setup_concierge_routes_in_shipped_library(tmp_path, neutral_classifier)
 HA_FALSE_POSITIVES = {
     "how do I turn on GPU persistence mode": "gpu-triage",
     "turn on flash attention in ollama": {"model-librarian", "latency-tuner"},
-    "how do I turn on ssh on the spark": "shell-teacher",
+    # 2026-09-03: enabling a *service* is a device setting (the settings
+    # desk's enable/disable pattern). Teaching ssh — keys, scp, config — is
+    # still the shell teacher's; see test_ssh_service_versus_ssh_keys.
+    "how do I turn on ssh on the spark": "device-settings",
     "what's the temperature of my gpu": "gpu-triage",
     "light model for coding": "model-sommelier",  # a model pick, not a light
     "my dim sum recipe": None,
@@ -1768,7 +1771,262 @@ def test_shell_teacher_scores_a_phrase_once_and_the_docker_socket_is_the_wrangle
     assert _pick("how do I set up ssh keys on the spark?").profile == "shell-teacher"
 
 
-# The routing surface in one table: seventy questions across eleven
+# ---------------------------------------------------------------------------
+# The device settings desk (2026-09-03, proposal §3.4 / §5 "Sudo reality")
+# ---------------------------------------------------------------------------
+
+# One setting at a time: services, the login session, the firewall, the
+# hostname, packages, updates, group membership. Checked on a workstation, a
+# Spark and a fresh Spark so neither the device boost nor its absence moves
+# any of them.
+DEVICE_SETTINGS_POSITIVES = [
+    "how do I enable ssh on the spark?",
+    "turn off auto-login",
+    "add me to the docker group",
+    "my headless spark keeps suspending after 20 minutes",
+    "is it safe to run apt upgrade on dgx os?",
+    "set up ufw but keep me reachable over tailscale",
+    "install htop with apt",
+    "enable the tailscaled service at boot",
+    "change my hostname to spark-01",
+    "sudo apt install nvtop",
+    "snap install code",
+    "systemctl enable tailscaled",
+    "should I turn on unattended upgrades?",
+    "the gdm greeter keeps putting my box to sleep",
+    "update the nvidia driver",
+    "upgrade my gpu driver",
+    "how do I do a driver upgrade on dgx os?",
+]
+
+# The neighbours, and where each one belongs instead. A privileged verb is
+# not enough: the fault, the claim, the package ecosystem, the daemon and the
+# tour each keep their own.
+DEVICE_SETTINGS_NEGATIVES = {
+    # The rig doctor keeps hardware faults, whatever setting word joins them.
+    "my gb10 shows xid 79 after I enabled ssh": "gpu-triage",
+    "nvidia-smi has failed because it couldn't communicate with the driver": "gpu-triage",
+    # Python packaging is an environment problem, not a device setting.
+    "apt install torch": "install-medic",
+    "pip install vllm fails to build a wheel": "install-medic",
+    # The Docker daemon is the wrangler's; the docker *group* is not.
+    "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+    "Is the docker daemon running?": "container-wrangler",
+    "install docker for me": "container-wrangler",
+    "set up docker": "container-wrangler",
+    # ssh keys are teaching, not a settings change.
+    "how do I set up ssh keys on the spark?": "shell-teacher",
+    "bash: permission denied when I run ./start.sh": "shell-teacher",
+    # A claim about a setting wants an answer, not an upgrade.
+    "is it true that apt upgrade breaks the driver?": "fact-checker",
+    # The product's own first run is the concierge's tour.
+    "install nvhive on this box": "setup-concierge",
+    "configure nvhive for me please": "setup-concierge",
+    # The model desk, the smart home and the notes coach.
+    "which model should I install on my spark?": "model-sommelier",
+    "turn on the kitchen lights": "home-assistant",
+    "remember this: the docker group fix is usermod -aG docker $USER": "daily-notes-coach",
+}
+
+
+@pytest.mark.parametrize("q", DEVICE_SETTINGS_POSITIVES)
+def test_device_settings_questions_route_to_the_settings_desk(q, neutral_classifier) -> None:
+    for which in ("ws", "spark", "fresh_spark"):
+        c = _pick_on(q, which)
+        assert c.profile == "device-settings", (q, which, c.reason)
+        assert c.confidence >= 0.5, (q, which, c.confidence)
+
+
+@pytest.mark.parametrize(
+    "q,expected", sorted(DEVICE_SETTINGS_NEGATIVES.items(), key=lambda kv: kv[0]),
+)
+def test_privileged_verbs_alone_do_not_reach_the_settings_desk(q, expected, neutral_classifier) -> None:
+    for which in ("ws", "spark", "fresh_spark"):
+        c = _pick_on(q, which)
+        assert c.profile != "device-settings", (q, which, c.reason)
+        assert c.profile == expected, (q, which, c.reason)
+
+
+def test_device_settings_rule_is_gated() -> None:
+    from nvh.integrations.wizard import concierge as mod
+
+    rule = _rule("device-settings")
+    # Settings verbs and nouns are strong; the low-precision words that also
+    # open a shell, rig or notes question are weak.
+    assert {"enable ssh", "ufw", "tailscale", "hostname", "docker group", "apt upgrade",
+            "snap install", "systemctl enable", "headless", "gdm"} <= set(rule.keywords)
+    assert {"ssh", "docker", "apt", "sudo", "permission denied", "suspend", "sleep",
+            "usermod", "service", "port"} <= set(rule.weak_keywords)
+    assert not set(rule.keywords) & set(rule.weak_keywords)
+    # The four derived / hand veto sets, each with its own owner.
+    assert set(mod._HW_FAULT_VETOES) <= set(rule.excludes)
+    assert set(mod._PYTHON_PACKAGING_VETOES) <= set(rule.excludes)
+    assert set(mod._MODEL_DESK_VETOES) <= set(rule.excludes)
+    assert set(mod._SMART_HOME_VETOES) <= set(rule.excludes)
+    # The fact checker's vetoes are derived from its own rule, so a keyword
+    # added there is a settings veto the same day.
+    assert (mod._CLAIM_VETO_WORDS, mod._CLAIM_VETO_PATTERNS) == mod._veto_vocabulary(
+        (mod._FACT_CHECKER,),
+    )
+    assert set(mod._CLAIM_VETO_WORDS) <= set(rule.excludes)
+    assert set(mod._CLAIM_VETO_PATTERNS) <= set(rule.exclude_patterns)
+    assert set(mod._HW_FAULT_VETO_PATTERNS) <= set(rule.exclude_patterns)
+    # The triage's bare nouns are NOT vetoes: they name the things a setting
+    # configures, so "driver update" and "gpu persistence mode" survive.
+    assert not {"driver", "drivers", "gpu", "secure boot", "persistence mode"} & set(rule.excludes)
+    assert "driver update" in rule.keywords
+    # One group, one boost: every member is a fact about the same machine.
+    assert rule.state == ("device:dgx-spark|device:rtx-spark|has_root|can_sudo|privileged_allowed",)
+    assert rule.phrase_once and rule.weight == 1.4
+    # Placement: after the rig doctor and the concierge, before the model desk.
+    order = [r.profile for r in SPECIALIST_RULES]
+    assert order.index("setup-concierge") < order.index("device-settings")
+    assert order.index("device-settings") < order.index("model-sommelier")
+    assert order.index("gpu-triage") < order.index("device-settings")
+
+
+def test_docker_group_is_the_settings_desks_and_the_daemon_the_wranglers(neutral_classifier) -> None:
+    """The documented Docker boundary. The *daemon* is the wrangler's, the
+    verbatim socket dump included — the same constant is its pattern and this
+    rule's veto, so the split is a rule and not a scoring margin (one Spark
+    state boost used to flip it). The *user's membership of the docker group*
+    is a privileged change to the machine and lands here."""
+    from nvh.integrations.wizard import concierge as mod
+
+    assert mod._DOCKER_DAEMON_SOCKET in _rule("container-wrangler").patterns
+    assert mod._DOCKER_DAEMON_SOCKET in _rule("device-settings").exclude_patterns
+    for q in (
+        "add me to the docker group",
+        "docker says permission denied, do I need sudo?",
+        "do I have to sudo docker every time?",
+        "put my user in the docker group",
+    ):
+        for which in ("ws", "spark", "fresh_spark"):
+            assert _pick_on(q, which).profile == "device-settings", (q, which)
+    for q in (
+        "permission denied while trying to connect to the Docker daemon socket at "
+        "unix:///var/run/docker.sock",
+        "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+        "Is the docker daemon running?",
+        "docker run --gpus all fails: nvidia runtime not found",
+    ):
+        for which in ("ws", "spark"):
+            assert _pick_on(q, which).profile == "container-wrangler", (q[:60], which)
+    # The shell teacher keeps a bare permission error on a file.
+    assert _pick("bash: permission denied when I run ./start.sh").profile == "shell-teacher"
+    assert _pick("permission denied").profile == "shell-teacher"
+
+
+def test_ssh_service_versus_ssh_keys(neutral_classifier) -> None:
+    """Enabling or disabling the *service* is a settings change; ssh keys,
+    scp and the client config are the shell teacher's teaching."""
+    for q in ("how do I enable ssh on the spark?", "how do I turn on ssh on the spark",
+              "disable ssh"):
+        assert _pick_on(q, "spark").profile == "device-settings", q
+    for q in ("how do I set up ssh keys on the spark?", "help me set up ssh on the spark",
+              "what does ssh-keygen -t ed25519 do?"):
+        assert _pick_on(q, "spark").profile == "shell-teacher", q
+
+
+def test_apt_upgrade_is_the_settings_desks_and_pip_the_medics(neutral_classifier) -> None:
+    """The DGX OS trap belongs to the desk that can hold the driver packages;
+    Python packaging stays an environment problem."""
+    for q in ("is it safe to run apt upgrade on dgx os?", "apt-get upgrade",
+              "sudo apt install nvtop", "install htop with apt"):
+        for which in ("ws", "spark"):
+            assert _pick_on(q, which).profile == "device-settings", (q, which)
+    for q in ("apt install torch", "pip install vllm fails to build a wheel",
+              "pip3 install -r requirements.txt fails"):
+        for which in ("ws", "spark"):
+            assert _pick_on(q, which).profile == "install-medic", (q, which)
+
+
+def test_device_settings_state_is_one_group_and_one_boost(neutral_classifier) -> None:
+    """The device, root, a working ``sudo -n`` and the privileged tier being
+    on are facts about the same machine: one boost between them, so a
+    settings word can never out-score a fault just because the box is a
+    Spark."""
+    plain = _pick("change my hostname to spark-01")
+    spark = _pick("change my hostname to spark-01", context=_spark_ctx())
+    assert plain.profile == spark.profile == "device-settings"
+    assert spark.confidence == pytest.approx(plain.confidence + BOOST_CONF, abs=0.011)
+    # The Spark context carries device:dgx-spark, can_sudo and (through them)
+    # privileged_allowed; all three are named, and it is still one boost.
+    for note in ("DGX Spark", "sudo works here without a password",
+                 "privileged changes need your approval on a red card"):
+        assert note in spark.reason, note
+
+
+def test_privileged_allowed_predicate_reads_sudo_and_the_kill_switch(monkeypatch) -> None:
+    """``privileged_allowed`` is "the owner can elevate, or can be handed the
+    exact command, and the tier is switched on". ``in_sudo_group`` matters:
+    on a stock DGX OS box the OOBE user is in the sudo group but a password
+    is required, so ``can_sudo`` is usually False there."""
+    from nvh.integrations.wizard import concierge as mod
+
+    def state_for(**platform):
+        return derive_state(_ctx(platform={"device_class": "dgx-spark", **platform}), None, [])
+
+    assert "privileged_allowed" not in state_for()
+    assert "in_sudo_group" not in state_for()
+    # can_sudo alone, in_sudo_group alone and root each open the tier.
+    assert "privileged_allowed" in state_for(can_sudo=True)
+    assert {"in_sudo_group", "privileged_allowed"} <= state_for(in_sudo_group=True)
+    assert "privileged_allowed" in state_for(has_root=True)
+    # The kill switch closes it. The variable is spelled once, in the module
+    # that enforces it; the concierge keeps no copy of the name or the falsy set.
+    from nvh.integrations.wizard.tools import PRIVILEGED_ENV
+
+    assert PRIVILEGED_ENV == "NVH_ALLOW_PRIVILEGED"
+    assert not hasattr(mod, "PRIVILEGED_ENV_VAR") and not hasattr(mod, "_ENV_FALSY")
+    for falsy in ("0", "false", "no", "off", "OFF", " False "):
+        monkeypatch.setenv(PRIVILEGED_ENV, falsy)
+        assert mod.privileged_tools_enabled() is False, falsy
+        assert "privileged_allowed" not in state_for(can_sudo=True), falsy
+        assert "can_sudo" in state_for(can_sudo=True), "the raw fact still shows"
+    for truthy in ("1", "yes", "on", "true", ""):
+        monkeypatch.setenv(PRIVILEGED_ENV, truthy)
+        assert mod.privileged_tools_enabled() is True, truthy
+    monkeypatch.delenv(PRIVILEGED_ENV, raising=False)
+    assert mod.privileged_tools_enabled() is True, "default is on"
+
+
+def test_privileged_predicate_defers_to_the_enforcing_module(monkeypatch) -> None:
+    """The registry owns the kill switch; the concierge asks it rather than
+    keeping a second opinion, and defaults to *on* only when the module is
+    not importable at all — routing to a specialist whose tools are off
+    wastes a turn, it never escalates anything (``execute()`` still refuses
+    the call)."""
+    import sys
+
+    from nvh.integrations.wizard import concierge as mod
+    from nvh.integrations.wizard import tools as tools_mod
+
+    monkeypatch.delenv(tools_mod.PRIVILEGED_ENV, raising=False)
+    # The enforcing module's answer is the answer, whatever the environment says.
+    monkeypatch.setattr(tools_mod, "privileged_enabled", lambda: False)
+    assert mod.privileged_tools_enabled() is False
+    monkeypatch.setattr(tools_mod, "privileged_enabled", lambda: True)
+    monkeypatch.setenv(tools_mod.PRIVILEGED_ENV, "0")
+    assert mod.privileged_tools_enabled() is True, "no second opinion from the env"
+
+    # The tools module itself failing to import is the only fallback, and it
+    # is "on": there is no env read of its own to fall back to.
+    monkeypatch.setitem(sys.modules, "nvh.integrations.wizard.tools", None)
+    monkeypatch.setenv(tools_mod.PRIVILEGED_ENV, "0")
+    assert mod.privileged_tools_enabled() is True, "default is on"
+
+
+def test_device_settings_routes_in_shipped_library(tmp_path, neutral_classifier) -> None:
+    assert "device-settings" in available_specialists(tmp_path)
+    c = select_specialist(
+        "add me to the docker group", context=_spark_ctx(), history=[], home_dir=tmp_path,
+    )
+    assert c.profile == "device-settings"
+    assert c.reason.startswith("device-settings:")
+
+
+# The routing surface in one table: eighty-two questions across twelve
 # categories, each on the context a user would ask it from. A rule edit that
 # moves any of these is a routing change and should be deliberate.
 ROUTING_PROBE = [
@@ -1860,6 +2118,28 @@ ROUTING_PROBE = [
         "container-wrangler",
     ),
     ("bash: permission denied when I run ./start.sh", "ws", "shell-teacher"),
+    # 2026-09-03: the device settings desk (proposal §3.4). One setting at a
+    # time — services, the login session, the firewall, the hostname,
+    # packages, updates, group membership.
+    ("how do I enable ssh on the spark?", "spark", "device-settings"),
+    ("add me to the docker group", "spark", "device-settings"),
+    ("my headless spark keeps suspending after 20 minutes", "spark", "device-settings"),
+    ("is it safe to run apt upgrade on dgx os?", "spark", "device-settings"),
+    ("set up ufw but keep me reachable over tailscale", "spark", "device-settings"),
+    ("install htop with apt", "ws", "device-settings"),
+    ("enable the tailscaled service at boot", "spark", "device-settings"),
+    ("change my hostname to spark-01", "ws", "device-settings"),
+    # A driver *update* is a settings change through the validated channel
+    # (the desk that knows the DGX OS trap); a driver *fault* is the rig doctor's.
+    ("update the nvidia driver", "spark", "device-settings"),
+    ("upgrade my gpu driver", "spark", "device-settings"),
+    # ... and the four neighbours it must not take: a switch at home, a model
+    # pick, a hardware fault and a coding request.
+    ("turn on the kitchen lights", "ws", "home-assistant"),
+    ("recommend a model for python coding", "spark", "model-sommelier"),
+    ("nvidia-smi has failed because it couldn't communicate with the driver", "spark",
+     "gpu-triage"),
+    ("write a python function that parses a csv file", "ws", "backend-implementer"),
 ]
 
 
@@ -1874,13 +2154,14 @@ def test_routing_probe(q, which, expected, neutral_classifier) -> None:
 
 
 def test_routing_probe_covers_the_surface() -> None:
-    assert len(ROUTING_PROBE) == 70
-    assert len({q for q, _, _ in ROUTING_PROBE}) == 70
+    assert len(ROUTING_PROBE) == 84
+    assert len({q for q, _, _ in ROUTING_PROBE}) == 84
     covered = {p for _, _, p in ROUTING_PROBE}
     assert {
         "setup-concierge", "install-medic", "gpu-triage", "model-sommelier", "vram-planner",
         "model-librarian", "home-assistant", "deep-researcher", "fact-checker", "bug-hunter",
         "backend-implementer", "deep-reviewer", "vault-rag", "daily-notes-coach", "doc-qa",
-        "latency-tuner", "finetune-advisor", "container-wrangler", "shell-teacher", None,
+        "latency-tuner", "finetune-advisor", "container-wrangler", "shell-teacher",
+        "device-settings", None,
     } <= covered
     assert {w for _, w, _ in ROUTING_PROBE} == set(_ALL_CONTEXTS)

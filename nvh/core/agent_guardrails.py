@@ -173,7 +173,10 @@ def check_path(path: str, workspace: Path) -> None:
 # ---------------------------------------------------------------------------
 
 _SECRET_PATTERNS: list[tuple[re.Pattern, str]] = [
-    # API keys and tokens
+    # API keys and tokens. The dash-separated prefixes (sk-ant-…, sk-proj-…,
+    # sk-or-v1-…) go first: the plain pattern below stops at the second dash
+    # and would leave the key body in the clear.
+    (re.compile(r'sk-[a-z]+(?:-v\d+)?-[A-Za-z0-9_-]{20,}'), "[REDACTED:api_key]"),
     (re.compile(r'(?:sk|pk|api[_-]?key)[_-][a-zA-Z0-9]{20,}'), "[REDACTED:api_key]"),
     (re.compile(r'ghp_[a-zA-Z0-9]{36,}'), "[REDACTED:github_pat]"),
     (re.compile(r'gho_[a-zA-Z0-9]{36,}'), "[REDACTED:github_oauth]"),

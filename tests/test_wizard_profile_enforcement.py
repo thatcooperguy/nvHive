@@ -91,7 +91,8 @@ _WEB = 'TOOL_CALL: {"name": "web_search", "arguments": {"query": "gpus"}}'
 _REFRESH = 'TOOL_CALL: {"name": "refresh_models", "arguments": {}}'
 _SAVE_KEY = 'TOOL_CALL: {"name": "save_provider_key", "arguments": {"provider": "groq", "api_key": "gsk_x"}}'
 _DIAGNOSE = 'TOOL_CALL: {"name": "diagnose", "arguments": {}}'
-_FULL_CATALOG = ["diagnose", "refresh_models", "save_provider_key", "web_search"]
+_APPLY = 'TOOL_CALL: {"name": "system_settings_apply", "arguments": {"setting": "enable_ssh"}}'
+_FULL_CATALOG = ["diagnose", "refresh_models", "save_provider_key", "system_settings_apply", "web_search"]
 
 _LOCAL_ONLY_REASON = "profile_local_only_provider_unavailable"
 
@@ -114,9 +115,12 @@ class _Counter:
 
 @pytest.fixture()
 def fake_registry(monkeypatch) -> tuple[WizardToolRegistry, dict[str, _Counter]]:
-    """Three auto tools (two of them core: diagnose, refresh_models) + one
-    confirm tool, all with counting handlers."""
-    counters = {name: _Counter() for name in ("web_search", "refresh_models", "diagnose", "save_provider_key")}
+    """Three auto tools (two of them core: diagnose, refresh_models), one
+    confirm tool and one privileged tool, all with counting handlers."""
+    counters = {
+        name: _Counter()
+        for name in ("web_search", "refresh_models", "diagnose", "save_provider_key", "system_settings_apply")
+    }
     reg = WizardToolRegistry()
     reg.register(WizardTool(
         name="web_search", description="Search the web.", safety_class="auto",
@@ -133,6 +137,14 @@ def fake_registry(monkeypatch) -> tuple[WizardToolRegistry, dict[str, _Counter]]
     reg.register(WizardTool(
         name="save_provider_key", description="Persist an API key.", safety_class="confirm",
         parameters={"provider": {}, "api_key": {}}, handler=counters["save_provider_key"],
+    ))
+    async def _plan_stub(args: dict[str, Any]) -> dict[str, Any]:
+        """The dry run the red card shows; runs nothing."""
+        return {"ok": True, "setting": args.get("setting"), "commands": ["sudo systemctl enable --now ssh"], "sudo": True}
+
+    reg.register(WizardTool(
+        name="system_settings_apply", description="Apply a system setting (sudo).", safety_class="privileged",
+        parameters={"setting": {}}, handler=counters["system_settings_apply"], planner=_plan_stub,
     ))
     monkeypatch.setattr("nvh.integrations.wizard.tools.default_registry", lambda: reg)
     return reg, counters
@@ -519,6 +531,77 @@ async def test_chat_max_iterations_one_splits_confirm_deferred_and_refused(
     assert [r["name"] for r in result["tool_results"]] == ["web_search"]
     assert result["tool_results"][0]["result"]["not_allowed"] is True
     assert all(c.calls == [] for c in counters.values())
+
+
+@pytest.mark.asyncio
+async def test_run_auto_tool_defers_a_privileged_call_and_split_buckets_it_as_confirm(fake_registry) -> None:
+    """``privileged`` is not ``auto``: ``_run_auto_tool`` hands it to the UI
+    (``confirmed=True`` is only ever passed for auto tools) and
+    ``_split_by_safety_class`` puts it in the confirm bucket, never the
+    deferred-auto one."""
+    from nvh.integrations.wizard.chat import _run_auto_tool, _split_by_safety_class
+
+    reg, counters = fake_registry
+    deferred = await _run_auto_tool("system_settings_apply", {"setting": "enable_ssh"}, registry=reg)
+    assert deferred["deferred_to_user"] is True and deferred["safety_class"] == "privileged"
+    assert deferred["ok"] is False
+    assert counters["system_settings_apply"].calls == []
+
+    call = {"name": "system_settings_apply", "arguments": {"setting": "enable_ssh"}}
+    confirm, auto = _split_by_safety_class([call, {"name": "refresh_models", "arguments": {}}], reg)
+    assert confirm == [call]
+    assert auto == [{"name": "refresh_models", "arguments": {}}]
+
+    # The whitelist still beats the safety class: a forbidden privileged tool
+    # is a refusal, not a red card.
+    forbidden = await _run_auto_tool(
+        "system_settings_apply", {"setting": "enable_ssh"},
+        tools_allowed=frozenset({"refresh_models"}), profile_name="notes-only", registry=reg,
+    )
+    assert forbidden["not_allowed"] is True and "deferred_to_user" not in forbidden
+    assert counters["system_settings_apply"].calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("max_iterations", [None, 1])
+async def test_privileged_call_lands_in_tool_calls_never_in_deferred_or_executed(
+    tmp_path: Path, fake_registry, stream: bool, max_iterations: int | None,
+) -> None:
+    """On both paths, with the loop free to follow up or capped at one
+    iteration, a privileged TOOL_CALL is surfaced in ``tool_calls`` (the
+    confirm-card bucket), never in ``deferred_tool_calls`` and never run."""
+    _reg, counters = fake_registry
+    if stream:
+        engine = _stream_engine([["Enabling SSH.\n", _APPLY + "\n"], ["never reached"]])
+    else:
+        engine = _complete_engine([f"Enabling SSH.\n{_APPLY}", "never reached"])
+
+    result, events = await _run(
+        engine, stream=stream, question="enable ssh", profile="wizard", home_dir=tmp_path,
+        max_iterations=max_iterations,
+    )
+
+    assert result is not None
+    assert len(result["tool_calls"]) == 1
+    surfaced = result["tool_calls"][0]
+    assert surfaced["name"] == "system_settings_apply" and surfaced["arguments"] == {"setting": "enable_ssh"}
+    # The red card's payload rides on the surfaced call — the registry's dry
+    # run and the token the confirmed execute must bring back — so the UI
+    # never reads a plan off the model's arguments. None of it reaches the model.
+    assert surfaced["privileged"] is True
+    assert surfaced["plan"]["commands"] == ["sudo systemctl enable --now ssh"]
+    assert isinstance(surfaced["approval_token"], str) and "." in surfaced["approval_token"]
+    assert isinstance(surfaced["approval_expires_at"], int)
+    assert result["deferred_tool_calls"] == []
+    assert result["tool_results"] == []
+    assert result["iterations"] == 1
+    assert all(c.calls == [] for c in counters.values())
+    if stream:
+        confirm_events = [e for e in events if e["type"] == "confirm_required"]
+        assert len(confirm_events) == 1
+        assert confirm_events[0]["tool_calls"] == result["tool_calls"]
+        assert [e["type"] for e in events if e["type"] == "tool_result"] == []
 
 
 @pytest.mark.asyncio

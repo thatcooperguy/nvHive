@@ -67,7 +67,7 @@ def test_register_rejects_never_class() -> None:
 
 
 def test_register_rejects_unknown_safety_class() -> None:
-    """Typos can't sneak past — only auto + confirm are allowed."""
+    """Typos can't sneak past — only auto, confirm and privileged are allowed."""
     reg = WizardToolRegistry()
     bad = WizardTool(
         name="weird",
@@ -78,6 +78,20 @@ def test_register_rejects_unknown_safety_class() -> None:
     )
     with pytest.raises(ValueError, match="safety_class"):
         reg.register(bad)
+    # ``privileged`` (2026-09, the Spark concierge's sudo tier) registers fine.
+    reg.register(WizardTool(
+        name="priv", description="privileged", safety_class="privileged", parameters={}, handler=_stub_handler,
+    ))
+    assert reg.get("priv").safety_class == "privileged"
+
+
+def test_list_tools_orders_auto_confirm_privileged() -> None:
+    """An explicit class order — not the classes' spelling — decides the catalogue."""
+    reg = WizardToolRegistry()
+    reg.register(WizardTool(name="a_priv", description="", safety_class="privileged", parameters={}, handler=_stub_handler))
+    reg.register(_make_confirm_tool())
+    reg.register(_make_auto_tool())
+    assert [t.safety_class for t in reg.list_tools()] == ["auto", "confirm", "privileged"]
 
 
 def test_register_overwrite_warns_but_succeeds(caplog: pytest.LogCaptureFixture) -> None:
@@ -208,16 +222,24 @@ def test_default_registry_contains_expected_tools() -> None:
     assert "repair_workspace" in names
     assert "validate_provider_key" in names
     assert "save_provider_key" in names
+    assert {"system_settings_get", "system_settings_plan", "system_settings_apply",
+            "apt_install", "snap_install", "service_enable"} <= names
 
 
 def test_default_registry_safety_class_distribution() -> None:
-    """save_provider_key is the canonical confirm-class tool; the rest run auto."""
+    """save_provider_key is the canonical confirm-class tool; the system-settings
+    apply / installs are the privileged ones; the rest run auto."""
     reg = default_registry()
     by_name = {t.name: t for t in reg.list_tools()}
     assert by_name["refresh_models"].safety_class == "auto"
     assert by_name["repair_workspace"].safety_class == "auto"
     assert by_name["validate_provider_key"].safety_class == "auto"
     assert by_name["save_provider_key"].safety_class == "confirm"
+    assert by_name["system_settings_get"].safety_class == "auto"
+    assert by_name["system_settings_plan"].safety_class == "auto"
+    for name in ("system_settings_apply", "apt_install", "snap_install", "service_enable"):
+        assert by_name[name].safety_class == "privileged", name
+    assert {t.safety_class for t in reg.list_tools()} == {"auto", "confirm", "privileged"}
 
 
 def test_default_registry_public_dicts_omit_handler() -> None:
@@ -225,9 +247,11 @@ def test_default_registry_public_dicts_omit_handler() -> None:
     for tool in reg.list_tools():
         pub = tool.as_public_dict()
         assert "handler" not in pub
+        assert "planner" not in pub
         assert "name" in pub
         assert "safety_class" in pub
         assert "parameters" in pub
+        assert pub["enabled"] is True  # kill switch unset in this suite
 
 
 @pytest.mark.asyncio

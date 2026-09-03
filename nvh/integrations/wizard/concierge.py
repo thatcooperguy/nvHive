@@ -98,7 +98,8 @@ container specialist's, not the medic's). Ops rules sit first in the
 table so an exact tie with a GPU / model word goes to the rig doctor.
 
 The rule list, in table order: the rig doctor (``install-medic``,
-``gpu-triage``), the setup concierge (``setup-concierge``), the model desk
+``gpu-triage``), the setup concierge (``setup-concierge``), the device
+settings desk (``device-settings``), the model desk
 (``model-sommelier``, ``vram-planner``, ``model-librarian``),
 ``provider-keysmith``, ``latency-tuner``, ``finetune-advisor``,
 ``home-assistant``, ``comfyui-workflow-debugger``, ``container-wrangler``,
@@ -155,6 +156,50 @@ pull the 120b") vetoes the librarian instead. A bare size token (``70b``) is
 the planner's pattern, a model family with a version (``qwen3``) is the
 sommelier's and a tag (``llama3.1:70b``) the librarian's, so a bare tag is a
 three-way tie that table order gives to the sommelier.
+
+The device settings desk (``device-settings``) sits between the concierge and
+the model desk and is the privileged tier's front door (proposal §3.4 and §5,
+"Sudo reality"): services, the login session, the firewall, the hostname,
+packages, updates and group membership. Its weight is 1.4 so one *pattern*
+(2.1) beats the install medic's two generic words ("install" + "apt" = 2.0) —
+the medic answers a *failed* install, this rule performs a supported one — and
+its state is one group, one boost (``device:dgx-spark|device:rtx-spark|
+has_root|can_sudo|privileged_allowed``: all facts about the same machine), so
+a settings word can never out-score a fault just because the box is a Spark.
+Four boundaries are drawn on purpose:
+
+* **Docker.** The *daemon* is the container wrangler's, the verbatim socket
+  error included: that dump reads the same whether the daemon is down or the
+  user is not in the group, so :data:`_DOCKER_DAEMON_SOCKET` is the
+  wrangler's pattern *and* this rule's veto — a boundary, not a scoring
+  margin (one Spark state boost used to flip it). The *user's membership of
+  the docker group* is here, because the fix is a privileged change to the
+  machine: "add me to the docker group", "docker says permission denied",
+  "do I have to sudo docker every time". Compose files, GPU passthrough and
+  image builds stay the wrangler's.
+* **Claims.** A question about whether something is *so* is the fact
+  checker's, derived from its own keywords and patterns
+  (:data:`_CLAIM_VETO_WORDS`): "is it true that apt upgrade breaks the
+  driver?" wants an answer, not an upgrade.
+* **The shell.** ``chmod``, ``$PATH``, ssh *keys* and a bare "permission
+  denied" on a file stay the shell teacher's — teaching, not changing the
+  box. Enabling or disabling a service ("turn on ssh") is here.
+* **Python packaging** stays the medic's (:data:`_PYTHON_PACKAGING_VETOES`):
+  "apt install torch" and every pip install are an environment problem,
+  whatever privileged verb leads them.
+* **Hardware faults** stay the rig doctor's (:data:`_HW_FAULT_VETOES` and
+  :data:`_HW_FAULT_VETO_PATTERNS`): "xid 79", "NVIDIA-SMI has failed". Only
+  the fault vocabulary is vetoed — the triage's bare nouns ("driver", "gpu")
+  name the things a setting configures, so "driver update" is still here.
+
+The product's own name is carved out of both install patterns by a lookahead
+rather than a word veto, so "install nvhive on this box" stays the setup
+concierge's tour while a sentence that merely mentions nvHive is unaffected.
+The setup concierge already vetoes on ``ssh`` / ``docker`` / ``container``,
+the two biggest overlaps; the rest is left to score, so a *compound* ask
+("set up my spark and the firewall") follows the concierge's first-run state:
+the tour on a fresh box, the one setting on a lived-in one. Both answers are
+reasonable there and no test pins it.
 
 Every fact-checker pattern takes a claim-shaped object ("is it true", "is
 that really the case", "did they actually say that", "fact check", a URL or
@@ -222,6 +267,7 @@ __all__ = [
     "active_rules",
     "available_specialists",
     "derive_state",
+    "privileged_tools_enabled",
     "resolve_auto_profile",
     "select_specialist",
 ]
@@ -261,6 +307,27 @@ STICKY_CONFIDENCE = 0.3
 #: ``"general Wizard: "`` and reads as a sentence: the chat envelope carries
 #: it as ``profile_reason`` and the UI shows it as the attribution tooltip.
 GENERAL_NO_MATCH_REASON = "general Wizard: no specialist matched"
+
+def privileged_tools_enabled() -> bool:
+    """``NVH_ALLOW_PRIVILEGED``, as the privileged tier itself reads it (default on).
+
+    The registry (:mod:`nvh.integrations.wizard.tools`) is the only
+    enforcement point and the only module that spells the variable and its
+    falsy vocabulary; the concierge merely *routes*, so it asks
+    :func:`~nvh.integrations.wizard.tools.privileged_enabled` rather than
+    keeping a second opinion. The import is lazy so a broken tools module
+    cannot take routing down with it; if the import itself fails the answer
+    is *on*, which is safe — routing to a specialist whose tools are disabled
+    wastes a turn, it never escalates anything, because ``execute()`` still
+    refuses the call and names the variable.
+    """
+    try:
+        from nvh.integrations.wizard.tools import privileged_enabled
+    except Exception as exc:  # the tier has not landed / is broken: routing goes on
+        logger.debug("concierge: privileged_enabled unavailable (%s); assuming on", exc)
+        return True
+    return bool(privileged_enabled())
+
 
 _GREETING_RE = re.compile(
     r"^\s*(?:hi|hello|hey|yo|hiya|howdy|sup|good\s+(?:morning|afternoon|evening|night)|"
@@ -602,6 +669,73 @@ _FINETUNE_ADVISOR = SpecialistRule(
 )
 _FINETUNE_VETO_WORDS, _ = _veto_vocabulary((_FINETUNE_ADVISOR,))
 
+# --- The fact checker ---------------------------------------------------------
+# Named so the device settings desk can derive its vetoes: a *claim* about a
+# setting ("is it true that apt upgrade breaks the driver?") is a fact check,
+# not a change to make, and the settings desk's Spark boost must never flip
+# one into the other.
+_FACT_CHECKER = SpecialistRule(
+    profile="fact-checker",
+    keywords=(
+        "is it true", "is that true", "true that", "fact check", "fact-check", "factcheck",
+        "verify that", "is this accurate", "myth", "debunk", "claim that", "rumor", "rumour",
+        "hoax", "misinformation", "source for", "evidence for", "is it real",
+        "true or false",
+    ),
+    # "verify my api key", "is the reading accurate", "confirm that the gpu
+    # works", "does it really matter": a bare "really" beside a pronoun is
+    # emphasis, not a claim; it counts next to a claim-shaped pattern.
+    weak_keywords=(
+        "verify", "accurate", "claims", "correct that", "confirm that", "did they really",
+        "does it really",
+    ),
+    # The rig's symptoms and the model desk's arithmetic are never a claim
+    # to check (review 2026-09-02, F1): "is the driver really broken" is
+    # the triage's, "does my 70b really fit" the planner's. Device nouns
+    # are not vetoes: "is it true that apt upgrade breaks the driver?" is
+    # a claim about the driver and stays here.
+    excludes=_VAGUE_TROUBLE + (
+        "running hot", "too hot", "overheating", "throttling", "throttle", "thermal", "xid",
+        "nvidia-smi", "crash", "crashed", "crashes", "traceback", "exit code",
+        "connection refused", "out of memory", "oom", "slow", "tok/s", "tokens/s", "fit",
+        "fits", "vram", "quant", "quants", "gguf", "how much memory", "how much vram",
+        "too big", "too large",
+    ),
+    patterns=(
+        # Every pattern takes a claim-shaped object: "is it true", "is
+        # that really the case", "did they actually say that", "true or
+        # false", "fact check", a URL or quoted claim beside a truth word.
+        # A bare "(is|are|does) ... really" is not one: "my gpu is running
+        # really hot" and "the fans are spinning really loud" are the
+        # triage's (review 2026-09-02, F1).
+        r"\bis (?:it|that|this) (?:really |actually )?"
+        r"(?:true|accurate|real|correct|legit|the case|a thing|a myth|a hoax|fake|bogus)\b",
+        r"\b(?:really|actually|genuinely|truly) "
+        r"(?:true|the case|real|legit|accurate|correct|a thing|happen(?:ed)?|say that|said that)\b",
+        r"\bfact[- ]?check\b|\btrue or false\b",
+        r"\b(?:did|does|do|is|was|are|were|has|have|can|could|will|would) (?:\w+ ){1,4}?"
+        r"(?:really|actually) (?:say|said|claim(?:ed)?|announce[d]?|confirm(?:ed)?|den(?:y|ied)|"
+        r"admit(?:ted)?|happen(?:ed)?|exist|mean|true|the case)\b",
+        # "is this legit: https://...", 'https://... - is that real?',
+        # 'is it true: "the spark has 256 GB"'.
+        r"\b(?:true|accurate|real|legit|fake|bogus|hoax)\b[^.?!\n]{0,20}:\s*"
+        r"(?:https?://\S+|\"[^\"\n]{8,}\")|"
+        r"https?://\S+\s*[-—,:]?\s*(?:is (?:this|that|it) )?"
+        r"(?:true|accurate|real|legit|fake|bogus|a hoax)\b",
+    ),
+    weight=1.0,
+)
+_CLAIM_VETO_WORDS, _CLAIM_VETO_PATTERNS = _veto_vocabulary((_FACT_CHECKER,))
+
+# The Docker daemon socket, as Docker prints it. Named so it can be the
+# container wrangler's pattern *and* the device settings desk's veto: the
+# daemon is the wrangler's whichever way the error reads, and a scoring
+# margin is not a boundary (one state boost on a Spark used to flip it).
+_DOCKER_DAEMON_SOCKET = (
+    r"connect to the docker daemon|docker daemon socket|is the docker daemon running|"
+    r"(?:unix://|/var/run/|/run/)\S*docker\.sock"
+)
+
 # --- Ops: the model desk's shared vocabulary ----------------------------------
 # Model families the sommelier and the librarian recognise by name, with an
 # optional version or tag glued on ("qwen3", "llama3.1:70b", "gpt-oss:120b",
@@ -674,6 +808,50 @@ _FETCH_RECOMMENDATION: tuple[str, ...] = (
     + _FETCH_VERB + r"\b",
     r"\bshould (?:i|we) (?:\w+ ){0,2}?" + _FETCH_VERB + r"\b",
     r"\brecommend\w* (?:\w+ ){0,3}?(?:to )?" + _FETCH_VERB + r"\b",
+)
+
+# --- Ops: the device-settings specialist's veto sets -------------------------
+# A *hardware fault* is the rig doctor's, whatever settings word sits beside
+# it ("my gb10 shows xid 79 after I enabled ssh"). Only the fault vocabulary
+# is derived by hand here: the triage's bare nouns ("driver", "gpu", "vram")
+# name the things a settings change configures, so vetoing them would take
+# "driver update" and "gpu persistence mode" away from the settings desk.
+_HW_FAULT_VETOES: tuple[str, ...] = (
+    "xid", "nvidia-smi", "nvidia smi", "nvml", "nvidia.ko", "dkms", "nouveau",
+    "no devices", "no devices were found", "overheating", "overheats", "overheated",
+    "throttling", "throttle", "thermal", "running hot", "too hot", "fan noise",
+    "loud fan", "loud fans", "segmentation fault", "core dumped", "cuda", "cudnn",
+    "compute capability", "torch.cuda",
+)
+_HW_FAULT_VETO_PATTERNS: tuple[str, ...] = (
+    r"NVIDIA-SMI has failed",
+    r"could(?:n't| not) communicate with the NVIDIA driver",
+    r"\bxid\b\s*\d+",
+    r"driver/library version mismatch",
+    r"\bno devices were found\b",
+    r"Traceback \(most recent call last\)",
+)
+# Python packaging stays with the install medic: "apt install torch", "pip
+# install vllm" and a wheel that will not build are an environment problem,
+# not a device setting, however privileged the command in front of them.
+_PYTHON_PACKAGING_VETOES: tuple[str, ...] = (
+    "pip", "pip3", "conda", "mamba", "torch", "pytorch", "tensorflow", "wheel", "wheels",
+    "requirements.txt", "venv", "virtualenv", "poetry", "pipx", "site-packages",
+    "module not found", "no module named",
+)
+# The model desk's and the smart home's vocabularies, by hand: "which model
+# should I install on the spark" is a pick and "turn off the kitchen lights"
+# is a light, whatever the install / turn-off verb suggests.
+_MODEL_DESK_VETOES: tuple[str, ...] = (
+    "model", "models", "llm", "llms", "ollama", "vram", "gguf", "quant", "quants",
+    "quantization", "quantisation", "quantized", "quantised", "moe", "context length",
+    "context window", "num_ctx", "kv cache", "tok/s", "tokens/s",
+)
+_SMART_HOME_VETOES: tuple[str, ...] = (
+    "home assistant", "homeassistant", "home-assistant", "hass", "smart home",
+    "home automation", "lights", "light bulb", "lamp", "thermostat", "smart plug",
+    "smart lock", "door lock", "garage door", "blinds", "robot vacuum", "roomba",
+    "zigbee", "z-wave", "esphome", "mqtt", "philips hue",
 )
 
 # Sizing arithmetic is the planner's (review 2026-09-02, F2). These phrases
@@ -803,6 +981,147 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
         state=("first_run|no_models", "first_run&device:dgx-spark", "first_run&device:rtx-spark"),
         phrase_once=True,
         weight=1.0,
+    ),
+    # --- Ops: the device settings desk --------------------------------------
+    # The privileged tier's front door (proposal §3.4/§5 "Sudo reality"): the
+    # machine's own settings — services, login session, firewall, hostname,
+    # packages, updates, group membership. It sits after the rig doctor and
+    # the setup concierge (a fault or a first-run tour outranks one setting)
+    # and before the model desk.
+    #
+    # Weight 1.4 so a *pattern* (2.1) beats the install medic's two generic
+    # words ("install" + "apt" = 2.0) on "install htop with apt": the medic
+    # answers a failed install, this rule performs a supported one. The
+    # boundaries it draws, all of them deliberate:
+    #
+    #  - Docker. The *daemon* is the container wrangler's, including the
+    #    verbatim socket error (which reads the same whether the daemon is
+    #    down or the user is not in the group; the wrangler asks that
+    #    question and its two nouns plus its socket pattern out-score this
+    #    rule by design). The *user's membership of the docker group* is
+    #    here, because the fix is a privileged change to the machine:
+    #    "add me to the docker group", "docker says permission denied",
+    #    "do I have to sudo docker every time". Compose files, GPU
+    #    passthrough and image builds stay the wrangler's.
+    #  - The shell teacher keeps `chmod`, `$PATH`, ssh *keys* and a bare
+    #    "permission denied" on a file — teaching, not changing the box.
+    #    Enabling or disabling a service ("turn on ssh") is here.
+    #  - Python packaging stays the medic's (_PYTHON_PACKAGING_VETOES):
+    #    "apt install torch" and every pip install are an environment
+    #    problem. A hardware fault stays the rig doctor's
+    #    (_HW_FAULT_VETOES): "xid 79", "NVIDIA-SMI has failed".
+    #  - "install nvhive" / "configure nvhive" is the setup concierge's
+    #    tour, so the product names are vetoes here too.
+    #
+    # State is ONE group and so one boost, like the sommelier's: the device,
+    # root, a working `sudo -n` and the privileged tier being switched on are
+    # all facts about the same machine, and stacking them would let a
+    # settings word out-score a fault on every Spark.
+    SpecialistRule(
+        profile="device-settings",
+        keywords=(
+            # Services and the login session.
+            "enable ssh", "disable ssh", "sshd", "ssh server", "openssh-server",
+            "autologin", "auto-login", "auto login", "automatic login",
+            "auto-suspend", "auto suspend", "autosuspend", "headless",
+            "gdm", "gdm3", "greeter", "display manager", "lightdm",
+            "systemctl enable", "systemctl disable", "systemctl start", "systemctl restart",
+            "service enable", "enable the service", "start at boot", "at boot", "on boot",
+            "start on boot", "enable at boot", "power mode", "power profile",
+            # Identity and network.
+            "hostname", "static ip", "netplan", "nmcli", "network manager",
+            "wifi", "wi-fi", "wireless network",
+            "firewall", "ufw", "iptables", "nftables", "firewalld",
+            "tailscale", "tailscaled", "tailnet", "tailscale0",
+            # Packages and updates.
+            "apt install", "apt-get install", "apt upgrade", "apt-get upgrade",
+            "apt update", "apt-get update", "dist-upgrade", "full-upgrade",
+            "do-release-upgrade", "unattended upgrades", "unattended-upgrades",
+            "automatic updates", "driver update", "driver updates", "update the driver",
+            "update the drivers", "validated update channel", "snap install", "snapd",
+            "hold the driver", "apt hold", "apt-mark hold",
+            # Privilege.
+            "docker group", "sudo group", "sudoers", "passwordless sudo", "visudo",
+            # The dialogue itself.
+            "system settings", "device settings", "os settings",
+        ),
+        # Low-precision words that also open a rig, shell or notes question:
+        # "sleep 5", "restart the job", "the docker image", "which port".
+        weak_keywords=(
+            "ssh", "docker", "apt", "snap", "systemd", "systemctl", "service", "services",
+            "sudo", "root", "permission denied", "update", "updates", "upgrade", "reboot",
+            "restart", "suspend", "suspends", "suspending", "suspended", "sleep", "sleeping",
+            "wake", "wakes", "usermod", "gpasswd", "adduser", "group", "groups", "port",
+            "ports", "boot",
+        ),
+        excludes=_MODEL_DESK_VETOES + _SMART_HOME_VETOES + _HW_FAULT_VETOES
+        + _PYTHON_PACKAGING_VETOES
+        # A claim about a setting is the fact checker's, derived from its own
+        # keywords: "is it true that apt upgrade breaks the driver?" asks
+        # whether something is so, not for the upgrade to be run, and one
+        # state boost on a Spark used to flip it.
+        + _CLAIM_VETO_WORDS
+        # A capture request is the notes coach's however privileged the
+        # payload ("remember this: the docker group fix is usermod -aG
+        # docker $USER").
+        + ("remember this", "remember that", "note this", "write this down", "save this",
+           "jot down"),
+        # The Docker *daemon* is the container wrangler's, verbatim socket
+        # dump included; a hardware fault is the rig doctor's; a claim is the
+        # fact checker's.
+        exclude_patterns=_HW_FAULT_VETO_PATTERNS + _CLAIM_VETO_PATTERNS
+        + (_DOCKER_DAEMON_SOCKET,),
+        patterns=(
+            # "enable ssh", "turn off auto-login", "disable the firewall".
+            r"\b(?:enable|disable|turn (?:on|off)|switch (?:on|off)|re-?enable)\s+"
+            r"(?:the\s+)?(?:ssh|sshd|ufw|firewall|auto[- ]?login|auto[- ]?suspend|suspend|"
+            r"sleep|unattended[- ]?upgrades|tailscaled?|snapd?)\b",
+            # "add me to the docker group", "put my user in the sudo group".
+            r"\b(?:add|put|join)\s+(?:me|my user|myself|the user|\w+)\s+(?:to|in|into)\s+"
+            r"(?:the\s+)?(?:docker|sudo|video|render|dialout)\s+group\b",
+            # "install htop with apt", "install docker via apt". The product
+            # itself is the setup concierge's tour, not a package: the
+            # lookahead keeps "install nvhive on this box" out of both
+            # install patterns without a word veto (which would also claim
+            # every other sentence that names nvHive).
+            r"\binstall(?:ing)?\s+(?!nvhive\b|nvh\b)(?:\S+\s+){0,3}?"
+            r"(?:with|via|using|through)\s+(?:apt|apt-get|snap|the package manager)\b",
+            # "install tailscale on the spark", "install docker on my dgx".
+            r"\binstall(?:ing)?\s+(?!nvhive\b|nvh\b)[a-z][\w.+-]*"
+            r"(?:\s+\w+){0,3}?\s+on\s+(?:my|the|this|our)\s+"
+            + _SETUP_ADJ + _SETUP_TARGET + r"\b",
+            # "sudo apt install htop", "apt-get upgrade", "apt-mark hold nvidia-*".
+            r"\b(?:apt|apt-get|aptitude)\s+(?:install|upgrade|update|full-upgrade|"
+            r"dist-upgrade|remove|purge|autoremove|hold|unhold)\b",
+            r"\bsnap\s+(?:install|remove|refresh)\b",
+            # "systemctl enable docker", "sudo systemctl start tailscaled".
+            r"\bsystemctl\s+(?:--user\s+)?(?:enable|disable|start|stop|restart|mask|unmask)\b",
+            r"\busermod\s+-\w*a\w*G\b|\bgpasswd\s+-a\b",
+            # The docker group problem in the user's own words. A verbatim
+            # daemon-socket dump matches this too, at 1.5 against the
+            # wrangler's two nouns plus its own socket pattern (3.85): the
+            # more of the daemon the message quotes, the more it is the
+            # wrangler's, and a one-line "docker says permission denied" is
+            # a group-membership question and lands here.
+            r"\bdocker\b[^.\n]{0,40}?\bpermission denied\b|"
+            r"\bpermission denied\b[^.\n]{0,40}?\bdocker\b|"
+            r"\bsudo docker\b|\bdocker without sudo\b",
+            # "my headless spark keeps suspending", "the box goes to sleep".
+            r"\b(?:keeps?|kept|goes|going|falls?|fell|drops?)\s+(?:\w+\s+){0,2}?"
+            r"(?:to\s+)?(?:sleep|sleeping|suspend|suspending|standby)\b",
+            # "change the hostname to spark-01", "set my hostname".
+            r"\b(?:set|change|rename)\s+(?:the\s+|my\s+|this\s+)?hostname\b",
+            # "update the nvidia driver", "upgrade my gpu driver", "driver
+            # upgrade": a driver *update* is a settings change routed through
+            # the validated channel (the desk that knows the DGX OS trap); a
+            # driver *fault* stays the rig doctor's via the veto patterns.
+            r"\b(?:update|upgrade|updating|upgrading)\s+(?:the\s+|my\s+|this\s+|our\s+)?"
+            r"(?:nvidia\s+|gpu\s+|graphics\s+)?drivers?\b",
+            r"\bdrivers?\s+(?:update|upgrade)s?\b",
+        ),
+        state=("device:dgx-spark|device:rtx-spark|has_root|can_sudo|privileged_allowed",),
+        phrase_once=True,
+        weight=1.4,
     ),
     # --- Ops: the model desk ------------------------------------------------
     # Three rules, no strong keyword in common. The sommelier (first, so a
@@ -1149,9 +1468,10 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
             # socket at unix:///var/run/docker.sock", "Cannot connect to the
             # Docker daemon at unix:///var/run/docker.sock. Is the docker
             # daemon running?". The shell teacher's "permission denied" is
-            # its pattern's 1.5 alone (phrase_once); this is the wrangler's.
-            r"connect to the docker daemon|docker daemon socket|is the docker daemon running|"
-            r"(?:unix://|/var/run/|/run/)\S*docker\.sock",
+            # its pattern's 1.5 alone (phrase_once); this is the wrangler's,
+            # and the same constant vetoes the device settings desk so the
+            # boundary is a rule rather than a scoring margin.
+            _DOCKER_DAEMON_SOCKET,
         ),
         # 1.1 so "install docker" goes to the container specialist rather
         # than the generic install medic on a one-word tie.
@@ -1284,57 +1604,9 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
         ),
         weight=1.0,
     ),
-    SpecialistRule(
-        profile="fact-checker",
-        keywords=(
-            "is it true", "is that true", "true that", "fact check", "fact-check", "factcheck",
-            "verify that", "is this accurate", "myth", "debunk", "claim that", "rumor", "rumour",
-            "hoax", "misinformation", "source for", "evidence for", "is it real",
-            "true or false",
-        ),
-        # "verify my api key", "is the reading accurate", "confirm that the gpu
-        # works", "does it really matter": a bare "really" beside a pronoun is
-        # emphasis, not a claim; it counts next to a claim-shaped pattern.
-        weak_keywords=(
-            "verify", "accurate", "claims", "correct that", "confirm that", "did they really",
-            "does it really",
-        ),
-        # The rig's symptoms and the model desk's arithmetic are never a claim
-        # to check (review 2026-09-02, F1): "is the driver really broken" is
-        # the triage's, "does my 70b really fit" the planner's. Device nouns
-        # are not vetoes: "is it true that apt upgrade breaks the driver?" is
-        # a claim about the driver and stays here.
-        excludes=_VAGUE_TROUBLE + (
-            "running hot", "too hot", "overheating", "throttling", "throttle", "thermal", "xid",
-            "nvidia-smi", "crash", "crashed", "crashes", "traceback", "exit code",
-            "connection refused", "out of memory", "oom", "slow", "tok/s", "tokens/s", "fit",
-            "fits", "vram", "quant", "quants", "gguf", "how much memory", "how much vram",
-            "too big", "too large",
-        ),
-        patterns=(
-            # Every pattern takes a claim-shaped object: "is it true", "is
-            # that really the case", "did they actually say that", "true or
-            # false", "fact check", a URL or quoted claim beside a truth word.
-            # A bare "(is|are|does) ... really" is not one: "my gpu is running
-            # really hot" and "the fans are spinning really loud" are the
-            # triage's (review 2026-09-02, F1).
-            r"\bis (?:it|that|this) (?:really |actually )?"
-            r"(?:true|accurate|real|correct|legit|the case|a thing|a myth|a hoax|fake|bogus)\b",
-            r"\b(?:really|actually|genuinely|truly) "
-            r"(?:true|the case|real|legit|accurate|correct|a thing|happen(?:ed)?|say that|said that)\b",
-            r"\bfact[- ]?check\b|\btrue or false\b",
-            r"\b(?:did|does|do|is|was|are|were|has|have|can|could|will|would) (?:\w+ ){1,4}?"
-            r"(?:really|actually) (?:say|said|claim(?:ed)?|announce[d]?|confirm(?:ed)?|den(?:y|ied)|"
-            r"admit(?:ted)?|happen(?:ed)?|exist|mean|true|the case)\b",
-            # "is this legit: https://...", 'https://... - is that real?',
-            # 'is it true: "the spark has 256 GB"'.
-            r"\b(?:true|accurate|real|legit|fake|bogus|hoax)\b[^.?!\n]{0,20}:\s*"
-            r"(?:https?://\S+|\"[^\"\n]{8,}\")|"
-            r"https?://\S+\s*[-—,:]?\s*(?:is (?:this|that|it) )?"
-            r"(?:true|accurate|real|legit|fake|bogus|a hoax)\b",
-        ),
-        weight=1.0,
-    ),
+    # Defined above the table, named, so the device settings desk can derive
+    # its claim vetoes from it.
+    _FACT_CHECKER,
     # --- Notes and vault ----------------------------------------------------
     SpecialistRule(
         profile="vault-rag",
@@ -1494,6 +1766,13 @@ _STATE_NOTES: dict[str, str] = {
     "no_providers": "no cloud provider is configured",
     "provider_unhealthy": "a configured provider is failing its health check",
     "first_run": "fresh workspace (first run)",
+    "has_root": "running as root",
+    "can_sudo": "sudo works here without a password",
+    "in_sudo_group": "you are in the sudo group (a password is needed)",
+    "privileged_allowed": (
+        "privileged changes need your approval on a red card; without sudo the "
+        "exact command is shown"
+    ),
     "receipts_unhealthy": "an install receipt needs attention",
     "storage_unavailable": "the NVH_HOME storage probe failed",
     "storage_warnings": "storage reported warnings",
@@ -1651,6 +1930,9 @@ def derive_state(
     ``gpu_missing``, ``no_providers``, ``provider_unhealthy``,
     ``unified_memory``, ``receipts_unhealthy``, ``storage_unavailable``,
     ``storage_warnings``, ``vault_ready``, ``has_root``, ``can_sudo``,
+    ``in_sudo_group``, ``privileged_allowed`` (the owner can elevate or be
+    handed the command, and ``NVH_ALLOW_PRIVILEGED`` — read through
+    :func:`privileged_tools_enabled` — is not off),
     ``device:<device_class>`` and ``first_run`` (no models, no receipts, no
     history).
     """
@@ -1694,6 +1976,17 @@ def derive_state(
         state.add("has_root")
     if platform.get("can_sudo"):
         state.add("can_sudo")
+    if platform.get("in_sudo_group"):
+        state.add("in_sudo_group")
+    # The privileged tier is reachable: the owner can either elevate without a
+    # password (``can_sudo``) or be handed the exact command to run themselves
+    # (``in_sudo_group``; on a stock DGX OS box that is the usual answer), and
+    # the kill switch is not off. Root implies both.
+    if (
+        (platform.get("can_sudo") or platform.get("in_sudo_group") or platform.get("has_root"))
+        and privileged_tools_enabled()
+    ):
+        state.add("privileged_allowed")
     receipts = context.get("receipts") or {}
     if receipts.get("unhealthy"):
         state.add("receipts_unhealthy")

@@ -91,6 +91,31 @@ export const MASCOT_STATE_LABELS: Record<MascotState, string> = {
   sleeping: 'asleep — click to wake',
 };
 
+/**
+ * What `asking` means when one of the pending cards is a privileged (sudo)
+ * one — a stronger sentence than the generic "needs your confirmation",
+ * because the click ahead changes the machine rather than the workspace.
+ * Used for the bubble WizardChat raises when a red card first appears and as
+ * the accessible name of the card's approval region.
+ */
+export const MASCOT_ASKING_PRIVILEGED_LABEL = 'the Wizard needs your approval for a privileged change';
+
+/**
+ * Label for the `asking` state given the safety classes of the calls still
+ * waiting for a click. Cheap by construction: the caller already holds the
+ * schemas (WizardChat's tool catalog), so this is a scan of a short list, not
+ * a lookup. Anything that is not exactly `privileged` — including a class
+ * this build has never heard of — keeps the ordinary confirmation wording,
+ * the same way an unknown class keeps the ordinary card.
+ */
+export function mascotAskingLabel(
+  pendingSafetyClasses: readonly (string | undefined | null)[],
+): string {
+  return pendingSafetyClasses.some(cls => cls === 'privileged')
+    ? MASCOT_ASKING_PRIVILEGED_LABEL
+    : MASCOT_STATE_LABELS.asking;
+}
+
 function isPositive(n: unknown): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n > 0;
 }

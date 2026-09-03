@@ -91,7 +91,11 @@ iteration executed travel with the fallback instead of being dropped.
 Three buckets leave the loop without executing:
 
   - ``tool_calls`` / ``confirm_required`` — confirm-class calls the UI must
-    ask the user about;
+    ask the user about; a ``privileged`` one carries its red card
+    (``privileged``, the registry's dry-run ``plan``, the ``approval_token``
+    the confirmed execute must send back — see :func:`_surfaced_call`), and
+    what the user then did comes back on the next turn's history as
+    ``tool_results`` (:func:`_history_tool_results_message`);
   - ``deferred_tool_calls`` — auto-class calls the loop did *not* run
     (``max_iterations=1``, follow-up disabled, cost ceiling), each with a
     ``reason``; the UI shows them and never auto-runs them;
@@ -293,17 +297,59 @@ def _extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
     return stripped, calls
 
 
-def _format_tool_result_message(name: str, result: dict[str, Any]) -> str:
+def _format_tool_result_message(name: str, result: Any) -> str:
     """Render a completed tool result as a system message the model can read.
 
     Compact JSON keeps the prompt small; the model already knows the tool's
-    schema from the system prompt.
+    schema from the system prompt. Secrets are redacted *before* the cut to
+    ``TOOL_RESULT_CHARS`` (the one window ``fit_tool_window`` sizes privileged
+    results to), so a key split by the cut can never slip past the patterns.
     """
+    from nvh.core.agent_guardrails import redact_secrets
+    from nvh.integrations.wizard.tools import TOOL_RESULT_CHARS
+
     try:
-        payload = json.dumps(result, default=str)[:1500]
+        payload = json.dumps(result, default=str)
     except Exception:
-        payload = str(result)[:1500]
-    return f"TOOL_RESULT {name}: {payload}"
+        payload = str(result)
+    return f"TOOL_RESULT {name}: {redact_secrets(payload)[:TOOL_RESULT_CHARS]}"
+
+
+#: A history ``tool_results`` entry's ``summary`` is cut here (the WebUI cuts
+#: at the same length before sending) and at most this many entries per turn
+#: reach the prompt.
+HISTORY_TOOL_SUMMARY_CHARS = 300
+HISTORY_TOOL_RESULTS_MAX = 8
+
+
+def _history_tool_results_message(entry: dict[str, Any]) -> str | None:
+    """``TOOL_RESULT`` lines for the cards a prior assistant turn's user acted on, or ``None``.
+
+    Confirm and privileged cards run in the WebUI (``/v1/wizard/tools/execute``)
+    after the turn that proposed them has ended, so the model never saw the
+    outcome. The next turn's history entry carries it as ``tool_results:
+    [{name, ok, summary}]`` and this renders it in the same ``TOOL_RESULT``
+    shape the in-turn loop uses — redacted, each summary cut to
+    :data:`HISTORY_TOOL_SUMMARY_CHARS`. A ``needs a terminal:`` summary is
+    how the model learns which exact command to repeat.
+    """
+    raw = entry.get("tool_results")
+    if not isinstance(raw, list) or not raw:
+        return None
+    from nvh.core.agent_guardrails import redact_secrets
+
+    lines: list[str] = []
+    for item in raw[:HISTORY_TOOL_RESULTS_MAX]:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        summary = item.get("summary")
+        text = redact_secrets(summary.strip())[:HISTORY_TOOL_SUMMARY_CHARS] if isinstance(summary, str) else ""
+        payload = json.dumps({"ok": item.get("ok") is True, "summary": text})
+        lines.append(f"TOOL_RESULT {name.strip()[:64]}: {payload}")
+    return "\n".join(lines) or None
 
 
 def _tool_not_allowed(name: str, profile_name: str | None) -> dict[str, Any]:
@@ -378,17 +424,71 @@ def _split_by_safety_class(
     return confirm, auto
 
 
-def _extend_unique(pending: list[dict[str, Any]], calls: list[dict[str, Any]]) -> None:
-    """Append confirm-class calls the UI hasn't seen yet.
+def _same_call(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Same tool, same arguments — whatever else (plan, token) one of them carries."""
+    return a.get("name") == b.get("name") and (a.get("arguments") or {}) == (b.get("arguments") or {})
+
+
+async def _surfaced_call(call: dict[str, Any], registry: Any | None) -> dict[str, Any]:
+    """The dict the UI gets for one confirm-bucket call.
+
+    Confirm-class (and unknown) calls pass through as ``{name, arguments}``.
+    A ``privileged`` call is surfaced with what its red card needs —
+    ``privileged: True``, the registry's dry-run ``plan`` and the
+    ``approval_token`` / ``approval_expires_at`` the confirmed execute must
+    bring back — read off the very card ``execute(confirmed=False)`` returns,
+    so the registry stays the one place that plans, mints tokens and re-reads
+    the kill switch (a switched-off tier surfaces ``disabled: True`` and its
+    refusal instead of a plan). None of this reaches the model: surfaced
+    calls go to the UI only.
+    """
+    tool = registry.get(call["name"]) if registry is not None else None
+    if tool is None or tool.safety_class != "privileged":
+        return call
+    arguments = call.get("arguments", {})
+    surfaced: dict[str, Any] = {"name": call["name"], "arguments": arguments, "privileged": True}
+    try:
+        card = await registry.execute(call["name"], arguments=arguments, confirmed=False)
+    except Exception as exc:
+        logger.warning("privileged card for '%s' not built: %s", call["name"], exc)
+        return surfaced
+    if card.get("disabled"):
+        surfaced["disabled"] = True
+        surfaced["error"] = card.get("error")
+        return surfaced
+    for key in ("plan", "approval_token", "approval_expires_at"):
+        if key in card:
+            surfaced[key] = card[key]
+    return surfaced
+
+
+async def _surface_confirm_calls(
+    pending: list[dict[str, Any]], calls: list[dict[str, Any]], registry: Any | None,
+) -> None:
+    """Append confirm-bucket calls the UI hasn't seen yet, privileged ones with their card.
 
     Deferred calls accumulate across follow-up iterations (a confirm-class
     call surfaced on iteration 1 must still be in ``done.tool_calls`` after
     iteration 2 answered); a model re-emitting the same call after seeing an
-    auto-tool result must not produce a duplicate confirm card.
+    auto-tool result must not produce a duplicate card, so identity is the
+    tool name plus arguments, not the surfaced dict.
     """
     for call in calls:
-        if call not in pending:
-            pending.append(call)
+        if not any(_same_call(call, seen) for seen in pending):
+            pending.append(await _surfaced_call(call, registry))
+
+
+def _persistable_calls(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Surfaced calls without their approval tokens, for the conversation store.
+
+    A stored token is of no use to a reload (cards are not rehydrated) and a
+    fifteen-minute, single-use secret has no business in a file.
+    """
+    return [
+        {k: v for k, v in call.items() if k not in ("approval_token", "approval_expires_at")}
+        if isinstance(call, dict) else call
+        for call in calls
+    ]
 
 
 def _cost_ceiling_reached(ceiling: float | None, total_cost_usd: float) -> bool:
@@ -1003,6 +1103,8 @@ class _TurnSetup:
     def meta(self, **extra: Any) -> dict[str, Any]:
         """Persistence metadata for an LLM-answered turn: attribution first so
         a reload can restore it. Deterministic answers use :meth:`meta_for`."""
+        if isinstance(extra.get("tool_calls"), list):
+            extra["tool_calls"] = _persistable_calls(extra["tool_calls"])
         return {
             "source": "wizard",
             "used_profile": self.prof.profile_name,
@@ -1025,7 +1127,7 @@ class _TurnSetup:
             "mode": result["mode"],
             "fallback_reason": result["fallback_reason"],
             "iterations": result["iterations"],
-            "tool_calls": result["tool_calls"],
+            "tool_calls": _persistable_calls(result["tool_calls"]),
             "tool_results": result["tool_results"],
             "deferred_tool_calls": result["deferred_tool_calls"],
             **extra,
@@ -1172,6 +1274,12 @@ def _build_messages(turn: _TurnSetup) -> list[Any]:
         content = entry.get("content", "")
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
             messages.append(Message(role=role, content=content))
+        if role == "assistant":
+            # What the user did with that turn's cards (ran / refused / handed
+            # to a terminal) — the only way a privileged outcome reaches the model.
+            outcomes = _history_tool_results_message(entry)
+            if outcomes:
+                messages.append(Message(role="system", content=outcomes))
     messages.append(Message(role="user", content=turn.user_message))
     return messages
 
@@ -1196,7 +1304,7 @@ class _LoopState:
     iterations: int = 0
 
 
-def _defer_calls_to_ui(
+async def _defer_calls_to_ui(
     tool_calls: list[dict[str, Any]],
     *,
     state: _LoopState,
@@ -1208,14 +1316,15 @@ def _defer_calls_to_ui(
     Used when follow-up is disabled, ``max_iterations=1``, or the cost
     ceiling fired. Whitelist refusals are recorded in ``tool_results`` (and
     returned so the stream can emit them); confirm-class or unknown calls go
-    to the confirm bucket; auto-class calls go to ``deferred_auto`` with
+    to the confirm bucket (privileged ones with their card, see
+    :func:`_surfaced_call`); auto-class calls go to ``deferred_auto`` with
     ``reason`` so the UI can explain why they did not run.
     """
     prof = turn.prof
     allowed, refused = _split_by_whitelist(tool_calls, prof.tools_allowed, prof.profile_name)
     state.tool_results.extend(refused)
     confirm_calls, auto_calls = _split_by_safety_class(allowed, turn.registry)
-    _extend_unique(state.pending_confirm, confirm_calls)
+    await _surface_confirm_calls(state.pending_confirm, confirm_calls, turn.registry)
     for call in auto_calls:
         entry = {"name": call["name"], "arguments": call.get("arguments", {}), "reason": reason}
         if entry not in state.deferred_auto:
@@ -1274,7 +1383,7 @@ async def _execute_tool_calls(
     # Confirm-class calls accumulate across iterations and go out with the
     # single confirm_required event / ``tool_calls``, so nothing is lost when
     # a later iteration answers without re-emitting them.
-    _extend_unique(state.pending_confirm, deferred)
+    await _surface_confirm_calls(state.pending_confirm, deferred, turn.registry)
 
 
 def _clamp_max_iterations(value: int | None) -> int:
@@ -1491,7 +1600,7 @@ async def wizard_chat(
                 # follow-up tool calls didn't run.
                 if _cost_ceiling_reached(prof.cost_ceiling_usd, total_cost_usd):
                     cost_ceiling_hit = True
-                    _defer_calls_to_ui(tool_calls, state=state, turn=turn, reason=DEFER_COST_CEILING)
+                    await _defer_calls_to_ui(tool_calls, state=state, turn=turn, reason=DEFER_COST_CEILING)
                     logger.info(
                         "wizard_chat: profile cost ceiling reached "
                         "(%.4f >= %.4f) — stopping follow-up loop",
@@ -1503,7 +1612,7 @@ async def wizard_chat(
                     # No tool calls (or follow-up disabled / capped at 1) —
                     # done. Confirm-class calls still reach the UI as cards;
                     # auto-class ones are reported as deferred, not run.
-                    _defer_calls_to_ui(
+                    await _defer_calls_to_ui(
                         tool_calls, state=state, turn=turn, reason=_defer_reason(enable_followup),
                     )
                     break
@@ -1831,7 +1940,7 @@ async def wizard_chat_stream(
 
             if _cost_ceiling_reached(prof.cost_ceiling_usd, total_cost_usd):
                 cost_ceiling_hit = True
-                for refused in _defer_calls_to_ui(
+                for refused in await _defer_calls_to_ui(
                     tool_calls, state=state, turn=turn, reason=DEFER_COST_CEILING,
                 ):
                     yield _tool_result_event(refused)
@@ -1843,7 +1952,7 @@ async def wizard_chat_stream(
                 break
 
             if not tool_calls or not effective_followup:
-                for refused in _defer_calls_to_ui(
+                for refused in await _defer_calls_to_ui(
                     tool_calls, state=state, turn=turn, reason=_defer_reason(enable_followup),
                 ):
                     yield _tool_result_event(refused)

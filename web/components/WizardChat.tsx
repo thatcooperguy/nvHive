@@ -72,13 +72,32 @@ import {
   type WizardChatToolResult,
   type WizardChatTurn,
   type WizardDeferredToolCall,
+  type WizardChatToolOutcome,
   type WizardDiagnosticsPayload,
   type WizardStreamEvent,
+  type WizardToolExecuteResult,
   type WizardToolSchema,
 } from '@/lib/api';
 import {
+  NEEDS_TERMINAL_HINT,
+  PRIVILEGED_DISABLED_NOTE,
+  PRIVILEGED_SUDO_NOTE,
+  cardChrome,
+  historyToolOutcome,
+  isPendingStatus,
+  isPrivilegedCall,
+  isPrivilegedDisabled,
+  needsTerminal,
+  planLines,
+  planNotes,
+  terminalCommand,
+  unwrapToolResult,
+  type ToolCardStatus,
+} from '@/lib/privileged';
+import {
   applyMascotEvent,
   markMascotTipProbed,
+  mascotAskingLabel,
   mascotTipProbeDue,
   noteMascotTyping,
   sayMascotTip,
@@ -93,6 +112,11 @@ interface Message {
   toolCalls?: WizardChatToolCall[];
   toolStatus?: Record<string, ToolCardStatus>;
   toolResults?: Record<string, string>;
+  // The raw execute response per tool, kept alongside the summary string so
+  // the card can render what only the structured result carries: the sudo
+  // `plan`, the `needs_terminal` hand-off command and its hint, and the
+  // `disabled` refusal. Display only — nothing here is re-executed.
+  toolDetails?: Record<string, WizardToolExecuteResult>;
   // Auto-class calls the server skipped this turn (depth 1 / cost ceiling),
   // with its reason. Rendered as muted "not run" lines; never executed here.
   deferredToolCalls?: WizardDeferredToolCall[];
@@ -146,8 +170,6 @@ interface Message {
   attributionPending?: boolean;
 }
 
-type ToolCardStatus = 'idle' | 'running' | 'ok' | 'error' | 'awaiting-confirm' | 'dismissed';
-
 function makeId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -157,8 +179,7 @@ function pendingConfirmCalls(message: Message | undefined, except?: string): Wiz
   if (!message?.toolCalls) return [];
   return message.toolCalls.filter(call => {
     if (call.name === except) return false;
-    const status = message.toolStatus?.[call.name] ?? 'idle';
-    return status === 'idle' || status === 'awaiting-confirm';
+    return isPendingStatus(message.toolStatus?.[call.name] ?? 'idle');
   });
 }
 
@@ -177,6 +198,27 @@ function awaitingConfirm(
     if (!next[call.name] || next[call.name] === 'idle') next[call.name] = 'awaiting-confirm';
   }
   return next;
+}
+
+/**
+ * Outcomes of a message's tool cards for the next turn's history. The model
+ * never saw a confirm / privileged card run — the cards execute here, after
+ * the turn ended — so this is how it learns what happened (ran, refused,
+ * handed to a terminal, skipped). Pending cards are left out; empty when
+ * nothing has settled.
+ */
+function toolOutcomesFor(message: Message): Pick<WizardChatTurn, 'tool_results'> {
+  const outcomes: WizardChatToolOutcome[] = [];
+  for (const call of message.toolCalls ?? []) {
+    const outcome = historyToolOutcome(
+      call.name,
+      message.toolStatus?.[call.name] ?? 'idle',
+      message.toolResults?.[call.name],
+      message.toolDetails?.[call.name],
+    );
+    if (outcome) outcomes.push(outcome);
+  }
+  return outcomes.length > 0 ? { tool_results: outcomes } : {};
 }
 
 /**
@@ -265,6 +307,11 @@ export default function WizardChat() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tools, setTools] = useState<Map<string, WizardToolSchema>>(new Map());
+  // `privileged_enabled` from the tool list: false means NVH_ALLOW_PRIVILEGED
+  // is off, so privileged cards render disabled with no Run button. undefined
+  // = the API never said (older build) — cards stay enabled and the refusal,
+  // if any, comes from execute.
+  const [privilegedEnabled, setPrivilegedEnabled] = useState<boolean | undefined>(undefined);
   // Profile catalog cached so MessageBlock can render the matching avatar
   // without each bubble making its own /v1/wizard/profiles call.
   const [profileMap, setProfileMap] = useState<Map<string, AgentProfileSchema>>(new Map());
@@ -439,6 +486,7 @@ export default function WizardChat() {
         const tmap = new Map<string, WizardToolSchema>();
         for (const t of tList.tools) tmap.set(t.name, t);
         setTools(tmap);
+        setPrivilegedEnabled(tList.privileged_enabled);
         const pmap = new Map<string, AgentProfileSchema>();
         for (const p of pList.profiles) pmap.set(p.name, p);
         setProfileMap(pmap);
@@ -615,75 +663,115 @@ export default function WizardChat() {
     call: WizardChatToolCall,
     confirmed: boolean,
   ): Promise<void> => {
-    setMessages(prev => prev.map(m =>
-      m.id === messageId
-        ? {
-          ...m,
-          toolStatus: { ...(m.toolStatus ?? {}), [call.name]: 'running' },
-        }
-        : m,
-    ));
-
-    try {
-      const result = await executeWizardTool(call.name, {
-        arguments: call.arguments,
-        confirmed,
-      });
-
-      if (result.needs_confirmation) {
-        setMessages(prev => prev.map(m =>
-          m.id === messageId
-            ? {
-              ...m,
-              toolStatus: { ...(m.toolStatus ?? {}), [call.name]: 'awaiting-confirm' },
-              toolResults: {
-                ...(m.toolResults ?? {}),
-                [call.name]: result.summary ?? 'Needs your confirmation.',
-              },
-            }
-            : m,
-        ));
-        setMascotState('asking');
-        return;
-      }
-
-      const summary = result.ok
-        ? formatToolResultSummary(call.name, result.result)
-        : `Tool failed: ${result.error ?? 'unknown error'}`;
-
-      const nextStatus: 'ok' | 'error' = result.ok ? 'ok' : 'error';
-      setMessages(prev => [
-        ...prev.map(m =>
-          m.id === messageId
-            ? {
-              ...m,
-              toolStatus: { ...(m.toolStatus ?? {}), [call.name]: nextStatus },
-              toolResults: { ...(m.toolResults ?? {}), [call.name]: summary },
-            }
-            : m,
-        ),
-        {
-          id: makeId(),
-          role: 'system' as const,
-          content: result.ok
-            ? `✓ ${call.name} — ${summary}`
-            : `✗ ${call.name} — ${summary}`,
-        },
-      ]);
-      settleMascot(messageId, call.name, result.ok ? 'happy' : 'error');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Tool call failed';
+    // The one updater every branch below uses: the card's status, its
+    // one-line summary and (when there is one) the raw execute response the
+    // card reads `plan` / `command` / `hint` / `disabled` from.
+    const patchMessage = (
+      status: ToolCardStatus,
+      summary?: string,
+      detail?: WizardToolExecuteResult,
+    ) => {
       setMessages(prev => prev.map(m =>
         m.id === messageId
           ? {
             ...m,
-            toolStatus: { ...(m.toolStatus ?? {}), [call.name]: 'error' },
-            toolResults: { ...(m.toolResults ?? {}), [call.name]: message },
+            toolStatus: { ...(m.toolStatus ?? {}), [call.name]: status },
+            ...(summary !== undefined
+              ? { toolResults: { ...(m.toolResults ?? {}), [call.name]: summary } }
+              : {}),
+            ...(detail
+              ? { toolDetails: { ...(m.toolDetails ?? {}), [call.name]: detail } }
+              : {}),
           }
           : m,
       ));
+    };
+    patchMessage('running');
+
+    try {
+      const envelope = await executeWizardTool(call.name, {
+        arguments: call.arguments,
+        confirmed,
+        // The token the server issued with this card; a confirmed privileged
+        // call is refused without it. The model never sees it.
+        approvalToken: call.approval_token,
+      });
+      // The registry nests a handler's answer under `result`; the hand-off,
+      // a deny-list refusal and a real receipt all live there, so verdicts
+      // are read from the unwrapped outcome, never from the envelope's
+      // "the tool answered" `ok: true`.
+      const outcome = unwrapToolResult(envelope);
+      const detail: WizardToolExecuteResult = { ...envelope, ...outcome, result: envelope.result };
+
+      if (envelope.needs_confirmation) {
+        patchMessage('awaiting-confirm', envelope.summary ?? 'Needs your confirmation.', detail);
+        setMascotState('asking');
+        return;
+      }
+
+      // Kill switch: privileged tools are off for this workspace. A refusal,
+      // not a failure — the card goes muted and loses its Run button rather
+      // than showing a red "✗ Failed" the user cannot act on.
+      if (envelope.disabled || outcome.disabled) {
+        patchMessage('disabled', envelope.error ?? outcome.error ?? PRIVILEGED_DISABLED_NOTE, detail);
+        settleMascot(messageId, call.name, 'idle');
+        return;
+      }
+
+      // sudo wants a password, so nvHive did not run it and hands over the
+      // exact command instead. This must be checked BEFORE `ok`: the hand-off
+      // arrives as a nested ok=false and it is never a red error.
+      if (needsTerminal(outcome)) {
+        patchMessage(
+          'needs-terminal',
+          typeof outcome.summary === 'string' ? outcome.summary : 'Run this yourself — sudo needs your password.',
+          detail,
+        );
+        settleMascot(messageId, call.name, 'idle');
+        return;
+      }
+
+      // A nested ok=false is an in-band refusal (deny list, validation, a
+      // failed apply) and renders as a failure with its error, never as Done.
+      const ok = envelope.ok && outcome.ok !== false;
+      const summary = ok
+        ? formatToolResultSummary(call.name, outcome)
+        : `Tool failed: ${outcome.error ?? envelope.error ?? 'unknown error'}`;
+      patchMessage(ok ? 'ok' : 'error', summary, detail);
+      setMessages(prev => [
+        ...prev,
+        {
+          id: makeId(),
+          role: 'system' as const,
+          content: ok
+            ? `✓ ${call.name} — ${summary}`
+            : `✗ ${call.name} — ${summary}`,
+        },
+      ]);
+      settleMascot(messageId, call.name, ok ? 'happy' : 'error');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Tool call failed';
+      patchMessage('error', message, { ok: false, error: message });
       settleMascot(messageId, call.name, 'error');
     }
+  };
+
+  // Initial card status for freshly surfaced calls: awaiting a click, except
+  // a privileged card the kill switch has already turned off (the server said
+  // so on the call, or the tool list did). That one starts settled as
+  // `disabled` — no Run button, and it does not keep the mascot asking.
+  const seedToolStatus = (
+    calls: WizardChatToolCall[],
+    prev: Record<string, ToolCardStatus> | undefined,
+  ): Record<string, ToolCardStatus> => {
+    const next = awaitingConfirm(calls, prev);
+    for (const call of calls) {
+      if (!isPendingStatus(next[call.name])) continue;
+      if (call.disabled === true || isPrivilegedDisabled(tools.get(call.name), call, privilegedEnabled)) {
+        next[call.name] = 'disabled';
+      }
+    }
+    return next;
   };
 
   // `confirm_required` (and `done.tool_calls`): show a Run / Skip card for
@@ -693,9 +781,23 @@ export default function WizardChat() {
     if (calls.length === 0) return;
     setMessages(prev => prev.map(m =>
       m.id === messageId
-        ? { ...m, toolCalls: calls, toolStatus: awaitingConfirm(calls, m.toolStatus) }
+        ? { ...m, toolCalls: calls, toolStatus: seedToolStatus(calls, m.toolStatus) }
         : m,
     ));
+    // A red card is a bigger ask than a confirm card, so the mascot says so in
+    // words rather than leaving the user to read the chrome. The `asking`
+    // state itself comes from the stream event; this only sharpens the
+    // wording, once per tool per browser session (`sayMascotTip`), and is a
+    // no-op while the mascot is hidden.
+    const classes = calls.map(c => tools.get(c.name)?.safety_class);
+    if (classes.some(cls => cls === 'privileged')) {
+      const named = calls
+        .filter(c => isPrivilegedCall(tools.get(c.name)))
+        .map(c => c.name)
+        .sort()
+        .join(',');
+      sayMascotTip(mascotAskingLabel(classes), { id: `privileged-approval:${named}` });
+    }
   };
 
   const send = async () => {
@@ -773,6 +875,9 @@ export default function WizardChat() {
         // Continuity: assistant turns name the specialist that produced them
         // so the concierge can stay with it on a weak follow-up ("and then?").
         ...(m.role === 'assistant' && m.usedProfile !== undefined ? { used_profile: m.usedProfile } : {}),
+        // What the user did with that turn's cards: the model never saw a
+        // confirm / privileged tool run, so the next turn tells it.
+        ...(m.role === 'assistant' ? toolOutcomesFor(m) : {}),
       }));
 
     const updateAssistant = (mut: (m: Message) => Message) => {
@@ -866,7 +971,7 @@ export default function WizardChat() {
               toolCalls: m.toolCalls?.length ? m.toolCalls : (event.tool_calls ?? []),
               toolStatus: m.toolCalls?.length
                 ? m.toolStatus
-                : awaitingConfirm(event.tool_calls ?? [], m.toolStatus),
+                : seedToolStatus(event.tool_calls ?? [], m.toolStatus),
               // Auto-class calls the server skipped (depth 1 / cost ceiling):
               // display only, never executed client-side.
               deferredToolCalls: event.deferred_tool_calls ?? [],
@@ -994,6 +1099,7 @@ export default function WizardChat() {
             message={message}
             tools={tools}
             profileMap={profileMap}
+            privilegedEnabled={privilegedEnabled}
             onConfirmTool={(call) => {
               setMascotState('working');
               void runTool(message.id, call, true);
@@ -1396,12 +1502,15 @@ function MessageBlock({
   message,
   tools,
   profileMap,
+  privilegedEnabled,
   onConfirmTool,
   onDismissTool,
 }: {
   message: Message;
   tools: Map<string, WizardToolSchema>;
   profileMap: Map<string, AgentProfileSchema>;
+  /** `privileged_enabled` from the tool list; undefined = the API never said. */
+  privilegedEnabled?: boolean;
   onConfirmTool: (call: WizardChatToolCall) => void;
   onDismissTool: (call: WizardChatToolCall) => void;
 }) {
@@ -1542,6 +1651,8 @@ function MessageBlock({
             schema={tools.get(call.name)}
             status={message.toolStatus?.[call.name] ?? 'idle'}
             result={message.toolResults?.[call.name]}
+            detail={message.toolDetails?.[call.name]}
+            privilegedEnabled={privilegedEnabled}
             onConfirm={() => onConfirmTool(call)}
             onDismiss={() => onDismissTool(call)}
           />
@@ -1551,11 +1662,32 @@ function MessageBlock({
   );
 }
 
+/**
+ * One tool the Wizard proposed, as a card the user must act on.
+ *
+ * Three chromes, all of which still need a click (or are already settled):
+ *  - ordinary confirm — themed border, "Run" / "Skip". Every safety class
+ *    that is not exactly `privileged` lands here, including one this build
+ *    has never heard of;
+ *  - privileged (sudo) — red border, a PRIVILEGED pill, the one-line note
+ *    that it runs with sudo on this machine, the server's exact commands in a
+ *    <pre> (with what changes, the undo and any warning) above the buttons,
+ *    and a destructive "Approve and run". The plan and the approval token
+ *    arrive on the surfaced call; nothing is read from the model's arguments;
+ *  - disabled — `NVH_ALLOW_PRIVILEGED=0`: a muted line naming the variable
+ *    and NO run button at all (Skip stays while the card is still pending).
+ *
+ * The `needs-terminal` outcome is a hand-off, not a failure: sudo wanted a
+ * password, so nvHive did not run the command and shows it copyable instead.
+ * nvHive never prompts for, sees or stores a password.
+ */
 function ToolCard({
   call,
   schema,
   status,
   result,
+  detail,
+  privilegedEnabled,
   onConfirm,
   onDismiss,
 }: {
@@ -1563,85 +1695,190 @@ function ToolCard({
   schema: WizardToolSchema | undefined;
   status: ToolCardStatus;
   result?: string;
+  /** Raw execute response: plan / command / hint / disabled live here. */
+  detail?: WizardToolExecuteResult;
+  privilegedEnabled?: boolean;
   onConfirm: () => void;
   onDismiss: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
   // Every call that reaches a card needs a click, whatever the catalog says
   // its safety class is — the server already ran what it was willing to.
   const description = schema?.description ?? call.name;
 
-  let badge = '';
-  let badgeColor = '#737373';
-  switch (status) {
-    case 'running':
-      badge = 'Running...';
-      badgeColor = '#d97706';
-      break;
-    case 'ok':
-      badge = '✓ Done';
-      badgeColor = '#16a34a';
-      break;
-    case 'error':
-      badge = '✗ Failed';
-      badgeColor = '#dc2626';
-      break;
-    case 'awaiting-confirm':
-      badge = 'Needs confirmation';
-      badgeColor = '#d97706';
-      break;
-    case 'dismissed':
-      badge = 'Skipped';
-      badgeColor = '#737373';
-      break;
-    default:
-      badge = 'Click to run';
-      badgeColor = '#d97706';
-  }
+  // The server marks a surfaced privileged call (`call.privileged`) as well as
+  // its execute answers, so the red chrome never depends on the local catalog.
+  const privileged = isPrivilegedCall(schema, detail) || isPrivilegedCall(undefined, call);
+  const disabled = call.disabled === true || isPrivilegedDisabled(schema, detail, privilegedEnabled);
+  // A card the kill switch has turned off reads as disabled before it is ever
+  // clicked, even though nothing has run. It keeps its Skip button while the
+  // underlying status is still pending, so the user can settle it and the
+  // mascot stops asking.
+  const effectiveStatus: ToolCardStatus = disabled && isPendingStatus(status) ? 'disabled' : status;
+  const chrome = cardChrome(privileged ? 'privileged' : schema?.safety_class, effectiveStatus);
+  const skippable = chrome.clickable || isPendingStatus(status);
+  // The exact commands: the server's dry run, delivered on the surfaced call
+  // (or on an unconfirmed execute answer). Displayed for approval only —
+  // never re-derived here, never fetched, and never the model's `arguments`.
+  const planSource = planLines(call).length > 0 ? call : detail;
+  const plan = planLines(planSource);
+  const notes = planNotes(planSource);
+  const handoff = needsTerminal(detail);
+  const command = terminalCommand(detail);
+
+  const copyCommand = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Clipboard blocked (insecure origin / denied permission) — the command
+      // is on screen in a selectable block, so there is nothing to recover.
+    }
+  };
 
   return (
     <div
       className="mt-2 rounded-md border p-2 text-xs"
-      style={{ background: 'var(--bg-subtle)', borderColor: 'var(--border)' }}
+      style={{
+        background: chrome.background ?? 'var(--bg-subtle)',
+        borderColor: chrome.borderColor ?? 'var(--border)',
+      }}
+      aria-label={privileged ? `${call.name} — ${PRIVILEGED_SUDO_NOTE}` : undefined}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-baseline gap-2">
-          <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
-            {call.name}
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
+          {call.name}
+        </span>
+        {chrome.classBadge && (
+          <span
+            className="rounded-sm border px-1 py-px text-[9px] font-mono font-semibold uppercase tracking-[0.14em]"
+            style={{ borderColor: chrome.borderColor ?? undefined, color: chrome.borderColor ?? undefined }}
+          >
+            {chrome.classBadge}
           </span>
-          <span className="text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: badgeColor }}>
-            {badge}
-          </span>
-        </div>
-        {(status === 'idle' || status === 'awaiting-confirm') && (
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={onDismiss}
-              className="rounded-sm border px-2 py-1 text-[10px] font-mono transition-colors hover:bg-[var(--bg-hover)]"
-              style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
-              title="Leave this tool un-run"
-            >
-              Skip
-            </button>
-            <button
-              type="button"
-              onClick={onConfirm}
-              className="btn-primary px-2 py-1 text-[10px] font-mono"
-            >
-              Run
-            </button>
-          </div>
         )}
+        <span className="text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: chrome.badgeColor }}>
+          {chrome.badge}
+        </span>
       </div>
       <div className="mt-1" style={{ color: 'var(--text-secondary)' }}>
         {description}
       </div>
+      {chrome.privileged && (
+        <div className="mt-1 font-mono text-[10px]" style={{ color: chrome.borderColor ?? undefined }}>
+          {PRIVILEGED_SUDO_NOTE}
+        </div>
+      )}
+      {/* The plan and its notes come BEFORE the buttons in DOM order, so a
+          screen reader (and the tab order) reaches what is being approved
+          before the control that approves it. */}
+      {plan.length > 0 && (
+        <pre
+          className="mt-1 overflow-x-auto rounded-sm border p-1.5 font-mono text-[10px] leading-relaxed"
+          style={{
+            background: 'var(--bg-card)',
+            borderColor: chrome.borderColor ?? 'var(--border)',
+            color: 'var(--text-primary)',
+          }}
+          aria-label="Commands this tool will run"
+        >
+          {plan.join('\n')}
+        </pre>
+      )}
+      {notes.error && (
+        <div className="mt-1 text-[10px]" style={{ color: chrome.borderColor ?? '#dc2626' }} role="note">
+          Refused: {notes.error}
+        </div>
+      )}
+      {notes.changes && (
+        <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+          {notes.changes}
+        </div>
+      )}
+      {notes.warning && (
+        <div className="mt-1 text-[10px] font-semibold" style={{ color: '#d97706' }} role="note">
+          Warning: {notes.warning}
+        </div>
+      )}
+      {notes.undo.length > 0 && (
+        <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          undo: {notes.undo.join(' ; ')}
+        </div>
+      )}
+      {notes.notes.length > 0 && (
+        <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          {notes.notes.join(' ')}
+        </div>
+      )}
       {Object.keys(call.arguments).length > 0 && (
         <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
           args: {JSON.stringify(call.arguments)}
         </div>
       )}
-      {result && (
+      {skippable && (
+        <div className="mt-2 flex items-center justify-end gap-1">
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="rounded-sm border px-2 py-1 text-[10px] font-mono transition-colors hover:bg-[var(--bg-hover)]"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+            title="Leave this tool un-run"
+          >
+            Skip
+          </button>
+          {chrome.clickable && (
+            <button
+              type="button"
+              onClick={onConfirm}
+              className={
+                chrome.privileged
+                  ? 'rounded-md px-2 py-1 text-[10px] font-mono font-semibold text-white transition-opacity hover:opacity-90'
+                  : 'btn-primary px-2 py-1 text-[10px] font-mono'
+              }
+              style={chrome.privileged ? { background: chrome.borderColor ?? undefined } : undefined}
+              title={chrome.privileged ? PRIVILEGED_SUDO_NOTE : undefined}
+            >
+              {chrome.runLabel}
+            </button>
+          )}
+        </div>
+      )}
+      {disabled && (
+        <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          {PRIVILEGED_DISABLED_NOTE}
+        </div>
+      )}
+      {handoff && (
+        <div className="mt-1">
+          <div className="flex items-center justify-between gap-2">
+            <code
+              className="min-w-0 flex-1 overflow-x-auto rounded-sm border px-1.5 py-1 font-mono text-[10px] whitespace-pre"
+              style={{
+                background: 'var(--bg-card)',
+                borderColor: 'var(--border)',
+                color: 'var(--text-primary)',
+              }}
+            >
+              {command || '(no command was returned)'}
+            </code>
+            {command && (
+              <button
+                type="button"
+                onClick={() => void copyCommand()}
+                className="shrink-0 rounded-sm border px-2 py-1 text-[10px] font-mono transition-colors hover:bg-[var(--bg-hover)]"
+                style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+              >
+                {copied ? 'Copied' : 'Copy command'}
+              </button>
+            )}
+          </div>
+          <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            {detail?.hint ?? NEEDS_TERMINAL_HINT}
+          </div>
+        </div>
+      )}
+      {result && !disabled && (
         <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-secondary)' }}>
           {result}
         </div>

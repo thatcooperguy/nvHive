@@ -551,11 +551,15 @@ class TestAPIEndpointCoverage:
         names = {t["name"] for t in tools}
         assert {"refresh_models", "repair_workspace", "save_provider_key"}.issubset(names)
         # Every tool advertises its safety class so the UI can decide whether
-        # to show a confirmation card before /v1/wizard/tools/execute.
+        # to show a confirmation card (red for privileged) before
+        # /v1/wizard/tools/execute.
         for tool in tools:
-            assert tool["safety_class"] in ("auto", "confirm")
+            assert tool["safety_class"] in ("auto", "confirm", "privileged")
+            assert isinstance(tool["enabled"], bool)
         assert body["data"]["confirm_count"] >= 1
         assert body["data"]["auto_count"] >= 1
+        assert body["data"]["privileged_count"] >= 1
+        assert isinstance(body["data"]["privileged_enabled"], bool)
 
     def test_wizard_tools_execute_unknown_tool_returns_error(self, test_client: TestClient) -> None:
         resp = test_client.post("/v1/wizard/tools/execute", json={"name": "does_not_exist"})
