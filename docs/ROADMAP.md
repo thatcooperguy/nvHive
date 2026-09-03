@@ -37,8 +37,9 @@ this page is the short version. Features are listed once each.
 |---|---|---|
 | 0.41.1 | hotfix | retired default models on most cloud providers; `$0` cost accounting; unreachable `nvh mcp` / `nvh agent`; `nvh snapshot` archiving the wrong tree; GitHub Models removed |
 | 0.42 | subtract | dead orchestration modules, Docker/compose, stale installers and demo assets; `~/.hive`-era modules folded into their `NVH_HOME` successors; provider adapters collapsed into `ProviderSpec` rows; CLI query modes into `nvh ask` flags and diagnostics into `nvh status`; `/query` and `/council` pages removed; docs 33 → 12 with parity and link tests |
-| 0.43 | refresh + concierge | one `ProviderSpec`-derived provider doc; price, context and capability flags derived from LiteLLM at load; a live `/v1/models` intersection and a model-currency CI test; a regenerated cloud catalog; `nemotron3:33b` local tiers; `num_ctx` passed to Ollama from the VRAM tier; Perplexity's 2026-09-27 Chat Completions sunset handled. **Spark concierge groundwork** ([proposal](proposals/SPARK_CONCIERGE_2026-09.md)): Wizard profile fields enforced; platform facts (device class, unified memory, sudo) in the prompt; GB10 recognised; `nvh-linux-arm64` release and arm64 CI; the mascot; Home Assistant tools; `profile=auto` hidden-specialist routing |
-| 0.44 | add | Wizard `run_code`/`shell` with approval cards and `ask_user`; a `remember` tool and a Memory filter on `/vault`; `generate_image` (NVIDIA-hosted or local ComfyUI); one chat surface; standard-path OpenAI endpoints and `nvh launch <tool>`; durable schedules under `NVH_HOME` with `/v1/schedules`; session cost against the hourly desktop rate; push-to-talk STT and optional TTS in the WebUI; **privileged tool class** (sudo with approval cards, vault audit) and Spark playbook packs |
+| 0.43 | concierge | **shipped 2026-09-03.** One Wizard with hidden specialists (`profile=auto`), the mascot, platform facts (device class, unified memory, sudo) in the prompt, Home Assistant tools, `nvh-linux-arm64` and arm64 CI, one registry-verified local-model table read by every ladder, installer and doc (`nemotron3:33b` MoE-first on unified memory, `num_ctx` passed to Ollama from the tier), `nvh ask --focus research` grounded on nvHive's own web search, Perplexity moved to the Agent API before its 2026-09-27 Chat Completions sunset ([proposal](proposals/SPARK_CONCIERGE_2026-09.md)) |
+| 0.44 | refresh + privileged | the remaining refresh items — one `ProviderSpec`-derived provider doc; price, context and capability flags derived from LiteLLM at load; a live `/v1/models` intersection and a model-currency CI test; a regenerated cloud catalog; `NVH_HOME` as the only root; one `Tool`/`ToolRegistry` with native function calling — plus the Spark concierge's **privileged tool class** (sudo with red approval cards, vault audit, `NVH_ALLOW_PRIVILEGED` kill switch), Spark playbooks as packs, and the Phase 3 bridge that brings the sandbox `run_code`/`shell` and vision tools into the Wizard registry with approval cards |
+| 0.45 | add | a Wizard `ask_user` tool; a `remember` tool and a Memory filter on `/vault`; `generate_image` (NVIDIA-hosted or local ComfyUI); one chat surface; standard-path OpenAI endpoints and `nvh launch <tool>`; durable schedules under `NVH_HOME` with `/v1/schedules`; session cost against the hourly desktop rate; push-to-talk STT and optional TTS in the WebUI |
 
 ## Features
 
@@ -55,18 +56,18 @@ Status: **shipped** · **planned** (in a release above) · **present-but-hidden*
 | Per-agent cost ceiling | shipped (non-streaming) | enforce on the streaming path once providers report per-chunk usage |
 | Provider-key paste with auto-detect; GPU-fit recommender card; reconnect panel on every page | shipped | |
 | Code execution from the Wizard, surfaced in chat | planned 0.44 | `run_code`/`shell` as confirm-class Wizard tools with approval cards |
-| Persistent cross-chat memory in the WebUI | planned 0.44 | `remember` tool; the vault is already RAG-queryable |
-| Image generation from chat | planned 0.44 | rename `generate_portrait` → `generate_image`; NVIDIA-hosted when `NVAPI_KEY` is set, else local ComfyUI |
-| One chat surface (`/` and `/wizard` merged) | planned 0.44 | two surfaces confuse first-time users |
-| Hidden specialists — the Wizard picks the agent per turn (`profile=auto`) | planned 0.43 | [Spark concierge](proposals/SPARK_CONCIERGE_2026-09.md) §3.1; the picker leaves the composer |
-| Mascot — sprite-based avatar reacting to Wizard state | planned 0.43 | placeholder sprite ships; a real-person likeness needs sign-off ([MASCOT.md](MASCOT.md)) |
-| Home Assistant operator (smart home via the HA REST API) | planned 0.43 | five Wizard tools, service calls behind a confirm card |
+| Persistent cross-chat memory in the WebUI | planned 0.45 | `remember` tool; the vault is already RAG-queryable |
+| Image generation from chat | planned 0.45 | rename `generate_portrait` → `generate_image`; NVIDIA-hosted when `NVAPI_KEY` is set, else local ComfyUI |
+| One chat surface (`/` and `/wizard` merged) | planned 0.45 | two surfaces confuse first-time users |
+| Hidden specialists — the Wizard picks the agent per turn (`profile=auto`) | shipped 0.43 | [Spark concierge](proposals/SPARK_CONCIERGE_2026-09.md) §3.1; the picker leaves the composer |
+| Mascot — sprite-based avatar reacting to Wizard state | shipped 0.43 | placeholder sprite ships; a real-person likeness needs sign-off ([MASCOT.md](MASCOT.md)) |
+| Home Assistant operator (smart home via the HA REST API) | shipped 0.43 | five Wizard tools, service calls behind a confirm card |
 | Device settings and app installs with sudo (Spark playbooks) | planned 0.44 | `privileged` tool class; DGX OS first, Windows on Arm when RTX Spark ships |
-| Standard-path OpenAI endpoints; `nvh launch <tool>` for Claude Code / Codex / opencode / Cursor / Continue | planned 0.44 | `/v1/chat/completions` beside `/v1/proxy/...` |
-| Scheduled prompts with a UI | planned 0.44 | durable jobs under `NVH_HOME`, `/v1/schedules`; today `nvh schedule` only |
-| Session cost vs hourly desktop rate | planned 0.44 | the "am I wasting GPU money" pill |
-| Voice in the WebUI (push-to-talk STT, optional TTS) | planned 0.44 | `nvh voice` exists on the CLI |
-| Quantisation variant picker; context length / GPU offload / KV-cache controls | open | `num_ctx` from the VRAM tier lands in 0.43; the UI is unscheduled |
+| Standard-path OpenAI endpoints; `nvh launch <tool>` for Claude Code / Codex / opencode / Cursor / Continue | planned 0.45 | `/v1/chat/completions` beside `/v1/proxy/...` |
+| Scheduled prompts with a UI | planned 0.45 | durable jobs under `NVH_HOME`, `/v1/schedules`; today `nvh schedule` only |
+| Session cost vs hourly desktop rate | planned 0.45 | the "am I wasting GPU money" pill |
+| Voice in the WebUI (push-to-talk STT, optional TTS) | planned 0.45 | `nvh voice` exists on the CLI |
+| Quantisation variant picker; context length / GPU offload / KV-cache controls | open | `num_ctx` from the VRAM tier shipped in 0.43; the UI is unscheduled |
 | Import an arbitrary GGUF or HF repo into Ollama | open | partial today via `nvh models pull <tag>` |
 | Pack uninstall and disk reclamation; per-app start/stop/logs; update detection | open | receipts already carry uninstall and repair plans |
 | Hybrid BM25 + vector RAG with reranking | open | SQLite store today; embedding-model swap by VRAM is the cheap first step |
@@ -88,10 +89,6 @@ Status: **shipped** · **planned** (in a release above) · **present-but-hidden*
   `mcp.server.fastmcp` and reshaped the client API. Migrate
   `nvh/mcp_server.py` and `nvh/integrations/mcp_client.py` together, then
   lift both pins.
-- **Perplexity Chat Completions sunset (2026-09-27)** — the `perplexity` row in
-  `nvh/providers/specs.py` carries `sunset_date`; before that date verify
-  LiteLLM's Perplexity route on the pinned version or move web-grounded
-  queries to `nvh/integrations/web_search/`.
 - **Streaming cost ceiling** — see the per-agent row above.
 
 ## Non-goals

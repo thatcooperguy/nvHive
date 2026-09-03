@@ -2,10 +2,21 @@
 
 ## [Unreleased]
 
-The start of the Spark concierge work
-([proposal](docs/proposals/SPARK_CONCIERGE_2026-09.md), #137): nvHive as an
-on-device helper for DGX Spark and RTX Spark owners — one Wizard, specialists
-under the hood, a mascot, and privileged setup with approval.
+## [0.43.0] - 2026-09-03
+
+The concierge release. nvHive turns toward NVIDIA's owned unified-memory
+desktops — DGX Spark today, RTX Spark when it ships — as an on-device helper
+([proposal](docs/proposals/SPARK_CONCIERGE_2026-09.md), #137, #136): one
+Wizard that picks a hidden specialist per turn, a sprite mascot that mirrors
+what it is doing, platform facts (device class, unified memory, sudo) in
+the prompt, Home Assistant tools, an arm64 release binary, and one
+registry-verified local-model table that every ladder, installer and doc
+reads. It also closes the dated 0.43 "refresh" items: the Perplexity
+Chat Completions sunset (the provider now speaks the Agent API) and
+`num_ctx` from the VRAM tier. The remaining refresh items (LiteLLM-derived
+capabilities, the live `/v1/models` intersection, the cloud catalogue
+regeneration, `NVH_HOME` as the only root, one `Tool`) move to 0.44.
+Privileged setup with approval cards (Phase 2) follows in 0.44.
 
 ### Added
 - **DGX Spark is a release target.** `release.yml` builds `nvh-linux-arm64`
