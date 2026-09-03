@@ -117,9 +117,13 @@ class ToolRegistry:
 
             workspace = pathlib.Path(self.workspace)
 
-            if tool_name == "shell" or tool_name == "run_code":
-                cmd = arguments.get("command", "")
-                check_command(cmd)
+            # Each tool's blocklisted text lives under its own argument:
+            # ``shell`` sends ``command``, ``run_code`` sends ``code``.
+            # Reading ``command`` for both left run_code unchecked.
+            if tool_name == "shell":
+                check_command(str(arguments.get("command", "") or ""))
+            elif tool_name == "run_code":
+                check_command(str(arguments.get("code", "") or ""))
 
             if tool_name == "read_file":
                 path = arguments.get("path", "")

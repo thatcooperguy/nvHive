@@ -8,6 +8,8 @@ Dependencies (add to pyproject.toml):
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hmac
 import inspect
 import ipaddress
@@ -49,6 +51,7 @@ from nvh.api.services import QueryService
 from nvh.core import local_models
 from nvh.core.agents import generate_agents, get_preset_agents, list_presets
 from nvh.core.engine import BudgetExceededError, Engine
+from nvh.integrations.wizard.vision_bridge import MAX_IMAGE_BYTES as _VISION_MAX_IMAGE_BYTES
 from nvh.providers.base import (
     CompletionResponse,
     Message,
@@ -606,6 +609,20 @@ class QueryAttachment(BaseModel):
     content: str = Field(..., min_length=1, max_length=25_000_000)
     mime_type: str | None = Field(default=None, max_length=120)
     is_image: bool = False
+
+
+#: A Wizard chat image as base64. Sized well past the 20 MB byte cap
+#: (``WIZARD_ATTACHMENT_MAX_BYTES``; 20 MiB is ~28M base64 characters) so an
+#: oversized image meets the friendly size 400 in ``_land_wizard_attachments``
+#: instead of pydantic's string-length 422 — ``QueryAttachment``'s 25M chars
+#: decode to only 18.75 MB.
+WIZARD_ATTACHMENT_MAX_BASE64_CHARS = 40_000_000
+
+
+class WizardChatAttachment(QueryAttachment):
+    """``QueryAttachment`` with the base64 ceiling the Wizard's 20 MB images need."""
+
+    content: str = Field(..., min_length=1, max_length=WIZARD_ATTACHMENT_MAX_BASE64_CHARS)
 
 
 class QueryRequest(BaseModel):
@@ -1794,6 +1811,170 @@ class WizardChatRequest(BaseModel):
     # Clamp the read→think→act→react loop. 1 = "just answer, no tools",
     # 3 (current ceiling) = "let it chain". Clamped server-side.
     max_iterations: int | None = Field(default=None, ge=1, le=10)
+    # Images for this turn (the WebUI's drop / paste / attach affordance).
+    # The ``/v1/query`` attachment shape, at most 6, 20 MB each (the vision
+    # tools' own cap). Only real images are accepted — a document, or bytes
+    # that carry no image signature, is a 400; documents belong to
+    # ``/v1/rag/upload-ingest``. The bytes land under the process's
+    # ``$NVH_HOME/rag/uploads/wizard/<conversation_id or a fresh id>/`` (never
+    # under ``home_dir``: the vision allowlist reads the process home) and the
+    # user turn gets one line naming the paths, so the allowlisted
+    # ``analyze_image`` / ``read_text_from_image`` tools can read them. The
+    # response echoes the landed paths as ``attachment_paths``.
+    attachments: list[WizardChatAttachment] = Field(default_factory=list, max_length=6)
+
+
+#: One Wizard chat attachment may decode to at most this many bytes — the
+#: vision tools' cap, so an image the chat accepts is one the tools will read.
+WIZARD_ATTACHMENT_MAX_BYTES = _VISION_MAX_IMAGE_BYTES
+
+_DATA_URL_RE = re.compile(r"^data:(?P<mime>[\w.+-]+/[\w.+-]+)?(?:;[\w.=-]+)*;base64,(?P<data>.*)$", re.S)
+_ATTACHMENT_SLUG_RE = re.compile(r"[^a-z0-9._-]+")
+_CONVERSATION_DIR_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _attachment_label(att: QueryAttachment, index: int) -> str:
+    return repr(att.name) if att.name else f"#{index + 1}"
+
+
+def _attachment_mime(att: QueryAttachment) -> str | None:
+    """The declared mime type, else the one inside a ``data:`` URL, lower-cased."""
+    mime = (att.mime_type or "").strip().lower()
+    if not mime:
+        match = _DATA_URL_RE.match(att.content.strip())
+        if match and match.group("mime"):
+            mime = match.group("mime").lower()
+    return mime or None
+
+
+def _attachment_bytes(att: QueryAttachment, label: str) -> bytes:
+    """Decode ``content`` — raw base64 or a ``data:…;base64,`` URL — or 400."""
+    raw = att.content.strip()
+    match = _DATA_URL_RE.match(raw)
+    if match:
+        raw = match.group("data")
+    try:
+        return base64.b64decode("".join(raw.split()), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Attachment {label} is not valid base64 ({exc}).",
+        ) from exc
+
+
+def _attachment_stem(name: str, index: int) -> str:
+    """A filesystem-safe stem from a browser-supplied name: slug of the basename, no path parts."""
+    stem = FilePath(name or "").name
+    stem = FilePath(stem).stem if FilePath(stem).suffix else stem
+    stem = _ATTACHMENT_SLUG_RE.sub("-", stem.strip().lower()).strip(".-_")[:60]
+    return stem or f"image-{index + 1}"
+
+
+def _attachment_dir_name(conversation_id: str | None) -> str:
+    """The conversation id when it is a plain token (UUIDs are), else a fresh id."""
+    cid = (conversation_id or "").strip()
+    if cid and _CONVERSATION_DIR_RE.match(cid):
+        return cid
+    return uuid.uuid4().hex
+
+
+def _land_upload(upload_dir: FilePath, filename: str, data: bytes) -> FilePath:
+    """Write ``data`` as ``upload_dir/filename`` — ``<stem>-N<ext>`` on a name collision — and return the path.
+
+    The one landing step ``/v1/rag/upload-ingest`` and the Wizard chat's
+    attachments share. ``filename`` must already be a bare, safe name (no
+    path parts); ``upload_dir`` must exist.
+    """
+    stem, ext = FilePath(filename).stem, FilePath(filename).suffix
+    dest = upload_dir / filename
+    counter = 1
+    while dest.exists():
+        dest = upload_dir / f"{stem}-{counter}{ext}"
+        counter += 1
+    dest.write_bytes(data)
+    return dest
+
+
+def _land_wizard_attachments(request: WizardChatRequest) -> list[str]:
+    """Write the request's image attachments to disk; the landed paths, in order.
+
+    Everything is validated before anything is written, so a batch with one
+    document in it lands nothing: each attachment must declare (or carry in
+    its data URL) one of the vision bridge's image mimes
+    (:data:`nvh.integrations.wizard.vision_bridge.IMAGE_MIME_SUFFIXES`),
+    decode as base64, fit :data:`WIZARD_ATTACHMENT_MAX_BYTES` and start with
+    a png/jpeg/gif/webp/bmp signature — the suffix it lands with comes from
+    the bytes, not the declaration, so the vision tool tells a cloud model
+    the truth. Files land under the process's
+    ``$NVH_HOME/rag/uploads/wizard/<conversation id or fresh id>/``
+    (``vision_bridge.wizard_uploads_root()``, the very root the tools'
+    allowlist reads — ``request.home_dir`` never moves them out of reach),
+    named ``<slug><ext>`` with a counter on collisions. Refusals are 400s.
+    """
+    if not request.attachments:
+        return []
+    from nvh.integrations.wizard.vision_bridge import (
+        IMAGE_KINDS_TEXT,
+        IMAGE_MIME_SUFFIXES,
+        sniff_image_suffix,
+        wizard_uploads_root,
+    )
+
+    prepared: list[tuple[str, bytes]] = []
+    for index, att in enumerate(request.attachments):
+        label = _attachment_label(att, index)
+        mime = _attachment_mime(att)
+        if not mime or not mime.startswith("image/"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Attachment {label} is {mime or 'of unknown type'}: the Wizard chat only "
+                    "accepts images (image/*). Add documents to the knowledge base with "
+                    "/v1/rag/upload-ingest instead."
+                ),
+            )
+        if mime not in IMAGE_MIME_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Attachment {label} has an unsupported image type {mime}; use {IMAGE_KINDS_TEXT}.",
+            )
+        data = _attachment_bytes(att, label)
+        if len(data) > WIZARD_ATTACHMENT_MAX_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Attachment {label} is {len(data) / 1024 / 1024:.1f} MB; "
+                    f"the limit is {WIZARD_ATTACHMENT_MAX_BYTES // (1024 * 1024)} MB per image."
+                ),
+            )
+        ext = sniff_image_suffix(data[:16])
+        if ext is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Attachment {label} is declared {mime} but its bytes carry no {IMAGE_KINDS_TEXT} "
+                    "signature; the Wizard chat only lands real images."
+                ),
+            )
+        prepared.append((f"{_attachment_stem(att.name, index)}{ext}", data))
+
+    upload_dir = wizard_uploads_root() / _attachment_dir_name(request.conversation_id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return [str(_land_upload(upload_dir, name, data)) for name, data in prepared]
+
+
+def _wizard_question(request: WizardChatRequest) -> tuple[str, list[str]]:
+    """``(user turn, landed paths)``: the question, plus the attached-images line when images landed.
+
+    The paths are echoed to the client as ``attachment_paths`` so a follow-up
+    turn's history can carry the same line the model saw.
+    """
+    paths = _land_wizard_attachments(request)
+    if not paths:
+        return request.question, []
+    from nvh.integrations.wizard.chat import append_attached_images
+
+    return append_attached_images(request.question, paths), paths
 
 
 def _wizard_history(turns: list[WizardChatTurn]) -> list[dict[str, Any]]:
@@ -1827,14 +2008,19 @@ async def wizard_chat_endpoint(
     from nvh.integrations.wizard.chat import wizard_chat as _wizard_chat
 
     history = _wizard_history(request.history)
+    question, attachment_paths = _wizard_question(request)
     result = await _wizard_chat(
-        request.question,
+        question,
         history=history,
         home_dir=request.home_dir,
         conversation_id=request.conversation_id,
         profile=request.profile,
         max_iterations=request.max_iterations,
     )
+    if attachment_paths and isinstance(result, dict):
+        # What the user turn actually carried, so the client can keep the
+        # attached-images line in its history for the follow-up turns.
+        result = {**result, "attachment_paths": attachment_paths}
     return _response_envelope(result)
 
 
@@ -1853,17 +2039,24 @@ async def wizard_chat_stream_endpoint(
     from nvh.integrations.wizard.chat import wizard_chat_stream
 
     history = _wizard_history(request.history)
+    # Land attachments before the response starts: a refused document is a
+    # real 400, not an error event inside an already-open stream.
+    question, attachment_paths = _wizard_question(request)
 
     async def _event_source():
         try:
             async for event in wizard_chat_stream(
-                request.question,
+                question,
                 history=history,
                 home_dir=request.home_dir,
                 conversation_id=request.conversation_id,
                 profile=request.profile,
                 max_iterations=request.max_iterations,
             ):
+                if attachment_paths and isinstance(event, dict) and event.get("type") == "done":
+                    # The landed paths ride on `done`, so the client can keep
+                    # the attached-images line in its history for follow-ups.
+                    event = {**event, "attachment_paths": attachment_paths}
                 yield f"data: {json.dumps(event)}\n\n".encode()
         except Exception as exc:
             # Streaming errors can't raise to FastAPI cleanly after headers
@@ -2446,17 +2639,11 @@ async def rag_upload_ingest_endpoint(
     for upload in files:
         # UploadFile.filename can be any browser-supplied string. Strip path
         # components hard so a malicious "../foo" never escapes upload_dir.
+        # A name that appears twice in the batch gets a counter (_land_upload).
         original = upload.filename or "file"
         safe_name = _Path(original).name or "file"
-        dest = upload_dir / safe_name
-        # If the same name appears twice in the batch, dedupe with a counter.
-        suffix_idx = 1
-        while dest.exists():
-            dest = upload_dir / f"{dest.stem}-{suffix_idx}{dest.suffix}"
-            suffix_idx += 1
         contents = await upload.read()
-        dest.write_bytes(contents)
-        saved.append(str(dest))
+        saved.append(str(_land_upload(upload_dir, safe_name, contents)))
 
     result = await ingest_folder(
         upload_dir,

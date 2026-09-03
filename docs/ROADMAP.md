@@ -55,7 +55,7 @@ Status: **shipped** · **planned** (in a release above) · **present-but-hidden*
 | Agent Library — bundled profiles grouped by category | shipped 0.41 | `nvh/catalog/agent-library.json`; copy into `$NVH_HOME/agent-profiles/` |
 | Per-agent cost ceiling | shipped (non-streaming) | enforce on the streaming path once providers report per-chunk usage |
 | Provider-key paste with auto-detect; GPU-fit recommender card; reconnect panel on every page | shipped | |
-| Code execution from the Wizard, surfaced in chat | planned 0.44 | `run_code`/`shell` as confirm-class Wizard tools with approval cards |
+| Code execution from the Wizard, surfaced in chat | planned 0.44 | landed on main: `shell` as a privileged Wizard tool (red card shows the command and the isolation it will get), `run_code` confirm-class and Docker-only |
 | Persistent cross-chat memory in the WebUI | planned 0.45 | `remember` tool; the vault is already RAG-queryable |
 | Image generation from chat | planned 0.45 | rename `generate_portrait` → `generate_image`; NVIDIA-hosted when `NVAPI_KEY` is set, else local ComfyUI |
 | One chat surface (`/` and `/wizard` merged) | planned 0.45 | two surfaces confuse first-time users |
@@ -71,7 +71,7 @@ Status: **shipped** · **planned** (in a release above) · **present-but-hidden*
 | Import an arbitrary GGUF or HF repo into Ollama | open | partial today via `nvh models pull <tag>` |
 | Pack uninstall and disk reclamation; per-app start/stop/logs; update detection | open | receipts already carry uninstall and repair plans |
 | Hybrid BM25 + vector RAG with reranking | open | SQLite store today; embedding-model swap by VRAM is the cheap first step |
-| Vision input and OCR in chat | present-but-hidden | `analyze_image` / `read_text_from_image` tools; the Wizard picker exposes vision models |
+| Vision input and OCR in chat | planned 0.44 | landed on main: `analyze_image` / `read_text_from_image` bridged into the Wizard behind a path allowlist; images attach in the chat composer |
 | Chat folders and tags | open | pin only today |
 | Artifacts — live HTML/React/Mermaid rendering | open | |
 | Shareable conversation links and export/import | open | Markdown export exists |

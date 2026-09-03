@@ -207,9 +207,9 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVH_BROWSER` | unset | browser command for `nvh webui`, e.g. `firefox --new-window {url}` |
 | `NVH_FIREFOX_AUTO_INSTALL` | `1` | `0` disables the rootless Firefox fallback install |
 | `NVH_FIREFOX_PROFILE` | `$NVH_STATE/browser-profiles/desktop` | isolated Firefox profile directory |
-| `NVH_SANDBOX_REQUIRE_DOCKER` | unset | `1`/`true`/`yes`: refuse `run_code`/`shell` instead of falling back to an unisolated subprocess (`nvh do --sandbox` sets it) |
+| `NVH_SANDBOX_REQUIRE_DOCKER` | unset | `1`/`true`/`yes`: refuse `run_code`/`shell` instead of falling back to an unisolated subprocess (`nvh do --sandbox` sets it). Applies to the CLI/agent tools and to the Wizard's `shell` card, whose plan then reads "refused — Docker is unavailable and isolation is required" and executes nothing. The Wizard's `run_code` ignores this variable because it always requires Docker ([Tools](#tools)) |
 | `NVH_SANDBOX` | unset | pre-0.42 spelling of `NVH_SANDBOX_REQUIRE_DOCKER`, honoured for one more release; truthy fails closed the same way |
-| `NVH_ALLOW_PRIVILEGED` | unset (on) | `0`/`false`/`no`/`off` disables the Wizard's `privileged` tools (`system_settings_apply`, `apt_install`, `snap_install`, `service_enable`, `playbook_install`): they stay listed with `enabled: false` and every call is refused naming this variable. Privileged tools always need a click on a red card showing the exact commands, use `sudo -n` only where the once-per-process probe found passwordless sudo, otherwise hand the command to a terminal, and record every apply that touched the host (complete, partial or failed) under the vault's `Decisions/`. The card carries an approval token bound to that exact call (15 minutes, single use) that the confirmed call must return; a confirmed call is also refused when the API runs in open mode (no `HIVE_API_KEY`) on a non-loopback bind, or arrives with a `Host`/`Origin` that is neither loopback nor in `HIVE_CORS_ORIGINS`. nvHive never prompts for, sees or stores a sudo password. Spark playbooks whose steps need sudo ([GETTING_STARTED.md](GETTING_STARTED.md#spark-playbooks)) obey it through `playbook_install`; the CLI path `nvh playbook install <id>` is not gated — it runs in your own terminal, where `sudo` prompts you directly |
+| `NVH_ALLOW_PRIVILEGED` | unset (on) | `0`/`false`/`no`/`off` disables the Wizard's `privileged` tools (`system_settings_apply`, `apt_install`, `snap_install`, `service_enable`, `playbook_install`, `shell`): they stay listed with `enabled: false` and every call is refused naming this variable. Privileged tools always need a click on a red card showing the exact commands, use `sudo -n` only where the once-per-process probe found passwordless sudo, otherwise hand the command to a terminal, and record every apply that touched the host (complete, partial or failed) under the vault's `Decisions/`. The card carries an approval token bound to that exact call (15 minutes, single use) that the confirmed call must return; a confirmed call is also refused when the API runs in open mode (no `HIVE_API_KEY`) on a non-loopback bind, or arrives with a `Host`/`Origin` that is neither loopback nor in `HIVE_CORS_ORIGINS`. nvHive never prompts for, sees or stores a sudo password. Spark playbooks whose steps need sudo ([GETTING_STARTED.md](GETTING_STARTED.md#spark-playbooks)) obey it through `playbook_install`; the CLI path `nvh playbook install <id>` is not gated — it runs in your own terminal, where `sudo` prompts you directly |
 | `NVH_BOOT_PREFLIGHT`, `NVH_BOOT_AUTO_REPAIR` | `1`, `1` | run the boot preflight at API start; let it apply safe repairs |
 | `NVH_TARGET_VM_VALIDATED` | unset | `1` after the target-VM checklist; gates `production-ready` |
 | `NVH_API_URL` | `http://127.0.0.1:8000` | API server the `nvh status --smoke` / `--report` probes exercise (`nvh test --api URL` sets it); requests carry `Authorization: Bearer $HIVE_API_KEY` when that is set |
@@ -308,7 +308,44 @@ Every tool is either **safe** (runs unattended) or **confirm** (asks first;
 Guardrails in `nvh/core/agent_guardrails.py` run before every call and cannot
 be bypassed by `--yes`: shell commands are checked against a deny list, file
 paths must stay inside the workspace, writes have a size cap, secrets are
-redacted from outputs and long outputs are truncated.
+redacted from outputs and long outputs are truncated. The deny list is applied
+to the argument each tool actually executes — `command` for `shell`, `code` for
+`run_code`.
+
+### Code and images from the Wizard chat
+
+The AI Wizard bridges four of the tools above into its own registry
+(`nvh.integrations.wizard.tools.WizardToolRegistry`, the single enforcement
+point for the chat loop and `POST /v1/wizard/tools/execute`). Wizard tools carry
+one of three safety classes: **auto** runs unattended, **confirm** shows a card
+and waits for a click, **privileged** shows a red card with the exact commands,
+carries a single-use approval token and is recorded under the vault's
+`Decisions/` (see `NVH_ALLOW_PRIVILEGED` above, which disables the class
+outright).
+
+| Wizard tool | Class | Rules |
+|---|---|---|
+| `shell` | privileged | Parameters `command` (required), `cwd` (relative to the workspace or absolute inside it; default the workspace root, `NVH_PROJECTS`), `timeout_s` (1–300, default 60). The red card shows the command and the isolation it will get — `Docker sandbox (no network, read-only image, /workspace mounted)` when `docker info` answers within 5 s, otherwise `directly on this machine as <user>, no Docker isolation` with a "Not isolated" warning — plus the working directory and timeout. That isolation is **pinned into the approved call** (`arguments.isolation`, signed by the approval token): the confirmed run probes Docker again with the same 5 s bound and answers `refused: true` (`isolation_changed`) if the availability changed, so a card approved as a sandbox never runs on the host and one approved as "on this machine" never silently moves into a container; a `shell` call confirmed without a card's pin is refused too. The host fallback closes stdin and strips variables whose names contain `KEY`, `TOKEN`, `SECRET`, `PASSW`, `CREDENTIAL` or `PRIVATE` from the command's environment (Docker passes no host environment at all). Both deny lists run before anything spawns — `agent_guardrails.check_command` on the raw command, then the Wizard system-settings host-protection list on every simple command in it (`&&` / `;` / `\|` chains split, `env` / `nohup` / `nice` / `timeout` / `xargs` prefixes stripped, `sh -c '…'` and `eval …` payloads recursed), plus `find … -delete` under the same NVH_HOME rule as recursive `rm`, piping into a shell, `chmod … 777 /` and writes to block devices; `sudo` / `su` / `doas` / `pkexec` are refused outright (root belongs to `apt_install`, `service_enable`, `system_settings_apply`). A hit returns `BLOCKED: …` and runs nothing. The lists are a backstop for well-known destructive shapes, not a sandbox — the card the user reads is the gate. Relative `rm` / `find` targets resolve against the server's working directory, and under Docker `/workspace` paths are not host paths, so a recursive delete is accepted only for absolute paths strictly inside `NVH_HOME`. Every run (success or failure) is audited to `Decisions/` as `Privileged change: Shell command: <cmd>`. `NVH_SANDBOX_REQUIRE_DOCKER` makes the card say the run will be refused, and it is |
+| `run_code` | confirm | Parameters `code` (required) and `language` (`python` default, `javascript`, `bash`). Docker is required from chat: without it the tool answers `refused: true` naming Docker, the `open-webui` / `vllm` playbooks that install it and the terminal, and executes nothing — never a subprocess. The CLI `nvh do` keeps its own fail-open default for the same core tool. `code` is checked against the shell deny list |
+| `analyze_image` | auto | Parameters `image_path` (required) and `prompt` (optional). The path is resolved (symlinks followed; the resolved path is what gets read) and must sit under one of the allowlisted roots: `$NVH_HOME/rag/uploads` (including the Wizard attachment folder `rag/uploads/wizard/`), the workspace (`NVH_PROJECTS`, the same directory `shell` mounts) or — directly, no subfolders — the system temp dir where the core `screenshot` tool writes. It must also be an image: a basename on the guardrails' sensitive-file list (`.env`, `id_rsa`, `credentials.json` …) is refused, the extension must be png / jpg / jpeg / gif / webp / bmp, and an existing file must start with a matching image signature (a `.env` renamed `.png` is refused before a byte is encoded). Anything else is `refused: true` naming the rule and the allowed roots. Images over 20 MB are declined. **Cloud rule:** only an image the user attached in the chat (`rag/uploads/wizard/`) may fall back to a configured cloud vision API; a workspace file, an ingested upload or a screenshot is analysed by a local Ollama vision model or, without one, refused (`local_only: true`) with the `ollama pull` hint — the model cannot ship a file off the machine on its own initiative. The answer keeps its `[Vision: <model>, N KB]` prefix and reports `model` and `provider` (`ollama` or `cloud`) |
+| `read_text_from_image` | auto | OCR variant of `analyze_image`; same `image_path` parameter, allowlist, image and cloud rules, size cap and result fields |
+
+Images enter the chat through the `attachments` field of `POST /v1/wizard/chat`
+and `/v1/wizard/chat/stream` (`name`, base64 `content` — raw or a `data:` URL —
+`mime_type`, `is_image`), or by dropping / pasting an image into the WebUI chat.
+Only png, jpeg, gif, webp or bmp attachments are accepted, at most 6 per request
+and 20 MB each (the vision tools' cap), and the bytes must carry that image
+signature — the landed extension follows the bytes, not the declared type;
+documents, other image types and mislabelled bytes are refused with HTTP 400
+and nothing lands, documents belonging in the knowledge base via `POST
+/v1/rag/upload-ingest`. Accepted images are written under the server's
+`$NVH_HOME/rag/uploads/wizard/<conversation id>/<safe name>.<ext>` (a `home_dir`
+on the request does not move them — the vision allowlist reads the process
+home), the user turn gains one line, `Attached images (use analyze_image or
+read_text_from_image on these paths): …`, so the model reaches them only through
+the allowlisted tools above, and the response (`attachment_paths`, also on the
+stream's `done` event) echoes the landed paths so a client can keep that line
+in the history it sends on the follow-up turns.
 
 ## Workflows
 

@@ -46,6 +46,26 @@ export interface QueryAttachment {
   is_image: boolean;
 }
 
+/** The image types a Wizard turn accepts; anything else is a document for RAG ingest. */
+export type WizardImageMimeType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+
+/**
+ * One image attached to a Wizard chat turn (`WizardChatRequest.attachments`,
+ * at most 6 per request, 25 MB each). The same field names as
+ * `QueryAttachment`, narrowed: `content` is RAW standard base64 with no
+ * `data:` URL prefix (the `/v1/query` chat sends data URLs; the Wizard
+ * server lands these bytes on disk under `NVH_HOME/rag/uploads/wizard/` and
+ * decodes the field directly), `mime_type` is always one of the four accepted
+ * types and `is_image` is always true — the server answers 400 to anything
+ * else, so documents never travel this way (see lib/attachments.ts).
+ */
+export interface WizardChatAttachment {
+  name: string;
+  content: string;
+  mime_type: WizardImageMimeType;
+  is_image: true;
+}
+
 export interface StreamChunkPayload {
   delta: string;
   accumulated: string;

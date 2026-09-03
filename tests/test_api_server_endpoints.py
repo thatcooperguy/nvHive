@@ -8,6 +8,9 @@ raising so error-path assertions can inspect the response.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import re
 import sys
 import threading
 import time
@@ -1248,3 +1251,241 @@ class TestAutoSetupPlanSizesComeFromTheTable:
             pick = local_models.pick_for_tag(entry["model"])
             assert pick is not None, entry["model"]
             assert entry["estimated_size_gb"] == pick.weights_gb
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: image attachments on the Wizard chat
+# ---------------------------------------------------------------------------
+
+class TestWizardChatAttachments:
+    """Images ride on ``attachments`` (the ``/v1/query`` model), land under
+    ``$NVH_HOME/rag/uploads/wizard/<conversation id or fresh id>/`` — inside the
+    vision tools' allowlist — and the user turn gains one line naming the landed
+    paths. A document is a 400 and nothing lands. Blocking and SSE endpoints alike;
+    the Wizard itself is a recording fake, so no engine, model or tool runs."""
+
+    PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    B64 = base64.b64encode(PNG).decode()
+    JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+    JPEG_B64 = base64.b64encode(JPEG).decode()
+
+    @pytest.fixture(autouse=True)
+    def _home(self, monkeypatch, tmp_path):
+        self.home = (tmp_path / "home").resolve()
+        monkeypatch.setenv("NVH_HOME", str(self.home))
+
+    @property
+    def uploads(self):
+        return self.home / "rag" / "uploads" / "wizard"
+
+    @staticmethod
+    def _capture(monkeypatch) -> dict:
+        """Record what reaches ``wizard_chat`` / ``wizard_chat_stream`` (the endpoints import them per call)."""
+        import nvh.integrations.wizard.chat as chat_mod
+
+        seen: dict = {}
+
+        async def fake_wizard_chat(question, **kwargs):
+            seen["question"] = question
+            seen.update(kwargs)
+            return {"answer": "ok", "mode": "llm", "context": {}}
+
+        async def fake_stream(question, **kwargs):
+            seen["question"] = question
+            seen.update(kwargs)
+            yield {"type": "done", "answer": "ok"}
+
+        monkeypatch.setattr(chat_mod, "wizard_chat", fake_wizard_chat)
+        monkeypatch.setattr(chat_mod, "wizard_chat_stream", fake_stream)
+        return seen
+
+    def _image(self, name, mime="image/png", content=None, is_image=True):
+        att = {"name": name, "content": content or self.B64, "is_image": is_image}
+        if mime is not None:
+            att["mime_type"] = mime
+        return att
+
+    def test_images_land_under_the_conversation_and_the_turn_names_them(self, client, monkeypatch):
+        from nvh.integrations.wizard.chat import ATTACHED_IMAGES_NOTE
+        from nvh.integrations.wizard.vision_bridge import image_path_refusal
+
+        seen = self._capture(monkeypatch)
+        r = client.post("/v1/wizard/chat", json={
+            "question": "what's in these?",
+            "conversation_id": "conv-42",
+            "attachments": [
+                self._image("Screen Shot.PNG"),
+                self._image("photo.jpeg", mime="image/jpeg", content=self.JPEG_B64),
+            ],
+        })
+        assert r.status_code == 200, r.text
+        folder = self.uploads / "conv-42"
+        # The landed suffix follows the bytes' signature (png / jpg), the stem is slugged.
+        assert sorted(p.name for p in folder.iterdir()) == ["photo.jpg", "screen-shot.png"]
+        assert (folder / "screen-shot.png").read_bytes() == self.PNG
+        assert (folder / "photo.jpg").read_bytes() == self.JPEG
+        assert seen["question"].startswith(f"what's in these?\n\n{ATTACHED_IMAGES_NOTE} ")
+        assert str(folder / "screen-shot.png") in seen["question"]
+        assert str(folder / "photo.jpg") in seen["question"]
+        assert seen["conversation_id"] == "conv-42"
+        # The response echoes the landed paths, in request order, for the client's history.
+        assert r.json()["data"]["attachment_paths"] == [str(folder / "screen-shot.png"), str(folder / "photo.jpg")]
+        # Every landed path is one the vision tools accept.
+        for path in folder.iterdir():
+            assert image_path_refusal(str(path)) is None, path
+
+    def test_stream_endpoint_lands_and_names_them_too(self, client, monkeypatch):
+        from nvh.integrations.wizard.chat import ATTACHED_IMAGES_NOTE
+
+        seen = self._capture(monkeypatch)
+        r = client.post("/v1/wizard/chat/stream", json={
+            "question": "read this",
+            "conversation_id": "c-stream",
+            "attachments": [self._image("err.png")],
+        })
+        assert r.status_code == 200, r.text
+        landed = self.uploads / "c-stream" / "err.png"
+        assert landed.read_bytes() == self.PNG
+        assert seen["question"] == f"read this\n\n{ATTACHED_IMAGES_NOTE} {landed}"
+        events = [json.loads(line[len("data: "):]) for line in r.text.splitlines() if line.startswith("data: ")]
+        done = [e for e in events if e.get("type") == "done"]
+        assert len(done) == 1 and done[0]["attachment_paths"] == [str(landed)]
+
+    def test_home_dir_on_the_request_does_not_move_the_landing(self, client, monkeypatch, tmp_path):
+        """The landing root is the process home the vision allowlist reads, whatever ``home_dir`` says."""
+        from nvh.integrations.wizard.vision_bridge import image_path_refusal
+
+        seen = self._capture(monkeypatch)
+        elsewhere = tmp_path / "elsewhere"
+        r = client.post("/v1/wizard/chat", json={
+            "question": "q", "conversation_id": "c-home", "home_dir": str(elsewhere),
+            "attachments": [self._image("a.png")],
+        })
+        assert r.status_code == 200, r.text
+        landed = self.uploads / "c-home" / "a.png"
+        assert landed.read_bytes() == self.PNG
+        assert not (elsewhere / "rag").exists()
+        assert image_path_refusal(str(landed)) is None
+        assert seen["home_dir"] == str(elsewhere)  # the turn itself still honours it
+
+    def test_data_url_content_is_accepted_and_the_bytes_pick_the_extension(self, client, monkeypatch):
+        self._capture(monkeypatch)
+        r = client.post("/v1/wizard/chat", json={
+            "question": "q", "conversation_id": "c2",
+            "attachments": [self._image("paste", mime=None, content=f"data:image/webp;base64,{self.B64}")],
+        })
+        assert r.status_code == 200, r.text
+        # Declared webp, actually PNG bytes: the honest suffix is the bytes'.
+        assert [p.name for p in (self.uploads / "c2").iterdir()] == ["paste.png"]
+        assert (self.uploads / "c2" / "paste.png").read_bytes() == self.PNG
+
+    def test_no_attachment_type_stays_a_400_when_no_mime_can_be_found(self, client, monkeypatch):
+        seen = self._capture(monkeypatch)
+        r = client.post("/v1/wizard/chat", json={
+            "question": "q", "attachments": [self._image("blob", mime=None)],
+        })
+        assert r.status_code == 400 and "unknown type" in r.json()["detail"]
+        assert "question" not in seen
+
+    def test_oversized_image_gets_the_friendly_400_not_a_422(self, client, monkeypatch):
+        from nvh.api.server import (
+            WIZARD_ATTACHMENT_MAX_BASE64_CHARS,
+            WIZARD_ATTACHMENT_MAX_BYTES,
+            WizardChatAttachment,
+        )
+        from nvh.integrations.wizard.vision_bridge import MAX_IMAGE_BYTES
+
+        assert WIZARD_ATTACHMENT_MAX_BYTES == MAX_IMAGE_BYTES == 20 * 1024 * 1024
+        # The base64 ceiling has room for the byte cap, so the size check speaks.
+        assert WIZARD_ATTACHMENT_MAX_BASE64_CHARS > WIZARD_ATTACHMENT_MAX_BYTES * 4 / 3
+        assert WizardChatAttachment.model_fields["content"].metadata  # a Field with constraints
+        seen = self._capture(monkeypatch)
+        big = self.PNG + b"\x00" * (WIZARD_ATTACHMENT_MAX_BYTES + 1 - len(self.PNG))
+        r = client.post("/v1/wizard/chat", json={
+            "question": "q", "attachments": [self._image("huge.png", content=base64.b64encode(big).decode())],
+        })
+        assert r.status_code == 400, r.text
+        assert "the limit is 20 MB per image" in r.json()["detail"] and "20.0 MB" in r.json()["detail"]
+        assert not self.uploads.exists() and "question" not in seen
+
+    def test_non_image_is_a_400_and_nothing_lands(self, client, monkeypatch):
+        seen = self._capture(monkeypatch)
+        body = {
+            "question": "q", "conversation_id": "c3",
+            "attachments": [
+                self._image("ok.png"),
+                self._image("notes.pdf", mime="application/pdf", is_image=False),
+            ],
+        }
+        for route in ("/v1/wizard/chat", "/v1/wizard/chat/stream"):
+            r = client.post(route, json=body)
+            assert r.status_code == 400, (route, r.text)
+            detail = r.json()["detail"]
+            assert "'notes.pdf'" in detail and "only accepts images" in detail and "upload-ingest" in detail
+        assert not self.uploads.exists()       # the whole batch was refused, ok.png included
+        assert "question" not in seen          # the Wizard never ran
+
+    def test_other_image_types_bad_base64_and_non_image_bytes_are_400(self, client, monkeypatch):
+        seen = self._capture(monkeypatch)
+        r = client.post("/v1/wizard/chat", json={
+            "question": "q", "attachments": [self._image("x.png", content="not base64!!")],
+        })
+        assert r.status_code == 400 and "base64" in r.json()["detail"]
+        # Real image/* types Python knows an extension for are still not ours.
+        for name, mime in (("x.svg", "image/svg+xml"), ("x.tiff", "image/tiff"), ("x.heic", "image/heic"), ("x.ico", "image/x-icon")):
+            r = client.post("/v1/wizard/chat", json={"question": "q", "attachments": [self._image(name, mime=mime)]})
+            assert r.status_code == 400 and "unsupported image type" in r.json()["detail"], (mime, r.text)
+            assert "png, jpeg, gif, webp or bmp" in r.json()["detail"]
+        # A declared png whose bytes are not an image never lands.
+        text_bytes = base64.b64encode(b"SECRET=x\n<svg onload=alert(1)/>").decode()
+        r = client.post("/v1/wizard/chat", json={"question": "q", "attachments": [self._image("x.png", content=text_bytes)]})
+        assert r.status_code == 400 and "signature" in r.json()["detail"]
+        assert not self.uploads.exists() and "question" not in seen
+
+    def test_without_a_plain_conversation_id_a_fresh_id_names_the_folder(self, client, monkeypatch):
+        seen = self._capture(monkeypatch)
+        r = client.post("/v1/wizard/chat", json={"question": "q", "attachments": [self._image("a.png")]})
+        assert r.status_code == 200, r.text
+        folders = [p.name for p in self.uploads.iterdir()]
+        assert len(folders) == 1 and re.fullmatch(r"[0-9a-f]{32}", folders[0])
+        assert str(self.uploads / folders[0] / "a.png") in seen["question"]
+        # An id with path characters never becomes a path component.
+        r = client.post("/v1/wizard/chat", json={
+            "question": "q", "conversation_id": "../escape", "attachments": [self._image("b.png")],
+        })
+        assert r.status_code == 200, r.text
+        assert not (self.home / "rag" / "uploads" / "escape").exists()
+        folders = [p.name for p in self.uploads.iterdir()]
+        assert len(folders) == 2 and all(re.fullmatch(r"[0-9a-f]{32}", f) for f in folders)
+
+    def test_unsafe_names_are_slugged_and_collisions_counted(self, client, monkeypatch):
+        self._capture(monkeypatch)
+        r = client.post("/v1/wizard/chat", json={
+            "question": "q", "conversation_id": "c5",
+            "attachments": [
+                self._image("../../evil name.png"),
+                self._image("evil-name.png"),
+                self._image(""),
+                self._image("...."),
+            ],
+        })
+        assert r.status_code == 200, r.text
+        assert sorted(p.name for p in (self.uploads / "c5").iterdir()) == [
+            "evil-name-1.png", "evil-name.png", "image-3.png", "image-4.png",
+        ]
+        assert not (self.uploads.parent.parent / "evil name.png").exists()
+
+    def test_more_than_six_attachments_is_422(self, client, monkeypatch):
+        seen = self._capture(monkeypatch)
+        r = client.post("/v1/wizard/chat", json={
+            "question": "q", "attachments": [self._image(f"{i}.png") for i in range(7)],
+        })
+        assert r.status_code == 422
+        assert not self.uploads.exists() and "question" not in seen
+
+    def test_no_attachments_leaves_the_question_untouched(self, client, monkeypatch):
+        seen = self._capture(monkeypatch)
+        r = client.post("/v1/wizard/chat", json={"question": "hi"})
+        assert r.status_code == 200, r.text
+        assert seen["question"] == "hi"
+        assert not (self.home / "rag").exists()

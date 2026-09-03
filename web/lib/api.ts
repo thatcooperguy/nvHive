@@ -17,6 +17,7 @@ import type {
   PlaybookCatalogueEntry,
   PlaybookRunEvent,
   PlaybookRunStart,
+  WizardChatAttachment,
   QueryRequest,
   CouncilRequest,
   CompareRequest,
@@ -1374,6 +1375,42 @@ export interface WizardChatResult {
   used_profile?: string | null;
   profile_reason?: string | null;
   deferred_tool_calls?: WizardDeferredToolCall[];
+  /** Where this turn's image attachments landed, in request order — present
+   * only when the request carried images. The user turn the model saw ends
+   * with `Attached images (…): <these paths>`; keep that line in history. */
+  attachment_paths?: string[];
+}
+
+/**
+ * The body of POST /v1/wizard/chat and /v1/wizard/chat/stream
+ * (`WizardChatRequest` in nvh/api/server.py). Both send helpers build it, so
+ * a field added here reaches the streaming and the non-streaming path alike.
+ *
+ * `attachments`: the images for THIS turn (max 6, 20 MB each; see
+ * lib/attachments.ts for the wire shape). The server lands them under the
+ * process's `NVH_HOME/rag/uploads/wizard/<conversation_id or a fresh id>/`
+ * (`home_dir` does not move them) and appends `Attached images (use
+ * analyze_image or read_text_from_image on these paths): …` to the user
+ * turn; the response gains `attachment_paths` and is otherwise unchanged. A
+ * non-image attachment, or bytes without an image signature, is refused
+ * with HTTP 400. Omitted (not `[]`) when there is none, so an older server
+ * sees the request it always saw.
+ */
+export type WizardChatRequest = {
+  question: string;
+  history?: WizardChatTurn[];
+  home_dir?: string;
+  conversation_id?: string;
+  profile?: string | null;
+  max_iterations?: number;
+  attachments?: WizardChatAttachment[];
+};
+
+/** `{attachments}` when there is at least one, `{}` otherwise. */
+function wizardAttachmentsField(
+  attachments: WizardChatAttachment[] | undefined,
+): Pick<WizardChatRequest, 'attachments'> {
+  return attachments && attachments.length > 0 ? { attachments } : {};
 }
 
 /**
@@ -1383,14 +1420,21 @@ export interface WizardChatResult {
  */
 export async function wizardChat(
   question: string,
-  options: { history?: WizardChatTurn[]; homeDir?: string; conversationId?: string } = {},
+  options: {
+    history?: WizardChatTurn[];
+    homeDir?: string;
+    conversationId?: string;
+    attachments?: WizardChatAttachment[];
+  } = {},
 ): Promise<WizardChatResult> {
-  return apiPost<WizardChatResult>('/v1/wizard/chat', {
+  const body: WizardChatRequest = {
     question,
     history: normalizeWizardHistory(options.history),
     home_dir: options.homeDir,
     conversation_id: options.conversationId,
-  });
+    ...wizardAttachmentsField(options.attachments),
+  };
+  return apiPost<WizardChatResult>('/v1/wizard/chat', body);
 }
 
 /**
@@ -1629,6 +1673,8 @@ export type WizardStreamEvent =
       profile_reason?: string | null;
       /** Auto-class calls skipped server-side (depth 1 / cost ceiling). Display only. */
       deferred_tool_calls?: WizardDeferredToolCall[];
+      /** Where this turn's image attachments landed (only when the request carried images). */
+      attachment_paths?: string[];
     }
   | {
       type: 'error';
@@ -1654,6 +1700,8 @@ interface WizardChatStreamOptions {
   conversationId?: string;
   profile?: string;
   maxIterations?: number;
+  /** Images for this turn — see `WizardChatRequest.attachments`. */
+  attachments?: WizardChatAttachment[];
   signal?: AbortSignal;
 }
 
@@ -1675,6 +1723,18 @@ export async function* wizardChatStream(
   const bases = getApiBases();
   let lastNetworkError: unknown;
 
+  const body: WizardChatRequest = {
+    question,
+    history: normalizeWizardHistory(options.history),
+    home_dir: options.homeDir,
+    conversation_id: options.conversationId,
+    // Same package ships both sides: "auto" is the literal the server
+    // treats as "let the concierge pick"; empty / unset map to it too.
+    profile: wizardProfileParam(options.profile),
+    max_iterations: options.maxIterations,
+    ...wizardAttachmentsField(options.attachments),
+  };
+
   for (const base of bases) {
     let resp: Response;
     try {
@@ -1685,16 +1745,7 @@ export async function* wizardChatStream(
           Accept: 'text/event-stream',
           ...getApiAuthHeaders(),
         },
-        body: JSON.stringify({
-          question,
-          history: normalizeWizardHistory(options.history),
-          home_dir: options.homeDir,
-          conversation_id: options.conversationId,
-          // Same package ships both sides: "auto" is the literal the server
-          // treats as "let the concierge pick"; empty / unset map to it too.
-          profile: wizardProfileParam(options.profile),
-          max_iterations: options.maxIterations,
-        }),
+        body: JSON.stringify(body),
         signal: options.signal,
       });
     } catch (err) {
@@ -1830,6 +1881,11 @@ export interface WizardToolPlan {
   notes?: string[];
   warning?: string;
   error?: string;
+  /** Decisions the dry run made that the server folded into the card's
+   * `arguments` (the sandbox `shell`'s `isolation`). The approval token signs
+   * them; the surfaced call's `arguments` already include them, so the card
+   * sends them back untouched. Informational here. */
+  pinned_arguments?: Record<string, unknown>;
 }
 
 /**

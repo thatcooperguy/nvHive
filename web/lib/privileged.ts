@@ -69,12 +69,13 @@ export const NEEDS_TERMINAL_HINT = 'sudo needs a password here, so nvHive did no
 /**
  * Card lifecycle state.
  *
- * Three are new for the privileged tier and none is a failure:
- * `needs-terminal` (the sudo-password hand-off — settled, but the user
- * finishes it themselves), `halted` (a playbook run stopped on purpose after
- * a step that needs the user to act before it can go on — the docker-group
- * re-login — and is neither done nor failed) and `disabled` (the kill switch
- * is off).
+ * Four are settled without being a failure: `needs-terminal` (the
+ * sudo-password hand-off — the user finishes it themselves), `halted` (a
+ * playbook run stopped on purpose after a step that needs the user to act
+ * before it can go on — the docker-group re-login — neither done nor
+ * failed), `disabled` (the kill switch is off) and `refused` (the tool
+ * declined in band — `run_code` without Docker, a vision path outside the
+ * allowed roots, a shell card whose isolation changed — so nothing ran).
  */
 export type ToolCardStatus =
   | 'idle'
@@ -85,6 +86,7 @@ export type ToolCardStatus =
   | 'needs-terminal'
   | 'halted'
   | 'disabled'
+  | 'refused'
   | 'dismissed';
 
 /** Statuses that still want a Run / Skip click. Everything else is settled. */
@@ -282,6 +284,11 @@ export function historyToolOutcome(
     case 'disabled':
       text = PRIVILEGED_DISABLED_NOTE;
       break;
+    case 'refused':
+      // The tool declined in band; the summary carries the server's reason
+      // (what to do: install Docker, attach the image, ask again).
+      text = summary?.trim() || 'refused — nothing ran';
+      break;
     case 'dismissed':
       text = 'skipped by the user; not run';
       break;
@@ -351,6 +358,12 @@ export function cardChrome(
       // A password is needed — the user finishes this one in a terminal.
       // Amber, like any other "your turn", never the red of a failure.
       chrome.badge = 'Run it in a terminal';
+      chrome.badgeColor = '#d97706';
+      break;
+    case 'refused':
+      // The tool declined in band and nothing ran: not done, not failed.
+      // Amber; the summary line under the badge carries the reason.
+      chrome.badge = 'Refused';
       chrome.badgeColor = '#d97706';
       break;
     case 'halted':

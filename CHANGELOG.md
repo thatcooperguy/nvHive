@@ -115,6 +115,50 @@
   without a click; `NVH_ALLOW_PRIVILEGED=0` hides the run button. Shared
   `PlaybookRunLog` / `PlanDetails` components; 32 new node tests.
 
+- **The bridge (Spark concierge Phase 3): code and images from the Wizard
+  chat.** The agent's `shell` and `run_code` reach the Wizard behind
+  approval cards (`nvh/integrations/wizard/sandbox_tools.py`). `shell` is
+  privileged: the red card renders the exact command, the working
+  directory, the timeout and the isolation the run will actually get
+  (Docker sandbox, or "directly on this machine as <user>, no Docker
+  isolation" with a warning); the isolation is pinned into the approved call
+  and re-checked at run time; both deny lists refuse before anything spawns
+  and see inside `sh -c` / `&&` / `|` chains and wrappers; `sudo`, `su`,
+  `doas` are refused outright; the host fallback closes stdin and strips
+  keys and tokens from the environment; output is redacted before it is
+  cut; every run is written to the vault under `Decisions/`. `run_code` is
+  confirm-class and Docker-only: without Docker it refuses in band, names
+  Docker, points at the Open WebUI / vLLM playbooks and the terminal, and
+  executes nothing. The core `ToolRegistry` guardrail hook read `command`
+  for `run_code` too, so snippets had no blocklist coverage; it now checks
+  `code` (pinned by tests). JSON-Schema parameters are translated into the
+  Wizard shape by one helper (`parameters_from_json_schema`).
+- **The Wizard can look at images.** `analyze_image` and
+  `read_text_from_image` (auto-class, `nvh/integrations/wizard/vision_bridge.py`)
+  bridge the core vision tools behind a path allowlist: only real images
+  (extension and signature) under `$NVH_HOME/rag/uploads`, the agent
+  workspace (`NVH_PROJECTS`) or directly in the OS temp folder (screenshots)
+  are read, symlinks are resolved first, the guardrails' sensitive-file list
+  applies, and bytes go to a cloud vision model only for images attached in
+  the chat; anything else is an in-band refusal naming the allowed roots.
+  Results keep the `[Vision: <model>, N KB]` line and add `model`,
+  `provider` and `bytes`. `POST /v1/wizard/chat` and `/chat/stream` accept
+  `attachments` (the `/v1/query` shape; at most 6 images, 20 MB each,
+  png/jpeg/gif/webp/bmp with a matching signature); images land under
+  `$NVH_HOME/rag/uploads/wizard/<conversation id>/` with safe names, the
+  user turn gains one line naming the paths, and the response echoes
+  `attachment_paths` so follow-up turns keep them.
+- **WebUI: images in the composer.** Drop, paste or click the paperclip to
+  attach up to six images; they show as chips with a thumbnail, travel as
+  `attachments` on the next turn (stream and non-stream) and appear in your
+  bubble, while dropped documents still go to RAG ingest. An in-band
+  `refused` answer (run_code without Docker, a vision path outside the
+  allowed roots) reads "Refused — nothing ran" in amber instead of
+  "Failed"; the shell card's isolation line renders through the plan notes.
+  Pure helpers in `web/lib/attachments.ts` with node tests.
+  `docs/CONFIGURATION.md` documents the four bridged tools and the
+  `attachments` field.
+
 ### Security
 - **The red-card click is verifiable server-side.** Every surfaced
   privileged call carries an HMAC approval token (15 minutes, single use,

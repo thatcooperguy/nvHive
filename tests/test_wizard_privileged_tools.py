@@ -63,7 +63,12 @@ from nvh.integrations.wizard.tools import (
 from nvh.utils import platform_facts as pf
 
 SPARK_LABEL = "NVIDIA DGX Spark (GB10, 128 GB unified)"
-PRIVILEGED_TOOLS = ("system_settings_apply", "apt_install", "snap_install", "service_enable", "playbook_install")
+#: Every privileged tool the default registry carries: the system-settings
+#: four, the playbook install and — since the phase-3 sandbox bridge
+#: (tests/test_wizard_sandbox_tools.py) — the agent ``shell``.
+PRIVILEGED_TOOLS = (
+    "system_settings_apply", "apt_install", "snap_install", "service_enable", "playbook_install", "shell",
+)
 
 
 # ───────────────────────────────────────────────────────────────────────────

@@ -424,9 +424,24 @@ def _split_by_safety_class(
     return confirm, auto
 
 
+def _requested_arguments(call: dict[str, Any]) -> dict[str, Any]:
+    """A call's arguments as the model requested them — the planner's pins taken back out.
+
+    A surfaced privileged call carries the card's arguments, which include
+    whatever its plan pinned (``plan.pinned_arguments``); identity for
+    de-duplication is the model's own call.
+    """
+    arguments = dict(call.get("arguments") or {})
+    plan = call.get("plan")
+    pinned = plan.get("pinned_arguments") if isinstance(plan, dict) else None
+    for key in pinned or {}:
+        arguments.pop(key, None)
+    return arguments
+
+
 def _same_call(a: dict[str, Any], b: dict[str, Any]) -> bool:
-    """Same tool, same arguments — whatever else (plan, token) one of them carries."""
-    return a.get("name") == b.get("name") and (a.get("arguments") or {}) == (b.get("arguments") or {})
+    """Same tool, same requested arguments — whatever else (plan, pins, token) one of them carries."""
+    return a.get("name") == b.get("name") and _requested_arguments(a) == _requested_arguments(b)
 
 
 async def _surfaced_call(call: dict[str, Any], registry: Any | None) -> dict[str, Any]:
@@ -434,13 +449,15 @@ async def _surfaced_call(call: dict[str, Any], registry: Any | None) -> dict[str
 
     Confirm-class (and unknown) calls pass through as ``{name, arguments}``.
     A ``privileged`` call is surfaced with what its red card needs —
-    ``privileged: True``, the registry's dry-run ``plan`` and the
+    ``privileged: True``, the registry's dry-run ``plan``, the card's
+    ``arguments`` (the model's plus whatever the plan pinned — the token
+    signs these, so the UI must send exactly them back) and the
     ``approval_token`` / ``approval_expires_at`` the confirmed execute must
     bring back — read off the very card ``execute(confirmed=False)`` returns,
-    so the registry stays the one place that plans, mints tokens and re-reads
-    the kill switch (a switched-off tier surfaces ``disabled: True`` and its
-    refusal instead of a plan). None of this reaches the model: surfaced
-    calls go to the UI only.
+    so the registry stays the one place that plans, pins, mints tokens and
+    re-reads the kill switch (a switched-off tier surfaces ``disabled: True``
+    and its refusal instead of a plan). None of this reaches the model:
+    surfaced calls go to the UI only.
     """
     tool = registry.get(call["name"]) if registry is not None else None
     if tool is None or tool.safety_class != "privileged":
@@ -456,6 +473,8 @@ async def _surfaced_call(call: dict[str, Any], registry: Any | None) -> dict[str
         surfaced["disabled"] = True
         surfaced["error"] = card.get("error")
         return surfaced
+    if isinstance(card.get("arguments"), dict):
+        surfaced["arguments"] = card["arguments"]
     for key in ("plan", "approval_token", "approval_expires_at"):
         if key in card:
             surfaced[key] = card[key]
@@ -598,6 +617,26 @@ def _apply_prompt_template(question: str, profile: Any | None) -> str:
     if profile is None:
         return question
     return profile.render_prompt(question)
+
+
+#: The line the HTTP layer appends to the user turn when the request carried
+#: image attachments (landed under ``$NVH_HOME/rag/uploads/wizard/…``). It
+#: names the two allowlisted vision tools so the model knows how to look.
+ATTACHED_IMAGES_NOTE = "Attached images (use analyze_image or read_text_from_image on these paths):"
+
+
+def append_attached_images(question: str, image_paths: Collection[str]) -> str:
+    """The user turn with the attached-image note appended; identity without paths.
+
+    One line, after a blank line, listing the landed paths comma-separated —
+    the exact strings ``analyze_image`` / ``read_text_from_image`` accept.
+    The server calls this before the turn runs, so persistence, routing and
+    the model all see the same message.
+    """
+    paths = [str(p).strip() for p in image_paths if str(p).strip()]
+    if not paths:
+        return question
+    return f"{question.rstrip()}\n\n{ATTACHED_IMAGES_NOTE} {', '.join(paths)}"
 
 
 @dataclass(frozen=True)

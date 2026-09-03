@@ -98,6 +98,24 @@ import {
   type PlaybookRunState,
   type ToolCardStatus,
 } from '@/lib/privileged';
+import {
+  NO_VISION_TOOL_NOTE,
+  WIZARD_ATTACHMENT_MAX_BYTES,
+  WIZARD_ATTACHMENT_MAX_COUNT,
+  WIZARD_IMAGE_ACCEPT,
+  attachmentPayloads,
+  attachmentPreview,
+  formatSize,
+  hasVisionTool,
+  pastedImageFiles,
+  questionWithAttachments,
+  splitDroppedFiles,
+  toAttachment,
+  validateAttachment,
+  withAttachedImagePaths,
+  type AttachmentPreview,
+  type PendingAttachment,
+} from '@/lib/attachments';
 import PlanDetails from '@/components/PlanDetails';
 import PlaybookRunLog from '@/components/PlaybookRunLog';
 import type { PlaybookRunStart } from '@/lib/types';
@@ -116,6 +134,16 @@ interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  // User turns only: the images that rode on this turn's request, kept as
+  // thumbnails for the bubble. Display only — the base64 payload went out
+  // once and is not stored on the message or re-sent in history.
+  attachments?: AttachmentPreview[];
+  // User turns only: what the server actually ran for this turn when images
+  // were attached — the typed text plus the `Attached images (…): <paths>`
+  // line, rebuilt from `done.attachment_paths`. The bubble shows `content`;
+  // the next request's history sends this, so the model can name the paths
+  // again on a follow-up ("now read the second one").
+  historyContent?: string;
   toolCalls?: WizardChatToolCall[];
   toolStatus?: Record<string, ToolCardStatus>;
   toolResults?: Record<string, string>;
@@ -334,6 +362,13 @@ export default function WizardChat() {
   // "we're embedding your files right now" indicator under the chat.
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // Images waiting to ride on the next turn (the chips above the composer):
+  // dropped, pasted or picked with the attach button. Documents never land
+  // here — they go to RAG ingest. `attachNote` is the one line naming a file
+  // that was turned away (a document, too big, a seventh image).
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [attachNote, setAttachNote] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   // Conversation id is created on first user message — until then chats are
   // not persisted. /save, /pin, and reconnect-resume all key off this id.
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -407,6 +442,8 @@ export default function WizardChat() {
         abortRef.current?.abort();
         setMessages([]);
         setConversationId(null);
+        setAttachments([]);
+        setAttachNote(null);
         // Drop the resume param so a reload starts fresh instead of
         // resurrecting the thread the user just cleared — and re-arm the
         // resume guard so re-selecting the same chat from the sidebar
@@ -461,10 +498,60 @@ export default function WizardChat() {
     }
   };
 
+  /**
+   * Validate and encode image files into pending attachments. Files that
+   * are turned away (a document, an empty or oversized file, a seventh
+   * image) are named in one line under the chips; the rest are added. The
+   * count cap is checked against what is pending plus what this batch has
+   * already accepted, so a drop of ten images adds six and says why.
+   */
+  const addImageFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    const accepted: PendingAttachment[] = [];
+    const problems: string[] = [];
+    let count = attachments.length;
+    for (const file of files) {
+      const verdict = validateAttachment(file, count);
+      if (!verdict.ok) {
+        problems.push(verdict.reason);
+        continue;
+      }
+      try {
+        accepted.push(await toAttachment(file, makeId()));
+        count += 1;
+      } catch {
+        problems.push(`${file.name || 'image'}: could not be read`);
+      }
+    }
+    if (accepted.length > 0) {
+      setAttachments(prev => [...prev, ...accepted].slice(0, WIZARD_ATTACHMENT_MAX_COUNT));
+    }
+    setAttachNote(problems.length > 0 ? problems.join(' · ') : null);
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments(prev => prev.filter(a => a.id !== id));
+    setAttachNote(null);
+  };
+
+  // Pasting a screenshot attaches it; a text paste is left to the textarea.
+  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const images = pastedImageFiles(event.clipboardData?.items);
+    if (images.length === 0) return;
+    event.preventDefault();
+    void addImageFiles(images);
+  };
+
   const handleDrop = async (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragActive(false);
-    const files = Array.from(event.dataTransfer?.files ?? []);
+    const dropped = Array.from(event.dataTransfer?.files ?? []);
+    if (dropped.length === 0) return;
+    // Two roads: images attach to the next message (the Wizard reads them
+    // with analyze_image / read_text_from_image); documents keep going to
+    // the RAG store exactly as before.
+    const { images, documents: files } = splitDroppedFiles(dropped);
+    if (images.length > 0) void addImageFiles(images);
     if (files.length === 0) return;
     setUploading(true);
     setError(null);
@@ -750,6 +837,27 @@ export default function WizardChat() {
         return;
       }
 
+      // `refused: true` — from the handler (run_code without Docker, a vision
+      // path outside the allowed roots, a shell card whose isolation changed)
+      // or from the HTTP layer (a confirmed privileged call from the
+      // network): nothing ran, so it is not a failure. The card's `refused`
+      // status (lib/privileged.ts owns its amber chrome) shows the server's
+      // reason (which names what to do: install Docker, attach the image, ask
+      // again), the model hears "nothing ran" in the next turn's history, and
+      // the mascot does not play the error strip. Checked before `ok` so the
+      // generic "Tool failed" text never wins.
+      if (detail.refused === true) {
+        const reason = outcome.error ?? envelope.error ?? 'the tool declined to run';
+        const summary = `Refused — nothing ran: ${reason}`;
+        patchMessage('refused', summary, detail);
+        setMessages(prev => [
+          ...prev,
+          { id: makeId(), role: 'system' as const, content: `⊘ ${call.name} — ${summary}` },
+        ]);
+        settleMascot(messageId, call.name, 'idle');
+        return;
+      }
+
       // A nested ok=false is an in-band refusal (deny list, validation, a
       // failed apply) and renders as a failure with its error, never as Done.
       const ok = envelope.ok && outcome.ok !== false;
@@ -908,15 +1016,22 @@ export default function WizardChat() {
   };
 
   const send = async () => {
-    const text = draft.trim();
-    if (!text || sending) return;
+    const typed = draft.trim();
+    // The images waiting in the composer ride on this turn; a slash command
+    // leaves them pending for the next real message.
+    const pending = attachments;
+    if ((!typed && pending.length === 0) || sending) return;
 
     // Slash commands are handled locally and never sent to the LLM.
-    if (text.startsWith('/')) {
+    if (typed.startsWith('/')) {
       setDraft('');
-      const consumed = await handleSlashCommand(text);
+      const consumed = await handleSlashCommand(typed);
       if (consumed) return;
     }
+
+    // Images with no words: the server needs a non-empty question, so ask
+    // the obvious one rather than refusing the send.
+    const text = questionWithAttachments(typed, pending.length);
 
     setError(null);
     setSending(true);
@@ -956,7 +1071,14 @@ export default function WizardChat() {
       }
     }
 
-    const userMsg: Message = { id: makeId(), role: 'user', content: text };
+    const userMsg: Message = {
+      id: makeId(),
+      role: 'user',
+      content: text,
+      // Thumbnails for the bubble only; the payload goes out on the request
+      // below and is not kept on the message.
+      ...(pending.length > 0 ? { attachments: pending.map(attachmentPreview) } : {}),
+    };
     const assistantId = makeId();
     const assistantSeed: Message = {
       id: assistantId,
@@ -972,13 +1094,17 @@ export default function WizardChat() {
     };
     setMessages(prev => [...prev, userMsg, assistantSeed]);
     setDraft('');
+    setAttachments([]);
+    setAttachNote(null);
 
     const history: WizardChatTurn[] = messages
       .filter(m => m.role !== 'system')
       .slice(-12)
       .map(m => ({
         role: m.role as 'user' | 'assistant',
-        content: m.content,
+        // A user turn that attached images sends what the server ran for it
+        // (with the attached-images line), never just the typed text.
+        content: m.historyContent ?? m.content,
         // Continuity: assistant turns name the specialist that produced them
         // so the concierge can stay with it on a weak follow-up ("and then?").
         ...(m.role === 'assistant' && m.usedProfile !== undefined ? { used_profile: m.usedProfile } : {}),
@@ -1013,6 +1139,9 @@ export default function WizardChat() {
         conversationId: convId ?? undefined,
         profile,
         maxIterations,
+        // The wire shape only ({name, content, mime_type, is_image}); the
+        // server lands the bytes and tells the model the paths.
+        attachments: attachmentPayloads(pending),
         signal: controller.signal,
       })) {
         publishMascot(event);
@@ -1083,6 +1212,12 @@ export default function WizardChat() {
               // display only, never executed client-side.
               deferredToolCalls: event.deferred_tool_calls ?? [],
             }));
+            if (event.attachment_paths && event.attachment_paths.length > 0) {
+              // The server landed this turn's images and told the model the
+              // paths; keep that line on the user turn for the follow-ups.
+              const historyContent = withAttachedImagePaths(text, event.attachment_paths);
+              setMessages(prev => prev.map(m => (m.id === userMsg.id ? { ...m, historyContent } : m)));
+            }
             setIterationStatus(null);
             break;
           case 'error': {
@@ -1184,7 +1319,7 @@ export default function WizardChat() {
             color: '#5a9100',
           }}
         >
-          Drop to ingest files into your RAG index
+          Drop images to attach them to your message · documents are indexed into your RAG store
         </div>
       )}
       <div
@@ -1243,6 +1378,45 @@ export default function WizardChat() {
         className="border-t p-3"
         style={{ borderColor: 'var(--border)', background: 'var(--bg-card)' }}
       >
+        {(attachments.length > 0 || attachNote) && (
+          <div className="mb-2 flex flex-wrap items-center gap-2" aria-label="Images attached to your next message">
+            {attachments.map(a => (
+              <div
+                key={a.id}
+                className="flex items-center gap-1.5 rounded-md border py-1 pl-1 pr-1.5 text-[10px] font-mono"
+                style={{ borderColor: 'var(--border-green)', background: 'var(--bg-subtle)', color: 'var(--text-secondary)' }}
+                title={`${a.name} · ${formatSize(a.size)} · ${a.mime_type}`}
+              >
+                {/* A data: URL built from the bytes already in memory — next/image has nothing to optimise here. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={a.previewUrl} alt="" className="h-7 w-7 rounded-sm object-cover" />
+                <span className="max-w-[10rem] truncate" style={{ color: 'var(--text-primary)' }}>{a.name}</span>
+                <span style={{ color: 'var(--text-muted)' }}>{formatSize(a.size)}</span>
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.id)}
+                  disabled={sending}
+                  aria-label={`Remove ${a.name}`}
+                  title="Remove this image"
+                  className="rounded-sm px-1 transition-colors hover:bg-[var(--bg-hover)]"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            {attachments.length > 0 && tools.size > 0 && !hasVisionTool(tools.keys()) && (
+              <div className="text-[10px] font-mono" style={{ color: '#d97706' }} role="note">
+                {NO_VISION_TOOL_NOTE}
+              </div>
+            )}
+            {attachNote && (
+              <div className="text-[10px] font-mono" style={{ color: '#d97706' }} role="status">
+                {attachNote}
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <textarea
             value={draft}
@@ -1253,6 +1427,7 @@ export default function WizardChat() {
               noteMascotTyping();
             }}
             onKeyDown={handleKey}
+            onPaste={handlePaste}
             placeholder="Ask the Wizard — about your setup, what to install, what just broke..."
             rows={2}
             className="flex-1 resize-none rounded-md border p-2 text-sm"
@@ -1263,10 +1438,40 @@ export default function WizardChat() {
             }}
             disabled={sending}
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={WIZARD_IMAGE_ACCEPT}
+            multiple
+            className="hidden"
+            onChange={e => {
+              const picked = Array.from(e.target.files ?? []);
+              // Reset so picking the same file again fires change again.
+              e.target.value = '';
+              void addImageFiles(picked);
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending || attachments.length >= WIZARD_ATTACHMENT_MAX_COUNT}
+            aria-label="Attach an image"
+            title={`Attach an image — png, jpeg, webp or gif, up to ${formatSize(WIZARD_ATTACHMENT_MAX_BYTES)}, ${WIZARD_ATTACHMENT_MAX_COUNT} per message. Or drop / paste one.`}
+            className="rounded-md border px-2 py-2 text-xs font-mono transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-50"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+          >
+            <svg aria-hidden className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             onClick={() => void send()}
-            disabled={sending || !draft.trim()}
+            disabled={sending || (!draft.trim() && attachments.length === 0)}
             className="btn-primary px-4 py-2 text-xs font-mono"
           >
             {sending ? 'Asking...' : 'Send'}
@@ -1673,6 +1878,22 @@ function MessageBlock({
         )}
         <div>{message.content}</div>
 
+        {isUser && message.attachments && message.attachments.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Attached images">
+            {message.attachments.map(a => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={a.id}
+                src={a.previewUrl}
+                alt={a.name}
+                title={`${a.name} · ${formatSize(a.size)}`}
+                className="h-16 max-w-[8rem] rounded-sm border object-cover"
+                style={{ borderColor: 'var(--border-green)' }}
+              />
+            ))}
+          </div>
+        )}
+
         {!isUser && message.serverToolTrace && message.serverToolTrace.length > 0 && (
           <ServerToolTrace
             trace={message.serverToolTrace}
@@ -1867,7 +2088,10 @@ function ToolCard({
             {chrome.classBadge}
           </span>
         )}
-        <span className="text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: chrome.badgeColor }}>
+        <span
+          className="text-[9px] font-mono uppercase tracking-[0.14em]"
+          style={{ color: chrome.badgeColor }}
+        >
           {chrome.badge}
         </span>
       </div>

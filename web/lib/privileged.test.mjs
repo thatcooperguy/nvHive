@@ -65,7 +65,7 @@ function schema(safety_class, extra = {}) {
   };
 }
 
-const STATUSES = ['idle', 'running', 'ok', 'error', 'awaiting-confirm', 'needs-terminal', 'disabled', 'dismissed'];
+const STATUSES = ['idle', 'running', 'ok', 'error', 'awaiting-confirm', 'needs-terminal', 'disabled', 'refused', 'dismissed'];
 const PENDING = ['idle', 'awaiting-confirm'];
 const SETTLED = STATUSES.filter(s => !PENDING.includes(s));
 
@@ -300,6 +300,13 @@ test('historyToolOutcome: ok is true only for a clean run; the hand-off names th
   assert.deepEqual(historyToolOutcome('apt_install', 'disabled', 'anything'), {
     name: 'apt_install', ok: false, summary: PRIVILEGED_DISABLED_NOTE,
   });
+  // An in-band refusal: never ok, the server's reason travels, a bare one still says nothing ran.
+  assert.deepEqual(historyToolOutcome('run_code', 'refused', 'Refused — nothing ran: run_code needs Docker'), {
+    name: 'run_code', ok: false, summary: 'Refused — nothing ran: run_code needs Docker',
+  });
+  assert.deepEqual(historyToolOutcome('shell', 'refused', undefined), {
+    name: 'shell', ok: false, summary: 'refused — nothing ran',
+  });
 });
 
 test('historyToolOutcome: the summary is cut to 300 characters', () => {
@@ -371,6 +378,20 @@ test('cardChrome: needs-terminal is amber, never the red "✗ Failed"', () => {
   assert.notEqual(handoff.badge, cardChrome('privileged', 'error').badge);
   // Settled: the user finishes it in a terminal, so no Run button.
   assert.equal(handoff.clickable, false);
+});
+
+test('cardChrome: refused is amber and settled — not done, not failed — for every class', () => {
+  for (const cls of ['confirm', 'privileged', 'auto', undefined]) {
+    const refused = cardChrome(cls, 'refused');
+    assert.equal(refused.badge, 'Refused', String(cls));
+    assert.equal(refused.badgeColor, '#d97706', String(cls));
+    assert.notEqual(refused.badgeColor, PRIVILEGED_COLOR, String(cls));
+    assert.notEqual(refused.badge, cardChrome(cls, 'error').badge, String(cls));
+    assert.equal(refused.clickable, false, String(cls));
+  }
+  // The class still owns the border: a refused privileged card stays red.
+  assert.equal(cardChrome('privileged', 'refused').borderColor, PRIVILEGED_COLOR);
+  assert.equal(cardChrome('confirm', 'refused').borderColor, null);
 });
 
 test('cardChrome: disabled mutes the badge, drops the buttons and keeps the red border', () => {

@@ -233,6 +233,64 @@ def format_summary(template: str, arguments: Mapping[str, Any] | None) -> str:
         return template
 
 
+def _json_schema_type(spec: Any) -> str:
+    """The single type name a JSON-Schema property means for the Wizard shape.
+
+    ``"string"`` when unspecified; a nullable list (``["string", "null"]``)
+    is its first non-null member; a type-less ``anyOf`` / ``oneOf`` is the
+    first member that names a type.
+    """
+    if not isinstance(spec, dict):
+        return "string"
+    declared = spec.get("type")
+    if isinstance(declared, str) and declared and declared != "null":
+        return declared
+    if isinstance(declared, list):
+        for item in declared:
+            if isinstance(item, str) and item and item != "null":
+                return item
+    for key in ("anyOf", "oneOf"):
+        for member in spec.get(key) or []:
+            found = _json_schema_type(member)
+            if found != "string" or (isinstance(member, dict) and member.get("type") == "string"):
+                return found
+    return "string"
+
+
+def parameters_from_json_schema(
+    schema: Mapping[str, Any] | None, descriptions: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """A JSON-Schema ``{"type": "object", "properties": …, "required": […]}`` as the ``WizardTool`` shape.
+
+    ``{name: {type, description, required}}`` — the one translation the core
+    tool bridges and the MCP adapter apply, so nullable types and missing
+    descriptions are handled in one place. ``descriptions`` fills in what the
+    schema left blank.
+    """
+    schema = schema or {}
+    properties = schema.get("properties") or {}
+    required = set(schema.get("required") or [])
+    overlay = descriptions or {}
+    return {
+        key: {
+            "type": _json_schema_type(val),
+            "description": overlay.get(key) or (val or {}).get("description", ""),
+            "required": key in required,
+        }
+        for key, val in properties.items()
+    }
+
+
+def _pinned_arguments(plan: Any) -> dict[str, Any]:
+    """The ``pinned_arguments`` a plan declares (string keys), else ``{}``."""
+    if not isinstance(plan, dict):
+        return {}
+    pinned = plan.get("pinned_arguments")
+    if not isinstance(pinned, dict):
+        return {}
+    return {str(key): value for key, value in pinned.items()}
+
+
 @dataclass(frozen=True)
 class WizardTool:
     """One executable capability the Wizard can request.
@@ -250,7 +308,11 @@ class WizardTool:
             ``privileged`` tools ``execute()`` calls it on the unconfirmed
             path and puts its answer on the card as ``plan`` — the exact
             commands, whether sudo is needed, what changes, how to undo —
-            without running anything.
+            without running anything. A plan may carry ``pinned_arguments``
+            (a dict): ``execute()`` folds them into the card's ``arguments``
+            before minting the approval token, so what the card showed (the
+            sandbox ``shell``'s isolation mode, say) is what the confirmed
+            call must bring back and what the handler enforces.
     """
 
     name: str
@@ -351,9 +413,11 @@ class WizardToolRegistry:
           switch is off, confirmed or not. Unconfirmed, the confirmation shape
           above plus ``privileged=True``, ``plan`` (the tool's dry run, or
           ``None`` when it has no planner) and the card's ``approval_token``
-          / ``approval_expires_at`` (:func:`issue_approval`). Confirmed, the
-          call must bring a token valid for exactly this name and these
-          arguments (:func:`verify_approval`) or it is refused with
+          / ``approval_expires_at`` (:func:`issue_approval`). When the plan
+          declares ``pinned_arguments`` they are folded into the card's
+          ``arguments`` first, so the token signs what the card showed.
+          Confirmed, the call must bring a token valid for exactly this name
+          and these arguments (:func:`verify_approval`) or it is refused with
           ``approval_required=True`` and nothing runs; then the handler runs,
           an apply that changed the host (complete, partial or failed) is
           recorded in the vault (``audit``) and the result is fitted to the
@@ -386,7 +450,16 @@ class WizardToolRegistry:
             }
             if privileged:
                 card["privileged"] = True
-                card["plan"] = await self.plan(name, arguments or {})
+                plan = await self.plan(name, arguments or {})
+                card["plan"] = plan
+                pinned = _pinned_arguments(plan)
+                if pinned:
+                    # The planner's decisions (e.g. the isolation a shell run
+                    # will get) become part of the approved call: the UI sends
+                    # these arguments back, the token binds them, the handler
+                    # enforces them.
+                    arguments = {**(arguments or {}), **pinned}
+                    card["arguments"] = arguments
                 card.update(issue_approval(name, arguments or {}))
             return card
 
@@ -1092,6 +1165,23 @@ def default_registry() -> WizardToolRegistry:
     from nvh.integrations.installs.playbooks import register_wizard_tools as _register_playbooks
 
     _register_playbooks(reg)
+
+    # The sandbox bridge (2026-09-03, design brief phase 3): the core agent's
+    # ``shell`` (privileged — the red card renders the command and how it
+    # will run: Docker sandbox or directly on this machine) and ``run_code``
+    # (confirm; Docker required, refused in-band without it). Both deny lists
+    # run before anything spawns; every shell run is audited under Decisions.
+    from nvh.integrations.wizard.sandbox_tools import register_wizard_tools as _register_sandbox
+
+    _register_sandbox(reg)
+
+    # The vision bridge (2026-09-03, design brief phase 3): ``analyze_image``
+    # and ``read_text_from_image`` (auto) behind a path allowlist, an
+    # image-only rule and a cloud rule — the chat's attached images reach the
+    # model only through these two.
+    from nvh.integrations.wizard.vision_bridge import register_wizard_tools as _register_vision
+
+    _register_vision(reg)
 
     # Pull in any third-party / workspace-local tools after the stock set so
     # plugins can override (with a logged warning) or extend without forking.

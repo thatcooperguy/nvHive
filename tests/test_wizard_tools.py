@@ -11,6 +11,8 @@ from nvh.integrations.wizard.tools import (
     WizardToolRegistry,
     default_registry,
     format_summary,
+    parameters_from_json_schema,
+    verify_approval,
 )
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -226,25 +228,103 @@ def test_default_registry_contains_expected_tools() -> None:
             "apt_install", "snap_install", "service_enable"} <= names
     # The Spark playbooks (2026-09-03): catalogue, dry run, privileged install.
     assert {"playbook_list", "playbook_plan", "playbook_install"} <= names
+    # The sandbox bridge (2026-09-03, phase 3): the agent's shell and run_code.
+    assert {"shell", "run_code"} <= names
+    # The vision bridge (phase 3): the allowlisted eyes the attached images are meant for.
+    assert {"analyze_image", "read_text_from_image"} <= names
 
 
 def test_default_registry_safety_class_distribution() -> None:
-    """save_provider_key is the canonical confirm-class tool; the system-settings
-    apply / installs are the privileged ones; the rest run auto."""
+    """save_provider_key is the canonical confirm-class tool (run_code joins it:
+    Docker-only, refused in-band without Docker); the system-settings apply /
+    installs and the sandbox shell are the privileged ones; the rest run auto."""
     reg = default_registry()
     by_name = {t.name: t for t in reg.list_tools()}
     assert by_name["refresh_models"].safety_class == "auto"
     assert by_name["repair_workspace"].safety_class == "auto"
     assert by_name["validate_provider_key"].safety_class == "auto"
     assert by_name["save_provider_key"].safety_class == "confirm"
+    assert by_name["run_code"].safety_class == "confirm"
+    assert by_name["run_code"].planner is None
+    for name in ("analyze_image", "read_text_from_image"):
+        assert by_name[name].safety_class == "auto", name
+        assert by_name[name].planner is None, name
     assert by_name["system_settings_get"].safety_class == "auto"
     assert by_name["system_settings_plan"].safety_class == "auto"
     assert by_name["playbook_list"].safety_class == "auto"
     assert by_name["playbook_plan"].safety_class == "auto"
-    for name in ("system_settings_apply", "apt_install", "snap_install", "service_enable", "playbook_install"):
+    for name in ("system_settings_apply", "apt_install", "snap_install", "service_enable", "playbook_install", "shell"):
         assert by_name[name].safety_class == "privileged", name
         assert by_name[name].planner is not None, name
     assert {t.safety_class for t in reg.list_tools()} == {"auto", "confirm", "privileged"}
+
+
+def test_parameters_from_json_schema_is_the_one_translation() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "a": {"type": "string", "description": "A"},
+            "b": {"type": "integer", "default": 5},
+            "c": None,
+            "d": {"type": ["string", "null"], "description": "nullable"},
+            "e": {"anyOf": [{"type": "null"}, {"type": "integer"}]},
+            "f": {"oneOf": [{"type": "string"}, {"type": "null"}]},
+            "g": {"type": "null"},
+        },
+        "required": ["a", "d"],
+    }
+    assert parameters_from_json_schema(schema, {"b": "B"}) == {
+        "a": {"type": "string", "description": "A", "required": True},
+        "b": {"type": "integer", "description": "B", "required": False},
+        "c": {"type": "string", "description": "", "required": False},
+        "d": {"type": "string", "description": "nullable", "required": True},
+        "e": {"type": "integer", "description": "", "required": False},
+        "f": {"type": "string", "description": "", "required": False},
+        "g": {"type": "string", "description": "", "required": False},
+    }
+    assert parameters_from_json_schema({}) == {}
+    assert parameters_from_json_schema(None) == {}
+
+
+@pytest.mark.asyncio
+async def test_a_plans_pinned_arguments_become_the_approved_call() -> None:
+    """A planner's decisions ride on the card's ``arguments`` and are what the
+    token signs: the model's bare call does not verify, the pinned one does,
+    and the handler sees the pins."""
+    seen: list[dict[str, Any]] = []
+
+    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+        seen.append(dict(args))
+        return {"ok": True, "applied": False}
+
+    async def planner(args: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, "commands": ["x"], "pinned_arguments": {"mode": "docker"}}
+
+    reg = WizardToolRegistry()
+    reg.register(WizardTool(
+        name="stub_pinned", description="pins", safety_class="privileged", parameters={},
+        handler=handler, planner=planner,
+    ))
+    card = await reg.execute("stub_pinned", arguments={"a": 1, "mode": "host"})
+    assert card["needs_confirmation"] is True and card["plan"]["pinned_arguments"] == {"mode": "docker"}
+    assert card["arguments"] == {"a": 1, "mode": "docker"}  # the pin wins over the caller's value
+    token = card["approval_token"]
+    assert verify_approval("stub_pinned", {"a": 1}, token) is False
+    refused = await reg.execute("stub_pinned", arguments={"a": 1, "mode": "host"}, confirmed=True, approval_token=token)
+    assert refused["approval_required"] is True and seen == []
+    out = await reg.execute("stub_pinned", arguments=card["arguments"], confirmed=True, approval_token=token)
+    assert out["ok"] is True and seen == [{"a": 1, "mode": "docker"}]
+    # A plan without pins (or a malformed one) changes nothing about the card.
+    async def bare_planner(args: dict[str, Any]) -> dict[str, Any]:
+        return {"ok": True, "commands": ["x"], "pinned_arguments": ["not", "a", "dict"]}
+
+    reg.register(WizardTool(
+        name="stub_bare", description="no pins", safety_class="privileged", parameters={},
+        handler=handler, planner=bare_planner,
+    ))
+    card = await reg.execute("stub_bare", arguments={"a": 1})
+    assert card["arguments"] == {"a": 1}
+    assert verify_approval("stub_bare", {"a": 1}, card["approval_token"]) is True
 
 
 def test_default_registry_public_dicts_omit_handler() -> None:
