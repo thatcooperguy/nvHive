@@ -13,20 +13,42 @@ import assert from 'node:assert/strict';
 
 import {
   NEEDS_TERMINAL_HINT,
+  PLAYBOOK_HANDOFF_PREFIX,
+  PLAYBOOK_INSTALL_TOOL,
+  PLAYBOOK_LIST_TOOL,
+  PLAYBOOK_LOG_LINES_PER_STEP,
+  PLAYBOOK_NEEDS_TERMINAL_EXPECTED_NOTE,
+  PLAYBOOK_PLAN_TOOL,
   PRIVILEGED_BADGE,
   PRIVILEGED_CLASS,
   PRIVILEGED_COLOR,
   PRIVILEGED_DISABLED_NOTE,
   PRIVILEGED_RUN_LABEL,
   PRIVILEGED_SUDO_NOTE,
+  applyPlaybookEvent,
   cardChrome,
   historyToolOutcome,
+  initialPlaybookRun,
   isPendingStatus,
   isPrivilegedCall,
   isPrivilegedDisabled,
+  jobOutcome,
+  manualStepsFromNotes,
   needsTerminal,
   planLines,
   planNotes,
+  planNotesWithoutManual,
+  playbookCardStatus,
+  playbookCatalogue,
+  playbookChips,
+  playbookHandoffCommand,
+  playbookOutcomeLabel,
+  playbookPlanExtras,
+  playbookProgressLabel,
+  playbookRunStart,
+  playbookStepIndex,
+  playbookStepNumber,
+  settlePlaybookRun,
   terminalCommand,
   unwrapToolResult,
 } from './privileged.ts';
@@ -374,4 +396,460 @@ test('the fixed strings say what they must, and name the env var they name', () 
   assert.match(NEEDS_TERMINAL_HINT, /terminal/);
   // No password vocabulary that suggests nvHive would take one.
   assert.doesNotMatch(NEEDS_TERMINAL_HINT, /enter your password (here|below)/i);
+});
+
+// ═══ Spark playbooks ═════════════════════════════════════════════════════════
+
+test('playbook tool names and the hand-off command are fixed strings', () => {
+  assert.equal(PLAYBOOK_LIST_TOOL, 'playbook_list');
+  assert.equal(PLAYBOOK_PLAN_TOOL, 'playbook_plan');
+  assert.equal(PLAYBOOK_INSTALL_TOOL, 'playbook_install');
+  assert.equal(PLAYBOOK_HANDOFF_PREFIX, 'nvh playbook install');
+  assert.equal(playbookHandoffCommand('ollama'), 'nvh playbook install ollama');
+  assert.equal(playbookHandoffCommand('  tailscale \n'), 'nvh playbook install tailscale');
+  // A blank id keeps a visible placeholder rather than an incomplete command.
+  assert.equal(playbookHandoffCommand(''), 'nvh playbook install <id>');
+  assert.equal(playbookHandoffCommand(undefined), 'nvh playbook install <id>');
+  assert.equal(playbookHandoffCommand(null), 'nvh playbook install <id>');
+  assert.doesNotMatch(PLAYBOOK_NEEDS_TERMINAL_EXPECTED_NOTE, /enter your password/i);
+});
+
+// ─── playbookRunStart ─────────────────────────────────────────────────────────
+
+test('playbookRunStart: a non-empty job_id starts a run; defaults fill the rest', () => {
+  assert.deepEqual(playbookRunStart({ ok: true, job_id: 'job-1', playbook: 'ollama', steps_total: 4 }), {
+    ok: true, job_id: 'job-1', playbook: 'ollama', steps_total: 4,
+  });
+  assert.deepEqual(playbookRunStart({ job_id: ' job-2 ' }), { ok: true, job_id: 'job-2', playbook: '', steps_total: 0 });
+  assert.equal(playbookRunStart({ job_id: 'job-3', steps_total: '5' }).steps_total, 5);
+  assert.equal(playbookRunStart({ job_id: 'job-3', steps_total: -1 }).steps_total, 0);
+  assert.equal(playbookRunStart({ job_id: 'job-3', steps_total: true }).steps_total, 0);
+  assert.equal(playbookRunStart({ ok: false, job_id: 'job-4' }).ok, false);
+});
+
+test('playbookRunStart: no job_id means no run — the card settles from the envelope as before', () => {
+  assert.equal(playbookRunStart({ ok: true, applied: true, summary: 'Enabled ssh' }), null);
+  assert.equal(playbookRunStart({ job_id: '' }), null);
+  assert.equal(playbookRunStart({ job_id: 42 }), null);
+  assert.equal(playbookRunStart({ ok: false, needs_terminal: true, command: 'sudo apt-get install -y x' }), null);
+  assert.equal(playbookRunStart(undefined), null);
+  assert.equal(playbookRunStart(null), null);
+  // The unwrapped handler answer is what the card reads, and the start rides there.
+  const envelope = { ok: true, result: { ok: true, job_id: 'job-9', playbook: 'vllm', steps_total: 3 }, tool: 'playbook_install', safety_class: 'privileged' };
+  assert.equal(playbookRunStart(unwrapToolResult(envelope)).job_id, 'job-9');
+  assert.equal(playbookRunStart(envelope), null, 'the envelope itself carries no job_id');
+});
+
+// ─── playbookCatalogue ────────────────────────────────────────────────────────
+
+const CATALOGUE_ROW = {
+  id: 'open-webui',
+  title: 'Open WebUI with Ollama',
+  category: 'chat',
+  summary: 'Install Open WebUI and use Ollama to chat with models on your Spark',
+  requires_sudo: true,
+  sudo_steps: 1,
+  manual_steps: 3,
+  estimated_minutes: 20,
+  estimated_disk_gb: 32,
+  rootless_alternative: null,
+  installed: false,
+  receipt_path: null,
+  source_urls: ['https://github.com/NVIDIA/dgx-spark-playbooks/tree/main/nvidia/open-webui'],
+};
+
+test('playbookCatalogue: a bare list or an object carrying `playbooks` yields typed rows; unknown fields ride along', () => {
+  const [fromList] = playbookCatalogue([CATALOGUE_ROW]);
+  assert.equal(fromList.id, 'open-webui');
+  assert.equal(fromList.requires_sudo, true);
+  assert.equal(fromList.sudo_steps, 1);
+  assert.equal(fromList.manual_steps, 3);
+  assert.equal(fromList.estimated_minutes, 20);
+  assert.equal(fromList.estimated_disk_gb, 32);
+  assert.equal(fromList.rootless_alternative, null);
+  assert.equal(fromList.installed, false);
+  assert.deepEqual(fromList.source_urls, CATALOGUE_ROW.source_urls, 'unknown fields are kept');
+  const [fromObject] = playbookCatalogue({ ok: true, playbooks: [CATALOGUE_ROW], count: 1 });
+  assert.deepEqual(fromObject, fromList);
+  assert.equal(playbookCatalogue({ items: [CATALOGUE_ROW] }).length, 1);
+  assert.equal(playbookCatalogue({ catalogue: [CATALOGUE_ROW] }).length, 1);
+});
+
+test('playbookCatalogue: rows without a string id are dropped; fields are coerced with safe defaults', () => {
+  const rows = playbookCatalogue([
+    { id: 'ollama' },
+    { id: '' },
+    { id: 7, title: 'seven' },
+    { title: 'no id' },
+    null,
+    'ollama',
+    { id: ' vllm ', sudo_steps: '2', manual_steps: -3, estimated_minutes: 'x', estimated_disk_gb: '1.5', rootless_alternative: ' ', installed: 'yes', receipt_path: '' },
+  ]);
+  assert.deepEqual(rows.map(r => r.id), ['ollama', 'vllm']);
+  const [ollama, vllm] = rows;
+  assert.equal(ollama.title, 'ollama', 'a missing title falls back to the id');
+  assert.equal(ollama.category, '');
+  assert.equal(ollama.summary, '');
+  assert.equal(ollama.requires_sudo, false);
+  assert.equal(ollama.sudo_steps, 0);
+  assert.equal(ollama.manual_steps, 0);
+  assert.equal(ollama.estimated_minutes, null);
+  assert.equal(ollama.estimated_disk_gb, null);
+  assert.equal(ollama.rootless_alternative, null);
+  assert.equal(ollama.installed, false);
+  assert.equal(ollama.receipt_path, null);
+  assert.equal(vllm.sudo_steps, 2);
+  assert.equal(vllm.requires_sudo, true, 'sudo steps imply requires_sudo even when the flag is missing');
+  assert.equal(vllm.manual_steps, 0);
+  assert.equal(vllm.estimated_minutes, null);
+  assert.equal(vllm.estimated_disk_gb, 1.5);
+  assert.equal(vllm.rootless_alternative, null);
+  assert.equal(vllm.installed, false, 'only a boolean true counts as installed');
+  assert.equal(vllm.receipt_path, null);
+});
+
+test('playbookCatalogue: junk gives an empty catalogue, never a throw', () => {
+  assert.deepEqual(playbookCatalogue(undefined), []);
+  assert.deepEqual(playbookCatalogue(null), []);
+  assert.deepEqual(playbookCatalogue('ollama'), []);
+  assert.deepEqual(playbookCatalogue(42), []);
+  assert.deepEqual(playbookCatalogue({ ok: true }), []);
+  assert.deepEqual(playbookCatalogue({ playbooks: 'ollama' }), []);
+  assert.deepEqual(playbookCatalogue([]), []);
+});
+
+// ─── playbookChips ────────────────────────────────────────────────────────────
+
+test('playbookChips: the sudo chip is always first; manual steps and estimates follow when known', () => {
+  assert.deepEqual(playbookChips(CATALOGUE_ROW), ['sudo: 1 step', '3 manual steps', '~20 min', '~32 GB']);
+  assert.deepEqual(playbookChips({ requires_sudo: true, sudo_steps: 2, manual_steps: 1, estimated_minutes: 45.4, estimated_disk_gb: 2 }), ['sudo: 2 steps', '1 manual step', '~45 min', '~2 GB']);
+  assert.deepEqual(playbookChips({ requires_sudo: false, sudo_steps: 0, manual_steps: 0, estimated_minutes: null, estimated_disk_gb: null }), ['no sudo']);
+  // requires_sudo without a count still says sudo (an older server that sends only the flag).
+  assert.deepEqual(playbookChips({ requires_sudo: true, sudo_steps: 0, manual_steps: 0, estimated_minutes: 0, estimated_disk_gb: 0 }), ['sudo']);
+});
+
+// ─── playbookPlanExtras / manual notes ────────────────────────────────────────
+
+const PLAYBOOK_PLAN = {
+  ok: true,
+  setting: 'playbook_install',
+  title: 'Install the open-webui playbook',
+  commands: ['sudo usermod -aG docker alice', 'docker pull ghcr.io/open-webui/open-webui:ollama', 'docker run -d -p 8080:8080 --gpus=all --name open-webui ghcr.io/open-webui/open-webui:ollama'],
+  sudo: true,
+  changes: 'Adds you to the docker group, pulls the image and starts the container.',
+  undo: ['docker stop open-webui', 'docker rm open-webui'],
+  notes: ['MANUAL: log out and back in after the docker-group change', 'Image is ~7 GB.', 'MANUAL: create the admin account at http://localhost:8080'],
+  warning: 'The cleanup commands delete all Open WebUI data.',
+  id: 'open-webui',
+  manual_steps: ['log out and back in after the docker-group change', 'create the admin account at http://localhost:8080'],
+  verify: [['docker', 'ps', '--filter', 'name=^open-webui$'], 'curl -sI http://localhost:8080'],
+  estimates: { minutes: 20, disk_gb: 32 },
+  needs_terminal_expected: true,
+};
+
+test('playbookPlanExtras: the plan_dict extras come off the same `plan` key planLines reads', () => {
+  const call = { name: 'playbook_install', arguments: { id: 'open-webui' }, plan: PLAYBOOK_PLAN };
+  const extras = playbookPlanExtras(call);
+  assert.equal(extras.id, 'open-webui');
+  assert.deepEqual(extras.manualSteps, PLAYBOOK_PLAN.manual_steps);
+  assert.deepEqual(extras.verify, ['docker ps --filter name=^open-webui$', 'curl -sI http://localhost:8080'], 'argv lists and strings both render');
+  assert.equal(extras.estimatedMinutes, 20);
+  assert.equal(extras.estimatedDiskGb, 32);
+  assert.equal(extras.needsTerminalExpected, true);
+  // The generic readers still work on the same plan.
+  assert.deepEqual(planLines(call), PLAYBOOK_PLAN.commands);
+  assert.equal(planNotes(call).warning, PLAYBOOK_PLAN.warning);
+});
+
+test('playbookPlanExtras: a bare plan, a command list or junk gives empty extras', () => {
+  const empty = { id: '', manualSteps: [], verify: [], estimatedMinutes: null, estimatedDiskGb: null, needsTerminalExpected: false };
+  assert.deepEqual(playbookPlanExtras({ plan: SERVER_PLAN }), empty);
+  assert.deepEqual(playbookPlanExtras({ plan: ['sudo apt-get update'] }), empty);
+  assert.deepEqual(playbookPlanExtras({}), empty);
+  assert.deepEqual(playbookPlanExtras(undefined), empty);
+  assert.deepEqual(playbookPlanExtras(null), empty);
+  assert.deepEqual(playbookPlanExtras({ plan: { manual_steps: 'x', verify: 'y', estimates: 'z', needs_terminal_expected: 'yes' } }), empty);
+  // One estimates shape: `plan_dict` sends `estimates: {minutes, disk_gb}`; the catalogue rows' flat
+  // `estimated_*` fields are not read off a plan, so the two readers cannot drift apart.
+  assert.equal(playbookPlanExtras({ plan: { estimated_minutes: 5 } }).estimatedMinutes, null);
+  assert.equal(playbookPlanExtras({ plan: { estimates: { minutes: 5, disk_gb: 0.2 } } }).estimatedDiskGb, 0.2);
+});
+
+test('manual notes split: MANUAL: lines render as their own list and leave the plain notes', () => {
+  const notes = planNotes({ plan: PLAYBOOK_PLAN }).notes;
+  assert.deepEqual(manualStepsFromNotes(notes), PLAYBOOK_PLAN.manual_steps);
+  assert.deepEqual(planNotesWithoutManual(notes), ['Image is ~7 GB.']);
+  assert.deepEqual(manualStepsFromNotes(['manual: lower-case prefix', 'MANUAL:', '  MANUAL:   spaced  ']), ['lower-case prefix', 'spaced']);
+  assert.deepEqual(planNotesWithoutManual(['MANUAL: x', 'keep', 'a MANUAL: in the middle stays']), ['keep', 'a MANUAL: in the middle stays']);
+  assert.deepEqual(manualStepsFromNotes([]), []);
+});
+
+// ─── step index helpers ───────────────────────────────────────────────────────
+
+test('playbookStepIndex / playbookStepNumber: the wire index is 0-based, the display is 1-based', () => {
+  assert.equal(playbookStepIndex({ step: 0 }), 0);
+  assert.equal(playbookStepIndex({ step: '2' }), 2);
+  assert.equal(playbookStepIndex({ step_index: 3 }), 3);
+  assert.equal(playbookStepIndex({ index: 1 }), 1);
+  assert.equal(playbookStepIndex({ step: -1 }), null);
+  assert.equal(playbookStepIndex({ step: 'two' }), null);
+  assert.equal(playbookStepIndex({}), null);
+  assert.equal(playbookStepIndex(undefined), null);
+  assert.equal(playbookStepNumber(0), 1);
+  assert.equal(playbookStepNumber(4), 5);
+  assert.equal(playbookStepNumber(2.7), 3);
+  assert.equal(playbookStepNumber(null), null);
+  assert.equal(playbookStepNumber(undefined), null);
+  assert.equal(playbookStepNumber(-1), null);
+});
+
+// ─── jobOutcome ───────────────────────────────────────────────────────────────
+
+test('jobOutcome: complete → done, error → failed at the step, everything in between → null', () => {
+  assert.deepEqual(jobOutcome({ event: 'complete', status: 'complete', message: 'open-webui installed' }), { kind: 'done', message: 'open-webui installed' });
+  assert.deepEqual(
+    jobOutcome({ event: 'error', status: 'failed', message: 'docker pull exited 1', step: 1, exit_code: 1 }),
+    { kind: 'failed', step: 1, error: 'docker pull exited 1' },
+  );
+  // `error` beats `message` when both are present; a bare error still names a reason.
+  assert.equal(jobOutcome({ event: 'error', status: 'failed', message: 'm', error: 'e' }).error, 'e');
+  assert.equal(jobOutcome({ event: 'error', status: 'failed', message: '' }).error, 'failed');
+  assert.equal(jobOutcome({ event: 'error', status: 'failed', message: 'no step here' }).step, null);
+  for (const event of [
+    { event: 'plan', status: 'running', message: '3 steps' },
+    { event: 'step', status: 'running', message: 'Pull the image', step: 1 },
+    { event: 'step', status: 'complete', message: 'Pull the image', step: 1, exit_code: 0 },
+    { event: 'step', status: 'skipped', message: 'already in the docker group', step: 0 },
+    { event: 'log', status: 'running', message: 'Downloading layer…', step: 1 },
+    { event: 'progress', status: 'running', message: '' },
+  ]) {
+    assert.equal(jobOutcome(event), null, event.event);
+  }
+  assert.equal(jobOutcome(undefined), null);
+  assert.equal(jobOutcome(null), null);
+  assert.equal(jobOutcome('complete'), null);
+});
+
+test('jobOutcome: a step that reports failed ends the run (the runner stops at the first failure)', () => {
+  assert.deepEqual(
+    jobOutcome({ event: 'step', status: 'failed', message: 'exited 100', step: 2, exit_code: 100 }),
+    { kind: 'failed', step: 2, error: 'exited 100' },
+  );
+});
+
+test('jobOutcome: needs_terminal is a hand-off — the exact command, or the CLI line for the playbook', () => {
+  const explicit = jobOutcome({ event: 'needs_terminal', status: 'complete', message: 'sudo needs a password', step: 0, command: 'nvh playbook install open-webui', hint: 'run it in your terminal' });
+  assert.deepEqual(explicit, { kind: 'needs-terminal', command: 'nvh playbook install open-webui', hint: 'run it in your terminal', step: 0 });
+  // No command on the event: the playbook id (event first, then the caller's) fills it.
+  assert.equal(jobOutcome({ event: 'needs_terminal', status: 'running', message: 'x', playbook: 'vllm' }).command, 'nvh playbook install vllm');
+  assert.equal(jobOutcome({ event: 'needs_terminal', status: 'running', message: 'x' }, 'tailscale').command, 'nvh playbook install tailscale');
+  assert.equal(jobOutcome({ event: 'needs_terminal', status: 'running', message: 'x' }).command, 'nvh playbook install <id>');
+  // An argv command renders joined; the hint falls back to the message.
+  const argv = jobOutcome({ event: 'needs_terminal', status: 'running', message: 'password needed', command: ['nvh', 'playbook', 'install', 'ollama'] });
+  assert.equal(argv.command, 'nvh playbook install ollama');
+  assert.equal(argv.hint, 'password needed');
+  // Never a failure, whatever the status says.
+  assert.equal(jobOutcome({ event: 'needs_terminal', status: 'failed', message: 'x' }).kind, 'needs-terminal');
+});
+
+test('jobOutcome: a complete that carries halted is the docker-group stop — never Done', () => {
+  const note = 'Log out and back in (and restart nvHive) so the docker group applies, then run this playbook again — finished steps are skipped.';
+  assert.deepEqual(
+    jobOutcome({ event: 'complete', status: 'complete', halted: true, partial: true, applied: true, message: note, step: 0 }),
+    { kind: 'halted', message: note, step: 0 },
+  );
+  assert.equal(jobOutcome({ event: 'complete', status: 'complete', halted: true, message: note }).step, null);
+  // Only the boolean counts; a plain complete is still done.
+  assert.equal(jobOutcome({ event: 'complete', status: 'complete', halted: 'yes', message: 'x' }).kind, 'done');
+  assert.equal(jobOutcome({ event: 'complete', status: 'complete', halted: false, message: 'x' }).kind, 'done');
+});
+
+// ─── applyPlaybookEvent ───────────────────────────────────────────────────────
+
+function run(overrides = {}) {
+  return initialPlaybookRun({ job_id: 'job-1', playbook: 'open-webui', steps_total: 3, ...overrides });
+}
+
+test('initialPlaybookRun: an empty run for the card, the fallback id filling a blank playbook', () => {
+  assert.deepEqual(run(), { jobId: 'job-1', playbook: 'open-webui', stepsTotal: 3, steps: [], outcome: null });
+  assert.equal(initialPlaybookRun({ job_id: 'j', playbook: '', steps_total: 0 }, 'ollama').playbook, 'ollama');
+  assert.equal(initialPlaybookRun({ job_id: 'j', playbook: 'vllm', steps_total: 0 }, 'ollama').playbook, 'vllm');
+});
+
+test('applyPlaybookEvent: step events upsert rows in index order and never mutate the input', () => {
+  const s0 = run();
+  const s1 = applyPlaybookEvent(s0, { event: 'step', status: 'running', message: 'Check the docker group', step: 0, title: 'Check the docker group', command: ['id', '-nG'], sudo: false });
+  assert.equal(s0.steps.length, 0, 'input untouched');
+  assert.deepEqual(s1.steps, [{ index: 0, title: 'Check the docker group', command: 'id -nG', sudo: false, status: 'running', exitCode: null, log: [] }]);
+  const s2 = applyPlaybookEvent(s1, { event: 'step', status: 'skipped', message: 'already a member', step: 0, exit_code: 0 });
+  assert.equal(s2.steps[0].status, 'skipped');
+  assert.equal(s2.steps[0].exitCode, 0);
+  assert.equal(s2.steps[0].title, 'Check the docker group', 'a patch without a title keeps the old one');
+  const s3 = applyPlaybookEvent(s2, { event: 'step', status: 'running', message: 'Pull', step: 2, title: 'Pull the image', command: 'docker pull ghcr.io/open-webui/open-webui:ollama' });
+  const s4 = applyPlaybookEvent(s3, { event: 'step', status: 'running', message: 'usermod', step: 1, title: 'Join the docker group', command: 'sudo usermod -aG docker alice', sudo: true });
+  assert.deepEqual(s4.steps.map(s => s.index), [0, 1, 2], 'rows stay sorted by index');
+  assert.equal(s4.steps[1].sudo, true);
+  assert.equal(s4.outcome, null);
+  // A step complete with an exit code.
+  const s5 = applyPlaybookEvent(s4, { event: 'step', status: 'complete', message: 'done', step: 1, exit_code: 0 });
+  assert.equal(s5.steps[1].status, 'ok');
+  assert.equal(s5.steps[1].exitCode, 0);
+  // A step without an index is ignored (nothing to attach it to).
+  assert.deepEqual(applyPlaybookEvent(s5, { event: 'step', status: 'running', message: 'orphan' }).steps, s5.steps);
+});
+
+test('applyPlaybookEvent: plan refreshes the totals; the playbook id is filled only when blank', () => {
+  const s = applyPlaybookEvent(initialPlaybookRun({ job_id: 'j', playbook: '', steps_total: 0 }), { event: 'plan', status: 'running', message: '4 steps', steps_total: 4, playbook: 'vllm' });
+  assert.equal(s.stepsTotal, 4);
+  assert.equal(s.playbook, 'vllm');
+  const kept = applyPlaybookEvent(run(), { event: 'plan', status: 'running', message: '', steps_total: 0, playbook: 'other' });
+  assert.equal(kept.stepsTotal, 3, 'a zero total does not erase a known one');
+  assert.equal(kept.playbook, 'open-webui');
+});
+
+test('applyPlaybookEvent: log lines attach to the named step, else the running step, else the last; the newest N are kept', () => {
+  let s = applyPlaybookEvent(run(), { event: 'step', status: 'running', message: 'Pull', step: 1, title: 'Pull the image' });
+  s = applyPlaybookEvent(s, { event: 'log', status: 'running', message: 'layer 1/9  ', step: 1 });
+  s = applyPlaybookEvent(s, { event: 'log', status: 'running', message: 'layer 2/9' });
+  assert.deepEqual(s.steps[0].log, ['layer 1/9', 'layer 2/9'], 'trailing whitespace trimmed; a log without a step lands on the running step');
+  // Blank logs are dropped; a log for a step nobody announced still creates the row.
+  s = applyPlaybookEvent(s, { event: 'log', status: 'running', message: '   ', step: 1 });
+  assert.equal(s.steps[0].log.length, 2);
+  s = applyPlaybookEvent(s, { event: 'log', status: 'running', message: 'early', step: 0 });
+  assert.equal(s.steps[0].index, 0);
+  assert.deepEqual(s.steps[0].log, ['early']);
+  assert.equal(s.steps[0].status, 'pending');
+  // Throttle: only the newest PLAYBOOK_LOG_LINES_PER_STEP survive.
+  for (let i = 0; i < PLAYBOOK_LOG_LINES_PER_STEP + 5; i++) {
+    s = applyPlaybookEvent(s, { event: 'log', status: 'running', message: `line ${i}`, step: 1 });
+  }
+  const pull = s.steps.find(x => x.index === 1);
+  assert.equal(pull.log.length, PLAYBOOK_LOG_LINES_PER_STEP);
+  assert.equal(pull.log[pull.log.length - 1], `line ${PLAYBOOK_LOG_LINES_PER_STEP + 4}`);
+  assert.equal(pull.log[0], 'line 5');
+  // With no step at all a log has nowhere to go and is dropped.
+  const empty = applyPlaybookEvent(run(), { event: 'log', status: 'running', message: 'nowhere' });
+  assert.deepEqual(empty.steps, []);
+  // A log after the running step settled falls back to the last step.
+  let settled = applyPlaybookEvent(run(), { event: 'step', status: 'complete', message: '', step: 0, title: 'a' });
+  settled = applyPlaybookEvent(settled, { event: 'log', status: 'running', message: 'tail' });
+  assert.deepEqual(settled.steps[0].log, ['tail']);
+});
+
+test('applyPlaybookEvent: complete settles the run and closes any step still marked running', () => {
+  let s = applyPlaybookEvent(run(), { event: 'step', status: 'running', message: '', step: 0, title: 'a' });
+  s = applyPlaybookEvent(s, { event: 'complete', status: 'complete', message: 'open-webui installed' });
+  assert.deepEqual(s.outcome, { kind: 'done', message: 'open-webui installed' });
+  assert.equal(s.steps[0].status, 'ok');
+  assert.equal(playbookCardStatus(s.outcome), 'ok');
+  assert.equal(playbookOutcomeLabel(s.outcome), 'Done');
+});
+
+test('applyPlaybookEvent: error settles the run as failed at the step it names, with the exit code', () => {
+  let s = applyPlaybookEvent(run(), { event: 'step', status: 'running', message: '', step: 1, title: 'Pull the image', command: 'docker pull x' });
+  s = applyPlaybookEvent(s, { event: 'error', status: 'failed', message: 'docker pull exited 1', step: 1, exit_code: 1 });
+  assert.deepEqual(s.outcome, { kind: 'failed', step: 1, error: 'docker pull exited 1' });
+  assert.equal(s.steps[0].status, 'failed');
+  assert.equal(s.steps[0].exitCode, 1);
+  assert.equal(s.steps[0].title, 'Pull the image');
+  assert.equal(playbookCardStatus(s.outcome), 'error');
+  assert.equal(playbookOutcomeLabel(s.outcome), 'Failed at step 2: docker pull exited 1');
+  // An error without a step still fails the run, with a plain label.
+  const noStep = applyPlaybookEvent(run(), { event: 'error', status: 'failed', message: 'runner crashed' });
+  assert.equal(playbookOutcomeLabel(noStep.outcome), 'Failed: runner crashed');
+  assert.equal(playbookOutcomeLabel({ kind: 'failed', step: null, error: '' }), 'Failed');
+});
+
+test('applyPlaybookEvent: needs_terminal settles as a hand-off and a later complete does not overwrite it', () => {
+  let s = applyPlaybookEvent(run(), { event: 'step', status: 'complete', message: '', step: 0, title: 'Check the docker group', exit_code: 1 });
+  s = applyPlaybookEvent(s, { event: 'needs_terminal', status: 'complete', message: 'sudo needs a password here', step: 1, title: 'Join the docker group', command: 'nvh playbook install open-webui', sudo: true });
+  assert.deepEqual(s.outcome, { kind: 'needs-terminal', command: 'nvh playbook install open-webui', hint: 'sudo needs a password here', step: 1 });
+  assert.equal(s.steps[1].status, 'needs-terminal');
+  assert.equal(s.steps[1].title, 'Join the docker group');
+  assert.equal(s.steps[1].command, '', 'the hand-off command is the CLI line, not the step command');
+  const after = applyPlaybookEvent(s, { event: 'complete', status: 'complete', message: 'job ended' });
+  assert.equal(after.outcome.kind, 'needs-terminal', 'first outcome wins');
+  assert.equal(playbookCardStatus(after.outcome), 'needs-terminal');
+  assert.equal(playbookOutcomeLabel(after.outcome), 'Stopped: needs a terminal — run: nvh playbook install open-webui');
+  // The chat history line built from that status names the exact command.
+  const history = historyToolOutcome('playbook_install', playbookCardStatus(after.outcome), playbookOutcomeLabel(after.outcome), { command: after.outcome.command });
+  assert.deepEqual(history, { name: 'playbook_install', ok: false, summary: 'needs a terminal: nvh playbook install open-webui' });
+});
+
+test('applyPlaybookEvent: a halted complete settles the run as halted — the step that ran closes, the card is never Done', () => {
+  const note = 'Log out and back in (and restart nvHive) so the docker group applies, then run this playbook again — finished steps are skipped.';
+  let s = applyPlaybookEvent(run(), { event: 'step', status: 'running', message: '', step: 0, title: 'Join the docker group', command: 'sudo usermod -aG docker alice', sudo: true });
+  s = applyPlaybookEvent(s, { event: 'step', status: 'complete', message: 'done', step: 0, exit_code: 0 });
+  s = applyPlaybookEvent(s, { event: 'log', status: 'running', message: `MANUAL: ${note}`, step: 0 });
+  s = applyPlaybookEvent(s, { event: 'complete', status: 'complete', halted: true, partial: true, applied: true, message: note });
+  assert.equal(s.outcome.kind, 'halted');
+  assert.equal(s.steps[0].status, 'ok', 'the usermod step itself completed; the run stopped after it');
+  assert.equal(playbookCardStatus(s.outcome), 'halted');
+  assert.equal(playbookOutcomeLabel(s.outcome), `Stopped for you to act: ${note}`);
+  assert.notEqual(playbookOutcomeLabel(s.outcome), 'Done');
+  assert.equal(playbookOutcomeLabel({ kind: 'halted', message: '', step: null }), 'Stopped for you to act — then run the playbook again');
+  // Amber "your turn" chrome — settled, not pending, not the green Done, not the red failure.
+  const chrome = cardChrome('privileged', 'halted');
+  assert.equal(chrome.badge, 'Stopped — your turn');
+  assert.notEqual(chrome.badge, '✓ Done');
+  assert.notEqual(chrome.badge, '✗ Failed');
+  assert.equal(chrome.clickable, false);
+  assert.equal(isPendingStatus('halted'), false);
+  // The next turn's history tells the model the install did not finish.
+  const history = historyToolOutcome('playbook_install', 'halted', playbookOutcomeLabel(s.outcome));
+  assert.equal(history.ok, false);
+  assert.match(history.summary, /^stopped for the user to act — not installed yet: Stopped for you to act/);
+  // A later job-complete (the poller's terminal status) does not turn it into Done.
+  assert.equal(settlePlaybookRun(s, 'complete', 'Install job complete.').outcome.kind, 'halted');
+  assert.equal(applyPlaybookEvent(s, { event: 'complete', status: 'complete', message: 'job ended' }).outcome.kind, 'halted');
+});
+
+// ─── settlePlaybookRun ────────────────────────────────────────────────────────
+
+test('settlePlaybookRun: the job ended without a settling event — complete is done, anything else failed', () => {
+  let s = applyPlaybookEvent(run(), { event: 'step', status: 'running', message: '', step: 2, title: 'Start' });
+  const done = settlePlaybookRun(s, 'complete', 'all steps ran');
+  assert.deepEqual(done.outcome, { kind: 'done', message: 'all steps ran' });
+  assert.equal(done.steps[0].status, 'ok');
+  const failed = settlePlaybookRun(s, 'failed', 'Install job failed');
+  assert.deepEqual(failed.outcome, { kind: 'failed', step: 2, error: 'Install job failed' });
+  assert.equal(failed.steps[0].status, 'failed');
+  assert.equal(settlePlaybookRun(run(), 'canceled', '').outcome.error, 'job canceled');
+  assert.equal(settlePlaybookRun(run(), '', '').outcome.error, 'job ended');
+  assert.equal(settlePlaybookRun(run(), 'failed', 'x').outcome.step, null, 'no running step → no step number');
+  // An outcome already on the run always wins: a hand-off followed by a failed job status stays a hand-off.
+  s = applyPlaybookEvent(s, { event: 'needs_terminal', status: 'running', message: 'password', step: 2 });
+  assert.equal(settlePlaybookRun(s, 'failed', 'Install job failed').outcome.kind, 'needs-terminal');
+  assert.equal(settlePlaybookRun(s, 'complete', '').outcome.kind, 'needs-terminal');
+});
+
+// ─── playbookCardStatus / playbookOutcomeLabel / playbookProgressLabel ────────
+
+test('playbookCardStatus: running until settled; the three outcomes map to the three card statuses', () => {
+  assert.equal(playbookCardStatus(null), 'running');
+  assert.equal(playbookCardStatus(undefined), 'running');
+  assert.equal(playbookCardStatus({ kind: 'done', message: '' }), 'ok');
+  assert.equal(playbookCardStatus({ kind: 'needs-terminal', command: 'nvh playbook install x', hint: '', step: null }), 'needs-terminal');
+  assert.equal(playbookCardStatus({ kind: 'failed', step: 0, error: 'x' }), 'error');
+  // The hand-off never wears the failure chrome.
+  assert.notEqual(cardChrome('privileged', playbookCardStatus({ kind: 'needs-terminal', command: 'x', hint: '', step: null })).badge, '✗ Failed');
+});
+
+test('playbookOutcomeLabel: empty while running; the three fixed shapes once settled', () => {
+  assert.equal(playbookOutcomeLabel(null), '');
+  assert.equal(playbookOutcomeLabel(undefined), '');
+  assert.equal(playbookOutcomeLabel({ kind: 'done', message: 'whatever' }), 'Done');
+  assert.equal(playbookOutcomeLabel({ kind: 'needs-terminal', command: 'nvh playbook install ollama', hint: '', step: 0 }), 'Stopped: needs a terminal — run: nvh playbook install ollama');
+  assert.equal(playbookOutcomeLabel({ kind: 'failed', step: 0, error: 'exit 1' }), 'Failed at step 1: exit 1');
+});
+
+test('playbookProgressLabel: step N of total while running, counts settled steps otherwise', () => {
+  assert.equal(playbookProgressLabel(run()), '0 of 3 steps');
+  assert.equal(playbookProgressLabel(initialPlaybookRun({ job_id: 'j', playbook: '', steps_total: 0 })), 'starting');
+  let s = applyPlaybookEvent(run(), { event: 'step', status: 'running', message: '', step: 1 });
+  assert.equal(playbookProgressLabel(s), 'step 2 of 3');
+  s = applyPlaybookEvent(s, { event: 'step', status: 'complete', message: '', step: 1 });
+  assert.equal(playbookProgressLabel(s), 'step 1 of 3', 'one settled step, none running');
+  const noTotal = applyPlaybookEvent(initialPlaybookRun({ job_id: 'j', playbook: '', steps_total: 0 }), { event: 'step', status: 'running', message: '', step: 0 });
+  assert.equal(playbookProgressLabel(noTotal), 'step 1');
 });

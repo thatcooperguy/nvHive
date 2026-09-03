@@ -224,6 +224,8 @@ def test_default_registry_contains_expected_tools() -> None:
     assert "save_provider_key" in names
     assert {"system_settings_get", "system_settings_plan", "system_settings_apply",
             "apt_install", "snap_install", "service_enable"} <= names
+    # The Spark playbooks (2026-09-03): catalogue, dry run, privileged install.
+    assert {"playbook_list", "playbook_plan", "playbook_install"} <= names
 
 
 def test_default_registry_safety_class_distribution() -> None:
@@ -237,8 +239,11 @@ def test_default_registry_safety_class_distribution() -> None:
     assert by_name["save_provider_key"].safety_class == "confirm"
     assert by_name["system_settings_get"].safety_class == "auto"
     assert by_name["system_settings_plan"].safety_class == "auto"
-    for name in ("system_settings_apply", "apt_install", "snap_install", "service_enable"):
+    assert by_name["playbook_list"].safety_class == "auto"
+    assert by_name["playbook_plan"].safety_class == "auto"
+    for name in ("system_settings_apply", "apt_install", "snap_install", "service_enable", "playbook_install"):
         assert by_name[name].safety_class == "privileged", name
+        assert by_name[name].planner is not None, name
     assert {t.safety_class for t in reg.list_tools()} == {"auto", "confirm", "privileged"}
 
 

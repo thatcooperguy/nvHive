@@ -74,6 +74,11 @@ def _receipt_path(identifier: str, home_dir: str | Path | None = None) -> Path:
     return receipts_root(home_dir=home_dir) / f"{_safe_slug(identifier)}.json"
 
 
+def receipt_path(kind: str, item_id: str, home_dir: str | Path | None = None) -> Path:
+    """Where the receipt for ``kind:item_id`` lives (whether or not it exists yet)."""
+    return _receipt_path(receipt_id(kind, item_id), home_dir=home_dir)
+
+
 def write_receipt(
     *,
     kind: str,
@@ -203,14 +208,38 @@ def repair_plan(identifier: str, home_dir: str | Path | None = None) -> dict[str
         commands = [f"nvh studio --install-models {target} -y"]
     elif kind == "comfyui":
         commands = ["nvh workstation --with-comfyui -y"]
+    elif kind == "playbook":
+        # The Spark playbook runner skips steps whose check passes, so a
+        # re-run is the repair; sudo may ask for a password in the terminal.
+        commands = [f"nvh playbook install {item_id}"]
     else:
         commands = [f"nvh setup repair {identifier}"]
+    no_root = bool(receipt.get("no_root", True))
+    # ``no_root`` records what *ran*; a playbook receipt also records what the
+    # plan *needs* (``metadata.requires_sudo``), so a partial run that stopped
+    # before its first sudo step does not read as a rootless repair.
+    requires_sudo = bool(_metadata(receipt).get("requires_sudo", False))
+    if not no_root:
+        reason = "Re-run the installer for this item; it used sudo, so run it in a terminal where sudo can ask you."
+    elif requires_sudo:
+        reason = (
+            "Re-run the installer for this item; its remaining steps need sudo, so run it in a terminal "
+            "where sudo can ask you."
+        )
+    else:
+        reason = "Re-run the rootless installer for this item and refresh the receipt."
     return {
         "receipt": receipt,
-        "safe_to_run_without_root": True,
+        # Derived from the receipt: what ran (no_root) and what the plan still needs (requires_sudo).
+        "safe_to_run_without_root": no_root and not requires_sudo,
         "commands": commands,
-        "reason": "Re-run the rootless installer for this item and refresh the receipt.",
+        "reason": reason,
     }
+
+
+def _metadata(receipt: dict[str, Any]) -> dict[str, Any]:
+    metadata = receipt.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
 
 
 def uninstall_plan(identifier: str, home_dir: str | Path | None = None) -> dict[str, Any]:
@@ -220,11 +249,27 @@ def uninstall_plan(identifier: str, home_dir: str | Path | None = None) -> dict[
     for path in paths:
         if path and path not in unique_paths:
             unique_paths.append(path)
+    no_root = bool(receipt.get("no_root", True))
+    commands = [f"rm -rf {path!r}" for path in unique_paths]
+    reason = "Preview only. nvHive records the paths so a user can remove rootless files deliberately."
+    undo = _metadata(receipt).get("undo")
+    if receipt.get("kind") == "playbook" and isinstance(undo, list) and undo:
+        # The upstream README's own cleanup, recorded at install time. Several
+        # lines hit the deny list by design (userdel, rm outside NVH_HOME):
+        # they are shown, never run by nvHive.
+        commands = [str(line) for line in undo]
+        reason = (
+            "Preview only: the playbook's upstream cleanup steps. nvHive never runs them; "
+            "several need sudo and remove files outside NVH_HOME."
+        )
+        # The preview itself says whether root is needed: any `sudo …` line means it is.
+        no_root = no_root and not any(line.lstrip().startswith("sudo ") for line in commands)
     return {
         "receipt": receipt,
-        "safe_to_run_without_root": True,
+        # Derived from the receipt: False once any sudo step ran, or when the cleanup lines need sudo.
+        "safe_to_run_without_root": no_root,
         "destructive": True,
         "target_paths": unique_paths,
-        "commands": [f"rm -rf {path!r}" for path in unique_paths],
-        "reason": "Preview only. nvHive records the paths so a user can remove rootless files deliberately.",
+        "commands": commands,
+        "reason": reason,
     }

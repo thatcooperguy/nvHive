@@ -42,7 +42,7 @@ from nvh.providers.base import TaskType
 RULE_PROFILES: tuple[str, ...] = tuple(dict.fromkeys(r.profile for r in SPECIALIST_RULES))
 OPS_PROFILES = {
     "install-medic", "gpu-triage", "model-sommelier", "model-librarian", "vram-planner",
-    "provider-keysmith", "device-settings",
+    "provider-keysmith", "device-settings", "app-installer",
 }
 MODEL_DESK = ("model-sommelier", "vram-planner", "model-librarian")
 CODING_PROFILES = {"bug-hunter", "deep-reviewer", "backend-implementer"}
@@ -1449,7 +1449,10 @@ SETUP_OBJECTS = [
     "setup this machine",
 ]
 SETUP_OBJECTS_ELSEWHERE = {
-    "set up docker on my spark": "container-wrangler",
+    # 2026-09-03: an app with the machine as its target is the app installer's
+    # (proposal §3.2 roster: "install docker"); a bare "set up docker" stays
+    # the wrangler's (see DEVICE_SETTINGS_NEGATIVES / APP_INSTALLER_NEGATIVES).
+    "set up docker on my spark": "app-installer",
     "help me set up ssh on the spark": "shell-teacher",
     "configure this thing for home assistant": "home-assistant",
     "set up my spark, it keeps failing": "install-medic",
@@ -2026,7 +2029,224 @@ def test_device_settings_routes_in_shipped_library(tmp_path, neutral_classifier)
     assert c.reason.startswith("device-settings:")
 
 
-# The routing surface in one table: eighty-two questions across twelve
+# ---------------------------------------------------------------------------
+# The app installer (2026-09-03, proposal §3.5: the Spark playbooks)
+# ---------------------------------------------------------------------------
+
+# An app *and* a device: "install <app> on my spark", "set up <app> on this
+# machine", "get <app> running on my box", "<app> here", the playbook
+# catalogue and the two-Spark link. Checked on a workstation, a Spark and a
+# fresh Spark so neither the device boost nor its absence moves any of them.
+APP_INSTALLER_POSITIVES = [
+    "install ollama on my spark",
+    "set up open webui on this machine",
+    "install comfyui on my dgx",
+    "deploy vllm on my spark",
+    "get llama.cpp running on my box",
+    "install lm studio here",
+    "install tailscale on the spark",
+    "install the tailscale client on my spark",
+    "set up nemoclaw on my dgx spark",
+    "can you get vllm running on my dgx",
+    "install jupyter on my spark",
+    "install docker on my dgx",
+    "install vs code on my spark",
+    "install claude code on my spark",
+    "deploy a nim on my spark",
+    "install llama.cpp with cuda support on my spark",
+    "which playbooks can I install?",
+    "what playbooks are there for the spark?",
+    "install the open webui playbook",
+    "connect two sparks",
+    "connect the two dgx sparks",
+    "link my sparks over 200gbe",
+]
+
+# The neighbours, and where each one belongs instead. An app name is not
+# enough and neither is a device: the bare install keeps today's routing,
+# the failed install and Python packaging stay the medic's, a model is the
+# model desk's, a setting the settings desk's, a fault the rig doctor's, a
+# daemon the wrangler's, a workflow the debugger's.
+APP_INSTALLER_NEGATIVES = {
+    # The documented boundary: no device, no sudo context — today's routing.
+    "install ollama": "install-medic",
+    "install open webui": "install-medic",
+    "install vllm": "install-medic",
+    "set up ollama": "model-librarian",
+    # A failed install is a repair; Python packaging is an environment problem.
+    "vllm install failed with exit code 1": "install-medic",
+    "pip install vllm on my spark": "install-medic",
+    "install torch on my spark": "install-medic",
+    # A model is the model desk's; the engine is not a model.
+    "install a model on my spark": "model-librarian",
+    "pull qwen3 on my spark": "model-librarian",
+    "which model should I install on my spark?": "model-sommelier",
+    # The settings desk keeps the box's own settings, the docker *group* and
+    # apt packages on the box ("htop" is not a playbook app).
+    "add me to the docker group": "device-settings",
+    "set up the docker group on my spark": "device-settings",
+    "enable ssh on my spark": "device-settings",
+    "install htop with apt": "device-settings",
+    "install htop on my spark": "device-settings",
+    "enable the tailscaled service at boot": "device-settings",
+    "set up ufw but keep me reachable over tailscale": "device-settings",
+    # The rig doctor keeps the fault, whatever install joins it.
+    "install ollama on my spark, nvidia-smi has failed": "gpu-triage",
+    "my gb10 shows xid 79 after I installed vllm": "gpu-triage",
+    # The daemon is the wrangler's; a bare "install docker" too.
+    "install docker for me": "container-wrangler",
+    "set up docker": "container-wrangler",
+    # The tour, the tuner, the smart home, the fact checker, the notes coach,
+    # the ComfyUI debugger.
+    "install nvhive on this box": "setup-concierge",
+    "set up my spark": "setup-concierge",
+    "vllm is slow on my spark": "latency-tuner",
+    "set up home assistant on my spark": "home-assistant",
+    "is it true that I can install ollama on my spark?": "fact-checker",
+    "remember this: install ollama on my spark with the playbook": "daily-notes-coach",
+    "my comfyui workflow has a red missing node": "comfyui-workflow-debugger",
+    # "playbook" alone is not an install; "ansible" is a veto.
+    "run the ansible playbook on my spark": None,
+}
+
+
+@pytest.mark.parametrize("q", APP_INSTALLER_POSITIVES)
+def test_app_installer_questions_route_to_the_installer(q, neutral_classifier) -> None:
+    for which in ("ws", "spark", "fresh_spark"):
+        c = _pick_on(q, which)
+        assert c.profile == "app-installer", (q, which, c.reason)
+        assert c.confidence >= 0.5, (q, which, c.confidence)
+
+
+@pytest.mark.parametrize(
+    "q,expected", sorted(APP_INSTALLER_NEGATIVES.items(), key=lambda kv: kv[0]),
+)
+def test_app_names_alone_do_not_reach_the_installer(q, expected, neutral_classifier) -> None:
+    for which in ("ws", "spark", "fresh_spark"):
+        c = _pick_on(q, which)
+        assert c.profile != "app-installer", (q, which, c.reason)
+        assert c.profile == expected, (q, which, c.reason)
+
+
+def test_bare_install_keeps_todays_routing(neutral_classifier) -> None:
+    """The documented boundary: an app name without a device is not the
+    installer's, however privileged the box. The same app with the machine as
+    its target is."""
+    for which in ("ws", "spark", "fresh_spark"):
+        assert _pick_on("install ollama", which).profile == "install-medic", which
+        assert _pick_on("set up ollama", which).profile == "model-librarian", which
+        assert _pick_on("install ollama on my spark", which).profile == "app-installer", which
+        assert _pick_on("set up ollama on this machine", which).profile == "app-installer", which
+        assert _pick_on("install ollama here", which).profile == "app-installer", which
+
+
+def test_app_installer_rule_is_gated() -> None:
+    from nvh.integrations.wizard import concierge as mod
+
+    rule = _rule("app-installer")
+    # Pattern-driven: the strong keywords are the playbook catalogue only;
+    # "playbook" alone is weak (ansible has playbooks too).
+    assert {"which playbooks", "spark playbooks", "available playbooks"} <= set(rule.keywords)
+    assert set(rule.weak_keywords) == {"playbook", "playbooks"}
+    assert rule.patterns == (
+        mod._APP_INSTALL_ON_DEVICE, mod._PLAYBOOK_ASK, mod._TWO_SPARKS, mod._SPARK_INTERCONNECT,
+    )
+    # Every install pattern needs an app and a device.
+    assert mod._PLAYBOOK_APP in mod._APP_INSTALL_ON_DEVICE
+    assert mod._INSTALL_DEVICE in mod._APP_INSTALL_ON_DEVICE
+    # The vetoes, each with its owner. The medic's are derived minus the four
+    # install verbs the installer claims; a keyword added to the medic is a
+    # veto the day it lands.
+    assert (mod._INSTALLER_MEDIC_VETO_WORDS, mod._INSTALLER_MEDIC_VETO_PATTERNS) == (
+        mod._veto_vocabulary((mod._INSTALL_MEDIC,), claimed=mod._INSTALLER_CLAIMED_VERBS)
+    )
+    assert set(mod._INSTALLER_MEDIC_VETO_WORDS) <= set(rule.excludes)
+    assert not {"install", "installed", "installing", "installation"} & set(rule.excludes)
+    assert {"failed", "exit code", "connection refused", "apt", "pip"} <= set(rule.excludes)
+    assert set(mod._PYTHON_PACKAGING_VETOES) <= set(rule.excludes)
+    assert set(mod._SMART_HOME_VETOES) <= set(rule.excludes)
+    assert set(mod._CLAIM_VETO_WORDS) <= set(rule.excludes)
+    assert set(mod._CAPTURE_VETOES) <= set(rule.excludes)
+    assert set(mod._SETTINGS_DESK_VETOES) <= set(rule.excludes)
+    assert {"ssh", "firewall", "ufw", "hostname", "suspend", "docker group", "apt upgrade",
+            "ansible"} <= set(rule.excludes)
+    # The model desk's words minus the engine; the fault words minus the
+    # CUDA nouns an install legitimately names.
+    assert set(mod._INSTALLER_MODEL_DESK_VETOES) <= set(rule.excludes)
+    assert {"model", "models", "gguf", "quant"} <= set(rule.excludes)
+    assert "ollama" not in rule.excludes
+    assert set(mod._INSTALLER_HW_FAULT_VETOES) <= set(rule.excludes)
+    assert {"xid", "nvidia-smi", "nouveau"} <= set(rule.excludes)
+    assert not {"cuda", "cudnn", "compute capability"} & set(rule.excludes)
+    for veto in mod._INSTALLER_MEDIC_VETO_PATTERNS + mod._HW_FAULT_VETO_PATTERNS + mod._CLAIM_VETO_PATTERNS:
+        assert veto in rule.exclude_patterns
+    assert {mod._FETCH_IMPERATIVE, mod._DOCKER_DAEMON_SOCKET} <= set(rule.exclude_patterns)
+    # One group, one boost; the profile must bind the three playbook tools.
+    assert rule.state == ("device:dgx-spark|device:rtx-spark|privileged_allowed",)
+    assert rule.requires_tools == ("playbook_list", "playbook_plan", "playbook_install")
+    assert rule.phrase_once and rule.weight == 1.3
+    # Placement: after the settings desk, before the model desk.
+    order = [r.profile for r in SPECIALIST_RULES]
+    assert order.index("device-settings") < order.index("app-installer")
+    assert order.index("app-installer") < order.index("model-sommelier")
+
+
+def test_playbook_apps_are_carved_out_of_the_settings_desk_and_the_debugger() -> None:
+    """Two neighbours yield by rule, not margin: the playbook app names are
+    carved out of the settings desk's install-on-device pattern the way
+    nvhive is, and the install-on-device phrase is a veto for the ComfyUI
+    debugger (whose keyword + pattern would otherwise out-score one
+    installer pattern)."""
+    from nvh.integrations.wizard import concierge as mod
+
+    settings = _rule("device-settings")
+    carved = [p for p in settings.patterns if mod._PLAYBOOK_APP in p]
+    assert len(carved) == 1 and "nvhive" in carved[0]
+    assert mod._APP_INSTALL_ON_DEVICE in _rule("comfyui-workflow-debugger").exclude_patterns
+    # "tailscale" the setting stays the desk's strong keyword; the install is
+    # the installer's; a package on the box is still the desk's.
+    assert "tailscale" in settings.keywords
+    for which in ("ws", "spark"):
+        assert _pick_on("install tailscale on the spark", which).profile == "app-installer"
+        assert _pick_on("enable the tailscaled service at boot", which).profile == "device-settings"
+        assert _pick_on("install htop on my spark", which).profile == "device-settings"
+        assert _pick_on("install comfyui on my dgx", which).profile == "app-installer"
+        assert _pick_on("my comfyui workflow has a red missing node", which).profile == (
+            "comfyui-workflow-debugger"
+        )
+
+
+def test_app_installer_state_is_one_group_and_one_boost(neutral_classifier) -> None:
+    """The device and the privileged tier being reachable are facts about the
+    same machine: one boost between them, so an install phrase can never
+    out-score a fault just because the box is a Spark."""
+    plain = _pick("install ollama on my spark")
+    spark = _pick("install ollama on my spark", context=_spark_ctx())
+    assert plain.profile == spark.profile == "app-installer"
+    assert spark.confidence == pytest.approx(plain.confidence + BOOST_CONF, abs=0.011)
+    for note in ("DGX Spark", "privileged changes need your approval on a red card"):
+        assert note in spark.reason, note
+
+
+def test_app_installer_rule_drops_without_its_tools() -> None:
+    """A profile override that removes ``playbook_install`` is no longer the
+    installer, so the rule drops and the sentence keeps its old route."""
+    profiles = _profiles(*RULE_PROFILES, **{"app-installer": {"tools_allowed": ["playbook_list"]}})
+    assert "app-installer" not in available_specialists(profiles=profiles)
+    c = select_specialist("install ollama on my spark", profiles=profiles, context=_ctx())
+    assert c.profile == "install-medic"
+
+
+def test_app_installer_routes_in_shipped_library(tmp_path, neutral_classifier) -> None:
+    assert "app-installer" in available_specialists(tmp_path)
+    c = select_specialist(
+        "install open webui on my spark", context=_spark_ctx(), history=[], home_dir=tmp_path,
+    )
+    assert c.profile == "app-installer"
+    assert c.reason.startswith("app-installer:")
+
+
+# The routing surface in one table: ninety-six questions across thirteen
 # categories, each on the context a user would ask it from. A rule edit that
 # moves any of these is a routing change and should be deliberate.
 ROUTING_PROBE = [
@@ -2140,6 +2360,24 @@ ROUTING_PROBE = [
     ("nvidia-smi has failed because it couldn't communicate with the driver", "spark",
      "gpu-triage"),
     ("write a python function that parses a csv file", "ws", "backend-implementer"),
+    # 2026-09-03: the app installer (proposal §3.5, the Spark playbooks). An
+    # app and a device: install / set up / get running / deploy, the
+    # catalogue, the two-Spark link.
+    ("install ollama on my spark", "spark", "app-installer"),
+    ("set up open webui on this machine", "spark", "app-installer"),
+    ("install comfyui on my dgx", "fresh_spark", "app-installer"),
+    ("deploy vllm on my spark", "spark", "app-installer"),
+    ("get llama.cpp running on my box", "ws", "app-installer"),
+    ("install tailscale on the spark", "spark", "app-installer"),
+    ("which playbooks can I install?", "spark", "app-installer"),
+    ("connect two sparks", "spark", "app-installer"),
+    # ... and the four neighbours it must not take: the bare install (no
+    # device, no sudo context: today's routing), Python packaging, a model
+    # and the docker *group*.
+    ("install ollama", "spark", "install-medic"),
+    ("pip install vllm on my spark", "spark", "install-medic"),
+    ("install a model on my spark", "spark", "model-librarian"),
+    ("set up the docker group on my spark", "spark", "device-settings"),
 ]
 
 
@@ -2154,14 +2392,14 @@ def test_routing_probe(q, which, expected, neutral_classifier) -> None:
 
 
 def test_routing_probe_covers_the_surface() -> None:
-    assert len(ROUTING_PROBE) == 84
-    assert len({q for q, _, _ in ROUTING_PROBE}) == 84
+    assert len(ROUTING_PROBE) == 96
+    assert len({q for q, _, _ in ROUTING_PROBE}) == 96
     covered = {p for _, _, p in ROUTING_PROBE}
     assert {
         "setup-concierge", "install-medic", "gpu-triage", "model-sommelier", "vram-planner",
         "model-librarian", "home-assistant", "deep-researcher", "fact-checker", "bug-hunter",
         "backend-implementer", "deep-reviewer", "vault-rag", "daily-notes-coach", "doc-qa",
         "latency-tuner", "finetune-advisor", "container-wrangler", "shell-teacher",
-        "device-settings", None,
+        "device-settings", "app-installer", None,
     } <= covered
     assert {w for _, w, _ in ROUTING_PROBE} == set(_ALL_CONTEXTS)

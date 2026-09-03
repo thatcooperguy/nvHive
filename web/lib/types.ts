@@ -1537,3 +1537,74 @@ export interface FreeProvider {
   /** Logo slug for the @lobehub/icons CDN. Null when no brand mark is available. */
   logo_slug?: string | null;
 }
+
+// ─── Spark playbooks (nvh/integrations/installs/playbooks.py) ────────────────
+
+/**
+ * One row of the playbook catalogue, as the auto-class Wizard tool
+ * `playbook_list` returns it (`playbooks.catalogue()`). Playbooks are NOT
+ * studio packs: they may need sudo, they run only through the privileged tool
+ * `playbook_install` (red approval card, approval token) or the CLI in the
+ * user's own terminal, and `installed` comes from the install receipt. Every
+ * id is an upstream folder name under
+ * github.com/NVIDIA/dgx-spark-playbooks/tree/main/nvidia/<id>. Unknown fields
+ * are kept, never rejected.
+ */
+export interface PlaybookCatalogueEntry {
+  id: string;
+  title: string;
+  category: string;
+  summary: string;
+  /** Any step runs with sudo. Derived server-side from the steps. */
+  requires_sudo: boolean;
+  /** How many steps run with sudo (0 for a user-space playbook). */
+  sudo_steps: number;
+  /** Browser logins, TUIs, cabling, foreground servers — shown, never run. */
+  manual_steps: number;
+  estimated_minutes: number | null;
+  estimated_disk_gb: number | null;
+  /** A studio pack (rootless, no sudo) that covers the same tool, if any. */
+  rootless_alternative: string | null;
+  /** From the `playbook` receipt; false when no receipt exists. */
+  installed: boolean;
+  receipt_path: string | null;
+  [key: string]: unknown;
+}
+
+/**
+ * What a confirmed `playbook_install` answers: the run was started as a job
+ * (kind `playbook-run`) and the card streams it from `/v1/jobs/<job_id>`.
+ */
+export interface PlaybookRunStart {
+  ok?: boolean;
+  job_id: string;
+  playbook: string;
+  steps_total: number;
+  [key: string]: unknown;
+}
+
+/**
+ * One `playbook-run` job event as the UI reads it (`InstallJobEvent.payload`
+ * flattened over `event` / `status` / `message`). `step` is the 0-based index
+ * into the compiled plan; the UI shows it 1-based. `command` is the rendered
+ * argv (already `sudo`-prefixed where the step is privileged). A
+ * `needs_terminal` event is a hand-off, not a failure: sudo wanted a password
+ * so the runner stopped and `command` is the one line the user runs
+ * themselves (`nvh playbook install <id>`).
+ */
+export interface PlaybookRunEvent {
+  event: 'plan' | 'step' | 'log' | 'needs_terminal' | 'complete' | 'error' | string;
+  status: string;
+  message: string;
+  playbook?: string;
+  step?: number;
+  steps_total?: number;
+  title?: string;
+  command?: string | string[];
+  sudo?: boolean;
+  skipped?: boolean;
+  exit_code?: number | null;
+  hint?: string;
+  error?: string;
+  [key: string]: unknown;
+}

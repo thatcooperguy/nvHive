@@ -65,6 +65,7 @@ import {
   pinConversation,
   saveVaultMemory,
   uploadAndIngest,
+  followPlaybookJob,
   wizardChatStream,
   wizardDiagnostics,
   type AgentProfileSchema,
@@ -89,11 +90,17 @@ import {
   isPrivilegedDisabled,
   needsTerminal,
   planLines,
-  planNotes,
+  playbookCardStatus,
+  playbookOutcomeLabel,
+  playbookRunStart,
   terminalCommand,
   unwrapToolResult,
+  type PlaybookRunState,
   type ToolCardStatus,
 } from '@/lib/privileged';
+import PlanDetails from '@/components/PlanDetails';
+import PlaybookRunLog from '@/components/PlaybookRunLog';
+import type { PlaybookRunStart } from '@/lib/types';
 import {
   applyMascotEvent,
   markMascotTipProbed,
@@ -117,6 +124,10 @@ interface Message {
   // `plan`, the `needs_terminal` hand-off command and its hint, and the
   // `disabled` refusal. Display only — nothing here is re-executed.
   toolDetails?: Record<string, WizardToolExecuteResult>;
+  // A confirmed `playbook_install` does not finish inside the execute call: the
+  // handler starts a `playbook-run` job and the card streams it. Per tool,
+  // the folded job state (steps, log lines, outcome) the live step log draws.
+  playbookRuns?: Record<string, PlaybookRunState>;
   // Auto-class calls the server skipped this turn (depth 1 / cost ceiling),
   // with its reason. Rendered as muted "not run" lines; never executed here.
   deferredToolCalls?: WizardDeferredToolCall[];
@@ -341,6 +352,14 @@ export default function WizardChat() {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Abort any in-flight stream when the user re-sends or unmounts.
   const abortRef = useRef<AbortController | null>(null);
+  // Stop functions of the `playbook-run` job pollers this chat started, by
+  // job id, so leaving the page stops them. The jobs themselves keep running
+  // server-side; only the polling stops.
+  const playbookWatchersRef = useRef<Map<string, () => void>>(new Map());
+  useEffect(() => () => {
+    for (const stop of playbookWatchersRef.current.values()) stop();
+    playbookWatchersRef.current.clear();
+  }, []);
   // Setup-page bridge: when the user clicks a System Check item we navigate
   // here with ?issue=<finding_id>. We fetch the matching finding from
   // /v1/wizard/diagnostics, seed the draft with "Help me with: <title>", and
@@ -734,6 +753,17 @@ export default function WizardChat() {
       // A nested ok=false is an in-band refusal (deny list, validation, a
       // failed apply) and renders as a failure with its error, never as Done.
       const ok = envelope.ok && outcome.ok !== false;
+
+      // A confirmed `playbook_install` answers {job_id, playbook, steps_total}:
+      // the run continues as a job. The card stays `running` and streams it;
+      // its verdict (Done / hand-off / failed at step N) comes from the job's
+      // events, never from this envelope's "the tool answered" ok.
+      const start = ok ? playbookRunStart(outcome) : null;
+      if (start) {
+        followPlaybookRun(messageId, call, start, detail);
+        return;
+      }
+
       const summary = ok
         ? formatToolResultSummary(call.name, outcome)
         : `Tool failed: ${outcome.error ?? envelope.error ?? 'unknown error'}`;
@@ -754,6 +784,83 @@ export default function WizardChat() {
       patchMessage('error', message, { ok: false, error: message });
       settleMascot(messageId, call.name, 'error');
     }
+  };
+
+  /**
+   * Stream a `playbook-run` job into its card. Every event is folded with the
+   * pure reducers in lib/privileged.ts (`followPlaybookJob`); the card reads
+   * the folded state. The run settles on the first `complete` /
+   * `needs_terminal` / `error` event (or on the job's terminal status if none
+   * came), and the card's status, summary and detail are patched the same way
+   * a one-shot tool's are — a hand-off lands as `needs-terminal` with the
+   * exact CLI line copyable, and the docker-group stop as `halted`, neither
+   * ever as a failure nor as Done; the next turn's history carries them as
+   * `needs a terminal: nvh playbook install <id>` / `stopped for the user to
+   * act — not installed yet: …`, so the model does not claim the install
+   * happened.
+   */
+  const followPlaybookRun = (
+    messageId: string,
+    call: WizardChatToolCall,
+    start: PlaybookRunStart,
+    detail: WizardToolExecuteResult,
+  ) => {
+    const argId = typeof call.arguments.id === 'string' ? call.arguments.id : '';
+    const playbook = start.playbook || argId;
+    const patchRun = (run: PlaybookRunState) => {
+      setMessages(prev => prev.map(m => (
+        m.id === messageId
+          ? { ...m, playbookRuns: { ...(m.playbookRuns ?? {}), [call.name]: run } }
+          : m
+      )));
+    };
+    const patchStatus = (status: ToolCardStatus, summary: string, extra?: Partial<WizardToolExecuteResult>) => {
+      setMessages(prev => prev.map(m => (
+        m.id === messageId
+          ? {
+            ...m,
+            toolStatus: { ...(m.toolStatus ?? {}), [call.name]: status },
+            toolResults: { ...(m.toolResults ?? {}), [call.name]: summary },
+            toolDetails: { ...(m.toolDetails ?? {}), [call.name]: { ...detail, ...(extra ?? {}) } },
+          }
+          : m
+      )));
+    };
+    patchStatus(
+      'running',
+      `Running ${playbook || 'the playbook'}${start.steps_total ? ` — ${start.steps_total} step${start.steps_total === 1 ? '' : 's'}` : ''}`,
+    );
+    setMascotState('working');
+
+    const stop = followPlaybookJob(start, argId, {
+      onRun: patchRun,
+      onFinish: run => {
+        playbookWatchersRef.current.delete(start.job_id);
+        const outcome = run.outcome;
+        if (!outcome) return;
+        const status = playbookCardStatus(outcome);
+        const label = playbookOutcomeLabel(outcome);
+        const touched = run.steps.some(s => s.status === 'ok' || s.status === 'failed');
+        // `applied: true` marks a finished install only; a hand-off or a halt
+        // left steps unrun and says so (`partial`), so nothing downstream
+        // reads it as installed.
+        const extra: Partial<WizardToolExecuteResult> = outcome.kind === 'needs-terminal'
+          ? { needs_terminal: true, command: outcome.command, ...(outcome.hint ? { hint: outcome.hint } : {}), partial: touched }
+          : outcome.kind === 'halted'
+            ? { partial: true, applied: touched }
+            : outcome.kind === 'failed'
+              ? { ok: false, error: outcome.error, partial: touched }
+              : { applied: true };
+        patchStatus(status, label, extra);
+        const mark = status === 'ok' ? '✓' : status === 'error' ? '✗' : '→';
+        setMessages(prev => [
+          ...prev,
+          { id: makeId(), role: 'system' as const, content: `${mark} ${call.name} — ${run.playbook || 'playbook'}: ${label}` },
+        ]);
+        settleMascot(messageId, call.name, status === 'ok' ? 'happy' : status === 'error' ? 'error' : 'idle');
+      },
+    });
+    playbookWatchersRef.current.set(start.job_id, stop);
   };
 
   // Initial card status for freshly surfaced calls: awaiting a click, except
@@ -1652,6 +1759,7 @@ function MessageBlock({
             status={message.toolStatus?.[call.name] ?? 'idle'}
             result={message.toolResults?.[call.name]}
             detail={message.toolDetails?.[call.name]}
+            run={message.playbookRuns?.[call.name]}
             privilegedEnabled={privilegedEnabled}
             onConfirm={() => onConfirmTool(call)}
             onDismiss={() => onDismissTool(call)}
@@ -1687,6 +1795,7 @@ function ToolCard({
   status,
   result,
   detail,
+  run,
   privilegedEnabled,
   onConfirm,
   onDismiss,
@@ -1697,6 +1806,8 @@ function ToolCard({
   result?: string;
   /** Raw execute response: plan / command / hint / disabled live here. */
   detail?: WizardToolExecuteResult;
+  /** The folded `playbook-run` job, once a confirmed `playbook_install` started one. */
+  run?: PlaybookRunState;
   privilegedEnabled?: boolean;
   onConfirm: () => void;
   onDismiss: () => void;
@@ -1721,8 +1832,6 @@ function ToolCard({
   // (or on an unconfirmed execute answer). Displayed for approval only —
   // never re-derived here, never fetched, and never the model's `arguments`.
   const planSource = planLines(call).length > 0 ? call : detail;
-  const plan = planLines(planSource);
-  const notes = planNotes(planSource);
   const handoff = needsTerminal(detail);
   const command = terminalCommand(detail);
 
@@ -1773,44 +1882,8 @@ function ToolCard({
       {/* The plan and its notes come BEFORE the buttons in DOM order, so a
           screen reader (and the tab order) reaches what is being approved
           before the control that approves it. */}
-      {plan.length > 0 && (
-        <pre
-          className="mt-1 overflow-x-auto rounded-sm border p-1.5 font-mono text-[10px] leading-relaxed"
-          style={{
-            background: 'var(--bg-card)',
-            borderColor: chrome.borderColor ?? 'var(--border)',
-            color: 'var(--text-primary)',
-          }}
-          aria-label="Commands this tool will run"
-        >
-          {plan.join('\n')}
-        </pre>
-      )}
-      {notes.error && (
-        <div className="mt-1 text-[10px]" style={{ color: chrome.borderColor ?? '#dc2626' }} role="note">
-          Refused: {notes.error}
-        </div>
-      )}
-      {notes.changes && (
-        <div className="mt-1 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-          {notes.changes}
-        </div>
-      )}
-      {notes.warning && (
-        <div className="mt-1 text-[10px] font-semibold" style={{ color: '#d97706' }} role="note">
-          Warning: {notes.warning}
-        </div>
-      )}
-      {notes.undo.length > 0 && (
-        <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
-          undo: {notes.undo.join(' ; ')}
-        </div>
-      )}
-      {notes.notes.length > 0 && (
-        <div className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-          {notes.notes.join(' ')}
-        </div>
-      )}
+      <PlanDetails source={planSource} borderColor={chrome.borderColor} />
+      {run && <PlaybookRunLog run={run} borderColor={chrome.borderColor} />}
       {Object.keys(call.arguments).length > 0 && (
         <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
           args: {JSON.stringify(call.arguments)}

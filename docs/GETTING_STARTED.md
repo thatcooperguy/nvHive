@@ -212,6 +212,77 @@ pack and the WebUI in one go. The WebUI's **Memory Vault** keeps Markdown
 notes under `$NVH_HOME/vault` (Obsidian installs rootlessly beside it when the
 image allows AppImages).
 
+## Spark playbooks
+
+NVIDIA publishes step-by-step install guides for the DGX Spark in
+[dgx-spark-playbooks](https://github.com/NVIDIA/dgx-spark-playbooks): Ollama,
+Open WebUI, ComfyUI, vLLM, llama.cpp, LM Studio, Tailscale, VS Code, the DGX
+Dashboard, CLI coding agents, OpenClaw and NemoClaw. nvHive ships them as
+runnable plans. A playbook's id is the upstream folder name, so every step
+traces back to its README (`nvidia/<id>`), and the plan mirrors the README's
+own skeleton: what you'll accomplish, prerequisites, numbered steps, verify,
+rollback, time and risk.
+
+Unlike [studio packs](#studio-packs-and-the-workstation), some playbook steps
+need `sudo`, so a playbook never runs silently:
+
+- **Plan first.** Every command is shown before anything runs — tagged
+  `sudo`, `user` or `manual` — with the verify commands, the undo commands and
+  the estimated time and disk. Undo is preview text: nvHive never executes it.
+- **Approve once.** In the Wizard, `playbook_plan` shows the plan and
+  `playbook_install` needs a click on the red card that lists the exact
+  commands (an approval token bound to that call, single use, 15 minutes). On
+  the CLI, `nvh playbook install <id>` prints the same plan and asks once.
+- **Skip what is done, stop at the first failure.** Each step has a check;
+  steps whose check passes are skipped, so running a playbook again is safe.
+- **No password ever reaches nvHive.** The Wizard's run uses `sudo -n` only
+  where passwordless sudo exists. When sudo needs a password it stops and hands
+  you one command for your own terminal — `nvh playbook install <id>` — where
+  `sudo` prompts you directly.
+- **A receipt and an audit note.** Every run that touches the host writes an
+  install receipt (that is what `nvh playbook list` reports as installed) and
+  a note under the vault's `Decisions/` folder — complete, partial or failed,
+  with exit codes.
+
+```bash
+nvh playbook list             # id, title, sudo steps, manual steps, time, installed
+nvh playbook plan ollama      # every command tagged sudo / user / manual, verify, undo
+nvh playbook install ollama   # prints the plan, asks once, runs; sudo prompts here
+nvh playbook install ollama -y --home-dir /mnt/persist/nvhive   # no prompt; another NVH_HOME
+```
+
+Some steps stay yours: browser logins, API tokens (`HF_TOKEN` and
+`NGC_API_KEY` are declared prerequisites — nvHive never prompts for or stores
+them), interactive TUIs such as `ollama run` or the OpenClaw and NemoClaw
+onboarding, cabling, and servers that run in the foreground. The plan lists
+them as `manual` steps. Two further rules of the road:
+
+- **Docker.** Playbooks that need Docker start by adding you to the `docker`
+  group when you are not in it; the run then stops and asks you to log out and
+  back in (never `newgrp`). Run the playbook again afterwards — the finished
+  steps are skipped.
+- **Pipe-to-shell.** An upstream `curl … | sh` one-liner is never piped. The
+  script is downloaded to `$NVH_HOME/playbooks/<id>/` and run from there; the
+  plan marks the step `pipe-to-shell: unpinned` and quotes the upstream
+  command verbatim. Where the README publishes a sha256 (ComfyUI), the
+  download is verified first. A vendor package the README neither pins nor
+  checksums (the VS Code "latest stable" .deb, installed as root) carries the
+  same flag, shown as `unpinned download`, so the two installs read alike.
+- **Cancelling.** Stopping a running playbook from the Jobs panel cannot
+  interrupt the host command already in flight (it may finish on its own);
+  the receipt and the vault note still record what ran and what was running,
+  so `nvh playbook list` and the repair plan stay honest.
+
+The DGX Dashboard's *Update Now* path (OS upgrade, firmware, reboot) is never
+automated. Where a rootless studio pack does the same job (Ollama, OpenClaw,
+NemoClaw) the plan names it as the alternative. `NVH_ALLOW_PRIVILEGED=0`
+switches off the Wizard's `playbook_install` together with the other
+privileged tools ([CONFIGURATION.md](CONFIGURATION.md#environment-variables));
+the CLI path is unaffected because `sudo` asks you, not nvHive. Guides not
+shipped yet — SGLang, NIM, Nemotron, Unsloth and the two networking guides
+(connect two Sparks, connect to your Spark) — are listed by `nvh playbook
+list` with the reason.
+
 ## If something breaks
 
 ```bash

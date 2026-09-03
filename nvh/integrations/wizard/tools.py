@@ -433,14 +433,19 @@ def _privileged_applied(result: Any) -> bool:
     failed at step 3 changed the host in steps 1–2, and a single command
     that exited non-zero may have changed it before failing (``systemctl
     enable --now`` with a bad ExecStart enables the unit, ``apt-get`` exiting
-    100 after unpacking); both get a vault note. Otherwise refusals
-    (``ok: False``), terminal hand-offs (``needs_terminal``) and non-dict
-    answers are not applies and get none.
+    100 after unpacking); both get a vault note. ``applied: False`` is
+    authoritative too: the handler says it touched nothing yet — a job it
+    started (``playbook_install``) audits itself when it finishes, having
+    seen what actually ran. Otherwise refusals (``ok: False``), terminal
+    hand-offs (``needs_terminal``) and non-dict answers are not applies and
+    get none.
     """
     if not isinstance(result, dict):
         return False
     if result.get("applied") is True:
         return True
+    if result.get("applied") is False:
+        return False
     return result.get("ok", True) is not False and not result.get("needs_terminal")
 
 
@@ -522,8 +527,8 @@ def fit_tool_window(result: dict[str, Any], limit: int = TOOL_RESULT_CHARS) -> d
     return keep
 
 
-def _audit_body(tool: WizardTool, arguments: dict[str, Any], result: dict[str, Any]) -> str:
-    """Markdown body of the vault note for one privileged apply."""
+def _audit_body(name: str, arguments: Mapping[str, Any], result: dict[str, Any]) -> str:
+    """Markdown body of the vault note for one privileged apply (``name`` is the tool's)."""
     from nvh.core.agent_guardrails import redact_secrets
 
     try:
@@ -534,7 +539,7 @@ def _audit_body(tool: WizardTool, arguments: dict[str, Any], result: dict[str, A
         device = "unknown device"
 
     lines = [
-        f"Tool: `{tool.name}`",
+        f"Tool: `{name}`",
         f"Device: {device}",
         f"Arguments: `{redact_secrets(_dumps(arguments))[:500]}`",
         f"Outcome: {_audit_outcome(result)}",
@@ -582,36 +587,67 @@ def _audit_outcome(result: dict[str, Any]) -> str:
     return verdict
 
 
-def record_privileged_change(
-    tool: WizardTool, arguments: dict[str, Any], result: dict[str, Any],
+def audit_privileged_change(
+    name: str,
+    arguments: Mapping[str, Any] | None,
+    result: dict[str, Any],
+    *,
+    summary: str = "",
+    home_dir: Any = None,
 ) -> dict[str, Any]:
-    """Write the audit note for a privileged apply that touched the host. Never raises.
+    """Write the vault audit note for a privileged change made under tool ``name``. Never raises.
+
+    The shared sink: :func:`record_privileged_change` calls it from
+    ``execute()`` for a tool's own apply, and the playbook job runner calls it
+    when a ``playbook-run`` finishes, having seen what ran — no
+    :class:`WizardTool` needed, only the name, the arguments and a result in
+    the apply shape (``ok``, ``applied``, ``partial``, ``error``, ``summary``,
+    ``steps`` with ``command`` / ``exit_code`` / output).
 
     ``Decisions/`` in the vault (``append_vault_memory``), titled
     ``Privileged change: <summary>`` — ``Privileged change (partial): …`` when
     later steps never ran, ``Privileged change (failed): …`` when the command
     that ran exited non-zero — body with the outcome, the commands, exit
     codes, truncated redacted output and the platform's device label; tags
-    ``privileged`` and the tool name. The vault is the one under ``NVH_HOME``
-    (``append_vault_memory``'s default): nothing in ``arguments`` — the model
-    wrote those — can point the note anywhere else. Returns the writer's
-    status (``saved``/``path``) or ``{saved: False, error}``.
+    ``privileged`` and ``name``. ``summary`` falls back to ``result.summary``
+    then to ``name``. The vault is the one under ``NVH_HOME`` unless the
+    *caller's code* passes ``home_dir`` (the CLI's ``--home``); nothing in
+    ``arguments`` — the model wrote those — can point the note anywhere else.
+    Returns the writer's status (``saved``/``path``/``category``) or
+    ``{saved: False, error}``.
     """
     try:
         from nvh.integrations.workspace.vault import append_vault_memory
 
-        summary = result.get("summary") if isinstance(result.get("summary"), str) else ""
-        summary = (summary or format_summary(tool.summary_template, arguments) or tool.name).strip()
+        result_summary = result.get("summary") if isinstance(result.get("summary"), str) else ""
+        title = (result_summary or summary or name).strip()
         note = append_vault_memory(
-            f"Privileged change{_audit_verdict(result)}: {summary[:80]}",
-            _audit_body(tool, arguments, result),
+            f"Privileged change{_audit_verdict(result)}: {title[:80]}",
+            _audit_body(name, dict(arguments or {}), result),
             category="Decisions",
-            tags=["privileged", tool.name],
+            tags=["privileged", name],
+            home_dir=home_dir,
         )
         return {"saved": bool(note.get("saved")), "path": note.get("path"), "category": note.get("category")}
     except Exception as exc:
-        logger.warning("privileged audit note for '%s' not written: %s", tool.name, exc)
+        logger.warning("privileged audit note for '%s' not written: %s", name, exc)
         return {"saved": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
+def record_privileged_change(
+    tool: WizardTool, arguments: dict[str, Any], result: dict[str, Any],
+) -> dict[str, Any]:
+    """Write the audit note for a privileged apply that touched the host. Never raises.
+
+    ``execute()``'s sink for a tool's own apply: :func:`audit_privileged_change`
+    under the tool's name, with the card's summary
+    (``summary_template`` rendered against the arguments) when the result
+    carries none. The vault is the one under ``NVH_HOME``.
+    """
+    return audit_privileged_change(
+        tool.name, arguments, result,
+        summary=format_summary(tool.summary_template, arguments) or tool.name,
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1047,6 +1083,15 @@ def default_registry() -> WizardToolRegistry:
     )
 
     _register_system_settings(reg)
+
+    # Spark playbooks (2026-09-03, design brief phase 2b): the upstream DGX
+    # Spark install guides as approved runs. ``playbook_list`` / ``playbook_plan``
+    # are auto (catalogue + receipt status, dry run); ``playbook_install`` is
+    # privileged — the red card carries the compiled plan, the confirmed call
+    # starts a ``playbook-run`` job that audits itself when it finishes.
+    from nvh.integrations.installs.playbooks import register_wizard_tools as _register_playbooks
+
+    _register_playbooks(reg)
 
     # Pull in any third-party / workspace-local tools after the stock set so
     # plugins can override (with a logged warning) or extend without forking.

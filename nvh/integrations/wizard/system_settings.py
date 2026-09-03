@@ -28,7 +28,11 @@ Safety posture
     once with ``sudo -n -k true``). A sudo-group member without it gets
     ``needs_terminal`` and the *exact* command to type themselves; an
     account that cannot elevate is told so. There is no password parameter
-    anywhere; stdin is always ``DEVNULL`` so nothing can prompt.
+    anywhere; stdin is ``DEVNULL`` so nothing can prompt. The one place sudo
+    may ask is the user's own terminal: ``nvh playbook install`` calls the
+    same runner with ``interactive=True``, which runs plain ``sudo`` with the
+    terminal's stdin so sudo prompts *there* — nvHive still never sees,
+    stores or passes a password, and the deny list is the same.
   - **Fixed catalogue, fixed deny list.** Every command is an argv list built
     from validated pieces (package names, unit names, hostnames); the model
     never supplies a command string. A package name must start *and end*
@@ -299,19 +303,36 @@ def run_host_command(
     sudo: bool,
     timeout: float = DEFAULT_TIMEOUT_S,
     sudo_user: str | None = None,
+    interactive: bool = False,
+    echo: bool = False,
 ) -> dict[str, Any]:
-    """Run one host command; never raises, never prompts.
+    """Run one host command; never raises, never asks for a password itself.
 
-    Order of business:
+    The one runner behind the Wizard's privileged tools and playbook jobs
+    (``interactive=False``) and the CLI's ``nvh playbook install`` in the
+    user's own terminal (``interactive=True``). Order of business:
 
     1. :func:`denied_reason` on the rendered command → ``{ok: False, denied: True, error}``.
-    2. ``sudo=True``: ``sudo -n`` (plus ``-u USER``) only when platform facts
-       say ``can_sudo`` (or the process is root); a sudo-group member without
-       passwordless sudo gets ``{ok: False, needs_terminal: True, command,
-       hint}`` and nothing runs; anyone else ``{ok: False, error: "this
-       account cannot elevate"}``.
-    3. ``subprocess.run`` with ``stdin=DEVNULL``, captured output, ``timeout``.
-       stdout/stderr come back redacted and cut at 1 MB.
+    2. ``sudo=True`` picks the prefix from the platform facts. Root runs the
+       command bare (``sudo -u USER`` still applies when ``sudo_user`` is set).
+
+       ``interactive=False``: ``sudo -n`` (plus ``-u USER``) only when the
+       facts say ``can_sudo``; a sudo-group member without passwordless sudo
+       gets ``{ok: False, needs_terminal: True, command, hint}`` and nothing
+       runs; anyone else ``{ok: False, error: "this account cannot elevate"}``.
+
+       ``interactive=True``: plain ``sudo`` — no ``-n`` — whenever the user
+       is root, ``can_sudo`` or ``in_sudo_group``, so sudo may ask for the
+       password on the terminal's own tty; nvHive never sees it. While the
+       privilege probe is still pending the group answer is a placeholder
+       (``host_probe_pending``), so sudo itself is left to decide. An account
+       with none of those is refused with ``CANNOT_ELEVATE_ERROR`` before
+       anything spawns.
+    3. ``subprocess.run`` with ``timeout``. ``stdin`` is ``DEVNULL`` unless
+       ``interactive`` (then the terminal's own, inherited). stdout/stderr are
+       captured, redacted and cut at 1 MB; ``echo=True`` — honoured only with
+       ``interactive`` — leaves them on the terminal instead, so the result
+       carries them empty.
 
     Returns ``{ok, command, exit_code, stdout, stderr}`` on a run
     (``ok`` is ``exit_code == 0``), or one of the refusal shapes above.
@@ -330,22 +351,31 @@ def run_host_command(
     full = words
     if sudo:
         facts = _facts()
+        as_user = ["-u", sudo_user] if sudo_user else []
         if facts.has_root and not sudo_user:
             full = words
+        elif interactive:
+            elevates = facts.has_root or facts.can_sudo or facts.in_sudo_group
+            if not elevates and not getattr(facts, "host_probe_pending", False):
+                return {"ok": False, "error": CANNOT_ELEVATE_ERROR, "command": human}
+            full = ["sudo", *as_user, *words]
         elif facts.can_sudo or facts.has_root:
-            full = ["sudo", "-n", *(["-u", sudo_user] if sudo_user else []), *words]
+            full = ["sudo", "-n", *as_user, *words]
         elif facts.in_sudo_group:
             return {"ok": False, "needs_terminal": True, "command": human, "hint": NEEDS_TERMINAL_HINT}
         else:
             return {"ok": False, "error": CANNOT_ELEVATE_ERROR, "command": human}
 
     rendered = shlex.join(full)
+    # ``capture_output`` and explicit ``stdout``/``stderr`` are mutually exclusive
+    # for subprocess.run, so the streaming (echo) form passes the latter.
+    output: dict[str, Any] = {"stdout": None, "stderr": None} if interactive and echo else {"capture_output": True}
     try:
         proc = subprocess.run(
             full,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
+            stdin=None if interactive else subprocess.DEVNULL,
             timeout=timeout,
+            **output,
         )
     except FileNotFoundError:
         return {"ok": False, "error": f"{full[0]}: command not found", "command": rendered}

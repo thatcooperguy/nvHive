@@ -64,6 +64,7 @@ to an advisor, and a task-shaped bare prompt asks for an explicit `nvh do`.
 | `nvh models <command>` | Browse, install, and remove local Ollama models with VRAM-fit guidance. |
 | `nvh nemoclaw` | NemoClaw integration — use NVHive as your NemoClaw inference provider and MCP tool server. |
 | `nvh openclaw` | OpenClaw / NemoClaw integration — multi-LLM routing for agents. |
+| `nvh playbook <command>` | Run NVIDIA's DGX Spark playbooks (Ollama, Open WebUI, ComfyUI, vLLM, llama.cpp, LM Studio, Tailscale, VS Code, ...) with the plan shown first and sudo asked in your own terminal. |
 | `nvh serve` | Start the REST API server. |
 | `nvh service [ACTION]` | Manage the nvHive proxy background service. |
 | `nvh services <command>` | Inspect / start / restart the local service pipeline (Ollama → API → WebUI). |
@@ -267,6 +268,14 @@ to an advisor, and a task-shaped bare prompt asks for an explicit `nvh do`.
 | `nvh models list` | Show installed models (and, with --all, the fit-ranked catalog). |
 | `nvh models pull [NAME]` | Download a model into the local Ollama store with live progress. |
 | `nvh models rm NAME` | Remove an installed model and reclaim its disk. |
+
+### `nvh playbook`
+
+| Command | Description |
+|---------|-------------|
+| `nvh playbook install PLAYBOOK_ID` | Run a playbook here: print the plan, ask once, then run the steps with sudo prompting in this terminal (nvHive never sees the password); ends with the receipt and vault audit paths. |
+| `nvh playbook list` | List the Spark playbooks: sudo steps, manual steps, estimated time, and whether a receipt says installed. |
+| `nvh playbook plan PLAYBOOK_ID` | Show one playbook's plan: every command tagged sudo, user or manual, then verify and undo. Runs nothing. |
 
 ### `nvh rag`
 

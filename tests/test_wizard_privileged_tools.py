@@ -23,7 +23,10 @@ Invariants pinned (docs/proposals/SPARK_CONCIERGE_2026-09.md §3.4, §5):
     auto, confirm, privileged by an explicit key.
   - The sudo matrix: ``can_sudo`` → ``sudo -n``; group-only →
     ``needs_terminal`` with the exact command and no subprocess; neither →
-    "this account cannot elevate". There is no password anywhere.
+    "this account cannot elevate". There is no password anywhere. The CLI's
+    terminal path is the same runner with ``interactive=True``: plain
+    ``sudo`` and the terminal's own stdin for root, ``can_sudo`` or the sudo
+    group — nvHive still has no password parameter and no prompt of its own.
   - The deny list (``check_command`` + the module's own) fires before any
     subprocess; ``apt_install`` refuses driver packages with the DGX warning.
   - ``chat.py`` buckets a privileged call as needing confirmation (see also
@@ -33,7 +36,7 @@ Invariants pinned (docs/proposals/SPARK_CONCIERGE_2026-09.md §3.4, §5):
 from __future__ import annotations
 
 import json
-import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -41,6 +44,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+import nvh.integrations.installs.playbooks as pb
 import nvh.integrations.wizard.system_settings as ss
 from nvh.integrations.wizard.tools import (
     APPROVAL_REQUIRED_ERROR,
@@ -59,7 +63,7 @@ from nvh.integrations.wizard.tools import (
 from nvh.utils import platform_facts as pf
 
 SPARK_LABEL = "NVIDIA DGX Spark (GB10, 128 GB unified)"
-PRIVILEGED_TOOLS = ("system_settings_apply", "apt_install", "snap_install", "service_enable")
+PRIVILEGED_TOOLS = ("system_settings_apply", "apt_install", "snap_install", "service_enable", "playbook_install")
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -67,13 +71,16 @@ PRIVILEGED_TOOLS = ("system_settings_apply", "apt_install", "snap_install", "ser
 # ───────────────────────────────────────────────────────────────────────────
 
 
-def seed(*, can_sudo: bool = False, in_sudo_group: bool = False, has_root: bool = False) -> None:
+def seed(
+    *, can_sudo: bool = False, in_sudo_group: bool = False, has_root: bool = False, host_probe_pending: bool = False,
+) -> None:
     """Seed platform facts for a DGX Spark with the given privilege answer (no probes)."""
     pf.seed_platform_facts(pf.PlatformFacts(
         os="linux", arch="arm64", machine="aarch64", distro="DGX OS 7.2", kernel="6.11.0-1016-nvidia",
         is_dgx_os=True, gpu_name="NVIDIA GB10", unified_memory=True, memory_total_gb=128.0,
         memory_available_gb=100.0, device_class="dgx-spark", device_label=SPARK_LABEL,
         has_root=has_root, can_sudo=can_sudo, in_sudo_group=in_sudo_group or can_sudo or has_root,
+        host_probe_pending=host_probe_pending,
     ))
 
 
@@ -546,6 +553,81 @@ def test_spawn_failures_are_in_band(monkeypatch) -> None:
     assert ss.run_host_command([], sudo=False) == {"ok": False, "error": "empty command"}
 
 
+# ── interactive=True: the CLI's terminal path, through the same runner ─────
+
+
+def test_interactive_group_member_gets_plain_sudo_and_the_terminals_stdin(fake_run: FakeSubprocess) -> None:
+    seed(in_sudo_group=True)  # a stock DGX OS user: sudo group, password still required
+    out = ss.run_host_command(["systemctl", "enable", "--now", "ssh"], sudo=True, timeout=42, interactive=True)
+    assert out["ok"] is True and out["exit_code"] == 0 and out["stdout"] == "done"
+    assert out["command"] == "sudo systemctl enable --now ssh"  # no -n: sudo may ask on the tty
+    assert fake_run.calls == [["sudo", "systemctl", "enable", "--now", "ssh"]]
+    kw = fake_run.kwargs[0]
+    assert kw["stdin"] is None and kw["capture_output"] is True and kw["timeout"] == 42
+    assert "input" not in kw and "shell" not in kw and "stdout" not in kw
+
+
+def test_interactive_sudo_matrix(fake_run: FakeSubprocess) -> None:
+    seed(can_sudo=True)
+    out = ss.run_host_command(["apt-get", "update"], sudo=True, interactive=True)
+    assert fake_run.calls[-1] == ["sudo", "apt-get", "update"] and out["command"] == "sudo apt-get update"
+    seed(has_root=True)
+    ss.run_host_command(["apt-get", "update"], sudo=True, interactive=True)
+    assert fake_run.calls[-1] == ["apt-get", "update"]  # root runs bare, as on the job path
+    out = ss.run_host_command(["id"], sudo=True, sudo_user="ollama", interactive=True)
+    assert fake_run.calls[-1] == ["sudo", "-u", "ollama", "id"] and out["command"] == "sudo -u ollama id"
+    seed()
+    out = ss.run_host_command(["id"], sudo=False, sudo_user="ollama", interactive=True)
+    assert out["ok"] is True and fake_run.calls[-1] == ["id"]  # sudo=False: no prefix, sudo_user dropped
+    assert fake_run.kwargs[-1]["stdin"] is None  # still the terminal's stdin
+
+
+def test_interactive_cannot_elevate_is_refused_without_a_subprocess(fake_run: FakeSubprocess) -> None:
+    seed()
+    out = ss.run_host_command(["systemctl", "enable", "--now", "ssh"], sudo=True, interactive=True)
+    assert out == {"ok": False, "error": "this account cannot elevate", "command": "sudo systemctl enable --now ssh"}
+    assert fake_run.calls == []
+    # A privilege probe still in flight carries placeholder answers (platform_facts): the terminal
+    # path lets sudo itself decide, while the Wizard's path keeps refusing as it always has.
+    seed(host_probe_pending=True)
+    out = ss.run_host_command(["systemctl", "enable", "--now", "ssh"], sudo=True, interactive=True)
+    assert out["ok"] is True and fake_run.calls == [["sudo", "systemctl", "enable", "--now", "ssh"]]
+    out = ss.run_host_command(["systemctl", "enable", "--now", "ssh"], sudo=True)
+    assert out["ok"] is False and out["error"] == "this account cannot elevate" and len(fake_run.calls) == 1
+
+
+def test_interactive_deny_list_and_spawn_failures_match_the_job_path(monkeypatch) -> None:
+    seed(in_sudo_group=True)
+    fake = FakeSubprocess()
+    monkeypatch.setattr(ss, "subprocess", fake)
+    out = ss.run_host_command(["systemctl", "reboot"], sudo=True, interactive=True)
+    assert out["ok"] is False and out["denied"] is True and out["command"] == "sudo systemctl reboot"
+    assert fake.calls == []  # refused before any spawn
+    assert ss.run_host_command([], sudo=True, interactive=True) == {"ok": False, "error": "empty command"}
+    fake.responder = lambda argv: FileNotFoundError("nope")
+    out = ss.run_host_command(["ufw", "status"], sudo=True, interactive=True)
+    assert out["ok"] is False and out["error"] == "sudo: command not found"
+    fake.responder = lambda argv: FakeSubprocess.TimeoutExpired(argv, 5)
+    out = ss.run_host_command(["ufw", "status"], sudo=True, timeout=5, interactive=True)
+    assert out["ok"] is False and out["timed_out"] is True and out["command"] == "sudo ufw status"
+    fake.responder = lambda argv: PermissionError("denied")
+    out = ss.run_host_command(["ufw", "status"], sudo=True, interactive=True)
+    assert out["ok"] is False and "PermissionError" in out["error"]
+
+
+def test_echo_streams_to_the_terminal_only_in_interactive_mode(fake_run: FakeSubprocess) -> None:
+    seed(can_sudo=True)
+    ss.run_host_command(["apt-get", "update"], sudo=True, interactive=True, echo=True)
+    kw = fake_run.kwargs[-1]
+    assert kw["stdout"] is None and kw["stderr"] is None and "capture_output" not in kw and kw["stdin"] is None
+    # Outside a terminal echo is ignored: the Wizard's tools always capture (redaction, audit, 1 MB cut),
+    # stdin stays closed and the prefix stays `sudo -n`.
+    ss.run_host_command(["apt-get", "update"], sudo=True, echo=True)
+    kw = fake_run.kwargs[-1]
+    assert kw["capture_output"] is True and kw["stdin"] == FakeSubprocess.DEVNULL and "stdout" not in kw
+    assert fake_run.calls[-1] == ["sudo", "-n", "apt-get", "update"]
+
+
 @pytest.mark.parametrize("argv, fragment", [
     (["shutdown", "-h", "now"], "shutdown"),
     (["reboot"], "reboot"),
@@ -992,7 +1074,7 @@ def test_wizard_tools_endpoint_reports_privileged_counts_and_the_switch(monkeypa
     client = _loopback_client()
     body = client.get("/v1/wizard/tools").json()["data"]
     assert body["privileged_enabled"] is True
-    assert body["privileged_count"] == 4
+    assert body["privileged_count"] == len(PRIVILEGED_TOOLS)
     assert body["auto_count"] >= 1 and body["confirm_count"] >= 1
     names = {t["name"]: t for t in body["tools"]}
     for name in PRIVILEGED_TOOLS:
@@ -1002,7 +1084,7 @@ def test_wizard_tools_endpoint_reports_privileged_counts_and_the_switch(monkeypa
 
     monkeypatch.setenv(PRIVILEGED_ENV, "0")
     body = client.get("/v1/wizard/tools").json()["data"]
-    assert body["privileged_enabled"] is False and body["privileged_count"] == 4
+    assert body["privileged_enabled"] is False and body["privileged_count"] == len(PRIVILEGED_TOOLS)
     assert all(t["enabled"] is False for t in body["tools"] if t["safety_class"] == "privileged")
     assert all(t["enabled"] is True for t in body["tools"] if t["safety_class"] != "privileged")
 
@@ -1323,8 +1405,19 @@ def test_apply_plan_single_step_failure_is_applied_not_partial(fake_run: FakeSub
     assert "command not found" in out["error"] and len(out["steps"]) == 1
 
 
-def test_no_password_parameter_or_prompt_anywhere() -> None:
-    source = Path(ss.__file__).read_text(encoding="utf-8")
+@pytest.mark.parametrize("module", [ss, pb], ids=["system_settings", "playbooks"])
+def test_no_password_parameter_or_prompt_anywhere(module) -> None:
+    """Neither the runner nor the playbooks can take, read or forward a password.
+
+    The only prompt in either file is the CLI's y/N confirmation; sudo is never
+    given ``-S`` / ``--stdin`` / an askpass helper, and nothing carries a
+    ``password`` parameter, keyword or field.
+    """
+    source = Path(module.__file__).read_text(encoding="utf-8")
     assert "getpass.getpass" not in source
-    assert "input(" not in source
-    assert os.environ.get("SUDO_ASKPASS") is None or "SUDO_ASKPASS" not in source
+    assert "SUDO_ASKPASS" not in source
+    # A parameter, keyword, annotated argument or dict key called password (prose about sudo asking is fine).
+    assert not re.search(r"""\bpassword\s*=|\bpassword\s*:\s*(?:str|bytes|Any)\b|["']password["']""", source)
+    assert not re.search(r"""["'](?:-S|--stdin|-A|--askpass)["']""", source)
+    prompts = [line for line in source.splitlines() if "input(" in line]
+    assert all("y/N" in line for line in prompts), prompts

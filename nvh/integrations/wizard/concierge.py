@@ -99,8 +99,8 @@ table so an exact tie with a GPU / model word goes to the rig doctor.
 
 The rule list, in table order: the rig doctor (``install-medic``,
 ``gpu-triage``), the setup concierge (``setup-concierge``), the device
-settings desk (``device-settings``), the model desk
-(``model-sommelier``, ``vram-planner``, ``model-librarian``),
+settings desk (``device-settings``), the app installer (``app-installer``),
+the model desk (``model-sommelier``, ``vram-planner``, ``model-librarian``),
 ``provider-keysmith``, ``latency-tuner``, ``finetune-advisor``,
 ``home-assistant``, ``comfyui-workflow-debugger``, ``container-wrangler``,
 ``shell-teacher``, the coding pair (``bug-hunter``, ``deep-reviewer``,
@@ -195,6 +195,34 @@ Four boundaries are drawn on purpose:
 The product's own name is carved out of both install patterns by a lookahead
 rather than a word veto, so "install nvhive on this box" stays the setup
 concierge's tour while a sentence that merely mentions nvHive is unaffected.
+
+The app installer (``app-installer``) sits between the settings desk and the
+model desk and is the Spark playbooks' front door (proposal §3.5): "install
+ollama on my spark", "set up open webui on this machine", "get llama.cpp
+running on my box", "which playbooks can I install?", "connect two sparks".
+It is pattern-driven and every install pattern needs an *app*
+(:data:`_PLAYBOOK_APP`) **and** a *device* (:data:`_INSTALL_DEVICE`), which
+draws the boundary the roster asks for: a bare "install ollama" — no device,
+no sudo context — has no pattern here and keeps today's routing (the medic's
+one word), "set up ollama" stays the librarian's, and "install a model on my
+spark" the model desk's. Its weight is 1.3 so one pattern (1.95) beats the
+medic's "install", the tuner's engine name plus its Spark boost and the
+wrangler's "docker", while the settings desk's own pattern (2.1) still wins
+an exact overlap; its state is one group, one boost, like the settings
+desk's. Two neighbours yield by rule rather than margin: the playbook app
+names are carved out of the settings desk's install-on-device pattern the way
+nvhive is ("install tailscale on my spark" is an install, "install htop on my
+spark" a package on the box, and "tailscale" the *setting* — its service, the
+tailnet, ufw on tailscale0 — stays the desk's strong keyword), and the same
+install-on-device phrase is a veto for the ComfyUI debugger, whose keyword +
+pattern (3.0) would otherwise out-score the installer on "install comfyui on
+my dgx". Its vetoes: the medic's strong words and patterns, derived minus the
+four install verbs it claims (a failed install is a repair); Python packaging;
+the model desk's words minus "ollama" (the engine is an app, a model is not);
+hardware faults minus the CUDA nouns an install legitimately names; the
+settings desk's vocabulary by hand (ssh, the firewall, the hostname, suspend,
+the login session, the docker *group*, the DGX OS upgrade path); the daemon
+socket dump; the smart home; claims; capture requests.
 The setup concierge already vetoes on ``ssh`` / ``docker`` / ``container``,
 the two biggest overlaps; the rest is left to score, so a *compound* ask
 ("set up my spark and the firewall") follows the concierge's first-run state:
@@ -880,6 +908,95 @@ _FIT_CHECK = (
 )
 _ARITHMETIC_VETO_PATTERNS: tuple[str, ...] = (_FIT_CHECK,)
 
+# A capture request is the notes coach's however privileged the payload
+# ("remember this: the docker group fix is usermod -aG docker $USER").
+_CAPTURE_VETOES: tuple[str, ...] = (
+    "remember this", "remember that", "note this", "write this down", "save this", "jot down",
+)
+
+# --- Ops: the app installer's shared vocabulary -------------------------------
+# The apps the Spark playbooks install (github.com/NVIDIA/dgx-spark-playbooks,
+# proposal §3.5), plus the two a Spark owner asks for by the same shape
+# ("jupyter", "docker"). Named so it can be the app installer's pattern *and*
+# the carve-out in the device settings desk's install-on-device pattern: an
+# apt package on the box ("install htop on my spark") is a setting, a
+# playbook app ("install tailscale on my spark") is an install, and the split
+# is a rule rather than a scoring margin. A model family is not an app
+# ("install nemotron on my spark" is the model desk's), and neither is the
+# product ("install nvhive on this box" is the setup concierge's tour).
+_PLAYBOOK_APP = (
+    r"(?:ollama|open[- ]?web ?ui|comfy ?ui|comfy|vllm|llama[-._ ]?cpp|lm ?studio|nims?|unsloth|"
+    r"tailscale|nemoclaw|openclaw|jupyter(?:[- ]?lab)?|docker|vs ?code|dgx dashboard|"
+    r"claude code|codex|cli coding agents?)"
+)
+# The install verbs the installer answers. "get" and "deploy" ride along so
+# "get vllm running on my dgx" and "deploy open webui on my spark" count; a
+# bare "install" is still the medic's one word (see the rule).
+_INSTALL_VERB = r"(?:install(?:ing)?|set(?:ting)?[- ]?up|setup|get(?:ting)?|deploy(?:ing)?)"
+# The machine as the target of the install: "on my spark", "on this machine",
+# "to my dgx spark", "on my box", "here". Without one of these the sentence
+# has no device / sudo context and keeps today's routing.
+_INSTALL_DEVICE = (
+    r"(?:(?:on|onto|to|for|in|into)\s+(?:my|the|this|our|your)\s+" + _SETUP_ADJ
+    + r"(?:dgx|spark|box|machine|rig|device|workstation)\b|\bhere\b)"
+)
+# "install ollama on my spark", "set up open webui on this machine", "get
+# llama.cpp running on my box", "install lm studio here".
+_APP_INSTALL_ON_DEVICE = (
+    r"\b" + _INSTALL_VERB + r"\b(?:\s+\S+){0,3}?\s+" + _PLAYBOOK_APP
+    + r"\b(?:\s+\S+){0,4}?\s+" + _INSTALL_DEVICE
+)
+# "which playbooks can I install?", "what playbooks are there for the spark?",
+# "install the open webui playbook", "playbooks for my dgx". Not "run the
+# ansible playbook" ("ansible" is a veto).
+_PLAYBOOK_ASK = (
+    r"\b(?:which|what|list|show(?: me)?|any|available|browse|see) (?:\w+ ){0,2}?playbooks?\b|"
+    r"\b(?:run|install|apply|start|use|try|open) (?:the |a |that |this )?(?:\w+ ){0,3}?playbooks?\b|"
+    r"\bplaybooks? (?:for|on) (?:my |the |this |a )?(?:dgx|spark|box|machine)\b"
+)
+# "connect two sparks", "link my sparks", "connect the two dgx sparks",
+# "2 sparks together". The connect-two-sparks playbook itself is deferred
+# (network-changing; needs its warning and undo design), so the installer
+# says so and points at the upstream guide.
+_TWO_SPARKS = (
+    r"\b(?:connect|link|join|pair|cluster|wire)(?:ing)? (?:up )?(?:\w+ ){0,2}?"
+    r"(?:two|2|both|my|the|our|these) (?:two |2 |dgx |dgx spark )?sparks\b|"
+    r"\b(?:two|2) sparks together\b"
+)
+# The Spark-to-Spark interconnect: the 200 GbE ConnectX-7 link.
+_SPARK_INTERCONNECT = r"\b200 ?gbe\b|\bconnectx[- ]?7\b|\bcx[- ]?7\b"
+# The installer's medic vetoes are derived like the concierge's: every strong
+# medic word and pattern says "this install went wrong" and the installer's
+# Spark boost must never out-score it ("vllm install failed with exit code
+# 1"). The four install verbs are claimed: the installer binds them to an app
+# and a device in its own pattern.
+_INSTALLER_CLAIMED_VERBS: tuple[str, ...] = ("install", "installed", "installing", "installation")
+_INSTALLER_MEDIC_VETO_WORDS, _INSTALLER_MEDIC_VETO_PATTERNS = _veto_vocabulary(
+    (_INSTALL_MEDIC,), claimed=_INSTALLER_CLAIMED_VERBS,
+)
+# Hardware faults are the rig doctor's, minus the CUDA nouns: "install
+# llama.cpp with cuda support on my spark" names the toolkit it builds
+# against, not a fault ("NVIDIA-SMI has failed" and "xid 79" stay vetoes).
+_INSTALLER_HW_FAULT_VETOES: tuple[str, ...] = tuple(
+    w for w in _HW_FAULT_VETOES if w not in {"cuda", "cudnn", "compute capability"}
+)
+# The model desk's words minus "ollama": the engine is a playbook app, a
+# *model* is the desk's ("install a model on my spark", "which model should I
+# install on my spark").
+_INSTALLER_MODEL_DESK_VETOES: tuple[str, ...] = tuple(w for w in _MODEL_DESK_VETOES if w != "ollama")
+# The settings desk's vocabulary, by hand: ssh, the firewall, the hostname,
+# suspend, the login session, the docker *group* and the DGX OS upgrade path
+# are settings, whatever install verb leads them ("install tailscale on my
+# spark and open the firewall" is the settings desk's).
+_SETTINGS_DESK_VETOES: tuple[str, ...] = (
+    "ssh", "sshd", "openssh-server", "enable ssh", "disable ssh",
+    "firewall", "ufw", "iptables", "nftables", "firewalld",
+    "hostname", "suspend", "suspends", "suspending", "auto-suspend", "auto suspend",
+    "autosuspend", "autologin", "auto-login", "auto login", "automatic login", "gdm", "greeter",
+    "docker group", "sudo group", "sudoers",
+    "apt upgrade", "apt-get upgrade", "dist-upgrade", "driver update", "update the driver",
+)
+
 SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
     # --- Ops: the rig doctor -----------------------------------------------
     _INSTALL_MEDIC,
@@ -1064,8 +1181,7 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
         # A capture request is the notes coach's however privileged the
         # payload ("remember this: the docker group fix is usermod -aG
         # docker $USER").
-        + ("remember this", "remember that", "note this", "write this down", "save this",
-           "jot down"),
+        + _CAPTURE_VETOES,
         # The Docker *daemon* is the container wrangler's, verbatim socket
         # dump included; a hardware fault is the rig doctor's; a claim is the
         # fact checker's.
@@ -1086,8 +1202,15 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
             # every other sentence that names nvHive).
             r"\binstall(?:ing)?\s+(?!nvhive\b|nvh\b)(?:\S+\s+){0,3}?"
             r"(?:with|via|using|through)\s+(?:apt|apt-get|snap|the package manager)\b",
-            # "install tailscale on the spark", "install docker on my dgx".
-            r"\binstall(?:ing)?\s+(?!nvhive\b|nvh\b)[a-z][\w.+-]*"
+            # "install htop on the spark", "install nvtop on my dgx": a
+            # package on the box. The playbook apps (_PLAYBOOK_APP: "install
+            # tailscale on the spark", "install docker on my dgx") are carved
+            # out the way nvhive is — they are the app installer's — with up
+            # to two filler words allowed in front ("install the tailscale
+            # client on my spark"); "tailscale" the setting (its service,
+            # the tailnet, ufw on tailscale0) stays a strong keyword here.
+            r"\binstall(?:ing)?\s+(?!(?:\w+\s+){0,2}(?:nvhive|nvh|" + _PLAYBOOK_APP + r")\b)"
+            r"[a-z][\w.+-]*"
             r"(?:\s+\w+){0,3}?\s+on\s+(?:my|the|this|our)\s+"
             + _SETUP_ADJ + _SETUP_TARGET + r"\b",
             # "sudo apt install htop", "apt-get upgrade", "apt-mark hold nvidia-*".
@@ -1122,6 +1245,65 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
         state=("device:dgx-spark|device:rtx-spark|has_root|can_sudo|privileged_allowed",),
         phrase_once=True,
         weight=1.4,
+    ),
+    # --- Ops: the app installer ---------------------------------------------
+    # The Spark playbooks' guide (proposal §3.2 roster, §3.5): "install
+    # ollama on my spark", "set up open webui on this machine", "get llama.cpp
+    # running on my box", "which playbooks can I install?", "connect two
+    # sparks". It sits after the settings desk (a setting outranks an install
+    # on an exact tie) and before the model desk.
+    #
+    # It is pattern-driven: every install pattern needs an *app*
+    # (_PLAYBOOK_APP) and a *device* (_INSTALL_DEVICE), so a bare "install
+    # ollama" — no device, no sudo context — has no pattern here and keeps
+    # today's routing (the medic's one word), and "set up ollama" stays the
+    # librarian's. Weight 1.3 so one pattern (1.95) beats the medic's
+    # "install" (1.0), the tuner's engine name plus its Spark boost ("deploy
+    # vllm on my spark": 1.6) and the wrangler's "docker" (1.1), while the
+    # settings desk's pattern (2.1) still wins an exact overlap.
+    #
+    # The boundaries, each a veto rather than a margin:
+    #  - a failed install is the medic's (its strong words and patterns,
+    #    derived, minus the four install verbs the installer claims);
+    #  - Python packaging is the medic's too (_PYTHON_PACKAGING_VETOES:
+    #    "pip install vllm on my spark", "install torch on my spark");
+    #  - a *model* is the model desk's ("install a model on my spark", "pull
+    #    qwen3 on my spark"; _INSTALLER_MODEL_DESK_VETOES and the fetch
+    #    imperative) — "ollama" the engine is not a veto;
+    #  - a hardware fault is the rig doctor's (_INSTALLER_HW_FAULT_VETOES,
+    #    minus the CUDA nouns an install legitimately names);
+    #  - the settings desk keeps ssh, the firewall, the hostname, suspend,
+    #    the login session, the docker *group* and the DGX OS upgrade path
+    #    (_SETTINGS_DESK_VETOES), and the daemon socket dump is the
+    #    wrangler's (_DOCKER_DAEMON_SOCKET);
+    #  - the smart home, a claim and a capture request keep their owners.
+    #
+    # State is ONE group and one boost (device or the privileged tier being
+    # reachable: facts about the same machine), like the settings desk's.
+    # The same install-on-device phrase is carved out of the settings desk's
+    # install pattern and is a veto for the ComfyUI debugger ("install
+    # comfyui on my dgx" is an install; "my comfyui workflow has a red
+    # missing node" is a workflow).
+    SpecialistRule(
+        profile="app-installer",
+        keywords=(
+            "which playbooks", "what playbooks", "spark playbooks", "spark playbook",
+            "dgx spark playbooks", "dgx-spark-playbooks", "available playbooks", "list playbooks",
+            "playbook catalogue", "playbook catalog",
+        ),
+        # "the ansible playbook", "our sales playbook": the noun alone is not
+        # an install; it counts beside one of the patterns.
+        weak_keywords=("playbook", "playbooks"),
+        excludes=_INSTALLER_MEDIC_VETO_WORDS + _PYTHON_PACKAGING_VETOES
+        + _INSTALLER_MODEL_DESK_VETOES + _INSTALLER_HW_FAULT_VETOES + _SETTINGS_DESK_VETOES
+        + _SMART_HOME_VETOES + _CLAIM_VETO_WORDS + _CAPTURE_VETOES + ("ansible",),
+        exclude_patterns=_INSTALLER_MEDIC_VETO_PATTERNS + _HW_FAULT_VETO_PATTERNS
+        + _CLAIM_VETO_PATTERNS + (_FETCH_IMPERATIVE, _DOCKER_DAEMON_SOCKET),
+        patterns=(_APP_INSTALL_ON_DEVICE, _PLAYBOOK_ASK, _TWO_SPARKS, _SPARK_INTERCONNECT),
+        state=("device:dgx-spark|device:rtx-spark|privileged_allowed",),
+        requires_tools=("playbook_list", "playbook_plan", "playbook_install"),
+        phrase_once=True,
+        weight=1.3,
     ),
     # --- Ops: the model desk ------------------------------------------------
     # Three rules, no strong keyword in common. The sommelier (first, so a
@@ -1443,6 +1625,11 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
             r"LoraLoader|EmptyLatentImage)\b",
             r"\bsd(?:xl|1\.5|3(?:\.5)?)\b",
         ),
+        # Installing ComfyUI on the device is the app installer's ("install
+        # comfyui on my dgx"); this rule's keyword + pattern (3.0) would
+        # otherwise out-score the installer's one pattern, so the shared
+        # phrase is a veto here. A workflow, a node or a red box stays here.
+        exclude_patterns=(_APP_INSTALL_ON_DEVICE,),
         weight=1.2,
     ),
     SpecialistRule(

@@ -33,7 +33,7 @@ The browser only opens after every service passes a health check — including a
 
 **AI Wizard.** A streaming, tool-using assistant grounded in live workspace state. It can refresh models, run safe repairs, ingest files you drag into chat (PDFs included), and cite web sources — showing cost and latency per response. Attach external [MCP tool servers](docs/INTEGRATIONS.md#nvhive-as-an-mcp-client) and their tools join its toolset.
 
-**Agent Library and council mode.** 105 agent profiles across 40 categories — coding, research, creative, GPU media, ops, smart home, first-run setup — each mappable to a local or cloud model. Council mode runs one question through multiple models in parallel and synthesizes the answers: `nvh convene "Redis or Postgres for session storage?"`. [Cabinets →](docs/CONFIGURATION.md#council-cabinets)
+**Agent Library and council mode.** 106 agent profiles across 40 categories — coding, research, creative, GPU media, ops, smart home, first-run setup — each mappable to a local or cloud model. Council mode runs one question through multiple models in parallel and synthesizes the answers: `nvh convene "Redis or Postgres for session storage?"`. [Cabinets →](docs/CONFIGURATION.md#council-cabinets)
 
 ![Agent Library — built-in agent profiles grouped by category](docs/screenshots/agent-library.png)
 

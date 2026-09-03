@@ -3,7 +3,8 @@
 The library (nvh/catalog/agent-library.json, added 2026-08-05) ships 100
 original in-house-authored agent profiles across ~38 categories, plus the
 Smart Home pair, the Setup Concierge and the Model Sommelier added
-2026-09-02. These tests pin the catalog's integrity invariants and the
+2026-09-02 and the privileged pair — the Device Settings desk and the App
+Installer — added 2026-09-03. These tests pin the catalog's integrity invariants and the
 loader's ordering contract so a bad regeneration or a packaging slip fails
 CI instead of shipping a broken /agents page.
 """
@@ -35,22 +36,29 @@ VALID_TOOLS = {
     # ``snap_install`` and ``service_enable`` render a red approval card.
     "system_settings_get", "system_settings_plan", "system_settings_apply",
     "apt_install", "snap_install", "service_enable",
+    # The Spark playbooks (proposal §3.5). ``playbook_list`` / ``playbook_plan``
+    # are auto (the catalogue and a compiled plan); ``playbook_install`` is
+    # privileged and renders the red card.
+    "playbook_list", "playbook_plan", "playbook_install",
 }
 # 100 original profiles (2026-08-05) + the two Smart Home profiles + the
 # Setup Concierge + the Model Sommelier (all 2026-09-02) + Device Settings
-# (2026-09-03).
-LIBRARY_SIZE = 105
+# + the App Installer (both 2026-09-03).
+LIBRARY_SIZE = 106
 # Distinct categories; Setup is the newest and, for now, has one member.
-# The sommelier and the settings desk joined Ops (now ten members) and added
-# no category.
+# The sommelier, the settings desk and the app installer joined Ops (now
+# eleven members) and added no category.
 CATEGORY_COUNT = 40
-OPS_COUNT = 10
+OPS_COUNT = 11
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # The first-run guide (proposal §3.2). The concierge routes onboarding
-# questions here; it must bind exactly the tools its four steps use.
+# questions here; it must bind exactly the tools its four steps use, plus
+# the two read-only playbook tools (2026-09-03) so the tour can propose an
+# install and hand the run to the App Installer — never ``playbook_install``.
 SETUP_CONCIERGE_TOOLS = [
     "diagnose", "refresh_models", "repair_workspace",
     "validate_provider_key", "save_provider_key", "rag_ask_vault",
+    "playbook_list", "playbook_plan",
 ]
 # The model sommelier (2026-09-02): reads the platform block, checks the
 # shelf, recommends, and hands over the pull command without running it.
@@ -63,13 +71,28 @@ DEVICE_SETTINGS_TOOLS = [
     "system_settings_get", "system_settings_plan", "system_settings_apply",
     "apt_install", "snap_install", "service_enable", "diagnose",
 ]
+# The app installer (2026-09-03, proposal §3.5): the Spark playbooks' list /
+# plan / install triple and diagnose. Order is the contract — the list comes
+# first because the prompt must call it first.
+APP_INSTALLER_TOOLS = ["playbook_list", "playbook_plan", "playbook_install", "diagnose"]
+# The privileged tier's allowlist: which profile may bind which privileged
+# tool. Strict on purpose — a stray library edit cannot hand ``apt_install``
+# or ``playbook_install`` to a general-purpose persona, and the two desks do
+# not borrow each other's tools.
+PRIVILEGED_TOOL_OWNERS = {
+    "device-settings": {
+        "system_settings_get", "system_settings_plan", "system_settings_apply",
+        "apt_install", "snap_install", "service_enable",
+    },
+    "app-installer": {"playbook_install"},
+}
 # Ops specialists the concierge routes trouble reports to: each must be able
 # to run `diagnose`, the tool whose description says to run it when the user
 # reports trouble.
 OPS_TROUBLESHOOTERS = {
     "install-medic", "gpu-triage", "provider-keysmith",
     "latency-tuner", "model-sommelier", "model-librarian", "vram-planner",
-    "device-settings",
+    "device-settings", "app-installer",
 }
 # Profiles whose prompt reasons about the machine's memory: they must take
 # the figure from the platform block, never hard-code one (the Spark ships
@@ -124,8 +147,14 @@ def test_setup_concierge_profile_contract() -> None:
         "platform", "DGX Spark", "unified pool", "MoE", "cloud desktop", "NVH_HOME",
         "ONE step at a time", "refresh_models", "apt upgrade", "validate_provider_key",
         "save_provider_key", "diagnose", "can_sudo", "in_sudo_group", "next single action",
+        # (5) Spark playbooks (2026-09-03): propose from the catalogue, prefer
+        # the rootless pack, show the plan, and hand the run to the App
+        # Installer — the concierge itself never installs.
+        "playbook_list", "playbook_plan", "rootless studio pack", "App Installer",
+        "never install anything yourself", "`nvh playbook install <id>`",
     ):
         assert phrase in prompt, phrase
+    assert "playbook_install" not in prompt and "playbook_install" not in p["tools_allowed"]
     # Setup is its own category with the concierge as its only member.
     categories = Counter(x["category"] for x in profiles)
     assert categories["Setup"] == 1
@@ -211,20 +240,82 @@ def test_device_settings_profile_contract() -> None:
     assert len(categories) == CATEGORY_COUNT
 
 
-def test_privileged_tools_are_bound_only_by_the_settings_desk() -> None:
-    """The privileged tier is one profile's, so a stray library edit cannot
-    hand ``system_settings_apply`` to a general-purpose persona. A profile
-    with no whitelist (``null``) is filtered by the registry instead."""
-    privileged = {
-        "system_settings_get", "system_settings_plan", "system_settings_apply",
-        "apt_install", "snap_install", "service_enable",
-    }
+def test_app_installer_profile_contract() -> None:
+    """The Spark playbooks' specialist (proposal §3.2 roster row and §3.5).
+
+    Its prompt is the safety contract the model is held to: list before
+    planning, plan before installing, prefer the rootless pack, one hand-off
+    command when sudo needs a password, never a password, never a bare
+    ``apt upgrade``, one install at a time.
+    """
+    profiles = _catalog()["profiles"]
+    by_name = {x["name"]: x for x in profiles}
+    p = by_name["app-installer"]
+    assert p["title"] == "App Installer"
+    assert p["category"] == "Ops"
+    assert "\n" not in p["description"] and len(p["description"]) < 260
+    assert p["tools_allowed"] == APP_INSTALLER_TOOLS
+    assert p["provider"] == "" and p["model"] == "", "leave routing to the router"
+    assert p["temperature"] == 0.2
+    # ``strict-tools`` keeps the whitelist exactly these four when the
+    # concierge routes the turn (see the device-settings contract).
+    assert p["tags"] == ["ops", "spark", "privileged", "strict-tools"]
+    prompt = p["system_prompt"]
+    for phrase in (
+        # (a) reads the platform block, lists first, prefers the rootless pack.
+        "platform block", "can_sudo", "in_sudo_group", "playbook_list first",
+        "rootless_alternative", "prefer the rootless studio pack", "NVH_HOME",
+        # (b) the compiled plan — sudo, manual, time/disk, undo — before the
+        # red card; never claims a run that has not happened.
+        "playbook_plan", "which steps need sudo", "MANUAL steps", "estimated time and disk",
+        "undo preview", "playbook_install", "red card", "never speak as though it has run",
+        # The research policies: pipe-to-shell verbatim + flagged, docker
+        # group re-login (never newgrp), tokens declared not stored, undo as
+        # preview, Update Now never automated.
+        "pipe-to-shell: unpinned", "log out and back in", "never newgrp",
+        "HF_TOKEN", "NGC_API_KEY", "never stores them", "Uninstall commands are a preview",
+        "Update Now",
+        # (c) the one hand-off command, verbatim.
+        "`nvh playbook install <id>`", "nvHive never sees it",
+        # (d) never a password, never a bare apt upgrade.
+        "Never ask for, accept, or repeat back a password", "no password parameter",
+        "apt upgrade", "validated update channel",
+        # (e) one at a time, short.
+        "One install at a time", "short answers", "single next action", "diagnose",
+    ):
+        assert phrase in prompt, phrase
+    assert "your password" not in prompt.lower()
+    # No hand-typed memory figure: the platform block owns the numbers.
+    assert MEMORY_FIGURE_RE.search(prompt) is None
+    # Ops gained a member and no category was added.
+    categories = Counter(x["category"] for x in profiles)
+    assert categories["Ops"] == OPS_COUNT
+    assert len(categories) == CATEGORY_COUNT
+
+
+def test_privileged_tools_are_bound_only_by_their_desks() -> None:
+    """The privileged tier is a strict allowlist (:data:`PRIVILEGED_TOOL_OWNERS`):
+    ``system_settings_*`` and the package / service actions only on the
+    settings desk, ``playbook_install`` only on the app installer, and
+    neither desk borrows the other's. A stray library edit cannot hand a
+    privileged tool to a general-purpose persona. A profile with no whitelist
+    (``null``) is filtered by the registry instead."""
+    privileged = set().union(*PRIVILEGED_TOOL_OWNERS.values())
     for p in _catalog()["profiles"]:
         tools = p.get("tools_allowed")
         if tools is None:
             continue
         overlap = privileged & set(tools)
-        assert not overlap or p["name"] == "device-settings", (p["name"], sorted(overlap))
+        allowed = PRIVILEGED_TOOL_OWNERS.get(p["name"], set())
+        assert overlap <= allowed, (p["name"], sorted(overlap - allowed))
+    # ... and each owner does bind its own set, so the allowlist is not stale.
+    by_name = {x["name"]: x for x in _catalog()["profiles"]}
+    for owner, tools in PRIVILEGED_TOOL_OWNERS.items():
+        assert tools <= set(by_name[owner]["tools_allowed"]), owner
+    # The read-only playbook tools are auto: the concierge may hold them, the
+    # privileged install it may not.
+    assert {"playbook_list", "playbook_plan"} <= set(by_name["setup-concierge"]["tools_allowed"])
+    assert "playbook_install" not in by_name["setup-concierge"]["tools_allowed"]
 
 
 def test_platform_aware_prompts_quote_no_memory_figure() -> None:

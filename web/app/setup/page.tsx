@@ -45,10 +45,37 @@ import {
   installStudioPacksStream,
   getStudioModels,
   installStudioModelsStream,
+  executeWizardTool,
+  followPlaybookJob,
+  listPlaybooks,
+  listWizardTools,
+  type WizardToolExecuteResult,
 } from '@/lib/api';
+import {
+  NEEDS_TERMINAL_HINT,
+  PLAYBOOK_INSTALL_TOOL,
+  PRIVILEGED_BADGE,
+  PRIVILEGED_DISABLED_NOTE,
+  PRIVILEGED_RUN_LABEL,
+  PRIVILEGED_SUDO_NOTE,
+  needsTerminal,
+  planLines,
+  playbookCardStatus,
+  playbookChips,
+  playbookHandoffCommand,
+  playbookOutcomeLabel,
+  playbookRunStart,
+  terminalCommand,
+  unwrapToolResult,
+  type PlaybookRunState,
+  type ToolCardStatus,
+} from '@/lib/privileged';
+import PlanDetails from '@/components/PlanDetails';
+import PlaybookRunLog from '@/components/PlaybookRunLog';
 import { useProviderHealth } from '@/lib/useProviderHealth';
 import type {
   GPUInfo,
+  PlaybookCatalogueEntry,
   RecommendationsResult,
   FreeProvider,
   ComfyUIExample,
@@ -423,6 +450,395 @@ const shouldAutoActivateStorage = (status: StorageStatus, report: MountAutopilot
     !candidate.os_mount
   );
 };
+
+// ─── Spark playbooks ─────────────────────────────────────────────────────────
+//
+// Curated multi-step installs from NVIDIA/dgx-spark-playbooks that may need
+// sudo. They are NOT studio packs and never go through the pack installer:
+// the catalogue is the auto-class Wizard tool `playbook_list`, and a run is
+// the privileged tool `playbook_install` — an unconfirmed execute returns the
+// red card (the server's plan + an approval token), "Approve and run" sends
+// the token back, and the answer is a `playbook-run` job the card streams.
+// Every run needs a click; nothing here executes on load except the
+// read-only catalogue. Same rules as the chat card (lib/privileged.ts): the
+// plan is the server's, a `needs_terminal` hand-off is not a failure, and a
+// kill-switched tier shows no run button.
+
+type PlaybookCardPhase = 'idle' | 'planning' | 'planned' | 'running' | 'settled';
+
+interface PlaybookCardState {
+  phase: PlaybookCardPhase;
+  status: ToolCardStatus;
+  /** The red card payload from the unconfirmed execute: `plan` + `approval_token`. */
+  card?: WizardToolExecuteResult;
+  /** The folded `playbook-run` job once approved. */
+  run?: PlaybookRunState;
+  summary?: string;
+  handoff?: { command: string; hint: string };
+  error?: string;
+}
+
+const PLAYBOOK_CARD_IDLE: PlaybookCardState = { phase: 'idle', status: 'idle' };
+
+// The live step log and the red-card body are the shared components
+// components/PlaybookRunLog.tsx and components/PlanDetails.tsx — the same JSX
+// the Wizard chat's tool card renders, so both surfaces read a run alike.
+
+function SparkPlaybooksSection({ packs }: { packs: StudioPack[] }) {
+  const [entries, setEntries] = useState<PlaybookCatalogueEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // `privileged_enabled` from the tool list: false = NVH_ALLOW_PRIVILEGED is
+  // off, so the Plan button is replaced by the note naming the variable and
+  // the CLI line. undefined = the API never said; a refusal from execute is
+  // honoured either way.
+  const [privilegedEnabled, setPrivilegedEnabled] = useState<boolean | undefined>(undefined);
+  const [cards, setCards] = useState<Record<string, PlaybookCardState>>({});
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const watchersRef = useRef<Map<string, () => void>>(new Map());
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      setEntries(await listPlaybooks());
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Could not load the playbook catalogue.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    listWizardTools()
+      .then(list => setPrivilegedEnabled(list.privileged_enabled))
+      .catch(() => undefined);
+    const watchers = watchersRef.current;
+    return () => {
+      for (const stop of watchers.values()) stop();
+      watchers.clear();
+    };
+  }, [refresh]);
+
+  const patchCard = (id: string, patch: Partial<PlaybookCardState>) => {
+    setCards(prev => ({ ...prev, [id]: { ...(prev[id] ?? PLAYBOOK_CARD_IDLE), ...patch } }));
+  };
+
+  // "Plan": the unconfirmed execute. For a privileged tool the server does not
+  // run anything — it answers the red card (its dry run + the approval token).
+  const showPlan = async (id: string) => {
+    patchCard(id, { phase: 'planning', status: 'running', card: undefined, run: undefined, handoff: undefined, summary: undefined, error: undefined });
+    try {
+      const envelope = await executeWizardTool(PLAYBOOK_INSTALL_TOOL, { arguments: { id }, confirmed: false });
+      const outcome = unwrapToolResult(envelope);
+      if (envelope.disabled || outcome.disabled) {
+        patchCard(id, { phase: 'settled', status: 'disabled', card: envelope, error: envelope.error ?? outcome.error ?? PRIVILEGED_DISABLED_NOTE });
+        return;
+      }
+      if (envelope.needs_confirmation) {
+        patchCard(id, { phase: 'planned', status: 'awaiting-confirm', card: envelope });
+        return;
+      }
+      // No card came back, so there is nothing approved and nothing ran.
+      patchCard(id, {
+        phase: 'settled',
+        status: 'error',
+        card: envelope,
+        error: envelope.error ?? (typeof outcome.error === 'string' ? outcome.error : undefined) ?? 'The server did not return an approval card; nothing ran.',
+      });
+    } catch (err) {
+      patchCard(id, { phase: 'settled', status: 'error', error: err instanceof Error ? err.message : 'Plan request failed.' });
+    }
+  };
+
+  const cancelPlan = (id: string) => patchCard(id, { ...PLAYBOOK_CARD_IDLE, card: undefined, run: undefined, error: undefined });
+
+  // "Approve and run": the confirmed execute with the card's token. The
+  // answer is a job the card streams; the verdict comes from the job's
+  // events, never from the envelope's "the tool answered" ok.
+  const approveAndRun = async (id: string) => {
+    const token = cards[id]?.card?.approval_token;
+    if (!token) return;
+    patchCard(id, { phase: 'running', status: 'running', error: undefined });
+    try {
+      const envelope = await executeWizardTool(PLAYBOOK_INSTALL_TOOL, { arguments: { id }, confirmed: true, approvalToken: token });
+      const outcome = unwrapToolResult(envelope);
+      if (envelope.disabled || outcome.disabled) {
+        patchCard(id, { phase: 'settled', status: 'disabled', error: envelope.error ?? outcome.error ?? PRIVILEGED_DISABLED_NOTE });
+        return;
+      }
+      if (envelope.approval_required || envelope.refused) {
+        patchCard(id, { phase: 'settled', status: 'error', card: undefined, error: `${envelope.error ?? 'The approval was refused.'} Click Plan to get a fresh card.` });
+        return;
+      }
+      if (needsTerminal(outcome)) {
+        patchCard(id, {
+          phase: 'settled',
+          status: 'needs-terminal',
+          handoff: { command: terminalCommand(outcome) || playbookHandoffCommand(id), hint: typeof outcome.hint === 'string' ? outcome.hint : NEEDS_TERMINAL_HINT },
+        });
+        return;
+      }
+      const ok = envelope.ok && outcome.ok !== false;
+      const start = ok ? playbookRunStart(outcome) : null;
+      if (!start) {
+        patchCard(id, {
+          phase: 'settled',
+          status: ok ? 'ok' : 'error',
+          summary: ok ? 'Done' : undefined,
+          error: ok ? undefined : (typeof outcome.error === 'string' ? outcome.error : undefined) ?? envelope.error ?? 'The install was refused.',
+        });
+        if (ok) void refresh();
+        return;
+      }
+      const stop = followPlaybookJob(start, id, {
+        onRun: (run: PlaybookRunState) => patchCard(id, { run }),
+        onFinish: run => {
+          watchersRef.current.delete(run.jobId);
+          const result = run.outcome;
+          if (!result) return;
+          // A halt (the docker-group re-login) and a hand-off both settle as
+          // "your turn": the card shows the instruction, never "✓ Done".
+          patchCard(id, {
+            phase: 'settled',
+            status: playbookCardStatus(result),
+            run,
+            summary: playbookOutcomeLabel(result),
+            handoff: result.kind === 'needs-terminal' ? { command: result.command, hint: result.hint || NEEDS_TERMINAL_HINT } : undefined,
+            error: result.kind === 'failed' ? result.error : undefined,
+          });
+          void refresh();
+        },
+      });
+      watchersRef.current.set(start.job_id, stop);
+    } catch (err) {
+      patchCard(id, { phase: 'settled', status: 'error', error: err instanceof Error ? err.message : 'Install request failed.' });
+    }
+  };
+
+  const copyCommand = async (id: string, command: string) => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId(current => (current === id ? null : current)), 1600);
+    } catch {
+      // Clipboard blocked — the command is on screen in a selectable block.
+    }
+  };
+
+  const packTitle = (packId: string) => packs.find(pack => pack.id === packId)?.title ?? packId;
+  const disabledByKillSwitch = privilegedEnabled === false;
+
+  return (
+    <div className="space-y-3" id="spark-playbooks">
+      <div>
+        <div className="section-label">Spark playbooks</div>
+        <p className="text-xs font-mono text-[#a3a3a3] mt-1 dark:text-[#737373]">
+          Guided installs from NVIDIA&apos;s DGX Spark playbooks. Unlike the packs above these may use sudo:
+          Plan shows every command first, Approve and run executes it step by step with a live log, and when sudo
+          needs a password the run stops and hands you one command for your terminal. Browser logins and other
+          manual steps are listed, never run.
+        </p>
+      </div>
+
+      {disabledByKillSwitch && (
+        <div className="border border-[#e5e5e5] bg-[#fafafa] p-3 text-[10px] font-mono text-[#737373] dark:border-[#262626] dark:bg-[#141414] dark:text-[#a3a3a3]">
+          {PRIVILEGED_DISABLED_NOTE}. Plans stay readable in the chat; to install, run <span className="text-[#0a0a0a] dark:text-[#fafafa]">{playbookHandoffCommand('<id>')}</span> in a terminal.
+        </div>
+      )}
+
+      {loadError && (
+        <div className="bg-[#dc2626]/5 border border-[#dc2626]/20 p-3">
+          <div className="text-[10px] font-mono text-[#dc2626] uppercase tracking-wider mb-1">Playbook catalogue</div>
+          <div className="text-xs font-mono text-[#dc2626]">{loadError}</div>
+          <button type="button" onClick={() => void refresh()} className="btn-secondary mt-2 px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider">
+            Retry
+          </button>
+        </div>
+      )}
+
+      {loading && entries.length === 0 && !loadError && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 animate-pulse">
+          {[1, 2].map(i => (
+            <div key={i} className="h-28 bg-[#ffffff] border border-[#e5e5e5] dark:bg-[#0a0a0a] dark:border-[#262626]" />
+          ))}
+        </div>
+      )}
+
+      {!loading && !loadError && entries.length === 0 && (
+        <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">No playbooks are available on this build.</div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {entries.map(entry => {
+          const state = cards[entry.id] ?? PLAYBOOK_CARD_IDLE;
+          const chips = playbookChips(entry);
+          const busy = state.phase === 'planning' || state.phase === 'running';
+          const card = state.card;
+          const plan = planLines(card);
+          const showRedCard = state.phase === 'planned' || state.phase === 'running' || (state.phase === 'settled' && !!card && plan.length > 0);
+          const statusText = state.phase === 'planning'
+            ? 'Fetching the plan…'
+            : state.phase === 'planned'
+              ? 'Needs your approval'
+              : state.phase === 'running'
+                ? 'Running…'
+                : state.phase === 'settled'
+                  ? state.status === 'ok'
+                    ? '✓ Done'
+                    : state.status === 'needs-terminal'
+                      ? 'Run it in a terminal'
+                      : state.status === 'halted'
+                        ? 'Stopped — your turn'
+                        : state.status === 'disabled'
+                          ? 'Disabled'
+                          : '✗ Failed'
+                  : '';
+          const statusClass = state.status === 'ok'
+            ? 'text-[#16a34a]'
+            : state.status === 'error'
+              ? 'text-[#dc2626]'
+              : state.status === 'disabled'
+                ? 'text-[#a3a3a3]'
+                : 'text-[#d97706]';
+          return (
+            <div
+              key={entry.id}
+              className={`border p-4 ${
+                showRedCard
+                  ? 'border-[#dc2626]/50 bg-[#dc2626]/5'
+                  : 'border-[#e5e5e5] bg-[#ffffff] dark:border-[#262626] dark:bg-[#0a0a0a]'
+              }`}
+              aria-label={`${entry.title} — ${entry.requires_sudo ? PRIVILEGED_SUDO_NOTE : 'no sudo'}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{entry.title}</div>
+                  <div className="text-[10px] font-mono text-[#76B900] mt-0.5">{entry.category || 'playbook'} · {entry.id}</div>
+                </div>
+                <span className={`text-[9px] font-mono px-1.5 py-0.5 border shrink-0 ${
+                  entry.installed ? 'border-[#76B900]/40 text-[#76B900]' : 'border-[#d4d4d4] text-[#737373]'
+                }`}>
+                  {entry.installed ? 'INSTALLED' : entry.requires_sudo ? 'SUDO' : 'NO SUDO'}
+                </span>
+              </div>
+              {entry.summary && (
+                <div className="text-[10px] font-mono text-[#737373] leading-relaxed mt-2 dark:text-[#a3a3a3]">{entry.summary}</div>
+              )}
+              <div className="flex flex-wrap gap-1 mt-3">
+                {chips.map((chip, i) => (
+                  <span
+                    key={chip}
+                    className={`text-[9px] font-mono border px-1.5 py-0.5 ${
+                      i === 0 && entry.requires_sudo
+                        ? 'text-[#dc2626] border-[#dc2626]/30 bg-[#dc2626]/5'
+                        : 'text-[#a3a3a3] bg-[#f5f5f5] border-[#e5e5e5] dark:bg-[#141414] dark:border-[#262626] dark:text-[#737373]'
+                    }`}
+                  >
+                    {chip}
+                  </span>
+                ))}
+                {entry.rootless_alternative && (
+                  <a
+                    href={`#studio-pack-${entry.rootless_alternative}`}
+                    className="text-[9px] font-mono border border-[#76B900]/40 text-[#76B900] px-1.5 py-0.5 hover:bg-[#76B900]/10"
+                    title="A studio pack that installs the same tool without sudo"
+                  >
+                    rootless alternative: {packTitle(entry.rootless_alternative)}
+                  </a>
+                )}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <span className={`text-[9px] font-mono uppercase tracking-[0.14em] ${statusClass}`}>{statusText}</span>
+                <div className="flex flex-wrap gap-2">
+                  {(state.phase === 'idle' || state.phase === 'settled') && !disabledByKillSwitch && (
+                    <button
+                      type="button"
+                      onClick={() => void showPlan(entry.id)}
+                      className="btn-secondary px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider"
+                      title="Show every command before anything runs"
+                    >
+                      {state.phase === 'settled' ? 'Plan again' : 'Plan'}
+                    </button>
+                  )}
+                  {state.phase === 'planned' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => cancelPlan(entry.id)}
+                        className="btn-ghost px-3 py-1.5 text-[10px] font-mono uppercase tracking-wider"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void approveAndRun(entry.id)}
+                        disabled={!card?.approval_token || plan.length === 0}
+                        className="px-3 py-1.5 text-[10px] font-mono font-semibold uppercase tracking-wider text-white bg-[#dc2626] hover:opacity-90 disabled:opacity-40"
+                        title={PRIVILEGED_SUDO_NOTE}
+                      >
+                        {PRIVILEGED_RUN_LABEL}
+                      </button>
+                    </>
+                  )}
+                  {busy && <span className="text-[10px] font-mono text-[#a3a3a3]">working…</span>}
+                </div>
+              </div>
+
+              {showRedCard && (
+                <div className="mt-3 space-y-1">
+                  <div className="flex flex-wrap items-baseline gap-2">
+                    <span className="rounded-sm border border-[#dc2626] px-1 py-px text-[9px] font-mono font-semibold uppercase tracking-[0.14em] text-[#dc2626]">{PRIVILEGED_BADGE}</span>
+                    <span className="font-mono text-[10px] text-[#dc2626]">{entry.requires_sudo ? PRIVILEGED_SUDO_NOTE : 'no step here uses sudo'}</span>
+                    {card?.summary && <span className="font-mono text-[10px] text-[#737373] dark:text-[#a3a3a3]">{card.summary}</span>}
+                  </div>
+                  <div className="font-mono">
+                    <PlanDetails source={card} borderColor="#dc2626" commandsLabel="Commands this playbook will run" />
+                  </div>
+                </div>
+              )}
+
+              {state.run && <PlaybookRunLog run={state.run} borderColor={showRedCard ? '#dc2626' : null} />}
+
+              {state.status === 'halted' && state.summary && (
+                <div className="mt-2 border border-[#d97706]/30 bg-[#d97706]/5 p-2 text-[10px] font-mono text-[#d97706]" role="note">
+                  {state.summary}
+                </div>
+              )}
+
+              {state.handoff && (
+                <div className="mt-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <code className="min-w-0 flex-1 overflow-x-auto border border-[#e5e5e5] bg-white px-1.5 py-1 font-mono text-[10px] whitespace-pre text-[#0a0a0a] dark:border-[#262626] dark:bg-[#0a0a0a] dark:text-[#fafafa]">
+                      {state.handoff.command}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => void copyCommand(entry.id, state.handoff?.command ?? '')}
+                      className="btn-secondary shrink-0 px-2 py-1 text-[10px] font-mono"
+                    >
+                      {copiedId === entry.id ? 'Copied' : 'Copy command'}
+                    </button>
+                  </div>
+                  <div className="mt-1 font-mono text-[10px] text-[#737373] dark:text-[#a3a3a3]">{state.handoff.hint}</div>
+                </div>
+              )}
+
+              {state.error && state.status !== 'needs-terminal' && (
+                <div className="mt-2 border border-[#dc2626]/20 bg-[#dc2626]/5 p-2 text-[10px] font-mono text-[#dc2626]">{state.error}</div>
+              )}
+              {state.status === 'disabled' && (
+                <div className="mt-2 text-[10px] font-mono text-[#737373]">{PRIVILEGED_DISABLED_NOTE}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export default function SetupPage() {
   const router = useRouter();
@@ -5065,7 +5481,7 @@ export default function SetupPage() {
               <div className="bg-[#ffffff] border border-[#e5e5e5] p-4 space-y-2 dark:bg-[#0a0a0a] dark:border-[#262626]">
                 <div className="flex items-center justify-between">
                   <div className="section-label">Pack Stream</div>
-                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">rootless mode</div>
+                  <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">packs never use sudo; Spark playbooks below ask first</div>
                 </div>
                 <div className="max-h-44 overflow-y-auto space-y-1">
                   {studioEvents.map((event, index) => (
@@ -5105,6 +5521,7 @@ export default function SetupPage() {
                         return (
                           <label
                             key={pack.id}
+                            id={`studio-pack-${pack.id}`}
                             className={`block border p-4 transition-colors ${
                               selected
                                 ? 'border-[#76B900]/50 bg-[#76B900]/5'
@@ -5178,6 +5595,9 @@ export default function SetupPage() {
                 ))}
               </div>
             )}
+
+            {/* SPARK PLAYBOOKS — the privileged install tier, below the rootless pack grid */}
+            <SparkPlaybooksSection packs={studioPacks} />
           </div>
         )}
 

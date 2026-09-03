@@ -61,6 +61,12 @@ const TOOL_OPTIONS = [
   'apt_install',
   'snap_install',
   'service_enable',
+  // Spark playbooks (proposal §3.5). `playbook_list` / `playbook_plan` are
+  // read-only (catalogue + compiled plan); `playbook_install` is privileged
+  // and runs only behind the red approval card.
+  'playbook_list',
+  'playbook_plan',
+  'playbook_install',
 ];
 
 export default function CreateAgentModal({ open, onClose, onCreated, toolNames }: Props) {

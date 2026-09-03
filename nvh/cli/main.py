@@ -49,6 +49,7 @@ if sys.platform == "win32":
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -8022,6 +8023,255 @@ def studio(
                 last_log = now
 
     _run(_install())
+
+
+# ---------------------------------------------------------------------------
+# nvh playbook — NVIDIA's DGX Spark playbooks as approved, audited runs.
+#
+# The Wizard's ``playbook_install`` runs the same plan as a background job
+# with ``sudo -n`` only where passwordless sudo exists, and hands the user
+# exactly this command when sudo needs a password. Here ``sudo`` asks in the
+# user's own terminal, so nvHive never sees the password. Same receipt, same
+# vault ``Decisions/`` note; undo stays preview text.
+# ---------------------------------------------------------------------------
+
+playbook_app = typer.Typer(
+    help=(
+        "Run NVIDIA's DGX Spark playbooks (Ollama, Open WebUI, ComfyUI, vLLM, llama.cpp, LM Studio, "
+        "Tailscale, VS Code, ...) with the plan shown first and sudo asked in your own terminal."
+    ),
+)
+app.add_typer(playbook_app, name="playbook", rich_help_panel="Infrastructure")
+
+_PLAYBOOK_HOME_HELP = "NVH_HOME whose receipts, downloads and vault the playbook uses (default: the active one)"
+_PLAYBOOK_ID_HELP = "Playbook id — the upstream folder name, e.g. ollama (nvh playbook list)"
+
+
+def _playbooks():
+    """The playbook module, imported on first use (it pulls in system_settings and receipts)."""
+    from nvh.integrations.installs import playbooks
+
+    return playbooks
+
+
+def _playbook_plan_or_exit(pb, playbook_id: str, home_dir: str | None) -> dict[str, Any]:
+    """``plan_dict`` for the CLI: unknown id, unplannable host or a denied command → message and exit 1."""
+    plan = pb.plan_dict(playbook_id, home_dir=home_dir)
+    if plan.get("ok"):
+        return plan
+    err_console.print(f"[red]{escape(str(plan.get('error') or 'this playbook cannot be planned here'))}[/red]")
+    err_console.print("[dim]nvh playbook list shows the catalogue.[/dim]")
+    raise typer.Exit(1)
+
+
+def _playbook_step_tag(sudo: bool) -> str:
+    return "[red]\\[sudo][/red]" if sudo else "[green]\\[user][/green]"
+
+
+def _print_playbook_plan(plan: dict[str, Any]) -> None:
+    """Render ``plan_dict()``: header, numbered steps tagged sudo/user/manual with the exact command, verify, undo, notes."""
+    steps = list(plan.get("steps") or [])
+    manual = list(plan.get("manual_steps") or [])
+    sudo_count = int(plan.get("sudo_steps") or 0)  # counted once, by the playbook itself
+    console.print(
+        f"\n[bold green]{escape(str(plan.get('title') or plan.get('id')))}[/bold green] [dim]({escape(str(plan.get('id')))})[/dim]"
+    )
+    if plan.get("summary"):
+        console.print(f"  {escape(str(plan['summary']))}")
+    for url in plan.get("source_urls") or []:
+        console.print(f"  [dim]Source: {escape(str(url))}[/dim]", highlight=False)
+    estimates = plan.get("estimates") or {}
+    minutes = estimates.get("minutes", "?")
+    disk = estimates.get("disk_gb", 0)
+    line = f"  [dim]Estimated: ~{minutes} min, ~{disk} GB disk · Risk: {escape(str(plan.get('risk') or 'n/a'))}"
+    if plan.get("last_updated"):
+        line += f" · Upstream last updated: {escape(str(plan['last_updated']))}"
+    console.print(line + "[/dim]", highlight=False)
+    if plan.get("install_path"):
+        console.print(f"  [dim]Downloads: {escape(str(plan['install_path']))}[/dim]", highlight=False)
+    if plan.get("prerequisites"):
+        console.print("  [bold]Prerequisites[/bold]")
+        for item in plan["prerequisites"]:
+            console.print(f"    - {escape(str(item))}", highlight=False)
+    if plan.get("warning"):
+        console.print(f"  [yellow]Warning:[/yellow] {escape(str(plan['warning']))}", highlight=False)
+
+    console.print(f"\n  [bold]Steps[/bold] [dim]({len(steps)} command(s), {sudo_count} with sudo, {len(manual)} manual)[/dim]")
+    for step in steps:
+        console.print(
+            f"  {int(step.get('index', 0)) + 1:>2}. {_playbook_step_tag(bool(step.get('sudo')))} {escape(str(step.get('title', '')))}",
+            highlight=False,
+        )
+        console.print(f"        $ {escape(str(step.get('command', '')))}", highlight=False)
+        if step.get("check"):
+            console.print(f"        [dim]skipped when this exits 0: {escape(str(step['check']))}[/dim]", highlight=False)
+        if step.get("unpinned") and step.get("upstream"):
+            upstream = str(step["upstream"])
+            if "|" in upstream:
+                label, tail = "pipe-to-shell: unpinned", "nvHive downloads the script and runs that file"
+            else:
+                label, tail = "unpinned download", "no version pin or checksum in the README; nvHive installs what the vendor serves today"
+            console.print(
+                f"        [yellow]{label}[/yellow] [dim]— upstream runs `{escape(upstream)}`; {tail}[/dim]",
+                highlight=False,
+            )
+        if step.get("halts_run"):
+            console.print("        [dim]the run stops after this step (log out and back in, then run the playbook again)[/dim]")
+    for offset, text in enumerate(manual, start=len(steps) + 1):
+        console.print(f"  {offset:>2}. [cyan]\\[manual][/cyan] {escape(str(text))}", highlight=False)
+
+    if plan.get("verify"):
+        console.print("\n  [bold]Verify[/bold] [dim](run after the last step)[/dim]")
+        for command in plan["verify"]:
+            console.print(f"        $ {escape(str(command))}", highlight=False)
+    if plan.get("undo"):
+        console.print("\n  [bold]Undo[/bold] [dim](preview only — nvHive never runs these)[/dim]")
+        for command in plan["undo"]:
+            console.print(f"        $ {escape(str(command))}", highlight=False)
+    notes = [  # MANUAL: and unpinned notes were already printed against their steps
+        str(note) for note in plan.get("notes") or []
+        if "MANUAL:" not in str(note) and not str(note).startswith(("pipe-to-shell", "unpinned download"))
+    ]
+    if notes:
+        console.print("\n  [bold]Notes[/bold]")
+        for note in notes:
+            console.print(f"    - {escape(note)}", highlight=False)
+    if plan.get("rootless_alternative"):
+        console.print(
+            f"  [dim]Rootless alternative (no sudo): nvh studio --install {escape(str(plan['rootless_alternative']))} -y[/dim]",
+            highlight=False,
+        )
+    if plan.get("requires_sudo"):
+        if not plan.get("can_elevate", True):
+            console.print(
+                f"  [yellow]This account cannot use sudo; the run would stop at the first \\[sudo] step "
+                f"({sudo_count} of {len(steps)} need it).[/yellow]"
+            )
+        elif plan.get("needs_terminal_expected"):
+            console.print("  [dim]sudo will ask for your password in this terminal; nvHive never sees it.[/dim]")
+
+
+def _print_playbook_event(event: dict[str, Any]) -> None:
+    """One line per engine event while ``run_in_terminal`` streams; command output itself goes straight to the terminal."""
+    kind = str(event.get("event", ""))
+    message = "\n        ".join(escape(str(event.get("message", ""))).splitlines()) or ""
+    if kind == "plan":
+        console.print(f"\n[dim]{message}[/dim]", highlight=False)
+    elif kind == "step":
+        status = event.get("status")
+        number = f"{int(event.get('step', 0)) + 1}/{event.get('steps_total', '?')}"
+        if status == "running":
+            console.print(
+                f"  [cyan]STEP {number}[/cyan] {_playbook_step_tag(bool(event.get('sudo')))} {escape(str(event.get('title', '')))}",
+                highlight=False,
+            )
+            console.print(f"        $ {escape(str(event.get('command', '')))}", highlight=False)
+        elif status == "failed":
+            console.print(f"        [red]FAILED[/red] {message}", highlight=False)
+        elif event.get("skipped"):
+            console.print("        [dim]already done — skipped[/dim]")
+        else:
+            console.print("        [green]done[/green]")
+    elif kind == "log":
+        console.print(f"        [dim]{message}[/dim]", highlight=False)
+    elif kind == "needs_terminal":
+        console.print(f"  [yellow]{message}[/yellow]", highlight=False)
+    elif kind == "complete":
+        if event.get("halted"):
+            console.print(f"\n[yellow]Stopped for you to act.[/yellow] MANUAL: {message}", highlight=False)
+        else:
+            console.print(f"\n[green]Done.[/green] {message}", highlight=False)
+    elif kind == "error":
+        console.print(f"\n[red]Failed:[/red] {message}", highlight=False)
+
+
+@playbook_app.command("list")
+def playbook_list(
+    home_dir: str | None = typer.Option(None, "--home-dir", "--home", help=_PLAYBOOK_HOME_HELP),
+) -> None:
+    """List the Spark playbooks: sudo steps, manual steps, estimated time, and whether a receipt says installed."""
+    pb = _playbooks()
+    rows = pb.catalogue(home_dir=home_dir)
+    console.print(
+        f"\n[bold green]DGX Spark playbooks[/bold green]  [dim]source: {escape(pb.UPSTREAM_TREE)}<id>[/dim]",
+        highlight=False,
+    )
+    table = Table(show_header=True, header_style="bold green")
+    table.add_column("Playbook", no_wrap=True)
+    table.add_column("Title")
+    table.add_column("Sudo steps", justify="right", no_wrap=True)
+    table.add_column("Manual steps", justify="right", no_wrap=True)
+    table.add_column("Est. time", justify="right", no_wrap=True)
+    table.add_column("Installed", no_wrap=True)
+    for row in rows:
+        installed = "yes" if row.get("installed") else str(row.get("receipt_status") or "no")
+        table.add_row(
+            str(row.get("id", "")),
+            str(row.get("title", "")),
+            f"{row.get('sudo_steps', 0)} of {row.get('steps_total', 0)}",
+            str(row.get("manual_steps", 0)),
+            f"~{row.get('estimated_minutes', '?')} min",
+            installed,
+        )
+    console.print(table)
+    deferred = pb.deferred()
+    if deferred:
+        console.print("[dim]Not yet shipped (see the upstream README):[/dim]")
+        for entry in deferred:
+            console.print(f"  [dim]- {escape(str(entry.get('id')))}: {escape(str(entry.get('reason', '')))}[/dim]", highlight=False)
+    console.print("\nPlan one:    [bold]nvh playbook plan <id>[/bold]  [dim](runs nothing)[/dim]")
+    console.print(
+        "Install one: [bold]nvh playbook install <id>[/bold]  "
+        "[dim](shows the plan, asks once; sudo asks for your password in this terminal)[/dim]"
+    )
+
+
+@playbook_app.command("plan")
+def playbook_plan(
+    playbook_id: str = typer.Argument(..., help=_PLAYBOOK_ID_HELP),
+    home_dir: str | None = typer.Option(None, "--home-dir", "--home", help=_PLAYBOOK_HOME_HELP),
+) -> None:
+    """Show one playbook's plan: every command tagged sudo, user or manual, then verify and undo. Runs nothing."""
+    _print_playbook_plan(_playbook_plan_or_exit(_playbooks(), playbook_id, home_dir))
+
+
+@playbook_app.command("install")
+def playbook_install(
+    playbook_id: str = typer.Argument(..., help=_PLAYBOOK_ID_HELP),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Skip the confirmation prompt (the plan is still printed)"),
+    home_dir: str | None = typer.Option(None, "--home-dir", "--home", help=_PLAYBOOK_HOME_HELP),
+) -> None:
+    """Run a playbook here: print the plan, ask once, then run the steps with sudo prompting in this terminal (nvHive never sees the password); ends with the receipt and vault audit paths."""
+    pb = _playbooks()
+    plan = _playbook_plan_or_exit(pb, playbook_id, home_dir)
+    _print_playbook_plan(plan)
+    # The runner owns the question (counts, manual-only wording) and asks it once through
+    # typer.confirm; -y skips it. A declined question runs nothing.
+    result = pb.run_in_terminal(
+        plan["id"], assume_yes=yes, echo=True, home_dir=home_dir, emit=_print_playbook_event,
+        confirm=lambda question: typer.confirm(question, default=False),
+    )
+    if result.get("canceled"):
+        console.print("Cancelled.")
+        raise typer.Exit(1)
+    manual = list(result.get("manual_steps") or [])
+    if manual:
+        console.print("\n  [bold]Left to you[/bold]")
+        for text in manual:
+            console.print(f"    - {escape(str(text))}", highlight=False)
+    receipt = result.get("receipt_path")
+    audit = result.get("audit") or {}
+    console.print(f"\n  Receipt: {escape(str(receipt))}" if receipt else "\n  Receipt: none (no host command ran)", highlight=False)
+    if audit.get("saved") and audit.get("path"):
+        console.print(f"  Audit:   {escape(str(audit['path']))}", highlight=False)
+    elif audit.get("error"):
+        console.print(f"  Audit:   not written ({escape(str(audit['error']))})", highlight=False)
+    else:
+        console.print("  Audit:   none (nothing touched the host)")
+    if not result.get("ok"):
+        if not result.get("events"):  # refused before the first step: nothing was streamed, so say why here
+            err_console.print(f"[red]{escape(str(result.get('error') or 'playbook run failed'))}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command(rich_help_panel="Infrastructure")

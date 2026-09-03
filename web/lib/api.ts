@@ -1,9 +1,22 @@
-// The one runtime import from the pure card-helper module: the cut applied to
-// history tool outcomes. privileged.ts itself imports only types from here, so
-// there is no runtime cycle and it still runs under plain `node --test`.
-import { WIZARD_TOOL_OUTCOME_CHARS } from './privileged';
+// The runtime imports from the pure card-helper module: the cut applied to
+// history tool outcomes, and the two readers `listPlaybooks` needs.
+// privileged.ts itself imports only types from here, so there is no runtime
+// cycle and it still runs under plain `node --test`.
+import {
+  WIZARD_TOOL_OUTCOME_CHARS,
+  PLAYBOOK_LIST_TOOL,
+  applyPlaybookEvent,
+  initialPlaybookRun,
+  playbookCatalogue,
+  settlePlaybookRun,
+  unwrapToolResult,
+  type PlaybookRunState,
+} from './privileged';
 import type {
   ApiEnvelope,
+  PlaybookCatalogueEntry,
+  PlaybookRunEvent,
+  PlaybookRunStart,
   QueryRequest,
   CouncilRequest,
   CompareRequest,
@@ -1819,10 +1832,35 @@ export interface WizardToolPlan {
   error?: string;
 }
 
+/**
+ * A Spark playbook's plan (`playbooks.plan_dict()`): `Plan.to_dict()` plus the
+ * playbook id, the manual steps (also present in `notes` as `MANUAL:` lines),
+ * the verify commands, the estimates and whether the server already expects
+ * sudo to want a password here. `playbook_plan` returns it and it rides on
+ * `playbook_install`'s red card as `plan`. Displayed verbatim.
+ */
+export interface PlaybookPlan extends WizardToolPlan {
+  id?: string;
+  manual_steps?: string[];
+  verify?: string[];
+  estimates?: { minutes?: number | null; disk_gb?: number | null; [key: string]: unknown };
+  /** Platform facts say sudo is not passwordless: the run will stop at the
+   * first sudo step with the `nvh playbook install <id>` hand-off. */
+  needs_terminal_expected?: boolean;
+}
+
 export interface WizardToolExecuteResult {
   ok: boolean;
+  /** The handler's answer. A confirmed `playbook_install` puts
+   * `{ok, job_id, playbook, steps_total}` here: the run continues as a
+   * `playbook-run` job the card streams (`watchPlaybookRun`). */
   result?: Record<string, unknown>;
   error?: string;
+  /** Flattened copies of a playbook run start (`unwrapToolResult` merges the
+   * nested result into the card's detail). Absent on every other tool. */
+  job_id?: string;
+  playbook?: string;
+  steps_total?: number;
   needs_confirmation?: boolean;
   tool?: WizardToolSchema | string;
   arguments?: Record<string, unknown>;
@@ -1882,6 +1920,76 @@ export async function executeWizardTool(
     arguments: args.arguments ?? {},
     confirmed: args.confirmed ?? false,
     ...(args.approvalToken ? { approval_token: args.approvalToken } : {}),
+  });
+}
+
+// ─── Spark playbooks ─────────────────────────────────────────────────────────
+
+/**
+ * The playbook catalogue. There is no `/v1/playbooks` route on purpose: the
+ * catalogue is the auto-class Wizard tool `playbook_list`, executed through
+ * the one enforcement point (`/v1/wizard/tools/execute`), so the setup page
+ * and the chat see the same rows (receipt status included). Read-only; an
+ * auto tool runs without confirmation. Throws when the registry refused.
+ */
+export async function listPlaybooks(): Promise<PlaybookCatalogueEntry[]> {
+  const envelope = await executeWizardTool(PLAYBOOK_LIST_TOOL);
+  if (!envelope.ok) {
+    throw new Error(envelope.error ?? `${PLAYBOOK_LIST_TOOL} refused`);
+  }
+  return playbookCatalogue(unwrapToolResult(envelope));
+}
+
+/**
+ * Follow a `playbook-run` job (the `job_id` a confirmed `playbook_install`
+ * answered). Same poller as every other install job (`watchInstallJob`):
+ * `/v1/jobs/<id>` + `/v1/jobs/<id>/events`, 1.2 s cadence, stops on a
+ * terminal status. Events arrive flattened (`payload` over event / status /
+ * message) as `PlaybookRunEvent`; fold them with `applyPlaybookEvent`.
+ * Returns the stop function.
+ */
+export function watchPlaybookRun(
+  jobId: string,
+  callbacks: {
+    onEvent?: (event: PlaybookRunEvent) => void;
+    onStatus?: (job: InstallJob) => void;
+    onComplete?: (event: PlaybookRunEvent, job: InstallJob) => void;
+    onError?: (error: string, job?: InstallJob) => void;
+  },
+): () => void {
+  return watchInstallJob<PlaybookRunEvent>(jobId, callbacks);
+}
+
+/**
+ * Follow a `playbook-run` job into a folded `PlaybookRunState` — the glue the
+ * chat card and the Setup page's playbook cards share. `onRun` receives the
+ * initial run at once and every folded state after it; `onFinish` fires once,
+ * after the last `onRun`, when the run has settled (an event settled it, or the
+ * job reached a terminal status without one — `settlePlaybookRun`). Returns the
+ * poller's stop function.
+ */
+export function followPlaybookJob(
+  start: PlaybookRunStart,
+  fallbackId: string,
+  callbacks: {
+    onRun: (run: PlaybookRunState) => void;
+    onFinish: (run: PlaybookRunState) => void;
+  },
+): () => void {
+  let latest = initialPlaybookRun(start, fallbackId);
+  callbacks.onRun(latest);
+  const finish = (run: PlaybookRunState) => {
+    latest = run;
+    callbacks.onRun(run);
+    if (run.outcome) callbacks.onFinish(run);
+  };
+  return watchPlaybookRun(start.job_id, {
+    onEvent: event => {
+      latest = applyPlaybookEvent(latest, event);
+      callbacks.onRun(latest);
+    },
+    onComplete: (_event, job) => finish(settlePlaybookRun(latest, job.status, job.message)),
+    onError: (message, job) => finish(settlePlaybookRun(latest, job?.status ?? 'failed', message)),
   });
 }
 

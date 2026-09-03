@@ -73,6 +73,36 @@ class TestCommandBlocklist:
             check_command(cmd)
 
     @pytest.mark.parametrize("cmd", [
+        "nvh playbook install ollama",
+        "nvh playbook install tailscale -y",
+        "cd /tmp && nvh playbook install open-webui --yes",
+        "nvh -v playbook install ollama",
+        "nvh.exe playbook install ollama",
+        "python -m nvh.cli.main playbook install ollama",
+        "python3 -m nvh.cli.main playbook install vllm -y",
+        ".venv/bin/python -m nvh.cli.main playbook install ollama",
+        "python nvh/cli/main.py playbook install ollama",
+        "python nvh\\cli\\main.py playbook install ollama",
+    ])
+    def test_blocks_privileged_playbook_install(self, cmd):
+        """The sandbox shell must not reach the CLI path that runs playbook steps with interactive sudo."""
+        with pytest.raises(GuardrailError, match="nvh playbook install"):
+            check_command(cmd)
+
+    @pytest.mark.parametrize("cmd", [
+        "nvh playbook list",
+        "nvh playbook plan ollama",
+        "nvh playbook plan install",  # an id, not the subcommand
+        "nvh playbook --help",
+        "python -m nvh.cli.main playbook plan tailscale",
+        "python -m nvh.cli.main playbook list",
+        "nvh --help",
+        "nvh doctor",
+    ])
+    def test_allows_playbook_list_and_plan(self, cmd):
+        check_command(cmd)
+
+    @pytest.mark.parametrize("cmd", [
         "ls -la",
         "cat README.md",
         "python -m pytest tests/",

@@ -89,6 +89,17 @@ _BLOCKED_COMMANDS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'\bdd\s+if=/dev/zero'), "dd from /dev/zero (disk fill)"),
     (re.compile(r'\byes\s*\|'), "yes pipe (infinite output)"),
     (re.compile(r'\b:bomb:\b|\bfork\s*bomb\b', re.IGNORECASE), "fork bomb reference"),
+
+    # nvHive's own privileged host path. `nvh playbook install` runs a
+    # playbook's steps with interactive sudo in the caller's terminal, so from
+    # the agent sandbox it would be a privilege escalation past the Wizard's
+    # red card. `nvh playbook list` and `plan` run nothing and stay allowed.
+    # Spellings: the console script (`nvh`, `nvh.exe`), `python -m
+    # nvh.cli.main`, `python nvh/cli/main.py`; flags may sit between the words.
+    (re.compile(
+        r'\bnvh(?:\.exe|\.cli\.main|[/\\]cli[/\\]main\.py)?(?:\s+-\S*)*\s+playbook(?:\s+-\S*)*\s+install\b',
+        re.IGNORECASE,
+    ), "nvh playbook install (privileged host install; run it yourself in a terminal)"),
 ]
 
 

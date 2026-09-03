@@ -60,6 +60,61 @@
   verbatim, never ask for a password. `docs/CONFIGURATION.md` documents
   `NVH_ALLOW_PRIVILEGED`.
 
+- **Spark playbooks** (`nvh/integrations/installs/playbooks.py`): the
+  first tier of NVIDIA's official DGX Spark playbooks — `ollama`,
+  `cli-coding-agent`, `open-webui`, `comfy-ui`, `dgx-dashboard`, `vscode`,
+  `tailscale`, `vllm`, `llama-cpp`, `lm-studio`, `openclaw`, `nemoclaw` (ids
+  are the upstream folder names) — as approved, audited runs. Steps compile
+  into the system-settings plan, so the deny list, the sudo matrix, closed
+  stdin, timeouts and redaction are inherited; a test renders every step,
+  check and verify command and asserts none is denied. Policies baked in:
+  pipe-to-shell installers are downloaded under `NVH_HOME` and run from the
+  file, shown verbatim and flagged "pipe-to-shell: unpinned" (`comfy-ui`
+  verifies the README's sha256); Docker playbooks start with a
+  `usermod -aG docker` step and halt for the re-login (never `newgrp`);
+  browser logins, TUIs and foreground servers stay manual; undo is preview
+  text; the DGX Dashboard "Update Now" path is never automated; `HF_TOKEN` /
+  `NGC_API_KEY` are declared, never prompted for. `sglang`, `nim-llm`,
+  `nemotron`, `unsloth`, `connect-two-sparks` and `connect-to-your-spark` are
+  listed as deferred with reasons. Wizard tools `playbook_list` and
+  `playbook_plan` (auto) and `playbook_install` (privileged: red card with the
+  compiled plan, then a `playbook-run` job that streams each step); receipts
+  of kind `playbook` with an honest `no_root`; every run that touched the
+  host is recorded under the vault's `Decisions/`. When sudo needs a
+  password the hand-off is one command: `nvh playbook install <id>`.
+- **`nvh playbook list | plan <id> | install <id> [-y]`** brings the same
+  playbooks to the CLI: `list` is a table (sudo steps, manual steps,
+  estimated time, installed from the receipt) plus the deferred guides with
+  their reason; `plan` prints every command tagged sudo / user / manual with
+  its skip check, then verify and undo (preview only); `install` prints the
+  plan the Wizard card shows, asks once, runs the steps with `sudo`
+  prompting in your own terminal (nvHive never sees the password), streams
+  each step and ends with the receipt path and the audit path. The CLI path
+  is not gated by `NVH_ALLOW_PRIVILEGED` (documented): in a terminal, sudo
+  asks you directly. `docs/COMMANDS.md` regenerated; GETTING_STARTED gains a
+  "Spark playbooks" section.
+- **`app-installer` Agent Library profile** (Ops; the library is now 106
+  profiles): the playbooks' guide — lists what ships, prefers a rootless
+  pack when one exists, shows the compiled plan (sudo steps, manual steps,
+  time, disk, undo) and installs one app at a time behind the red card. The
+  Setup Concierge gains the read-only `playbook_list` / `playbook_plan` so
+  the first-run tour can propose an install and hand the run to the App
+  Installer. Concierge routing: "install ollama on my spark", "set up open
+  webui on this machine", "which playbooks can I install?" route to the App
+  Installer; a bare "install ollama" keeps its old route; models, Python
+  packaging, faults, settings and the smart home keep their owners.
+- **WebUI: Spark playbooks.** The red approval card follows a confirmed
+  `playbook_install` into its job and shows a live step log (step, command,
+  exit code, throttled log lines) ending in Done, "Stopped — your turn"
+  (the docker-group re-login halt), "Stopped: needs a terminal — run:
+  `nvh playbook install <id>`" (copyable), or "Failed at step N". The setup
+  page's AI Studio step gains a "Spark playbooks" section below the pack
+  grid: catalogue cards (sudo and manual-step chips, estimated time and
+  disk, rootless-alternative link, INSTALLED from the receipt) with Plan →
+  red approval → Approve and run streaming the same job. Nothing runs
+  without a click; `NVH_ALLOW_PRIVILEGED=0` hides the run button. Shared
+  `PlaybookRunLog` / `PlanDetails` components; 32 new node tests.
+
 ### Security
 - **The red-card click is verifiable server-side.** Every surfaced
   privileged call carries an HMAC approval token (15 minutes, single use,
@@ -84,6 +139,23 @@
   tool-result window fit keeps the hand-off fields; `TOOL_RESULT` text is
   redacted before it is cut, and `redact_secrets` now catches dash-separated
   keys such as `sk-ant-…`.
+- **Playbooks after review:** a cancelled `playbook-run` job still writes its
+  receipt and vault note (naming the command that was in flight); the
+  `tailscale` undo and warning cover the SSH server it may enable;
+  `open-webui` and `vllm` carry LAN-exposure warnings (they publish
+  unauthenticated services on every interface); VS Code is one
+  `apt-get install -y <deb>` step flagged "unpinned download"; `bash -c`
+  steps take paths as positional parameters so a quote in `NVH_HOME` cannot
+  break or inject; `repair_plan` / `uninstall_plan` derive
+  `safe_to_run_without_root` from the recorded `requires_sudo` and the undo
+  lines, not only from `no_root`.
+- **One host-command runner.** `nvh playbook install` runs its steps through
+  `system_settings.run_host_command(interactive=True)` — plain `sudo`
+  prompting on the terminal, stdin inherited, output echoed — instead of a
+  second copy of the runner, so the deny list, the sudo matrix and the
+  in-band error shapes are shared; an account that cannot elevate is
+  refused before anything spawns. The agent sandbox's shell guardrails
+  block `nvh playbook install` (list and plan stay allowed).
 
 ## [0.43.0] - 2026-09-03
 
