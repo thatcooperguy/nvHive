@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Council correctness
+- MCP and OpenAI/Anthropic-compatible throwdown requests now share an actual
+  two-round analysis/critique workflow with a final answer. Both rounds and
+  their reported costs are retained; failed quorum stops further stages.
+- Majority voting now counts matching answers, labels ties and pluralities,
+  and uses weights only to break ties. Streaming honors the selected strategy.
+- Council accounting includes agreement calls, intermediate syntheses and
+  reported partial-stream usage; total latency includes synthesis and retries.
+  Compatible API usage and the budget ledger include this auxiliary work.
+
 ### Added
 - **Privileged Wizard tools (Spark concierge Phase 2a).** A third safety
   class, `privileged`, for changes to the machine nvHive runs on. An

@@ -1035,6 +1035,17 @@ class Engine:
             privacy: When ``True``, skip all query logging and conversation
                      persistence so no data is stored.
         """
+        if strategy == "throwdown":
+            from nvh.core.throwdown import run_throwdown
+
+            if not synthesize:
+                raise ValueError("Throwdown requires synthesis; use council for independent answers.")
+            return await run_throwdown(
+                self, prompt, members=members, weights=weights,
+                system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens,
+                conversation_id=conversation_id, auto_agents=auto_agents,
+                agent_preset=agent_preset, num_agents=num_agents, privacy=privacy,
+            )
         await self.initialize()
         await self._check_budget()
 
@@ -1067,17 +1078,12 @@ class Engine:
             # Skip all logging and persistence in privacy mode
             return result
 
-        # Log each member response
-        for pname, resp in result.member_responses.items():
+        # Include agreement calls and intermediate work in the budget ledger.
+        for resp in result.all_responses:
             await self._log_query(resp, "council", conversation_id=conversation_id)
 
-        if result.synthesis:
-            await self._log_query(result.synthesis, "council", conversation_id=conversation_id)
-
         # Emit webhook event
-        total_tokens = sum(
-            r.usage.total_tokens for r in result.member_responses.values()
-        )
+        total_tokens = result.total_usage.total_tokens
         total_cost = float(result.total_cost_usd or 0)
         await self.webhooks.emit(
             WebhookEvent.COUNCIL_COMPLETE,

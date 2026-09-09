@@ -530,6 +530,11 @@ async def council_stream_generator(
         "created": now,
         "model": effective_model,
         "choices": _sse_choices({}, finish_reason="stop"),
+        "usage": {
+            "prompt_tokens": result.total_usage.input_tokens,
+            "completion_tokens": result.total_usage.output_tokens,
+            "total_tokens": result.total_usage.total_tokens,
+        },
     }
     yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"
@@ -598,6 +603,11 @@ async def throwdown_stream_generator(
         "created": now,
         "model": "throwdown",
         "choices": _sse_choices({}, finish_reason="stop"),
+        "usage": {
+            "prompt_tokens": result.total_usage.input_tokens,
+            "completion_tokens": result.total_usage.output_tokens,
+            "total_tokens": result.total_usage.total_tokens,
+        },
     }
     yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"

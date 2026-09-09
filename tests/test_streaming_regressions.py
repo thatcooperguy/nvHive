@@ -151,7 +151,7 @@ def _council_with(
         },
         council=CouncilModeConfig(
             quorum=1,
-            strategy="majority_vote",
+            strategy="weighted_consensus",
             timeout=10,
             default_weights={name: 1.0 for name in providers},
             synthesis_provider=synthesis_provider or "",

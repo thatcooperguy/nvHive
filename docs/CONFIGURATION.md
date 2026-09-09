@@ -314,6 +314,22 @@ Strategies: `weighted_consensus` (default; `--weights groq=0.5,google=0.5`),
 `--no-synthesize` shows the raw responses. `product_resilience` is the
 skeptical panel for "what breaks for a beginner on a no-root GPU desktop".
 
+`majority_vote` counts answers that match after normalizing letter case and
+whitespace; it does not infer that differently worded answers mean the same
+thing. More than half the responses must match to be labelled a majority.
+Otherwise the result says plurality or tie; configured weights break ties.
+The same rule applies to streaming councils. For long, differently worded
+analyses, use `weighted_consensus` or `best_of`.
+
+The MCP `throwdown` tool and both compatible APIs run two council rounds:
+independent analysis, then critique with the first round's answers in context,
+followed by a final answer using both rounds. A failed quorum stops the next
+stage. Each completed round is recorded before the next budget check.
+Council totals include reported agreement-check, synthesis and intermediate
+round usage; latency runs through the final answer, including retries.
+Failed streams retain any reported usage, but a provider that fails before
+reporting usage may still incur a charge that nvHive cannot measure.
+
 ## Tools
 
 Tools are functions the model may call while answering. They are opt-in:
