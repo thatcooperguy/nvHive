@@ -48,6 +48,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,14 @@ REQUIRE_DOCKER_ENV = "NVH_SANDBOX_REQUIRE_DOCKER"
 # NVH_SANDBOX was the pre-0.42 docker_sandbox opt-in; honoured as a
 # spelling of "require isolation" for one release.
 _REQUIRE_DOCKER_ENV_VARS = (REQUIRE_DOCKER_ENV, "NVH_SANDBOX")
+
+
+class _SpawnOptions(TypedDict):
+    stdin: int
+    stdout: int
+    stderr: int
+    cwd: str | None
+    env: NotRequired[dict[str, str]]
 
 
 def require_docker_source() -> str | None:
@@ -241,7 +250,7 @@ class SandboxExecutor:
         off — the same for Docker's CLI and the host fallback.
         """
         start = time.monotonic()
-        spawn_kwargs: dict[str, object] = {
+        spawn_kwargs: _SpawnOptions = {
             "stdin": asyncio.subprocess.DEVNULL,
             "stdout": asyncio.subprocess.PIPE,
             "stderr": asyncio.subprocess.PIPE,
