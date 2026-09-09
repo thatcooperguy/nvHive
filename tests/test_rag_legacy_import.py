@@ -50,6 +50,20 @@ def test_rebuild_text_undoes_the_word_overlap(tmp_path: Path) -> None:
     assert _rebuild_text(tmp_path / "legacy" / "chunks", "bbbb").split() == _WORDS
 
 
+def test_default_legacy_dir_is_the_migrated_copy_under_nvh_home(tmp_path: Path, monkeypatch) -> None:
+    """0.44: the store is read from ``$NVH_HOME/knowledge`` (the legacy-home
+    migration's copy of ``~/.hive/knowledge``), never from $HOME."""
+    from nvh.integrations.rag.legacy import legacy_knowledge_dir
+
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    monkeypatch.delenv("NVHIVE_HOME", raising=False)
+    assert legacy_knowledge_dir() == tmp_path / "nvh" / "knowledge"
+    assert legacy_knowledge_dir(tmp_path / "other") == tmp_path / "other" / "knowledge"
+    status = legacy_knowledge_status(home_dir=tmp_path / "nvh")
+    assert status["found"] is False
+    assert status["path"] == str(tmp_path / "nvh" / "knowledge")
+
+
 def test_status_reports_missing_store(tmp_path: Path) -> None:
     status = legacy_knowledge_status(home_dir=tmp_path / "home", legacy_dir=tmp_path / "none")
     assert status["found"] is False

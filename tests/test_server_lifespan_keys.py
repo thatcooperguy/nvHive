@@ -44,7 +44,14 @@ class _StubEngine:
 
 @pytest.fixture()
 def config_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Throwaway config dir; records every keyring lookup the lifespan makes."""
+    """Throwaway config dir; records every keyring lookup the lifespan makes.
+
+    Hermetic on two counts: tests/conftest.py turns the pre-0.44 home migration
+    off, and ``Path.home`` points at an empty directory, so the lifespan's key
+    loading can never read the developer's real ``~/.hive/.env`` into this
+    process (it used to, exporting real API keys into ``os.environ``).
+    """
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "os-home")
     monkeypatch.setenv("HIVE_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh-home"))
     monkeypatch.setenv("NVH_BOOT_PREFLIGHT", "0")

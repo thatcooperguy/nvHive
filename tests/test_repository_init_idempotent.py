@@ -23,14 +23,94 @@ async def nvh_home(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("HIVE_DATA_DIR", raising=False)
     monkeypatch.delenv("NVH_STATE", raising=False)
     monkeypatch.delenv("NVHIVE_HOME", raising=False)
-    # A real ~/.council/council.db on the dev box would be auto-copied into
-    # the wiped path by init_db's legacy migration, breaking hermeticity
-    monkeypatch.setattr(
-        repo, "_legacy_db_path", lambda: tmp_path / "no-legacy" / "council.db"
-    )
+    # tests/conftest.py turns the legacy migration off; a fake OS home keeps
+    # the dev box's real ~/.council out of the picture even if it were on.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "no-home")
     await repo.close_db()
     yield tmp_path
     await repo.close_db()
+
+
+def test_default_db_path_is_the_layout_state_dir(tmp_path: Path, monkeypatch) -> None:
+    """0.44: ``_default_db_path`` is ``storage_layout().state_dir / nvhive.db``;
+    NVH_STATE relocates it and the pre-0.44 ``HIVE_DATA_DIR`` is ignored."""
+    for var in ("HIVE_DATA_DIR", "NVH_STATE", "NVHIVE_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvhive"))
+    assert repo._default_db_path() == tmp_path / "nvhive" / "state" / "nvhive.db"
+
+    monkeypatch.setenv("NVH_STATE", str(tmp_path / "state"))
+    assert repo._default_db_path() == tmp_path / "state" / "nvhive.db"
+
+    monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path / "data"))
+    assert repo._default_db_path() == tmp_path / "state" / "nvhive.db"
+
+
+def test_repository_no_longer_spells_the_legacy_root() -> None:
+    """The ``~/.council`` import belongs to migrate_legacy.py alone (D7): the
+    repository has no legacy path of its own and no second copy of the move."""
+    source = Path(repo.__file__).read_text(encoding="utf-8")
+    assert "_legacy_db_path" not in source and "council" not in source.lower().replace("councilconfig", "")
+    assert "migrate_legacy_homes" in source
+
+
+async def test_init_db_imports_the_legacy_council_db_through_the_one_migration(tmp_path: Path, monkeypatch) -> None:
+    """The first default-path ``init_db()`` with no database runs the one-shot
+    migration, which brings ``~/.council/council.db`` in and writes the marker.
+    Once the marker exists a database the user deletes is created fresh —
+    the stale legacy file is never re-read (no silent resurrection)."""
+    import json
+    import sqlite3
+
+    from nvh.integrations.workspace import migrate_legacy as ml
+
+    for var in ("HIVE_DATA_DIR", "NVH_STATE", "NVHIVE_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvhive"))
+    monkeypatch.setenv(ml.LEGACY_MIGRATION_ENV, "1")
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    legacy = home / ".council" / "council.db"
+    legacy.parent.mkdir(parents=True)
+    conn = sqlite3.connect(legacy)
+    try:
+        conn.execute("CREATE TABLE legacy_marker (x INTEGER)")
+        conn.execute("INSERT INTO legacy_marker VALUES (1)")
+        conn.commit()
+    finally:
+        conn.close()
+    stamp = legacy.stat().st_mtime_ns
+
+    def _tables(path: Path) -> set[str]:
+        # An explicit close: ``with sqlite3.connect()`` only commits, and an
+        # open handle blocks the unlink below on Windows.
+        probe = sqlite3.connect(path)
+        try:
+            return {row[0] for row in probe.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            probe.close()
+
+    await repo.close_db()
+    try:
+        await repo.init_db()
+        db_path = repo._db_path
+        assert db_path == tmp_path / "nvhive" / "state" / "nvhive.db"
+        assert "legacy_marker" in _tables(db_path)
+    finally:
+        await repo.close_db()
+    assert legacy.stat().st_mtime_ns == stamp  # the legacy file is read, never written
+    marker = json.loads((tmp_path / "nvhive" / "state" / ml.MARKER_NAME).read_text(encoding="utf-8"))
+    assert "state database" in {entry["label"] for entry in marker["moved"]}
+
+    # The user starts clean: the next init creates an empty database.
+    for sidecar in db_path.parent.glob("nvhive.db*"):
+        sidecar.unlink()
+    try:
+        await repo.init_db()
+        tables = _tables(db_path)
+        assert "conversations" in tables and "legacy_marker" not in tables
+    finally:
+        await repo.close_db()
 
 
 async def test_repeat_init_same_path_reuses_engine(nvh_home):

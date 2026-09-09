@@ -83,14 +83,10 @@ def _hermetic(monkeypatch, tmp_path: Path) -> None:
     async def never_spawn(self, *args, **kwargs):
         pytest.fail(f"the sandbox executor must not spawn a process here: {args} {kwargs}")
 
-    async def never_spawn_shell(*args, **kwargs):
-        pytest.fail(f"the bridge must not spawn a shell here: {args} {kwargs}")
-
     async def no_probe_fixture(self):
         pytest.fail("a test that reaches the Docker probe must request no_docker or with_docker")
 
     monkeypatch.setattr(SandboxExecutor, "_run_process", never_spawn)
-    monkeypatch.setattr(sb, "_spawn_shell", never_spawn_shell)
     monkeypatch.setattr(SandboxExecutor, "_check_docker", no_probe_fixture)
 
 
@@ -150,8 +146,6 @@ def runs(monkeypatch) -> FakeRuns:
 
     monkeypatch.setattr(SandboxExecutor, "_run_shell_docker", _shell("docker"))
     monkeypatch.setattr(SandboxExecutor, "_run_shell_subprocess", _shell("subprocess"))
-    # The bridge's executor overrides the host fallback; fake that one too.
-    monkeypatch.setattr(sb._WizardShellExecutor, "_run_shell_subprocess", _shell("subprocess"))
     monkeypatch.setattr(SandboxExecutor, "_execute_docker", _code("docker"))
     monkeypatch.setattr(SandboxExecutor, "_execute_subprocess", _code("subprocess"))
     return fake
@@ -355,10 +349,10 @@ async def test_confirmed_shell_runs_through_the_executor_and_is_audited(no_docke
     assert "no network/memory/user isolation" in result["note"] and "stdin closed" in result["note"]
     assert "error" not in result
     # Exactly as the core shell tool runs: mount_dir = the workspace, the default timeout —
-    # through the bridge's executor, whose host fallback closes stdin and scrubs the env.
+    # through the one SandboxExecutor, whose spawn closes stdin and scrubs the env (0.44).
     assert runs.shell == [{
         "mode": "subprocess", "command": "make test", "mount": _workspace(tmp_path), "timeout": 60,
-        "require_docker": False, "executor": "_WizardShellExecutor",
+        "require_docker": False, "executor": "SandboxExecutor",
     }]
     assert _workspace(tmp_path).is_dir()  # created right before the run
     assert out["audit"]["saved"] is True and out["audit"]["category"] == "Decisions"
@@ -382,7 +376,7 @@ async def test_confirmed_shell_under_docker_mounts_cwd_uses_the_timeout_and_requ
     # A Docker-approved run can never fall back: the executor is told so.
     assert runs.shell == [{
         "mode": "docker", "command": "pytest -q", "mount": sub, "timeout": 120, "require_docker": True,
-        "executor": "_WizardShellExecutor",
+        "executor": "SandboxExecutor",
     }]
     assert out["audit"]["saved"] is True
     # An absolute cwd inside the workspace is fine too, and a missing one is created.
@@ -672,8 +666,12 @@ async def test_shell_kill_switch_refuses_on_both_paths_and_probes_nothing(runs: 
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# The host fallback: stdin closed, secrets out of the environment
+# The host fallback: stdin closed, secrets out of the environment — the
+# executor's own behaviour since 0.44 (SandboxExecutor._run_process), which
+# the bridge shares with the core ``shell`` tool instead of overriding.
 # ───────────────────────────────────────────────────────────────────────────
+
+_REAL_RUN_PROCESS = SandboxExecutor._run_process
 
 
 def test_scrubbed_environment_drops_key_and_token_shaped_names_only() -> None:
@@ -709,7 +707,12 @@ class _FakeProc:
 
 
 @pytest.mark.asyncio
-async def test_run_host_shell_closes_stdin_and_scrubs_the_environment(monkeypatch, tmp_path: Path) -> None:
+async def test_executor_shell_spawn_closes_stdin_and_scrubs_the_environment(monkeypatch, tmp_path: Path) -> None:
+    """The executor's host spawn — what the bridge's ``shell`` runs through — never
+    inherits the server's stdin or its key/token-shaped variables."""
+    import nvh.sandbox.executor as executor_mod
+    from nvh.sandbox.executor import SandboxConfig
+
     monkeypatch.setenv("HIVE_API_KEY", "hive-secret-value")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-secret")
     monkeypatch.setenv("NVH_TEST_PLAIN", "kept")
@@ -719,8 +722,10 @@ async def test_run_host_shell_closes_stdin_and_scrubs_the_environment(monkeypatc
         spawned.append({"command": command, **kwargs})
         return _FakeProc(stdout=b"hello\n", stderr=b"warn", returncode=3)
 
-    monkeypatch.setattr(sb, "_spawn_shell", fake_spawn)
-    result = await sb.run_host_shell("echo $HIVE_API_KEY", cwd=str(tmp_path), timeout_s=7, max_output_bytes=3)
+    monkeypatch.setattr(SandboxExecutor, "_run_process", _REAL_RUN_PROCESS)
+    monkeypatch.setattr(executor_mod.asyncio, "create_subprocess_shell", fake_spawn)
+    executor = SandboxExecutor(SandboxConfig(mount_dir=tmp_path, timeout_seconds=7, max_output_bytes=3))
+    result = await executor._run_shell_subprocess("echo $HIVE_API_KEY", tmp_path)
     assert len(spawned) == 1
     call = spawned[0]
     assert call["command"] == "echo $HIVE_API_KEY" and call["cwd"] == str(tmp_path)
@@ -731,9 +736,29 @@ async def test_run_host_shell_closes_stdin_and_scrubs_the_environment(monkeypatc
     # The executor's contract: output cap, exit code, no exception.
     assert result.stdout == "hel" and result.stderr == "war" and result.exit_code == 3 and result.isolation == ""
 
+    # exec-style spawns (run_code's interpreter, the docker CLI) get the same treatment.
+    execs: list[dict[str, Any]] = []
+
+    async def fake_exec(*argv, **kwargs):
+        execs.append({"argv": list(argv), **kwargs})
+        return _FakeProc()
+
+    monkeypatch.setattr(executor_mod.asyncio, "create_subprocess_exec", fake_exec)
+    await executor._run_process(["docker", "info"])
+    assert execs[0]["argv"] == ["docker", "info"] and execs[0]["stdin"] == asyncio.subprocess.DEVNULL
+    assert "HIVE_API_KEY" not in execs[0]["env"]
+
+    # Opting out (SandboxConfig.scrub_environment=False) inherits the environment; stdin stays closed.
+    executor = SandboxExecutor(SandboxConfig(mount_dir=tmp_path, scrub_environment=False))
+    await executor._run_shell_subprocess("env", tmp_path)
+    assert "env" not in spawned[-1] and spawned[-1]["stdin"] == asyncio.subprocess.DEVNULL
+
 
 @pytest.mark.asyncio
-async def test_run_host_shell_times_out_and_kills_like_the_executor(monkeypatch) -> None:
+async def test_executor_shell_spawn_times_out_kills_and_reports_spawn_errors(monkeypatch, tmp_path: Path) -> None:
+    import nvh.sandbox.executor as executor_mod
+    from nvh.sandbox.executor import SandboxConfig
+
     procs: list[_FakeProc] = []
 
     async def fake_spawn(command, **kwargs):
@@ -741,36 +766,29 @@ async def test_run_host_shell_times_out_and_kills_like_the_executor(monkeypatch)
         procs.append(proc)
         return proc
 
-    monkeypatch.setattr(sb, "_spawn_shell", fake_spawn)
-    result = await sb.run_host_shell("sleep 99", cwd=None, timeout_s=0.05, max_output_bytes=1000)
+    monkeypatch.setattr(SandboxExecutor, "_run_process", _REAL_RUN_PROCESS)
+    monkeypatch.setattr(executor_mod.asyncio, "create_subprocess_shell", fake_spawn)
+    executor = SandboxExecutor(SandboxConfig(mount_dir=tmp_path, timeout_seconds=0.05))
+    result = await executor._run_shell_subprocess("sleep 99", tmp_path)
     assert result.timed_out is True and result.exit_code == -1 and "Timed out" in result.error
     assert procs[0].killed is True
 
     async def broken_spawn(command, **kwargs):
         raise OSError("no shell")
 
-    monkeypatch.setattr(sb, "_spawn_shell", broken_spawn)
-    result = await sb.run_host_shell("ls", cwd=None, timeout_s=1, max_output_bytes=1000)
+    monkeypatch.setattr(executor_mod.asyncio, "create_subprocess_shell", broken_spawn)
+    result = await executor._run_shell_subprocess("ls", tmp_path)
     assert result.exit_code == -1 and result.error == "no shell" and result.timed_out is False
 
 
-@pytest.mark.asyncio
-async def test_the_bridges_executor_routes_the_host_fallback_through_run_host_shell(monkeypatch, tmp_path: Path) -> None:
-    seen: list[dict[str, Any]] = []
+def test_the_bridge_runs_the_plain_sandbox_executor() -> None:
+    """No bolted-on executor subclass any more: the bridge and the core ``shell``
+    tool share SandboxExecutor, and the bridge re-exports its scrubber."""
+    from nvh.sandbox import executor as executor_mod
 
-    async def fake_run_host_shell(command, *, cwd, timeout_s, max_output_bytes):
-        seen.append({"command": command, "cwd": cwd, "timeout_s": timeout_s, "max_output_bytes": max_output_bytes})
-        return _done()
-
-    monkeypatch.setattr(sb, "run_host_shell", fake_run_host_shell)
-    from nvh.sandbox.executor import SandboxConfig
-
-    executor = sb._WizardShellExecutor(SandboxConfig(mount_dir=tmp_path, timeout_seconds=9))
-    result = await executor._run_shell_subprocess("ls", tmp_path)
-    assert result.exit_code == 0
-    assert seen == [{"command": "ls", "cwd": str(tmp_path), "timeout_s": 9, "max_output_bytes": 1_000_000}]
-    # Docker mode is untouched: it is the base class's.
-    assert sb._WizardShellExecutor._run_shell_docker is SandboxExecutor._run_shell_docker
+    assert not hasattr(sb, "_WizardShellExecutor")
+    assert not hasattr(sb, "run_host_shell")
+    assert sb.scrubbed_environment is executor_mod.scrubbed_environment
 
 
 # ───────────────────────────────────────────────────────────────────────────

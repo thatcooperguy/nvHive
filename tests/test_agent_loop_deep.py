@@ -2,6 +2,11 @@
 
 Covers _extract_tool_calls and run_agent_loop with mocked engine/tools.
 No real API calls, no real filesystem changes.
+
+The protocol is ``TOOL_CALL: {"name": ..., "arguments": {...}}`` (0.44 D3,
+one text protocol shared with the Wizard chat); the pre-0.44 fenced
+```` ```tool_call ```` block and bare ``{"tool": ..., "args": {...}}`` object
+are still *parsed* for one release, never taught.
 """
 
 from __future__ import annotations
@@ -12,10 +17,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from nvh.core.agent_loop import (
+    AGENT_SYSTEM_PROMPT,
     MAX_TOOL_CALLS_PER_TURN,
     AgentResult,
     AgentStep,
+    _calls_from_response,
     _extract_tool_calls,
+    build_agent_system_prompt,
     run_agent_loop,
 )
 from nvh.core.tools import Tool, ToolRegistry, ToolResult
@@ -27,9 +35,30 @@ from nvh.providers.base import CompletionResponse, Usage
 
 
 class TestExtractToolCalls:
-    """Tests for parsing tool_call blocks from LLM output."""
+    """Tests for parsing tool calls from LLM output."""
+
+    def test_extracts_the_one_protocol_line(self):
+        text = 'Let me look.\nTOOL_CALL: {"name": "read_file", "arguments": {"path": "main.py"}}'
+        calls = _extract_tool_calls(text)
+        assert calls == [{"tool": "read_file", "args": {"path": "main.py"}}]
+
+    def test_protocol_line_accepts_the_legacy_key_spelling_and_nested_json(self):
+        text = 'TOOL_CALL: {"tool": "write_file", "args": {"path": "a.py", "content": "x = {\\"k\\": {1: 2}}"}}'
+        calls = _extract_tool_calls(text)
+        assert calls[0]["tool"] == "write_file"
+        assert calls[0]["args"]["path"] == "a.py"
+
+    def test_multiple_protocol_lines(self):
+        text = (
+            'Two reads.\n'
+            'TOOL_CALL: {"name": "read_file", "arguments": {"path": "a.py"}}\n'
+            'TOOL_CALL: {"name": "read_file", "arguments": {"path": "b.py"}}\n'
+        )
+        calls = _extract_tool_calls(text)
+        assert [c["args"]["path"] for c in calls] == ["a.py", "b.py"]
 
     def test_extracts_fenced_tool_call(self):
+        """Deprecated form, still parsed for one release."""
         text = 'Some thought\n```tool_call\n{"tool": "read_file", "args": {"path": "main.py"}}\n```'
         calls = _extract_tool_calls(text)
         assert len(calls) == 1
@@ -48,6 +77,7 @@ class TestExtractToolCalls:
         assert calls[1]["tool"] == "list_files"
 
     def test_extracts_inline_tool_call(self):
+        """Deprecated bare object, still parsed for one release."""
         text = 'I will use {"tool": "search_files", "args": {"query": "TODO"}} to find items.'
         calls = _extract_tool_calls(text)
         assert len(calls) == 1
@@ -58,10 +88,39 @@ class TestExtractToolCalls:
         calls = _extract_tool_calls(text)
         assert len(calls) == 0
 
-    def test_ignores_json_without_tool_key(self):
-        text = '```tool_call\n{"name": "foo", "args": {}}\n```'
+    def test_ignores_json_without_a_tool_name(self):
+        """Neither ``name`` nor ``tool`` — not a call."""
+        text = '```tool_call\n{"args": {}}\n```\nTOOL_CALL: {"arguments": {"x": 1}}'
         calls = _extract_tool_calls(text)
         assert len(calls) == 0
+
+    def test_the_prompt_teaches_only_the_protocol_line(self):
+        """One text protocol: the fenced form is never taught or emitted."""
+        assert "TOOL_CALL:" in AGENT_SYSTEM_PROMPT
+        assert "```tool_call" not in AGENT_SYSTEM_PROMPT
+        prompt = build_agent_system_prompt(ToolRegistry(include_system=False), "ROLE GUIDANCE")
+        assert prompt.startswith("ROLE GUIDANCE")
+        assert "TOOL_CALL:" in prompt and "read_file(" in prompt
+        assert "```tool_call" not in prompt
+
+    def test_native_tool_calls_on_the_response_win_over_text(self):
+        response = CompletionResponse(
+            content='TOOL_CALL: {"name": "list_files", "arguments": {}}',
+            model="m", provider="p", usage=Usage(),
+            tool_calls=[{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "a.py"}'}}],
+        )
+        thought, calls = _calls_from_response(response)
+        assert calls == [{"tool": "read_file", "args": {"path": "a.py"}}]
+        assert "TOOL_CALL" not in thought
+
+    def test_text_protocol_is_the_fallback_without_native_calls(self):
+        response = CompletionResponse(
+            content='Reading.\nTOOL_CALL: {"name": "list_files", "arguments": {"pattern": "*.py"}}',
+            model="m", provider="p", usage=Usage(),
+        )
+        thought, calls = _calls_from_response(response)
+        assert calls == [{"tool": "list_files", "args": {"pattern": "*.py"}}]
+        assert thought == "Reading."
 
     def test_empty_response(self):
         calls = _extract_tool_calls("")
@@ -74,7 +133,7 @@ class TestExtractToolCalls:
 
     def test_respects_max_tool_calls_per_turn(self):
         blocks = "\n".join(
-            f'```tool_call\n{{"tool": "read_file", "args": {{"path": "f{i}.py"}}}}\n```'
+            f'TOOL_CALL: {{"name": "read_file", "arguments": {{"path": "f{i}.py"}}}}'
             for i in range(MAX_TOOL_CALLS_PER_TURN + 5)
         )
         calls = _extract_tool_calls(blocks)
@@ -144,7 +203,7 @@ async def test_loop_completes_on_no_tool_calls():
 async def test_loop_executes_tool_then_finishes():
     """Agent calls a tool, gets result, then gives final answer."""
     engine = _make_mock_engine([
-        '```tool_call\n{"tool": "read_file", "args": {"path": "main.py"}}\n```',
+        'TOOL_CALL: {"name": "read_file", "arguments": {"path": "main.py"}}',
         "The file contains a hello world program.",
     ])
     registry = _make_mock_registry()
@@ -154,6 +213,38 @@ async def test_loop_executes_tool_then_finishes():
     assert result.total_iterations == 2
     assert result.total_tool_calls == 1
     assert len(result.steps) == 2
+    # The click was the caller's (auto tool here): execute() is told so.
+    registry.execute.assert_called_once_with("read_file", {"path": "main.py"}, confirmed=True)
+    # The one prompt reached the engine, with the registry's catalogue.
+    assert engine.query.call_args_list[0].kwargs["system_prompt"].count("TOOL_CALL:") >= 1
+
+
+@pytest.mark.asyncio
+async def test_loop_reads_native_tool_calls_from_the_response():
+    """A provider that took tools= answers tool_calls; the loop runs them like text calls."""
+    engine = AsyncMock()
+    first = MagicMock()
+    first.content = ""
+    first.tool_calls = [{"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "main.py"}'}}]
+    second = MagicMock()
+    second.content = "Done."
+    second.tool_calls = None
+    engine.query = AsyncMock(side_effect=[first, second])
+    registry = _make_mock_registry()
+
+    result = await run_agent_loop("Read main.py", engine, tools=registry)
+
+    assert result.completed is True and result.total_tool_calls == 1
+    assert result.steps[0].tool_calls == [{"tool": "read_file", "args": {"path": "main.py"}}]
+
+
+@pytest.mark.asyncio
+async def test_loop_passes_role_guidance_ahead_of_the_one_prompt():
+    engine = _make_mock_engine(["Final."])
+    await run_agent_loop("x", engine, tools=_make_mock_registry(), system_prompt="BE A CODER")
+    prompt = engine.query.call_args.kwargs["system_prompt"]
+    assert prompt.startswith("BE A CODER")
+    assert "mock tool descriptions" in prompt
 
 
 @pytest.mark.asyncio

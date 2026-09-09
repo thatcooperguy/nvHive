@@ -1,7 +1,7 @@
-"""Deployment environment detection for Council.
+"""Deployment environment detection for nvHive.
 
-Detects whether Council is running locally, in Docker, or on a cloud GPU instance,
-and reports GPU accessibility and root status. Used by `council doctor` and
+Detects whether nvHive is running locally, in Docker, or on a cloud GPU instance,
+and reports GPU accessibility and root status. Used by `nvh status --deep` and
 cloud-aware startup paths.
 """
 

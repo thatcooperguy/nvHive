@@ -1,10 +1,12 @@
-"""One-shot import of the pre-0.42 ``~/.hive/knowledge`` store into the RAG index.
+"""One-shot import of the pre-0.42 knowledge store into the RAG index.
 
 ``nvh/core/knowledge.py`` (deleted in 0.42) kept ``documents.json`` plus
-word-chunked JSON files under ``chunks/``. The original file is re-ingested
-when it still exists; otherwise the text is rebuilt from the chunks so
-nothing the user indexed is lost. A marker under ``$NVH_HOME/rag/`` makes
-the import idempotent — ``nvh status --deep`` stops nagging once it has run.
+word-chunked JSON files under ``chunks/`` in ``~/.hive/knowledge``. Since 0.44
+the legacy-home migration copies that tree to ``$NVH_HOME/knowledge`` once and
+this module reads it from there. The original file is re-ingested when it
+still exists; otherwise the text is rebuilt from the chunks so nothing the
+user indexed is lost. A marker under ``$NVH_HOME/rag/`` makes the import
+idempotent — ``nvh status --deep`` stops nagging once it has run.
 """
 
 from __future__ import annotations
@@ -23,8 +25,11 @@ _CHUNK_WORDS = 1000
 _OVERLAP_WORDS = 200
 
 
-def legacy_knowledge_dir() -> Path:
-    return Path.home() / ".hive" / "knowledge"
+def legacy_knowledge_dir(home_dir: str | Path | None = None) -> Path:
+    """``$NVH_HOME/knowledge`` — the migrated copy of the pre-0.42 store."""
+    from nvh.integrations.workspace.storage import storage_layout
+
+    return storage_layout(home_dir).home / "knowledge"
 
 
 def _marker_path(home_dir: str | Path | None) -> Path:

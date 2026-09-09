@@ -327,6 +327,36 @@ async def test_a_plans_pinned_arguments_become_the_approved_call() -> None:
     assert verify_approval("stub_bare", {"a": 1}, card["approval_token"]) is True
 
 
+def test_wizard_registry_is_the_one_registry_class_and_never_carries_desktop_hands() -> None:
+    """D2: WizardToolRegistry is a thin subclass of the core ToolRegistry; the
+    Wizard instance keeps its curated set and the desktop tools (mouse_*,
+    keyboard_*, scroll) that the agent registry has are never registered."""
+    from nvh.core.tools import Tool, ToolRegistry
+
+    assert issubclass(WizardToolRegistry, ToolRegistry) and issubclass(WizardTool, Tool)
+    reg = default_registry()
+    names = {t.name for t in reg.list_tools()}
+    desktop = {"mouse_move", "mouse_click", "keyboard_type", "keyboard_press", "scroll", "capture_screenshot"}
+    assert not names & desktop
+    agent_names = {t.name for t in ToolRegistry(include_system=True).list_tools()}
+    assert desktop <= agent_names
+    # Every Wizard tool reads its parameters back in the prompt/UI shape, derived from one JSON Schema.
+    for tool in reg.list_tools():
+        assert tool.parameters == tool.wizard_parameters
+        assert tool.input_schema.get("type") == "object"
+        assert tool.as_public_dict()["parameters"] == tool.parameters
+
+
+def test_wizard_tool_declared_as_json_schema_reads_back_the_wizard_shape() -> None:
+    tool = WizardTool(
+        name="j", description="", safety_class="auto",
+        parameters={"type": "object", "properties": {"a": {"type": ["string", "null"], "description": "A"}}, "required": ["a"]},
+        handler=_stub_handler,
+    )
+    assert tool.parameters == {"a": {"type": "string", "description": "A", "required": True}}
+    assert tool.as_openai_tool()["function"]["parameters"]["required"] == ["a"]
+
+
 def test_default_registry_public_dicts_omit_handler() -> None:
     reg = default_registry()
     for tool in reg.list_tools():

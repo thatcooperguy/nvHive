@@ -568,10 +568,31 @@ class TestExtractFileOperations:
 
 
 class TestAgenticModuleSurface:
-    def test_coding_system_prompt_has_tools(self):
-        assert "{tool_descriptions}" in CODING_SYSTEM_PROMPT
+    def test_coding_system_prompt_is_role_guidance_only(self):
+        """One tool-description prompt (agent_loop.AGENT_SYSTEM_PROMPT): the coding
+        prompt no longer repeats the catalogue placeholder or teaches a protocol."""
+        assert "{tool_descriptions}" not in CODING_SYSTEM_PROMPT
+        assert "```tool_call" not in CODING_SYSTEM_PROMPT
+        assert "TOOL_CALL" not in CODING_SYSTEM_PROMPT
         assert "read" in CODING_SYSTEM_PROMPT.lower()
         assert "write" in CODING_SYSTEM_PROMPT.lower()
+
+    @pytest.mark.asyncio
+    async def test_run_coding_agent_passes_its_system_prompt_to_the_loop(self, tmp_path: Path):
+        """The worker's system prompt is the coding guidance + the one tool prompt — not discarded."""
+        engine = _MockEngine()
+        config = AgentConfig(tier=AgentTier.TIER_0, verify_results=False)
+        await run_coding_agent(task="Add a comment", engine=engine, config=config, working_dir=tmp_path)
+        worker_prompt = engine.query_calls[1]["system_prompt"]
+        assert worker_prompt.startswith(CODING_SYSTEM_PROMPT.strip())
+        assert "TOOL_CALL:" in worker_prompt and "read_file(" in worker_prompt
+
+        engine = _MockEngine()
+        await run_coding_agent(
+            task="Add a comment", engine=engine, config=config, working_dir=tmp_path,
+            system_prompt="CUSTOM ROLE",
+        )
+        assert engine.query_calls[1]["system_prompt"].startswith("CUSTOM ROLE")
 
     def test_tier_descriptions_all_tiers(self):
         for tier in AgentTier:

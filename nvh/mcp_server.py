@@ -64,7 +64,7 @@ async def _get_engine():
                 "Troubleshooting:\n"
                 "  1. Check config:  nvh config init\n"
                 "  2. Test providers: nvh status --smoke\n"
-                "  3. Check logs:    ~/.hive/nvhive.log"
+                "  3. Check logs:    $NVH_LOGS/nvhive.log"
             ) from e
     return _engine
 
@@ -248,7 +248,7 @@ def create_server():
         return (
             f"Unexpected error during {operation}: {msg}\n\n"
             "Check that nvHive is configured correctly: nvh status\n"
-            "If this persists, check logs at ~/.hive/nvhive.log"
+            "If this persists, check logs at $NVH_LOGS/nvhive.log"
         )
 
     # ------------------------------------------------------------------

@@ -15,6 +15,14 @@ Two execution modes:
 - Code runs with the same permissions as the nvHive process
 - Use with caution — only run trusted code in this mode
 
+Every process the executor spawns — Docker CLI or fallback — gets stdin
+closed (``DEVNULL``: nothing can prompt or read what an operator types into
+the server's terminal) and, unless ``SandboxConfig.scrub_environment`` is
+off, an environment without the variables whose names look like secrets
+(:func:`scrubbed_environment`: ``*KEY*``, ``*TOKEN*``, ``*SECRET*``,
+``*PASSW*``, ``*CREDENTIAL*``, ``*PRIVATE*``), so the server's API keys
+never reach sandboxed code.
+
 Docker mode is strongly recommended for production deployments.
 The subprocess fallback is intended for development and trusted
 environments where Docker is not available.
@@ -34,14 +42,27 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _TRUTHY = ("1", "true", "yes")
+
+#: Environment variables a sandboxed process must not inherit, by name shape:
+#: ``HIVE_API_KEY``, ``OPENAI_API_KEY``, ``GITHUB_TOKEN``, ``AWS_SECRET_ACCESS_KEY``,
+#: ``HF_TOKEN``, anything ``*PASSWORD*`` / ``*CREDENTIAL*`` / ``*PRIVATE*``.
+_SECRET_ENV_RE = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|PRIVATE", re.IGNORECASE)
+
+
+def scrubbed_environment(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """``environ`` (default ``os.environ``) without the variables whose names look like secrets."""
+    source = os.environ if environ is None else environ
+    return {key: value for key, value in source.items() if not _SECRET_ENV_RE.search(key)}
 REQUIRE_DOCKER_ENV = "NVH_SANDBOX_REQUIRE_DOCKER"
 # NVH_SANDBOX was the pre-0.42 docker_sandbox opt-in; honoured as a
 # spelling of "require isolation" for one release.
@@ -92,6 +113,11 @@ class SandboxConfig:
     # is rootless Linux boxes without Docker. "yes" is accepted so a flag
     # meant to fail closed never silently fails open.
     require_docker: bool = field(default_factory=_require_docker_default)
+    # Spawn every process (Docker CLI and the fallback alike) with the
+    # key/token-shaped variables removed from its environment
+    # (``scrubbed_environment``). Off only for a caller that must hand a
+    # credential to sandboxed code on purpose.
+    scrub_environment: bool = True
 
 class SandboxExecutor:
     """Execute code in a sandboxed environment."""
@@ -208,23 +234,26 @@ class SandboxExecutor:
         cwd: str | None = None,
     ) -> ExecutionResult:
         """Run ``argv`` (exec) or ``shell_command`` (via the system shell)
-        under the configured timeout and output cap."""
+        under the configured timeout and output cap.
+
+        stdin is always ``DEVNULL`` and the environment is
+        :func:`scrubbed_environment` unless ``config.scrub_environment`` is
+        off — the same for Docker's CLI and the host fallback.
+        """
         start = time.monotonic()
+        spawn_kwargs: dict[str, object] = {
+            "stdin": asyncio.subprocess.DEVNULL,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "cwd": cwd,
+        }
+        if self.config.scrub_environment:
+            spawn_kwargs["env"] = scrubbed_environment()
         try:
             if shell_command is not None:
-                proc = await asyncio.create_subprocess_shell(
-                    shell_command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=cwd,
-                )
+                proc = await asyncio.create_subprocess_shell(shell_command, **spawn_kwargs)
             else:
-                proc = await asyncio.create_subprocess_exec(
-                    *(argv or []),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=cwd,
-                )
+                proc = await asyncio.create_subprocess_exec(*(argv or []), **spawn_kwargs)
             try:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(),

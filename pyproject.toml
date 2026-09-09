@@ -110,6 +110,12 @@ Source = "https://github.com/thatcooperguy/nvHive"
 Changelog = "https://github.com/thatcooperguy/nvHive/blob/main/CHANGELOG.md"
 "Trademark Policy" = "https://github.com/thatcooperguy/nvHive/blob/main/TRADEMARKS.md"
 
+# The plugin entry-point group CONTRIBUTING.md documents: third-party
+# packages register providers / agents / cabinets here and
+# nvh/plugins/manager.py discovers them. nvHive itself ships none, so the
+# table is declared empty.
+[project.entry-points."nvhive.plugins"]
+
 [project.scripts]
 nvh = "nvh.cli.main:main"
 nvhive = "nvh.cli.main:main"

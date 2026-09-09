@@ -4,18 +4,30 @@
 # Install (run as regular user — no admin needed):
 #   iwr -useb https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.ps1 | iex
 #
-# What lives in ~/nvh/:
-#   ~/nvh/repo/       — the NVHive source code
-#   ~/nvh/venv/       — Python virtual environment
-#   ~/.hive/          — Config, database, API keys
+# Everything lives in NVH_HOME (default ~/.nvh), exactly like install.sh:
+#   $NVH_HOME\repo\       — the NVHive source code
+#   $NVH_HOME\venv\       — Python virtual environment
+#   $NVH_HOME\config\     — config.yaml, API keys (.env)   ($NVH_CONFIG / HIVE_CONFIG_HOME)
+#   $NVH_HOME\state\      — the SQLite state database
+# Set NVH_HOME before running to install somewhere else (a persistent mount);
+# the installer then records it in your user environment so every later
+# `nvh` finds the same home.
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
 
-$NVH_HOME  = if ($env:NVH_HOME) { $env:NVH_HOME } else { "$HOME\nvh" }
-$NVH_VENV  = "$NVH_HOME\venv"
-$NVH_REPO  = "$NVH_HOME\repo"
-$HIVE_DIR  = "$HOME\.hive"
+$NVH_HOME_CONFIGURED = [bool]$env:NVH_HOME
+$NVH_HOME   = if ($env:NVH_HOME) { $env:NVH_HOME } elseif ($env:NVHIVE_HOME) { $env:NVHIVE_HOME } else { "$HOME\.nvh" }
+$NVH_VENV   = "$NVH_HOME\venv"
+$NVH_REPO   = "$NVH_HOME\repo"
+# Config dir: NVH_CONFIG is the primary override, HIVE_CONFIG_HOME the legacy alias.
+# An override is remembered in the user environment below (like NVH_HOME), so
+# the config.yaml / .env written here is the one every later shell reads.
+$NVH_CONFIG_CONFIGURED = [bool]($env:NVH_CONFIG -or $env:HIVE_CONFIG_HOME)
+$NVH_CONFIG = if ($env:NVH_CONFIG) { $env:NVH_CONFIG } elseif ($env:HIVE_CONFIG_HOME) { $env:HIVE_CONFIG_HOME } else { "$NVH_HOME\config" }
+$env:NVH_HOME         = $NVH_HOME
+$env:NVH_CONFIG       = $NVH_CONFIG
+$env:HIVE_CONFIG_HOME = $NVH_CONFIG
 
 function Write-Green  { param($msg) Write-Host $msg -ForegroundColor Green  }
 function Write-Yellow { param($msg) Write-Host $msg -ForegroundColor Yellow }
@@ -113,7 +125,7 @@ if ((Test-Path $NVH_REPO) -and (Test-Path $NVH_VENV)) {
 # ---------------------------------------------------------------------------
 # Fresh install
 # ---------------------------------------------------------------------------
-Write-Blue "Fresh install — setting up ~/nvh/..."
+Write-Blue "Fresh install — setting up $NVH_HOME ..."
 New-Item -ItemType Directory -Force -Path $NVH_HOME | Out-Null
 
 # Clone repo
@@ -180,8 +192,8 @@ if ($DefaultModel) {
 # ---------------------------------------------------------------------------
 # Auto-config
 # ---------------------------------------------------------------------------
-New-Item -ItemType Directory -Force -Path $HIVE_DIR | Out-Null
-$configFile = "$HIVE_DIR\config.yaml"
+New-Item -ItemType Directory -Force -Path $NVH_CONFIG | Out-Null
+$configFile = "$NVH_CONFIG\config.yaml"
 if (-not (Test-Path $configFile)) {
     Write-Blue "Creating auto-config..."
     $configText = @'
@@ -253,6 +265,28 @@ if ($userPath -notlike "*$scriptsDir*") {
     )
     $env:PATH = "$scriptsDir;$env:PATH"
     Write-Green "Added $scriptsDir to user PATH"
+}
+
+# ---------------------------------------------------------------------------
+# Remember a non-default NVH_HOME — and a non-default config dir — so every
+# later shell finds the same home and the same config.yaml / .env
+# (install.sh does this through nvh-env.sh + a shell-profile hook)
+# ---------------------------------------------------------------------------
+if ($NVH_HOME_CONFIGURED) {
+    $savedHome = [System.Environment]::GetEnvironmentVariable("NVH_HOME", "User")
+    if ($savedHome -ne $NVH_HOME) {
+        [System.Environment]::SetEnvironmentVariable("NVH_HOME", $NVH_HOME, "User")
+        Write-Green "Saved NVH_HOME=$NVH_HOME to your user environment"
+    }
+}
+if ($NVH_CONFIG_CONFIGURED -and ($NVH_CONFIG -ne "$NVH_HOME\config")) {
+    foreach ($configVar in @("NVH_CONFIG", "HIVE_CONFIG_HOME")) {
+        $savedConfig = [System.Environment]::GetEnvironmentVariable($configVar, "User")
+        if ($savedConfig -ne $NVH_CONFIG) {
+            [System.Environment]::SetEnvironmentVariable($configVar, $NVH_CONFIG, "User")
+        }
+    }
+    Write-Green "Saved NVH_CONFIG=$NVH_CONFIG (and the HIVE_CONFIG_HOME alias) to your user environment"
 }
 
 # ---------------------------------------------------------------------------
@@ -338,8 +372,8 @@ Write-Host "      Add more free AI providers"
 Write-Host "  " -NoNewline; Write-Green "nvh status" -NoNewline
 Write-Host "     System overview"
 Write-Host ""
-Write-Gray "  Install dir: ~/nvh/"
-Write-Gray "  Config: ~/.hive/config.yaml"
+Write-Gray "  Install dir (NVH_HOME): $NVH_HOME"
+Write-Gray "  Config: $NVH_CONFIG\config.yaml"
 Write-Host ""
 Write-Gray "(Restart your terminal for PATH changes to take effect)"
 Write-Host ""

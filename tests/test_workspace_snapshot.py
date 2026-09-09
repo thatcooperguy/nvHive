@@ -117,8 +117,8 @@ def test_export_finds_db_relocated_by_hive_data_dir(
     data_dir = tmp_path / "persist"
     _sqlite_with_rows(data_dir / "state" / "nvhive.db", "conversations", 5)
     monkeypatch.setenv("NVH_HOME", str(home))
-    monkeypatch.setenv("HIVE_DATA_DIR", str(data_dir))
-    monkeypatch.delenv("NVH_STATE", raising=False)
+    monkeypatch.setenv("NVH_STATE", str(data_dir / "state"))  # 0.44: HIVE_DATA_DIR is gone
+    monkeypatch.delenv("HIVE_DATA_DIR", raising=False)
 
     result = export_snapshot()
 
@@ -287,8 +287,8 @@ def test_import_writes_db_where_repository_reads_it(
     dest_home = tmp_path / "dest"
     data_dir = tmp_path / "persist"
     monkeypatch.setenv("NVH_HOME", str(dest_home))
-    monkeypatch.setenv("HIVE_DATA_DIR", str(data_dir))
-    monkeypatch.delenv("NVH_STATE", raising=False)
+    monkeypatch.setenv("NVH_STATE", str(data_dir / "state"))  # 0.44: HIVE_DATA_DIR is gone
+    monkeypatch.delenv("HIVE_DATA_DIR", raising=False)
 
     restored = import_snapshot(exported["path"])
 

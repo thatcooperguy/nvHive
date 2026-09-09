@@ -125,6 +125,34 @@ def test_register_mcp_tools_namespaces_and_safety_classes(tmp_path) -> None:
     assert "[MCP:fs]" in read.description
 
 
+def test_register_mcp_tools_keeps_the_servers_schema_whole(tmp_path) -> None:
+    """The MCP inputSchema is the tool's JSON Schema as-is (nested shapes and
+    all, for native function calling); the Wizard view is derived from it by
+    the one translation, not re-typed in the adapter."""
+    from nvh.core.tools import translate_parameters
+
+    _write_config(tmp_path, {"fs": {"command": "echo"}})
+    schema = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "file path"},
+            "opts": {"type": "object", "properties": {"recursive": {"type": "boolean"}}},
+            "mode": {"type": ["string", "null"], "enum": ["r", "w", None]},
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    }
+    _write_cache(tmp_path, {"fs": {"ok": True, "tools": [{"name": "read", "description": "Read", "input_schema": schema}]}})
+    reg = WizardToolRegistry()
+    register_mcp_tools(reg, home_dir=tmp_path)
+    tool = reg.get("mcp_fs_read")
+    assert tool.input_schema == schema
+    assert tool.as_openai_tool()["function"]["parameters"] == schema
+    assert tool.parameters == translate_parameters(schema)
+    assert tool.parameters["mode"] == {"type": "string", "description": "", "required": False}
+    assert tool.parameters["opts"]["type"] == "object"
+
+
 def test_register_mcp_tools_skips_failed_and_unrefreshed_servers(tmp_path) -> None:
     _write_config(tmp_path, {"a": {"command": "echo"}, "b": {"command": "echo"}})
     _write_cache(tmp_path, {"a": {"ok": False, "error": "boom", "tools": []}})

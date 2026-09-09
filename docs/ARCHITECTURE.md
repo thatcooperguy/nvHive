@@ -32,7 +32,7 @@ nvh CLI · Web UI · Python SDK · MCP clients · OpenAI/Anthropic clients
    SDK (`nvh/sdk.py`) and the MCP server (`nvh/mcp_server.py`) all build one
    `Engine` (`nvh/core/engine.py`) from `config.yaml` and the provider
    registry.
-2. **Context.** `HIVE.md` and `.hive/context/*.md` files are injected into the
+2. **Context.** `HIVE.md` and `.nvh/context/*.md` files are injected into the
    system prompt (`nvh/core/context_files.py`).
 3. **Routing.** `Router` (`nvh/core/router.py`) classifies the task, scores
    every enabled advisor, applies routing rules, the budget and the cache, and

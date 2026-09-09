@@ -5,19 +5,46 @@
 # Install:
 #   curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install-mac.sh | bash
 #
-# What lives in ~/nvh/:
-#   ~/nvh/repo/       — the NVHive source code
-#   ~/nvh/venv/       — Python virtual environment
-#   ~/.hive/          — Config, database, API keys
+# Everything lives in NVH_HOME (default ~/.nvh), exactly like install.sh:
+#   $NVH_HOME/repo/       — the NVHive source code
+#   $NVH_HOME/venv/       — Python virtual environment
+#   $NVH_HOME/bin/        — rootless Ollama fallback
+#   $NVH_HOME/models/     — downloaded AI models
+#   $NVH_HOME/config/     — config.yaml, API keys (.env)   ($NVH_CONFIG / HIVE_CONFIG_HOME)
+#   $NVH_HOME/state/      — the SQLite state database
+# Set NVH_HOME before running to install somewhere else (an external drive);
+# the installer writes $NVH_HOME/nvh-env.sh and sources it from ~/.zshrc so
+# every later `nvh` finds the same home.
 # =============================================================================
 
 set -euo pipefail
 
 G='\033[0;32m'; Y='\033[1;33m'; B='\033[0;34m'; R='\033[0;31m'; D='\033[0;90m'; N='\033[0m'
 
-NVH_HOME="${NVH_HOME:-$HOME/nvh}"
+NVH_HOME="${NVH_HOME:-${NVHIVE_HOME:-$HOME/.nvh}}"
 NVH_VENV="$NVH_HOME/venv"
 NVH_REPO="$NVH_HOME/repo"
+NVH_BIN="$NVH_HOME/bin"
+NVH_MODELS="$NVH_HOME/models"
+OLLAMA_MODELS="${OLLAMA_MODELS:-$NVH_MODELS/ollama}"
+# Config dir: NVH_CONFIG is the primary override, HIVE_CONFIG_HOME the legacy alias.
+NVH_CONFIG="${NVH_CONFIG:-${HIVE_CONFIG_HOME:-$NVH_HOME/config}}"
+HIVE_CONFIG_HOME="$NVH_CONFIG"
+export NVH_HOME NVH_BIN NVH_MODELS OLLAMA_MODELS NVH_CONFIG HIVE_CONFIG_HOME
+
+write_nvh_env() {
+cat > "$NVH_HOME/nvh-env.sh" << ENVEOF
+export NVH_HOME="$NVH_HOME"
+export NVH_VENV="$NVH_VENV"
+export NVH_BIN="$NVH_BIN"
+export NVH_MODELS="$NVH_MODELS"
+export OLLAMA_MODELS="$OLLAMA_MODELS"
+export NVH_CONFIG="$NVH_CONFIG"
+export HIVE_CONFIG_HOME="$HIVE_CONFIG_HOME"
+export PATH="$NVH_VENV/bin:$NVH_BIN:\$PATH"
+ENVEOF
+chmod 600 "$NVH_HOME/nvh-env.sh" 2>/dev/null || true
+}
 
 echo ""
 echo -e "${G}╔══════════════════════════════════════╗${N}"
@@ -107,8 +134,9 @@ fi
 # ---------------------------------------------------------------------------
 # Fresh install
 # ---------------------------------------------------------------------------
-echo -e "${B}Fresh install — setting up ~/nvh/...${N}"
-mkdir -p "$NVH_HOME"
+echo -e "${B}Fresh install — setting up $NVH_HOME ...${N}"
+mkdir -p "$NVH_HOME" "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CONFIG"
+write_nvh_env
 
 # Clone repo
 echo -e "${B}Downloading NVHive...${N}"
@@ -162,11 +190,10 @@ fi
 # ---------------------------------------------------------------------------
 # Auto-config
 # ---------------------------------------------------------------------------
-HIVE_DIR="$HOME/.hive"
-mkdir -p "$HIVE_DIR"
-if [ ! -f "$HIVE_DIR/config.yaml" ]; then
+mkdir -p "$NVH_CONFIG"
+if [ ! -f "$NVH_CONFIG/config.yaml" ]; then
     echo -e "${B}Creating auto-config...${N}"
-    cat > "$HIVE_DIR/config.yaml" << 'CFGEOF'
+    cat > "$NVH_CONFIG/config.yaml" << 'CFGEOF'
 version: "1"
 
 defaults:
@@ -214,7 +241,7 @@ cache:
   ttl_seconds: 86400
   max_size: 1000
 CFGEOF
-    CFG="$HIVE_DIR/config.yaml" MODEL="$DEFAULT_OLLAMA_MODEL" "$NVH_VENV/bin/python" - <<'PY'
+    CFG="$NVH_CONFIG/config.yaml" MODEL="$DEFAULT_OLLAMA_MODEL" "$NVH_VENV/bin/python" - <<'PY'
 import os
 from pathlib import Path
 
@@ -228,17 +255,17 @@ else:
     lines = [line for line in lines if "__NVH_DEFAULT_OLLAMA_MODEL__" not in line]
 path.write_text("\n".join(lines), encoding="utf-8")
 PY
-    echo -e "${G}Config created: $HIVE_DIR/config.yaml${N}"
+    echo -e "${G}Config created: $NVH_CONFIG/config.yaml${N}"
 fi
 
 # ---------------------------------------------------------------------------
 # Add to ~/.zshrc (macOS default shell)
 # ---------------------------------------------------------------------------
 RC="$HOME/.zshrc"
-grep -q "nvh/venv/bin" "$RC" 2>/dev/null || {
+grep -qF "$NVH_HOME/nvh-env.sh" "$RC" 2>/dev/null || {
     echo "" >> "$RC"
-    echo "# NVHive — Multi-LLM Orchestration" >> "$RC"
-    echo "export PATH=\"$NVH_VENV/bin:\$PATH\"" >> "$RC"
+    echo "# NVHive — Multi-LLM Orchestration (NVH_HOME, config dir, PATH)" >> "$RC"
+    echo "[ -f \"$NVH_HOME/nvh-env.sh\" ] && source \"$NVH_HOME/nvh-env.sh\"" >> "$RC"
 }
 
 # ---------------------------------------------------------------------------
@@ -251,21 +278,22 @@ if [ "$APPLE_SILICON" = "true" ]; then
             echo -e "${Y}Homebrew Ollama failed, trying direct download...${N}"
             curl -sSL https://ollama.com/download/Ollama-darwin.zip -o /tmp/ollama.zip
             unzip -q /tmp/ollama.zip -d /tmp/ollama-app
-            # Move the binary to NVH_HOME
-            cp /tmp/ollama-app/Ollama.app/Contents/Resources/ollama "$NVH_HOME/ollama"
-            chmod +x "$NVH_HOME/ollama"
+            # Move the binary to $NVH_HOME/bin (the layout's rootless launcher dir)
+            mkdir -p "$NVH_BIN"
+            cp /tmp/ollama-app/Ollama.app/Contents/Resources/ollama "$NVH_BIN/ollama"
+            chmod +x "$NVH_BIN/ollama"
         }
     fi
 
     # Start Ollama service
-    OLLAMA_BIN=$(command -v ollama 2>/dev/null || echo "$NVH_HOME/ollama")
+    OLLAMA_BIN=$(command -v ollama 2>/dev/null || echo "$NVH_BIN/ollama")
     if ! curl -sf http://localhost:11434/api/tags &>/dev/null; then
         echo -e "${B}Starting Ollama...${N}"
         if command -v ollama &>/dev/null; then
             # brew install creates a service
             brew services start ollama 2>/dev/null || ollama serve &>/dev/null &
         else
-            OLLAMA_MODELS="$NVH_HOME/models" "$OLLAMA_BIN" serve &>/dev/null &
+            "$OLLAMA_BIN" serve &>/dev/null &   # OLLAMA_MODELS is exported above ($NVH_HOME/models/ollama)
         fi
         sleep 3
     fi
@@ -295,8 +323,8 @@ echo -e "  ${G}nvh${N}            Start chatting"
 echo -e "  ${G}nvh setup${N}      Add more free AI providers"
 echo -e "  ${G}nvh status${N}     System overview"
 echo ""
-echo -e "  ${D}Install dir: ~/nvh/${N}"
-echo -e "  ${D}Config: ~/.hive/config.yaml${N}"
+echo -e "  ${D}Install dir (NVH_HOME): $NVH_HOME${N}"
+echo -e "  ${D}Config: $NVH_CONFIG/config.yaml${N}"
 echo ""
 echo -e "${D}(Restart your terminal or run: source ~/.zshrc)${N}"
 echo ""

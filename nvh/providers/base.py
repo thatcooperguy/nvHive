@@ -62,6 +62,11 @@ class StreamChunk(BaseModel):
     usage: Usage | None = None
     cost_usd: Decimal | None = None
     finish_reason: FinishReason | None = None
+    # Native function calls, complete on the final chunk, in the OpenAI wire
+    # shape ``{id, type: "function", function: {name, arguments: <json str>}}``
+    # (the same shape ``Message.tool_calls`` carries back). ``None`` when the
+    # model answered in text — read the ``TOOL_CALL:`` lines instead.
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 class CompletionResponse(BaseModel):
@@ -75,6 +80,9 @@ class CompletionResponse(BaseModel):
     cache_hit: bool = False
     fallback_from: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Native function calls in the OpenAI wire shape (see ``StreamChunk``);
+    # ``None`` when the model answered in text.
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 class ModelInfo(BaseModel):
@@ -185,9 +193,20 @@ class Provider(Protocol):
         temperature: float = 1.0,
         max_tokens: int = 4096,
         system_prompt: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
-        """Send a completion request and return the full response."""
+        """Send a completion request and return the full response.
+
+        ``tools`` are native function specs (``{"type": "function",
+        "function": {name, description, parameters}}``, what
+        ``Tool.as_openai_tool()`` builds) and ``tool_choice`` the OpenAI
+        selector. An adapter sends them only when the resolved model supports
+        function calling and never to a Responses-API surface; otherwise it
+        drops them and the caller's ``TOOL_CALL:`` text protocol applies.
+        Calls the model made come back as ``CompletionResponse.tool_calls``.
+        """
         ...
 
     async def stream(
@@ -197,9 +216,15 @@ class Provider(Protocol):
         temperature: float = 1.0,
         max_tokens: int = 4096,
         system_prompt: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
-        """Send a completion request and yield streaming chunks."""
+        """Send a completion request and yield streaming chunks.
+
+        Same ``tools`` / ``tool_choice`` contract as :meth:`complete`; the
+        final chunk carries the complete ``tool_calls``.
+        """
         ...
 
     async def list_models(self) -> list[ModelInfo]:

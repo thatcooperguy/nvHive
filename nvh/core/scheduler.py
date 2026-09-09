@@ -1,7 +1,8 @@
 """NVHive Scheduler — run tasks on a schedule.
 
-Stores scheduled tasks in ~/.hive/schedules.json.
-Uses a simple polling loop (no system cron needed — works without root).
+Stores scheduled tasks in $NVH_STATE/schedules.json (the storage layout's
+``state_dir``). Uses a simple polling loop (no system cron needed — works
+without root).
 
 Examples:
   nvh schedule add "Summarize my emails" --every 1h
@@ -32,9 +33,16 @@ class ScheduledTask:
     enabled: bool
     created_at: str
 
+def default_schedule_file() -> Path:
+    """``$NVH_STATE/schedules.json`` from the one path oracle."""
+    from nvh.integrations.workspace.storage import storage_layout
+
+    return storage_layout().state_dir / "schedules.json"
+
+
 class Scheduler:
     def __init__(self, schedule_file: Path | None = None):
-        self.schedule_file = schedule_file or (Path.home() / ".hive" / "schedules.json")
+        self.schedule_file = schedule_file or default_schedule_file()
         self.schedule_file.parent.mkdir(parents=True, exist_ok=True)
         self._tasks: list[ScheduledTask] = []
         self._load()

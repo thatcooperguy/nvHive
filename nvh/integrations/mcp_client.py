@@ -316,13 +316,26 @@ def servers_status(home_dir: str | Path | None = None) -> list[dict[str, Any]]:
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def register_mcp_tools(reg: Any, home_dir: str | Path | None = None) -> None:
-    """Register cached MCP tools into a WizardToolRegistry.
+def _mcp_input_schema(schema: Any) -> dict[str, Any]:
+    """The server's ``inputSchema`` as the tool's JSON Schema — kept whole, so native
+    function calling gets the real shape and the Wizard view is derived from it
+    by :func:`nvh.core.tools.translate_parameters`, never re-typed here."""
+    if not isinstance(schema, dict) or not schema:
+        return {"type": "object", "properties": {}}
+    out = dict(schema)
+    out.setdefault("type", "object")
+    out.setdefault("properties", {})
+    return out
 
-    Called from ``default_registry()`` on every registry build, so it must
-    be fast and synchronous: it only reads the JSON cache. Servers that
-    haven't been refreshed contribute nothing until ``nvh mcp refresh``
-    (or API-server startup) populates the cache.
+
+def register_mcp_tools(reg: Any, home_dir: str | Path | None = None) -> None:
+    """Register cached MCP tools into a tool registry (the Wizard's, or the agent's).
+
+    Called from ``default_registry()`` on every registry build — and from
+    ``ToolRegistry(include_mcp=True)`` / ``NVH_AGENT_MCP_TOOLS=1`` for the
+    agent registry — so it must be fast and synchronous: it only reads the
+    JSON cache. Servers that haven't been refreshed contribute nothing until
+    ``nvh mcp refresh`` (or API-server startup) populates the cache.
 
     Safety: ``confirm`` by default; a tool named in its server's
     ``auto_approve`` list registers as ``auto``.
@@ -344,17 +357,6 @@ def register_mcp_tools(reg: Any, home_dir: str | Path | None = None) -> None:
             if not tool_name:
                 continue
             reg_name = namespaced_tool_name(server, tool_name)
-            schema = tool.get("input_schema") or {}
-            properties = schema.get("properties") or {}
-            required = set(schema.get("required") or [])
-            parameters = {
-                key: {
-                    "type": (val or {}).get("type", "string"),
-                    "description": (val or {}).get("description", ""),
-                    "required": key in required,
-                }
-                for key, val in properties.items()
-            }
             safety = "auto" if tool_name in auto_approve else "confirm"
 
             def _make_handler(srv: str, tl: str):
@@ -369,7 +371,7 @@ def register_mcp_tools(reg: Any, home_dir: str | Path | None = None) -> None:
                         f"[MCP:{server}] {tool.get('description') or tool_name}"
                     )[:300],
                     safety_class=safety,
-                    parameters=parameters,
+                    input_schema=_mcp_input_schema(tool.get("input_schema")),
                     handler=_make_handler(server, tool_name),
                     summary_template=f"Run MCP tool {tool_name} on {server}",
                 ))

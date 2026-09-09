@@ -17,15 +17,18 @@ The WebUI is a separate Node 22 project: `cd web && npm ci && npm run dev`.
 
 ## How to Add a Provider
 
-1. Add a `ProviderSpec` row to `nvh/providers/specs.py` (default and fallback
-   model, LiteLLM prefix, base URL, extra env vars). `OpenAICompatibleProvider`
-   supplies the behaviour and `tests/test_providers_parametrized.py` picks the
-   row up automatically.
+1. Add a `ProviderSpec` row to `nvh/providers/specs.py`: default and fallback
+   model, LiteLLM prefix, base URL, extra env vars, and the descriptive facts
+   (display name, signup URL, free tier and its note, cost tier, strengths and
+   weaknesses). `OpenAICompatibleProvider` supplies the behaviour; the free-tier
+   ladder, quota text, advisor card and the proxy's model map derive from the
+   row, and `tests/test_providers_parametrized.py` picks it up automatically.
 2. Add the default and fallback models to `nvh/config/capabilities.yaml` and the
    stanza to `generate_default_config` in `nvh/config/settings.py`; parity tests
    enforce both.
-3. Add an entry to `KNOWN_ADVISORS` in `nvh/cli/main.py` and a row to
-   `docs/PROVIDERS.md`.
+3. Run `python scripts/gen_providers_doc.py` to regenerate the table and the
+   free-tier ladder in `docs/PROVIDERS.md` (CI diffs it), and — until the CLI
+   reads the spec table — add the entry to `KNOWN_ADVISORS` in `nvh/cli/main.py`.
 4. A provider that is not OpenAI-compatible (its own transport or discovery, like
    Ollama or Triton) gets a bespoke adapter listed in `BESPOKE_ADAPTERS` in
    `nvh/providers/registry.py`, with tests in `tests/test_providers_special.py`.
@@ -35,7 +38,7 @@ The WebUI is a separate Node 22 project: `cd web && npm ci && npm run dev`.
 Plugins extend nvHive with a provider, an agent persona or a cabinet without
 touching the package. `nvh/plugins/manager.py` discovers them two ways:
 
-- a Python file in `~/.hive/plugins/` that defines the class and a manifest:
+- a Python file in `$NVH_HOME/plugins/` (`nvh.plugins.manager.plugins_dir()`) that defines the class and a manifest:
 
   ```python
   NVHIVE_PLUGIN = {"type": "provider", "name": "my_provider", "class": MyProvider}
@@ -72,6 +75,9 @@ reaches zero errors, add it to the gated list in `.github/workflows/ci.yml`.
 
 - `docs/COMMANDS.md` is generated — run `python scripts/gen_commands_doc.py`
   after adding, renaming or hiding a command; CI diffs it.
+- The provider table and free-tier ladder in `docs/PROVIDERS.md` are generated
+  from `nvh/providers/specs.py` — run `python scripts/gen_providers_doc.py`
+  after changing a spec row; `tests/test_provider_docs_parity.py` diffs it.
 - Do not type inventory counts (providers, models, free tiers, cabinets, tools,
   personas, agents) into README, docs or CLI help. `tests/test_marketing_parity.py`
   fails on any count that disagrees with the code.

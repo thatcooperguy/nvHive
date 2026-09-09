@@ -75,3 +75,76 @@ def test_workspace_plugin_dir_missing_is_noop(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setenv("NVH_WIZARD_PLUGIN_DIR", str(tmp_path / "does-not-exist"))
     registry = default_registry()
     assert registry.get("refresh_models") is not None
+
+
+_PLUGIN_SOURCE = """
+from nvh.integrations.wizard.tools import WizardTool
+
+
+async def _noop(args):
+    return {"ok": True}
+
+
+def register(reg):
+    reg.register(WizardTool(name="%s", description="d", safety_class="auto", parameters={}, handler=_noop))
+"""
+
+
+def test_default_plugin_dir_is_the_one_plugins_directory_under_nvh_home(tmp_path: Path, monkeypatch) -> None:
+    """Without the override, Wizard tools load from ``nvh.plugins.manager.plugins_dir()``
+    (``$NVH_HOME/plugins``, shared with provider plugins) — and, for one more
+    release, from the pre-0.44 ``$NVH_HOME/wizard-tools``. A file without a
+    top-level ``register`` (a provider plugin) is never *executed* by the
+    Wizard build, not merely left unregistered."""
+    from nvh.integrations.wizard.tools import default_registry
+    from nvh.plugins.manager import plugins_dir
+
+    monkeypatch.setenv("NVH_HOME", str(tmp_path))
+    monkeypatch.delenv("NVH_WIZARD_PLUGIN_DIR", raising=False)
+    primary = plugins_dir()
+    primary.mkdir(parents=True)
+    (primary / "one.py").write_text(_PLUGIN_SOURCE % "plugin_from_plugins_dir")
+    sentinel = tmp_path / "provider-plugin-was-imported"
+    (primary / "provider_plugin.py").write_text(
+        "import pathlib\n"
+        f"pathlib.Path({str(sentinel)!r}).write_text('imported')\n"
+        "class P:\n    pass\n\nNVHIVE_PLUGIN = {'type': 'provider', 'name': 'p', 'class': P}\n"
+    )
+    legacy = primary.parent / "wizard-tools"
+    legacy.mkdir(parents=True)
+    (legacy / "old.py").write_text(_PLUGIN_SOURCE % "plugin_from_legacy_dir")
+
+    names = {t.name for t in default_registry().list_tools()}
+    assert {"plugin_from_plugins_dir", "plugin_from_legacy_dir"} <= names
+    assert "refresh_models" in names
+    assert not sentinel.exists(), "a provider plugin's module body ran inside the Wizard registry build"
+
+
+def test_plugin_tool_without_a_safety_class_is_refused_not_registered_as_auto(tmp_path: Path, monkeypatch, caplog) -> None:
+    """Pre-0.44 ``WizardTool`` required ``safety_class``; the 0.44 subclass keeps
+    that contract so a plugin that forgets it fails to load (logged, skipped)
+    instead of becoming a no-click ``auto`` tool."""
+    import logging
+
+    import pytest
+
+    from nvh.integrations.wizard.tools import WizardTool, default_registry
+
+    with pytest.raises(TypeError, match="safety_class"):
+        WizardTool(name="purge_models", description="d", parameters={}, handler=None)
+    # ``safe=`` (the older spelling) is an explicit choice too.
+    assert WizardTool(name="x", description="d", parameters={}, handler=None, safe=False).safety_class == "confirm"
+
+    plugin_dir = tmp_path / "plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "cleanup.py").write_text(
+        "from nvh.integrations.wizard.tools import WizardTool\n\n"
+        "async def _purge(args):\n    return {'ok': True}\n\n"
+        "def register(reg):\n"
+        "    reg.register(WizardTool(name='purge_models', description='d', parameters={}, handler=_purge))\n",
+    )
+    monkeypatch.setenv("NVH_WIZARD_PLUGIN_DIR", str(plugin_dir))
+    with caplog.at_level(logging.WARNING, logger="nvh.integrations.wizard.tools"):
+        registry = default_registry()
+    assert registry.get("purge_models") is None
+    assert any("cleanup.py failed" in record.getMessage() for record in caplog.records)

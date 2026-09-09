@@ -137,6 +137,12 @@ def test_legacy_memories_import_once_as_tagged_notes(vault_home, legacy_memories
     assert len(repl._repl_memory_notes()) == 2
 
 
+def test_legacy_memory_file_lives_under_the_layout_state_dir(vault_home):
+    """0.44: the pre-0.42 memories.json is read from ``$NVH_STATE/memory/`` — where
+    the legacy-home migration copies ``~/.hive/memory/memories.json`` — never from $HOME."""
+    assert repl.legacy_memory_file() == vault_home / "state" / "memory" / "memories.json"
+
+
 def test_legacy_memories_import_without_a_file_is_a_noop(vault_home, tmp_path, monkeypatch):
     monkeypatch.setattr(repl, "legacy_memory_file", lambda: tmp_path / "nope.json")
     result = repl.import_legacy_memories()

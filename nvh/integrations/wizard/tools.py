@@ -1,9 +1,13 @@
-"""AI Wizard tool registry — natural-language action authority with safety.
+"""AI Wizard tool registry — the Wizard's instance of the one tool model.
 
-The Wizard chat (Wizard-2) can read live state and answer questions. This
-module is the action layer: the Wizard can *do* things on behalf of the user,
-with an explicit safety class on every tool so the system never silently does
-something destructive.
+The tool model itself — :class:`~nvh.core.tools.Tool`,
+:class:`~nvh.core.tools.ToolRegistry`, the safety classes, the approval
+tokens, the kill switch, the vault audit, the tool-result window and the
+prompt/UI parameter shape — lives in :mod:`nvh.core.tools` since 0.44 (issue
+#132 D2). This module keeps the Wizard-facing names importable
+(:class:`WizardTool`, :class:`WizardToolRegistry`, every helper and constant
+below) and owns what is Wizard-specific: the stock handlers, plugin discovery
+and :func:`default_registry`, the curated catalogue the chat and the API build.
 
 Safety classes
 ==============
@@ -75,652 +79,136 @@ Wire-up
 
 The HTTP layer (``/v1/wizard/tools/*``) handles auth + envelope; this module
 owns the tool definitions and their handlers. Tools are async by convention
-so they can chain into other engine async paths cleanly.
+so they can chain into other engine async paths cleanly. Desktop-hands tools
+(``mouse_*``, ``keyboard_*``, ``scroll``) are never registered here.
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import hmac
-import json
 import logging
-import os
-import secrets
-import time
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, ClassVar
+
+from nvh.core.tools import (  # noqa: F401 — re-exported for every existing importer
+    _CONSUMED_APPROVALS,
+    APPROVAL_REQUIRED_ERROR,
+    APPROVAL_TTL_S,
+    AUDIT_OUTPUT_CHARS,
+    PRIVILEGED_DISABLED_ERROR,
+    PRIVILEGED_ENV,
+    SAFETY_CLASSES,
+    TOOL_RESULT_CHARS,
+    SafetyClass,
+    Tool,
+    ToolHandler,
+    ToolRegistry,
+    ToolResult,
+    _dry_run,
+    _pinned_arguments,
+    _privileged_applied,
+    audit_privileged_change,
+    fit_tool_window,
+    format_summary,
+    issue_approval,
+    json_schema_from_parameters,
+    parameters_from_json_schema,
+    privileged_enabled,
+    record_privileged_change,
+    reset_approvals,
+    translate_parameters,
+    verify_approval,
+)
 
 logger = logging.getLogger(__name__)
 
-ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
-SafetyClass = str  # "auto" | "confirm" | "privileged" — "never" is never registered
-
-#: The safety classes ``register()`` accepts, in the order ``list_tools()`` uses.
-SAFETY_CLASSES: tuple[str, ...] = ("auto", "confirm", "privileged")
-_SAFETY_ORDER = {name: index for index, name in enumerate(SAFETY_CLASSES)}
-
-#: Kill switch for the ``privileged`` class. Unset means on; the falsy
-#: vocabulary matches ``_platform_warmup_enabled`` in nvh/api/server.py.
-PRIVILEGED_ENV = "NVH_ALLOW_PRIVILEGED"
-_FALSY = frozenset({"0", "false", "no", "off"})
-PRIVILEGED_DISABLED_ERROR = f"privileged tools are disabled ({PRIVILEGED_ENV}=0)"
-
-#: Characters a tool result may occupy in the model's ``TOOL_RESULT`` message
-#: (chat.py imports this for its cut); privileged results are fitted to it
-#: *before* they leave ``execute()`` so the cut never lands mid-JSON.
-TOOL_RESULT_CHARS = 1500
-#: Per-command output kept in the vault audit note (redacted first).
-AUDIT_OUTPUT_CHARS = 4000
-
-#: How long a red card's approval token stays valid (seconds). A card left
-#: open across lunch has to be re-issued; a leaked token dies with it.
-APPROVAL_TTL_S = 15 * 60
-#: Refusal for a confirmed privileged call that did not bring its card's token.
-APPROVAL_REQUIRED_ERROR = "privileged call needs the approval token from its card"
-#: Process-lifetime HMAC key for approval tokens. Never persisted, never
-#: exposed; a restart invalidates every outstanding card, which is the point.
-_APPROVAL_SECRET = secrets.token_bytes(32)
-#: Tokens already spent, token → expiry. Bounded so a flood cannot grow it.
-_CONSUMED_APPROVALS: dict[str, float] = {}
-_CONSUMED_MAX = 1024
-
-
-def privileged_enabled() -> bool:
-    """``NVH_ALLOW_PRIVILEGED=0`` (or false/no/off) disables every ``privileged`` tool.
-
-    Default on. Registration is unaffected — the catalogue still lists the
-    tools with ``enabled: false`` so the Wizard can explain what they would
-    do — but ``execute()`` refuses them on the card path and the confirmed
-    path alike, naming the variable.
-    """
-    return os.environ.get(PRIVILEGED_ENV, "1").strip().lower() not in _FALSY
+__all__ = [
+    "APPROVAL_REQUIRED_ERROR",
+    "APPROVAL_TTL_S",
+    "AUDIT_OUTPUT_CHARS",
+    "ENTRY_POINT_GROUP",
+    "PRIVILEGED_DISABLED_ERROR",
+    "PRIVILEGED_ENV",
+    "SAFETY_CLASSES",
+    "TOOL_RESULT_CHARS",
+    "WORKSPACE_PLUGIN_DIR_ENV",
+    "SafetyClass",
+    "Tool",
+    "ToolHandler",
+    "ToolRegistry",
+    "ToolResult",
+    "WizardTool",
+    "WizardToolRegistry",
+    "audit_privileged_change",
+    "default_registry",
+    "fit_tool_window",
+    "format_summary",
+    "issue_approval",
+    "json_schema_from_parameters",
+    "parameters_from_json_schema",
+    "privileged_enabled",
+    "record_privileged_change",
+    "reset_approvals",
+    "translate_parameters",
+    "verify_approval",
+]
 
 
-def _canonical_call(name: str, arguments: Mapping[str, Any] | None) -> str:
-    """``name`` + newline + the arguments as sorted, compact JSON — the bytes a token signs."""
-    return name + "\n" + json.dumps(
-        dict(arguments or {}), sort_keys=True, separators=(",", ":"), default=str,
-    )
+class WizardTool(Tool):
+    """A :class:`~nvh.core.tools.Tool` declared the Wizard way.
 
-
-def _approval_mac(name: str, arguments: Mapping[str, Any] | None, issued: int, nonce: str) -> str:
-    message = f"{_canonical_call(name, arguments)}\n{issued}\n{nonce}".encode()
-    digest = hmac.new(_APPROVAL_SECRET, message, "sha256").digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-
-
-def issue_approval(
-    name: str, arguments: Mapping[str, Any] | None, *, now: float | None = None,
-) -> dict[str, Any]:
-    """Mint the token a privileged card carries: ``{approval_token, approval_expires_at}``.
-
-    ``approval_token`` is ``base64url(HMAC-SHA256(secret, name \\n canonical
-    arguments \\n issued \\n nonce)) . issued . nonce`` with ``issued`` in
-    whole seconds since the epoch and a random ``nonce`` so two cards for
-    the same call in the same second are still two tokens (each spent
-    separately); ``approval_expires_at`` is ``issued + APPROVAL_TTL_S``.
-    Bound to the exact name and arguments shown on the card, so a token
-    cannot be re-aimed. ``now`` exists for tests.
-    """
-    issued = int(now if now is not None else time.time())
-    nonce = secrets.token_urlsafe(8)
-    return {
-        "approval_token": f"{_approval_mac(name, arguments, issued, nonce)}.{issued}.{nonce}",
-        "approval_expires_at": issued + APPROVAL_TTL_S,
-    }
-
-
-def _prune_consumed(current: float) -> None:
-    for token, expires in list(_CONSUMED_APPROVALS.items()):
-        if expires <= current:
-            del _CONSUMED_APPROVALS[token]
-    while len(_CONSUMED_APPROVALS) > _CONSUMED_MAX:
-        _CONSUMED_APPROVALS.pop(next(iter(_CONSUMED_APPROVALS)))
-
-
-def verify_approval(
-    name: str, arguments: Mapping[str, Any] | None, token: Any, *, now: float | None = None,
-) -> bool:
-    """Is ``token`` a live, unspent approval for exactly this call? Spends it when so.
-
-    Constant-time MAC comparison; refuses anything older than
-    :data:`APPROVAL_TTL_S`, issued in the future, malformed, minted for a
-    different name or different arguments, or already used. Never raises.
-    """
-    if not isinstance(token, str) or token.count(".") != 2:
-        return False
-    mac, issued_raw, nonce = token.split(".")
-    if not mac or not nonce or not issued_raw.isdigit():
-        return False
-    issued = int(issued_raw)
-    current = now if now is not None else time.time()
-    if issued > current + 5 or current - issued > APPROVAL_TTL_S:
-        return False
-    expected = _approval_mac(name, arguments, issued, nonce)
-    if not hmac.compare_digest(mac.encode("ascii", "replace"), expected.encode("ascii")):
-        return False
-    _prune_consumed(current)
-    if token in _CONSUMED_APPROVALS:
-        return False
-    _CONSUMED_APPROVALS[token] = issued + APPROVAL_TTL_S
-    return True
-
-
-class _MissingArgs(dict):
-    """``format_map`` mapping that renders unknown placeholders as ``?``."""
-
-    def __missing__(self, key: str) -> str:
-        return "?"
-
-
-def format_summary(template: str, arguments: Mapping[str, Any] | None) -> str:
-    """Render a ``summary_template`` against model-supplied arguments; never raises.
-
-    The model decides which arguments it sends, so a required name may be
-    missing (``KeyError``), a placeholder may index into a string
-    (``{a[0]}``), or the template may use positional fields. Missing names
-    render as ``?``; anything else falls back to the raw template so the
-    confirmation card still shows *something* instead of the HTTP layer
-    turning a formatting slip into a 500.
-    """
-    if not template:
-        return ""
-    try:
-        return template.format_map(_MissingArgs(arguments or {}))
-    except Exception:
-        return template
-
-
-def _json_schema_type(spec: Any) -> str:
-    """The single type name a JSON-Schema property means for the Wizard shape.
-
-    ``"string"`` when unspecified; a nullable list (``["string", "null"]``)
-    is its first non-null member; a type-less ``anyOf`` / ``oneOf`` is the
-    first member that names a type.
-    """
-    if not isinstance(spec, dict):
-        return "string"
-    declared = spec.get("type")
-    if isinstance(declared, str) and declared and declared != "null":
-        return declared
-    if isinstance(declared, list):
-        for item in declared:
-            if isinstance(item, str) and item and item != "null":
-                return item
-    for key in ("anyOf", "oneOf"):
-        for member in spec.get(key) or []:
-            found = _json_schema_type(member)
-            if found != "string" or (isinstance(member, dict) and member.get("type") == "string"):
-                return found
-    return "string"
-
-
-def parameters_from_json_schema(
-    schema: Mapping[str, Any] | None, descriptions: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
-    """A JSON-Schema ``{"type": "object", "properties": …, "required": […]}`` as the ``WizardTool`` shape.
-
-    ``{name: {type, description, required}}`` — the one translation the core
-    tool bridges and the MCP adapter apply, so nullable types and missing
-    descriptions are handled in one place. ``descriptions`` fills in what the
-    schema left blank.
-    """
-    schema = schema or {}
-    properties = schema.get("properties") or {}
-    required = set(schema.get("required") or [])
-    overlay = descriptions or {}
-    return {
-        key: {
-            "type": _json_schema_type(val),
-            "description": overlay.get(key) or (val or {}).get("description", ""),
-            "required": key in required,
-        }
-        for key, val in properties.items()
-    }
-
-
-def _pinned_arguments(plan: Any) -> dict[str, Any]:
-    """The ``pinned_arguments`` a plan declares (string keys), else ``{}``."""
-    if not isinstance(plan, dict):
-        return {}
-    pinned = plan.get("pinned_arguments")
-    if not isinstance(pinned, dict):
-        return {}
-    return {str(key): value for key, value in pinned.items()}
-
-
-@dataclass(frozen=True)
-class WizardTool:
-    """One executable capability the Wizard can request.
-
-    Attributes:
-        name: Stable identifier the LLM emits when it wants to call this tool.
-        description: One-line user-facing description; shown in confirm cards.
-        safety_class: "auto" (run without asking), "confirm" (user clicks) or
-            "privileged" (user clicks a red card; sudo-class host change).
-        parameters: JSON-schema-ish dict of {param_name: {type, description, required?}}.
-        handler: Async callable that takes the param dict and returns a result dict.
-        summary_template: User-facing one-liner that gets formatted with the
-            executed args. The UI shows this on the confirmation card.
-        planner: Optional dry run with the handler's signature. For
-            ``privileged`` tools ``execute()`` calls it on the unconfirmed
-            path and puts its answer on the card as ``plan`` — the exact
-            commands, whether sudo is needed, what changes, how to undo —
-            without running anything. A plan may carry ``pinned_arguments``
-            (a dict): ``execute()`` folds them into the card's ``arguments``
-            before minting the approval token, so what the card showed (the
-            sandbox ``shell``'s isolation mode, say) is what the confirmed
-            call must bring back and what the handler enforces.
+    Three differences from the base. The handler takes one ``dict``
+    (``handler(arguments)``); ``parameters`` may be given — and reads back —
+    in the prompt/UI shape ``{name: {type, description, required}}`` (the
+    canonical JSON Schema is still ``input_schema``, a schema given as
+    ``parameters`` is accepted too, and the Wizard shape is derived from it by
+    :func:`~nvh.core.tools.translate_parameters`, never stored twice); and
+    the safety class is **required**: a Wizard tool built without
+    ``safety_class`` (or the older ``safe=``) raises ``TypeError`` at
+    construction, so a plugin that forgets it fails to load instead of being
+    registered as ``auto`` and run without a click.
     """
 
-    name: str
-    description: str
-    safety_class: SafetyClass
-    parameters: dict[str, Any]
-    handler: ToolHandler
-    summary_template: str = ""
-    planner: ToolHandler | None = None
+    _default_handler_style: ClassVar[str] = "mapping"
 
-    @property
-    def enabled(self) -> bool:
-        """False only for a ``privileged`` tool while the kill switch is off."""
-        return self.safety_class != "privileged" or privileged_enabled()
-
-    def as_public_dict(self) -> dict[str, Any]:
-        """Return the schema fields the LLM and UI can see (no handler)."""
-        return {
-            "name": self.name,
-            "description": self.description,
-            "safety_class": self.safety_class,
-            "parameters": self.parameters,
-            "summary_template": self.summary_template,
-            "enabled": self.enabled,
-        }
-
-
-class WizardToolRegistry:
-    """Lookup table for the Wizard's executable tools.
-
-    Safety enforcement lives here, not in the handlers: registering a tool
-    with ``safety_class="never"`` raises immediately so the constant can't
-    drift past code review. ``execute()`` rejects ``confirm`` and
-    ``privileged`` calls that arrive without ``confirmed=True``, and refuses
-    ``privileged`` calls outright while :func:`privileged_enabled` is False.
-    ``execute()`` is the only enforcement point — the HTTP layer and the chat
-    loop both call it and add nothing — so the kill switch is checked here on
-    every call, not at registration.
-    """
-
-    def __init__(self) -> None:
-        self._tools: dict[str, WizardTool] = {}
-
-    def register(self, tool: WizardTool) -> None:
-        if tool.safety_class == "never":
-            raise ValueError(
-                f"Tool '{tool.name}' has safety_class=never — never-class operations "
-                "are admin-only paths, not registry tools.",
-            )
-        if tool.safety_class not in SAFETY_CLASSES:
-            raise ValueError(
-                f"Tool '{tool.name}' has unknown safety_class '{tool.safety_class}'. "
-                "Allowed: 'auto', 'confirm', 'privileged'.",
-            )
-        if tool.name in self._tools:
-            logger.warning("Overwriting wizard tool '%s'", tool.name)
-        self._tools[tool.name] = tool
-
-    def get(self, name: str) -> WizardTool | None:
-        return self._tools.get(name)
-
-    def list_tools(self) -> list[WizardTool]:
-        """Tools ordered auto, confirm, privileged (then by name) — an explicit key,
-        so the classes' spelling never decides the catalogue order."""
-        return sorted(
-            self._tools.values(),
-            key=lambda t: (_SAFETY_ORDER.get(t.safety_class, len(SAFETY_CLASSES)), t.name),
-        )
-
-    async def plan(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        """The dry run for ``name`` — what a privileged tool *would* execute.
-
-        Runs nothing. ``None`` for an unknown tool or one without a planner;
-        a planner that raises becomes ``{ok: False, error, commands: []}``.
-        This is what the unconfirmed card carries as ``plan`` and what
-        ``chat.py`` puts on a surfaced privileged call.
-        """
-        tool = self.get(name)
-        if tool is None:
-            return None
-        return await _dry_run(tool, arguments or {})
-
-    async def execute(
+    def __init__(
         self,
         name: str,
+        description: str,
+        parameters: Mapping[str, Any] | None = None,
+        handler: ToolHandler | None = None,
+        safe: bool | None = None,
         *,
-        arguments: dict[str, Any] | None = None,
-        confirmed: bool = False,
-        approval_token: str | None = None,
-    ) -> dict[str, Any]:
-        """Run a tool by name. Returns ``{ok, result?, error?, needs_confirmation?}``.
+        safety_class: SafetyClass | None = None,
+        **fields: Any,
+    ) -> None:
+        if safety_class is None and safe is None:
+            raise TypeError(
+                f"WizardTool {name!r} needs an explicit safety_class "
+                f"({', '.join(repr(c) for c in SAFETY_CLASSES)}); a Wizard tool without one "
+                "is refused at load, never registered as auto.",
+            )
+        super().__init__(name, description, parameters, handler, safe, safety_class=safety_class, **fields)
 
-        - ``auto`` tools run regardless of ``confirmed``.
-        - ``confirm`` tools require ``confirmed=True``; otherwise return a
-          structured "I need a confirmation" response so the UI can render
-          the button card.
-        - ``privileged`` tools: refused (``disabled=True``) whenever the kill
-          switch is off, confirmed or not. Unconfirmed, the confirmation shape
-          above plus ``privileged=True``, ``plan`` (the tool's dry run, or
-          ``None`` when it has no planner) and the card's ``approval_token``
-          / ``approval_expires_at`` (:func:`issue_approval`). When the plan
-          declares ``pinned_arguments`` they are folded into the card's
-          ``arguments`` first, so the token signs what the card showed.
-          Confirmed, the call must bring a token valid for exactly this name
-          and these arguments (:func:`verify_approval`) or it is refused with
-          ``approval_required=True`` and nothing runs; then the handler runs,
-          an apply that changed the host (complete, partial or failed) is
-          recorded in the vault (``audit``) and the result is fitted to the
-          tool-result window.
-        - Unknown tools return ``ok=False`` with an error.
-
-        Handlers never raise out of here: an exception becomes ``ok=False``.
-        """
-        tool = self.get(name)
-        if tool is None:
-            return {"ok": False, "error": f"Unknown tool: {name}"}
-
-        privileged = tool.safety_class == "privileged"
-        if privileged and not privileged_enabled():
-            return {
-                "ok": False,
-                "error": PRIVILEGED_DISABLED_ERROR,
-                "disabled": True,
-                "tool": name,
-                "safety_class": tool.safety_class,
-            }
-
-        if tool.safety_class != "auto" and not confirmed:
-            card: dict[str, Any] = {
-                "ok": False,
-                "needs_confirmation": True,
-                "tool": tool.as_public_dict(),
-                "arguments": arguments or {},
-                "summary": format_summary(tool.summary_template, arguments) or tool.description,
-            }
-            if privileged:
-                card["privileged"] = True
-                plan = await self.plan(name, arguments or {})
-                card["plan"] = plan
-                pinned = _pinned_arguments(plan)
-                if pinned:
-                    # The planner's decisions (e.g. the isolation a shell run
-                    # will get) become part of the approved call: the UI sends
-                    # these arguments back, the token binds them, the handler
-                    # enforces them.
-                    arguments = {**(arguments or {}), **pinned}
-                    card["arguments"] = arguments
-                card.update(issue_approval(name, arguments or {}))
-            return card
-
-        if privileged and not verify_approval(name, arguments or {}, approval_token):
-            return {
-                "ok": False,
-                "error": APPROVAL_REQUIRED_ERROR,
-                "approval_required": True,
-                "tool": name,
-                "safety_class": tool.safety_class,
-            }
-
-        try:
-            result = await tool.handler(arguments or {})
-        except Exception as exc:
-            logger.warning("Wizard tool '%s' raised: %s", name, exc)
-            return {"ok": False, "error": str(exc)[:300], "tool": name}
-
-        envelope: dict[str, Any] = {"ok": True, "result": result, "tool": name, "safety_class": tool.safety_class}
-        if privileged:
-            if _privileged_applied(result):
-                envelope["audit"] = record_privileged_change(tool, arguments or {}, result)
-            if isinstance(result, dict):
-                envelope["result"] = fit_tool_window(result)
-        return envelope
+    @property
+    def parameters(self) -> dict[str, Any]:  # type: ignore[override]
+        """The Wizard shape ``{name: {type, description, required}}`` (derived from ``input_schema``)."""
+        return self.wizard_parameters
 
 
-async def _dry_run(tool: WizardTool, arguments: dict[str, Any]) -> dict[str, Any] | None:
-    """The plan a privileged tool would execute; ``None`` without a planner, never raises."""
-    if tool.planner is None:
-        return None
-    try:
-        plan = await tool.planner(arguments)
-    except Exception as exc:
-        logger.warning("Wizard tool '%s' planner raised: %s", tool.name, exc)
-        return {"ok": False, "error": f"dry run failed: {str(exc)[:200]}", "commands": []}
-    return plan if isinstance(plan, dict) else {"ok": True, "commands": [], "detail": str(plan)[:300]}
+class WizardToolRegistry(ToolRegistry):
+    """The Wizard's instance of the one registry: empty at construction, click-enforcing.
 
-
-def _privileged_applied(result: Any) -> bool:
-    """Did a privileged handler actually change the host?
-
-    ``applied: True`` is authoritative whatever ``ok`` says — a plan that
-    failed at step 3 changed the host in steps 1–2, and a single command
-    that exited non-zero may have changed it before failing (``systemctl
-    enable --now`` with a bad ExecStart enables the unit, ``apt-get`` exiting
-    100 after unpacking); both get a vault note. ``applied: False`` is
-    authoritative too: the handler says it touched nothing yet — a job it
-    started (``playbook_install``) audits itself when it finishes, having
-    seen what actually ran. Otherwise refusals (``ok: False``), terminal
-    hand-offs (``needs_terminal``) and non-dict answers are not applies and
-    get none.
+    No built-ins, no system tools; ``execute()`` requires ``confirmed=True``
+    for every ``confirm`` tool and the card's token for every ``privileged``
+    one — the single enforcement point the HTTP layer and the chat loop rely
+    on (they add nothing).
     """
-    if not isinstance(result, dict):
-        return False
-    if result.get("applied") is True:
-        return True
-    if result.get("applied") is False:
-        return False
-    return result.get("ok", True) is not False and not result.get("needs_terminal")
 
+    _logger: ClassVar[logging.Logger] = logger
 
-def _dumps(value: Any) -> str:
-    try:
-        return json.dumps(value, default=str)
-    except Exception:
-        return str(value)
-
-
-def _shrink_text(value: Any, budget: int) -> Any:
-    if not isinstance(value, str) or len(value) <= budget:
-        return value
-    return value[:budget] + "…"
-
-
-def _shrink_list(value: Any, keep: int) -> Any:
-    if not isinstance(value, list) or len(value) <= keep:
-        return value
-    return value[:keep] + [f"… {len(value) - keep} more"]
-
-
-#: Free text that is shrunk first, top level and inside ``steps``.
-_WINDOW_TEXT_KEYS = ("stdout", "stderr", "output", "changes")
-#: Lists that are shortened before anything is dropped.
-_WINDOW_LIST_KEYS = ("undo", "notes", "commands")
-#: What the last resort keeps: the verdict and every field the hand-off and
-#: refusal contracts depend on. ``command`` is never cut — a truncated command
-#: pasted into a terminal is worse than a long tool window.
-_WINDOW_KEEP_KEYS = (
-    "ok", "error", "summary", "setting", "needs_terminal", "command", "commands", "hint",
-    "denied", "disabled", "applied", "partial", "truncated", "note",
-)
-
-
-def fit_tool_window(result: dict[str, Any], limit: int = TOOL_RESULT_CHARS) -> dict[str, Any]:
-    """Cut a tool result so its JSON fits the model's tool-result window.
-
-    Shrinks the free-text fields first (top-level ``stdout`` / ``stderr`` /
-    ``output`` / ``changes`` and the same keys inside ``steps``) and shortens
-    the list fields (``undo``, ``notes``, ``commands``) in ever smaller
-    budgets, marking the result ``truncated`` with a note pointing at the
-    vault note. The last resort keeps the verdict plus the hand-off and
-    refusal fields (``needs_terminal``, ``command``, ``hint``, ``denied``,
-    ``applied``, ``partial``, …) and drops the rest, listing them in
-    ``dropped_keys``; if even that is over the limit, ``commands`` (a copy of
-    ``command`` for a one-step plan) goes too, but ``command`` itself is
-    never shortened. Returns the input untouched when it already fits.
-    Never raises.
-    """
-    if len(_dumps(result)) <= limit:
-        return result
-    out: dict[str, Any] = dict(result)
-    out["truncated"] = True
-    out["note"] = f"output cut to fit the {limit}-char tool window; the vault Decisions note keeps more"
-    for budget, keep_items in ((600, 12), (300, 6), (120, 3), (40, 1), (0, 1)):
-        for key in _WINDOW_TEXT_KEYS:
-            if key in out:
-                out[key] = _shrink_text(out[key], budget)
-        steps = out.get("steps")
-        if isinstance(steps, list):
-            out["steps"] = [
-                {k: (_shrink_text(v, budget) if k in _WINDOW_TEXT_KEYS else v) for k, v in step.items()}
-                if isinstance(step, dict) else step
-                for step in steps
-            ]
-        for key in _WINDOW_LIST_KEYS:
-            if key in out:
-                out[key] = _shrink_list(out[key], keep_items)
-        if len(_dumps(out)) <= limit:
-            return out
-    # Still too big (a handler stuffed something else in): keep the verdict
-    # and the fields the hand-off / refusal contracts need.
-    keep = {k: out[k] for k in _WINDOW_KEEP_KEYS if k in out}
-    keep["dropped_keys"] = sorted(k for k in out if k not in keep)
-    if len(_dumps(keep)) > limit and "commands" in keep:
-        del keep["commands"]
-        keep["dropped_keys"] = sorted([*keep["dropped_keys"], "commands"])
-    return keep
-
-
-def _audit_body(name: str, arguments: Mapping[str, Any], result: dict[str, Any]) -> str:
-    """Markdown body of the vault note for one privileged apply (``name`` is the tool's)."""
-    from nvh.core.agent_guardrails import redact_secrets
-
-    try:
-        from nvh.utils.platform_facts import detect_platform_facts
-
-        device = detect_platform_facts().device_label or "unknown device"
-    except Exception:
-        device = "unknown device"
-
-    lines = [
-        f"Tool: `{name}`",
-        f"Device: {device}",
-        f"Arguments: `{redact_secrets(_dumps(arguments))[:500]}`",
-        f"Outcome: {_audit_outcome(result)}",
-    ]
-    summary = result.get("summary")
-    if isinstance(summary, str) and summary.strip():
-        lines.append(f"Summary: {redact_secrets(summary.strip())[:500]}")
-    steps = result.get("steps")
-    if isinstance(steps, list) and steps:
-        lines += ["", "## Commands", ""]
-        for index, step in enumerate(steps, 1):
-            if not isinstance(step, dict):
-                lines.append(f"{index}. `{redact_secrets(str(step))[:500]}`")
-                continue
-            command = redact_secrets(str(step.get("command", "")))[:500]
-            exit_code = step.get("exit_code", "n/a")
-            lines.append(f"{index}. `{command}` — exit {exit_code}")
-            for stream in ("stdout", "stderr"):
-                text = step.get(stream)
-                if isinstance(text, str) and text.strip():
-                    body = redact_secrets(text.strip())
-                    if len(body) > AUDIT_OUTPUT_CHARS:
-                        body = body[:AUDIT_OUTPUT_CHARS] + f"\n[cut at {AUDIT_OUTPUT_CHARS} chars]"
-                    lines += ["", f"{stream}:", "", "```text", body, "```"]
-        lines.append("")
-    else:
-        lines += ["", "## Result", "", "```json", redact_secrets(_dumps(result))[:AUDIT_OUTPUT_CHARS], "```"]
-    return "\n".join(lines)
-
-
-def _audit_verdict(result: dict[str, Any]) -> str:
-    """``""`` for a clean apply, ``" (partial)"`` or ``" (failed)"`` otherwise — the title suffix."""
-    if result.get("ok") is False:
-        return " (partial)" if result.get("partial") else " (failed)"
-    return ""
-
-
-def _audit_outcome(result: dict[str, Any]) -> str:
-    verdict = _audit_verdict(result).strip(" ()") or "applied"
-    error = result.get("error")
-    if verdict != "applied" and isinstance(error, str) and error.strip():
-        from nvh.core.agent_guardrails import redact_secrets
-
-        return f"{verdict} — {redact_secrets(error.strip())[:300]}"
-    return verdict
-
-
-def audit_privileged_change(
-    name: str,
-    arguments: Mapping[str, Any] | None,
-    result: dict[str, Any],
-    *,
-    summary: str = "",
-    home_dir: Any = None,
-) -> dict[str, Any]:
-    """Write the vault audit note for a privileged change made under tool ``name``. Never raises.
-
-    The shared sink: :func:`record_privileged_change` calls it from
-    ``execute()`` for a tool's own apply, and the playbook job runner calls it
-    when a ``playbook-run`` finishes, having seen what ran — no
-    :class:`WizardTool` needed, only the name, the arguments and a result in
-    the apply shape (``ok``, ``applied``, ``partial``, ``error``, ``summary``,
-    ``steps`` with ``command`` / ``exit_code`` / output).
-
-    ``Decisions/`` in the vault (``append_vault_memory``), titled
-    ``Privileged change: <summary>`` — ``Privileged change (partial): …`` when
-    later steps never ran, ``Privileged change (failed): …`` when the command
-    that ran exited non-zero — body with the outcome, the commands, exit
-    codes, truncated redacted output and the platform's device label; tags
-    ``privileged`` and ``name``. ``summary`` falls back to ``result.summary``
-    then to ``name``. The vault is the one under ``NVH_HOME`` unless the
-    *caller's code* passes ``home_dir`` (the CLI's ``--home``); nothing in
-    ``arguments`` — the model wrote those — can point the note anywhere else.
-    Returns the writer's status (``saved``/``path``/``category``) or
-    ``{saved: False, error}``.
-    """
-    try:
-        from nvh.integrations.workspace.vault import append_vault_memory
-
-        result_summary = result.get("summary") if isinstance(result.get("summary"), str) else ""
-        title = (result_summary or summary or name).strip()
-        note = append_vault_memory(
-            f"Privileged change{_audit_verdict(result)}: {title[:80]}",
-            _audit_body(name, dict(arguments or {}), result),
-            category="Decisions",
-            tags=["privileged", name],
-            home_dir=home_dir,
-        )
-        return {"saved": bool(note.get("saved")), "path": note.get("path"), "category": note.get("category")}
-    except Exception as exc:
-        logger.warning("privileged audit note for '%s' not written: %s", name, exc)
-        return {"saved": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
-
-
-def record_privileged_change(
-    tool: WizardTool, arguments: dict[str, Any], result: dict[str, Any],
-) -> dict[str, Any]:
-    """Write the audit note for a privileged apply that touched the host. Never raises.
-
-    ``execute()``'s sink for a tool's own apply: :func:`audit_privileged_change`
-    under the tool's name, with the card's summary
-    (``summary_template`` rendered against the arguments) when the result
-    carries none. The vault is the one under ``NVH_HOME``.
-    """
-    return audit_privileged_change(
-        tool.name, arguments, result,
-        summary=format_summary(tool.summary_template, arguments) or tool.name,
-    )
+    def __init__(self) -> None:
+        super().__init__(None, False, builtins=False, include_mcp=False, enforce_confirmation=True)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -922,24 +410,32 @@ async def _tool_web_search(args: dict[str, Any]) -> dict[str, Any]:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Tool discovery — entry-points + workspace plugin directory
+# Tool discovery — entry-points + the plugins directory
 # ────────────────────────────────────────────────────────────────────────────
 
 # Distributions that ship Wizard tools (incl. third-party plugins down the
 # road) advertise them under this entry-point group. Each entry point should
 # resolve to a callable ``register(reg: WizardToolRegistry) -> None`` so
-# multi-tool packages don't have to publish one entry per tool.
+# multi-tool packages don't have to publish one entry per tool. (Provider /
+# agent / cabinet plugins use the ``nvhive.plugins`` group — see
+# nvh/plugins/manager.py; the two contracts differ.)
 ENTRY_POINT_GROUP = "nvh.wizard_tools"
 
 # Workspace-local plugin directory. Drop a Python file with a top-level
-# ``register(reg)`` callable here and it gets loaded on registry build. This
-# is the simplest possible "extend the Wizard" path that doesn't need a wheel
-# rebuild. Sandbox is the user's filesystem; same trust boundary as their
-# own scripts. The directory is ignored if it doesn't exist.
+# ``register(reg)`` callable in the one plugins directory (``NVH_HOME/plugins``,
+# :func:`nvh.plugins.manager.plugins_dir`) and it gets loaded on registry
+# build. This is the simplest possible "extend the Wizard" path that doesn't
+# need a wheel rebuild. Sandbox is the user's filesystem; same trust boundary
+# as their own scripts — but only files that declare ``register`` are ever
+# executed here (provider plugins in the same directory are not). Missing
+# directories are ignored. The variable overrides the directory outright
+# (tests, one-off experiments).
 WORKSPACE_PLUGIN_DIR_ENV = "NVH_WIZARD_PLUGIN_DIR"
+#: Pre-0.44 location, read (never written) for one more release.
+LEGACY_WIZARD_PLUGIN_SUBDIR = "wizard-tools"
 
 
-def _load_entry_point_tools(reg: WizardToolRegistry) -> None:
+def _load_entry_point_tools(reg: ToolRegistry) -> None:
     """Discover Wizard-tool registrations advertised via importlib.metadata.
 
     Best-effort: a broken entry point logs a warning and is skipped — never
@@ -964,52 +460,61 @@ def _load_entry_point_tools(reg: WizardToolRegistry) -> None:
             logger.warning("entry point %s failed: %s", ep.name, exc)
 
 
-def _load_workspace_plugin_tools(reg: WizardToolRegistry) -> None:
-    """Load .py plugins from the workspace plugin directory.
-
-    Walks ``$NVH_WIZARD_PLUGIN_DIR`` (or ``$NVH_HOME/wizard-tools/`` by
-    default) and imports each ``.py`` file via spec_from_file_location. If
-    the file exposes a top-level ``register(reg)`` callable, it gets called.
-    """
+def _wizard_plugin_dirs() -> list[Any]:
+    """The directories ``.py`` Wizard plugins are read from, in load order."""
     import os as _os
-    from importlib import util as _util
+    from pathlib import Path as _Path
 
-    plugin_dir_str = _os.environ.get(WORKSPACE_PLUGIN_DIR_ENV)
-    if plugin_dir_str:
-        from pathlib import Path as _Path
+    override = _os.environ.get(WORKSPACE_PLUGIN_DIR_ENV)
+    if override:
+        return [_Path(override).expanduser()]
+    try:
+        from nvh.plugins.manager import plugins_dir
 
-        plugin_dir = _Path(plugin_dir_str).expanduser()
-    else:
-        try:
-            from nvh.integrations.workspace.storage import nvh_home
+        primary = plugins_dir()
+    except Exception:
+        return []
+    return [primary, primary.parent / LEGACY_WIZARD_PLUGIN_SUBDIR]
 
-            home, _src = nvh_home(None)
-            from pathlib import Path as _Path
 
-            plugin_dir = home / "wizard-tools"
-        except Exception:
-            return
-    if not plugin_dir.is_dir():
-        return
-    for path in plugin_dir.glob("*.py"):
-        if path.name.startswith("_"):
-            continue
-        try:
-            spec = _util.spec_from_file_location(f"nvh_wizard_plugin_{path.stem}", path)
-            if spec is None or spec.loader is None:
-                continue
-            mod = _util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            reg_fn = getattr(mod, "register", None)
-            if callable(reg_fn):
-                reg_fn(reg)
-                logger.info("loaded wizard plugin %s", path.name)
-        except Exception as exc:
-            logger.warning("wizard plugin %s failed: %s", path.name, exc)
+def _load_workspace_plugin_tools(reg: ToolRegistry) -> None:
+    """Load ``.py`` Wizard tool plugins from the plugins directory.
+
+    Walks ``$NVH_WIZARD_PLUGIN_DIR`` when set, otherwise the one plugins
+    directory (``$NVH_HOME/plugins``) and, for one release, the pre-0.44
+    ``$NVH_HOME/wizard-tools`` — through the same
+    :func:`nvh.plugins.manager.plugin_files` walk ``nvh plugins`` uses. A file
+    is executed only when its source declares a top-level ``register``
+    (:func:`nvh.plugins.manager.declares_top_level`, an ``ast`` probe that
+    runs nothing): provider / agent plugins (an ``NVHIVE_PLUGIN`` manifest,
+    no ``register``) are never imported into the API server process by a
+    chat turn. A file that does not parse, raises on import or registers a
+    tool without a safety class logs a warning and is skipped — never fatal
+    to the rest of the registry build.
+    """
+    from nvh.plugins.manager import (
+        WIZARD_REGISTER_NAME,
+        declares_top_level,
+        load_plugin_module,
+        plugin_files,
+    )
+
+    for plugin_dir in _wizard_plugin_dirs():
+        for path in plugin_files(plugin_dir):
+            try:
+                if not declares_top_level(path, WIZARD_REGISTER_NAME):
+                    continue
+                mod = load_plugin_module(path, f"nvh_wizard_plugin_{path.stem}")
+                reg_fn = getattr(mod, WIZARD_REGISTER_NAME, None)
+                if callable(reg_fn):
+                    reg_fn(reg)
+                    logger.info("loaded wizard plugin %s", path.name)
+            except Exception as exc:
+                logger.warning("wizard plugin %s failed: %s", path.name, exc)
 
 
 def default_registry() -> WizardToolRegistry:
-    """Build the registry with nvHive's stock tools + any discovered plugins.
+    """Build the Wizard registry with nvHive's stock tools + any discovered plugins.
 
     Kept as a builder rather than a module-level singleton so the API layer
     can rebuild it for tests without import-time side effects.
@@ -1017,8 +522,8 @@ def default_registry() -> WizardToolRegistry:
     After the stock tools land, we run two discovery passes:
       1. ``importlib.metadata`` entry points under the ``nvh.wizard_tools``
          group — for packaged plugins installed via pip.
-      2. ``.py`` files under the workspace plugin directory — for one-off
-         user tools dropped into the rootless home without a wheel rebuild.
+      2. ``.py`` files under the plugins directory — for one-off user tools
+         dropped into the rootless home without a wheel rebuild.
 
     Both passes are best-effort: a broken plugin logs and is skipped.
     """

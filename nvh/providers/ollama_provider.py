@@ -16,6 +16,7 @@ import httpx
 import litellm
 
 from nvh.core import local_models
+from nvh.core.tools import normalize_tool_calls, wire_tool_calls
 from nvh.providers.base import (
     CompletionResponse,
     FinishReason,
@@ -641,6 +642,45 @@ class OllamaProvider:
         self._model_ctx_limits[raw_model] = limit if limit and limit > 0 else None
         return self._model_ctx_limits[raw_model]
 
+    async def supports_tools(self, model: str | None = None) -> bool:
+        """Does the daemon say ``model`` can take ``tools`` on ``/api/chat``?
+
+        Ollama lists ``"tools"`` under ``capabilities`` in ``/api/show`` for
+        models whose template renders tool calls (qwen3, llama3.1, mistral,
+        …). Cached per tag for the life of the instance; any failure — daemon
+        down, old daemon without ``capabilities``, unknown tag — is ``False``
+        so the caller falls back to the ``TOOL_CALL:`` text protocol.
+        """
+        raw_model = self._get_model(model).removeprefix("ollama/")
+        cache = self.__dict__.setdefault("_tool_capable", {})
+        if raw_model in cache:
+            return cache[raw_model]
+        capable = False
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{self._base_url.rstrip('/')}/api/show",
+                    json={"model": raw_model},
+                    timeout=5.0,
+                )
+                resp.raise_for_status()
+                capabilities = resp.json().get("capabilities") or []
+                capable = isinstance(capabilities, list) and "tools" in capabilities
+        except Exception:
+            capable = False
+        cache[raw_model] = capable
+        return capable
+
+    @staticmethod
+    def _wire_tool_calls(raw: Any) -> list[dict[str, Any]]:
+        """Ollama's ``message.tool_calls`` (``arguments`` a dict) as the OpenAI wire shape.
+
+        The one mapping every adapter uses (:func:`nvh.core.tools.normalize_tool_calls`
+        + :func:`nvh.core.tools.wire_tool_calls`): a call without an ``id``
+        gets ``call_<n>`` here exactly as it does on the LiteLLM paths.
+        """
+        return wire_tool_calls(normalize_tool_calls(raw or []))
+
     async def _options(self, raw_model: str, temperature: float, max_tokens: int) -> dict[str, Any]:
         """Ollama ``options`` for one request: sampling, plus the ``num_ctx`` :meth:`_num_ctx_for` grants, never above the model's own."""
         options: dict[str, Any] = {"temperature": temperature, "num_predict": max_tokens}
@@ -809,6 +849,8 @@ class OllamaProvider:
         temperature: float = 1.0,
         max_tokens: int = 4096,
         system_prompt: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         prefer_vision = bool(kwargs.pop("prefer_vision", False))
@@ -826,15 +868,27 @@ class OllamaProvider:
             if installed:
                 model_name = installed
 
+        # Native function calling only where the daemon says the picked model
+        # renders tool calls; otherwise ``tools`` is dropped and the caller's
+        # TOOL_CALL: text protocol applies (D3 degrades). ``tool_choice`` has
+        # no Ollama counterpart. The fallback paths below stay text-only.
+        native_tools = list(tools) if tools and await self.supports_tools(model_name) else None
+
         # Prefer Ollama's native API for local desktop installs. It avoids a
         # class of LiteLLM edge cases where a freshly loaded local model reports
         # usage but returns no text, which made first-run quick tests feel broken.
         direct_error: Exception | None = None
         try:
-            content = await self._direct_complete(
-                msgs, model_name, temperature, max_tokens,
-            )
-            if content.strip():
+            tool_calls: list[dict[str, Any]] = []
+            if native_tools:
+                content, tool_calls = await self._direct_chat(
+                    msgs, model_name, temperature, max_tokens, tools=native_tools,
+                )
+            else:
+                content = await self._direct_complete(
+                    msgs, model_name, temperature, max_tokens,
+                )
+            if content.strip() or tool_calls:
                 elapsed = int((time.monotonic() - start) * 1000)
                 output_tokens = max(1, self.estimate_tokens(content))
                 prompt_tokens = sum(
@@ -852,8 +906,9 @@ class OllamaProvider:
                     ),
                     cost_usd=Decimal("0"),
                     latency_ms=elapsed,
-                    finish_reason=FinishReason.STOP,
+                    finish_reason=FinishReason.TOOL_CALLS if tool_calls else FinishReason.STOP,
                     metadata={"transport": "ollama-api"},
+                    tool_calls=tool_calls or None,
                 )
             if auto_model:
                 fallback_model = await self._installed_model_fallback(
@@ -1041,6 +1096,43 @@ class OllamaProvider:
             metadata=metadata,
         )
 
+    async def _direct_chat(
+        self,
+        messages: list[dict],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        *,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """One ``/api/chat`` call, bypassing LiteLLM: ``(content, tool_calls)``.
+
+        ``tools`` (OpenAI function specs — Ollama takes the same shape) are
+        sent only when given; ``tool_calls`` come back in the wire shape.
+        """
+        # Strip ollama/ prefix for direct API call
+        raw_model = model.removeprefix("ollama/")
+        options = await self._options(raw_model, temperature, max_tokens)
+        body: dict[str, Any] = {
+            "model": raw_model,
+            "messages": self._messages_for_ollama(messages),
+            "stream": False,
+            "options": options,
+        }
+        if tools:
+            body["tools"] = tools
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{self._base_url}/api/chat",
+                json=body,
+                timeout=self._timeout,
+            )
+            await _raise_for_ollama_status(resp)
+            data = resp.json()
+            message = data.get("message") or {}
+            return message.get("content", "") or "", self._wire_tool_calls(message.get("tool_calls"))
+
     async def _direct_complete(
         self,
         messages: list[dict],
@@ -1048,29 +1140,13 @@ class OllamaProvider:
         temperature: float,
         max_tokens: int,
     ) -> str:
-        """Call Ollama API directly, bypassing LiteLLM.
+        """Call Ollama API directly, bypassing LiteLLM; the text only.
 
         Fallback for models where LiteLLM returns empty content
         (e.g. Gemma 4 with code/structured responses).
         """
-        # Strip ollama/ prefix for direct API call
-        raw_model = model.removeprefix("ollama/")
-        options = await self._options(raw_model, temperature, max_tokens)
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self._base_url}/api/chat",
-                json={
-                    "model": raw_model,
-                    "messages": self._messages_for_ollama(messages),
-                    "stream": False,
-                    "options": options,
-                },
-                timeout=self._timeout,
-            )
-            await _raise_for_ollama_status(resp)
-            data = resp.json()
-            return data.get("message", {}).get("content", "")
+        content, _calls = await self._direct_chat(messages, model, temperature, max_tokens)
+        return content
 
     async def stream(
         self,
@@ -1079,6 +1155,8 @@ class OllamaProvider:
         temperature: float = 1.0,
         max_tokens: int = 4096,
         system_prompt: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         prefer_vision = bool(kwargs.pop("prefer_vision", False))
@@ -1094,9 +1172,17 @@ class OllamaProvider:
             if installed:
                 model_name = installed
 
+        # Same gate as ``complete``: native tools only where the daemon says
+        # the model renders them; the fallback paths stay text-only.
+        native_tools = list(tools) if tools and await self.supports_tools(model_name) else None
+
         try:
-            async for chunk in self._direct_stream(msgs, model_name, temperature, max_tokens):
-                yield chunk
+            if native_tools:
+                async for chunk in self._direct_stream(msgs, model_name, temperature, max_tokens, tools=native_tools):
+                    yield chunk
+            else:
+                async for chunk in self._direct_stream(msgs, model_name, temperature, max_tokens):
+                    yield chunk
             return
         except Exception as e:
             recovered = False
@@ -1134,28 +1220,35 @@ class OllamaProvider:
         model: str,
         temperature: float,
         max_tokens: int,
+        *,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream directly from Ollama's native API.
 
         LiteLLM is useful for cloud providers, but local Ollama is more reliable
         when we keep the chat stream close to the daemon. This also makes the
         first local-model test less fragile on fresh VMs where the model is
-        still loading into VRAM.
+        still loading into VRAM. With ``tools`` the daemon's ``message.tool_calls``
+        are collected and delivered whole on the final chunk.
         """
         raw_model = model.removeprefix("ollama/")
         accumulated = ""
+        tool_calls: list[dict[str, Any]] = []
         options = await self._options(raw_model, temperature, max_tokens)
+        body: dict[str, Any] = {
+            "model": raw_model,
+            "messages": self._messages_for_ollama(messages),
+            "stream": True,
+            "options": options,
+        }
+        if tools:
+            body["tools"] = tools
         timeout = httpx.Timeout(self._timeout, connect=5.0, read=self._timeout, write=30.0, pool=30.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream(
                 "POST",
                 f"{self._base_url.rstrip('/')}/api/chat",
-                json={
-                    "model": raw_model,
-                    "messages": self._messages_for_ollama(messages),
-                    "stream": True,
-                    "options": options,
-                },
+                json=body,
             ) as resp:
                 await _raise_for_ollama_status(resp)
                 async for line in resp.aiter_lines():
@@ -1164,7 +1257,9 @@ class OllamaProvider:
                     data = json.loads(line)
                     if data.get("error"):
                         raise RuntimeError(str(data["error"]))
-                    delta = str((data.get("message") or {}).get("content") or "")
+                    message = data.get("message") or {}
+                    delta = str(message.get("content") or "")
+                    tool_calls.extend(self._wire_tool_calls(message.get("tool_calls")))
                     accumulated += delta
                     is_final = bool(data.get("done"))
                     usage = None
@@ -1184,7 +1279,10 @@ class OllamaProvider:
                         provider=self._provider_name,
                         usage=usage,
                         cost_usd=Decimal("0") if is_final else None,
-                        finish_reason=FinishReason.STOP if is_final else None,
+                        finish_reason=(
+                            (FinishReason.TOOL_CALLS if tool_calls else FinishReason.STOP) if is_final else None
+                        ),
+                        tool_calls=(tool_calls or None) if is_final else None,
                     )
                     if is_final:
                         return
