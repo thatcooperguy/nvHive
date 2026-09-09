@@ -101,6 +101,7 @@ def test_default_plugin_dir_is_the_one_plugins_directory_under_nvh_home(tmp_path
 
     monkeypatch.setenv("NVH_HOME", str(tmp_path))
     monkeypatch.delenv("NVH_WIZARD_PLUGIN_DIR", raising=False)
+    monkeypatch.delenv("NVH_PLUGINS", raising=False)
     primary = plugins_dir()
     primary.mkdir(parents=True)
     (primary / "one.py").write_text(_PLUGIN_SOURCE % "plugin_from_plugins_dir")

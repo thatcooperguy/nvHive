@@ -22,6 +22,9 @@ class TestPluginsDir:
         from nvh.plugins.manager import PluginManager, plugins_dir
 
         monkeypatch.setenv("NVH_HOME", str(tmp_path))
+        # This contract tests the home default, not an explicit component
+        # override left by a preceding API storage-activation test.
+        monkeypatch.delenv("NVH_PLUGINS", raising=False)
         target = plugins_dir()
         target.mkdir(parents=True)
         (target / "from_home.py").write_text("NVHIVE_PLUGIN = {'type': 'agent', 'name': 'from_home'}\n")

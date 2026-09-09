@@ -490,6 +490,8 @@ class TestTwoInstances:
 
     def test_mcp_tools_reach_the_agent_registry_only_by_opt_in(self, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("NVH_HOME", str(tmp_path))
+        for name in ("NVH_CONFIG", "HIVE_CONFIG_HOME", "NVH_STATE"):
+            monkeypatch.delenv(name, raising=False)
         monkeypatch.delenv("NVH_AGENT_MCP_TOOLS", raising=False)
         (tmp_path / "config").mkdir()
         (tmp_path / "state").mkdir()
