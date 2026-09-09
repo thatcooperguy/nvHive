@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from unittest.mock import AsyncMock
+import sys
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -37,6 +38,30 @@ NEUTRAL_PLATFORM_FACTS = _platform_facts.PlatformFacts(
     in_sudo_group=False,
     is_cloud=False,
 )
+
+
+@pytest.fixture(autouse=True)
+def _restore_storage_activation():
+    """API tests may activate a layout for the entire process.
+
+    Restore its environment and cached config paths after each test, including
+    direct ``os.environ.update`` writes that a test's monkeypatch did not own.
+    Otherwise later plugin/MCP tests read a previous test's config and state.
+    """
+    from nvh.config import settings
+
+    saved_dir = settings.DEFAULT_CONFIG_DIR
+    saved_path = settings.DEFAULT_CONFIG_PATH
+    with patch.dict(os.environ):
+        yield
+    for module_name in ("nvh.config.settings", "nvh.cli.setup", "nvh.cli.main"):
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        if hasattr(module, "DEFAULT_CONFIG_DIR"):
+            module.DEFAULT_CONFIG_DIR = saved_dir
+        if hasattr(module, "DEFAULT_CONFIG_PATH"):
+            module.DEFAULT_CONFIG_PATH = saved_path
 
 
 @pytest.fixture(autouse=True)
