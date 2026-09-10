@@ -146,7 +146,7 @@ def fake_registry(monkeypatch) -> tuple[WizardToolRegistry, dict[str, _Counter]]
         name="system_settings_apply", description="Apply a system setting (sudo).", safety_class="privileged",
         parameters={"setting": {}}, handler=counters["system_settings_apply"], planner=_plan_stub,
     ))
-    monkeypatch.setattr("nvh.integrations.wizard.tools.default_registry", lambda: reg)
+    monkeypatch.setattr("nvh.integrations.wizard.tools.default_registry", lambda **kwargs: reg)
     return reg, counters
 
 
@@ -1156,7 +1156,7 @@ async def test_turn_builds_registry_and_loads_profile_catalog_once(
     registry_builds: list[int] = []
     monkeypatch.setattr(
         "nvh.integrations.wizard.tools.default_registry",
-        lambda: registry_builds.append(1) or reg,
+        lambda **kwargs: registry_builds.append(1) or reg,
     )
     real_list = profiles_mod.list_profiles
     catalog_loads: list[Any] = []

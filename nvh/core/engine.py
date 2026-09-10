@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any
 
 from nvh.config.settings import CouncilConfig, load_config
+from nvh.core.atohi import wait_resource_tasks
 from nvh.core.context import ConversationManager
 from nvh.core.council import CouncilOrchestrator, CouncilResponse
 from nvh.core.rate_limiter import ProviderRateManager
@@ -194,7 +195,7 @@ class Engine:
         registry: ProviderRegistry | None = None,
     ):
         self.config = config or load_config()
-        self.registry = registry or get_registry()
+        self.registry = (registry or get_registry()).scoped(self.config)
         self.rate_manager = ProviderRateManager()
         self.router = RoutingEngine(self.config, self.registry, self.rate_manager)
         self.council = CouncilOrchestrator(self.config, self.registry, self.rate_manager)
@@ -250,6 +251,7 @@ class Engine:
 
         Returns list of enabled provider names.
         """
+        self.registry.check_admission_available()
         if not self._initialized:
             try:
                 await repo.init_db()
@@ -1125,7 +1127,7 @@ class Engine:
         messages = [Message(role="user", content=prompt)]
 
         tasks = {}
-        for pname in target_providers:
+        for pname in dict.fromkeys(target_providers):
             if not self.registry.has(pname):
                 continue
             p = self.registry.get(pname)
@@ -1142,6 +1144,7 @@ class Engine:
             )
 
         results: dict[str, CompletionResponse] = {}
+        await wait_resource_tasks(tasks.values())
         for pname, task in tasks.items():
             try:
                 results[pname] = await task

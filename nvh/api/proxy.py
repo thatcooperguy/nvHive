@@ -46,7 +46,44 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from nvh.core.atohi import ResourcePaused
 from nvh.providers.specs import PROVIDER_SPECS
+
+
+async def _close_stream(iterator: Any) -> None:
+    close = getattr(iterator, "aclose", None)
+    if close is not None:
+        await close()
+
+
+def _terminal_resource_pause(*, anthropic: bool = False):
+    """Cover setup, iteration and cleanup with one terminal protocol error."""
+    def decorate(generate):
+        @functools.wraps(generate)
+        async def guarded(*args, **kwargs):
+            iterator = generate(*args, **kwargs)
+            interrupted = False
+            try:
+                try:
+                    async for item in iterator:
+                        yield item
+                except (asyncio.CancelledError, GeneratorExit):
+                    interrupted = True
+                    raise
+                finally:
+                    await _close_stream(iterator)
+            except ResourcePaused as exc:
+                if interrupted:
+                    # A disconnected consumer cannot receive another SSE event.
+                    raise
+                detail = exc.as_dict()
+                error = {"message": detail.pop("error"), "type": "resource_paused", **detail}
+                event = {"type": "error", "error": error} if anthropic else {"error": error}
+                prefix = "event: error\n" if anthropic else ""
+                yield f"{prefix}data: {json.dumps(event)}\n\n".encode()
+
+        return guarded
+    return decorate
 
 # ---------------------------------------------------------------------------
 # Model → provider mapping, derived from the spec table
@@ -287,6 +324,7 @@ def format_openai_response(
     }
 
 
+@_terminal_resource_pause()
 async def openai_stream_generator(
     engine: Any,
     prompt: str,
@@ -357,6 +395,8 @@ async def openai_stream_generator(
     # OpenAI-compatible clients like Continue / Cursor indefinitely.
     CHUNK_STALL_TIMEOUT = 45.0  # noqa: N806 — local constant, intentional uppercase
 
+    aiter = None
+    finish_chunk = None
     try:
         aiter = provider.stream(
             messages=messages,
@@ -414,7 +454,6 @@ async def openai_stream_generator(
                         }
                     ],
                 }
-                yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
                 break
 
     except Exception as exc:
@@ -426,7 +465,11 @@ async def openai_stream_generator(
             }
         }
         yield f"data: {json.dumps(error_chunk)}\n\n".encode()
+    finally:
+        await _close_stream(aiter)
 
+    if finish_chunk is not None:
+        yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"
 
 
@@ -457,6 +500,7 @@ def _extract_content(result: Any) -> str:
     return ""
 
 
+@_terminal_resource_pause()
 async def council_stream_generator(
     engine: Any,
     prompt: str,
@@ -540,6 +584,7 @@ async def council_stream_generator(
     yield b"data: [DONE]\n\n"
 
 
+@_terminal_resource_pause()
 async def throwdown_stream_generator(
     engine: Any,
     prompt: str,
@@ -758,6 +803,7 @@ def format_anthropic_response(
     }
 
 
+@_terminal_resource_pause(anthropic=True)
 async def anthropic_stream_generator(
     engine: Any,
     prompt: str,
@@ -851,6 +897,7 @@ async def anthropic_stream_generator(
     # Per-chunk stall timeout — keeps Anthropic-compatible clients from
     # hanging when a backing provider stalls mid-stream.
     CHUNK_STALL_TIMEOUT = 45.0  # noqa: N806 — local constant, intentional uppercase
+    aiter = None
     try:
         aiter = provider.stream(
             messages=messages,
@@ -904,6 +951,8 @@ async def anthropic_stream_generator(
             f"data: {json.dumps(error_event)}\n\n"
         ).encode()
         return
+    finally:
+        await _close_stream(aiter)
 
     # content_block_stop
     block_stop = {"type": "content_block_stop", "index": 0}

@@ -280,8 +280,11 @@ async def run_agent_loop(
             coding agent's approach and rules); the tool catalogue and the
             protocol are never duplicated by the caller.
     """
+    admission = engine.registry.admission
     if tools is None:
-        tools = ToolRegistry()
+        tools = ToolRegistry(admission=admission)
+    else:
+        tools = tools.with_admission(admission)
 
     # Build system prompt with tool descriptions
     # Include desktop agent guidance if vision/desktop tools are available

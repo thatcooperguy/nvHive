@@ -77,21 +77,18 @@ def _build_registry(*names) -> ProviderRegistry:
 
 def _make_orchestrator():
     """Build orchestrator with minimal fakes."""
-    cfg = MagicMock()
-    cfg.council.strategy = "weighted_consensus"
-    cfg.council.synthesis_provider = "synth"
-    cfg.council.timeout = 30
-    cfg.council.quorum = 2
-    cfg.council.default_weights = {}
-    cfg.providers = {}
-
-    registry = MagicMock()
-    registry.list_enabled.return_value = ["synth"]
-    registry.has.return_value = True
+    cfg = _build_config(
+        providers={"synth": ProviderConfig(default_model="m")},
+        council=CouncilModeConfig(
+            strategy="weighted_consensus", synthesis_provider="synth",
+            timeout=30, quorum=2, default_weights={},
+        ),
+    )
+    registry = ProviderRegistry()
 
     mock_provider = AsyncMock()
     mock_provider.complete = AsyncMock(return_value=_resp("synthesized"))
-    registry.get.return_value = mock_provider
+    registry.register("synth", mock_provider)
 
     return CouncilOrchestrator(cfg, registry), mock_provider
 

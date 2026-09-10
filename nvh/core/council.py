@@ -13,6 +13,7 @@ from decimal import Decimal
 logger = logging.getLogger(__name__)
 
 from nvh.config.settings import CouncilConfig
+from nvh.core.atohi import wait_resource_tasks
 from nvh.providers.base import (
     CompletionResponse,
     FinishReason,
@@ -85,7 +86,7 @@ class CouncilOrchestrator:
         rate_manager=None,  # ProviderRateManager | None — optional for health-aware selection
     ):
         self.config = config
-        self.registry = registry
+        self.registry = registry.scoped(config)
         self.rate_manager = rate_manager
 
     # Minimum health score for a provider to be considered usable.
@@ -335,6 +336,7 @@ class CouncilOrchestrator:
                 "security_review", "code_review", "product", "data", "full_board").
             num_agents: Number of agent personas to generate (default: match member count).
         """
+        self.registry.check_admission_available()
         members = self._resolve_members(members_override, weights_override)
         strategy = strategy or self.config.council.strategy
         timeout = timeout or self.config.council.timeout
@@ -432,16 +434,10 @@ class CouncilOrchestrator:
                 )
 
         # Wait for all tasks (with overall timeout)
-        done, pending = await asyncio.wait(
+        done, pending = await wait_resource_tasks(
             tasks.values(),
             timeout=timeout + 5,  # extra buffer
         )
-
-        # Cancel and await any still-pending tasks to prevent resource leaks
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
 
         # Collect results
         for label, task in tasks.items():
@@ -541,6 +537,7 @@ class CouncilOrchestrator:
           synthesis_complete  — synthesis finished
           council_complete    — entire session done
         """
+        self.registry.check_admission_available()
         members = self._resolve_members(members_override, weights_override)
         strategy = strategy or self.config.council.strategy
         timeout = timeout or self.config.council.timeout
@@ -695,15 +692,11 @@ class CouncilOrchestrator:
 
         # Run all member streams concurrently with timeout
         council_timeout = timeout or self.config.council.timeout
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(
-                    *[_stream_member(m) for m in members],
-                    return_exceptions=True,
-                ),
-                timeout=council_timeout + 5,
-            )
-        except TimeoutError:
+        _, pending = await wait_resource_tasks(
+            [asyncio.create_task(_stream_member(m)) for m in members],
+            timeout=council_timeout + 5,
+        )
+        if pending:
             for m in members:
                 if m.label not in member_responses and m.label not in failed_members:
                     failed_members[m.label] = "timed out"

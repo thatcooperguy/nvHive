@@ -70,6 +70,7 @@ the provider whether the picked model can take ``tools=`` at all.
 from __future__ import annotations
 
 import base64
+import copy
 import glob as globmod
 import hmac
 import inspect
@@ -81,8 +82,11 @@ import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, ClassVar
+
+if TYPE_CHECKING:
+    from nvh.core.atohi import AtohiAdmission
 
 from nvh.core import agent_guardrails as _guardrails
 
@@ -793,6 +797,7 @@ class ToolRegistry:
         builtins: bool = True,
         include_mcp: bool | None = None,
         enforce_confirmation: bool = False,
+        admission: AtohiAdmission | None = None,
     ) -> None:
         self._tools: dict[str, Tool] = {}
         self.workspace = workspace or os.getcwd()
@@ -807,7 +812,10 @@ class ToolRegistry:
             ):
                 try:
                     module = __import__(module_name, fromlist=[register_name])
-                    getattr(module, register_name)(self)
+                    if register_name == "register_vision_tools":
+                        getattr(module, register_name)(self, admission=admission)
+                    else:
+                        getattr(module, register_name)(self)
                 except Exception as exc:  # optional tool packs
                     self._logger.debug("%s skipped: %s", module_name, exc)
         if include_mcp is None:
@@ -819,6 +827,20 @@ class ToolRegistry:
                 register_mcp_tools(self)
             except Exception as exc:
                 self._logger.warning("mcp tool registration skipped: %s", exc)
+
+    def with_admission(self, admission: AtohiAdmission) -> ToolRegistry:
+        """Copy this catalogue and rebind only built-in model-using vision tools.
+
+        Custom tools, their safety policy and the supplied registry remain intact.
+        Factories live on trusted Python handlers, never on request arguments.
+        """
+        scoped = copy.copy(self)
+        scoped._tools = self._tools.copy()
+        for name, tool in self._tools.items():
+            bind = tool.handler.__dict__.get("_nvh_vision_rebind") if inspect.isfunction(tool.handler) else None
+            if bind is not None:
+                scoped._tools[name] = replace(tool, handler=bind(admission))
+        return scoped
 
     # -- registration and lookup ------------------------------------------
 

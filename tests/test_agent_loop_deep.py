@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from nvh.config.settings import CouncilConfig
 from nvh.core.agent_loop import (
     AGENT_SYSTEM_PROMPT,
     MAX_TOOL_CALLS_PER_TURN,
@@ -28,6 +29,7 @@ from nvh.core.agent_loop import (
 )
 from nvh.core.tools import Tool, ToolRegistry, ToolResult
 from nvh.providers.base import CompletionResponse, Usage
+from nvh.providers.registry import ProviderRegistry
 
 # ---------------------------------------------------------------------------
 # _extract_tool_calls
@@ -155,6 +157,7 @@ class TestExtractToolCalls:
 def _make_mock_engine(responses: list[str]):
     """Build a mock engine that returns the given responses in sequence."""
     engine = AsyncMock()
+    engine.registry = ProviderRegistry().scoped(CouncilConfig())
     side_effects = []
     for text in responses:
         resp = MagicMock()
@@ -172,11 +175,12 @@ def _make_mock_registry(known_tools: dict[str, bool] | None = None):
     if known_tools is None:
         known_tools = {"read_file": True, "write_file": False}
 
-    registry = MagicMock()
+    registry = ToolRegistry(include_system=False, builtins=False)
     tools_map: dict[str, Tool] = {}
     for name, safe in known_tools.items():
         t = Tool(name=name, description=f"mock {name}", parameters={}, handler=AsyncMock(), safe=safe)
         tools_map[name] = t
+        registry.register(t)
 
     registry.get = MagicMock(side_effect=lambda n: tools_map.get(n))
     registry.get_tool_descriptions = MagicMock(return_value="mock tool descriptions")
@@ -433,6 +437,8 @@ Then I'll write:
     @pytest.mark.asyncio
     async def test_agent_loop_completes_without_tools(self):
         class MockEngine:
+            registry = ProviderRegistry().scoped(CouncilConfig())
+
             async def query(self, prompt="", **kw):
                 return CompletionResponse(
                     content="The answer is 42.", model="m", provider="mock",
@@ -447,6 +453,8 @@ Then I'll write:
         call_count = 0
 
         class MockEngine:
+            registry = ProviderRegistry().scoped(CouncilConfig())
+
             async def query(self, prompt="", **kw):
                 nonlocal call_count
                 call_count += 1

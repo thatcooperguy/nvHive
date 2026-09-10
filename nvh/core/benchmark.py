@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from nvh.core.atohi import AtohiAdmission
 
 
 @dataclass
@@ -62,11 +66,37 @@ BENCHMARK_PROMPTS = [
 ]
 
 
+def _benchmark_provider(provider, admission: AtohiAdmission | None):
+    from nvh.core.atohi import AdmittedProvider, AtohiAdmission
+
+    wrapped = isinstance(provider, AdmittedProvider)
+    if admission is None:
+        if wrapped:
+            admission = provider.admission
+        else:
+            from nvh.config.settings import load_config
+
+            admission = AtohiAdmission(load_config().atohi)
+    admission.require_broker()
+    if wrapped and provider.admission is admission:
+        # The registry already resolved configured transport aliases. Keep its
+        # wrapper instead of reclassifying solely from the public alias name.
+        return provider, admission
+    name = provider.name
+    if wrapped:
+        provider = provider.provider
+    if admission.manages(name) or (wrapped and admission.enabled):
+        provider = AdmittedProvider(provider, admission, name)
+    return provider, admission
+
+
 async def run_single_benchmark(
     provider,  # Provider instance (OllamaProvider or any)
     model: str,
     prompt: str,
     max_tokens: int = 512,
+    *,
+    admission: AtohiAdmission | None = None,
 ) -> BenchmarkResult:
     """Run a single benchmark — measure tokens/second.
 
@@ -74,6 +104,8 @@ async def run_single_benchmark(
     """
     from nvh.providers.base import Message
     from nvh.utils.gpu import detect_gpus
+
+    provider, _ = _benchmark_provider(provider, admission)
 
     gpus = detect_gpus()
     gpu_name = gpus[0].name if gpus else "CPU"
@@ -127,11 +159,15 @@ async def run_benchmark_suite(
     provider,
     model: str,
     prompts: list[dict] | None = None,
+    *,
+    admission: AtohiAdmission | None = None,
 ) -> BenchmarkSuite:
     """Run the full benchmark suite on a model."""
     from datetime import datetime
 
     from nvh.utils.gpu import detect_gpus
+
+    provider, admission = _benchmark_provider(provider, admission)
 
     if prompts is None:
         prompts = BENCHMARK_PROMPTS
@@ -149,6 +185,7 @@ async def run_benchmark_suite(
             model=model,
             prompt=bp["prompt"],
             max_tokens=bp["max_tokens"],
+            admission=admission,
         )
         results.append(result)
 

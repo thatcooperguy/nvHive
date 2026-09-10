@@ -88,8 +88,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
+from functools import partial
 from typing import Any, ClassVar
 
+from nvh.core.atohi import AtohiAdmission
 from nvh.core.tools import (  # noqa: F401 — re-exported for every existing importer
     _CONSUMED_APPROVALS,
     APPROVAL_REQUIRED_ERROR,
@@ -349,7 +351,7 @@ async def _tool_save_provider_key(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _tool_rag_ingest(args: dict[str, Any]) -> dict[str, Any]:
+async def _tool_rag_ingest(args: dict[str, Any], *, admission: AtohiAdmission | None = None) -> dict[str, Any]:
     """Ingest a folder of text/source files into the local RAG index."""
     from nvh.integrations.rag import ingest_folder
 
@@ -358,10 +360,10 @@ async def _tool_rag_ingest(args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "path required (string)"}
     collection = args.get("collection") if isinstance(args.get("collection"), str) else None
     home_dir = args.get("home_dir") if isinstance(args.get("home_dir"), str) else None
-    return await ingest_folder(path, collection=collection, home_dir=home_dir)
+    return await ingest_folder(path, collection=collection, home_dir=home_dir, admission=admission)
 
 
-async def _tool_rag_ask(args: dict[str, Any]) -> dict[str, Any]:
+async def _tool_rag_ask(args: dict[str, Any], *, admission: AtohiAdmission | None = None) -> dict[str, Any]:
     """Ask a question grounded in the local RAG index — returns retrieved chunks."""
     from nvh.integrations.rag import ask
 
@@ -375,10 +377,10 @@ async def _tool_rag_ask(args: dict[str, Any]) -> dict[str, Any]:
         top_k = max(1, min(20, int(top_k_raw)))
     except (TypeError, ValueError):
         top_k = 5
-    return await ask(question, collection=collection, top_k=top_k, home_dir=home_dir)
+    return await ask(question, collection=collection, top_k=top_k, home_dir=home_dir, admission=admission)
 
 
-async def _tool_rag_ask_vault(args: dict[str, Any]) -> dict[str, Any]:
+async def _tool_rag_ask_vault(args: dict[str, Any], *, admission: AtohiAdmission | None = None) -> dict[str, Any]:
     """Search the nvHive Vault (user's own notes) — auto-indexes on first use."""
     from nvh.integrations.rag import ask_vault
 
@@ -391,7 +393,7 @@ async def _tool_rag_ask_vault(args: dict[str, Any]) -> dict[str, Any]:
         top_k = max(1, min(20, int(top_k_raw)))
     except (TypeError, ValueError):
         top_k = 5
-    return await ask_vault(question, top_k=top_k, home_dir=home_dir)
+    return await ask_vault(question, top_k=top_k, home_dir=home_dir, admission=admission)
 
 
 async def _tool_web_search(args: dict[str, Any]) -> dict[str, Any]:
@@ -513,7 +515,7 @@ def _load_workspace_plugin_tools(reg: ToolRegistry) -> None:
                 logger.warning("wizard plugin %s failed: %s", path.name, exc)
 
 
-def default_registry() -> WizardToolRegistry:
+def default_registry(*, admission: AtohiAdmission | None = None) -> WizardToolRegistry:
     """Build the Wizard registry with nvHive's stock tools + any discovered plugins.
 
     Kept as a builder rather than a module-level singleton so the API layer
@@ -602,7 +604,7 @@ def default_registry() -> WizardToolRegistry:
             "collection": {"type": "string", "required": False, "description": "Named collection; defaults to 'default'."},
             "top_k": {"type": "integer", "required": False, "description": "Max chunks to return (1-20, default 5)."},
         },
-        handler=_tool_rag_ask,
+        handler=partial(_tool_rag_ask, admission=admission),
         summary_template="Search the RAG index for: {question}",
     ))
 
@@ -614,7 +616,7 @@ def default_registry() -> WizardToolRegistry:
             "path": {"type": "string", "required": True, "description": "Folder to index."},
             "collection": {"type": "string", "required": False, "description": "Named collection; defaults to 'default'."},
         },
-        handler=_tool_rag_ingest,
+        handler=partial(_tool_rag_ingest, admission=admission),
         summary_template="Ingest {path} into the RAG index.",
     ))
 
@@ -626,7 +628,7 @@ def default_registry() -> WizardToolRegistry:
             "question": {"type": "string", "required": True, "description": "The natural-language question."},
             "top_k": {"type": "integer", "required": False, "description": "Max chunks to return (1-20, default 5)."},
         },
-        handler=_tool_rag_ask_vault,
+        handler=partial(_tool_rag_ask_vault, admission=admission),
         summary_template="Search your nvHive Vault for: {question}",
     ))
 
@@ -686,7 +688,7 @@ def default_registry() -> WizardToolRegistry:
     # model only through these two.
     from nvh.integrations.wizard.vision_bridge import register_wizard_tools as _register_vision
 
-    _register_vision(reg)
+    _register_vision(reg, admission=admission)
 
     # Pull in any third-party / workspace-local tools after the stock set so
     # plugins can override (with a logged warning) or extend without forking.

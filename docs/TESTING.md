@@ -113,10 +113,36 @@ excluded from the coverage metric and covered by the subprocess tests instead.
   reach one, skip it unless an explicit opt-in variable is set.
 - Prefer testing behaviour through the public entry point (`Engine`, the
   Typer app, the FastAPI app) over private helpers.
+- Ollama attempts direct HTTP before its LiteLLM fallback. Mocking only
+  `litellm.acompletion` can contact a running local model. The provider unit
+  suite blocks unmocked HTTP and daemon probes; error tests mock both paths.
+  Pin a fake provider when testing query behavior unrelated to connectivity,
+  and mock host tools such as Docker in endpoint shape tests.
 - Regenerate `docs/COMMANDS.md` when you add, rename or hide a command, and
   keep counts out of prose â€” the parity tests will tell you if you forgot.
 - A test that reads a doc (`test_release_hardening.py`,
   `test_docs_links.py`) is a contract: update the doc and the test together.
+
+Run the focused admission regressions with:
+
+```bash
+pytest tests/test_atohi_admission.py \
+  tests/test_atohi_lifecycle_isolation.py \
+  tests/test_atohi_setup_probes.py \
+  tests/test_atohi_rag_binding.py \
+  tests/test_atohi_auxiliary_vision_benchmark.py \
+  tests/test_atohi_proxy_pause.py -q
+```
+
+These tests use local provider, transport and broker doubles. They cover policy
+isolation across reused registries and tools, late adapter registration,
+revocation through transport cleanup and broker exit, setup/preload and RAG
+bindings, vision/benchmark admission, and terminal HTTP/SSE pause responses.
+Setup tests also check that existing and migrated admission settings survive
+configuration rewriting. Council and agent fixtures use real registries with
+fake providers so policy binding follows the application path. No live model,
+native broker, Spark allocation or physical GPU release is established by this
+suite; paused-council partial-usage accounting remains a separate milestone.
 
 ## Manual smoke before a release
 

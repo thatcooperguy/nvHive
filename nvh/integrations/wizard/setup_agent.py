@@ -11,7 +11,7 @@ import logging
 from dataclasses import asdict, dataclass
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from nvh.integrations.installs.comfyui import detect_comfyui
 from nvh.integrations.installs.studio_packs import catalog_with_status, model_catalog_with_status
@@ -27,6 +27,9 @@ from nvh.integrations.services.service_registry import (
 from nvh.integrations.setup_catalog import catalog_status
 from nvh.integrations.wizard.troubleshooter import analyze_setup_failure
 from nvh.integrations.workspace.storage import storage_status
+
+if TYPE_CHECKING:
+    from nvh.core.atohi import AtohiAdmission
 
 logger = logging.getLogger(__name__)
 
@@ -358,7 +361,9 @@ def _looks_older(current: str | None, latest: str | None) -> bool:
         return current != latest
 
 
-def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
+def setup_helper_report(
+    home_dir: str | Path | None = None, *, admission: AtohiAdmission | None = None,
+) -> dict[str, Any]:
     """Return a local setup diagnosis and ranked action list."""
     storage = storage_status(home_dir=home_dir, min_free_gb=DEFAULT_SETUP_MIN_FREE_GB)
     runtime = runtime_status()
@@ -493,7 +498,9 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
             "rootless": True,
         }
     elif installed_targets:
-        local_chat = local_chat_smoke_status(home_dir=home_dir, max_age_s=45, timeout_s=20.0)
+        local_chat = local_chat_smoke_status(
+            home_dir=home_dir, max_age_s=45, timeout_s=20.0, admission=admission,
+        )
     else:
         local_chat = {
             "ready": False,
@@ -512,7 +519,7 @@ def setup_helper_report(home_dir: str | Path | None = None) -> dict[str, Any]:
 
     if (
         not local_chat.get("ready")
-        and local_chat.get("status") not in {"missing-runtime", "missing-models"}
+        and local_chat.get("status") not in {"missing-runtime", "missing-models", "paused", "configuration-error"}
     ):
         next_action = str(local_chat.get("next_action_id") or "rootless-ollama")
         issues.append(SetupIssue(
@@ -996,9 +1003,11 @@ def _service_summary_answer(registry: dict[str, Any]) -> tuple[str, list[str]]:
 def setup_assistant_reply(
     question: str,
     home_dir: str | Path | None = None,
+    *,
+    admission: AtohiAdmission | None = None,
 ) -> dict[str, Any]:
     """Answer a setup question using local state and deterministic rules."""
-    report = setup_helper_report(home_dir=home_dir)
+    report = setup_helper_report(home_dir=home_dir, admission=admission)
     actions = report["actions"]
     core_actions = _core_actions(actions)
     q = question.strip().lower()
@@ -1139,6 +1148,12 @@ def setup_assistant_reply(
                 "ComfyUI is not required for local chat; it is only needed for visual image/video workflows. "
                 "You can use Ask AI for normal questions and this AI Wizard box for setup repair guidance."
             )
+        elif local_chat.get("status") in {"paused", "configuration-error"}:
+            answer = (
+                f"{local_chat['summary']} "
+                "The setup guide can still read setup state, jobs, receipts, and redacted logs."
+            )
+            suppress_command_fallback = True
         else:
             answer = (
                 "The setup guide is online, but local model chat is not verified yet. "

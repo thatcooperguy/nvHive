@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from nvh.core.atohi import AtohiAdmission
 from nvh.integrations.rag.embedder import embed_one
 from nvh.integrations.rag.store import RagStore, default_collection
 
@@ -23,6 +24,7 @@ async def ask(
     collection: str | None = None,
     top_k: int = 5,
     home_dir: str | Path | None = None,
+    admission: AtohiAdmission | None = None,
 ) -> dict[str, Any]:
     """Embed the question, run a top-k cosine search, return chunks.
 
@@ -36,7 +38,7 @@ async def ask(
         return {"ok": False, "error": "Empty question."}
 
     try:
-        qvec = await embed_one(question)
+        qvec = await embed_one(question, admission=admission)
     except Exception as exc:
         return {"ok": False, "error": f"Failed to embed question: {exc}", "collection": collection}
 

@@ -79,7 +79,7 @@ def local_vision(monkeypatch) -> dict:
     seen: dict = {}
     monkeypatch.setattr(vision_tools, "_detect_ollama_vision_model", lambda: "qwen3-vl:4b")
 
-    async def fake_ollama(image_data, question, model):
+    async def fake_ollama(image_data, question, model, *, admission):
         seen.update(question=question, model=model, image_data=image_data)
         return "A grey cat asleep on a keyboard."
 
@@ -222,7 +222,7 @@ async def test_cloud_fallback_for_a_chat_attachment_reports_provider_cloud(roots
     img = _png(roots.uploads)  # rag/uploads/wizard/<conv>/ — the user attached it
     monkeypatch.setattr(vision_tools, "_detect_ollama_vision_model", lambda: None)
 
-    async def fake_cloud(image_data, mime, question):
+    async def fake_cloud(image_data, mime, question, *, admission):
         assert mime == "image/png"  # from the bytes' signature, never a default
         assert base64.b64decode(image_data) == PNG
         return "A chart with three bars."
@@ -241,7 +241,7 @@ async def test_the_cloud_mime_follows_the_bytes_not_the_suffix(roots, registry, 
     monkeypatch.setattr(vision_tools, "_detect_ollama_vision_model", lambda: None)
     mimes: list[str] = []
 
-    async def fake_cloud(image_data, mime, question):
+    async def fake_cloud(image_data, mime, question, *, admission):
         mimes.append(mime)
         return "ok"
 
@@ -283,7 +283,7 @@ async def test_secrets_in_the_returned_text_are_redacted(roots, registry, monkey
     img = _png(roots.uploads)
     monkeypatch.setattr(vision_tools, "_detect_ollama_vision_model", lambda: "qwen3-vl:4b")
 
-    async def leaky(image_data, question, model):
+    async def leaky(image_data, question, model, *, admission):
         return "OPENAI_API_KEY=sk-proj-" + "a" * 40 + "\nand a ghp_" + "b" * 40
 
     monkeypatch.setattr(vision_tools, "_analyze_with_ollama", leaky)

@@ -135,7 +135,7 @@ def test_setup_assistant_does_not_require_comfyui_for_local_ai(tmp_path, monkeyp
     monkeypatch.setattr(
         setup_agent,
         "setup_helper_report",
-        lambda home_dir=None: {
+        lambda home_dir=None, admission=None: {
             "ready": True,
             "summary": "Core AI setup is ready; optional add-ons are available",
             "actions": [
@@ -209,7 +209,7 @@ def test_setup_assistant_debugs_failed_jobs_and_logs(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(
         setup_agent,
         "setup_helper_report",
-        lambda home_dir=None: {
+        lambda home_dir=None, admission=None: {
             "ready": False,
             "summary": "1 setup item needs attention",
             "actions": [
@@ -293,7 +293,7 @@ def test_setup_assistant_turns_micromamba_log_into_runtime_button(tmp_path, monk
     monkeypatch.setattr(
         setup_agent,
         "setup_helper_report",
-        lambda home_dir=None: {
+        lambda home_dir=None, admission=None: {
             "ready": False,
             "summary": "Runtime needs attention",
             "actions": [],

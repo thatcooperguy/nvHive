@@ -74,8 +74,12 @@ import base64
 import logging
 import re
 import tempfile
+from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from nvh.core.atohi import AtohiAdmission
 
 from nvh.integrations.wizard.sandbox_tools import workspace_dir
 
@@ -324,7 +328,9 @@ def _no_model_text(name: str, size_kb: float, *, allow_cloud: bool) -> str:
     )
 
 
-async def analyze_image_file(resolved: Path, question: str, *, allow_cloud: bool) -> str:
+async def analyze_image_file(
+    resolved: Path, question: str, *, allow_cloud: bool, admission: AtohiAdmission | None = None,
+) -> str:
     """The core tool's answer text for an admitted path, with the cloud rule applied.
 
     Same shape as ``nvh.core.vision_tools.analyze_image``: ``Image not
@@ -340,6 +346,7 @@ async def analyze_image_file(resolved: Path, question: str, *, allow_cloud: bool
     size = resolved.stat().st_size
     if size > MAX_IMAGE_BYTES:
         return f"Image too large ({size / 1024 / 1024:.1f} MB). Max {MAX_IMAGE_BYTES // (1024 * 1024)} MB."
+    policy = vt._vision_admission(admission)
     try:
         data = resolved.read_bytes()
         size_kb = size / 1024
@@ -348,11 +355,11 @@ async def analyze_image_file(resolved: Path, question: str, *, allow_cloud: bool
 
         model = vt._detect_ollama_vision_model()
         if model:
-            answer = await vt._analyze_with_ollama(image_data, question, model)
+            answer = await vt._analyze_with_ollama(image_data, question, model, admission=policy)
             if answer:
                 return f"[Vision: {model}, {size_kb:.1f} KB]\n{answer}"
         if allow_cloud:
-            answer = await vt._analyze_with_cloud(image_data, mime, question)
+            answer = await vt._analyze_with_cloud(image_data, mime, question, admission=policy)
             if answer:
                 return f"[Vision: {CLOUD_MODEL_LABEL}, {size_kb:.1f} KB]\n{answer}"
         return _no_model_text(resolved.name, size_kb, allow_cloud=allow_cloud)
@@ -421,24 +428,30 @@ def _result_from_text(image_path: str, resolved: Path, text: Any, *, allow_cloud
 # ---------------------------------------------------------------------------
 
 
-async def _analyze(args: dict[str, Any], question: str) -> dict[str, Any]:
+async def _analyze(
+    args: dict[str, Any], question: str, *, admission: AtohiAdmission | None = None,
+) -> dict[str, Any]:
     image_path = str(args.get("image_path") or "").strip()
     resolved, refusal = admit_image_path(image_path)
     if refusal is not None or resolved is None:
         return refusal or _refusal("image_path is required")
     allow_cloud = cloud_allowed(resolved)
-    text = await analyze_image_file(resolved, question, allow_cloud=allow_cloud)
+    text = await analyze_image_file(resolved, question, allow_cloud=allow_cloud, admission=admission)
     return _result_from_text(image_path, resolved, text, allow_cloud=allow_cloud)
 
 
-async def _tool_analyze_image(args: dict[str, Any]) -> dict[str, Any]:
+async def _tool_analyze_image(
+    args: dict[str, Any], *, admission: AtohiAdmission | None = None,
+) -> dict[str, Any]:
     prompt = args.get("prompt")
     question = prompt.strip() if isinstance(prompt, str) and prompt.strip() else _DEFAULT_QUESTION
-    return await _analyze(args, question)
+    return await _analyze(args, question, admission=admission)
 
 
-async def _tool_read_text_from_image(args: dict[str, Any]) -> dict[str, Any]:
-    return await _analyze(args, OCR_QUESTION)
+async def _tool_read_text_from_image(
+    args: dict[str, Any], *, admission: AtohiAdmission | None = None,
+) -> dict[str, Any]:
+    return await _analyze(args, OCR_QUESTION, admission=admission)
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +467,7 @@ _PATH_PARAM_DESCRIPTION = (
 )
 
 
-def register_wizard_tools(reg: Any) -> None:
+def register_wizard_tools(reg: Any, *, admission: AtohiAdmission | None = None) -> None:
     """Register ``analyze_image`` and ``read_text_from_image`` (auto) on a ``WizardToolRegistry``.
 
     Both wrap the core vision providers behind :func:`admit_image_path` and
@@ -483,7 +496,7 @@ def register_wizard_tools(reg: Any) -> None:
                 "description": f"What to ask about the image. Default: '{_DEFAULT_QUESTION}'",
             },
         },
-        handler=_tool_analyze_image,
+        handler=partial(_tool_analyze_image, admission=admission),
         summary_template="Analyze the image at {image_path}.",
     ))
 
@@ -498,6 +511,6 @@ def register_wizard_tools(reg: Any) -> None:
         parameters={
             "image_path": {"type": "string", "required": True, "description": _PATH_PARAM_DESCRIPTION},
         },
-        handler=_tool_read_text_from_image,
+        handler=partial(_tool_read_text_from_image, admission=admission),
         summary_template="Read the text in the image at {image_path}.",
     ))

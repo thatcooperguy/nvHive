@@ -1157,9 +1157,25 @@ def _write_config(
 
     Returns the path to the written file.
     """
-    from nvh.config.settings import DEFAULT_CONFIG_PATH, get_config_dir
+    import yaml
 
+    from nvh.config.settings import DEFAULT_CONFIG_PATH, CouncilConfig, get_config_dir
+
+    # Legacy migration may publish the first destination config here. Resolve
+    # it before taking the policy snapshot that the replacement must preserve.
     get_config_dir()
+
+    # Setup may replace provider preferences, but must never silently remove
+    # the user's explicit shared-resource policy. Validate the actual file,
+    # not a project/profile override, before changing any existing bytes.
+    admission_config = None
+    if DEFAULT_CONFIG_PATH.is_file():
+        existing = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+        if existing is None:
+            existing = {}
+        if not isinstance(existing, dict):
+            raise ValueError("Existing config must be a YAML mapping")
+        admission_config = CouncilConfig(**existing).atohi
 
     lines = [
         'version: "1"',
@@ -1253,6 +1269,8 @@ def _write_config(
         lines.append(f"    enabled: {str(enabled).lower()}")
         lines.append("")
 
+    if admission_config is not None:
+        lines.append(yaml.safe_dump({"atohi": admission_config.model_dump()}, sort_keys=False))
     DEFAULT_CONFIG_PATH.write_text("\n".join(lines))
     return DEFAULT_CONFIG_PATH
 
@@ -1260,6 +1278,13 @@ def _write_config(
 # ---------------------------------------------------------------------------
 # Main guided setup
 # ---------------------------------------------------------------------------
+
+def _setup_vision_allowed() -> bool:
+    """Metadata-only decision; synchronous setup never starts shared model work."""
+    from nvh.config.settings import load_config
+
+    return not load_config().atohi.enabled
+
 
 def guided_setup(console: Console | None = None) -> None:
     """Run the first-run guided setup menu.
@@ -1386,9 +1411,12 @@ def guided_setup(console: Console | None = None) -> None:
 
             # Check if a vision model is now available
             from nvh.core.vision_tools import _detect_ollama_vision_model
-            has_vision_model = _detect_ollama_vision_model() is not None
+            installed_vision = _detect_ollama_vision_model() is not None
+            has_vision_model = installed_vision and _setup_vision_allowed()
             if has_vision_model:
                 console.print("  [green]Desktop agent: ready (vision model loaded)[/green]")
+            elif installed_vision:
+                console.print("  [dim]Vision assist paused in shared mode; manual key setup remains available.[/dim]")
 
         elif recommended and not ollama_up:
             console.print(
@@ -1512,7 +1540,7 @@ def guided_setup(console: Console | None = None) -> None:
                     console.print(f"  [dim]Opened {url}[/dim]")
 
                     # If we have a vision model, take a screenshot to verify
-                    if has_vision_model:
+                    if has_vision_model and _setup_vision_allowed():
                         import time as _time
                         _time.sleep(3)  # wait for browser to load
                         try:

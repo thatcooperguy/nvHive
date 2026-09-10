@@ -13,6 +13,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from nvh.core.atohi import AtohiAdmission
 from nvh.integrations.rag.chunker import chunk_text
 from nvh.integrations.rag.embedder import embed_model_name, embed_texts
 from nvh.integrations.rag.store import RagStore, default_collection
@@ -116,6 +117,7 @@ async def ingest_folder(
     home_dir: str | Path | None = None,
     extensions: tuple[str, ...] | None = None,
     max_files: int = 2000,
+    admission: AtohiAdmission | None = None,
 ) -> dict[str, Any]:
     """Walk ``path``, chunk + embed each file, store under ``collection``.
 
@@ -147,7 +149,7 @@ async def ingest_folder(
             ),
             "files_scanned": len(files),
         }
-    return await ingest_files(files, collection=collection, home_dir=home_dir)
+    return await ingest_files(files, collection=collection, home_dir=home_dir, admission=admission)
 
 
 async def ingest_files(
@@ -155,6 +157,7 @@ async def ingest_files(
     *,
     collection: str | None = None,
     home_dir: str | Path | None = None,
+    admission: AtohiAdmission | None = None,
 ) -> dict[str, Any]:
     """Ingest an explicit list of files (``nvh rag add``); same result shape
     as :func:`ingest_folder`."""
@@ -171,7 +174,7 @@ async def ingest_files(
                 continue
             yield str(path), _read_text(path)
 
-    result = await ingest_documents(_documents(), collection=collection, home_dir=home_dir)
+    result = await ingest_documents(_documents(), collection=collection, home_dir=home_dir, admission=admission)
     result["files_scanned"] = len(paths)
     if pdfs_skipped_missing:
         result["pdfs_skipped_missing_pypdf"] = pdfs_skipped_missing
@@ -187,6 +190,7 @@ async def ingest_documents(
     *,
     collection: str | None = None,
     home_dir: str | Path | None = None,
+    admission: AtohiAdmission | None = None,
 ) -> dict[str, Any]:
     """Chunk + embed + store ``(source, text)`` pairs — the core every ingest
     path shares. ``source`` is the provenance label returned by ``ask``."""
@@ -206,7 +210,7 @@ async def ingest_documents(
                 skipped.append(source)
                 continue
             try:
-                vectors = await embed_texts(chunks)
+                vectors = await embed_texts(chunks, admission=admission)
             except Exception as exc:
                 # If embedder fails mid-walk, surface the error rather than
                 # silently producing a half-indexed collection.

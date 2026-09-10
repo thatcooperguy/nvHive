@@ -11,13 +11,16 @@ import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from nvh.core import local_models
 from nvh.integrations.workspace.storage import storage_layout
 from nvh.utils.ollama import ollama_base_url
+
+if TYPE_CHECKING:
+    from nvh.core.atohi import AtohiAdmission
 
 
 def _preferred_chat_models() -> tuple[str, ...]:
@@ -129,6 +132,7 @@ def local_chat_smoke_status(
     force: bool = False,
     max_age_s: int = 120,
     timeout_s: float = 35.0,
+    admission: AtohiAdmission | None = None,
 ) -> dict[str, Any]:
     """Return whether a local Ollama model can answer a tiny prompt.
 
@@ -136,6 +140,27 @@ def local_chat_smoke_status(
     download, or mutate model state; it only reads /api/tags and asks one
     installed model for a tiny response. Results are cached under NVH_HOME.
     """
+    # A cached token probe is not a grant. This synchronous helper has no
+    # cancellable native lease transport, so shared mode leaves it untested.
+    # An owner-supplied policy always takes precedence over persisted settings.
+    try:
+        policy = admission
+        if policy is None:
+            from nvh.config.settings import load_config
+            from nvh.core.atohi import AtohiAdmission
+
+            config_path = storage_layout(home_dir).config_dir / "config.yaml" if home_dir is not None else None
+            policy = AtohiAdmission(load_config(config_path=config_path).atohi)
+        if policy.enabled:
+            return _result(
+                ready=False, status="paused",
+                summary="Local chat probe was not run while shared resource admission is enabled.",
+            )
+    except Exception:
+        return _result(
+            ready=False, status="configuration-error",
+            summary="Local chat was not tested because resource admission settings could not be read.",
+        )
     state_file = _state_path(home_dir)
     if not force:
         cached = _read_cache(state_file, max_age_s=max_age_s)
