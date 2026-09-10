@@ -278,10 +278,14 @@ async def test_revoked_batch_preserves_existing_source_and_stops_next_file(
 ):
     revoked = asyncio.Event()
 
+    from types import SimpleNamespace
+
+    from tests.test_atohi_admission import fixture_model_lease
+
     class Broker:
         @asynccontextmanager
         async def admit(self, request):
-            yield self
+            yield fixture_model_lease(self, request)
 
         async def wait_revoked(self):
             await revoked.wait()
@@ -293,7 +297,8 @@ async def test_revoked_batch_preserves_existing_source_and_stops_next_file(
         revoked.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(embedder, "_embed_texts_with_retry", batch)
+    broker = Broker()
+    broker.transports = {"ollama": SimpleNamespace(embeddings=batch)}
     with RagStore(home_dir=tmp_path) as store:
         store.add_chunks(
             collection="test",
@@ -302,7 +307,7 @@ async def test_revoked_batch_preserves_existing_source_and_stops_next_file(
             vectors=[[1.0, 0.0]],
             model="test",
         )
-    admission = AtohiAdmission(AtohiConfig(enabled=True), broker=Broker())
+    admission = AtohiAdmission(AtohiConfig(enabled=True), broker=broker)
     with pytest.raises(ResourcePaused, match="resource_revoked"):
         await asyncio.wait_for(
             ingest.ingest_documents(

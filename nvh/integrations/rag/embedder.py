@@ -106,11 +106,12 @@ async def embed_texts(
     model = embed_model_name()
     if admission is None:
         admission = AtohiAdmission(load_config().atohi)
-    return await admission.run(
-        AdmissionRequest("ollama", "embeddings"),
+    return await admission.run_model(
+        AdmissionRequest("ollama", "embeddings", model),
         lambda: _embed_texts_with_retry(
             texts, model=model, timeout=timeout, allow_pull=_auto_pull_enabled(),
         ),
+        lambda session: session.transport.embeddings(texts, model=model, timeout=timeout),
     )
 
 

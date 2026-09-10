@@ -209,6 +209,7 @@ async def _analyze_with_ollama(
 ) -> str | None:
     """Call Ollama vision with authority held through HTTP client cleanup."""
     from nvh.core.atohi import AdmissionRequest
+    from nvh.providers.base import Message
 
     policy = _vision_admission(admission)
 
@@ -229,8 +230,19 @@ async def _analyze_with_ollama(
                 return resp.json().get("message", {}).get("content", "")
         return None
 
+    async def owned_call(session):
+        # The existing Ollama message codec accepts base64 image_url content.
+        # Only the issued transport sees these inputs in shared mode.
+        response = await session.transport.complete(
+            [Message(role="user", content=[
+                {"type": "text", "text": question},
+                {"type": "image_url", "image_url": {"url": image_data}},
+            ])], model=model, timeout=60,
+        )
+        return response.content
+
     try:
-        return await policy.run(AdmissionRequest("ollama", "complete"), call)
+        return await policy.run_model(AdmissionRequest("ollama", "complete", model), call, owned_call)
     except Exception as exc:
         logger.debug("Ollama vision failed: %s", exc)
     return None
@@ -241,12 +253,11 @@ async def _analyze_with_cloud(
 ) -> str | None:
     """Try configured cloud vision; a resource pause never triggers fallback."""
     from nvh.core.atohi import AdmissionRequest
+    from nvh.providers.base import Message
 
     policy = _vision_admission(admission)
     try:
         import os
-
-        import litellm
 
         messages = [{
             "role": "user",
@@ -265,16 +276,27 @@ async def _analyze_with_cloud(
 
         for provider_name, model in models_to_try:
             async def call(model=model):
-                return await litellm.acompletion(
+                import litellm
+
+                response = await litellm.acompletion(
                     model=model, messages=messages, max_tokens=1024, timeout=30,
                 )
+                return response.choices[0].message.content
+
+            async def owned_call(session, model=model):
+                response = await session.transport.complete(
+                    [Message(**message) for message in messages],
+                    model=model, max_tokens=1024, timeout=30,
+                )
+                return response.content
 
             try:
                 if policy.manages(provider_name):
-                    resp = await policy.run(AdmissionRequest(provider_name, "complete"), call)
+                    content = await policy.run_model(
+                        AdmissionRequest(provider_name, "complete", model), call, owned_call,
+                    )
                 else:
-                    resp = await call()
-                content = resp.choices[0].message.content
+                    content = await call()
                 if content:
                     return content
             except Exception as exc:
