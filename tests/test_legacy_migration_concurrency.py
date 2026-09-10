@@ -155,10 +155,15 @@ def test_existing_dangling_destination_symlink_is_preserved(homes):
     destination.parent.mkdir(parents=True)
     missing = homes.root / "missing-owner-target"
     make_symlink(missing, destination)
+    # Windows readlink returns the substitution path, including its native prefix.
+    # Compare the actual link before/after; do not normalize away a changed target.
+    original_target = os.readlink(destination)
+    original_inode = destination.lstat().st_ino
     report = ml.migrate_legacy_homes(homes.layout)
     assert not report.failed and report.skipped
     assert destination.is_symlink() and not missing.exists()
-    assert os.readlink(destination) == str(missing)
+    assert os.readlink(destination) == original_target
+    assert destination.lstat().st_ino == original_inode
 
 
 def test_relative_source_link_keeps_its_referent_after_staged_move(homes):
