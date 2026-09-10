@@ -56,6 +56,23 @@ class CouncilResponse:
     agents_used: list[str] = field(default_factory=list)  # persona roles assigned
     confidence_score: float | None = field(default=None)  # 0.0-1.0 agreement level
     agreement_summary: str | None = field(default=None)  # human-readable summary
+    # Paid work that is not a member answer or the final synthesis (agreement
+    # checks, earlier throwdown syntheses, and reported partial stream usage).
+    auxiliary_responses: list[CompletionResponse] = field(default_factory=list)
+
+    @property
+    def all_responses(self) -> list[CompletionResponse]:
+        return [*self.member_responses.values(), *self.auxiliary_responses,
+                *([self.synthesis] if self.synthesis is not None else [])]
+
+    @property
+    def total_usage(self) -> Usage:
+        responses = self.all_responses
+        return Usage(
+            input_tokens=sum(r.usage.input_tokens for r in responses),
+            output_tokens=sum(r.usage.output_tokens for r in responses),
+            total_tokens=sum(r.usage.total_tokens for r in responses),
+        )
 
 
 class CouncilOrchestrator:
@@ -167,6 +184,7 @@ class CouncilOrchestrator:
         member_responses: dict[str, CompletionResponse],
         *,
         use_llm: bool = True,
+        accounting: list[CompletionResponse] | None = None,
     ) -> tuple[float | None, str | None]:
         """Analyze agreement across member responses.
 
@@ -212,6 +230,9 @@ class CouncilOrchestrator:
                     ),
                     timeout=15,
                 )
+                # Even a malformed score is a completed, billable model call.
+                if accounting is not None:
+                    accounting.append(analysis)
 
                 # Parse score and summary from response
                 text = analysis.content
@@ -437,8 +458,6 @@ class CouncilOrchestrator:
             else:
                 failed_members[label] = "Timed out"
 
-        total_elapsed = int((time.monotonic() - start) * 1000)
-
         # Check quorum
         quorum_met = len(member_responses) >= quorum
 
@@ -448,11 +467,13 @@ class CouncilOrchestrator:
         # Analyze agreement across member responses
         confidence_score: float | None = None
         agreement_summary: str | None = None
+        auxiliary_responses: list[CompletionResponse] = []
         if quorum_met and len(member_responses) > 1:
             confidence_score, agreement_summary = await self._analyze_agreement(
                 query=query,
                 member_responses=member_responses,
                 use_llm=synthesize,
+                accounting=auxiliary_responses,
             )
 
         # Synthesize if we have quorum
@@ -471,7 +492,9 @@ class CouncilOrchestrator:
                 # If synthesis fails, we still return member responses
                 failed_members["_synthesis"] = str(e)
 
-        total_cost = member_cost + (synthesis.cost_usd if synthesis else Decimal("0"))
+        total_cost = (member_cost + sum(r.cost_usd for r in auxiliary_responses)
+                      + (synthesis.cost_usd if synthesis else Decimal("0")))
+        total_elapsed = int((time.monotonic() - start) * 1000)
 
         return CouncilResponse(
             member_responses=member_responses,
@@ -485,6 +508,7 @@ class CouncilOrchestrator:
             agents_used=agents_used,
             confidence_score=confidence_score,
             agreement_summary=agreement_summary,
+            auxiliary_responses=auxiliary_responses,
         )
 
     async def run_council_streaming(
@@ -576,6 +600,7 @@ class CouncilOrchestrator:
 
         member_responses: dict[str, CompletionResponse] = {}
         failed_members: dict[str, str] = {}
+        auxiliary_responses: list[CompletionResponse] = []
 
         start = time.monotonic()
 
@@ -593,6 +618,8 @@ class CouncilOrchestrator:
             provider = self.registry.get(member.provider)
             accumulated = ""
             last_chunk = None
+            reported_usage = None
+            reported_cost = None
             member_start_time = time.monotonic()
 
             try:
@@ -604,6 +631,10 @@ class CouncilOrchestrator:
                     system_prompt=member_system,
                 ):
                     last_chunk = chunk
+                    if chunk.usage is not None:
+                        reported_usage = chunk.usage
+                    if chunk.cost_usd is not None:
+                        reported_cost = chunk.cost_usd
                     if chunk.delta:
                         accumulated += chunk.delta
                         await on_event({
@@ -616,16 +647,16 @@ class CouncilOrchestrator:
                         break
 
                 latency_ms = int((time.monotonic() - member_start_time) * 1000)
-                tokens = last_chunk.usage.total_tokens if last_chunk and last_chunk.usage else 0
-                cost_usd = str(last_chunk.cost_usd) if last_chunk and last_chunk.cost_usd is not None else "0"
+                tokens = reported_usage.total_tokens if reported_usage else 0
+                cost_usd = str(reported_cost) if reported_cost is not None else "0"
 
                 # Build a CompletionResponse from the streamed data
                 resp = CompletionResponse(
                     content=accumulated,
                     model=last_chunk.model if last_chunk else member.model,
                     provider=member.provider,
-                    usage=last_chunk.usage if last_chunk and last_chunk.usage else Usage(),
-                    cost_usd=last_chunk.cost_usd if last_chunk and last_chunk.cost_usd is not None else Decimal("0"),
+                    usage=reported_usage or Usage(),
+                    cost_usd=reported_cost if reported_cost is not None else Decimal("0"),
                     latency_ms=latency_ms,
                     finish_reason=last_chunk.finish_reason if last_chunk and last_chunk.finish_reason else FinishReason.STOP,
                 )
@@ -650,6 +681,17 @@ class CouncilOrchestrator:
                     "member": label,
                     "error": str(exc),
                 })
+            finally:
+                # Keep reported usage even if a stream failed or was cancelled.
+                # A partial answer never participates in quorum or voting.
+                if label not in member_responses and last_chunk is not None:
+                    auxiliary_responses.append(CompletionResponse(
+                        content=accumulated, provider=member.provider,
+                        model=last_chunk.model or member.model,
+                        usage=reported_usage or Usage(),
+                        cost_usd=reported_cost if reported_cost is not None else Decimal("0"),
+                        finish_reason=FinishReason.ERROR,
+                    ))
 
         # Run all member streams concurrently with timeout
         council_timeout = timeout or self.config.council.timeout
@@ -666,7 +708,6 @@ class CouncilOrchestrator:
                 if m.label not in member_responses and m.label not in failed_members:
                     failed_members[m.label] = "timed out"
 
-        total_elapsed = int((time.monotonic() - start) * 1000)
         quorum_met = len(member_responses) >= quorum
         member_cost = sum(r.cost_usd for r in member_responses.values())
 
@@ -674,11 +715,27 @@ class CouncilOrchestrator:
         confidence_score, agreement_summary = await self._analyze_agreement(
             query=query,
             member_responses=member_responses,
+            use_llm=synthesize and quorum_met,
+            accounting=auxiliary_responses,
         )
 
         # Synthesis
         synthesis: CompletionResponse | None = None
-        if quorum_met and synthesize and len(member_responses) > 1:
+        if quorum_met and synthesize and len(member_responses) > 1 and strategy in {"majority_vote", "best_of"}:
+            try:
+                if budget_check is not None and strategy == "best_of":
+                    await budget_check()
+                await on_event({"type": "synthesis_start"})
+                synthesis = await self._synthesize(query, member_responses, members, strategy)
+                await on_event({"type": "synthesis_chunk", "delta": synthesis.content,
+                                "accumulated": synthesis.content, "provider": synthesis.provider})
+                await on_event({"type": "synthesis_complete", "content": synthesis.content,
+                                "tokens": synthesis.usage.total_tokens,
+                                "cost": str(synthesis.cost_usd), "provider": synthesis.provider})
+            except Exception as exc:
+                failed_members["_synthesis"] = str(exc)
+                await on_event({"type": "error", "error": str(exc), "phase": "synthesis"})
+        elif quorum_met and synthesize and len(member_responses) > 1:
             # Re-check the budget before synthesis. Council members
             # already consumed budget in parallel; if they collectively
             # blew through the limit, we don't want synthesis to add
@@ -778,9 +835,12 @@ class CouncilOrchestrator:
                     # failing, the frontend will see a fresh stream below.
                     synth_accumulated = ""
                     synth_last_chunk = None
+                    synth_usage = None
+                    synth_reported_cost = None
+                    synth_started = time.monotonic()
 
                     async def _run_synth_stream():
-                        nonlocal synth_accumulated, synth_last_chunk
+                        nonlocal synth_accumulated, synth_last_chunk, synth_usage, synth_reported_cost
                         async for chunk in synth_provider.stream(
                             messages=[Message(role="user", content=synthesis_prompt)],
                             model=synth_model or None,
@@ -788,6 +848,10 @@ class CouncilOrchestrator:
                             max_tokens=4096,
                         ):
                             synth_last_chunk = chunk
+                            if chunk.usage is not None:
+                                synth_usage = chunk.usage
+                            if chunk.cost_usd is not None:
+                                synth_reported_cost = chunk.cost_usd
                             if chunk.delta:
                                 synth_accumulated += chunk.delta
                                 await on_event({
@@ -805,16 +869,16 @@ class CouncilOrchestrator:
                             timeout=synth_per_attempt_timeout,
                         )
 
-                        synth_tokens = synth_last_chunk.usage.total_tokens if synth_last_chunk and synth_last_chunk.usage else 0
-                        synth_cost = str(synth_last_chunk.cost_usd) if synth_last_chunk and synth_last_chunk.cost_usd is not None else "0"
+                        synth_tokens = synth_usage.total_tokens if synth_usage else 0
+                        synth_cost = str(synth_reported_cost) if synth_reported_cost is not None else "0"
 
                         synthesis = CompletionResponse(
                             content=synth_accumulated,
                             model=synth_last_chunk.model if synth_last_chunk else synth_model,
                             provider=synth_provider_name,
-                            usage=synth_last_chunk.usage if synth_last_chunk and synth_last_chunk.usage else Usage(),
-                            cost_usd=synth_last_chunk.cost_usd if synth_last_chunk and synth_last_chunk.cost_usd is not None else Decimal("0"),
-                            latency_ms=0,
+                            usage=synth_usage or Usage(),
+                            cost_usd=synth_reported_cost if synth_reported_cost is not None else Decimal("0"),
+                            latency_ms=int((time.monotonic() - synth_started) * 1000),
                             finish_reason=FinishReason.STOP,
                         )
                         synthesis.metadata["strategy"] = strategy
@@ -867,6 +931,15 @@ class CouncilOrchestrator:
                             "max_attempts": synth_attempts,
                         })
                         continue
+                    finally:
+                        if synthesis is None and synth_last_chunk is not None:
+                            auxiliary_responses.append(CompletionResponse(
+                                content=synth_accumulated, provider=synth_provider_name,
+                                model=synth_last_chunk.model or synth_model,
+                                usage=synth_usage or Usage(),
+                                cost_usd=synth_reported_cost if synth_reported_cost is not None else Decimal("0"),
+                                finish_reason=FinishReason.ERROR,
+                            ))
 
                 # If every attempt failed, surface a terminal error so the
                 # UI stops spinning. Previously this only wrote to
@@ -896,7 +969,9 @@ class CouncilOrchestrator:
                     "phase": "synthesis",
                 })
 
-        total_cost = member_cost + (synthesis.cost_usd if synthesis else Decimal("0"))
+        total_cost = (member_cost + sum(r.cost_usd for r in auxiliary_responses)
+                      + (synthesis.cost_usd if synthesis else Decimal("0")))
+        total_elapsed = int((time.monotonic() - start) * 1000)
 
         await on_event({
             "type": "council_complete",
@@ -919,6 +994,7 @@ class CouncilOrchestrator:
             agents_used=agents_used,
             confidence_score=confidence_score,
             agreement_summary=agreement_summary,
+            auxiliary_responses=auxiliary_responses,
         )
 
     async def _call_member_delayed(
@@ -990,26 +1066,36 @@ class CouncilOrchestrator:
         responses: dict[str, CompletionResponse],
         members: list[CouncilMember],
     ) -> CompletionResponse:
-        """Simple majority vote — return the most common response (by content similarity)."""
-        if len(responses) == 1:
-            return list(responses.values())[0]
+        """Count equal answers after case/whitespace normalization.
 
-        # For MVP: return the response from the highest-weighted member
-        weights = {m.provider: m.weight for m in members}
-        best_provider = max(responses.keys(), key=lambda p: weights.get(p, 0))
-        best = responses[best_provider]
-
-        # Add attribution
-        content = f"**Selected response** (from {best_provider}, highest weight):\n\n{best.content}"
+        We do not pretend to infer semantic equivalence of free-form answers.
+        A plurality or tie is labelled honestly; weights only break a tie.
+        """
+        groups: dict[str, list[str]] = {}
+        for label, response in responses.items():
+            groups.setdefault(" ".join(response.content.casefold().split()), []).append(label)
+        weights = {m.label: m.weight for m in members}
+        winning = max(groups.values(), key=lambda labels: (
+            len(labels), sum(weights.get(label, 0) for label in labels),
+        ))
+        selected = max(winning, key=lambda label: weights.get(label, 0))
+        best = responses[selected]
+        votes, total = len(winning), len(responses)
+        tied = sum(len(labels) == votes for labels in groups.values()) > 1
+        outcome = "majority" if votes > total / 2 else ("tie" if tied else "plurality")
+        detail = " (weight tie-break)" if tied else ""
+        content = f"**Selected response** ({votes}/{total} votes, {outcome}{detail}):\n\n{best.content}"
         return CompletionResponse(
             content=content,
             model=best.model,
             provider=best.provider,
-            usage=best.usage,
+            usage=Usage(),  # selection itself did not generate or consume tokens
             cost_usd=Decimal("0"),  # No extra cost for vote
             latency_ms=0,
             finish_reason=FinishReason.STOP,
-            metadata={"strategy": "majority_vote", "selected_from": best_provider},
+            metadata={"strategy": "majority_vote", "selected_from": selected,
+                      "votes": votes, "voters": total, "outcome": outcome,
+                      "normalization": "casefold_whitespace"},
         )
 
     async def _weighted_synthesis(

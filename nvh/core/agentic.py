@@ -290,9 +290,14 @@ def auto_detect_config(
 
 
 # ---------------------------------------------------------------------------
-# Coding-specific system prompt
+# Coding-specific role guidance
 # ---------------------------------------------------------------------------
 
+#: The coding agent's approach and rules. This is *role guidance only*: it is
+#: handed to ``run_agent_loop(system_prompt=...)``, which prepends it to the
+#: ONE tool-description prompt (``nvh.core.agent_loop.AGENT_SYSTEM_PROMPT``)
+#: that teaches the tool catalogue and the ``TOOL_CALL:`` protocol. Neither
+#: is repeated here.
 CODING_SYSTEM_PROMPT = """You are an expert coding agent. You receive a task and use tools to read, understand, and modify code in a real codebase.
 
 APPROACH:
@@ -309,15 +314,6 @@ RULES:
 - Don't add unnecessary comments, docstrings, or type annotations to code you didn't change.
 - If you're unsure about something, explain your uncertainty instead of guessing.
 - If you can't complete the task, explain what you tried and what blocked you.
-
-When you need to use a tool, respond with a JSON tool call block:
-
-```tool_call
-{{"tool": "tool_name", "args": {{"param1": "value1"}}}}
-```
-
-Available tools:
-{tool_descriptions}
 
 When your work is complete, respond with your final summary WITHOUT any tool calls.
 """
@@ -430,7 +426,9 @@ async def run_coding_agent(
         working_dir: Root directory of the codebase to operate on.
         on_step: Callback for live step updates (step: AgentStep).
         confirm_write: Callback to confirm file writes (tool, args) -> bool.
-        system_prompt: Override the default coding system prompt.
+        system_prompt: Role guidance for the worker in place of
+            :data:`CODING_SYSTEM_PROMPT`; the tool catalogue and protocol come
+            from the agent loop's one prompt either way.
     """
     start_time = time.monotonic()
     tools = ToolRegistry(workspace=str(working_dir))
@@ -496,10 +494,9 @@ async def run_coding_agent(
         f"the necessary changes."
     )
 
-    # TODO: pass coding-specific system prompt to run_agent_loop once
-    # it supports a system_prompt override parameter. For now the
-    # generic AGENT_SYSTEM_PROMPT in agent_loop.py is used.
-    _ = system_prompt  # reserved for future use
+    # The worker's role guidance; the agent loop prepends it to its one tool
+    # prompt (catalogue + TOOL_CALL protocol), so nothing is taught twice.
+    worker_prompt = system_prompt if system_prompt is not None else CODING_SYSTEM_PROMPT
 
     max_verify_retries = 2
     exec_result: AgentResult | None = None
@@ -526,6 +523,7 @@ async def run_coding_agent(
             auto_approve_safe=True,
             on_step=on_step,
             confirm_unsafe=confirm_write,
+            system_prompt=worker_prompt,
         )
 
         if not exec_result.completed and exec_result.error:
@@ -628,6 +626,7 @@ async def run_coding_agent(
                 auto_approve_safe=True,
                 on_step=on_step,
                 confirm_unsafe=confirm_write,
+                system_prompt=worker_prompt,
             )
             if gate_result.completed:
                 exec_result = gate_result

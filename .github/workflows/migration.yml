@@ -1,0 +1,71 @@
+name: Migration platform contracts
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'nvh/integrations/workspace/migrate_legacy.py'
+      - 'nvh/integrations/workspace/storage.py'
+      - 'nvh/storage/repository.py'
+      - 'nvh/config/settings.py'
+      - 'tests/test_legacy_migration_concurrency.py'
+      - 'tests/test_storage_layout.py'
+      - 'tests/test_single_root.py'
+      - 'tests/test_repository_init_idempotent.py'
+      - 'tests/test_workspace_snapshot.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - '.github/workflows/migration.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'nvh/integrations/workspace/migrate_legacy.py'
+      - 'nvh/integrations/workspace/storage.py'
+      - 'nvh/storage/repository.py'
+      - 'nvh/config/settings.py'
+      - 'tests/test_legacy_migration_concurrency.py'
+      - 'tests/test_storage_layout.py'
+      - 'tests/test_single_root.py'
+      - 'tests/test_repository_init_idempotent.py'
+      - 'tests/test_workspace_snapshot.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - '.github/workflows/migration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migration-platform:
+    # Linux x64/Arm64 already run these files in the ordinary full CI suite.
+    # These jobs exercise the actual NT/Darwin publication implementations.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      # Only migration fixtures enable this against their private fake homes.
+      NVH_LEGACY_MIGRATION: '0'
+      NVH_NETWORK_TESTS: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install existing development test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Native filesystem and process migration contracts
+        run: >-
+          python -m pytest
+          tests/test_legacy_migration_concurrency.py
+          tests/test_storage_layout.py
+          tests/test_single_root.py
+          tests/test_repository_init_idempotent.py
+          tests/test_workspace_snapshot.py
+          -v --tb=short -ra

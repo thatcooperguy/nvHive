@@ -1,8 +1,82 @@
-"""Tests for nvh.plugins.manager — discover, list, load."""
+"""Tests for nvh.plugins.manager — discover, list, load, the one plugins directory."""
 
 from __future__ import annotations
 
 from pathlib import Path
+
+
+class TestPluginsDir:
+    """One discovery path: ``storage_layout().plugins_dir`` if declared, else ``NVH_HOME/plugins``."""
+
+    def test_plugins_dir_follows_nvh_home(self, tmp_path: Path, monkeypatch):
+        from nvh.integrations.workspace.storage import storage_layout
+        from nvh.plugins.manager import plugins_dir
+
+        monkeypatch.setenv("NVH_HOME", str(tmp_path))
+        expected = getattr(storage_layout(), "plugins_dir", None) or (tmp_path.resolve() / "plugins")
+        assert plugins_dir() == Path(expected)
+        assert ".hive" not in plugins_dir().parts
+        assert plugins_dir(tmp_path / "other") == Path(getattr(storage_layout(tmp_path / "other"), "plugins_dir", None) or (tmp_path / "other").resolve() / "plugins")
+
+    def test_discover_defaults_to_the_plugins_dir(self, tmp_path: Path, monkeypatch):
+        from nvh.plugins.manager import PluginManager, plugins_dir
+
+        monkeypatch.setenv("NVH_HOME", str(tmp_path))
+        # This contract tests the home default, not an explicit component
+        # override left by a preceding API storage-activation test.
+        monkeypatch.delenv("NVH_PLUGINS", raising=False)
+        target = plugins_dir()
+        target.mkdir(parents=True)
+        (target / "from_home.py").write_text("NVHIVE_PLUGIN = {'type': 'agent', 'name': 'from_home'}\n")
+        (target / "_private.py").write_text("raise RuntimeError('never')\n")
+        pm = PluginManager()
+        found = {p.name: p for p in pm.discover() if p.source == "file"}
+        assert set(found) == {"from_home"}
+        assert found["from_home"].module == str(target / "from_home.py")
+        assert pm.load("from_home") is not None and pm.list_plugins()[-1].type == "agent"
+
+    def test_no_hive_dot_dir_is_read(self):
+        source = Path(__import__("nvh.plugins.manager", fromlist=["x"]).__file__).read_text(encoding="utf-8")
+        assert '".hive"' not in source
+
+    def test_one_walk_serves_both_loaders_and_neither_executes_the_others_files(self, tmp_path: Path):
+        """``plugin_files`` is the single listing; ``declares_top_level`` tells a
+        provider manifest from a Wizard tool without running the file; a Wizard
+        tool file is the Wizard registry's to execute, not ``nvh plugins``'."""
+        import pytest
+
+        from nvh.plugins.manager import (
+            PluginManager,
+            declares_top_level,
+            load_plugin_module,
+            plugin_files,
+        )
+
+        sentinel = tmp_path / "wizard-tool-was-imported"
+        (tmp_path / "b.py").write_text("NVHIVE_PLUGIN = {'type': 'agent', 'name': 'b'}\n")
+        (tmp_path / "a.py").write_text(
+            f"import pathlib\npathlib.Path({str(sentinel)!r}).write_text('x')\n\ndef register(reg):\n    reg.seen = True\n"
+        )
+        (tmp_path / "_private.py").write_text("raise RuntimeError('never')\n")
+        (tmp_path / "bad.py").write_text("this is not python ::\n")
+
+        assert [p.name for p in plugin_files(tmp_path)] == ["a.py", "b.py", "bad.py"]
+        assert plugin_files(tmp_path / "missing") == []
+        assert declares_top_level(tmp_path / "a.py", "register")
+        assert not declares_top_level(tmp_path / "a.py", "NVHIVE_PLUGIN")
+        assert declares_top_level(tmp_path / "b.py", "NVHIVE_PLUGIN")
+        with pytest.raises(SyntaxError):
+            declares_top_level(tmp_path / "bad.py", "register")
+        assert not sentinel.exists()  # probing never runs the file
+
+        pm = PluginManager()
+        pm.discover(plugin_dir=tmp_path)
+        assert pm.load("a") is None and pm.list_plugins()[0].type == "wizard-tool"
+        assert not sentinel.exists()  # nvh plugins does not run Wizard tool files
+        assert pm.load("b") is not None
+        assert load_plugin_module(tmp_path / "b.py").NVHIVE_PLUGIN["name"] == "b"
+        with pytest.raises(SyntaxError):
+            load_plugin_module(tmp_path / "bad.py")
 
 
 class TestPluginManager:

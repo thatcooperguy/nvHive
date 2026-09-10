@@ -132,8 +132,15 @@ def _forget_repl_memories(keyword: str) -> int:
 
 
 def legacy_memory_file() -> Path:
-    """Where the deleted ``nvh/core/memory.py`` kept its memories."""
-    return Path.home() / ".hive" / "memory" / "memories.json"
+    """The pre-0.42 ``memories.json`` of the deleted ``nvh/core/memory.py``.
+
+    Read from ``state_dir/memory/memories.json`` of the storage layout: the
+    legacy-home migration copies the old ``~/.hive/memory/memories.json`` there
+    once, and this import turns it into vault notes once.
+    """
+    from nvh.integrations.workspace.storage import storage_layout
+
+    return storage_layout().state_dir / "memory" / "memories.json"
 
 
 def _legacy_memory_marker(home_dir: str | Path | None = None) -> Path:

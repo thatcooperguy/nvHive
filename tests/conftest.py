@@ -13,6 +13,12 @@ import pytest
 # for (and spawn) them on CI; a test that wants the warm-up sets the variable
 # to "1" itself. setdefault so an operator's explicit choice still wins.
 os.environ.setdefault("NVH_PLATFORM_WARMUP", "0")
+# The one-shot pre-0.44 home import (nvh/integrations/workspace/migrate_legacy.py)
+# reads the developer's real ~/.hive / ~/.council whenever a suite sets NVH_HOME
+# without patching Path.home — and exports the keys it finds. Off for every
+# test; a test of the migration itself sets NVH_LEGACY_MIGRATION=1 (and a fake
+# Path.home). setdefault so an operator's explicit choice still wins.
+os.environ.setdefault("NVH_LEGACY_MIGRATION", "0")
 
 import nvh.storage.repository as repo  # noqa: E402
 from nvh.utils import platform_facts as _platform_facts  # noqa: E402

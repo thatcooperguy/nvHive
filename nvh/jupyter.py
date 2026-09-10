@@ -82,18 +82,25 @@ def _register_magics(ipython):
         try:
             from IPython.display import JSON, display
 
-            path = Path.home() / ".hive" / "last_query.json"
+            path = _last_query_path()
             if not path.exists():
                 print("No last query found. Run %nvh first.")
                 return
             data = json.loads(path.read_text())
             display(JSON(data))
         except ImportError:
-            path = Path.home() / ".hive" / "last_query.json"
+            path = _last_query_path()
             if not path.exists():
                 print("No last query found. Run %nvh first.")
                 return
             print(json.dumps(json.loads(path.read_text()), indent=2))
+
+
+def _last_query_path() -> Path:
+    """``$NVH_STATE/last_query.json`` — where the engine writes the routing explanation."""
+    from nvh.integrations.workspace.storage import storage_layout
+
+    return storage_layout().state_dir / "last_query.json"
 
 
 def load_ipython_extension(ipython):

@@ -46,7 +46,9 @@ minute for PyPI.
 2. `cd web && npx tsc --noEmit && npm run build` passes; a broken WebUI
    breaks first run for every user.
 3. `CHANGELOG.md` has the section; `docs/COMMANDS.md` is regenerated
-   (`python scripts/gen_commands_doc.py`) if any command changed.
+   (`python scripts/gen_commands_doc.py`) if any command changed, and
+   `docs/PROVIDERS.md` (`python scripts/gen_providers_doc.py`) after any change
+   to `nvh/providers/specs.py` (`tests/test_provider_docs_parity.py` runs `--check`).
 4. README install URLs, PyPI metadata, release asset names, `NOTICE.md`,
    `TRADEMARKS.md` and the trusted-publisher settings all point at
    `thatcooperguy/nvHive` and the `nvhive` package.
@@ -217,7 +219,8 @@ profile."
 
 ## Documentation
 
-- `docs/COMMANDS.md` is generated: `python scripts/gen_commands_doc.py`
+- `docs/COMMANDS.md` is generated: `python scripts/gen_commands_doc.py`;
+  `docs/PROVIDERS.md`'s tables too: `python scripts/gen_providers_doc.py`
   (`--check` in CI via `tests/test_commands_doc_parity.py`). Never hand-edit.
 - No hand-typed inventory counts (providers, models, free tiers, cabinets,
   tools, personas, agents) in README, docs or CLI strings —

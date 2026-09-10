@@ -168,6 +168,23 @@ class ResponseCache:
 logger = logging.getLogger(__name__)
 
 
+def _tool_kwargs(
+    tools: list[dict[str, Any]] | None, tool_choice: str | dict[str, Any] | None,
+) -> dict[str, Any]:
+    """``tools`` / ``tool_choice`` for ``provider.complete`` / ``stream``, or ``{}`` when no tools were offered.
+
+    Passed only when there is a catalogue to send, so an adapter that takes
+    neither (the Mock / Triton ``**kwargs`` sinks) sees the pre-0.44 call and
+    the LiteLLM / Ollama adapters decide per model whether to send it.
+    """
+    if not tools:
+        return {}
+    kwargs: dict[str, Any] = {"tools": tools}
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
+    return kwargs
+
+
 class Engine:
     """Main orchestration engine."""
 
@@ -505,6 +522,8 @@ class Engine:
         escalate: bool = False,
         verify: bool = False,
         history: list[Message] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResponse:
         """Execute a single query with routing, fallback, caching, and budget enforcement.
 
@@ -512,6 +531,13 @@ class Engine:
         system prompt and before the final user message. Ignored when
         stored conversation context (*conversation_id*/*continue_last*)
         is used.
+
+        *tools* / *tool_choice* (the OpenAI function-calling shape
+        ``ToolRegistry.openai_tools()`` builds) are handed to the provider
+        that answers — every adapter sends them only when the resolved model
+        can take them and never to Perplexity's Responses surface, so the
+        caller keeps parsing the ``TOOL_CALL:`` text protocol as the
+        fallback. A cached answer is never used for a tool-bearing query.
 
         When *privacy* is ``True``, cache reads/writes, query logging, and
         conversation persistence are all skipped so no data is stored.
@@ -637,8 +663,9 @@ class Engine:
             history=history,
         )
 
-        # Cache check (skipped in privacy mode)
-        if not privacy and use_cache and self.config.cache.enabled and temp == 0:
+        # Cache check (skipped in privacy mode and for tool-bearing queries:
+        # the cache key does not carry the tool catalogue)
+        if not privacy and use_cache and not tools and self.config.cache.enabled and temp == 0:
             cached = await self.cache.get(
                 decision.provider, decision.model,
                 messages, temp, max_tok,
@@ -659,6 +686,8 @@ class Engine:
             max_tokens=max_tok,
             system_prompt=sys_prompt,
             stream=stream,
+            tools=tools,
+            tool_choice=tool_choice,
         )
 
         # Response evaluation via local orchestrator (FULL mode only)
@@ -693,6 +722,8 @@ class Engine:
                                 max_tokens=max_tok,
                                 system_prompt=sys_prompt,
                                 stream=stream,
+                                tools=tools,
+                                tool_choice=tool_choice,
                             )
                             response = retry_response
                         except Exception:
@@ -706,7 +737,7 @@ class Engine:
             return response
 
         # Cache the response
-        if use_cache and self.config.cache.enabled and temp == 0:
+        if use_cache and not tools and self.config.cache.enabled and temp == 0:
             await self.cache.put(
                 decision.provider, decision.model,
                 messages, temp, max_tok, response,
@@ -783,12 +814,15 @@ class Engine:
         temperature: float | None = None,
         max_tokens: int | None = None,
         on_token: Any = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResponse:
         """Stream a query, calling on_token(delta) for each chunk.
 
         Returns the final collected CompletionResponse. This is a
         thin wrapper that sets up routing/messages like query() but
         uses stream_to_callback instead of collecting silently.
+        ``tools`` / ``tool_choice`` reach the provider as in :meth:`query`.
         """
         await self.initialize()
 
@@ -834,6 +868,7 @@ class Engine:
                     temperature=temp,
                     max_tokens=max_tok,
                     system_prompt=sys_prompt,
+                    **_tool_kwargs(tools, tool_choice),
                 )
                 response = await stream_to_callback(stream_iter, on_token=on_token)
                 self.rate_manager.record_success(provider_name)
@@ -852,7 +887,6 @@ class Engine:
     ) -> None:
         """Save routing explanation to disk for `nvh why`."""
         import json as _json
-        from pathlib import Path as _Path
 
         context = {
             "prompt": prompt[:200],
@@ -883,7 +917,9 @@ class Engine:
         }
 
         try:
-            why_path = _Path.home() / ".hive" / "last_query.json"
+            from nvh.integrations.workspace.storage import storage_layout
+
+            why_path = storage_layout().state_dir / "last_query.json"
             why_path.parent.mkdir(parents=True, exist_ok=True)
             why_path.write_text(_json.dumps(context, indent=2))
         except Exception:
@@ -999,6 +1035,17 @@ class Engine:
             privacy: When ``True``, skip all query logging and conversation
                      persistence so no data is stored.
         """
+        if strategy == "throwdown":
+            from nvh.core.throwdown import run_throwdown
+
+            if not synthesize:
+                raise ValueError("Throwdown requires synthesis; use council for independent answers.")
+            return await run_throwdown(
+                self, prompt, members=members, weights=weights,
+                system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens,
+                conversation_id=conversation_id, auto_agents=auto_agents,
+                agent_preset=agent_preset, num_agents=num_agents, privacy=privacy,
+            )
         await self.initialize()
         await self._check_budget()
 
@@ -1031,17 +1078,12 @@ class Engine:
             # Skip all logging and persistence in privacy mode
             return result
 
-        # Log each member response
-        for pname, resp in result.member_responses.items():
+        # Include agreement calls and intermediate work in the budget ledger.
+        for resp in result.all_responses:
             await self._log_query(resp, "council", conversation_id=conversation_id)
 
-        if result.synthesis:
-            await self._log_query(result.synthesis, "council", conversation_id=conversation_id)
-
         # Emit webhook event
-        total_tokens = sum(
-            r.usage.total_tokens for r in result.member_responses.values()
-        )
+        total_tokens = result.total_usage.total_tokens
         total_cost = float(result.total_cost_usd or 0)
         await self.webhooks.emit(
             WebhookEvent.COUNCIL_COMPLETE,
@@ -1163,9 +1205,12 @@ class Engine:
         max_tokens: int,
         system_prompt: str | None,
         stream: bool,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> CompletionResponse:
         """Execute query with automatic fallback chain on failure."""
         fallback_chain = self._get_fallback_chain(decision.provider)
+        tool_kwargs = _tool_kwargs(tools, tool_choice)
         failure_log: list[str] = []  # track why each provider failed
 
         for i, provider_name in enumerate(fallback_chain):
@@ -1201,6 +1246,7 @@ class Engine:
                         temperature=temperature,
                         max_tokens=max_tokens,
                         system_prompt=system_prompt,
+                        **tool_kwargs,
                     ).__aiter__()
                     # For now, collect the stream (CLI will handle real streaming)
                     response = await collect_stream(stream_iter)
@@ -1211,6 +1257,7 @@ class Engine:
                         temperature=temperature,
                         max_tokens=max_tokens,
                         system_prompt=system_prompt,
+                        **tool_kwargs,
                     )
 
                 self.rate_manager.record_success(provider_name)

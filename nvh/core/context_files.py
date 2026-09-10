@@ -1,6 +1,6 @@
 """HIVE.md and context file injection for multi-LLM prompts.
 
-Searches for context files (HIVE.md, .hive/context/*.md) and injects
+Searches for context files (HIVE.md, .nvh/context/*.md) and injects
 them into system prompts so all LLMs — local and cloud — share the same
 project context, rules, and constraints.
 
@@ -10,9 +10,13 @@ Usage:
 
 Supports:
     - HIVE.md — primary context file (like CLAUDE.md but for all LLMs)
-    - .hive/context/*.md — additional context files (modular)
-    - ~/.hive/global_context.md — global context applied to all projects
+    - .nvh/context/*.md and .nvh/rules/*.md — additional context files (modular)
+    - $NVH_HOME/config/global_context.md — global context applied to all projects
+      (the storage layout's ``config_dir``)
     - Frontmatter parsing (optional: name, scope, priority)
+
+A project's pre-0.44 ``.hive.md`` / ``.hive/context`` / ``.hive/rules`` are
+still read as fallbacks after the ``.nvh`` names.
 """
 
 from __future__ import annotations
@@ -37,14 +41,39 @@ class ContextFile:
 CONTEXT_FILE_NAMES = [
     "HIVE.md",
     "hive.md",
-    ".hive.md",
+    ".nvh.md",
 ]
 
-# Directory for modular context files
+# Directories for modular context files
 CONTEXT_DIR_NAMES = [
-    ".hive/context",
-    ".hive/rules",
+    ".nvh/context",
+    ".nvh/rules",
 ]
+
+GLOBAL_CONTEXT_FILENAME = "global_context.md"
+
+
+def _context_file_names() -> list[str]:
+    from nvh.integrations.workspace.migrate_legacy import LEGACY_CONTEXT_FILE_NAMES
+
+    return [*CONTEXT_FILE_NAMES, *LEGACY_CONTEXT_FILE_NAMES]
+
+
+def _context_dir_names() -> list[str]:
+    from nvh.integrations.workspace.migrate_legacy import LEGACY_CONTEXT_DIR_NAMES
+
+    return [*CONTEXT_DIR_NAMES, *LEGACY_CONTEXT_DIR_NAMES]
+
+
+def global_context_file(home_dir: Path | None = None) -> Path:
+    """``config_dir/global_context.md`` of the storage layout.
+
+    ``home_dir`` (tests) names an explicit ``NVH_HOME``; otherwise the active
+    layout is used — never the OS home directory.
+    """
+    from nvh.integrations.workspace.storage import storage_layout
+
+    return storage_layout(home_dir).config_dir / GLOBAL_CONTEXT_FILENAME
 
 
 def _parse_frontmatter(content: str) -> tuple[dict[str, str], str]:
@@ -76,20 +105,27 @@ def _parse_frontmatter(content: str) -> tuple[dict[str, str], str]:
 def find_context_files(
     project_dir: Path | None = None,
     home_dir: Path | None = None,
+    nvh_home: Path | None = None,
 ) -> list[ContextFile]:
     """Find all context files from project directory up to home directory.
 
     Search order (later files have higher priority):
-    1. ~/.hive/global_context.md (global, lowest priority)
+    1. $NVH_HOME/config/global_context.md (global, lowest priority)
     2. ~/HIVE.md (user-level)
     3. Project directory HIVE.md (project-level, highest priority)
-    4. Project .hive/context/*.md (modular context files)
+    4. Project .nvh/context/*.md and .nvh/rules/*.md (modular context files)
+
+    ``home_dir`` is the OS home (for ``~/HIVE.md``); ``nvh_home`` is an explicit
+    ``NVH_HOME`` for the global context file (tests) — unset, the active
+    storage layout is used.
     """
     home = home_dir or Path.home()
     files: list[ContextFile] = []
+    file_names = _context_file_names()
+    dir_names = _context_dir_names()
 
     # 1. Global context
-    global_ctx = home / ".hive" / "global_context.md"
+    global_ctx = global_context_file(nvh_home)
     if global_ctx.is_file():
         try:
             content = global_ctx.read_text(encoding="utf-8")
@@ -127,7 +163,7 @@ def find_context_files(
     # 3. Project directory search (walk upward from cwd)
     search_dir = project_dir or Path.cwd()
     for _ in range(10):  # limit depth
-        for name in CONTEXT_FILE_NAMES:
+        for name in file_names:
             project_ctx = search_dir / name
             if project_ctx.is_file():
                 try:
@@ -145,8 +181,9 @@ def find_context_files(
                     pass
                 break
 
-        # 4. Modular context files from .hive/context/
-        for dir_name in CONTEXT_DIR_NAMES:
+        # 4. Modular context files from .nvh/context/ and .nvh/rules/
+        #    (a project's pre-0.44 .hive/ directories are read as fallbacks)
+        for dir_name in dir_names:
             ctx_dir = search_dir / dir_name
             if ctx_dir.is_dir():
                 for md_file in sorted(ctx_dir.glob("*.md")):

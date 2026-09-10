@@ -40,9 +40,13 @@ from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC_PATH = ROOT / "docs" / "MODELS.md"
+SCRIPT = "scripts/gen_models_doc.py"
 
-BEGIN = "<!-- BEGIN GENERATED: {name} -->"
-END = "<!-- END GENERATED: {name} -->"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _gendoc  # noqa: E402 — the marker plumbing shared with gen_providers_doc.py
+from _gendoc import BEGIN, END  # noqa: E402,F401
+from _gendoc import code as _code  # noqa: E402
+from _gendoc import table as _table  # noqa: E402
 
 
 def _lm():
@@ -50,16 +54,6 @@ def _lm():
     from nvh.core import local_models
 
     return local_models
-
-
-def _table(header: list[str], rows: list[list[str]]) -> str:
-    lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
-    lines += ["| " + " | ".join(row) + " |" for row in rows]
-    return "\n".join(lines) + "\n"
-
-
-def _code(tag: str) -> str:
-    return f"`{tag}`"
 
 
 # --- renderers ---------------------------------------------------------------
@@ -231,51 +225,21 @@ BLOCKS: dict[str, Callable[[], str]] = {
 }
 
 
-# --- marker plumbing -----------------------------------------------------------
-
-
-def _span(text: str, name: str) -> tuple[int, int]:
-    """(start of body, start of END marker) for a block; raises when a marker is missing or doubled."""
-    begin, end = BEGIN.format(name=name), END.format(name=name)
-    for marker in (begin, end):
-        count = text.count(marker)
-        if count != 1:
-            raise SystemExit(f"docs/MODELS.md: expected exactly one {marker!r}, found {count}")
-    i = text.index(begin) + len(begin)
-    j = text.index(end)
-    if j < i:
-        raise SystemExit(f"docs/MODELS.md: END marker for {name!r} precedes its BEGIN marker")
-    return i, j
+# --- marker plumbing (scripts/_gendoc.py, shared with gen_providers_doc.py) ---
 
 
 def block_text(text: str, name: str) -> str:
     """The generated body currently between a block's markers."""
-    i, j = _span(text, name)
-    return text[i:j]
+    return _gendoc.block_text(text, name, "docs/MODELS.md")
 
 
 def render(text: str) -> str:
     """``text`` with every generated block replaced by its renderer's output."""
-    for name, renderer in BLOCKS.items():
-        i, j = _span(text, name)
-        text = text[:i] + "\n" + renderer() + text[j:]
-    return text
+    return _gendoc.render(text, BLOCKS, "docs/MODELS.md")
 
 
 def main(argv: list[str] | None = None) -> int:
-    argv = sys.argv[1:] if argv is None else argv
-    actual = DOC_PATH.read_text(encoding="utf-8").replace("\r\n", "\n")
-    expected = render(actual)
-    rel = DOC_PATH.relative_to(ROOT).as_posix() if DOC_PATH.is_relative_to(ROOT) else str(DOC_PATH)
-    if "--check" in argv:
-        if actual != expected:
-            print(f"{rel} is stale — run: python scripts/gen_models_doc.py", file=sys.stderr)
-            return 1
-        print(f"{rel} is current")
-        return 0
-    DOC_PATH.write_text(expected, encoding="utf-8", newline="\n")
-    print(f"wrote {rel} ({len(BLOCKS)} generated blocks)")
-    return 0
+    return _gendoc.main(argv, doc_path=DOC_PATH, root=ROOT, blocks=BLOCKS, script=SCRIPT)
 
 
 if __name__ == "__main__":

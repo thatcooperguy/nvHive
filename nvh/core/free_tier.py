@@ -4,15 +4,11 @@ On first run (or when no advisors are configured), automatically enables
 advisors with free tiers so users can start using NVHive immediately
 without any API key setup.
 
-Free tiers available:
-- Ollama (local)  — unlimited, free, requires NVIDIA GPU
-- Groq            — free tier: 30 req/min, 14.4K tokens/min
-- Google Gemini   — free tier: 15 req/min
-- Mistral         — Free Experiment plan: 2 RPM, 1B tokens/month
-- Cohere          — trial API key on signup
-- NVIDIA NIM      — 1000+ free API credits on signup
-- SiliconFlow     — permanently free models at 1000 RPM
-- LLM7            — anonymous 30 RPM, no signup required
+The ladder — which providers count as free and the order they are tried —
+is derived from the ``free_tier`` / ``free_tier_rank`` facts in
+:mod:`nvh.providers.specs` (:func:`nvh.providers.specs.free_tier_ladder`);
+docs/PROVIDERS.md renders the same list. Ollama (local) comes first, then
+the keyed free tiers; the anonymous LLM7 tier needs no key at all.
 
 The goal: `nvh "What is machine learning?"` should work on first run
 with zero configuration if Ollama is available locally.
@@ -24,7 +20,7 @@ import logging
 import os
 from dataclasses import dataclass
 
-from nvh.providers.specs import PROVIDER_SPECS
+from nvh.providers.specs import PROVIDER_SPECS, ProviderSpec, free_tier_ladder
 from nvh.utils.ollama import ollama_base_url
 
 logger = logging.getLogger(__name__)
@@ -33,8 +29,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FreeTierAdvisor:
     name: str
-    env_var: str           # primary env var to check
-    check_fn: str          # "env" or "ollama" (special check)
+    env_var: str           # primary env var to check ("" when no key is taken)
+    check_fn: str          # "env", "anonymous" (works without a key) or "ollama" (daemon probe)
     priority: int          # lower = preferred (used first)
     daily_limit: str       # human-readable limit description
 
@@ -45,99 +41,35 @@ class FreeTierAdvisor:
         return list(spec.env_keys) if spec else []
 
 
-FREE_TIER_ADVISORS = [
-    FreeTierAdvisor(
-        name="ollama",
-        env_var="",
-        check_fn="ollama",
-        priority=1,
-        daily_limit="Unlimited (local GPU)",
-    ),
-    FreeTierAdvisor(
-        name="groq",
-        env_var="GROQ_API_KEY",
-        check_fn="env",
-        priority=2,
-        daily_limit="30 req/min, 14.4K tok/min",
-    ),
-    FreeTierAdvisor(
-        name="google",
-        env_var="GOOGLE_API_KEY",
-        check_fn="env",
-        priority=3,
-        daily_limit="15 req/min free",
-    ),
-    FreeTierAdvisor(
-        name="mistral",
-        env_var="MISTRAL_API_KEY",
-        check_fn="env",
-        priority=4,
-        daily_limit="Free Experiment plan: 2 RPM, 1B tokens/month",
-    ),
-    FreeTierAdvisor(
-        name="cohere",
-        env_var="COHERE_API_KEY",
-        check_fn="env",
-        priority=5,
-        daily_limit="Trial tier rate limits",
-    ),
-    FreeTierAdvisor(
-        name="nvidia",
-        env_var="NVIDIA_API_KEY",
-        check_fn="env",
-        priority=6,
-        daily_limit="1000+ free API credits, 40 RPM, NVIDIA Developer Program",
-    ),
-    FreeTierAdvisor(
-        name="siliconflow",
-        env_var="SILICONFLOW_API_KEY",
-        check_fn="env",
-        priority=7,
-        daily_limit="Permanently free models at 1000 RPM",
-    ),
-    FreeTierAdvisor(
-        name="llm7",
-        env_var="LLM7_API_KEY",
-        check_fn="llm7",
-        priority=8,
-        daily_limit="Anonymous access: 30 RPM, no signup. Token: 120 RPM",
-    ),
-    FreeTierAdvisor(
-        name="fireworks",
-        env_var="FIREWORKS_API_KEY",
-        check_fn="env",
-        priority=9,
-        daily_limit="Free tier available",
-    ),
-    FreeTierAdvisor(
-        name="cerebras",
-        env_var="CEREBRAS_API_KEY",
-        check_fn="env",
-        priority=10,
-        daily_limit="Free tier: 30 req/min",
-    ),
-    FreeTierAdvisor(
-        name="sambanova",
-        env_var="SAMBANOVA_API_KEY",
-        check_fn="env",
-        priority=11,
-        daily_limit="Free tier available",
-    ),
-    FreeTierAdvisor(
-        name="huggingface",
-        env_var="HUGGINGFACE_API_KEY",
-        check_fn="env",
-        priority=12,
-        daily_limit="Free Inference API",
-    ),
-    FreeTierAdvisor(
-        name="ai21",
-        env_var="AI21_API_KEY",
-        check_fn="env",
-        priority=13,
-        daily_limit="Free tier available",
-    ),
-]
+def _advisor(spec: ProviderSpec) -> FreeTierAdvisor:
+    if spec.name == "ollama":
+        check_fn = "ollama"
+    elif spec.anonymous_key:
+        check_fn = "anonymous"
+    else:
+        check_fn = "env"
+    return FreeTierAdvisor(
+        name=spec.name,
+        env_var=spec.key_env or "",
+        check_fn=check_fn,
+        priority=spec.free_tier_rank,
+        daily_limit=spec.free_info,
+    )
+
+
+# Rank order from the spec table: Ollama first, then the keyed free tiers.
+FREE_TIER_ADVISORS: list[FreeTierAdvisor] = [_advisor(spec) for spec in free_tier_ladder()]
+
+
+def _env_key(advisor: FreeTierAdvisor) -> str:
+    """The advisor's key from its primary or any alternative env var, else ""."""
+    key = os.environ.get(advisor.env_var, "") if advisor.env_var else ""
+    if not key:
+        for alt in advisor.alt_env_vars:
+            key = os.environ.get(alt, "")
+            if key:
+                break
+    return key
 
 
 def detect_available_free_advisors() -> list[FreeTierAdvisor]:
@@ -158,18 +90,13 @@ def detect_available_free_advisors() -> list[FreeTierAdvisor]:
             except Exception:
                 pass
 
-        elif advisor.check_fn == "llm7":
-            # LLM7 works without any key (anonymous access)
+        elif advisor.check_fn == "anonymous":
+            # Works without any key (LLM7's anonymous tier)
             available.append(advisor)
 
         elif advisor.check_fn == "env":
             # Check if API key is set in environment
-            key = os.environ.get(advisor.env_var, "")
-            if not key:
-                for alt in advisor.alt_env_vars:
-                    key = os.environ.get(alt, "")
-                    if key:
-                        break
+            key = _env_key(advisor)
             if not key:
                 # Check keyring
                 try:
@@ -201,26 +128,15 @@ def auto_configure_free_tiers(config_dict: dict) -> dict:
     """
     advisors = config_dict.get("advisors", config_dict.get("providers", {}))
 
-    # Always enable Ollama if it's in the config
-    if "ollama" in advisors:
-        advisors["ollama"]["enabled"] = True
-
-    # Always enable LLM7 if it's in the config (no key needed)
-    if "llm7" in advisors:
-        advisors["llm7"]["enabled"] = True
-
-    # Enable any advisor that has a key available
     for free_advisor in FREE_TIER_ADVISORS:
-        if free_advisor.name in advisors and free_advisor.check_fn == "env":
-            key = os.environ.get(free_advisor.env_var, "")
-            if not key:
-                for alt in free_advisor.alt_env_vars:
-                    key = os.environ.get(alt, "")
-                    if key:
-                        break
-            if key:
-                advisors[free_advisor.name]["enabled"] = True
-                logger.info(f"Auto-enabled {free_advisor.name} (API key found in environment)")
+        if free_advisor.name not in advisors:
+            continue
+        if free_advisor.check_fn in ("ollama", "anonymous"):
+            # No key needed: always enable the local daemon and the anonymous tier
+            advisors[free_advisor.name]["enabled"] = True
+        elif free_advisor.check_fn == "env" and _env_key(free_advisor):
+            advisors[free_advisor.name]["enabled"] = True
+            logger.info(f"Auto-enabled {free_advisor.name} (API key found in environment)")
 
     return config_dict
 

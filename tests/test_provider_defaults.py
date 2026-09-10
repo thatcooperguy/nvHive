@@ -1,10 +1,11 @@
-"""Shipped provider defaults: settings template vs. the server's copy.
+"""Shipped provider defaults: the settings template and the server's copy vs PROVIDER_SPECS.
 
 The 0.41.1 hotfix replaced every retired model ID and removed the GitHub
-Models provider (service retired 2026-07-30). Two hard-coded copies of the
-defaults exist — nvh.config.settings.generate_default_config and
-nvh.api.server._PROVIDER_DEFAULT_CONFIG — so these tests pin the new IDs
-and keep the copies from drifting apart again.
+Models provider (service retired 2026-07-30). Two hand-typed copies of the
+defaults still exist — nvh.config.settings.generate_default_config and
+nvh.api.server._PROVIDER_DEFAULT_CONFIG — so these tests pin both to
+nvh.providers.specs, the one source since 0.44, rather than to a third copy
+of the IDs typed here.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ import yaml
 import nvh.api.server as server_module
 from nvh.cli.setup import RETIRED_MODEL_RENAMES
 from nvh.config.settings import generate_default_config
-from nvh.providers.specs import PROVIDER_SPECS
+from nvh.providers.registry import BESPOKE_ADAPTERS
+from nvh.providers.specs import BESPOKE_SPECS, PROVIDER_SPECS
 
 # Every ID the migrate table retires, plus the GitHub Models fallback that
 # left with its provider (no rename target — the provider is gone).
@@ -23,56 +25,34 @@ RETIRED_MODEL_IDS = {
     old for table in RETIRED_MODEL_RENAMES.values() for old in table
 } | {"meta-llama-3.1-8b-instruct"}
 
-EXPECTED_DEFAULTS = {
-    "openai": ("gpt-5.6-terra", "gpt-5.6-luna"),
-    "anthropic": ("claude-sonnet-5", "claude-haiku-4-5-20251001"),
-    "google": ("gemini/gemini-3.7-flash", "gemini/gemini-3.5-flash-lite"),
-    "groq": ("groq/openai/gpt-oss-120b", "groq/openai/gpt-oss-20b"),
-    "grok": ("xai/grok-4.6", "xai/grok-4.3"),
-    "mistral": ("mistral/mistral-large-latest", "mistral/mistral-small-latest"),
-    "cohere": ("command-a-03-2025", "command-r-08-2024"),
-    "deepseek": ("deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"),
-    "perplexity": ("perplexity/preset/low", "perplexity/preset/fast"),
-    "together": ("together_ai/openai/gpt-oss-120b", "together_ai/openai/gpt-oss-20b"),
-    "fireworks": (
-        "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
-        "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
-    ),
-    "openrouter": ("openrouter/openai/gpt-oss-120b", "openrouter/openai/gpt-oss-20b"),
-    "cerebras": ("cerebras/gpt-oss-120b", "cerebras/gpt-oss-120b"),
-    "sambanova": ("sambanova/Meta-Llama-3.3-70B-Instruct", "sambanova/gpt-oss-120b"),
-    "huggingface": ("huggingface/openai/gpt-oss-120b", "huggingface/openai/gpt-oss-20b"),
-    "ai21": ("ai21_chat/jamba-large-1.7", "ai21_chat/jamba-mini-2"),
-    "nvidia": ("nvidia_nim/meta/llama-3.3-70b-instruct", "nvidia_nim/meta/llama-3.1-8b-instruct"),
-    "siliconflow": ("Qwen/Qwen2.5-7B-Instruct", ""),
-    "llm7": ("gpt-oss", "minimax-m2.7"),
-    "ollama": ("ollama/gemma3:4b", ""),
-    "mock": ("mock/default", "mock/fast"),
-}
-
 
 def _template_advisors() -> dict[str, dict]:
     return yaml.safe_load(generate_default_config())["advisors"]
 
 
-def test_template_default_and_fallback_models() -> None:
-    advisors = _template_advisors()
-    actual = {
-        name: (block.get("default_model", ""), block.get("fallback_model", ""))
-        for name, block in advisors.items()
-        if name in EXPECTED_DEFAULTS
-    }
-    assert actual == EXPECTED_DEFAULTS
+def test_template_has_a_stanza_per_provider_and_nothing_else() -> None:
+    assert set(_template_advisors()) == set(PROVIDER_SPECS) | set(BESPOKE_ADAPTERS)
 
 
-def test_template_defaults_match_provider_specs() -> None:
-    """The settings template is a hand copy of PROVIDER_SPECS until 0.43 derives it."""
-    advisors = _template_advisors()
-    for name, spec in PROVIDER_SPECS.items():
-        block = advisors[name]
-        assert block.get("default_model") == spec.default_model, f"{name}.default_model"
-        # A blank template fallback inherits the spec's; anything else must match it.
-        assert block.get("fallback_model", "") in ("", spec.fallback_model), f"{name}.fallback_model"
+@pytest.mark.parametrize("name", sorted(PROVIDER_SPECS))
+def test_template_stanza_matches_provider_spec(name: str) -> None:
+    """The settings template is a hand copy of PROVIDER_SPECS until the template derives from it."""
+    block = _template_advisors()[name]
+    spec = PROVIDER_SPECS[name]
+    assert block.get("default_model") == spec.default_model, f"{name}.default_model"
+    # A blank template fallback inherits the spec's; anything else must match it.
+    assert block.get("fallback_model", "") in ("", spec.fallback_model), f"{name}.fallback_model"
+    if spec.base_url:
+        assert block.get("base_url") == spec.base_url, f"{name}.base_url"
+    # The api_key reference names the spec's primary key variable first.
+    assert str(block.get("api_key", "")).startswith("${" + spec.key_env), f"{name}.api_key"
+
+
+def test_template_mock_defaults_match_the_bespoke_spec() -> None:
+    mock = _template_advisors()["mock"]
+    assert (mock["default_model"], mock["fallback_model"]) == (
+        BESPOKE_SPECS["mock"].default_model, BESPOKE_SPECS["mock"].fallback_model,
+    )
 
 
 def test_template_has_no_retired_models_or_github() -> None:
@@ -87,7 +67,7 @@ def test_template_has_no_retired_models_or_github() -> None:
 def test_llm7_default_is_a_served_free_tier_model() -> None:
     llm7 = _template_advisors()["llm7"]
     assert llm7["enabled"] is True
-    assert llm7["default_model"] == "gpt-oss"
+    assert llm7["default_model"] == PROVIDER_SPECS["llm7"].default_model == "gpt-oss"
 
 
 def test_server_defaults_match_settings_template() -> None:
@@ -100,6 +80,14 @@ def test_server_defaults_match_settings_template() -> None:
             assert template.get(field) == value, (
                 f"{name}.{field}: server={value!r} template={template.get(field)!r}"
             )
+
+
+def test_server_key_env_map_matches_provider_specs() -> None:
+    """The server's env-var copy names exactly the specs' primary key variables."""
+    env_map = server_module._PROVIDER_ENV_VAR_MAP
+    assert set(env_map) == set(PROVIDER_SPECS)
+    for name, env in env_map.items():
+        assert env == PROVIDER_SPECS[name].key_env, name
 
 
 def test_server_provider_maps_dropped_github() -> None:

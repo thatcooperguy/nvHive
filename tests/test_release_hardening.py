@@ -93,8 +93,10 @@ def test_repository_default_db_path_prefers_rootless_state(monkeypatch, tmp_path
     monkeypatch.setenv("NVH_STATE", str(tmp_path / "state"))
     assert repository._default_db_path() == tmp_path / "state" / "nvhive.db"
 
+    # 0.44: the pre-0.44 HIVE_DATA_DIR knob is no longer read (the legacy
+    # migration warns when it is still exported); NVH_STATE is the relocation.
     monkeypatch.setenv("HIVE_DATA_DIR", str(tmp_path / "data"))
-    assert repository._default_db_path() == tmp_path / "data" / "state" / "nvhive.db"
+    assert repository._default_db_path() == tmp_path / "state" / "nvhive.db"
 
 
 def test_linux_installer_handles_missing_ensurepip_without_root() -> None:

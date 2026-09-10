@@ -8,9 +8,9 @@ the tool system and workflows.
 
 | Layer | Location | Notes |
 |---|---|---|
-| user config | `$HIVE_CONFIG_HOME/config.yaml` | the installer sets `HIVE_CONFIG_HOME=$NVH_HOME/config`; a plain pip install defaults to `~/.hive/config.yaml` |
-| secrets | `$NVH_HOME/config/.env`, `~/.hive/.env` | `KEY=VALUE` lines, loaded by the CLI and the API at startup; shell variables win |
-| project overlay | `.hive.yaml` or `.hive/config.yaml` | searched upward from the current directory, never above `$HOME` and never `~/.hive` itself; deep-merged over the user config |
+| user config | `$NVH_HOME/config/config.yaml` | the storage layout's `config_dir` (`NVH_CONFIG`, legacy alias `HIVE_CONFIG_HOME`); `NVH_HOME` defaults to `~/.nvh`, so a plain pip install reads `~/.nvh/config/config.yaml` |
+| secrets | `$NVH_HOME/config/.env` | `KEY=VALUE` lines, loaded by the CLI and the API at startup; shell variables win |
+| project overlay | `.nvh.yaml` or `.nvh/config.yaml` | searched upward from the current directory, never above `$HOME` and never inside `NVH_HOME` itself; deep-merged over the user config. A project's pre-0.44 `.hive.yaml` / `.hive/config.yaml` is still read as a fallback |
 | profile overlay | `profiles.<name>` in `config.yaml` | applied with `--profile <name>` or `HIVE_PROFILE=<name>` |
 
 Values may reference the environment: `${GROQ_API_KEY}` or
@@ -142,8 +142,8 @@ aliases are `XAI_API_KEY` (grok), `GEMINI_API_KEY` (google), `CO_API_KEY`
 (cohere), `TOGETHERAI_API_KEY` (together), `FIREWORKS_AI_API_KEY` (fireworks),
 `PERPLEXITYAI_API_KEY` (perplexity), `HF_TOKEN` / `HUGGINGFACE_API_KEY`
 (huggingface) and `NIM_API_KEY` (nvidia). `nvh setup`, `nvh advisor add` and the
-Wizard write keys to the `.env` file under `$NVH_HOME/config` (falling back to
-`~/.hive/.env`); `nvh advisor remove` scrubs both and disables the stanza.
+Wizard write keys to the `.env` file under `$NVH_HOME/config`; `nvh advisor
+remove` scrubs it and disables the stanza.
 `.env.example` at the repo root is a template. Snapshots never bundle
 `config.yaml` or `.env`.
 
@@ -151,10 +151,16 @@ Wizard write keys to the `.env` file under `$NVH_HOME/config` (falling back to
 
 `NVH_HOME` (alias `NVHIVE_HOME`) is the only root. Unset, it defaults to
 `~/.nvh`, which is fine on a laptop and wrong on an ephemeral VM — the
-installer picks the persistent volume and exports it from your shell profile
-and from `$NVH_HOME/nvh-env.sh`. Each component directory has an override so
-one large tree can be split across mounts; `nvh status --deep --storage`
-prints the active layout with a real write probe and free-space check.
+installers (`install.sh`, `install-mac.sh`, `install.ps1`) pick the persistent
+volume and export it from your shell profile (or, on Windows, your user
+environment) and from `$NVH_HOME/nvh-env.sh`. Each component directory has an
+override so one large tree can be split across mounts; `nvh status --deep
+--storage` prints the active layout with a real write probe and free-space
+check. Every per-user file nvHive touches — config, keys, the state database,
+schedules, workflows, plugins, the routing explanation — lives under one of
+these directories: `storage_layout()` in `nvh/integrations/workspace/storage.py`
+is the single path oracle and `tests/test_single_root.py` fails on any new
+hard-coded home path.
 
 | Directory | Override | Holds |
 |---|---|---|
@@ -163,8 +169,9 @@ prints the active layout with a real write probe and free-space check.
 | `models/`, `models/ollama/` | `NVH_MODELS`, `OLLAMA_MODELS` | local model weights |
 | `cache/` | `NVH_CACHE` | `pip/`, `uv/`, `huggingface/`, `torch/`, `tmp/`, `catalog/`, `xdg/` (also exported as `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `TORCH_HOME`, `TMPDIR`, `XDG_CACHE_HOME`) |
 | `logs/` | `NVH_LOGS` | `install.log`, `api-server.log`, `nvhive.log`, service logs |
-| `config/` | `HIVE_CONFIG_HOME` | `config.yaml`, `.env`, `mcp-servers.json` |
-| `state/` | `NVH_STATE` | `nvhive.db` (SQLite: conversations, routing outcomes, costs), capability marker, browser profiles |
+| `config/` | `NVH_CONFIG` (legacy alias `HIVE_CONFIG_HOME`, still honoured and still exported) | `config.yaml`, `.env`, `user.json`, `global_context.md`, `workflows/`, `mcp-servers.json` |
+| `state/` | `NVH_STATE` | `nvhive.db` (SQLite: conversations, routing outcomes, costs), `schedules.json`, `last_query.json` (`nvh status --routing`), `memory/`, `legacy-migration.json`, capability marker, browser profiles |
+| `plugins/` | `NVH_PLUGINS` | drop-in `.py` plugins (`nvh plugins`) |
 | `runtimes/` | `NVH_RUNTIME_HOME` | micromamba and other runtime fallbacks |
 | `apps/` | `NVH_APPS_HOME` | rootless Firefox, Obsidian, AppImages |
 | `webui/` | `NVH_WEB_HOME` | WebUI source, build and the auto-installed Node |
@@ -177,8 +184,58 @@ prints the active layout with a real write probe and free-space check.
 | `catalog/` | `NVH_CATALOG` | cached setup catalog |
 | `vault/`, `rag/`, `jobs/`, `agent-profiles/` | — | Memory Vault notes, the RAG store, background-job metadata and logs, custom agent profiles |
 
-`HIVE_DATA_DIR` moves only the SQLite database; `nvh snapshot` reads it from
-wherever it actually is.
+### Legacy homes (pre-0.44)
+
+Before 0.44 files were spread over `~/.hive` (config, keys, plugins,
+workflows, schedules, REPL memories, the pre-0.42 knowledge store),
+`~/.council` (the state database) and `~/nvh` (the early installers' root).
+The first `nvh` command after an upgrade — key loading, `nvh config init`, a
+`load_config()` that finds no user config while a legacy one exists, or the
+first database open — copies whatever it finds into the layout **once**:
+legacy user files and database contents remain intact, nothing already under
+`NVH_HOME` is overwritten, and `$NVH_STATE/legacy-migration.json` records what
+moved. Two files are *merged* rather than skipped, because 0.43 kept both
+copies live (`nvh setup` wrote `~/.hive/.env` and `~/.hive/config.yaml`, the
+web wizard wrote the layout's): `KEY=VALUE` lines the layout `.env` lacks are
+appended to it, and provider stanzas / sections the layout `config.yaml`
+lacks are added (the layout copy wins every conflict; a `.pre-0.44-merge`
+backup is left beside it). Symlinks are copied as links except for the state
+database, which becomes an independent SQLite snapshot including committed WAL
+data. The database is opened read-only; live WAL/SHM files are never copied.
+SQLite may perform its normal WAL/read-lock bookkeeping while reading.
+Backup checks a five-second deadline between SQLite steps and reports a timeout
+for retry when the database remains busy.
+The complete snapshot is published without replacing an existing file; a
+filesystem without hard-link support or an existing destination sidecar causes
+a reported failure and leaves the old database intact. A copy that fails
+is reported and retried on the next command instead of being recorded as
+done. If the state database import fails, opening the default database stops
+instead of creating an empty replacement that would prevent a later retry.
+Cooperating migrations serialize on a persistent SQLite lock under
+`state/.legacy-migration-lock.sqlite3`, with a five-second lock-contention
+timeout. Do not delete this lock file while migrations may be running. A lock
+failure prevents default database initialization from creating an empty database.
+This is not a deadline for arbitrary filesystem I/O. After acquiring the lock,
+the importer rechecks the marker and every destination.
+
+Other files, directories and links are copied into private staging beside their
+destination and published atomically without replacing any existing entry,
+including an empty directory or a dangling link. Windows uses no-replace rename;
+Linux requires `renameat2(RENAME_NOREPLACE)` and macOS requires
+`renamex_np(RENAME_EXCL)`. An unavailable operation/filesystem fails safely for
+retry, without falling back to an overwriting rename. Only staging owned by the
+current copy is cleaned up; an abrupt process exit may leave private staging
+behind, which later migrations leave untouched. Process exit releases the lock;
+the completed marker is published atomically while holding it. This does not
+promise power-loss durability or synchronize unrelated applications/user edits
+to existing `.env`/YAML files during their deliberate merge.
+
+Stores a one-shot importer already consumed (`nvh rag import-legacy`,
+the REPL memory import) are skipped. The old roots can be deleted once you
+have checked the copy. `NVH_LEGACY_MIGRATION=0` turns the whole thing off.
+`HIVE_DATA_DIR` is no longer read — export `NVH_STATE=<dir>/state` instead
+(the migration warns while it is still set). `nvh snapshot` reads the
+database from wherever `NVH_STATE` puts it.
 
 ## Environment variables
 
@@ -219,10 +276,10 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVH_CATALOG_URL` | GitHub raw URL | remote setup catalog; the bundled copy is the fallback |
 | `NVH_RAG_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for the RAG store |
 | `NVH_RAG_AUTO_PULL` | `1` | `0` stops the embedder pulling a missing embedding model on first use |
-| `NVH_WIZARD_PLUGIN_DIR` | `$NVH_HOME/wizard-tools/` | directory of `.py` files exposing `register(reg)` that add Wizard tools |
+| `NVH_WIZARD_PLUGIN_DIR` | `$NVH_HOME/plugins/` | directory of `.py` files exposing `register(reg)` that add Wizard tools — the one plugins directory, shared with provider plugins (only files that declare `register` are executed by the Wizard; `$NVH_HOME/wizard-tools/` is still read for one more release) |
+| `NVH_LEGACY_MIGRATION` | unset (on) | `0` disables the one-shot copy of the pre-0.44 `~/.hive` / `~/.council` / `~/nvh` files into `$NVH_HOME` (see [Where files live](#where-files-live)) |
 | `NVH_WIZARD_AUTOFOLD_VAULT` | `1` | `0` stops the Wizard folding a strongly matching vault note into its system prompt |
-| `NVH_SEARXNG_URL`, `BRAVE_API_KEY` | unset | backends for the Wizard's `web_search`: SearXNG wins, then Brave, then key-free DuckDuckGo |
-| `SEARXNG_URL`, `BRAVE_SEARCH_KEY`, `GOOGLE_SEARCH_KEY` + `GOOGLE_CX` | unset | web-search backends for the agent `web_search` tool (DuckDuckGo needs nothing) |
+| `NVH_SEARXNG_URL`, `BRAVE_API_KEY` | unset | backends for the one `web_search` implementation (the Wizard tool and the agent tool): SearXNG wins, then Brave, then key-free DuckDuckGo |
 | `HASS_URL` | unset | Home Assistant instance the Wizard's `home_assistant_*` tools talk to (`HOME_ASSISTANT_URL` is accepted too). Required whenever `HASS_TOKEN` is set — no address is ever guessed, so the token is never sent to whichever host answers an mDNS name. Prefer `https://`; plain `http://` is accepted only for loopback, RFC 1918 / IPv6-ULA addresses and `.local` names, and `home_assistant_status` then reports `insecure_transport: true` |
 | `HASS_TOKEN` | unset | Home Assistant long-lived access token (profile → Security → Long-lived access tokens); unset = the tools explain how to connect instead of calling out (`HOME_ASSISTANT_TOKEN` is accepted too) |
 | `NVH_HASS_ALLOW_ADMIN` | unset | `home_assistant_call` is limited to device-control domains by default (`light`, `switch`, `fan`, `cover`, `climate`, `media_player`, `scene`, `vacuum`, `humidifier`, `water_heater`, `lock`, `input_boolean`/`input_number`/`input_select`, `number`, `select`, `button`, `notify`). `1` also allows every other domain (`script.*`, `automation.*`, `update.*`, …); `all` additionally allows the host-reaching surface — `hassio.*`, `shell_command.*`, `python_script.*`, `homeassistant.restart`/`stop` — which `1` still refuses |
@@ -250,7 +307,8 @@ Installer-only knobs (`install.sh` / `start-linux.sh`):
 A `HIVE.md` in the project root is injected into the system prompt of every
 query run from that directory — for all advisors, local and cloud. Lower
 priority sources are `~/HIVE.md` (user-level) and
-`~/.hive/global_context.md`; `.hive/context/*.md` adds modular files. Optional
+`$NVH_HOME/config/global_context.md`; `.nvh/context/*.md` and `.nvh/rules/*.md`
+add modular files (a project's pre-0.44 `.hive/` directories still work). Optional
 frontmatter: `name`, `scope` (`all`, `convene`, `query`, `code`) and
 `priority` (0–100, higher first). `HIVE.md.example` at the repo root shows the
 shape; `GET /v1/context` lists what is loaded and `POST /v1/context/reload`
@@ -284,6 +342,22 @@ Strategies: `weighted_consensus` (default; `--weights groq=0.5,google=0.5`),
 `majority_vote`, `best_of`. `--members` picks advisors explicitly,
 `--no-synthesize` shows the raw responses. `product_resilience` is the
 skeptical panel for "what breaks for a beginner on a no-root GPU desktop".
+
+`majority_vote` counts answers that match after normalizing letter case and
+whitespace; it does not infer that differently worded answers mean the same
+thing. More than half the responses must match to be labelled a majority.
+Otherwise the result says plurality or tie; configured weights break ties.
+The same rule applies to streaming councils. For long, differently worded
+analyses, use `weighted_consensus` or `best_of`.
+
+The MCP `throwdown` tool and both compatible APIs run two council rounds:
+independent analysis, then critique with the first round's answers in context,
+followed by a final answer using both rounds. A failed quorum stops the next
+stage. Each completed round is recorded before the next budget check.
+Council totals include reported agreement-check, synthesis and intermediate
+round usage; latency runs through the final answer, including retries.
+Failed streams retain any reported usage, but a provider that fails before
+reporting usage may still incur a charge that nvHive cannot measure.
 
 ## Tools
 
@@ -381,8 +455,9 @@ nvh workflow show code_review
 nvh workflow run code_review --file main.py     # or --input "text"
 ```
 
-Workflows are discovered in `nvh/workflows/` (bundled), `~/.hive/workflows/`
-and `./.hive/workflows/`. Shell steps run through the same sandbox as the
-`shell` tool.
+Workflows are discovered in `nvh/workflows/` (bundled),
+`$NVH_HOME/config/workflows/` and `./.nvh/workflows/` (a project's pre-0.44
+`./.hive/workflows/` is still read). Shell steps run through the same sandbox
+as the `shell` tool.
 
 Back to [README](../README.md)

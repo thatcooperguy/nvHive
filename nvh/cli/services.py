@@ -961,7 +961,6 @@ def _webui_first_run() -> bool:
         candidates = [
             os.path.join(package_root, "web"),
             str(layout.home / "repo" / "web"),
-            os.path.expanduser("~/nvh/repo/web"),
             str(layout.webui_dir),
             os.path.join(os.getcwd(), "web"),
         ]

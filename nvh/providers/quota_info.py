@@ -3,12 +3,22 @@
 When a provider returns a rate limit error, this module provides
 user-friendly context: what the limit is, when it resets, and how
 to upgrade for higher limits.
+
+The per-provider rows are derived from :data:`nvh.providers.specs.PROVIDER_FACTS`:
+the limit text is the spec's ``free_info``, the reset and upgrade wording
+comes from its tier unless the row carries its own ``reset_hint`` /
+``upgrade_hint`` (Gemini's midnight-PT daily cap, NIM's non-expiring credits,
+Ollama's ``nvh models pull``), and a provider with nowhere to upgrade
+(Mock, Triton without a library URL) gets no upgrade sentence at all. A
+provider's quota text therefore changes by editing its spec row.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+
+from nvh.providers.specs import PROVIDER_FACTS, ProviderSpec
 
 
 @dataclass
@@ -23,113 +33,54 @@ class QuotaInfo:
     retry_after_seconds: float | None = None
 
 
-# Per-provider quota details
-PROVIDER_QUOTAS: dict[str, QuotaInfo] = {
-    "openai": QuotaInfo(
-        provider="openai",
-        tier="paid",
-        limit_description="Pay-as-you-go with rate limits based on spending tier",
-        reset_hint="Limits reset every minute. Higher spend = higher limits.",
-        upgrade_url="https://platform.openai.com/settings/organization/billing",
-        upgrade_hint="Add API credits at platform.openai.com/billing (min $5)",
-    ),
-    "anthropic": QuotaInfo(
-        provider="anthropic",
-        tier="paid",
-        limit_description="Pay-as-you-go with tier-based rate limits",
-        reset_hint="Limits reset every minute",
-        upgrade_url="https://console.anthropic.com/settings/billing",
-        upgrade_hint="Add API credits at console.anthropic.com",
-    ),
-    "groq": QuotaInfo(
-        provider="groq",
-        tier="free",
-        limit_description="Free tier: 30 requests/min, 14,400 tokens/min",
-        reset_hint="Resets every 60 seconds",
-        upgrade_url="https://console.groq.com/settings/billing",
-        upgrade_hint="Free tier is generous. Upgrade for higher throughput.",
-    ),
-    "google": QuotaInfo(
-        provider="google",
-        tier="free",
-        limit_description="Free tier: 15 requests/min, 1M tokens/day",
-        reset_hint="Per-minute limits reset every 60s. Daily limits reset at midnight PT.",
-        upgrade_url="https://aistudio.google.com/apikey",
-        upgrade_hint="Create a new API key in a fresh project, or enable billing.",
-    ),
-    "mistral": QuotaInfo(
-        provider="mistral",
-        tier="free",
-        limit_description="Free Experiment plan: 2 requests/min",
-        reset_hint="Resets every 60 seconds",
-        upgrade_url="https://console.mistral.ai/billing",
-        upgrade_hint="Upgrade to paid plan for higher limits",
-    ),
-    "cohere": QuotaInfo(
-        provider="cohere",
-        tier="free",
-        limit_description="Trial tier with rate limits",
-        reset_hint="Resets every minute",
-        upgrade_url="https://dashboard.cohere.com/billing",
-        upgrade_hint="Upgrade from trial for production limits",
-    ),
-    "deepseek": QuotaInfo(
-        provider="deepseek",
-        tier="paid",
-        limit_description="Very cheap: $0.07/M input tokens",
-        reset_hint="Limits reset every minute",
-        upgrade_url="https://platform.deepseek.com/top_up",
-        upgrade_hint="Add credits at platform.deepseek.com (very affordable)",
-    ),
-    "nvidia": QuotaInfo(
-        provider="nvidia",
-        tier="free",
-        limit_description="1000+ free API credits, 40 requests/min",
-        reset_hint="Credits don't expire. Rate limits reset every minute.",
-        upgrade_url="https://build.nvidia.com/",
-        upgrade_hint="Sign up for NVIDIA Developer Program for free credits",
-    ),
-    "cerebras": QuotaInfo(
-        provider="cerebras",
-        tier="free",
-        limit_description="Free tier: 30 requests/min",
-        reset_hint="Resets every 60 seconds",
-        upgrade_url="https://cloud.cerebras.ai/",
-        upgrade_hint="Free tier available with generous limits",
-    ),
-    "siliconflow": QuotaInfo(
-        provider="siliconflow",
-        tier="free",
-        limit_description="Permanently free models at 1000 requests/min",
-        reset_hint="Resets every 60 seconds",
-        upgrade_url="https://cloud.siliconflow.cn/",
-        upgrade_hint="Free models always available",
-    ),
-    "fireworks": QuotaInfo(
-        provider="fireworks",
-        tier="free",
-        limit_description="Free tier available",
-        reset_hint="Limits reset every minute",
-        upgrade_url="https://fireworks.ai/account/billing",
-        upgrade_hint="Free tier available on signup",
-    ),
-    "llm7": QuotaInfo(
-        provider="llm7",
-        tier="anonymous",
-        limit_description="Anonymous: 30 requests/min. With token: 120 requests/min",
-        reset_hint="Resets every 60 seconds",
-        upgrade_url="https://llm7.io",
-        upgrade_hint="Get a token for 4x higher limits (120 RPM)",
-    ),
-    "ollama": QuotaInfo(
-        provider="ollama",
-        tier="free",
-        limit_description="Unlimited (local GPU)",
-        reset_hint="No rate limits — runs on your hardware",
-        upgrade_url="https://ollama.com/library",
-        upgrade_hint="Pull more models: ollama pull llama3.1:8b",
-    ),
+_PAID_LIMITS = "Pay-as-you-go with tier-based rate limits"
+
+# The per-tier default sentences a spec row may override.
+_RESET_BY_TIER = {
+    "local": "No rate limits — runs on your hardware",
+    "anonymous": "Resets every 60 seconds",
+    "free": "Per-minute limits reset every 60 seconds",
+    "paid": "Limits reset every minute; higher spend raises them",
 }
+
+
+def _upgrade_hint(spec: ProviderSpec, tier: str) -> str:
+    """The row's own sentence, else the tier's — and nothing when there is no URL to point at."""
+    if spec.upgrade_hint:
+        return spec.upgrade_hint
+    if not spec.upgrade_url:
+        return ""
+    if tier == "local":
+        return f"Pull more models from {spec.upgrade_url}"
+    if tier == "anonymous":
+        return f"Get a free token at {spec.upgrade_url} for higher limits"
+    if tier == "free":
+        return f"Upgrade the plan at {spec.upgrade_url} for higher limits"
+    return f"Add credits or raise the tier at {spec.upgrade_url}"
+
+
+def _quota_for(spec: ProviderSpec) -> QuotaInfo:
+    tier = "local" if spec.is_local else spec.quota_tier
+    if tier == "local":
+        limit = spec.free_info or "Unlimited (local)"
+    elif tier == "anonymous":
+        limit = spec.free_info
+    elif tier == "free":
+        limit = spec.free_info or "Free tier with rate limits"
+    else:
+        limit = f"{_PAID_LIMITS}; {spec.free_info}" if spec.free_info else _PAID_LIMITS
+    return QuotaInfo(
+        provider=spec.name,
+        tier="free" if tier == "local" else tier,
+        limit_description=limit,
+        reset_hint=spec.reset_hint or _RESET_BY_TIER[tier],
+        upgrade_url=spec.upgrade_url,
+        upgrade_hint=_upgrade_hint(spec, tier),
+    )
+
+
+# Per-provider quota details, one row per spec (cloud adapters and bespoke).
+PROVIDER_QUOTAS: dict[str, QuotaInfo] = {name: _quota_for(spec) for name, spec in PROVIDER_FACTS.items()}
 
 
 def get_quota_info(provider: str) -> QuotaInfo:
@@ -189,8 +140,9 @@ def format_rate_limit_message(
         parts.append(f"  Reset: {info.reset_hint}")
 
     # How to upgrade?
-    if info.upgrade_url:
+    if info.upgrade_hint:
         parts.append(f"  Upgrade: {info.upgrade_hint}")
+    if info.upgrade_url:
         parts.append(f"  Link: {info.upgrade_url}")
 
     # What fallback was used?

@@ -22,12 +22,11 @@ Model routing:
   "safe"                      → local Ollama only
   "council" or "council:N"    → N-model consensus (default 3)
   "throwdown"                 → two-pass deep analysis
-  "gpt-5.6-*", "gpt-4o"      → OpenAI provider
-  "claude-*"                  → Anthropic provider
-  "gemini-*"                  → Google provider
-  "grok-*"                    → xAI provider
-  "llama-*", "mixtral-*"     → Groq/local provider
-  any other known model name  → routed by NVHive
+  a spec's default/fallback id, LiteLLM route ("groq/...") or model
+  family ("gpt-4o", "claude-*", "gemini-*", "grok-*", "llama-3*")
+                              → that provider (nvh.providers.specs)
+  anything LiteLLM recognises → the provider LiteLLM names, when it has a spec
+  any other model name        → routed by NVHive with the name as a hint
 
 NemoClaw integration:
   Register nvHive as an OpenShell inference provider and all agent
@@ -40,60 +39,112 @@ NemoClaw integration:
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from nvh.providers.specs import PROVIDER_SPECS
+
 # ---------------------------------------------------------------------------
-# Model → provider mapping for well-known model IDs
+# Model → provider mapping, derived from the spec table
 # ---------------------------------------------------------------------------
 
-# Maps model name prefixes/exact matches to NVHive provider names
-_MODEL_TO_PROVIDER: dict[str, str] = {
-    "gpt-5.6-terra": "openai",
-    "gpt-5.6-luna": "openai",
-    "gpt-5": "openai",
-    "gpt-4o": "openai",
-    "gpt-4o-mini": "openai",
-    "gpt-4-turbo": "openai",
-    "gpt-4": "openai",
-    "gpt-3.5-turbo": "openai",
-    "o1": "openai",
-    "o1-mini": "openai",
-    "o1-preview": "openai",
-    "o3": "openai",
-    "o3-mini": "openai",
-    "claude-3-5-sonnet": "anthropic",
-    "claude-3-5-haiku": "anthropic",
-    "claude-3-opus": "anthropic",
-    "claude-3-sonnet": "anthropic",
-    "claude-3-haiku": "anthropic",
-    "claude-sonnet-5": "anthropic",
-    "claude-sonnet-4": "anthropic",
-    "claude-opus-4": "anthropic",
-    "claude-haiku-4": "anthropic",
-    "gemini-3": "google",
-    "gemini-2.5": "google",
-    "gemini-2.0": "google",
-    "gemini-1.5-pro": "google",
-    "gemini-1.5-flash": "google",
-    "gemini-pro": "google",
-    "grok-4": "grok",
-    "grok-3": "grok",
-    "llama-3.3": "groq",
-    "llama-3.1": "groq",
-    "llama-3": "groq",
-    "mixtral-8x7b": "groq",
-    "mixtral-8x22b": "groq",
-    "mistral-large": "mistral",
-    "mistral-medium": "mistral",
-    "mistral-small": "mistral",
-    "deepseek-v4": "deepseek",
-    "deepseek-chat": "deepseek",
-    "deepseek-coder": "deepseek",
-}
+
+def _prefix_owners() -> dict[str, list[str]]:
+    """``litellm_prefix -> [provider, ...]`` over the spec table."""
+    owners: dict[str, list[str]] = {}
+    for spec in PROVIDER_SPECS.values():
+        if spec.litellm_prefix:
+            owners.setdefault(spec.litellm_prefix, []).append(spec.name)
+    return owners
+
+
+def _unique_prefixes() -> dict[str, str]:
+    """``litellm_prefix -> provider`` for the routes only one spec uses.
+
+    ``openai/`` is LiteLLM's generic OpenAI-compatible client, shared by
+    siliconflow and llm7, so it names no provider.
+    """
+    return {prefix: names[0] for prefix, names in _prefix_owners().items() if len(names) == 1}
+
+
+def _shared_prefixes() -> frozenset[str]:
+    """The routes more than one spec uses (``openai/``): LiteLLM's answer for them is not a provider."""
+    return frozenset(prefix for prefix, names in _prefix_owners().items() if len(names) > 1)
+
+
+def _derive_model_maps() -> tuple[dict[str, str], dict[str, str]]:
+    """``(exact id -> provider, id prefix -> provider)`` from ``PROVIDER_SPECS``.
+
+    Exact: every spec's default and fallback model, routed and bare, when no
+    other spec claims the same id (shared open-weight ids such as
+    ``openai/gpt-oss-120b`` are left to the router). Prefix: each spec's
+    unique LiteLLM route (``groq/``, ``xai/``; a multi-part route such as
+    ``fireworks_ai/accounts/fireworks/models/`` also contributes its lead
+    segment ``fireworks_ai/``) plus its ``model_prefixes`` families.
+    """
+    unique = _unique_prefixes()
+    claims: dict[str, set[str]] = {}
+    for spec in PROVIDER_SPECS.values():
+        ids: set[str] = set()
+        for model in (spec.default_model, spec.fallback_model):
+            ids.add(model.removeprefix(spec.litellm_prefix) if spec.litellm_prefix else model)
+            if spec.litellm_prefix in unique:
+                ids.add(model)
+        for model_id in ids:
+            claims.setdefault(model_id, set()).add(spec.name)
+    exact = {model_id: next(iter(names)) for model_id, names in claims.items() if len(names) == 1}
+
+    prefixes: dict[str, str] = {}
+    for prefix, name in unique.items():
+        prefixes[prefix] = name
+        lead = prefix.split("/", 1)[0] + "/"
+        prefixes.setdefault(lead, name)
+    for spec in PROVIDER_SPECS.values():
+        for family in spec.model_prefixes:
+            prefixes[family] = spec.name
+    return exact, prefixes
+
+
+def _litellm_provider_names() -> dict[str, str]:
+    """LiteLLM's ``custom_llm_provider`` names -> nvHive provider names."""
+    names = {spec.name: spec.name for spec in PROVIDER_SPECS.values()}
+    for prefix, name in _unique_prefixes().items():
+        names.setdefault(prefix.split("/", 1)[0], name)
+    # LiteLLM's spelling for Cohere's chat surface.
+    names.setdefault("cohere_chat", "cohere")
+    return names
+
+
+# Exact model ids and id prefixes the specs claim; ``resolve_provider_from_model``
+# checks exact first, then prefixes in this order, then asks LiteLLM.
+_MODEL_TO_PROVIDER, _MODEL_PREFIX_TO_PROVIDER = _derive_model_maps()
+_LITELLM_TO_NVH: dict[str, str] = _litellm_provider_names()
+_SHARED_PREFIXES: frozenset[str] = _shared_prefixes()
+
+
+@functools.lru_cache(maxsize=512)
+def _litellm_provider(model: str) -> str | None:
+    """The nvHive provider LiteLLM infers for ``model``.
+
+    ``None`` when LiteLLM does not know the id, names a provider nvHive has
+    no spec for (vertex_ai, bedrock, ...), or the id carries a route several
+    specs share (``openai/gpt-oss-120b`` is a generic-client id, not OpenAI's).
+    LiteLLM is imported lazily (it is heavy) and the answer cached per id;
+    ``_litellm_provider.cache_clear()`` resets it.
+    """
+    if model.startswith(tuple(_SHARED_PREFIXES)):
+        return None
+    try:
+        from litellm import get_llm_provider
+
+        _, provider, _, _ = get_llm_provider(model)
+    except Exception:
+        return None
+    return _LITELLM_TO_NVH.get(provider or "")
 
 # Virtual model names handled by NVHive routing logic
 _NVHIVE_VIRTUAL_MODELS = {
@@ -144,14 +195,20 @@ def resolve_provider_from_model(model: str | None) -> tuple[str | None, str | No
     if parse_council_model(model) is not None or is_throwdown_model(model):
         return None, None
 
-    # Exact match first
+    # Exact match first: a spec's default or fallback id, routed or bare
     if model in _MODEL_TO_PROVIDER:
         return _MODEL_TO_PROVIDER[model], model
 
-    # Prefix match (e.g. "gpt-4o-2024-11-20" → "openai")
-    for prefix, provider in _MODEL_TO_PROVIDER.items():
+    # Prefix match: a LiteLLM route ("groq/...") or a model family
+    # (e.g. "gpt-4o-2024-11-20" → "openai")
+    for prefix, provider in _MODEL_PREFIX_TO_PROVIDER.items():
         if model.startswith(prefix):
             return provider, model
+
+    # LiteLLM may still know the id (a served model the specs do not name)
+    provider = _litellm_provider(model)
+    if provider:
+        return provider, model
 
     # Unknown model — let NVHive route it with the model as a hint
     return None, model
@@ -473,6 +530,11 @@ async def council_stream_generator(
         "created": now,
         "model": effective_model,
         "choices": _sse_choices({}, finish_reason="stop"),
+        "usage": {
+            "prompt_tokens": result.total_usage.input_tokens,
+            "completion_tokens": result.total_usage.output_tokens,
+            "total_tokens": result.total_usage.total_tokens,
+        },
     }
     yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"
@@ -541,6 +603,11 @@ async def throwdown_stream_generator(
         "created": now,
         "model": "throwdown",
         "choices": _sse_choices({}, finish_reason="stop"),
+        "usage": {
+            "prompt_tokens": result.total_usage.input_tokens,
+            "completion_tokens": result.total_usage.output_tokens,
+            "total_tokens": result.total_usage.total_tokens,
+        },
     }
     yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
     yield b"data: [DONE]\n\n"

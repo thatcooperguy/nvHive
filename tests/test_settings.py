@@ -178,7 +178,7 @@ class TestSettings:
     def test_config_merge_project_over_user(self, tmp_path: Path) -> None:
         user_cfg = tmp_path / "user.yaml"
         user_cfg.write_text("defaults:\n  timeout: 10\n  provider: openai\n")
-        proj_cfg = tmp_path / ".hive.yaml"
+        proj_cfg = tmp_path / ".nvh.yaml"
         proj_cfg.write_text("defaults:\n  timeout: 99\n")
         with patch("nvh.config.settings._find_project_config", return_value=proj_cfg):
             cfg = load_config(config_path=user_cfg)
@@ -186,8 +186,85 @@ class TestSettings:
         assert cfg.defaults.provider == "openai"
 
 
+@pytest.fixture()
+def nvh_home(tmp_path: Path, monkeypatch) -> Path:
+    """A throwaway ``NVH_HOME`` so nothing below touches the real user config."""
+    import nvh.config.settings as settings
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    for var in ("NVHIVE_HOME", "NVH_CONFIG", "HIVE_CONFIG_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    # cwd under the *fake* home so the project-config walk stops there (on
+    # Windows tmp_path itself sits under the real home).
+    (home / "work").mkdir()
+    monkeypatch.chdir(home / "work")
+    settings.reset_default_paths()
+    yield tmp_path / "nvh"
+    settings.reset_default_paths()
+
+
+class TestDefaultPaths:
+    """``DEFAULT_CONFIG_DIR`` / ``DEFAULT_CONFIG_PATH`` come from ``storage_layout()``."""
+
+    def test_default_paths_derive_from_the_storage_layout(self, nvh_home: Path) -> None:
+        import nvh.config.settings as settings
+        from nvh.integrations.workspace.storage import storage_layout
+
+        assert settings.DEFAULT_CONFIG_DIR == storage_layout().config_dir == nvh_home / "config"
+        assert settings.DEFAULT_CONFIG_PATH == nvh_home / "config" / "config.yaml"
+
+    def test_default_paths_follow_the_config_override(self, nvh_home: Path, monkeypatch) -> None:
+        import nvh.config.settings as settings
+
+        monkeypatch.setenv("NVH_CONFIG", str(nvh_home.parent / "cfg"))
+        settings.reset_default_paths()
+        assert settings.DEFAULT_CONFIG_DIR == nvh_home.parent / "cfg"
+        assert settings.DEFAULT_CONFIG_PATH == nvh_home.parent / "cfg" / "config.yaml"
+
+        monkeypatch.delenv("NVH_CONFIG")
+        monkeypatch.setenv("HIVE_CONFIG_HOME", str(nvh_home.parent / "legacy-cfg"))
+        settings.reset_default_paths()
+        assert settings.DEFAULT_CONFIG_DIR == nvh_home.parent / "legacy-cfg"
+
+    def test_patched_default_paths_are_honoured(self, nvh_home: Path, monkeypatch) -> None:
+        """Tests and ``activate_storage()`` set the names as plain module attributes."""
+        import nvh.config.settings as settings
+
+        monkeypatch.setattr(settings, "DEFAULT_CONFIG_DIR", nvh_home / "elsewhere")
+        assert settings.get_config_dir() == nvh_home / "elsewhere"
+        assert (nvh_home / "elsewhere").is_dir()
+        with patch("nvh.config.settings.DEFAULT_CONFIG_PATH", nvh_home / "p" / "config.yaml"):
+            (nvh_home / "p").mkdir(parents=True)
+            (nvh_home / "p" / "config.yaml").write_text("defaults:\n  timeout: 42\n")
+            assert settings.load_config().defaults.timeout == 42
+
+    def test_default_paths_are_plain_module_constants(self) -> None:
+        """D7 literally: ``DEFAULT_CONFIG_DIR = storage_layout().config_dir`` at import —
+        no lazy ``__getattr__``, no accessor a bare in-module name could bypass."""
+        import ast
+        from pathlib import Path as _Path
+
+        import nvh.config.settings as settings
+
+        source = _Path(settings.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        top_level = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+        assert "__getattr__" not in top_level
+        assert not {"_default_config_dir", "_default_config_path"} & top_level
+        assigned = {
+            target.id
+            for node in tree.body if isinstance(node, ast.Assign)
+            for target in node.targets if isinstance(target, ast.Name)
+        }
+        assert {"DEFAULT_CONFIG_DIR", "DEFAULT_CONFIG_PATH"} <= assigned
+        assert isinstance(settings.DEFAULT_CONFIG_DIR, Path) and isinstance(settings.DEFAULT_CONFIG_PATH, Path)
+
+
 class TestSettingsDefaults:
-    def test_load_config_defaults(self):
+    def test_load_config_defaults(self, nvh_home: Path):
         from nvh.config.settings import load_config
         config = load_config()
         assert config is not None
@@ -224,10 +301,11 @@ class TestSettingsDefaults:
         assert c.quorum >= 1
         assert c.timeout > 0
 
-    def test_get_config_dir_creates(self, tmp_path):
+    def test_get_config_dir_creates(self, nvh_home: Path):
         from nvh.config.settings import get_config_dir
         d = get_config_dir()
         assert d.exists()
+        assert d == nvh_home / "config"
 
     def test_provider_config(self):
         from nvh.config.settings import ProviderConfig
@@ -235,7 +313,7 @@ class TestSettingsDefaults:
         assert p.enabled is True
         assert p.default_model == "test"
 
-    def test_load_config_with_profile(self, tmp_path):
+    def test_load_config_with_profile(self, nvh_home: Path):
         from nvh.config.settings import load_config
         # Loading with a nonexistent profile should fall back to defaults
         config = load_config(profile="nonexistent_profile_xyz")

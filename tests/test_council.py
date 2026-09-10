@@ -147,7 +147,7 @@ class TestHeuristicAgreement:
 
 
 class TestMajorityVote:
-    def test_returns_highest_weight_member(self):
+    def test_tie_returns_highest_weight_member(self):
         orch, _ = _make_orchestrator()
         members = [
             CouncilMember(provider="a", model="m1", weight=0.3),
@@ -157,6 +157,7 @@ class TestMajorityVote:
         result = orch._majority_vote(resps, members)
         assert "answer B" in result.content
         assert result.metadata["strategy"] == "majority_vote"
+        assert result.metadata["outcome"] == "tie"
 
 
 class TestBestOf:

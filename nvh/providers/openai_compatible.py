@@ -13,6 +13,7 @@ A spec's ``api_surface`` picks the LiteLLM call: ``"chat"`` goes through
 from __future__ import annotations
 
 import functools
+import json
 import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
@@ -21,6 +22,7 @@ from typing import Any
 import httpx
 import litellm
 
+from nvh.core.tools import normalize_tool_calls, wire_tool_calls
 from nvh.providers.base import (
     AuthenticationError,
     CompletionResponse,
@@ -127,7 +129,12 @@ def _build_messages(
     messages: list[Message],
     system_prompt: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Convert our Message models to LiteLLM format."""
+    """Convert our Message models to LiteLLM format.
+
+    An assistant turn's ``tool_calls`` and a ``tool`` turn's ``tool_call_id``
+    travel with the message so a native tool round trip can be replayed to
+    the provider in its own protocol.
+    """
     result: list[dict[str, Any]] = []
     if system_prompt:
         result.append({"role": "system", "content": system_prompt})
@@ -135,8 +142,88 @@ def _build_messages(
         d: dict[str, Any] = {"role": msg.role, "content": msg.content}
         if msg.name:
             d["name"] = msg.name
+        if msg.tool_calls:
+            d["tool_calls"] = msg.tool_calls
+        if msg.tool_call_id:
+            d["tool_call_id"] = msg.tool_call_id
         result.append(d)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Native function calling (0.44 D3): tools= only where the model can take it,
+# never to the Responses surface; LiteLLM's tool_calls mapped back to the
+# OpenAI wire shape ``Message.tool_calls`` / ``CompletionResponse.tool_calls``
+# carry.
+# ---------------------------------------------------------------------------
+
+
+def model_supports_function_calling(model: str) -> bool:
+    """Does the shipped catalog (else LiteLLM's model table) say ``model`` takes ``tools=``?
+
+    ``ModelInfo.supports_function_calling`` when a row has it (the 0.44 wave-2
+    LiteLLM-derived flag), else the row's ``supports_tools``; a model without
+    a catalog row falls back to ``litellm.supports_function_calling`` — an
+    in-package table, no network. Unknown means ``False``: the text protocol.
+    """
+    if not model:
+        return False
+    catalog = _catalog()
+    bare = model.split("/", 1)[1] if "/" in model else model
+    for candidate in dict.fromkeys((model, bare)):
+        info = catalog.get_model_info(candidate)
+        if info is None:
+            continue
+        native = getattr(info, "supports_function_calling", None)
+        if native is not None:
+            return native is True
+        return info.supports_tools is True
+    try:
+        return litellm.supports_function_calling(model) is True
+    except Exception:
+        return False
+
+
+def _tool_calls_from_message(message: Any) -> list[dict[str, Any]] | None:
+    """``message.tool_calls`` mapped to wire dicts; ``None`` when the model made no call.
+
+    One mapping for every adapter: :func:`nvh.core.tools.normalize_tool_calls`
+    reads LiteLLM's objects (``.function.name`` / ``.arguments``) and dicts
+    alike, :func:`nvh.core.tools.wire_tool_calls` writes the OpenAI wire shape
+    and fills a missing ``id`` with ``call_<n>`` — the same fallback the
+    streaming path and the Ollama adapter use, so a backend that omits ids
+    (a vLLM-style local server) yields one contract however it was called.
+    """
+    raw = _get(message, "tool_calls") if message is not None else None
+    if not raw:
+        return None
+    calls = wire_tool_calls(normalize_tool_calls(raw))
+    return calls or None
+
+
+def _merge_tool_call_delta(partial: dict[int, dict[str, Any]], deltas: Any) -> None:
+    """Fold one streaming chunk's ``delta.tool_calls`` into ``partial`` (keyed by index)."""
+    for delta in deltas or []:
+        index = _get(delta, "index")
+        index = int(index) if isinstance(index, int) else len(partial)
+        entry = partial.setdefault(index, {"id": "", "name": "", "arguments": ""})
+        call_id = _get(delta, "id")
+        if call_id:
+            entry["id"] = str(call_id)
+        function = _get(delta, "function")
+        if function is not None:
+            name = _get(function, "name")
+            if name:
+                entry["name"] = str(name)
+            piece = _get(function, "arguments")
+            if piece:
+                entry["arguments"] += piece if isinstance(piece, str) else json.dumps(piece, default=str)
+
+
+def _wire_partial_calls(partial: dict[int, dict[str, Any]]) -> list[dict[str, Any]] | None:
+    """The assembled stream deltas (by index) as wire dicts, through the one mapping."""
+    calls = wire_tool_calls(normalize_tool_calls([entry for _index, entry in sorted(partial.items())]))
+    return calls or None
 
 
 def _responses_content(role: str, content: Any) -> Any:
@@ -359,6 +446,27 @@ class OpenAICompatibleProvider:
     def _responses(self) -> bool:
         return self._spec.api_surface == "responses"
 
+    async def supports_tools(self, model: str | None = None) -> bool:
+        """Can ``model`` (default: the configured one) take ``tools=`` here?
+
+        Never on the Responses surface (I11); otherwise what
+        :func:`model_supports_function_calling` says of the routed model.
+        """
+        if self._responses:
+            return False
+        return model_supports_function_calling(self._get_model(model))
+
+    def _tool_kwargs(
+        self, model_name: str, tools: list[dict[str, Any]] | None, tool_choice: Any,
+    ) -> dict[str, Any]:
+        """``tools`` / ``tool_choice`` for LiteLLM, or ``{}`` when the model cannot take them."""
+        if not tools or self._responses or not model_supports_function_calling(model_name):
+            return {}
+        kw: dict[str, Any] = {"tools": list(tools)}
+        if tool_choice is not None:
+            kw["tool_choice"] = tool_choice
+        return kw
+
     def _responses_cost(self, model: str, usage: Usage, billed: Decimal | None) -> Decimal:
         if billed is None or self._spec.zero_cost:
             return self._cost(model, usage)
@@ -492,10 +600,14 @@ class OpenAICompatibleProvider:
         temperature: float = 1.0,
         max_tokens: int = 4096,
         system_prompt: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         model_name = self._get_model(model)
         if self._responses:
+            # ``tools`` never reach the Responses surface (I11): the caller's
+            # text protocol applies there.
             return await self._complete_responses(
                 messages, model_name, temperature, max_tokens, system_prompt, **kwargs
             )
@@ -509,6 +621,7 @@ class OpenAICompatibleProvider:
                 max_tokens=max_tokens,
                 timeout=self._timeout,
                 **self._kwargs(model_name),
+                **self._tool_kwargs(model_name, tools, tool_choice),
                 **kwargs,
             )
         except Exception as e:
@@ -521,8 +634,10 @@ class OpenAICompatibleProvider:
             output_tokens=usage_data.completion_tokens or 0,
             total_tokens=usage_data.total_tokens or 0,
         )
-        content = response.choices[0].message.content or ""
+        message = response.choices[0].message
+        content = message.content or ""
         finish = response.choices[0].finish_reason or "stop"
+        tool_calls = _tool_calls_from_message(message)
 
         return CompletionResponse(
             content=content,
@@ -531,7 +646,11 @@ class OpenAICompatibleProvider:
             usage=usage,
             cost_usd=self._cost(model_name, usage),
             latency_ms=elapsed,
-            finish_reason=_FINISH_REASONS.get(finish, FinishReason.STOP),
+            finish_reason=(
+                FinishReason.TOOL_CALLS if tool_calls and finish == "stop"
+                else _FINISH_REASONS.get(finish, FinishReason.STOP)
+            ),
+            tool_calls=tool_calls,
         )
 
     async def stream(
@@ -541,10 +660,13 @@ class OpenAICompatibleProvider:
         temperature: float = 1.0,
         max_tokens: int = 4096,
         system_prompt: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         model_name = self._get_model(model)
         if self._responses:
+            # ``tools`` never reach the Responses surface (I11).
             async for chunk in self._stream_responses(
                 messages, model_name, temperature, max_tokens, system_prompt, **kwargs
             ):
@@ -552,6 +674,10 @@ class OpenAICompatibleProvider:
             return
         msgs = _build_messages(messages, system_prompt)
         accumulated = ""
+        # Native tool calls arrive as deltas keyed by index; the final chunk
+        # carries them assembled.
+        partial_calls: dict[int, dict[str, Any]] = {}
+        emitted_final = False
 
         try:
             response = await litellm.acompletion(
@@ -561,6 +687,7 @@ class OpenAICompatibleProvider:
                 stream=True,
                 timeout=self._timeout,
                 **self._kwargs(model_name),
+                **self._tool_kwargs(model_name, tools, tool_choice),
                 **kwargs,
             )
         except Exception as e:
@@ -573,6 +700,7 @@ class OpenAICompatibleProvider:
 
                 if chunk.choices and chunk.choices[0].delta:
                     delta = chunk.choices[0].delta.content or ""
+                    _merge_tool_call_delta(partial_calls, getattr(chunk.choices[0].delta, "tool_calls", None))
                 if chunk.choices and chunk.choices[0].finish_reason:
                     fr = chunk.choices[0].finish_reason
                     finish_reason = _FINISH_REASONS.get(fr, FinishReason.STOP)
@@ -583,6 +711,7 @@ class OpenAICompatibleProvider:
                 usage = None
                 cost = None
                 if is_final:
+                    emitted_final = True
                     # Estimate usage for streaming (not all providers send it)
                     usage_data = getattr(chunk, "usage", None)
                     if usage_data:
@@ -609,9 +738,27 @@ class OpenAICompatibleProvider:
                     usage=usage,
                     cost_usd=cost,
                     finish_reason=finish_reason,
+                    tool_calls=_wire_partial_calls(partial_calls) if is_final else None,
                 )
         except Exception as e:
             raise _map_error(e, self._provider_name) from e
+
+        if partial_calls and not emitted_final:
+            # The provider streamed tool calls but never a finish_reason:
+            # close the stream ourselves so the calls are not lost.
+            est_out = self.estimate_tokens(accumulated)
+            usage = Usage(input_tokens=0, output_tokens=est_out, total_tokens=est_out)
+            yield StreamChunk(
+                delta="",
+                is_final=True,
+                accumulated_content=accumulated,
+                model=model_name,
+                provider=self._provider_name,
+                usage=usage,
+                cost_usd=self._cost(model_name, usage),
+                finish_reason=FinishReason.TOOL_CALLS,
+                tool_calls=_wire_partial_calls(partial_calls),
+            )
 
     async def list_models(self) -> list[ModelInfo]:
         model_ids = dict.fromkeys((self._default_model, self._fallback_model))

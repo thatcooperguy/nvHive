@@ -180,8 +180,9 @@ NVH_LOGS="$NVH_HOME/logs"
 NVH_STUDIO_HOME="${NVH_STUDIO_HOME:-$NVH_HOME/studio}"
 COMFYUI_HOME="${COMFYUI_HOME:-$NVH_HOME/comfyui}"
 OLLAMA_MODELS="${OLLAMA_MODELS:-$NVH_MODELS/ollama}"
-HIVE_CONFIG_HOME="${HIVE_CONFIG_HOME:-$NVH_HOME/config}"
-export NVH_HOME NVH_BIN NVH_MODELS NVH_CACHE NVH_LOGS NVH_STUDIO_HOME COMFYUI_HOME OLLAMA_MODELS HIVE_CONFIG_HOME
+NVH_CONFIG="${NVH_CONFIG:-${HIVE_CONFIG_HOME:-$NVH_HOME/config}}"
+HIVE_CONFIG_HOME="$NVH_CONFIG"
+export NVH_HOME NVH_BIN NVH_MODELS NVH_CACHE NVH_LOGS NVH_STUDIO_HOME COMFYUI_HOME OLLAMA_MODELS HIVE_CONFIG_HOME NVH_CONFIG
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$NVH_CACHE/xdg}"
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$NVH_CACHE/pip}"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$NVH_CACHE/uv}"
@@ -194,29 +195,21 @@ export TMP="$TMPDIR"
 export NVH_NO_OS_MOD="${NVH_NO_OS_MOD:-0}"
 
 write_nvh_env() {
-cat > "$NVH_HOME/nvh-env.sh" << ENVEOF
-export NVH_HOME="$NVH_HOME"
-export NVH_VENV="$NVH_VENV"
-export NVH_BIN="$NVH_BIN"
-export NVH_MODELS="$NVH_MODELS"
-export NVH_CACHE="$NVH_CACHE"
-export NVH_LOGS="$NVH_LOGS"
-export NVH_STUDIO_HOME="$NVH_STUDIO_HOME"
-export COMFYUI_HOME="$COMFYUI_HOME"
-export OLLAMA_MODELS="$OLLAMA_MODELS"
-export HIVE_CONFIG_HOME="$HIVE_CONFIG_HOME"
-export XDG_CACHE_HOME="$XDG_CACHE_HOME"
-export PIP_CACHE_DIR="$PIP_CACHE_DIR"
-export UV_CACHE_DIR="$UV_CACHE_DIR"
-export HF_HOME="$HF_HOME"
-export HUGGINGFACE_HUB_CACHE="$HUGGINGFACE_HUB_CACHE"
-export TORCH_HOME="$TORCH_HOME"
-export TMPDIR="$TMPDIR"
-export TEMP="$TMPDIR"
-export TMP="$TMPDIR"
-export PATH="$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN:\$PATH"
-ENVEOF
-chmod 600 "$NVH_HOME/nvh-env.sh" 2>/dev/null || true
+    # These values become shell source; preserve custom paths as literal data.
+    # Bash printf %q also produces syntax accepted by the supported Zsh hook.
+    local name
+    {
+        for name in NVH_HOME NVH_VENV NVH_BIN NVH_MODELS NVH_CACHE NVH_LOGS \
+            NVH_STUDIO_HOME COMFYUI_HOME OLLAMA_MODELS HIVE_CONFIG_HOME NVH_CONFIG \
+            XDG_CACHE_HOME PIP_CACHE_DIR UV_CACHE_DIR HF_HOME HUGGINGFACE_HUB_CACHE \
+            TORCH_HOME TMPDIR; do
+            printf 'export %s=%q\n' "$name" "${!name}"
+        done
+        printf 'export TEMP=%q\nexport TMP=%q\n' "$TMPDIR" "$TMPDIR"
+        # Keep the receiving shell's PATH, not the installer's current PATH.
+        printf 'export PATH=%q:"$PATH"\n' "$NVH_HOME/runtimes/node/current/bin:$NVH_VENV/bin:$NVH_BIN"
+    } > "$NVH_HOME/nvh-env.sh"
+    chmod 600 "$NVH_HOME/nvh-env.sh" 2>/dev/null || true
 }
 
 shell_rc_path() {
@@ -231,7 +224,7 @@ install_shell_hook() {
     [ "${NVH_NO_OS_MOD:-0}" = "1" ] && return 0
     [ "$USE_ACTIVE_ENV" = "true" ] && return 0
 
-    local rc tmp
+    local rc tmp env_path ollama_path ollama_process ollama_models
     rc="$(shell_rc_path)"
     mkdir -p "$(dirname "$rc")"
     touch "$rc"
@@ -247,13 +240,20 @@ install_shell_hook() {
         | grep -vF "export PATH=\"$NVH_VENV/bin:\$PATH\"" \
         | grep -vF "$NVH_BIN/ollama" > "$tmp" || true
 
+    # Quote once when generating source, rather than evaluating path syntax on login.
+    printf -v env_path '%q' "$NVH_HOME/nvh-env.sh"
+    printf -v ollama_path '%q' "$NVH_BIN/ollama"
+    # pgrep -f consumes an extended regex; the installed path is literal.
+    ollama_process="$(printf '%s' "$NVH_BIN/ollama serve" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+    printf -v ollama_process '%q' "$ollama_process"
+    printf -v ollama_models '%q' "$OLLAMA_MODELS"
     cat >> "$tmp" << RCEOF
 
 # >>> nvhive rootless env >>>
 # Guarded source (2026-06-10 audit): on ephemeral cloud desktops the
 # persistent mount can be detached; an unguarded source made EVERY
 # interactive shell print an error at login until reinstall.
-[ -f "$NVH_HOME/nvh-env.sh" ] && source "$NVH_HOME/nvh-env.sh"
+[ -f $env_path ] && source $env_path
 # Auto-start Ollama on shell login if it's not already running AND no
 # other shell is mid-spawn. Previously this used a curl probe ONLY,
 # which on a slow daemon false-negatived — so every new terminal during
@@ -261,7 +261,7 @@ install_shell_hook() {
 # multi-tab terminals this stormed the OS; one won, the others wrote
 # "address already in use" to a discarded log and exited. The pgrep
 # guard makes this idempotent (real-rig audit 2026-05-22 Agent D).
-[ -x "$NVH_BIN/ollama" ] && "$NVH_BIN/ollama" --version >/dev/null 2>&1 && ! pgrep -f "$NVH_BIN/ollama serve" >/dev/null 2>&1 && ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && OLLAMA_MODELS="$OLLAMA_MODELS" "$NVH_BIN/ollama" serve >/dev/null 2>&1 &
+[ -x $ollama_path ] && $ollama_path --version >/dev/null 2>&1 && ! pgrep -f $ollama_process >/dev/null 2>&1 && ! curl -sf http://localhost:11434/api/tags >/dev/null 2>&1 && OLLAMA_MODELS=$ollama_models $ollama_path serve >/dev/null 2>&1 &
 # <<< nvhive rootless env <<<
 RCEOF
     mv "$tmp" "$rc"
@@ -283,10 +283,12 @@ UNINSTALLEOF
 }
 
 install_command_shims() {
-    local local_bin shim
+    local local_bin shim env_path nvh_path
     local_bin="$HOME/.local/bin"
     mkdir -p "$local_bin"
     export PATH="$local_bin:$PATH"
+    printf -v env_path '%q' "$NVH_HOME/nvh-env.sh"
+    printf -v nvh_path '%q' "$NVH_VENV/bin/nvh"
 
     for shim in nvh nvhive; do
         local target="$local_bin/$shim"
@@ -297,13 +299,13 @@ install_command_shims() {
         cat > "$target" << SHIMEOF
 #!/bin/bash
 # nvHive rootless wrapper
-NVH_ENV="$NVH_HOME/nvh-env.sh"
+NVH_ENV=$env_path
 if [ -f "\$NVH_ENV" ]; then
     # shellcheck disable=SC1090
     source "\$NVH_ENV"
 fi
-if [ -x "$NVH_VENV/bin/nvh" ]; then
-    exec "$NVH_VENV/bin/nvh" "\$@"
+if [ -x $nvh_path ]; then
+    exec $nvh_path "\$@"
 fi
 # Last resort (2026-06-10 audit): prefer python3 — the Debian/Ubuntu GPU
 # rigs this targets ship python3 only; bare \`python\` rarely exists.

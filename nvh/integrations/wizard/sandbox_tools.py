@@ -25,26 +25,27 @@ two tools with their own safety classes — not a sweep of the core registry.
     chains split, ``env`` / ``nohup`` / ``timeout`` prefixes stripped,
     ``sh -c`` and ``eval`` payloads recursed), refuses ``sudo`` / ``su`` /
     ``doas`` outright, then runs through :meth:`SandboxExecutor.run_shell`
-    exactly as the core ``shell`` tool does — with a stricter subprocess
-    fallback that closes stdin and strips key/token-looking variables from
-    the environment — and answers in the system-settings apply shape (``ok``,
-    ``applied``, ``summary``, ``steps=[{command, exit_code, stdout, stderr}]``,
-    ``isolation``, ``timed_out``) so ``WizardToolRegistry.execute()`` writes
-    the vault ``Decisions/`` note and fits the result to the tool window
-    untouched. Output is redacted before it is cut; ``command`` is never cut.
-    The deny lists are a backstop for the well-known destructive shapes, not
-    a sandbox: the red card the user reads is the gate.
+    exactly as the core ``shell`` tool does — the executor itself closes
+    stdin and strips key/token-looking variables from every process it
+    spawns (:func:`nvh.sandbox.executor.scrubbed_environment`) — and answers
+    in the system-settings apply shape (``ok``, ``applied``, ``summary``,
+    ``steps=[{command, exit_code, stdout, stderr}]``, ``isolation``,
+    ``timed_out``) so ``WizardToolRegistry.execute()`` writes the vault
+    ``Decisions/`` note and fits the result to the tool window untouched.
+    Output is redacted before it is cut; ``command`` is never cut. The deny
+    lists are a backstop for the well-known destructive shapes, not a
+    sandbox: the red card the user reads is the gate.
   - ``run_code`` is ``confirm`` — honest only because the handler forces
     ``SandboxConfig(require_docker=True)``: without Docker it returns an
     in-band refusal (``ok: False, refused: True, error``) naming ``docker``
     and pointing at the playbooks that install it, and executes nothing. The
     guardrail blocklist is applied to the ``code`` argument.
 
-Parameters are translated from the core tools' JSON Schema into the
-``WizardTool`` shape (``{name: {type, description, required}}``) by
-:func:`nvh.integrations.wizard.tools.parameters_from_json_schema`, so there
-is no second hand-typed schema; the two bridge-only ``shell`` parameters
-(``cwd``, ``timeout_s``) are added on top.
+Both tools carry the core tools' JSON Schema (``input_schema``; the prompt/UI
+shape is derived from it by :func:`nvh.core.tools.translate_parameters`), so
+there is no second hand-typed schema; the two bridge-only ``shell``
+parameters (``cwd``, ``timeout_s``) and the descriptions the core schema
+leaves blank are added on top.
 
 The workspace both tools see is the rootless layout's ``projects/`` directory
 (``NVH_PROJECTS``, default ``$NVH_HOME/projects`` — "agent workspaces" in
@@ -59,12 +60,8 @@ from __future__ import annotations
 import asyncio
 import getpass
 import logging
-import os
 import re
 import shlex
-import tempfile
-import time
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -75,7 +72,11 @@ from nvh.core.agent_guardrails import (
     redact_secrets,
     truncate_output,
 )
-from nvh.sandbox.executor import ExecutionResult, SandboxConfig, SandboxExecutor
+from nvh.sandbox.executor import (  # noqa: F401 — scrubbed_environment re-exported for callers of the bridge
+    SandboxConfig,
+    SandboxExecutor,
+    scrubbed_environment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +146,7 @@ ESCALATION_ERROR = (
 
 #: Descriptions for the parameters the core schema leaves undocumented, keyed
 #: by tool then parameter. The types and the required flags come from the
-#: core schema itself (:func:`nvh.integrations.wizard.tools.parameters_from_json_schema`).
+#: core schema itself; :func:`_bridge_schema` folds these in.
 _PARAMETER_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "shell": {
         "command": "The shell command, exactly as it will run (bash -c under Docker; the system shell otherwise).",
@@ -207,7 +208,30 @@ def _core_schema(name: str) -> dict[str, Any]:
     tool = ToolRegistry(include_system=False).get(name)
     if tool is None:  # pragma: no cover — the core tool set is ours
         raise LookupError(f"core tool {name!r} is not registered")
-    return tool.parameters
+    return tool.input_schema
+
+
+def _bridge_schema(name: str, extra: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """The core tool's JSON Schema with the bridge's descriptions and extra parameters folded in.
+
+    A deep-enough copy: the core registry's schema is never mutated.
+    """
+    from nvh.core.tools import json_schema_from_parameters
+
+    core = _core_schema(name)
+    properties = {key: dict(spec) for key, spec in (core.get("properties") or {}).items()}
+    for key, text in _PARAMETER_DESCRIPTIONS.get(name, {}).items():
+        if key in properties and not properties[key].get("description"):
+            properties[key]["description"] = text
+    required = list(core.get("required") or [])
+    if extra:
+        added = json_schema_from_parameters(extra)
+        properties.update(added["properties"])
+        required.extend(key for key in added.get("required", []) if key not in required)
+    schema: dict[str, Any] = {**core, "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
 
 
 def _clean(text: str | None) -> str:
@@ -500,91 +524,11 @@ def _isolation_line(docker: bool, require_docker: bool) -> tuple[str, str | None
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# The subprocess fallback the bridge uses: stdin closed, secrets out of env
-# ────────────────────────────────────────────────────────────────────────────
-
-#: Environment variables a host-run command must not inherit, by name shape:
-#: ``HIVE_API_KEY``, ``OPENAI_API_KEY``, ``GITHUB_TOKEN``, ``AWS_SECRET_ACCESS_KEY``,
-#: ``HF_TOKEN``, anything ``*PASSWORD*`` / ``*CREDENTIAL*`` / ``*PRIVATE*``.
-_SECRET_ENV_RE = re.compile(r"KEY|TOKEN|SECRET|PASSW|CREDENTIAL|PRIVATE", re.IGNORECASE)
-
-#: Seam for tests; the real spawn otherwise.
-_spawn_shell = asyncio.create_subprocess_shell
-
-
-def scrubbed_environment(environ: Mapping[str, str] | None = None) -> dict[str, str]:
-    """``environ`` (default ``os.environ``) without the variables whose names look like secrets."""
-    source = os.environ if environ is None else environ
-    return {key: value for key, value in source.items() if not _SECRET_ENV_RE.search(key)}
-
-
-async def run_host_shell(command: str, *, cwd: str | None, timeout_s: int, max_output_bytes: int) -> ExecutionResult:
-    """Run ``command`` through the system shell on this machine, the bridge's way.
-
-    Same contract as ``SandboxExecutor._run_process`` (timeout, output cap,
-    exceptions as a result), with two things the executor's fallback does not
-    do: stdin is ``DEVNULL`` (nothing can prompt or read what an operator
-    types into the server's terminal) and the environment is
-    :func:`scrubbed_environment` (the server's API keys never reach the
-    command). Docker mode passes no host environment at all, so both modes
-    now keep the keys.
-    """
-    start = time.monotonic()
-    try:
-        proc = await _spawn_shell(
-            command,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-            env=scrubbed_environment(),
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return ExecutionResult(
-                stdout="", stderr="Execution timed out", exit_code=-1,
-                execution_time_ms=int((time.monotonic() - start) * 1000),
-                timed_out=True, error=f"Timed out after {timeout_s}s",
-            )
-        return ExecutionResult(
-            stdout=stdout.decode(errors="replace")[:max_output_bytes],
-            stderr=stderr.decode(errors="replace")[:max_output_bytes],
-            exit_code=proc.returncode or 0,
-            execution_time_ms=int((time.monotonic() - start) * 1000),
-        )
-    except Exception as exc:
-        return ExecutionResult(
-            stdout="", stderr=str(exc), exit_code=-1,
-            execution_time_ms=int((time.monotonic() - start) * 1000), error=str(exc),
-        )
-
-
-class _WizardShellExecutor(SandboxExecutor):
-    """The sandbox executor with :func:`run_host_shell` as its subprocess fallback.
-
-    Docker mode, the probe, the fail-closed refusal and the isolation label
-    are the base class's; only the host spawn differs.
-    """
-
-    async def _run_shell_subprocess(self, command: str, mount: Path | None) -> ExecutionResult:
-        if mount is not None:
-            return await run_host_shell(
-                command, cwd=str(mount), timeout_s=self.config.timeout_seconds,
-                max_output_bytes=self.config.max_output_bytes,
-            )
-        with tempfile.TemporaryDirectory() as tmpdir:
-            return await run_host_shell(
-                command, cwd=tmpdir, timeout_s=self.config.timeout_seconds,
-                max_output_bytes=self.config.max_output_bytes,
-            )
-
-
-# ────────────────────────────────────────────────────────────────────────────
 # shell — privileged: planner (dry run) and handler
 # ────────────────────────────────────────────────────────────────────────────
+# The host fallback's stdin=DEVNULL and scrubbed environment are the
+# executor's own since 0.44 (SandboxExecutor._run_process); the bridge runs
+# the plain SandboxExecutor, exactly as the core ``shell`` tool does.
 
 
 async def _plan_shell(args: dict[str, Any]) -> dict[str, Any]:
@@ -602,7 +546,7 @@ async def _plan_shell(args: dict[str, Any]) -> dict[str, Any]:
         return plan
 
     config = SandboxConfig(mount_dir=request["cwd"], timeout_seconds=request["timeout_s"])
-    docker = await _docker_available(_WizardShellExecutor(config))
+    docker = await _docker_available(SandboxExecutor(config))
     isolation, warning = _isolation_line(docker, config.require_docker)
     mode = "docker" if docker else ("" if config.require_docker else "subprocess")
     plan: dict[str, Any] = {
@@ -664,7 +608,7 @@ async def _tool_shell(args: dict[str, Any]) -> dict[str, Any]:
         # Belt and braces: even if the probe below flips between the check and
         # the run, the executor itself may not fall back to the host.
         config.require_docker = True
-    executor = _WizardShellExecutor(config)
+    executor = SandboxExecutor(config)
     docker_now = await _docker_available(executor)
     if docker_now != (planned == "docker"):
         return refused(
@@ -789,10 +733,8 @@ async def _tool_run_code(args: dict[str, Any]) -> dict[str, Any]:
 
 def register_wizard_tools(reg: Any) -> None:
     """Register ``shell`` (privileged, with planner) and ``run_code`` (confirm)."""
-    from nvh.integrations.wizard.tools import WizardTool, parameters_from_json_schema
+    from nvh.integrations.wizard.tools import WizardTool
 
-    shell_parameters = parameters_from_json_schema(_core_schema("shell"), _PARAMETER_DESCRIPTIONS["shell"])
-    shell_parameters.update(_SHELL_EXTRA_PARAMETERS)
     reg.register(WizardTool(
         name="shell",
         description=(
@@ -808,7 +750,7 @@ def register_wizard_tools(reg: Any) -> None:
             "is recorded in the vault under Decisions."
         ),
         safety_class="privileged",
-        parameters=shell_parameters,
+        input_schema=_bridge_schema("shell", _SHELL_EXTRA_PARAMETERS),
         handler=_tool_shell,
         planner=_plan_shell,
         summary_template="Run shell command: {command}",
@@ -823,7 +765,7 @@ def register_wizard_tools(reg: Any) -> None:
             "confirms before it runs."
         ),
         safety_class="confirm",
-        parameters=parameters_from_json_schema(_core_schema("run_code"), _PARAMETER_DESCRIPTIONS["run_code"]),
+        input_schema=_bridge_schema("run_code"),
         handler=_tool_run_code,
         summary_template="Run a code snippet in the Docker sandbox.",
     ))

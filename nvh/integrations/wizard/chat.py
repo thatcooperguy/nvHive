@@ -17,7 +17,9 @@ both the blocking and the streaming entry point):
      is re-routed to a registered cloud provider first
      (:func:`_route_around_dead_local_provider`). The deterministic flow
      stays the safe net.
-  4. If the LLM emitted ``TOOL_CALL:`` markers, **run the auto-class tools
+  4. If the LLM called tools — natively, when the provider vouches for the
+     model and took ``tools=`` (0.44 D3), or with ``TOOL_CALL:`` markers,
+     the text protocol every model can emit — **run the auto-class tools
      server-side** (Wizard-5 follow-up loop), append the results to the
      conversation as system messages, and give the LLM one more turn to
      react. Repeats up to ``WIZARD_FOLLOWUP_MAX_ITER`` times so the model
@@ -267,34 +269,66 @@ async def _persist_wizard_turn(
     except Exception as exc:
         logger.info("wizard: persistence skipped (%s)", exc)
 
-# Matches `TOOL_CALL: {...json...}` (optionally inside a fenced code block).
-# Greedy on the JSON object so multi-line argument bodies still match.
-_TOOL_CALL_RE = re.compile(
-    r"TOOL_CALL\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})",
-    re.MULTILINE | re.DOTALL,
-)
-
-
 def _extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
     """Strip ``TOOL_CALL:`` markers out of the LLM's text response.
 
-    Returns ``(stripped_text, [{name, arguments}, ...])``. Malformed JSON is
-    silently dropped — better to show the user a plain answer than to
-    surface a parse error mid-chat.
+    Returns ``(stripped_text, [{name, arguments}, ...])`` — the one text
+    protocol, parsed by :func:`nvh.core.tools.parse_tool_calls` in its
+    marker-only form: the Wizard never emitted or taught the pre-0.44 fenced
+    block or the bare ``{"tool": …, "args": {…}}`` object, so a quoted log
+    line or pasted config the model echoes back is never a call here, and a
+    prose mention of the marker is left in the answer. Malformed JSON after a
+    marker is silently dropped — better to show the user a plain answer than
+    to surface a parse error mid-chat.
     """
-    calls: list[dict[str, Any]] = []
-    for match in _TOOL_CALL_RE.finditer(text):
-        try:
-            parsed = json.loads(match.group(1))
-            if isinstance(parsed, dict) and isinstance(parsed.get("name"), str):
-                calls.append({
-                    "name": parsed["name"],
-                    "arguments": parsed.get("arguments", {}) if isinstance(parsed.get("arguments"), dict) else {},
-                })
-        except (json.JSONDecodeError, ValueError):
-            continue
-    stripped = _TOOL_CALL_RE.sub("", text).strip()
-    return stripped, calls
+    from nvh.core.tools import parse_tool_calls
+
+    stripped, calls = parse_tool_calls(text or "")
+    return stripped, [{"name": call["name"], "arguments": call["arguments"]} for call in calls]
+
+
+def _native_tool_calls(raw: Any) -> list[dict[str, Any]]:
+    """A response's native ``tool_calls`` (any shape) as the loop's ``[{name, arguments}]``."""
+    from nvh.core.tools import normalize_tool_calls
+
+    return [{"name": call["name"], "arguments": call["arguments"]} for call in normalize_tool_calls(raw)]
+
+
+def _merge_tool_calls(
+    native: list[dict[str, Any]], text_calls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Native calls first, then text-protocol calls the model did not also make natively."""
+    merged = list(native)
+    for call in text_calls:
+        if not any(_same_call(call, seen) for seen in merged):
+            merged.append(call)
+    return merged
+
+
+def _native_call_note(tool_calls: list[dict[str, Any]]) -> str:
+    """Stand-in assistant text for a native-only reply (no content, only calls), so the history never carries an empty turn."""
+    names = ", ".join(dict.fromkeys(call["name"] for call in tool_calls)) or "a tool"
+    return f"(calling {names})"
+
+
+async def _native_tool_kwargs(turn: _TurnSetup, provider: Any, model: str | None) -> dict[str, Any]:
+    """``{"tools": …, "tool_choice": "auto"}`` when this turn can use native function calling, else ``{}``.
+
+    The turn must have tools to offer and the provider must say the picked
+    model takes ``tools=`` (:func:`nvh.core.tools.provider_supports_native_tools`
+    — never on Perplexity's Responses surface, never for a model the catalog
+    or the daemon does not vouch for). Otherwise the ``TOOL_CALL:`` text
+    protocol the system prompt teaches is the only channel. The prompt teaches
+    it either way, and both channels are read every iteration.
+    """
+    from nvh.core.tools import provider_supports_native_tools
+
+    tools = getattr(turn, "native_tools", None)
+    if not tools:
+        return {}
+    if not await provider_supports_native_tools(provider, model):
+        return {}
+    return {"tools": list(tools), "tool_choice": "auto"}
 
 
 def _format_tool_result_message(name: str, result: Any) -> str:
@@ -1134,6 +1168,11 @@ class _TurnSetup:
     system_prompt: str
     user_message: str
     history: list[dict[str, Any]]
+    # Native function specs (``Tool.as_openai_tool()``) for the whitelisted
+    # catalogue — sent as ``tools=`` only when the provider says the picked
+    # model can take them (:func:`_native_tool_kwargs`). ``None`` / empty
+    # means the text protocol only.
+    native_tools: list[dict[str, Any]] | None = None
 
     @property
     def profile_reason(self) -> str | None:
@@ -1269,6 +1308,14 @@ async def _prepare_turn(
         else:
             prof = prof.with_core_tools()
     tool_schemas = _filter_tool_schemas(tool_schemas, prof.tools_allowed)
+    # The same whitelisted catalogue as native function specs, for providers
+    # that can take ``tools=`` (decided per completion, see _native_tool_kwargs).
+    native_tools: list[dict[str, Any]] = []
+    if registry is not None and tool_schemas:
+        try:
+            native_tools = registry.openai_tools({schema["name"] for schema in tool_schemas})
+        except Exception as exc:
+            logger.debug("%s: native tool specs not built (%s)", label, exc)
 
     # Auto-fold the top vault chunk if the user's question matches anything
     # they've already written down. Free recall — saves a tool round-trip.
@@ -1290,6 +1337,7 @@ async def _prepare_turn(
         system_prompt=system_prompt,
         user_message=_apply_prompt_template(question, resolved),
         history=list(history or []),
+        native_tools=native_tools,
     )
 
 
@@ -1603,6 +1651,9 @@ async def wizard_chat(
             # We honor that by short-circuiting the follow-up loop the same
             # way enable_followup=False would.
             effective_followup = enable_followup and iter_cap > 1
+            # Native function calling where the provider vouches for the
+            # model; the text protocol (always taught) everywhere else.
+            native_kwargs = await _native_tool_kwargs(turn, provider, decision.model or None)
             while state.iterations < iter_cap:
                 state.iterations += 1
                 response = await provider.complete(
@@ -1611,6 +1662,7 @@ async def wizard_chat(
                     system_prompt=turn.system_prompt,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    **native_kwargs,
                 )
                 try:
                     await engine._log_query(response, mode="wizard-chat")
@@ -1629,7 +1681,12 @@ async def wizard_chat(
                 if getattr(response, "fallback_from", None) and not fallback_from:
                     fallback_from = response.fallback_from
 
-                cleaned_text, tool_calls = _extract_tool_calls(response.content)
+                cleaned_text, text_calls = _extract_tool_calls(response.content or "")
+                # Calls the model made natively (a provider that took tools=)
+                # come first; TOOL_CALL lines it wrote as well are merged in.
+                tool_calls = _merge_tool_calls(
+                    _native_tool_calls(getattr(response, "tool_calls", None)), text_calls,
+                )
                 final_text = cleaned_text
 
                 # Profile cost ceiling: if the running cost has crossed the
@@ -1658,7 +1715,9 @@ async def wizard_chat(
 
                 # Append the assistant's reply (with markers stripped) to the
                 # conversation so it sees its own reasoning on the next turn.
-                messages.append(Message(role="assistant", content=cleaned_text))
+                # A native-only reply has no text of its own; a one-line note
+                # keeps the history free of empty assistant turns.
+                messages.append(Message(role="assistant", content=cleaned_text or _native_call_note(tool_calls)))
 
                 # Execute auto-class tools, defer confirm-class to the UI.
                 async for _event in _execute_tool_calls(
@@ -1775,9 +1834,11 @@ async def _filtered_token_stream(
     """Yield ``("token", text)`` for user-visible token deltas, hiding any
     line that starts with ``TOOL_CALL:`` from the live stream. At the end
     yields ``("meter", {cost_usd, input_tokens, output_tokens})`` — read from
-    the last chunk that reported usage/cost, zeros if none did — and finally
-    ``("full", accumulated)`` so the caller can parse markers from the
-    complete response.
+    the last chunk that reported usage/cost, zeros if none did — then
+    ``("tool_calls", [...])`` when a chunk carried native ``tool_calls`` (the
+    final chunk of a provider that took ``tools=``; the wire shape, as-is),
+    and finally ``("full", accumulated)`` so the caller can parse markers
+    from the complete response.
 
     The filter buffers up to a newline so a TOOL_CALL line never bleeds into
     the user-visible stream even if the provider chunks mid-line.
@@ -1788,6 +1849,7 @@ async def _filtered_token_stream(
     cost_usd = 0.0
     input_tokens = 0
     output_tokens = 0
+    native_calls: list[Any] | None = None
 
     async for chunk in stream:
         # Read the meter before the empty-delta short-circuit: the final
@@ -1799,6 +1861,9 @@ async def _filtered_token_stream(
             input_tokens = chunk_in
         if chunk_out is not None:
             output_tokens = chunk_out
+        chunk_calls = getattr(chunk, "tool_calls", None)
+        if isinstance(chunk_calls, list) and chunk_calls:
+            native_calls = chunk_calls
         delta = getattr(chunk, "delta", "") or ""
         if not delta:
             continue
@@ -1837,6 +1902,8 @@ async def _filtered_token_stream(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     })
+    if native_calls:
+        yield ("tool_calls", native_calls)
     yield ("full", "".join(full_parts))
 
 
@@ -1949,6 +2016,9 @@ async def wizard_chat_stream(
 
         iter_cap = _clamp_max_iterations(max_iterations)
         effective_followup = enable_followup and iter_cap > 1
+        # Same gate as the blocking path: native function calling only where
+        # the provider vouches for the model, the text protocol otherwise.
+        native_kwargs = await _native_tool_kwargs(turn, provider, decision.model or None)
         while state.iterations < iter_cap:
             state.iterations += 1
             yield {"type": "iteration", "n": state.iterations}
@@ -1960,9 +2030,11 @@ async def wizard_chat_stream(
                 system_prompt=turn.system_prompt,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                **native_kwargs,
             )
 
             full_text = ""
+            native_raw: Any = None
             async for kind, payload in _filtered_token_stream(stream_ctx):
                 if kind == "token":
                     yield {"type": "token", "text": payload}
@@ -1970,11 +2042,14 @@ async def wizard_chat_stream(
                     total_cost_usd += payload["cost_usd"]
                     total_input_tokens += payload["input_tokens"]
                     total_output_tokens += payload["output_tokens"]
+                elif kind == "tool_calls":
+                    native_raw = payload
                 else:
                     full_text = payload
             total_latency_ms += int((time.monotonic() - started) * 1000)
 
-            cleaned_text, tool_calls = _extract_tool_calls(full_text)
+            cleaned_text, text_calls = _extract_tool_calls(full_text)
+            tool_calls = _merge_tool_calls(_native_tool_calls(native_raw), text_calls)
             final_text = cleaned_text
 
             if _cost_ceiling_reached(prof.cost_ceiling_usd, total_cost_usd):
@@ -1997,7 +2072,7 @@ async def wizard_chat_stream(
                     yield _tool_result_event(refused)
                 break
 
-            messages.append(Message(role="assistant", content=cleaned_text))
+            messages.append(Message(role="assistant", content=cleaned_text or _native_call_note(tool_calls)))
 
             async for event in _execute_tool_calls(
                 tool_calls, turn=turn, state=state, messages=messages,

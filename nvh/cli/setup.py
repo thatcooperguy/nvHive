@@ -128,34 +128,35 @@ RETIRED_MODEL_RENAMES: dict[str, dict[str, str]] = {
 # ---------------------------------------------------------------------------
 
 def _layout_config_dir() -> Path:
-    # Mirrors nvh.integrations.workspace.storage.storage_layout().config_dir
-    # (HIVE_CONFIG_HOME, else <NVH_HOME | NVHIVE_HOME | ~/.nvh>/config) without
-    # importing nvh.integrations, which costs every CLI invocation ~160 ms.
-    explicit = os.environ.get("HIVE_CONFIG_HOME")
-    if explicit:
-        return Path(os.path.expandvars(explicit)).expanduser()
-    home = os.environ.get("NVH_HOME") or os.environ.get("NVHIVE_HOME")
-    if home:
-        return Path(os.path.expandvars(home)).expanduser() / "config"
-    return Path.home() / ".nvh" / "config"
+    """``storage_layout().config_dir`` — the one path oracle (0.44).
+
+    ``nvh.config.settings.DEFAULT_CONFIG_DIR`` is derived from the same call, so
+    the two agree by construction; tests/test_setup.py pins the agreement
+    across the NVH_CONFIG / HIVE_CONFIG_HOME / NVH_HOME / NVHIVE_HOME overrides.
+    """
+    from nvh.integrations.workspace.storage import storage_layout
+
+    return storage_layout().config_dir
 
 
 def _env_key_files() -> list[Path]:
     """``.env`` files to load, in load order.
 
-    ``DEFAULT_CONFIG_DIR/.env`` (~/.hive or HIVE_CONFIG_HOME) is where
-    ``nvh setup`` writes; the storage layout's ``config_dir/.env`` is where the
-    web wizard's save-key path writes. They are the same file only when
-    HIVE_CONFIG_HOME is exported, so both are read.
+    Since 0.44 there is exactly one: ``DEFAULT_CONFIG_DIR/.env`` — the storage
+    layout's ``config_dir/.env`` — which ``nvh setup``, ``nvh advisor add`` and
+    the web wizard all write. A pre-0.44 ``~/.hive/.env`` is copied there once
+    by the legacy-home migration — or, when the layout already has a ``.env``
+    (0.43 wrote both), its missing ``KEY=VALUE`` lines are merged in — run
+    here so the first command after an upgrade already sees its keys; the old
+    place is never read again.
     """
-    files = [DEFAULT_CONFIG_DIR / ".env"]
     try:
-        layout_env = _layout_config_dir() / ".env"
-        if layout_env.resolve() != files[0].resolve():
-            files.append(layout_env)
-    except Exception:
+        from nvh.integrations.workspace.migrate_legacy import migrate_legacy_homes
+
+        migrate_legacy_homes()
+    except Exception:  # noqa: BLE001 — a migration must never block key loading
         pass
-    return files
+    return [DEFAULT_CONFIG_DIR / ".env"]
 
 
 def provider_config_files() -> list[Path]:

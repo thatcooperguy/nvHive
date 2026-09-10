@@ -2457,9 +2457,10 @@ def throwdown(
 def _status_routing():
     """Task classification, provider scores and why the chosen provider won."""
     import json as _json
-    from pathlib import Path as _Path
 
-    why_path = _Path.home() / ".hive" / "last_query.json"
+    from nvh.integrations.workspace.storage import storage_layout
+
+    why_path = storage_layout().state_dir / "last_query.json"
     if not why_path.exists():
         console.print(
             "[dim]No query to explain yet."
@@ -3248,7 +3249,11 @@ def _status_smoke(ctx, *, imports: bool, json_output: bool, strict: bool) -> Non
 def _nvidia_bug_report() -> dict[str, Any]:
     import subprocess
 
-    path = os.path.expanduser("~/nvh/nvidia-bug-report.log.gz")
+    from nvh.integrations.workspace.storage import storage_layout
+
+    support_dir = storage_layout().support_dir
+    support_dir.mkdir(parents=True, exist_ok=True)
+    path = str(support_dir / "nvidia-bug-report.log.gz")
     try:
         result = subprocess.run(
             ["nvidia-bug-report.sh", "--output-file", path],
@@ -3498,7 +3503,7 @@ By proceeding, you agree to:
 9. Nemotron model usage is subject to NVIDIA's model license terms
 10. AI-generated content should be reviewed before relying on it
 
-Your email is stored locally at ~/.hive/user.json for provider signups only.
+Your email is stored locally at $NVH_HOME/config/user.json for provider signups only.
 It is NEVER sent to NVHive servers (we don't have any).
 
 Full terms: https://github.com/thatcooperguy/nvHive/blob/main/EULA.md
@@ -3580,8 +3585,9 @@ def setup(
     # Save user profile locally (never transmitted to NVHive)
     if email:
         import json
-        from pathlib import Path
-        user_file = Path.home() / ".hive" / "user.json"
+
+        from nvh.integrations.workspace.storage import storage_layout
+        user_file = storage_layout().config_dir / "user.json"
         user_file.parent.mkdir(parents=True, exist_ok=True)
         user_data = {}
         if user_file.exists():
@@ -3757,7 +3763,7 @@ def setup(
                     "  (add to ~/.bashrc or ~/.zshrc)"
                 )
                 console.print(
-                    "    Option 2: Add to ~/.hive/config.yaml"
+                    "    Option 2: Add to config.yaml in $NVH_HOME/config/"
                     f" under providers.{name}.api_key"
                 )
                 skipped += 1
@@ -4927,7 +4933,9 @@ def list_plugins():
 
     if not found:
         console.print("[dim]No plugins found.[/dim]")
-        console.print("Put .py files in ~/.hive/plugins/ or install via pip.")
+        from nvh.integrations.workspace.storage import storage_layout
+
+        console.print(f"Put .py files in {storage_layout().plugins_dir} or install via pip.")
         return
 
     table = Table(title="Plugins")
@@ -5201,7 +5209,9 @@ def bench(
 
             _display_benchmark_table(report)
 
-            ep = Path.home() / ".hive" / "benchmark_results.md"
+            from nvh.integrations.workspace.storage import storage_layout
+
+            ep = storage_layout().outputs_dir / "benchmark_results.md"
             ep.parent.mkdir(parents=True, exist_ok=True)
             ep.write_text(generate_markdown_report(report))
             console.print(
@@ -5406,9 +5416,11 @@ def benchmark(
             # Rich table output
             _display_benchmark_table(report)
 
-        # Export — auto-save to ~/.hive/ if no path specified
+        # Export — auto-save to $NVH_OUTPUTS if no path specified
+        from nvh.integrations.workspace.storage import storage_layout
+
         ep = Path(export_path) if export_path else (
-            Path.home() / ".hive" / "benchmark_results.md"
+            storage_layout().outputs_dir / "benchmark_results.md"
         )
         ep.parent.mkdir(parents=True, exist_ok=True)
         if ep.suffix == ".json":
@@ -7651,7 +7663,7 @@ def _detect_install_mode() -> tuple[str, str]:
     """Detect how NVHive was installed.
 
     Returns (mode, location) where mode is one of:
-      - "git-clone":  install.sh layout at ~/nvh/repo
+      - "git-clone":  install.sh layout at $NVH_HOME/repo
       - "editable":   pip install -e <path>
       - "pipx":       installed via pipx
       - "pip":        plain pip install nvhive
@@ -7661,10 +7673,12 @@ def _detect_install_mode() -> tuple[str, str]:
     import os
     from pathlib import Path
 
+    from nvh.integrations.workspace.storage import storage_layout
+
     # 1. install.sh layout wins if present — that's what `nvh update` used
-    #    historically and we don't want to regress it.
-    nvh_home = os.environ.get("NVH_HOME", os.path.expanduser("~/nvh"))
-    repo_dir = os.path.join(nvh_home, "repo")
+    #    historically and we don't want to regress it. (A pre-0.44 ~/nvh/repo
+    #    checkout is an editable install and is detected in step 2.)
+    repo_dir = str(storage_layout().home / "repo")
     if os.path.isdir(os.path.join(repo_dir, ".git")):
         return "git-clone", repo_dir
 
@@ -9014,7 +9028,6 @@ def webui(
             "web",
         ),
         str(layout.home / "repo" / "web"),
-        os.path.expanduser("~/nvh/repo/web"),
         cache_web_dir,
         os.path.join(os.getcwd(), "web"),
     ]
@@ -9849,7 +9862,7 @@ def workflow_list():
     if not workflows:
         console.print("[dim]No workflows found.[/dim]")
         console.print(
-            "[dim]Add YAML files to ~/.hive/workflows/ or .hive/workflows/[/dim]"
+            "[dim]Add YAML files to $NVH_HOME/config/workflows/ or .nvh/workflows/[/dim]"
         )
         return
 
@@ -11332,10 +11345,10 @@ def rag_remove(
 def rag_import_legacy(
     memories: bool = typer.Option(
         False, "--memories",
-        help="Import the pre-0.42 REPL memories (~/.hive/memory/memories.json) as vault notes instead",
+        help="Import the pre-0.42 REPL memories (memories.json) as vault notes instead",
     ),
 ) -> None:
-    """One-shot import of the pre-0.42 ~/.hive/knowledge store (or, with --memories, the REPL memories)."""
+    """One-shot import of the pre-0.42 knowledge store (or, with --memories, the REPL memories)."""
     if memories:
         from nvh.cli.repl import import_legacy_memories
 
@@ -12527,7 +12540,7 @@ def main():
 
     args = sys.argv[1:]
 
-    # Load API keys from keyring / ~/.hive/.env before config interpolation
+    # Load API keys from keyring / $NVH_HOME/config/.env before config interpolation
     try:
         from nvh.cli.setup import load_env_keys
         load_env_keys()

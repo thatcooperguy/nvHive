@@ -4,6 +4,7 @@ These tests execute the real CLI via subprocess and check that
 commands produce the expected output without errors.
 """
 
+import os
 import subprocess
 import sys
 
@@ -147,10 +148,15 @@ class TestCLIDispatch:
 # Query commands (require a running provider)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.network
+@pytest.mark.skipif(
+    os.environ.get("NVH_NETWORK_TESTS") != "1",
+    reason="set NVH_NETWORK_TESTS=1 to run CLI queries against live providers",
+)
 class TestCLIQuery:
-    """These tests require at least LLM7 to be reachable."""
+    """Explicit opt-in queries against configured live providers."""
 
-    # 2026-06-10 audit: these three spawn `nvh` against live LLM providers
+    # Once explicitly enabled, these three spawn `nvh` against live LLM providers
     # over the network with a hard 45s subprocess timeout. On a slow or
     # offline CI runner the provider call hangs past 45s, TimeoutExpired
     # propagates uncaught, and the test ERRORs — the documented flake that

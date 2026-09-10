@@ -283,7 +283,7 @@ to an advisor, and a task-shaped bare prompt asks for an explicit `nvh do`.
 |---------|-------------|
 | `nvh rag add PATHS` | Index one or more files into the local RAG store. |
 | `nvh rag ask QUESTION` | Retrieve the most relevant indexed chunks for a question. |
-| `nvh rag import-legacy` | One-shot import of the pre-0.42 ~/.hive/knowledge store (or, with --memories, the REPL memories). |
+| `nvh rag import-legacy` | One-shot import of the pre-0.42 knowledge store (or, with --memories, the REPL memories). |
 | `nvh rag ingest FOLDER` | Walk a folder and index every supported document in it. |
 | `nvh rag list` | List collections in the local RAG store. |
 | `nvh rag remove SOURCE` | Drop every chunk of one source from a collection. |

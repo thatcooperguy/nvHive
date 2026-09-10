@@ -3975,7 +3975,8 @@ async def ws_council(websocket: WebSocket) -> None:
         # invisible to every dashboard — the HTTP council path logged,
         # but the WS path was a total blind spot.
         if council_result is not None:
-            for resp in council_result.member_responses.values():
+            for resp in [*council_result.member_responses.values(),
+                         *getattr(council_result, "auxiliary_responses", [])]:
                 try:
                     await engine._log_query(resp, mode="council")
                 except Exception as log_exc:
@@ -6172,7 +6173,7 @@ async def proxy_chat_completions(
             first = next(iter(result.member_responses.values()))
             content = first.content if hasattr(first, "content") else str(first)
 
-        responses = list(result.member_responses.values())
+        responses = result.all_responses
         total_input = sum(r.usage.input_tokens for r in responses if r.usage)
         total_output = sum(r.usage.output_tokens for r in responses if r.usage)
 
@@ -6234,7 +6235,7 @@ async def proxy_chat_completions(
             first = next(iter(result.member_responses.values()))
             content = first.content if hasattr(first, "content") else str(first)
 
-        responses = list(result.member_responses.values())
+        responses = result.all_responses
         total_input = sum(r.usage.input_tokens for r in responses if r.usage)
         total_output = sum(r.usage.output_tokens for r in responses if r.usage)
 
@@ -6538,51 +6539,25 @@ async def anthropic_messages(
                 content=content,
                 model=f"council({council_size})",
                 provider="council",
-                input_tokens=sum(
-                    r.usage.input_tokens
-                    for r in result.member_responses.values()
-                ),
-                output_tokens=sum(
-                    r.usage.output_tokens
-                    for r in result.member_responses.values()
-                ),
+                input_tokens=result.total_usage.input_tokens,
+                output_tokens=result.total_usage.output_tokens,
             )
 
         if is_throwdown:
-            pass1 = await engine.run_council(
+            result = await engine.run_council(
                 prompt=prompt,
                 auto_agents=True,
-                synthesize=True,
+                strategy="throwdown",
+                system_prompt=system_prompt,
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
             )
-            critique = (
-                f"Original: {prompt}\n\n"
-                f"Analysis:\n"
-                f"{pass1.synthesis.content if pass1.synthesis else ''}"
-                f"\n\nCritique and improve this analysis."
-            )
-            pass2 = await engine.run_council(
-                prompt=critique,
-                auto_agents=True,
-                synthesize=True,
-            )
-            final = await engine.query(
-                prompt=(
-                    f"Original: {prompt}\n\n"
-                    f"Pass 1:\n"
-                    f"{pass1.synthesis.content if pass1.synthesis else ''}"
-                    f"\n\nPass 2:\n"
-                    f"{pass2.synthesis.content if pass2.synthesis else ''}"
-                    f"\n\nFinal definitive answer:"
-                ),
-            )
             return format_anthropic_response(
-                content=final.content,
+                content=result.synthesis.content if result.synthesis else "Throwdown did not reach quorum.",
                 model="throwdown",
-                provider=final.provider,
-                input_tokens=final.usage.input_tokens,
-                output_tokens=final.usage.output_tokens,
+                provider="nvhive-throwdown",
+                input_tokens=result.total_usage.input_tokens,
+                output_tokens=result.total_usage.output_tokens,
             )
 
         # Standard single query with smart routing

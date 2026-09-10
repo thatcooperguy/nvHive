@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -397,38 +398,43 @@ class TestNoKeyringFallback:
         # Cleanup
         os.environ.pop("MY_KEY", None)
 
-    def test_load_env_keys_reads_storage_layout_env_too(self, tmp_path):
-        """Keys the web wizard saves to NVH_HOME/config/.env load without
-        HIVE_CONFIG_HOME exported; the legacy ~/.hive/.env still loads first
-        and anything already in the environment wins over both."""
-        legacy_dir = tmp_path / "hive"
-        legacy_dir.mkdir()
-        (legacy_dir / ".env").write_text(
-            "LEGACY_ONLY_KEY=from_legacy\nSHARED_KEY=from_legacy\n"
-        )
-        nvh_home = tmp_path / "nvh-home"
-        (nvh_home / "config").mkdir(parents=True)
-        (nvh_home / "config" / ".env").write_text(
-            "WIZARD_ONLY_KEY=from_wizard\nSHARED_KEY=from_wizard\nPRESET_KEY=from_wizard\n"
-        )
+    def test_load_env_keys_migrates_legacy_env_then_reads_only_the_layout(self, tmp_path, monkeypatch):
+        """0.44: ``.env`` is read from the storage layout's config_dir only. A
+        pre-0.44 ``~/.hive/.env`` is copied there once by the legacy-home
+        migration (which key loading triggers) and never read from $HOME again;
+        anything already in the environment still wins."""
+        import nvh.config.settings as settings
 
-        scrub = {
-            "HIVE_CONFIG_HOME", "NVHIVE_HOME",
-            "LEGACY_ONLY_KEY", "WIZARD_ONLY_KEY", "SHARED_KEY", "PRESET_KEY",
-        }
+        home = tmp_path / "home"
+        (home / ".hive").mkdir(parents=True)
+        (home / ".hive" / ".env").write_text("LEGACY_ONLY_KEY=from_legacy\nPRESET_KEY=from_legacy\n")
+        nvh_home = tmp_path / "nvh-home"
+        monkeypatch.setattr(Path, "home", lambda: home)
+
+        scrub = {"NVH_CONFIG", "HIVE_CONFIG_HOME", "NVHIVE_HOME", "LEGACY_ONLY_KEY", "PRESET_KEY"}
         env = {k: v for k, v in os.environ.items() if k not in scrub}
         env["NVH_HOME"] = str(nvh_home)
         env["PRESET_KEY"] = "from_env"
-        with (
-            patch.dict(os.environ, env, clear=True),
-            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", legacy_dir),
-        ):
-            load_env_keys()
+        env["NVH_LEGACY_MIGRATION"] = "1"  # conftest turns the migration off; this test exercises it
+        settings.reset_default_paths()
+        try:
+            with (
+                patch.dict(os.environ, env, clear=True),
+                patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", nvh_home / "config"),
+            ):
+                assert _env_key_files() == [nvh_home / "config" / ".env"]
+                assert (nvh_home / "config" / ".env").read_text() == (home / ".hive" / ".env").read_text()
+                load_env_keys(use_keyring=False)
+                assert os.environ["LEGACY_ONLY_KEY"] == "from_legacy"
+                assert os.environ["PRESET_KEY"] == "from_env"
 
-            assert os.environ["LEGACY_ONLY_KEY"] == "from_legacy"
-            assert os.environ["WIZARD_ONLY_KEY"] == "from_wizard"
-            assert os.environ["SHARED_KEY"] == "from_legacy"
-            assert os.environ["PRESET_KEY"] == "from_env"
+                # Second run: the marker short-circuits; the legacy file is not re-read.
+                (home / ".hive" / ".env").write_text("LEGACY_ONLY_KEY=changed_later\n")
+                os.environ.pop("LEGACY_ONLY_KEY")
+                load_env_keys(use_keyring=False)
+                assert os.environ["LEGACY_ONLY_KEY"] == "from_legacy"
+        finally:
+            settings.reset_default_paths()
 
     def test_load_env_keys_can_skip_keyring(self, tmp_path):
         """The API lifespan passes use_keyring=False — no keyring round-trips."""
@@ -440,25 +446,18 @@ class TestNoKeyringFallback:
             load_env_keys(use_keyring=False)
         mock_keyring.get_password.assert_not_called()
 
-    def test_env_key_files_resolve_layout_without_importing_integrations(
-        self, tmp_path, monkeypatch,
-    ):
-        """Importing nvh.integrations costs every CLI invocation ~160 ms, so the
-        layout config dir is derived from the environment directly."""
-        for var in ("HIVE_CONFIG_HOME", "NVHIVE_HOME"):
+    def test_env_key_files_is_exactly_the_default_config_dir_env(self, tmp_path, monkeypatch):
+        """0.44: one ``.env`` — ``DEFAULT_CONFIG_DIR/.env`` (== the layout's
+        ``config_dir/.env``). No second legacy file is appended."""
+        for var in ("NVH_CONFIG", "HIVE_CONFIG_HOME", "NVHIVE_HOME"):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("NVH_HOME", str(tmp_path / "home"))
-        blocked = {
-            "nvh.integrations": None,
-            "nvh.integrations.workspace": None,
-            "nvh.integrations.workspace.storage": None,
-        }
-        with (
-            patch.dict("sys.modules", blocked),
-            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", tmp_path / "hive"),
-        ):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path / "oshome")  # no legacy roots
+        with patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", tmp_path / "home" / "config"):
             files = _env_key_files()
-        assert files == [tmp_path / "hive" / ".env", tmp_path / "home" / "config" / ".env"]
+        assert files == [tmp_path / "home" / "config" / ".env"]
+        # Nothing to migrate: the migration leaves no marker behind.
+        assert not (tmp_path / "home" / "state").exists()
 
     @pytest.mark.parametrize("env", [
         {},
@@ -466,15 +465,28 @@ class TestNoKeyringFallback:
         {"NVHIVE_HOME": "{tmp}/b"},
         {"NVH_HOME": "{tmp}/a", "NVHIVE_HOME": "{tmp}/b"},
         {"HIVE_CONFIG_HOME": "{tmp}/cfg", "NVH_HOME": "{tmp}/a"},
+        {"NVH_CONFIG": "{tmp}/cfg2", "NVH_HOME": "{tmp}/a"},
+        {"NVH_CONFIG": "{tmp}/cfg2", "HIVE_CONFIG_HOME": "{tmp}/cfg", "NVH_HOME": "{tmp}/a"},
     ])
-    def test_layout_config_dir_matches_storage_layout(self, tmp_path, monkeypatch, env):
+    def test_layout_config_dir_matches_storage_layout_and_settings(self, tmp_path, monkeypatch, env):
+        """setup._layout_config_dir(), settings.DEFAULT_CONFIG_DIR and
+        storage_layout().config_dir are one value under every override."""
+        import nvh.config.settings as settings
         from nvh.integrations.workspace.storage import storage_layout
 
-        for var in ("HIVE_CONFIG_HOME", "NVH_HOME", "NVHIVE_HOME"):
+        for var in ("NVH_CONFIG", "HIVE_CONFIG_HOME", "NVH_HOME", "NVHIVE_HOME"):
             monkeypatch.delenv(var, raising=False)
         for var, value in env.items():
             monkeypatch.setenv(var, value.format(tmp=tmp_path))
-        assert _layout_config_dir().resolve() == storage_layout().config_dir
+        settings.reset_default_paths()
+        try:
+            expected = storage_layout().config_dir
+            assert _layout_config_dir().resolve() == expected
+            assert settings.DEFAULT_CONFIG_DIR == expected
+            if "NVH_CONFIG" in env:
+                assert expected == (tmp_path / "cfg2").resolve()
+        finally:
+            settings.reset_default_paths()
 
 
 # The table's vision *column* (lm.vision_picks) versus everything else -- which

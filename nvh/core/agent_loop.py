@@ -15,8 +15,12 @@ Usage:
   nvh do "Read the README and suggest improvements"
   nvh do "Search the web for Python FastAPI best practices and summarize"
 
-The agent loop uses tool calls in the system prompt to give the LLM
-access to file operations, code execution, and web browsing.
+The agent loop teaches the model the ONE tool-description prompt
+(:data:`AGENT_SYSTEM_PROMPT`, built by :func:`build_agent_system_prompt`) and
+the ONE text protocol — ``TOOL_CALL: {"name": ..., "arguments": {...}}`` —
+parsed by :func:`nvh.core.tools.parse_tool_calls`. A response that carries
+native ``tool_calls`` (a provider that took ``tools=``) is read first; the
+text protocol is the fallback that works on any model.
 """
 
 from __future__ import annotations
@@ -24,11 +28,16 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-import re
 from dataclasses import dataclass
 from typing import Any
 
-from nvh.core.tools import ToolRegistry, ToolResult
+from nvh.core.tools import (
+    TOOL_CALL_MARKER,
+    ToolRegistry,
+    ToolResult,
+    normalize_tool_calls,
+    parse_tool_calls,
+)
 from nvh.providers.base import Message
 
 logger = logging.getLogger(__name__)
@@ -42,7 +51,7 @@ class AgentStep:
     """One step in the agent's execution."""
     iteration: int
     thought: str           # what the agent is thinking
-    tool_calls: list[dict] # tools the agent wants to use
+    tool_calls: list[dict] # tools the agent wants to use: [{"tool": name, "args": {...}}]
     tool_results: list[ToolResult]
     response: str          # the agent's response after tool use
 
@@ -87,17 +96,18 @@ Desktop tips:
 """
 
 
-AGENT_SYSTEM_PROMPT = """You are an autonomous AI agent with access to tools. You can read files, write files, search the web, run code, and more.
+#: The one tool-description prompt. ``{role_preamble}`` is the caller's role
+#: guidance (the coding agent's approach and rules), ``{tool_descriptions}``
+#: the registry's catalogue, ``{desktop_supplement}`` the desktop workflow when
+#: the desktop tools are registered.
+AGENT_SYSTEM_PROMPT = """{role_preamble}You are an autonomous AI agent with access to tools. You can read files, write files, search the web, run code, and more.
 
-When you need to use a tool, respond with a JSON tool call block like this:
+When you need to use a tool, put each call on its own line, exactly like this:
 
-```tool_call
-{{"tool": "tool_name", "args": {{"param1": "value1"}}}}
-```
+TOOL_CALL: {{"name": "tool_name", "arguments": {{"param1": "value1"}}}}
 
 You can make multiple tool calls in one response. After each tool call, you'll see the result and can decide what to do next.
 
-Available tools:
 {tool_descriptions}
 {desktop_supplement}
 Rules:
@@ -108,6 +118,21 @@ Rules:
 - Be thorough but efficient — don't use tools unnecessarily
 - For file modifications, read the file first to understand the context
 """
+
+
+def build_agent_system_prompt(tools: ToolRegistry, preamble: str | None = None) -> str:
+    """The system prompt for one run: ``preamble`` (role guidance) + the one tool prompt.
+
+    The desktop workflow supplement is included when the registry carries the
+    desktop tools (``capture_screenshot``).
+    """
+    has_desktop = tools.get("capture_screenshot") is not None
+    role = preamble.strip() + "\n\n" if preamble and preamble.strip() else ""
+    return AGENT_SYSTEM_PROMPT.format(
+        role_preamble=role,
+        tool_descriptions=tools.get_tool_descriptions(),
+        desktop_supplement=DESKTOP_AGENT_SUPPLEMENT if has_desktop else "",
+    )
 
 
 def _summarize_tool_result(result: ToolResult, max_chars: int = 200) -> str:
@@ -181,31 +206,50 @@ def _compress_history(steps: list[AgentStep], keep_full: int = 2) -> str:
     return "\n".join(compressed)
 
 
+def _as_step_calls(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``[{name, arguments}]`` as the loop's ``[{tool, args}]`` step shape, capped per turn."""
+    return [
+        {"tool": call["name"], "args": dict(call.get("arguments") or {})}
+        for call in calls[:MAX_TOOL_CALLS_PER_TURN]
+    ]
+
+
 def _extract_tool_calls(response_text: str) -> list[dict]:
-    """Extract tool_call JSON blocks from LLM response text."""
-    calls = []
-    # Match ```tool_call ... ``` blocks
-    pattern = r'```tool_call\s*\n(.*?)\n```'
-    matches = re.findall(pattern, response_text, re.DOTALL)
-    for match in matches:
-        try:
-            call = json.loads(match.strip())
-            if "tool" in call:
-                calls.append(call)
-        except json.JSONDecodeError:
-            continue
+    """The tool calls in a model's text — ``TOOL_CALL: {json}`` lines (the deprecated
+    fenced block and bare object too, for one release: ``legacy=True`` is this
+    loop's alone) — as ``[{tool, args}]``."""
+    _stripped, calls = parse_tool_calls(response_text or "", legacy=True)
+    return _as_step_calls(calls)
 
-    # Also match inline {"tool": ...} patterns
-    inline_pattern = r'\{"tool":\s*"[^"]+",\s*"args":\s*\{[^}]*\}\}'
-    for match in re.finditer(inline_pattern, response_text):
-        try:
-            call = json.loads(match.group())
-            if call not in calls:
-                calls.append(call)
-        except json.JSONDecodeError:
-            continue
 
-    return calls[:MAX_TOOL_CALLS_PER_TURN]
+def _calls_from_response(response: Any) -> tuple[str, list[dict]]:
+    """``(thought text, [{tool, args}])`` from one completion.
+
+    Native ``tool_calls`` on the response (a provider that took ``tools=``)
+    win; otherwise the text protocol is parsed. Either way the text handed
+    back has the markers stripped.
+    """
+    text = getattr(response, "content", "") or ""
+    stripped, text_calls = parse_tool_calls(text, legacy=True)
+    native = normalize_tool_calls(getattr(response, "tool_calls", None))
+    calls = native or text_calls
+    return stripped, _as_step_calls(calls)
+
+
+def _step_result(name: str, outcome: Any) -> ToolResult:
+    """Whatever ``execute()`` (or a test double) returned, as the loop's ``ToolResult``."""
+    if isinstance(outcome, ToolResult):
+        return outcome
+    if isinstance(outcome, dict):
+        return ToolResult(outcome)
+    if hasattr(outcome, "success"):
+        return ToolResult(
+            tool_name=getattr(outcome, "tool_name", name),
+            success=bool(getattr(outcome, "success", False)),
+            output=getattr(outcome, "output", ""),
+            error=getattr(outcome, "error", "") or None,
+        )
+    return ToolResult(tool_name=name, success=True, output=str(outcome))
 
 
 async def run_agent_loop(
@@ -218,6 +262,7 @@ async def run_agent_loop(
     auto_approve_safe: bool = True,
     on_step: Any = None,  # callback(step: AgentStep) for live updates
     confirm_unsafe: Any = None,  # callback(tool_name, args) -> bool
+    system_prompt: str | None = None,
 ) -> AgentResult:
     """Run the agentic execution loop.
 
@@ -231,17 +276,23 @@ async def run_agent_loop(
         auto_approve_safe: Auto-run safe tools without confirmation
         on_step: Callback for live step updates
         confirm_unsafe: Callback to confirm unsafe tool execution
+        system_prompt: Role guidance prepended to the one tool prompt (the
+            coding agent's approach and rules); the tool catalogue and the
+            protocol are never duplicated by the caller.
     """
     if tools is None:
         tools = ToolRegistry()
 
     # Build system prompt with tool descriptions
     # Include desktop agent guidance if vision/desktop tools are available
-    has_desktop = tools.get("capture_screenshot") is not None
-    system_prompt = AGENT_SYSTEM_PROMPT.format(
-        tool_descriptions=tools.get_tool_descriptions(),
-        desktop_supplement=DESKTOP_AGENT_SUPPLEMENT if has_desktop else "",
-    )
+    full_system_prompt = build_agent_system_prompt(tools, system_prompt)
+
+    # Native function calling degrades (D3): the same catalogue goes out as
+    # ``tools=`` too. The engine hands it to the provider, which sends it only
+    # when the resolved model can take it (and never to the Responses
+    # surface); everywhere else the prompt's text protocol is what the model
+    # sees, and both channels are read back below.
+    native_tools = tools.openai_tools()
 
     # Conversation history for the agent
     messages: list[Message] = [
@@ -258,9 +309,11 @@ async def run_agent_loop(
                 prompt=messages[-1].content if messages else task,
                 provider=provider,
                 model=model,
-                system_prompt=system_prompt,
+                system_prompt=full_system_prompt,
                 stream=False,
                 use_cache=False,  # don't cache agent steps
+                tools=native_tools or None,
+                tool_choice="auto" if native_tools else None,
             )
         except Exception as e:
             return AgentResult(
@@ -273,10 +326,10 @@ async def run_agent_loop(
                 error=str(e),
             )
 
-        response_text = response.content
+        response_text = response.content or ""
 
-        # Extract tool calls
-        tool_calls = _extract_tool_calls(response_text)
+        # Extract tool calls — native ones first, then the text protocol
+        thought_text, tool_calls = _calls_from_response(response)
 
         if not tool_calls:
             # No tool calls — agent is done
@@ -318,9 +371,10 @@ async def run_agent_loop(
                 ))
                 continue
 
-            # Unsafe tools always require an explicit approval callback.
-            # `auto_approve_safe` only controls read/search-style tools.
-            if not tool.safe:
+            # Anything that is not exactly ``auto`` requires an explicit
+            # approval callback. ``auto_approve_safe`` only controls
+            # read/search-style tools.
+            if tool.safety_class != "auto":
                 if not confirm_unsafe:
                     tool_results.append(ToolResult(
                         tool_name=tool_name,
@@ -354,16 +408,17 @@ async def run_agent_loop(
                     ))
                     continue
 
-            # Execute the tool
-            result = await tools.execute(tool_name, tool_args)
+            # Execute the tool. The caller's callback was the click, so the
+            # call is confirmed; a privileged tool (none in the agent registry)
+            # would still be refused without its card's token.
+            result = _step_result(tool_name, await tools.execute(tool_name, tool_args, confirmed=True))
             tool_results.append(result)
             total_tool_calls += 1
 
         # Build thought from the response text (before tool calls)
-        thought = response_text
+        thought = thought_text
         for tc in tool_calls:
             thought = thought.replace(json.dumps(tc), "").strip()
-        thought = re.sub(r'```tool_call.*?```', '', thought, flags=re.DOTALL).strip()
         thought = thought[:200] if thought else f"Using {len(tool_calls)} tool(s)"
 
         step = AgentStep(
@@ -428,3 +483,16 @@ async def run_agent_loop(
         completed=False,
         error="Max iterations reached",
     )
+
+
+__all__ = [
+    "AGENT_SYSTEM_PROMPT",
+    "DESKTOP_AGENT_SUPPLEMENT",
+    "MAX_ITERATIONS",
+    "MAX_TOOL_CALLS_PER_TURN",
+    "TOOL_CALL_MARKER",
+    "AgentResult",
+    "AgentStep",
+    "build_agent_system_prompt",
+    "run_agent_loop",
+]

@@ -80,7 +80,7 @@ def _database_paths(home: Path, home_dir: str | Path | None) -> dict[str, Path]:
 
     An explicit ``home_dir`` is authoritative, as in storage_layout(); otherwise
     the state DB is wherever the repository puts it, so installs relocated via
-    HIVE_DATA_DIR / NVH_STATE are found rather than silently omitted.
+    NVH_STATE is found rather than silently omitted.
     """
     if home_dir is None:
         from nvh.storage.repository import _default_db_path

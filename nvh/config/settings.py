@@ -12,6 +12,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from nvh.integrations.workspace.storage import storage_layout
+
 _log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -198,25 +200,63 @@ class CouncilConfig(BaseModel):
 # Config Loading
 # ---------------------------------------------------------------------------
 
-DEFAULT_CONFIG_DIR = Path(os.environ.get("HIVE_CONFIG_HOME", Path.home() / ".hive")).expanduser()
+# ``DEFAULT_CONFIG_DIR`` / ``DEFAULT_CONFIG_PATH`` are the one path oracle's
+# answer, ``storage_layout().config_dir`` ($NVH_CONFIG, else $HIVE_CONFIG_HOME,
+# else $NVH_HOME/config, else ~/.nvh/config), taken at import like every
+# other module constant (design D7). They are plain module attributes, so
+# ``monkeypatch.setattr`` / ``mock.patch`` on either name and
+# ``activate_storage()`` rebind them as before; a test that changes
+# ``NVH_HOME`` after the import calls ``reset_default_paths()`` to re-derive.
+DEFAULT_CONFIG_DIR = storage_layout().config_dir
 DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.yaml"
-PROJECT_CONFIG_NAMES = [".hive.yaml", ".hive/config.yaml"]
+
+# Project overlay files, searched upward from cwd (``.nvh`` since 0.44; the
+# pre-0.44 ``.hive`` names are read as a fallback at every level).
+PROJECT_CONFIG_NAMES = [".nvh.yaml", ".nvh/config.yaml"]
+
+
+def reset_default_paths() -> None:
+    """Re-derive ``DEFAULT_CONFIG_DIR`` / ``DEFAULT_CONFIG_PATH`` from ``storage_layout()``.
+
+    The reset hook for tests that change ``NVH_HOME`` / ``NVH_CONFIG`` after
+    the module was imported; ``activate_storage()`` does the same for a
+    layout chosen at runtime.
+    """
+    global DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_PATH
+    DEFAULT_CONFIG_DIR = storage_layout().config_dir
+    DEFAULT_CONFIG_PATH = DEFAULT_CONFIG_DIR / "config.yaml"
+
+
+def _project_config_names() -> list[str]:
+    from nvh.integrations.workspace.migrate_legacy import LEGACY_PROJECT_CONFIG_NAMES
+
+    return [*PROJECT_CONFIG_NAMES, *LEGACY_PROJECT_CONFIG_NAMES]
 
 
 def _find_project_config() -> Path | None:
     """Search upward from cwd for a project-level config file.
 
-    The home directory's ``.hive/`` is the user config location (or a
-    pre-NVH_HOME leftover), never a project overlay: merging it on top of
-    the real user config once left an ``advisors:``-style config with zero
-    providers whenever the CLI ran from anywhere under ``$HOME``. The walk
-    also stops at the home directory — nothing above it is a project.
+    The user's own config locations — the layout's ``config_dir``, the
+    ``NVH_HOME`` root and the pre-0.44 ``~/.hive`` — are never a project
+    overlay: merging one on top of the real user config once left an
+    ``advisors:``-style config with zero providers whenever the CLI ran from
+    anywhere under ``$HOME``. The walk also stops at the home directory —
+    nothing above it is a project.
     """
+    from nvh.integrations.workspace.migrate_legacy import legacy_hive_home
+
     home = Path.home().resolve()
-    user_config_dirs = {home / ".hive", DEFAULT_CONFIG_DIR.resolve()}
+    layout = storage_layout()
+    user_config_dirs = {
+        legacy_hive_home().resolve(),
+        layout.home.resolve(),
+        layout.config_dir.resolve(),
+        Path(DEFAULT_CONFIG_DIR).resolve(),
+    }
+    names = _project_config_names()
     current = Path.cwd()
     for _ in range(20):  # limit depth
-        for name in PROJECT_CONFIG_NAMES:
+        for name in names:
             candidate = current / name
             if candidate.is_file() and candidate.parent.resolve() not in user_config_dirs:
                 return candidate
@@ -225,6 +265,25 @@ def _find_project_config() -> Path | None:
             break
         current = parent
     return None
+
+
+def _migrate_legacy_homes_once() -> None:
+    """Run the one-shot pre-0.44 import; never let it break config loading."""
+    try:
+        from nvh.integrations.workspace.migrate_legacy import migrate_legacy_homes
+
+        migrate_legacy_homes()
+    except Exception as exc:  # noqa: BLE001 — a migration must never block startup
+        _log.warning("Legacy home migration skipped: %s", exc)
+
+
+def _legacy_user_config_exists() -> bool:
+    try:
+        from nvh.integrations.workspace.migrate_legacy import legacy_hive_home
+
+        return (legacy_hive_home() / "config.yaml").is_file()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -272,8 +331,15 @@ def load_config(
     """
     merged: dict[str, Any] = {}
 
-    # User-level config
-    user_path = config_path or DEFAULT_CONFIG_PATH
+    # User-level config. An upgraded install whose config still sits in the
+    # pre-0.44 ``~/.hive`` gets it copied into the layout once, right here,
+    # so the first command after the upgrade does not run unconfigured.
+    if config_path is None:
+        user_path = Path(DEFAULT_CONFIG_PATH)
+        if not user_path.is_file() and _legacy_user_config_exists():
+            _migrate_legacy_homes_once()
+    else:
+        user_path = config_path
     if user_path.is_file():
         merged = _load_yaml(user_path)
 
@@ -310,14 +376,20 @@ def load_config(
 
 
 def get_config_dir() -> Path:
-    """Return the config directory, creating it if needed."""
-    DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    return DEFAULT_CONFIG_DIR
+    """Return the config directory, creating it if needed.
+
+    This is the init path (``nvh config init``, ``nvh setup``), so the
+    one-shot pre-0.44 home import runs here before the directory is used.
+    """
+    _migrate_legacy_homes_once()
+    config_dir = Path(DEFAULT_CONFIG_DIR)
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return config_dir
 
 
 def save_config(config: CouncilConfig, path: Path | None = None) -> Path:
     """Write config to YAML file."""
-    target = path or DEFAULT_CONFIG_PATH
+    target = path or Path(DEFAULT_CONFIG_PATH)
     target.parent.mkdir(parents=True, exist_ok=True)
     data = config.model_dump(mode="json", exclude_defaults=False)
     with open(target, "w") as f:

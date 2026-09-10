@@ -1,6 +1,7 @@
 """NVHive Workflows — chain multiple AI operations into pipelines.
 
-Workflows are defined as YAML files in ~/.hive/workflows/ or inline.
+Workflows are defined as YAML files in $NVH_HOME/config/workflows/ (the
+storage layout's ``config_dir``), in a project's ``.nvh/workflows/``, or inline.
 
 Example workflow (code_review.yaml):
   name: Code Review Pipeline
@@ -96,13 +97,31 @@ def load_workflow(path: Path) -> Workflow:
     )
 
 
+PROJECT_WORKFLOW_DIRNAME = ".nvh/workflows"
+
+
+def default_workflow_dirs() -> list[Path]:
+    """User workflows (``config_dir/workflows``) then the project's ``.nvh/workflows``.
+
+    A project's pre-0.44 ``.hive/workflows`` is still read as a fallback; the
+    user-level ``~/.hive/workflows`` is copied into the layout once by the
+    legacy migration and not read from there.
+    """
+    from nvh.integrations.workspace.migrate_legacy import LEGACY_WORKFLOW_DIRNAME
+    from nvh.integrations.workspace.storage import storage_layout
+
+    cwd = Path.cwd()
+    return [
+        storage_layout().config_dir / "workflows",
+        cwd / PROJECT_WORKFLOW_DIRNAME,
+        cwd / LEGACY_WORKFLOW_DIRNAME,
+    ]
+
+
 def discover_workflows(dirs: list[Path] | None = None) -> dict[str, Path]:
     """Find all workflow YAML files."""
     if dirs is None:
-        dirs = [
-            Path.home() / ".hive" / "workflows",
-            Path.cwd() / ".hive" / "workflows",
-        ]
+        dirs = default_workflow_dirs()
 
     # Also include the built-in workflow templates shipped with the package
     _builtin = Path(__file__).parent.parent / "workflows"

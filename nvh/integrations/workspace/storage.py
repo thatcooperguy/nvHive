@@ -5,6 +5,13 @@ ephemeral, but a user-owned file mount persists across sessions.  ``NVH_HOME``
 is the canonical directory students and admins should point at that mount.
 ``NVHIVE_HOME`` is accepted as a friendly alias because it is easier to guess
 from the product name.
+
+``storage_layout()`` is the single path oracle (0.44): every per-user file
+nvHive reads or writes — config.yaml, .env, the SQLite state, schedules,
+workflows, plugins, the routing explanation — lives under one of its
+directories. The pre-0.44 homes (``~/.hive``, ``~/.council``, ``~/nvh``) are
+known only to :mod:`nvh.integrations.workspace.migrate_legacy`, which copies
+them in once and never writes back.
 """
 
 from __future__ import annotations
@@ -19,6 +26,11 @@ from typing import Any
 DEFAULT_MIN_FREE_GB = 20.0
 NVH_HOME_ENV = "NVH_HOME"
 NVHIVE_HOME_ENV = "NVHIVE_HOME"
+# The config directory override. ``NVH_CONFIG`` is the primary name (it matches
+# NVH_BIN / NVH_MODELS / NVH_STATE); ``HIVE_CONFIG_HOME`` is the legacy alias
+# install.sh exported before 0.44 and is still honoured and still exported.
+CONFIG_DIR_ENV = "NVH_CONFIG"
+LEGACY_CONFIG_DIR_ENV = "HIVE_CONFIG_HOME"
 
 
 @dataclass(frozen=True)
@@ -44,6 +56,7 @@ class StorageLayout:
     support_dir: Path
     state_dir: Path
     catalog_dir: Path
+    plugins_dir: Path
 
     def env(self) -> dict[str, str]:
         """Environment variables that make this layout active."""
@@ -60,7 +73,10 @@ class StorageLayout:
             "NVH_STUDIO_HOME": str(self.studio_dir),
             "COMFYUI_HOME": str(self.comfyui_dir),
             "OLLAMA_MODELS": str(self.ollama_models_dir),
-            "HIVE_CONFIG_HOME": str(self.config_dir),
+            CONFIG_DIR_ENV: str(self.config_dir),
+            # Legacy alias, kept so pre-0.44 nvh-env.sh consumers keep working.
+            LEGACY_CONFIG_DIR_ENV: str(self.config_dir),
+            "NVH_PLUGINS": str(self.plugins_dir),
             "NVH_PROJECTS": str(self.projects_dir),
             "NVH_OUTPUTS": str(self.outputs_dir),
             "NVH_BACKUPS": str(self.backups_dir),
@@ -159,7 +175,12 @@ def storage_layout(home_dir: str | Path | None = None) -> StorageLayout:
         os.environ.get("COMFYUI_HOME", home / "comfyui") if use_component_env else home / "comfyui"
     )
     config_dir = _expand_path(
-        os.environ.get("HIVE_CONFIG_HOME", home / "config") if use_component_env else home / "config"
+        os.environ.get(CONFIG_DIR_ENV) or os.environ.get(LEGACY_CONFIG_DIR_ENV) or home / "config"
+        if use_component_env
+        else home / "config"
+    )
+    plugins_dir = _expand_path(
+        os.environ.get("NVH_PLUGINS", home / "plugins") if use_component_env else home / "plugins"
     )
     projects_dir = _expand_path(
         os.environ.get("NVH_PROJECTS", home / "projects") if use_component_env else home / "projects"
@@ -204,6 +225,7 @@ def storage_layout(home_dir: str | Path | None = None) -> StorageLayout:
         support_dir=support_dir,
         state_dir=state_dir,
         catalog_dir=catalog_dir,
+        plugins_dir=plugins_dir,
     )
 
 
@@ -301,6 +323,7 @@ def ensure_storage(
         layout.support_dir,
         layout.state_dir,
         layout.catalog_dir,
+        layout.plugins_dir,
     ]:
         path.mkdir(parents=True, exist_ok=True)
     for value in layout.env().values():

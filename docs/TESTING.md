@@ -45,24 +45,47 @@ files are guards rather than unit tests:
 
 ## Kinds of tests
 
-- **Unit** — the bulk: routing, council, agents, tools, storage, config.
+- **Unit** â€” the bulk: routing, council, agents, tools, storage, config.
   Providers are exercised through `MockProvider` (`nvh/providers/mock_provider.py`)
   or by patching `litellm`; nothing in the default run talks to a real
   provider.
-- **API** — FastAPI's `TestClient` runs `nvh.api.server:app` in-process
+- **API** â€” FastAPI's `TestClient` runs `nvh.api.server:app` in-process
   (`test_api.py`, `test_auth.py`, `test_chat_history.py`, ...).
-- **Live server** — `test_live_api.py` spawns `uvicorn` on a free port and
+- **Live server** â€” `test_live_api.py` spawns `uvicorn` on a free port and
   probes `/v1/health`, CORS and a WebSocket upgrade; this is the only place
   lifespan startup runs for real.
-- **CLI** — `test_cli_inprocess.py` drives the Typer app with `CliRunner`;
+- **CLI** â€” `test_cli_inprocess.py` drives the Typer app with `CliRunner`;
   `test_cli_e2e.py` spawns the `nvh` console script (`encoding="utf-8",
-  errors="replace"` — copy that on Windows).
-- **MCP** — `test_mcp_client.py` runs a real stdio MCP server through the SDK
+  errors="replace"` â€” copy that on Windows).
+- **MCP** â€” `test_mcp_client.py` runs a real stdio MCP server through the SDK
   pinned in the `dev` extra.
-- **Installer** — `ci/integration-test-install.sh` runs `install.sh` in a
-  clean Ubuntu container with a stubbed `nvidia-smi`. It downloads Ollama and
-  a model, so it is not in the default matrix; run it before merging anything
-  that touches `install.sh`.
+- **Installer** â€” `ci/integration-test-install.sh` installs the exact clean,
+  committed checkout in a disposable Ubuntu container with no GPU access.
+  The installer workflow runs `NVH_TEST_SKIP_MODEL=1 bash ci/integration-test-install.sh`
+  for installer pull requests. This downloads the Ollama binary and Python
+  dependencies, verifies the candidate package, workspace/config persistence,
+  CLI, and local Ollama health, and checks that no models were downloaded.
+  It does not test inference or model downloads. Run this gate before merging
+  changes to `install.sh`; changes to model acquisition also require the
+  explicit model-enabled invocation (`NVH_TEST_SKIP_MODEL=0`) on a suitable
+  disposable host. That additional check records a pull attempt, not an
+  inference-quality claim.
+  The harness refuses dirty tracked files, shallow history, and the formerly
+  ignored `NVH_TEST_DOCKERFILE` option. It builds from a Git bundle, excluding
+  local untracked files, Git credentials/config, caches, and home directories.
+  Its container-local Git redirect leaves the normal installer source URL
+  unchanged. Windows persistence contracts run with
+  `pwsh -File ci/test-windows-installer.ps1`; they execute extracted installer
+  logic against fake user settings and native commands, with no installation
+  or registry writes.
+
+  Linux shell-path contracts (`python3 ci/test-linux-installer-env.py`) source
+  generated environment/profile code and command shims with inert services.
+  macOS contracts (`python3 ci/test-macos-installer.py`) run the installer with
+  disposable homes and inert dependency commands, including later-shell
+  readback in Bash and Zsh where available. These are control-flow/path checks,
+  not actual Windows/macOS dependency installations or transactional rollback
+  guarantees for a partially completed fresh install.
 
 ## CI
 
@@ -91,7 +114,7 @@ excluded from the coverage metric and covered by the subprocess tests instead.
 - Prefer testing behaviour through the public entry point (`Engine`, the
   Typer app, the FastAPI app) over private helpers.
 - Regenerate `docs/COMMANDS.md` when you add, rename or hide a command, and
-  keep counts out of prose — the parity tests will tell you if you forgot.
+  keep counts out of prose â€” the parity tests will tell you if you forgot.
 - A test that reads a doc (`test_release_hardening.py`,
   `test_docs_links.py`) is a contract: update the doc and the test together.
 
@@ -99,7 +122,7 @@ excluded from the coverage metric and covered by the subprocess tests instead.
 
 ```bash
 nvh status --smoke --strict            # offline workspace smoke test
-nvh services start                     # Ollama → API → WebUI → Wizard answers
+nvh services start                     # Ollama â†’ API â†’ WebUI â†’ Wizard answers
 nvh status --report --live             # one live Wizard round-trip in the bundle
 nvh ask "hello" --local                # local path
 nvh convene "hello" --cabinet engineering

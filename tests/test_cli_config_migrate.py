@@ -392,21 +392,25 @@ class TestAdvisorRemove:
         assert (tmp_path / ".env").read_text() == "OPENAI_API_KEY=sk_live\n# comment\n"
         assert "GROQ_API_KEY" not in os.environ
 
-    def test_remove_key_scrubs_the_wizard_env_too(self, tmp_path: Path, layout_config_dir: Path):
-        (tmp_path / ".env").write_text(self.ENV)
+    def test_remove_key_scrubs_the_one_env_the_wizard_writes_too(self, tmp_path: Path, layout_config_dir: Path):
+        """0.44: ``DEFAULT_CONFIG_DIR`` *is* the layout's ``config_dir``, so the file
+        the web wizard writes (``$NVH_HOME/config/.env``) is the one ``.env``
+        ``remove_key`` scrubs — there is no second legacy file any more."""
         (layout_config_dir / ".env").write_text("GROQ_API_KEY=gsk_wizard\nNVIDIA_API_KEY=nv\n")
+        stray = tmp_path / ".env"
+        stray.write_text(self.ENV)  # not a config dir the loader knows: never touched
         mock_keyring = MagicMock()
         mock_keyring.delete_password.side_effect = Exception("no such password")
         with (
             patch.dict("sys.modules", {"keyring": mock_keyring}),
-            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", tmp_path),
+            patch("nvh.cli.setup.DEFAULT_CONFIG_DIR", layout_config_dir),
         ):
             result = remove_key("groq")
 
         assert result["env_file"] == ["GROQ_API_KEY"]
-        assert result["env_paths"] == [tmp_path / ".env", layout_config_dir / ".env"]
-        assert "GROQ_API_KEY" not in (tmp_path / ".env").read_text()
+        assert result["env_paths"] == [layout_config_dir / ".env"]
         assert (layout_config_dir / ".env").read_text() == "NVIDIA_API_KEY=nv\n"
+        assert stray.read_text() == self.ENV
 
     def test_remove_key_reports_nothing_found(self, tmp_path: Path, layout_config_dir: Path):
         mock_keyring = MagicMock()
@@ -454,10 +458,11 @@ class TestAdvisorRemove:
     ):
         cfg = tmp_path / "config.yaml"
         cfg.write_text(SHIPPED_CONFIG)
+        # 0.44: one ``.env`` (``DEFAULT_CONFIG_DIR/.env`` == the layout's); the
+        # config.yaml stanza is still disabled in both files when they differ.
         (tmp_path / ".env").write_text(self.ENV)
         layout_cfg = layout_config_dir / "config.yaml"
         layout_cfg.write_text(WIZARD_CONFIG)
-        (layout_config_dir / ".env").write_text("GROQ_API_KEY=gsk_wizard\n")
         monkeypatch.setenv("GROQ_API_KEY", "gsk_live")
         mock_keyring = MagicMock()
         with (
@@ -472,7 +477,7 @@ class TestAdvisorRemove:
         assert "GROQ_API_KEY" in result.output
         assert result.output.count("Disabled groq") == 2
         assert "GROQ_API_KEY" not in (tmp_path / ".env").read_text()
-        assert (layout_config_dir / ".env").read_text() == ""
+        assert not (layout_config_dir / ".env").exists()
         for path in (cfg, layout_cfg):
             data = yaml.safe_load(path.read_text())
             assert data["advisors"]["groq"]["enabled"] is False

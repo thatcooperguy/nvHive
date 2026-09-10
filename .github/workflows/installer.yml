@@ -1,0 +1,69 @@
+name: Installer contracts
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'install.sh'
+      - 'install.ps1'
+      - 'install-mac.sh'
+      - 'install-macos.command'
+      - 'ci/*install*'
+      - '.github/workflows/installer.yml'
+      - 'docs/TESTING.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-installer-no-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Test the PR head itself, not an implicit synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Offline harness and config guards
+        run: |
+          bash -n install.sh
+          python3 ci/test-installer-harness.py
+          python3 ci/test-linux-installer-env.py
+      - name: Exact-candidate install without GPU or model downloads
+        env:
+          NVH_TEST_SKIP_MODEL: '1'
+        run: bash ci/integration-test-install.sh
+
+  windows-workspace-contract:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Windows PowerShell 5 workspace contract (no installation)
+        shell: powershell
+        run: ./ci/test-windows-installer.ps1
+      - name: PowerShell 7 workspace contract (no installation)
+        shell: pwsh
+        run: ./ci/test-windows-installer.ps1
+
+  macos-workspace-contract:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: macOS shell and workspace contract (no installation)
+        run: |
+          bash -n install-mac.sh
+          python3 ci/test-macos-installer.py

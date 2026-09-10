@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -38,21 +37,37 @@ _db_path: Path | None = None
 
 
 def _default_db_path() -> Path:
-    """Return a rootless persistent default database path."""
-    data_dir = os.environ.get("HIVE_DATA_DIR")
-    if data_dir:
-        return Path(data_dir).expanduser() / "state" / "nvhive.db"
-    state_dir = os.environ.get("NVH_STATE")
-    if state_dir:
-        return Path(state_dir).expanduser() / "nvhive.db"
-    home_dir = os.environ.get("NVH_HOME") or os.environ.get("NVHIVE_HOME")
-    if home_dir:
-        return Path(home_dir).expanduser() / "state" / "nvhive.db"
-    return Path.home() / ".nvh" / "state" / "nvhive.db"
+    """``$NVH_STATE/nvhive.db`` — the state directory of the one path oracle.
+
+    ``storage_layout()`` resolves NVH_STATE, NVH_HOME / NVHIVE_HOME and the
+    ``~/.nvh`` default; the pre-0.44 ``HIVE_DATA_DIR`` knob is no longer read
+    (the legacy migration warns when it is still exported).
+    """
+    from nvh.integrations.workspace.storage import storage_layout
+
+    return storage_layout().state_dir / "nvhive.db"
 
 
-def _legacy_db_path() -> Path:
-    return Path.home() / ".council" / "council.db"
+def _import_legacy_state() -> None:
+    """Run the one-shot pre-0.44 home import before a *missing* default database is created.
+
+    A consistent snapshot of the pre-0.41 state database is
+    one of the targets :func:`~nvh.integrations.workspace.migrate_legacy.migrate_legacy_homes`
+    copies into ``$NVH_STATE/nvhive.db`` — the single owner of that move,
+    with the single marker; this module no longer spells the old location.
+    Once the marker says the import ran, a database the user later deleted
+    is created fresh, never re-filled from the old file. A failed state import
+    must stop initialization: creating an empty database would mask the failure
+    and cause every later migration attempt to skip the real legacy state.
+    """
+    try:
+        from nvh.integrations.workspace.migrate_legacy import migrate_legacy_homes
+
+        report = migrate_legacy_homes()
+    except Exception as exc:  # noqa: BLE001 — preserve legacy data on an uncertain import
+        raise RuntimeError("Legacy state database import failed; retry before creating a new database") from exc
+    if any(entry["label"] == "state database" for entry in report.failed):
+        raise RuntimeError("Legacy state database import failed; retry before creating a new database")
 
 
 async def init_db(db_path: Path | None = None) -> None:
@@ -60,10 +75,8 @@ async def init_db(db_path: Path | None = None) -> None:
     global _engine, _session_factory, _db_path
     if db_path is None:
         db_path = _default_db_path()
-        legacy_path = _legacy_db_path()
-        if db_path != legacy_path and legacy_path.exists() and not db_path.exists():
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(legacy_path, db_path)
+        if not db_path.exists():
+            _import_legacy_state()
 
     # Several DAO functions call init_db() on every invocation, so this must
     # be a no-op when the engine already points at the target path. The
