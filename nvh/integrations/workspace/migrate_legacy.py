@@ -27,9 +27,9 @@ symlinks=True)``), so an edit-in-place ``~/.hive/plugins/dev.py ->
 ~/src/dev.py`` stays a link and a ``~/.hive/knowledge -> /mnt/archive`` link
 is re-created rather than the archive duplicated. SQLite is the exception:
 its read-only backup is a standalone snapshot, never a link or a separate
-copy of a live database and its WAL/SHM files. A target whose copy fails
-is cleaned up and reported under ``failed``; the marker is written only when
-every present target copied or was deliberately skipped, so the next run
+copy of a live database and its WAL/SHM files. Only owned private staging is
+cleaned up when a copy fails; the target is reported under ``failed``. The marker
+is written only when every present target copied or was deliberately skipped, so the next run
 retries the failed ones instead of forgetting them.
 
 It runs from the init path (``nvh config init`` via ``get_config_dir()``),
@@ -50,13 +50,17 @@ over an existing marker.
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
 import logging
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,6 +94,8 @@ LEGACY_MIGRATION_ENV = "NVH_LEGACY_MIGRATION"
 _FALSY = frozenset({"0", "false", "no", "off"})
 _SQLITE_SIDECARS = ("-wal", "-shm")
 _SQLITE_BACKUP_SECONDS = 5.0
+_MIGRATION_LOCK_SECONDS = 5.0
+_MIGRATION_LOCK_NAME = ".legacy-migration-lock.sqlite3"
 #: Suffix of the backup left beside a layout file the migration merged into.
 MERGE_BACKUP_SUFFIX = ".pre-0.44-merge"
 #: Sections of ``config.yaml`` whose *entries* are merged one by one.
@@ -295,41 +301,97 @@ def _copy_sqlite(source: Path, destination: Path) -> None:
             raise OSError("SQLite snapshot failed; legacy database was not migrated") from exc
 
 
+def _publish_no_replace(source: Path, destination: Path) -> None:
+    """Atomically rename owned staging without replacing even an empty directory.
+
+    Ordinary POSIX rename replaces empty directories, so it is not a fallback.
+    Unsupported kernels/filesystems fail safely and leave the import retryable.
+    Windows os.rename has no-replace semantics; Linux and Darwin expose flags.
+    """
+    if os.name == "nt":
+        os.rename(source, destination)
+        return
+    old, new = os.fsencode(source), os.fsencode(destination)
+    if b"\0" in old or b"\0" in new:
+        raise ValueError("embedded null byte")
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux"):
+        rename = getattr(libc, "renameat2", None)
+        arguments = (-100, old, -100, new, 1)  # AT_FDCWD, RENAME_NOREPLACE
+        signature = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
+                     ctypes.c_char_p, ctypes.c_uint]
+    elif sys.platform == "darwin":
+        rename = getattr(libc, "renamex_np", None)
+        arguments = (old, new, 0x00000004)  # Darwin sys/stdio.h: RENAME_EXCL
+        signature = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+    else:
+        rename = None
+    if rename is None:
+        raise OSError(errno.ENOTSUP, "Atomic no-replace migration is unavailable")
+    rename.argtypes = signature
+    rename.restype = ctypes.c_int
+    if rename(*arguments) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), str(destination))
+
+
 def _copy(target: LegacyTarget, report: LegacyMigration | None = None) -> None:
-    """Copy one target; snapshot databases, preserve other links. Raises ``OSError``."""
+    """Stage a complete copy, then publish without replacing a competing entry."""
     target.destination.parent.mkdir(parents=True, exist_ok=True)
     if target.sqlite:
         _copy_sqlite(target.source, target.destination)
         return
-    source = target.source
-    if source.is_symlink():
-        # The legacy entry itself is a link (``~/.hive/knowledge -> /mnt/archive``):
-        # re-create the link, never duplicate what it points at — unless this
-        # user cannot create links, in which case the content is copied and
-        # the report says so.
-        if _relink(source, target.destination):
-            return
-        if report is not None:
-            report.warnings.append(
-                f"{target.label}: {source} is a symlink and this user cannot create links; "
-                f"its content was copied to {target.destination} instead"
-            )
-        source = source.resolve()
-    if source.is_dir():
-        shutil.copytree(source, target.destination, symlinks=True)
-        return
-    shutil.copy2(source, target.destination)
+    with tempfile.TemporaryDirectory(
+        prefix=".nvh-legacy-copy-", dir=target.destination.parent,
+    ) as staging:
+        copied = Path(staging) / "entry"
+        source = target.source
+        if source.is_symlink():
+            # Preserve the legacy link's referent when its parent changes.
+            if _relink(source, copied):
+                _publish_no_replace(copied, target.destination)
+                return
+            if report is not None:
+                report.warnings.append(
+                    f"{target.label}: {source} is a symlink and this user cannot create links; "
+                    f"its content was copied to {target.destination} instead"
+                )
+            source = source.resolve()
+        if source.is_dir():
+            shutil.copytree(source, copied, symlinks=True)
+        else:
+            shutil.copy2(source, copied)
+        _publish_no_replace(copied, target.destination)
 
 
-def _discard_partial(destination: Path) -> None:
-    """Remove whatever a failed copy left at ``destination`` so the next run can retry."""
+@contextmanager
+def _migration_lock(layout: StorageLayout) -> Iterator[None]:
+    """Serialize cooperating importers; OS process exit releases SQLite's lock.
+
+    The lock file must stay in place: deleting it could split waiting processes
+    across different inodes. This is a contention timeout, not a deadline for
+    arbitrary filesystem I/O. Failure propagates so init_db cannot create an
+    empty default database while another import is unfinished.
+    """
+    layout.state_dir.mkdir(parents=True, exist_ok=True)
     try:
-        if destination.is_symlink() or destination.is_file():
-            destination.unlink()
-        elif destination.is_dir():
-            shutil.rmtree(destination, ignore_errors=True)
-    except OSError as exc:  # pragma: no cover — best effort
-        _log.debug("legacy migration: could not clean up %s: %s", destination, exc)
+        connection = sqlite3.connect(
+            layout.state_dir / _MIGRATION_LOCK_NAME,
+            timeout=_MIGRATION_LOCK_SECONDS, isolation_level=None,
+        )
+    except sqlite3.Error as exc:
+        raise OSError("Cannot open legacy migration lock; retry before initializing") from exc
+    with closing(connection):
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+        except sqlite3.Error as exc:
+            raise OSError(
+                "Cannot acquire legacy migration lock; retry before initializing"
+            ) from exc
+        try:
+            yield
+        finally:
+            connection.rollback()
 
 
 # ---------------------------------------------------------------------------
@@ -352,8 +414,13 @@ def _env_lines(text: str) -> dict[str, str]:
 
 def _backup(destination: Path) -> None:
     backup = destination.with_name(destination.name + MERGE_BACKUP_SUFFIX)
-    if not backup.exists():
-        shutil.copy2(destination, backup)
+    if not os.path.lexists(backup):
+        try:
+            # A linked config is deliberately edited through its link below.
+            # Snapshot its old contents, not a second link to the edited file.
+            _copy(LegacyTarget("merge backup", destination.resolve(strict=True), backup))
+        except FileExistsError:
+            pass  # A competing creator owns this backup; never overwrite it.
 
 
 def _merge_env(source: Path, destination: Path) -> list[str]:
@@ -463,6 +530,21 @@ def migrate_legacy_homes(
         report.disabled = True
         return report
 
+    # A fresh installation remains a no-write operation. All actual migration
+    # decisions, including the marker recheck, happen while holding the lock.
+    if not marker.is_file() and not legacy_roots_present():
+        report.warnings.extend(legacy_env_warnings())
+        for warning in report.warnings:
+            _log.warning("%s", warning)
+        return report
+    with _migration_lock(layout):
+        return _migrate_locked(layout, report, force=force)
+
+
+def _migrate_locked(
+    layout: StorageLayout, report: LegacyMigration, *, force: bool,
+) -> LegacyMigration:
+    marker = layout.state_dir / MARKER_NAME
     if marker.is_file() and not force:
         _read_marker(marker, report)
         report.already_done = True
@@ -486,7 +568,7 @@ def migrate_legacy_homes(
         if target.skip_if is not None and target.skip_if.exists():
             report.skipped.append({**entry, "reason": f"already imported ({target.skip_if.name})"})
             continue
-        if target.destination.exists():
+        if os.path.lexists(target.destination):
             if target.merge == "skip" or not target.destination.is_file():
                 report.skipped.append({**entry, "reason": "destination exists"})
                 continue
@@ -505,10 +587,8 @@ def migrate_legacy_homes(
         try:
             _copy(target, report)
         except OSError as exc:
-            # SQLite publishes only a complete snapshot. An existing destination
-            # here may belong to another process and must never be removed.
-            if not target.sqlite:
-                _discard_partial(target.destination)
+            # Only private staging is ours to clean. The destination may have
+            # appeared after the existence check and belongs to another creator.
             report.failed.append({**entry, "reason": f"copy failed: {exc}"})
             _log.warning("legacy migration: could not copy %s -> %s: %s", target.source, target.destination, exc)
             continue
@@ -523,8 +603,13 @@ def migrate_legacy_homes(
         )
         return report
     try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
+        with tempfile.TemporaryDirectory(
+            prefix=".nvh-legacy-marker-", dir=marker.parent,
+        ) as staging:
+            completed = Path(staging) / "marker.json"
+            completed.write_text(json.dumps(report.as_dict(), indent=2), encoding="utf-8")
+            # force=True intentionally updates our marker, under the migration lock.
+            os.replace(completed, marker)
     except OSError as exc:
         _log.warning("legacy migration: could not write marker %s: %s", marker, exc)
     return report

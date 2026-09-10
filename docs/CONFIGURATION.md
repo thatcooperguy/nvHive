@@ -211,6 +211,25 @@ a reported failure and leaves the old database intact. A copy that fails
 is reported and retried on the next command instead of being recorded as
 done. If the state database import fails, opening the default database stops
 instead of creating an empty replacement that would prevent a later retry.
+Cooperating migrations serialize on a persistent SQLite lock under
+`state/.legacy-migration-lock.sqlite3`, with a five-second lock-contention
+timeout. Do not delete this lock file while migrations may be running. A lock
+failure prevents default database initialization from creating an empty database.
+This is not a deadline for arbitrary filesystem I/O. After acquiring the lock,
+the importer rechecks the marker and every destination.
+
+Other files, directories and links are copied into private staging beside their
+destination and published atomically without replacing any existing entry,
+including an empty directory or a dangling link. Windows uses no-replace rename;
+Linux requires `renameat2(RENAME_NOREPLACE)` and macOS requires
+`renamex_np(RENAME_EXCL)`. An unavailable operation/filesystem fails safely for
+retry, without falling back to an overwriting rename. Only staging owned by the
+current copy is cleaned up; an abrupt process exit may leave private staging
+behind, which later migrations leave untouched. Process exit releases the lock;
+the completed marker is published atomically while holding it. This does not
+promise power-loss durability or synchronize unrelated applications/user edits
+to existing `.env`/YAML files during their deliberate merge.
+
 Stores a one-shot importer already consumed (`nvh rag import-legacy`,
 the REPL memory import) are skipped. The old roots can be deleted once you
 have checked the copy. `NVH_LEGACY_MIGRATION=0` turns the whole thing off.
