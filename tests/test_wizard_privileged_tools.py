@@ -194,6 +194,21 @@ def _loopback_client() -> TestClient:
     return TestClient(app, base_url="http://127.0.0.1:8000")
 
 
+@pytest.fixture()
+def api_engine(monkeypatch):
+    """Bind endpoint policy without starting providers or the server lifespan."""
+    from nvh.api import server as server_module
+    from nvh.config.settings import CouncilConfig
+    from nvh.providers.registry import ProviderRegistry
+
+    config = CouncilConfig()
+    engine = SimpleNamespace(config=config, registry=ProviderRegistry().scoped(config))
+    monkeypatch.setattr(server_module, "get_engine", lambda: engine)
+    monkeypatch.setattr(server_module, "_wizard_tool_registry", None)
+    monkeypatch.setattr(server_module, "_wizard_tool_admission", None)
+    return engine
+
+
 # ───────────────────────────────────────────────────────────────────────────
 # The class: registration, ordering, the kill switch
 # ───────────────────────────────────────────────────────────────────────────
@@ -1072,12 +1087,13 @@ async def test_real_tool_handlers_never_raise_and_keep_the_message(monkeypatch, 
     assert error.startswith("system_settings_get failed: ValueError: mmm") and len(error) < 300
 
 
-def test_wizard_tools_endpoint_reports_privileged_counts_and_the_switch(monkeypatch) -> None:
+def test_wizard_tools_endpoint_reports_privileged_counts_and_the_switch(monkeypatch, api_engine) -> None:
     from nvh.api import server as server_module
 
     monkeypatch.setattr(server_module, "_wizard_tool_registry", None)
     client = _loopback_client()
     body = client.get("/v1/wizard/tools").json()["data"]
+    assert server_module._wizard_tool_admission is api_engine.registry.admission
     assert body["privileged_enabled"] is True
     assert body["privileged_count"] == len(PRIVILEGED_TOOLS)
     assert body["auto_count"] >= 1 and body["confirm_count"] >= 1
@@ -1100,7 +1116,7 @@ def test_wizard_tools_endpoint_reports_privileged_counts_and_the_switch(monkeypa
     }
 
 
-def test_wizard_tools_execute_endpoint_returns_the_privileged_card_unchanged(fake_run: FakeSubprocess, monkeypatch) -> None:
+def test_wizard_tools_execute_endpoint_returns_the_privileged_card_unchanged(fake_run: FakeSubprocess, monkeypatch, api_engine) -> None:
     from nvh.api import server as server_module
 
     monkeypatch.setattr(server_module, "_wizard_tool_registry", None)
@@ -1116,7 +1132,7 @@ def test_wizard_tools_execute_endpoint_returns_the_privileged_card_unchanged(fak
 
 
 def test_wizard_tools_execute_endpoint_confirmed_privileged_needs_token_and_a_local_origin(
-    fake_run: FakeSubprocess, monkeypatch,
+    fake_run: FakeSubprocess, monkeypatch, api_engine,
 ) -> None:
     """The HTTP layer's one addition: where a *confirmed* privileged call came from."""
     from nvh.api import server as server_module

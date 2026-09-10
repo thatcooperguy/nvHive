@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeVar
@@ -172,7 +172,14 @@ class AtohiAdmission:
                     # Do not invoke a provider when admission is already revoked.
                     await asyncio.sleep(0)
                     self._revocation(watch)
-                    work = asyncio.create_task(call())
+
+                    async def invoke_call() -> T:
+                        # A trusted call may return any Awaitable, including an
+                        # existing Future/Task. The lease owns this wrapper task
+                        # and drains propagated cancellation before release.
+                        return await call()
+
+                    work = asyncio.create_task(invoke_call())
                     await asyncio.wait({watch, work}, return_when=asyncio.FIRST_COMPLETED)
                     self._revocation(watch)  # revocation wins a simultaneous completion
                     return work.result()
@@ -190,7 +197,7 @@ class AtohiAdmission:
 
     async def stream(
         self, request: AdmissionRequest, call: Callable[[], AsyncIterator[T]],
-    ) -> AsyncIterator[T]:
+    ) -> AsyncGenerator[T, None]:
         if not self.enabled:
             async for chunk in call():
                 yield chunk

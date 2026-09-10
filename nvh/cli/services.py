@@ -824,7 +824,7 @@ def _preload_default_model() -> str | None:
     (e.g. unit tests, scripted use).
     """
     if os.environ.get("NVH_OLLAMA_PRELOAD", "1").lower() in {"0", "false", "no", "off"}:
-        return
+        return None
     # This detached, synchronous convenience path cannot hold/cancel a native
     # lease. Resolve policy before a model override can bypass configuration.
     try:
@@ -864,9 +864,9 @@ def _preload_default_model() -> str | None:
                         break
                     # Non-Ollama advisor default — keep scanning.
         except Exception:
-            return
+            return None
     if not model:
-        return
+        return None
 
     def _kick() -> None:
         # Empty prompt + keep_alive is Ollama's documented warmup pattern.
@@ -893,6 +893,7 @@ def _preload_default_model() -> str | None:
 
     import threading
     threading.Thread(target=_kick, name="ollama-preload", daemon=True).start()
+    return None
 
 
 def start_api(

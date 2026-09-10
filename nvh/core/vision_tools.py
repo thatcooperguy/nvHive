@@ -382,7 +382,7 @@ def _vision_handlers(admission: AtohiAdmission | None = None):
 
     handlers = {"analyze_image": analyze_image, "read_text_from_image": read_text_from_image}
     for name, handler in handlers.items():
-        handler._nvh_vision_rebind = lambda policy, name=name: _vision_handlers(policy)[name]
+        setattr(handler, "_nvh_vision_rebind", lambda policy, name=name: _vision_handlers(policy)[name])
     return handlers
 
 

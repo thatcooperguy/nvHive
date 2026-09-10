@@ -945,12 +945,15 @@ class TestGpuMemoryRendering:
         import httpx
 
         from nvh.core import benchmark as bench_mod
+        from nvh.core.atohi import AtohiAdmission
 
         monkeypatch.setattr("nvh.utils.gpu.detect_gpus", lambda: gpus)
         tags = types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"models": [{"name": "qwen3:8b"}]})
         monkeypatch.setattr(httpx, "get", lambda *a, **k: tags)
 
-        async def fake_single(provider, model, prompt, max_tokens=512):
+        async def fake_single(provider, model, prompt, max_tokens=512, *, admission):
+            assert isinstance(admission, AtohiAdmission)
+            assert not admission.enabled
             return bench_mod.BenchmarkResult(
                 model=model, gpu_name=gpus[0].name, vram_gb=gpus[0].vram_gb, prompt_tokens=10,
                 output_tokens=64, time_to_first_token_ms=120, total_time_ms=1000,
