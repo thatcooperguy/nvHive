@@ -192,16 +192,26 @@ workflows, schedules, REPL memories, the pre-0.42 knowledge store),
 The first `nvh` command after an upgrade — key loading, `nvh config init`, a
 `load_config()` that finds no user config while a legacy one exists, or the
 first database open — copies whatever it finds into the layout **once**:
-nothing is deleted or written under the old roots, nothing already under
+legacy user files and database contents remain intact, nothing already under
 `NVH_HOME` is overwritten, and `$NVH_STATE/legacy-migration.json` records what
 moved. Two files are *merged* rather than skipped, because 0.43 kept both
 copies live (`nvh setup` wrote `~/.hive/.env` and `~/.hive/config.yaml`, the
 web wizard wrote the layout's): `KEY=VALUE` lines the layout `.env` lacks are
 appended to it, and provider stanzas / sections the layout `config.yaml`
 lacks are added (the layout copy wins every conflict; a `.pre-0.44-merge`
-backup is left beside it). Symlinks are copied as links. A copy that fails
+backup is left beside it). Symlinks are copied as links except for the state
+database, which becomes an independent SQLite snapshot including committed WAL
+data. The database is opened read-only; live WAL/SHM files are never copied.
+SQLite may perform its normal WAL/read-lock bookkeeping while reading.
+Backup checks a five-second deadline between SQLite steps and reports a timeout
+for retry when the database remains busy.
+The complete snapshot is published without replacing an existing file; a
+filesystem without hard-link support or an existing destination sidecar causes
+a reported failure and leaves the old database intact. A copy that fails
 is reported and retried on the next command instead of being recorded as
-done. Stores a one-shot importer already consumed (`nvh rag import-legacy`,
+done. If the state database import fails, opening the default database stops
+instead of creating an empty replacement that would prevent a later retry.
+Stores a one-shot importer already consumed (`nvh rag import-legacy`,
 the REPL memory import) are skipped. The old roots can be deleted once you
 have checked the copy. `NVH_LEGACY_MIGRATION=0` turns the whole thing off.
 `HIVE_DATA_DIR` is no longer read — export `NVH_STATE=<dir>/state` instead

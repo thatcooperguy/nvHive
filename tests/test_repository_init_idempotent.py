@@ -113,6 +113,41 @@ async def test_init_db_imports_the_legacy_council_db_through_the_one_migration(t
         await repo.close_db()
 
 
+async def test_failed_legacy_snapshot_does_not_create_an_empty_database(nvh_home, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+
+    from nvh.integrations.workspace import migrate_legacy as ml
+
+    home = nvh_home / "fake-home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv(ml.LEGACY_MIGRATION_ENV, "1")
+    legacy = home / ".council" / "council.db"
+    legacy.parent.mkdir(parents=True)
+    destination = repo._default_db_path()
+    with closing(sqlite3.connect(legacy)) as writer:
+        writer.execute("CREATE TABLE legacy_marker(x INTEGER)")
+        writer.execute("INSERT INTO legacy_marker VALUES(1)")
+        writer.commit()
+        writer.execute("BEGIN EXCLUSIVE")
+        writer.execute("INSERT INTO legacy_marker VALUES(2)")
+        with monkeypatch.context() as clock:
+            times = iter((0.0, ml._SQLITE_BACKUP_SECONDS + 1))
+            clock.setattr(ml, "monotonic", lambda: next(times))
+            with pytest.raises(RuntimeError, match="Legacy state database import failed"):
+                await repo.init_db()
+        assert not destination.exists()
+        assert repo._engine is None
+        assert not (destination.parent / ml.MARKER_NAME).exists()
+        writer.rollback()
+
+    await repo.init_db()
+    with closing(sqlite3.connect(destination)) as imported:
+        assert imported.execute("SELECT x FROM legacy_marker").fetchall() == [(1,)]
+        assert imported.execute("SELECT name FROM sqlite_master WHERE name='conversations'").fetchone()
+    assert (destination.parent / ml.MARKER_NAME).is_file()
+
+
 async def test_repeat_init_same_path_reuses_engine(nvh_home):
     await repo.init_db()
     first_engine = repo._engine

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -52,20 +51,23 @@ def _default_db_path() -> Path:
 def _import_legacy_state() -> None:
     """Run the one-shot pre-0.44 home import before a *missing* default database is created.
 
-    The pre-0.41 state database (with its ``-wal`` / ``-shm`` sidecars) is
+    A consistent snapshot of the pre-0.41 state database is
     one of the targets :func:`~nvh.integrations.workspace.migrate_legacy.migrate_legacy_homes`
     copies into ``$NVH_STATE/nvhive.db`` — the single owner of that move,
     with the single marker; this module no longer spells the old location.
     Once the marker says the import ran, a database the user later deleted
-    is created fresh, never re-filled from the old file. Best-effort:
-    nothing here may stop the database from opening.
+    is created fresh, never re-filled from the old file. A failed state import
+    must stop initialization: creating an empty database would mask the failure
+    and cause every later migration attempt to skip the real legacy state.
     """
     try:
         from nvh.integrations.workspace.migrate_legacy import migrate_legacy_homes
 
-        migrate_legacy_homes()
-    except Exception as exc:  # noqa: BLE001 — a migration must never block the database
-        logging.getLogger(__name__).warning("legacy state import skipped: %s", exc)
+        report = migrate_legacy_homes()
+    except Exception as exc:  # noqa: BLE001 — preserve legacy data on an uncertain import
+        raise RuntimeError("Legacy state database import failed; retry before creating a new database") from exc
+    if any(entry["label"] == "state database" for entry in report.failed):
+        raise RuntimeError("Legacy state database import failed; retry before creating a new database")
 
 
 async def init_db(db_path: Path | None = None) -> None:

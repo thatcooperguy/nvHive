@@ -8,7 +8,7 @@ early installers). Since 0.44 :func:`nvh.integrations.workspace.storage.storage_
 is the only path oracle, and this module is the **only** place that still
 knows the old names: :func:`migrate_legacy_homes` copies whatever it finds
 into the layout exactly once (a marker under ``state/`` records what moved),
-never deletes or writes to a legacy location, and skips anything a one-shot
+never replaces legacy user files or changes legacy database contents, and skips anything a one-shot
 importer (``nvh rag import-legacy``, the REPL memory import) has already
 consumed.
 
@@ -25,7 +25,9 @@ backup of it is left beside it). Nothing else is merged.
 Symlinks under a legacy tree are copied *as links* (``copytree(...,
 symlinks=True)``), so an edit-in-place ``~/.hive/plugins/dev.py ->
 ~/src/dev.py`` stays a link and a ``~/.hive/knowledge -> /mnt/archive`` link
-is re-created rather than the archive duplicated. A target whose copy fails
+is re-created rather than the archive duplicated. SQLite is the exception:
+its read-only backup is a standalone snapshot, never a link or a separate
+copy of a live database and its WAL/SHM files. A target whose copy fails
 is cleaned up and reported under ``failed``; the marker is written only when
 every present target copied or was deliberately skipped, so the next run
 retries the failed ones instead of forgetting them.
@@ -52,9 +54,13 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
+import tempfile
+from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from nvh.integrations.workspace.storage import StorageLayout, storage_layout
@@ -83,6 +89,7 @@ MARKER_NAME = "legacy-migration.json"
 LEGACY_MIGRATION_ENV = "NVH_LEGACY_MIGRATION"
 _FALSY = frozenset({"0", "false", "no", "off"})
 _SQLITE_SIDECARS = ("-wal", "-shm")
+_SQLITE_BACKUP_SECONDS = 5.0
 #: Suffix of the backup left beside a layout file the migration merged into.
 MERGE_BACKUP_SUFFIX = ".pre-0.44-merge"
 #: Sections of ``config.yaml`` whose *entries* are merged one by one.
@@ -135,8 +142,7 @@ class LegacyTarget:
     # An existing marker meaning a one-shot importer already consumed the
     # source (the RAG knowledge import, the REPL memory import): nothing to copy.
     skip_if: Path | None = None
-    # SQLite databases travel with their -wal / -shm sidecars so no committed
-    # row that only lives in the write-ahead log is lost.
+    # SQLite's backup API includes committed WAL pages in one snapshot.
     sqlite: bool = False
     # How an existing destination is treated: ``"skip"`` (never touched),
     # ``"env"`` (KEY=VALUE lines it lacks are appended) or ``"yaml"``
@@ -249,9 +255,52 @@ def _relink(source: Path, destination: Path) -> bool:
     return True
 
 
+def _copy_sqlite(source: Path, destination: Path) -> None:
+    """Publish a complete SQLite snapshot without replacing any existing file.
+
+    Reading the main file and WAL separately races a live checkpoint. SQLite's
+    backup API coordinates those reads; mode=ro never changes the source DB.
+    Only the private staging directory is cleaned up on failure. A hard link
+    publishes the closed snapshot atomically and refuses a competing creator.
+    Filesystems without hard-link support fail safely and leave migration retryable.
+    """
+    deadline = monotonic() + _SQLITE_BACKUP_SECONDS
+
+    def bounded_backup(_status: int, _remaining: int, _total: int) -> None:
+        if monotonic() >= deadline:
+            raise TimeoutError("SQLite backup timed out; retry when the legacy database is less busy")
+
+    def require_empty_target() -> None:
+        for path in (destination, *(destination.with_name(destination.name + suffix)
+                                    for suffix in _SQLITE_SIDECARS)):
+            if os.path.lexists(path):
+                raise FileExistsError("SQLite migration destination or sidecars already exist")
+
+    require_empty_target()
+    with tempfile.TemporaryDirectory(prefix=".nvh-sqlite-migration-", dir=destination.parent) as staging:
+        snapshot = Path(staging) / "snapshot.db"
+        try:
+            uri = source.resolve(strict=True).as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True, timeout=0.1)) as original:
+                with closing(sqlite3.connect(snapshot)) as backup:
+                    original.backup(backup, pages=256, progress=bounded_backup, sleep=0.05)
+                    # The snapshot must not need sidecars when it is published.
+                    backup.execute("PRAGMA journal_mode=DELETE")
+            snapshot.chmod(0o600)
+            with snapshot.open("r+b") as completed:
+                os.fsync(completed.fileno())
+            require_empty_target()
+            os.link(snapshot, destination)
+        except sqlite3.Error as exc:
+            raise OSError("SQLite snapshot failed; legacy database was not migrated") from exc
+
+
 def _copy(target: LegacyTarget, report: LegacyMigration | None = None) -> None:
-    """Copy one target; links stay links, databases bring their sidecars. Raises ``OSError``."""
+    """Copy one target; snapshot databases, preserve other links. Raises ``OSError``."""
     target.destination.parent.mkdir(parents=True, exist_ok=True)
+    if target.sqlite:
+        _copy_sqlite(target.source, target.destination)
+        return
     source = target.source
     if source.is_symlink():
         # The legacy entry itself is a link (``~/.hive/knowledge -> /mnt/archive``):
@@ -270,11 +319,6 @@ def _copy(target: LegacyTarget, report: LegacyMigration | None = None) -> None:
         shutil.copytree(source, target.destination, symlinks=True)
         return
     shutil.copy2(source, target.destination)
-    if target.sqlite:
-        for suffix in _SQLITE_SIDECARS:
-            sidecar = target.source.with_name(target.source.name + suffix)
-            if sidecar.is_file():
-                shutil.copy2(sidecar, target.destination.with_name(target.destination.name + suffix))
 
 
 def _discard_partial(destination: Path) -> None:
@@ -399,7 +443,7 @@ def migrate_legacy_homes(
     *,
     force: bool = False,
 ) -> LegacyMigration:
-    """Copy the pre-0.44 homes into ``layout`` once; never write back to them.
+    """Copy the pre-0.44 homes once; preserve legacy user files and database contents.
 
     Idempotent: a marker at ``state_dir/legacy-migration.json`` short-circuits
     later calls (``force=True`` re-runs and rewrites it). When no legacy root
@@ -461,7 +505,10 @@ def migrate_legacy_homes(
         try:
             _copy(target, report)
         except OSError as exc:
-            _discard_partial(target.destination)
+            # SQLite publishes only a complete snapshot. An existing destination
+            # here may belong to another process and must never be removed.
+            if not target.sqlite:
+                _discard_partial(target.destination)
             report.failed.append({**entry, "reason": f"copy failed: {exc}"})
             _log.warning("legacy migration: could not copy %s -> %s: %s", target.source, target.destination, exc)
             continue

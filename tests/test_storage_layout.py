@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -84,11 +85,7 @@ def _seed_legacy(os_home: Path) -> dict[str, bytes]:
         conn.commit()
     finally:
         conn.close()  # closed for real, so nothing checkpoints the file behind the test's back
-    # Stand-ins for the -wal / -shm sidecars a live WAL-mode database leaves behind.
-    (council / "council.db-wal").write_bytes(b"wal-sidecar")
-    (council / "council.db-shm").write_bytes(b"shm-sidecar")
-    for name in ("council.db", "council.db-wal", "council.db-shm"):
-        files[f".council/{name}"] = (council / name).read_bytes()
+    files[".council/council.db"] = (council / "council.db").read_bytes()
     assert hive.is_dir()
     return files
 
@@ -158,13 +155,10 @@ def test_migration_copies_everything_once_and_never_writes_back(homes) -> None:
     }
     for path, data in expected.items():
         assert path.read_bytes() == data, path
-    # The database travels with its -wal / -shm sidecars (renamed to the new stem).
+    # A standalone SQLite snapshot contains the committed rows, without sidecars.
     db_copy = layout.state_dir / "nvhive.db"
-    assert db_copy.read_bytes() == seeded[".council/council.db"]
     for suffix in ("-wal", "-shm"):
-        sidecar = db_copy.with_name(db_copy.name + suffix)
-        assert sidecar.read_bytes() == seeded[f".council/council.db{suffix}"]
-        sidecar.unlink()  # stand-in bytes, not a real WAL: drop them before opening the copy
+        assert not db_copy.with_name(db_copy.name + suffix).exists()
     conn = sqlite3.connect(db_copy)
     try:
         assert conn.execute("SELECT x FROM legacy_marker").fetchone() == (1,)
@@ -186,6 +180,125 @@ def test_migration_copies_everything_once_and_never_writes_back(homes) -> None:
     again = ml.migrate_legacy_homes()
     assert again.already_done is True and again.moved == report.moved
     assert (layout.config_dir / "config.yaml").read_bytes() == seeded[".hive/config.yaml"]
+
+
+def test_migration_snapshots_live_wal_during_checkpoint(homes, monkeypatch) -> None:
+    """A still-running legacy service checkpoints while the actual importer reads.
+
+    The prior main-file/sidecar copy silently lost every committed WAL row.
+    Exercise that boundary too so this test fails against the previous code.
+    """
+    source = homes.os_home / ".council" / "council.db"
+    source.parent.mkdir()
+    real_connect = sqlite3.connect
+    real_copy = ml.shutil.copy2
+    checkpoints = []
+    with closing(real_connect(source)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL")
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("CREATE TABLE payload(id INTEGER PRIMARY KEY, content BLOB)")
+        writer.commit()
+        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        writer.executemany("INSERT INTO payload VALUES(?, ?)",
+                           ((i, bytes([i % 251]) * 4096) for i in range(600)))
+        writer.commit()
+        assert source.with_name(source.name + "-wal").stat().st_size > 0
+
+        def checkpoint():
+            if not checkpoints:
+                checkpoints.append(writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone())
+
+        class CheckpointConnection(sqlite3.Connection):
+            def backup(self, target, *, progress=None, **options):
+                def while_backing_up(status, remaining, total):
+                    if remaining:
+                        checkpoint()
+                    if progress:
+                        progress(status, remaining, total)
+                return super().backup(target, progress=while_backing_up, **options)
+
+        def connect(database, **options):
+            if options.get("uri"):
+                options["factory"] = CheckpointConnection
+            return real_connect(database, **options)
+
+        def copy_then_checkpoint(src, dst, *args, **kwargs):
+            result = real_copy(src, dst, *args, **kwargs)
+            if Path(src) == source:
+                checkpoint()
+            return result
+
+        monkeypatch.setattr(ml.sqlite3, "connect", connect)
+        monkeypatch.setattr(ml.shutil, "copy2", copy_then_checkpoint)
+        report = ml.migrate_legacy_homes()
+        assert report.failed == []
+        assert checkpoints == [(0, 0, 0)]  # the concurrent checkpoint actually completed
+        destination = homes.layout.state_dir / "nvhive.db"
+        with closing(real_connect(destination)) as imported:
+            assert imported.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+            assert imported.execute("SELECT count(*) FROM payload").fetchone() == (600,)
+            assert imported.execute("SELECT id, content FROM payload ORDER BY id").fetchall() == (
+                writer.execute("SELECT id, content FROM payload ORDER BY id").fetchall()
+            )
+        assert writer.execute("SELECT count(*) FROM payload").fetchone() == (600,)
+        assert not any(destination.with_name(destination.name + suffix).exists() for suffix in ("-wal", "-shm"))
+        assert (homes.layout.state_dir / ml.MARKER_NAME).is_file()
+
+
+def test_busy_sqlite_backup_is_bounded_and_retryable(homes, monkeypatch) -> None:
+    _seed_legacy(homes.os_home)
+    source = homes.os_home / ".council" / "council.db"
+    destination = homes.layout.state_dir / "nvhive.db"
+    with closing(sqlite3.connect(source)) as writer:
+        writer.execute("BEGIN EXCLUSIVE")
+        writer.execute("INSERT INTO legacy_marker VALUES(2)")
+        # Advance only the deadline clock; SQLite still encounters a real lock.
+        with monkeypatch.context() as clock:
+            times = iter((0.0, ml._SQLITE_BACKUP_SECONDS + 1))
+            clock.setattr(ml, "monotonic", lambda: next(times))
+            report = ml.migrate_legacy_homes()
+        assert [entry["label"] for entry in report.failed] == ["state database"]
+        assert "timed out" in report.failed[0]["reason"]
+        assert not destination.exists()
+        assert not (homes.layout.state_dir / ml.MARKER_NAME).exists()
+        assert not list(homes.layout.state_dir.glob(".nvh-sqlite-migration-*"))
+        writer.rollback()
+    retried = ml.migrate_legacy_homes()
+    assert retried.failed == []
+    with closing(sqlite3.connect(destination)) as imported:
+        assert imported.execute("SELECT x FROM legacy_marker").fetchall() == [(1,)]
+    assert (homes.layout.state_dir / ml.MARKER_NAME).is_file()
+
+
+def test_sqlite_snapshot_never_deletes_a_competing_destination(homes, monkeypatch) -> None:
+    _seed_legacy(homes.os_home)
+    destination = homes.layout.state_dir / "nvhive.db"
+    real_link = ml.os.link
+    existing = b"another process owns this destination"
+
+    def competing_creator(source, target):
+        Path(target).write_bytes(existing)
+        return real_link(source, target)  # the real OS refuses to overwrite
+
+    monkeypatch.setattr(ml.os, "link", competing_creator)
+    report = ml.migrate_legacy_homes()
+    assert [entry["label"] for entry in report.failed] == ["state database"]
+    assert destination.read_bytes() == existing
+    assert not (homes.layout.state_dir / ml.MARKER_NAME).exists()
+    assert not list(homes.layout.state_dir.glob(".nvh-sqlite-migration-*"))
+
+
+def test_sqlite_snapshot_preserves_unmatched_destination_sidecars(homes) -> None:
+    _seed_legacy(homes.os_home)
+    destination = homes.layout.state_dir / "nvhive.db"
+    destination.parent.mkdir(parents=True)
+    sidecar = destination.with_name(destination.name + "-wal")
+    sidecar.write_bytes(b"existing recovery state")
+    report = ml.migrate_legacy_homes()
+    assert [entry["label"] for entry in report.failed] == ["state database"]
+    assert sidecar.read_bytes() == b"existing recovery state"
+    assert not destination.exists()
+    assert not (homes.layout.state_dir / ml.MARKER_NAME).exists()
 
 
 def test_migration_never_overwrites_existing_layout_files(homes) -> None:
