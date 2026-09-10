@@ -15,6 +15,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from nvh.core.atohi import AtohiAdmission
+
 logger = logging.getLogger(__name__)
 
 VAULT_COLLECTION = "vault"
@@ -38,7 +40,9 @@ def vault_exists(home_dir: str | Path | None = None) -> bool:
     return _vault_dir(home_dir).is_dir()
 
 
-async def ingest_vault(home_dir: str | Path | None = None) -> dict[str, Any]:
+async def ingest_vault(
+    home_dir: str | Path | None = None, *, admission: AtohiAdmission | None = None,
+) -> dict[str, Any]:
     """Walk the vault and replace the ``vault`` collection with fresh chunks."""
     from nvh.integrations.rag.ingest import ingest_folder
 
@@ -54,10 +58,13 @@ async def ingest_vault(home_dir: str | Path | None = None) -> dict[str, Any]:
         collection=VAULT_COLLECTION,
         home_dir=home_dir,
         extensions=_VAULT_EXTENSIONS,
+        admission=admission,
     )
 
 
-async def ensure_vault_indexed(home_dir: str | Path | None = None) -> dict[str, Any]:
+async def ensure_vault_indexed(
+    home_dir: str | Path | None = None, *, admission: AtohiAdmission | None = None,
+) -> dict[str, Any]:
     """Ingest the vault iff its collection is currently empty.
 
     Idempotent and cheap when the collection already has chunks — one SQLite
@@ -78,7 +85,7 @@ async def ensure_vault_indexed(home_dir: str | Path | None = None) -> dict[str, 
     if stats["chunks"] > 0:
         return {"ok": True, "already_indexed": True, **stats}
 
-    result = await ingest_vault(home_dir=home_dir)
+    result = await ingest_vault(home_dir=home_dir, admission=admission)
     result["already_indexed"] = False
     return result
 
@@ -88,6 +95,7 @@ async def ask_vault(
     *,
     top_k: int = 5,
     home_dir: str | Path | None = None,
+    admission: AtohiAdmission | None = None,
 ) -> dict[str, Any]:
     """Ensure the vault is indexed, then run a top-k cosine search against it.
 
@@ -97,13 +105,13 @@ async def ask_vault(
     """
     from nvh.integrations.rag.query import ask
 
-    ensure_result = await ensure_vault_indexed(home_dir=home_dir)
+    ensure_result = await ensure_vault_indexed(home_dir=home_dir, admission=admission)
     if not ensure_result.get("ok"):
         return {
             "ok": False,
             "error": ensure_result.get("error", "Vault not indexable"),
             "collection": VAULT_COLLECTION,
         }
-    result = await ask(question, collection=VAULT_COLLECTION, top_k=top_k, home_dir=home_dir)
+    result = await ask(question, collection=VAULT_COLLECTION, top_k=top_k, home_dir=home_dir, admission=admission)
     result["auto_indexed"] = not ensure_result.get("already_indexed", False)
     return result

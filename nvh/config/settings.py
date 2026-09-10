@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 from nvh.integrations.workspace.storage import storage_layout
 
@@ -53,6 +53,23 @@ def _interpolate_env(value: Any) -> Any:
 # ---------------------------------------------------------------------------
 # Config Models
 # ---------------------------------------------------------------------------
+
+class AtohiConfig(BaseModel):
+    """Opt-in admission boundary; no production broker is installed yet."""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool = False
+    managed_providers: list[str] = Field(default_factory=list, max_length=64)
+
+    @field_validator("managed_providers")
+    @classmethod
+    def provider_names(cls, names: list[str]) -> list[str]:
+        if len(set(names)) != len(names) or any(
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name) for name in names
+        ):
+            raise ValueError("Atohi managed providers must be unique bounded provider names")
+        return names
+
 
 class ProviderConfig(BaseModel):
     api_key: str = ""
@@ -158,6 +175,8 @@ class ProfileConfig(BaseModel):
     @classmethod
     def _accept_advisors_key(cls, data: Any) -> Any:
         """Accept 'advisors' as an alias for 'providers' in YAML configs."""
+        if isinstance(data, dict) and "atohi" in data:
+            raise ValueError("Atohi admission is top-level configuration, not a profile override")
         if isinstance(data, dict) and "advisors" in data and "providers" not in data:
             data = dict(data)
             data["providers"] = data.pop("advisors")
@@ -176,6 +195,7 @@ class WebhookConfigModel(BaseModel):
 class CouncilConfig(BaseModel):
     """Root configuration model."""
     version: str = "1"
+    atohi: AtohiConfig = Field(default_factory=AtohiConfig)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
     council: CouncilModeConfig = Field(default_factory=CouncilModeConfig)

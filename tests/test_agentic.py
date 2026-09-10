@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import nvh.core.agentic as agentic_module
+from nvh.config.settings import CouncilConfig
 from nvh.core import local_models
 from nvh.core.agent_loop import AgentResult, AgentStep
 from nvh.core.agentic import (
@@ -242,7 +243,8 @@ class _MockEngine:
 
     def __init__(self):
         self.query_calls: list[dict] = []
-        self.registry = ProviderRegistry()
+        self.config = CouncilConfig()
+        self.registry = ProviderRegistry().scoped(self.config)
         self._plan_response = "1. Read the file\n2. Fix the bug\n3. Verify"
         self._execute_response = "I have completed the task. The bug is fixed."
         self._verify_response = "APPROVED — changes look correct."

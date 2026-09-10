@@ -24,6 +24,10 @@ import logging
 import time as _time
 from collections.abc import Iterable
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from nvh.core.atohi import AtohiAdmission
 
 from nvh.core import local_models
 from nvh.utils.ollama import ollama_base_url
@@ -189,70 +193,92 @@ def _detect_ollama_vision_model() -> str | None:
     return result
 
 
-async def _analyze_with_ollama(image_data: str, question: str, model: str) -> str | None:
-    """Call Ollama's native vision API directly."""
-    try:
+def _vision_admission(admission: AtohiAdmission | None = None) -> AtohiAdmission:
+    """Use trusted caller policy, or disk policy for a standalone helper call."""
+    if admission is None:
+        from nvh.config.settings import load_config
+        from nvh.core.atohi import AtohiAdmission
+
+        admission = AtohiAdmission(load_config().atohi)
+    admission.require_broker()
+    return admission
+
+
+async def _analyze_with_ollama(
+    image_data: str, question: str, model: str, *, admission: AtohiAdmission | None = None,
+) -> str | None:
+    """Call Ollama vision with authority held through HTTP client cleanup."""
+    from nvh.core.atohi import AdmissionRequest
+
+    policy = _vision_admission(admission)
+
+    async def call():
         import httpx
+
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{ollama_base_url()}/api/chat",
                 json={
                     "model": model,
-                    "messages": [{
-                        "role": "user",
-                        "content": question,
-                        "images": [image_data],
-                    }],
+                    "messages": [{"role": "user", "content": question, "images": [image_data]}],
                     "stream": False,
                 },
                 timeout=60,
             )
             if resp.status_code == 200:
                 return resp.json().get("message", {}).get("content", "")
+        return None
+
+    try:
+        return await policy.run(AdmissionRequest("ollama", "complete"), call)
     except Exception as exc:
         logger.debug("Ollama vision failed: %s", exc)
     return None
 
 
-async def _analyze_with_cloud(image_data: str, mime: str, question: str) -> str | None:
-    """Fall back to cloud vision LLM via litellm (GPT-5.6, Gemini, Claude)."""
+async def _analyze_with_cloud(
+    image_data: str, mime: str, question: str, *, admission: AtohiAdmission | None = None,
+) -> str | None:
+    """Try configured cloud vision; a resource pause never triggers fallback."""
+    from nvh.core.atohi import AdmissionRequest
+
+    policy = _vision_admission(admission)
     try:
+        import os
+
         import litellm
 
         messages = [{
             "role": "user",
             "content": [
                 {"type": "text", "text": question},
-                {"type": "image_url", "image_url": {
-                    "url": f"data:{mime};base64,{image_data}",
-                }},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_data}"}},
             ],
         }]
-
-        # Try providers in order: GPT-5.6 Terra (best spatial accuracy), Gemini, Claude
-        import os
         models_to_try = []
         if os.environ.get("OPENAI_API_KEY"):
-            models_to_try.append("gpt-5.6-terra")
+            models_to_try.append(("openai", "gpt-5.6-terra"))
         if os.environ.get("GOOGLE_API_KEY"):
-            models_to_try.append("gemini/gemini-3.7-flash")
+            models_to_try.append(("google", "gemini/gemini-3.7-flash"))
         if os.environ.get("ANTHROPIC_API_KEY"):
-            models_to_try.append("claude-sonnet-5")
+            models_to_try.append(("anthropic", "claude-sonnet-5"))
 
-        for model in models_to_try:
-            try:
-                resp = await litellm.acompletion(
-                    model=model,
-                    messages=messages,
-                    max_tokens=1024,
-                    timeout=30,
+        for provider_name, model in models_to_try:
+            async def call(model=model):
+                return await litellm.acompletion(
+                    model=model, messages=messages, max_tokens=1024, timeout=30,
                 )
+
+            try:
+                if policy.manages(provider_name):
+                    resp = await policy.run(AdmissionRequest(provider_name, "complete"), call)
+                else:
+                    resp = await call()
                 content = resp.choices[0].message.content
                 if content:
                     return content
             except Exception as exc:
                 logger.debug("Cloud vision (%s) failed: %s", model, exc)
-                continue
     except Exception as exc:
         logger.debug("Cloud vision failed: %s", exc)
     return None
@@ -285,7 +311,82 @@ def _desktop_action(func_name: str):
     return decorator
 
 
-def register_vision_tools(registry) -> None:
+def _vision_handlers(admission: AtohiAdmission | None = None):
+    """Private factories bind authority, never fields supplied by a tool request."""
+    async def analyze_image(image_path: str, question: str = "Describe what you see in this image.") -> str:
+        """Analyze an image using a vision-capable LLM.
+
+        Tries the strongest installed local Ollama vision model first (the
+        tier table's image-capable picks, see :func:`pick_vision_model`),
+        then falls back to cloud APIs (GPT, Gemini, Claude).
+
+        Args:
+            image_path: Path to the image file
+            question: What to ask about the image
+        """
+        path = Path(image_path)
+        if not path.exists():
+            return f"Image not found: {image_path}"
+
+        # Guard against huge files
+        file_size = path.stat().st_size
+        if file_size > 20 * 1024 * 1024:
+            return f"Image too large ({file_size / 1024 / 1024:.1f} MB). Max 20 MB."
+
+        policy = _vision_admission(admission)
+        try:
+            with open(path, "rb") as f:
+                image_data = base64.b64encode(f.read()).decode("utf-8")
+
+            # Determine MIME type
+            suffix = path.suffix.lower()
+            mime = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".bmp": "image/bmp",
+            }.get(suffix, "image/png")
+
+            size_kb = file_size / 1024
+
+            # Try local Ollama vision model first (cached detection)
+            vision_model = _detect_ollama_vision_model()
+            if vision_model:
+                result = await _analyze_with_ollama(image_data, question, vision_model, admission=policy)
+                if result:
+                    return f"[Vision: {vision_model}, {size_kb:.1f} KB]\n{result}"
+
+            # Fall back to cloud vision APIs
+            result = await _analyze_with_cloud(image_data, mime, question, admission=policy)
+            if result:
+                return f"[Vision: cloud, {size_kb:.1f} KB]\n{result}"
+
+            return (
+                f"[Image loaded: {path.name}, {size_kb:.1f} KB]\n"
+                "No vision model available. Install one locally:\n"
+                f"  ollama pull {_suggested_vision_pull()}\n"
+                "Or configure a cloud API key (OpenAI, Google, Anthropic)."
+            )
+        except Exception as e:
+            return f"Failed to analyze image: {e}"
+
+    async def read_text_from_image(image_path: str) -> str:
+        """Extract visible text from an image (OCR via LLM)."""
+        return await analyze_image(
+            image_path,
+            "Read ALL visible text from this image. Return the text exactly "
+            "as it appears, preserving formatting and line breaks."
+        )
+
+    handlers = {"analyze_image": analyze_image, "read_text_from_image": read_text_from_image}
+    for name, handler in handlers.items():
+        setattr(handler, "_nvh_vision_rebind", lambda policy, name=name: _vision_handlers(policy)[name])
+    return handlers
+
+
+def register_vision_tools(registry, *, admission: AtohiAdmission | None = None) -> None:
     """Register vision and desktop control tools into a ToolRegistry."""
     from nvh.core.tools import Tool
 
@@ -367,71 +468,9 @@ def register_vision_tools(registry) -> None:
             "Or install spectacle/scrot on Linux."
         )
 
-    async def analyze_image(image_path: str, question: str = "Describe what you see in this image.") -> str:
-        """Analyze an image using a vision-capable LLM.
-
-        Tries the strongest installed local Ollama vision model first (the
-        tier table's image-capable picks, see :func:`pick_vision_model`),
-        then falls back to cloud APIs (GPT, Gemini, Claude).
-
-        Args:
-            image_path: Path to the image file
-            question: What to ask about the image
-        """
-        path = Path(image_path)
-        if not path.exists():
-            return f"Image not found: {image_path}"
-
-        # Guard against huge files
-        file_size = path.stat().st_size
-        if file_size > 20 * 1024 * 1024:
-            return f"Image too large ({file_size / 1024 / 1024:.1f} MB). Max 20 MB."
-
-        try:
-            with open(path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode("utf-8")
-
-            # Determine MIME type
-            suffix = path.suffix.lower()
-            mime = {
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".gif": "image/gif",
-                ".webp": "image/webp",
-                ".bmp": "image/bmp",
-            }.get(suffix, "image/png")
-
-            size_kb = file_size / 1024
-
-            # Try local Ollama vision model first (cached detection)
-            vision_model = _detect_ollama_vision_model()
-            if vision_model:
-                result = await _analyze_with_ollama(image_data, question, vision_model)
-                if result:
-                    return f"[Vision: {vision_model}, {size_kb:.1f} KB]\n{result}"
-
-            # Fall back to cloud vision APIs
-            result = await _analyze_with_cloud(image_data, mime, question)
-            if result:
-                return f"[Vision: cloud, {size_kb:.1f} KB]\n{result}"
-
-            return (
-                f"[Image loaded: {path.name}, {size_kb:.1f} KB]\n"
-                "No vision model available. Install one locally:\n"
-                f"  ollama pull {_suggested_vision_pull()}\n"
-                "Or configure a cloud API key (OpenAI, Google, Anthropic)."
-            )
-        except Exception as e:
-            return f"Failed to analyze image: {e}"
-
-    async def read_text_from_image(image_path: str) -> str:
-        """Extract visible text from an image (OCR via LLM)."""
-        return await analyze_image(
-            image_path,
-            "Read ALL visible text from this image. Return the text exactly "
-            "as it appears, preserving formatting and line breaks."
-        )
+    handlers = _vision_handlers(admission)
+    analyze_image = handlers["analyze_image"]
+    read_text_from_image = handlers["read_text_from_image"]
 
     # ── HANDS: Mouse + Keyboard Control ───────────────────────────
 

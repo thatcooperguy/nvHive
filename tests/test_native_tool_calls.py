@@ -511,12 +511,18 @@ async def test_engine_forwards_tools_to_the_provider_only_when_offered() -> None
 
 @pytest.mark.asyncio
 async def test_agent_loop_offers_its_catalogue_natively_and_reads_the_native_answer() -> None:
+    from nvh.config.settings import CouncilConfig
     from nvh.core.agent_loop import run_agent_loop
     from nvh.providers.base import CompletionResponse, Usage
+    from nvh.providers.registry import ProviderRegistry
 
     seen: list[dict[str, Any]] = []
 
     class FakeEngine:
+        def __init__(self):
+            self.config = CouncilConfig()
+            self.registry = ProviderRegistry().scoped(self.config)
+
         async def query(self, prompt="", **kwargs):
             seen.append(kwargs)
             if len(seen) == 1:

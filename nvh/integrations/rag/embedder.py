@@ -20,6 +20,8 @@ from typing import Any
 
 import httpx
 
+from nvh.config.settings import load_config
+from nvh.core.atohi import AdmissionRequest, AtohiAdmission
 from nvh.utils.ollama import ollama_base_url
 
 logger = logging.getLogger(__name__)
@@ -88,7 +90,9 @@ async def _pull_ollama_model(model: str, *, timeout: float = _PULL_TIMEOUT_SECS)
         return False
 
 
-async def embed_texts(texts: list[str], *, timeout: float = 30.0) -> list[list[float]]:
+async def embed_texts(
+    texts: list[str], *, timeout: float = 30.0, admission: AtohiAdmission | None = None,
+) -> list[list[float]]:
     """Return one embedding vector per input string via Ollama.
 
     If the configured embedding model isn't pulled and auto-pull is enabled
@@ -100,8 +104,13 @@ async def embed_texts(texts: list[str], *, timeout: float = 30.0) -> list[list[f
         return []
 
     model = embed_model_name()
-    return await _embed_texts_with_retry(
-        texts, model=model, timeout=timeout, allow_pull=_auto_pull_enabled(),
+    if admission is None:
+        admission = AtohiAdmission(load_config().atohi)
+    return await admission.run(
+        AdmissionRequest("ollama", "embeddings"),
+        lambda: _embed_texts_with_retry(
+            texts, model=model, timeout=timeout, allow_pull=_auto_pull_enabled(),
+        ),
     )
 
 
@@ -150,9 +159,9 @@ async def _embed_texts_with_retry(
     return vectors
 
 
-async def embed_one(text: str) -> list[float]:
+async def embed_one(text: str, *, admission: AtohiAdmission | None = None) -> list[float]:
     """Single-text convenience wrapper."""
-    result = await embed_texts([text])
+    result = await embed_texts([text], admission=admission)
     if not result:
         raise EmbeddingError("Embedder returned no vectors.")
     return result[0]

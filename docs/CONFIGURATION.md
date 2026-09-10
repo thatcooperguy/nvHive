@@ -33,6 +33,101 @@ file before touching it.
 
 ## `config.yaml` reference
 
+### Atohi admission (disabled)
+
+nvHive includes a native admission and cancellation boundary for shared compute
+managed by [Atohi](https://github.com/thatcooperguy/atohi). It ships disabled:
+
+```yaml
+atohi:
+  enabled: false
+  managed_providers: []
+```
+
+When enabled, Ollama and Triton provider types, including configured aliases,
+require admission. Add the exact registered names of other self-hosted GPU
+endpoints (for example an OpenAI-compatible NIM endpoint) to `managed_providers`.
+Local RAG embeddings also require admission. Hosted cloud providers are not
+automatically treated as members of the home compute pool. This is top-level
+configuration; profile overrides cannot replace it.
+
+**No production native broker is installed. Leave this disabled.** Enabling it
+currently stops engine initialization and council dispatch before any provider
+call, and stops embedding requests before opening HTTP or pulling a model.
+There is no endpoint, token, arbitrary import path, executable, or granted flag
+that can turn this into a working lease. The code-only `AdmissionBroker` protocol
+is an integration boundary exercised with hermetic test doubles.
+
+Revocation or uncertain ownership raises `ResourcePaused`, outside ordinary
+provider errors. Chat does not fall back to cloud, embeddings do not retry or
+auto-pull, and council/comparison sessions cancel and await their cooperating
+client tasks before returning the pause. A council cannot treat a revoked member
+as a quorum loss and continue to synthesis. CLI async commands stop with exit 1;
+HTTP query, council, comparison, Wizard and RAG endpoints return 409 with code
+`resource_paused`, status `paused` and `automatic_retry: false`. Streaming HTTP
+and WebSocket query/council endpoints send a terminal error carrying the same
+fields, without a completion event. Earlier streamed text remains partial.
+No call is automatically replayed or resumed.
+
+The boundary covers providers obtained through the application registry
+(including local routing/synthesis helpers), local RAG embeddings, built-in
+vision analysis and benchmark helpers. API and Wizard callers pass the owning
+Engine's exact admission object through folder ingestion, vault indexing,
+retrieval and automatic recall. Library callers with in-memory configuration
+must pass the same `AtohiAdmission` using the helpers' trusted keyword-only
+`admission` parameter. Omitting it at a standalone entrypoint loads normal file
+configuration; request JSON and model tool arguments cannot supply authority.
+Configuration changes require a controlled application restart.
+
+Each engine and directly constructed council binds its own admission policy.
+Reusing a registry with another configuration cannot enable or disable that
+policy. Raw adapters and the model catalog remain shared, so later registrations
+through the original registry or the engine stay visible. Bound policy changes
+are rejected; create a new scoped registry or restart for a different policy.
+Ownership remains watched through upstream cleanup and broker exit for ordinary
+calls and streams. A result or final chunk is delivered only after that scope
+closes without revocation or loss of ownership knowledge. Cleanup already handling
+cancellation is drained without a second cancellation interrupting it. Trusted
+engine-owned helpers use `engine.registry.admission`; an unconfigured registry
+raises instead of supplying a missing policy that could fall back to disk.
+
+In shared mode, opportunistic service warmup and synchronous setup token probes
+are not attempted: they have no cancellable lease transport. A cached successful
+probe cannot override the current shared policy. Setup reports distinguish this
+pause from model readiness, and setup configuration writes preserve the existing
+admission policy. Optional screenshot-assisted setup is likewise unavailable in
+shared mode; manual setup remains available.
+
+Tool registries bind built-in model calls per Engine without modifying a registry
+used by another Engine. The API rebuilds its Wizard registry when its bound
+policy changes. If a turn's registry is unavailable, tool execution cannot
+silently rebuild it with disk policy. Revoked embedding batches do not replace
+existing source chunks or continue to subsequent files. Compatible chat APIs
+report resource pauses explicitly, including terminal streaming errors without
+success markers.
+
+This remains a disabled checkpoint, not complete shared-compute integration.
+Arbitrary direct adapters, third-party plugins and external tools are not made
+members of the compute pool by these changes. Paused council runs still need
+durable accounting of completed and partial usage reconciled with the native
+integration before shared workloads are enabled.
+
+Before activation, a reviewed broker must implement Atohi's actual workload/job
+contract and immutable workload, input and handler digests, authenticated node
+ownership, durable operation identity, cancellation reconciliation and verified
+physical GPU release. See Atohi's `schemas/` and node protocol documentation.
+nvHive does not equate a closed HTTP connection, cancelled asyncio task, empty
+client task list, or broker context exit with a released GPU. A provider that
+ignores cancellation can still require process-level containment. Task cleanup
+is cooperative and has no hard time bound; a qualified native worker still
+needs an independent node watchdog. These tests
+do not qualify multi-node inference, checkpoint recovery, model unloading,
+exactly-once remote execution, or the 120-second reclaim deadline. A new user
+request after a pause is a new operation, not permission to replay an ambiguous
+earlier inference.
+
+### Schema defaults
+
 Defaults shown are the schema defaults (`nvh/config/settings.py`); `nvh config
 init` writes a fuller template with every provider stanza disabled.
 

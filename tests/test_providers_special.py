@@ -10,7 +10,8 @@ test_providers_parametrized.py because:
 - **Triton** also uses httpx (``/v2/models``) for list_models and
   has a different default_model behavior.
 
-Both still wrap litellm for complete/stream, but with custom error
+Ollama tries direct HTTP before its LiteLLM fallback; Triton wraps LiteLLM.
+Both have custom error
 mapping for "connection refused" cases. This file mocks at both
 boundaries (litellm + httpx) and exercises the same contract plus
 the custom error paths.
@@ -36,6 +37,15 @@ from nvh.providers.base import (
 )
 from nvh.providers.ollama_provider import OllamaProvider
 from nvh.providers.triton_provider import TritonProvider
+
+
+@pytest.fixture(autouse=True)
+def _no_unmocked_http(monkeypatch):
+    """The running developer daemon must never affect these unit tests."""
+    monkeypatch.setattr(
+        "httpx.AsyncClient", MagicMock(side_effect=ConnectionError("HTTP transport is not mocked")),
+    )
+    monkeypatch.setattr("nvh.providers.ollama_provider._ollama_daemon_reachable", lambda *_: False)
 
 # ---------------------------------------------------------------------------
 # Shared mock builders
@@ -181,9 +191,11 @@ class TestOllamaProvider:
         ProviderUnavailableError with a helpful 'ollama serve' message."""
         provider = OllamaProvider()
 
-        with patch(
-            "nvh.providers.ollama_provider.litellm.acompletion",
-            new=AsyncMock(side_effect=Exception("connection refused: localhost:11434")),
+        with (
+            patch("nvh.providers.ollama_provider.OllamaProvider._direct_complete",
+                  new=AsyncMock(side_effect=ConnectionError("connection refused: localhost:11434"))),
+            patch("nvh.providers.ollama_provider.litellm.acompletion",
+                  new=AsyncMock(side_effect=ConnectionError("connection refused: localhost:11434"))),
         ):
             with pytest.raises(ProviderUnavailableError) as exc_info:
                 await provider.complete(
@@ -198,9 +210,11 @@ class TestOllamaProvider:
         """Non-connection errors still wrap in ProviderError."""
         provider = OllamaProvider()
 
-        with patch(
-            "nvh.providers.ollama_provider.litellm.acompletion",
-            new=AsyncMock(side_effect=Exception("model not found")),
+        with (
+            patch("nvh.providers.ollama_provider.OllamaProvider._direct_complete",
+                  new=AsyncMock(side_effect=Exception("model not found"))),
+            patch("nvh.providers.ollama_provider.litellm.acompletion",
+                  new=AsyncMock(side_effect=Exception("model not found"))),
         ):
             with pytest.raises(ProviderError):
                 await provider.complete(

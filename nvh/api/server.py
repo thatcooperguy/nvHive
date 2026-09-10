@@ -25,6 +25,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from functools import wraps
 from pathlib import Path as FilePath
 from typing import Any
 from urllib.parse import urlparse
@@ -50,6 +51,7 @@ from pydantic import BaseModel, Field, field_validator
 from nvh.api.services import QueryService
 from nvh.core import local_models
 from nvh.core.agents import generate_agents, get_preset_agents, list_presets
+from nvh.core.atohi import ResourcePaused
 from nvh.core.engine import BudgetExceededError, Engine
 from nvh.integrations.wizard.vision_bridge import MAX_IMAGE_BYTES as _VISION_MAX_IMAGE_BYTES
 from nvh.providers.base import (
@@ -73,6 +75,17 @@ from nvh.utils.gpu import (
 from nvh.utils.ollama import ollama_base_url
 
 logger = logging.getLogger(__name__)
+
+
+def _resource_pause_response(endpoint):
+    """Map terminal admission cancellation only at the outward HTTP boundary."""
+    @wraps(endpoint)
+    async def wrapped(*args, **kwargs):
+        try:
+            return await endpoint(*args, **kwargs)
+        except ResourcePaused as exc:
+            raise HTTPException(status_code=409, detail=exc.as_dict()) from None
+    return wrapped
 
 # ---------------------------------------------------------------------------
 # Optional API key authentication
@@ -708,6 +721,9 @@ async def _sse_query_stream(
     try:
         await engine.initialize()
         await engine._check_budget()
+    except ResourcePaused as exc:
+        yield f"event: error\ndata: {json.dumps(exc.as_dict())}\n\n".encode()
+        return
     except BudgetExceededError as exc:
         payload = json.dumps({"error": str(exc)})
         yield f"event: error\ndata: {payload}\n\n".encode()
@@ -808,6 +824,8 @@ async def _sse_query_stream(
 
         yield f"event: done\ndata: {json.dumps(done_payload)}\n\n".encode()
 
+    except ResourcePaused as exc:
+        yield f"event: error\ndata: {json.dumps(exc.as_dict())}\n\n".encode()
     except Exception as exc:
         payload = json.dumps({"error": str(exc)})
         yield f"event: error\ndata: {payload}\n\n".encode()
@@ -1641,7 +1659,7 @@ async def setup_helper(
     """Return offline setup recommendations for the student workstation wizard."""
     from nvh.integrations.wizard.setup_agent import setup_helper_report
 
-    return _response_envelope(setup_helper_report(home_dir=home_dir))
+    return _response_envelope(setup_helper_report(home_dir=home_dir, admission=get_engine().registry.admission))
 
 
 @app.get("/v1/setup/services", summary="Return rootless service registry status")
@@ -1995,6 +2013,7 @@ def _wizard_history(turns: list[WizardChatTurn]) -> list[dict[str, Any]]:
 
 
 @app.post("/v1/wizard/chat", summary="AI Wizard chat — live-state-grounded conversation")
+@_resource_pause_response
 async def wizard_chat_endpoint(
     request: WizardChatRequest,
     _auth: None = Depends(require_auth),
@@ -2058,6 +2077,8 @@ async def wizard_chat_stream_endpoint(
                     # the attached-images line in its history for follow-ups.
                     event = {**event, "attachment_paths": attachment_paths}
                 yield f"data: {json.dumps(event)}\n\n".encode()
+        except ResourcePaused as exc:
+            yield f"data: {json.dumps({'type': 'error', **exc.as_dict()})}\n\n".encode()
         except Exception as exc:
             # Streaming errors can't raise to FastAPI cleanly after headers
             # are flushed — emit them as a final event so the client sees
@@ -2378,15 +2399,18 @@ async def wizard_context_endpoint(
 
 # Singleton Wizard tool registry — built lazily on first request.
 _wizard_tool_registry = None
+_wizard_tool_admission = None
 
 
 def _get_wizard_tools():
     """Lazy-init the Wizard tool registry. Importable so tests can replace it."""
-    global _wizard_tool_registry
-    if _wizard_tool_registry is None:
+    global _wizard_tool_registry, _wizard_tool_admission
+    admission = get_engine().registry.admission
+    if _wizard_tool_registry is None or _wizard_tool_admission is not admission:
         from nvh.integrations.wizard.tools import default_registry
 
-        _wizard_tool_registry = default_registry()
+        _wizard_tool_registry = default_registry(admission=admission)
+        _wizard_tool_admission = admission
     return _wizard_tool_registry
 
 
@@ -2516,6 +2540,7 @@ async def _privileged_network_refusal(http_request: Request) -> dict[str, Any] |
 
 
 @app.post("/v1/wizard/tools/execute", summary="Execute an AI Wizard tool with safety enforcement")
+@_resource_pause_response
 async def wizard_tools_execute(
     request: WizardToolExecuteRequest,
     http_request: Request,
@@ -2560,6 +2585,7 @@ class RagIngestRequest(BaseModel):
 
 
 @app.post("/v1/rag/ingest", summary="Walk a folder and store embeddings for RAG")
+@_resource_pause_response
 async def rag_ingest_endpoint(
     request: RagIngestRequest,
     _auth: None = Depends(require_auth),
@@ -2576,6 +2602,7 @@ async def rag_ingest_endpoint(
         request.path,
         collection=request.collection,
         home_dir=request.home_dir,
+        admission=get_engine().registry.admission,
     )
     return _response_envelope(result)
 
@@ -2588,6 +2615,7 @@ class RagAskRequest(BaseModel):
 
 
 @app.post("/v1/rag/ask", summary="Retrieve top-k RAG chunks for a question")
+@_resource_pause_response
 async def rag_ask_endpoint(
     request: RagAskRequest,
     _auth: None = Depends(require_auth),
@@ -2605,11 +2633,13 @@ async def rag_ask_endpoint(
         collection=request.collection,
         top_k=request.top_k,
         home_dir=request.home_dir,
+        admission=get_engine().registry.admission,
     )
     return _response_envelope(result)
 
 
 @app.post("/v1/rag/upload-ingest", summary="Upload files and ingest them into a RAG collection")
+@_resource_pause_response
 async def rag_upload_ingest_endpoint(
     files: list[UploadFile] = File(...),
     collection: str | None = None,
@@ -2649,6 +2679,7 @@ async def rag_upload_ingest_endpoint(
         upload_dir,
         collection=collection,
         home_dir=home_dir,
+        admission=get_engine().registry.admission,
     )
     result.setdefault("uploaded_files", len(saved))
     result.setdefault("upload_dir", str(upload_dir))
@@ -2671,6 +2702,7 @@ class RagVaultIngestRequest(BaseModel):
 
 
 @app.post("/v1/rag/vault/ingest", summary="Index the nvHive Vault into the RAG store")
+@_resource_pause_response
 async def rag_vault_ingest_endpoint(
     request: RagVaultIngestRequest,
     _auth: None = Depends(require_auth),
@@ -2683,7 +2715,7 @@ async def rag_vault_ingest_endpoint(
     """
     from nvh.integrations.rag import ingest_vault
 
-    return _response_envelope(await ingest_vault(home_dir=request.home_dir))
+    return _response_envelope(await ingest_vault(home_dir=request.home_dir, admission=get_engine().registry.admission))
 
 
 class RagVaultAskRequest(BaseModel):
@@ -2693,6 +2725,7 @@ class RagVaultAskRequest(BaseModel):
 
 
 @app.post("/v1/rag/vault/ask", summary="Ask a question grounded in the nvHive Vault")
+@_resource_pause_response
 async def rag_vault_ask_endpoint(
     request: RagVaultAskRequest,
     _auth: None = Depends(require_auth),
@@ -2706,7 +2739,10 @@ async def rag_vault_ask_endpoint(
     from nvh.integrations.rag import ask_vault
 
     return _response_envelope(
-        await ask_vault(request.question, top_k=request.top_k, home_dir=request.home_dir),
+        await ask_vault(
+            request.question, top_k=request.top_k, home_dir=request.home_dir,
+            admission=get_engine().registry.admission,
+        ),
     )
 
 
@@ -2987,7 +3023,10 @@ async def setup_assistant(
     from nvh.integrations.wizard.setup_agent import setup_assistant_reply
 
     return _response_envelope(
-        setup_assistant_reply(request.question, home_dir=request.home_dir)
+        setup_assistant_reply(
+            request.question, home_dir=request.home_dir,
+            admission=get_engine().registry.admission,
+        )
     )
 
 
@@ -3185,6 +3224,7 @@ async def system_info(_auth: None = Depends(require_auth)) -> dict[str, Any]:
 # -- /v1/query ----------------------------------------------------------------
 
 @app.post("/v1/query", summary="Single provider query")
+@_resource_pause_response
 async def query(request: QueryRequest, _auth: None = Depends(require_auth)) -> Any:
     engine = get_engine()
 
@@ -3258,6 +3298,7 @@ async def query(request: QueryRequest, _auth: None = Depends(require_auth)) -> A
 # -- /v1/council --------------------------------------------------------------
 
 @app.post("/v1/council", summary="Council mode — multi-LLM orchestration")
+@_resource_pause_response
 async def council_query(request: CouncilRequest, _auth: None = Depends(require_auth)) -> dict[str, Any]:
     engine = get_engine()
 
@@ -3316,6 +3357,7 @@ async def council_query(request: CouncilRequest, _auth: None = Depends(require_a
 # -- /v1/compare --------------------------------------------------------------
 
 @app.post("/v1/compare", summary="Compare multiple providers on the same prompt")
+@_resource_pause_response
 async def compare(request: CompareRequest, _auth: None = Depends(require_auth)) -> dict[str, Any]:
     engine = get_engine()
 
@@ -3571,6 +3613,7 @@ async def analytics(_auth: None = Depends(require_auth)) -> dict[str, Any]:
 # -- /v1/smart — auto-detect intent and route appropriately -------------------
 
 @app.post("/v1/smart", summary="Smart query — auto-detects actions, tasks, and questions")
+@_resource_pause_response
 async def smart_query(request: QueryRequest, _auth: None = Depends(require_auth)) -> Any:
     """Smart endpoint: detects if the prompt is an action, a multi-step task,
     or a question, and routes accordingly.
@@ -3588,7 +3631,7 @@ async def smart_query(request: QueryRequest, _auth: None = Depends(require_auth)
     if action:
         try:
             from nvh.core.tools import ToolRegistry
-            tools = ToolRegistry()
+            tools = ToolRegistry(admission=engine.registry.admission)
             result = await tools.execute(action.tool_name, action.arguments)
             return _response_envelope({
                 "type": "action",
@@ -3733,6 +3776,10 @@ async def ws_query(websocket: WebSocket) -> None:
         await websocket.send_json({"type": "error", "error": str(exc)})
         await websocket.close()
         return
+    except ResourcePaused as exc:
+        await websocket.send_json({"type": "error", **exc.as_dict()})
+        await websocket.close()
+        return
     except Exception as exc:
         logger.exception("WebSocket query preflight failed")
         await websocket.send_json({
@@ -3849,6 +3896,8 @@ async def ws_query(websocket: WebSocket) -> None:
         except Exception as exc:
             logger.debug("rate_manager.record_failure failed: %s", exc)
         return
+    except ResourcePaused as exc:
+        await websocket.send_json({"type": "error", **exc.as_dict()})
     except Exception as exc:
         logger.exception("Unexpected error in /v1/ws/query")
         try:
@@ -3993,6 +4042,8 @@ async def ws_council(websocket: WebSocket) -> None:
         await _send({"type": "error", "error": str(exc)})
     except WebSocketDisconnect:
         return
+    except ResourcePaused as exc:
+        await _send({"type": "error", **exc.as_dict()})
     except Exception:
         logger.exception("Unexpected error in /v1/ws/council")
         await _send({"type": "error", "error": "Internal server error"})
@@ -5286,6 +5337,7 @@ async def delete_conversation(
     "/v1/conversations/{conversation_id}/query",
     summary="Continue a conversation — send a message and receive a reply",
 )
+@_resource_pause_response
 async def conversation_query(
     request: ConversationQueryRequest,
     conversation_id: str = Path(..., description="Conversation UUID"),
@@ -6073,6 +6125,7 @@ class _ProxyCompletionsRequest(BaseModel):
     summary="OpenAI-compatible chat completions",
     tags=["proxy"],
 )
+@_resource_pause_response
 async def proxy_chat_completions(
     request: _ProxyChatRequest,
     raw_request: Request,
@@ -6306,6 +6359,7 @@ async def proxy_chat_completions(
     summary="OpenAI-compatible legacy text completions",
     tags=["proxy"],
 )
+@_resource_pause_response
 async def proxy_completions(
     request: _ProxyCompletionsRequest,
     _auth: Any = Depends(require_auth),
@@ -6457,6 +6511,7 @@ class AnthropicMessageRequest(BaseModel):
     summary="Anthropic Messages API proxy",
     tags=["anthropic-proxy"],
 )
+@_resource_pause_response
 async def anthropic_messages(
     request: AnthropicMessageRequest,
     raw_request: Request,

@@ -123,6 +123,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from nvh.core.atohi import AtohiAdmission
+
 logger = logging.getLogger(__name__)
 
 # Cap the read→think→act→react cycle. Real ceiling on how chatty a single
@@ -192,6 +194,7 @@ async def _auto_fold_vault_chunk(
     *,
     home_dir: str | Path | None,
     min_score: float = VAULT_AUTOFOLD_MIN_SCORE,
+    admission: AtohiAdmission | None = None,
 ) -> str | None:
     """Return a formatted "Relevant note" block if the vault has a strong hit.
 
@@ -204,7 +207,7 @@ async def _auto_fold_vault_chunk(
     try:
         from nvh.integrations.rag import ask_vault
 
-        result = await ask_vault(question, top_k=1, home_dir=home_dir)
+        result = await ask_vault(question, top_k=1, home_dir=home_dir, admission=admission)
     except Exception as exc:
         logger.debug("autofold: ask_vault raised (%s)", exc)
         return None
@@ -554,13 +557,16 @@ def _tool_result_event(entry: dict[str, Any]) -> dict[str, Any]:
     return {"type": "tool_result", "name": entry["name"], "result": entry["result"]}
 
 
+_REGISTRY_OMITTED = object()
+
+
 async def _run_auto_tool(
     name: str,
     arguments: dict[str, Any],
     *,
     tools_allowed: Collection[str] | None = None,
     profile_name: str | None = None,
-    registry: Any | None = None,
+    registry: Any = _REGISTRY_OMITTED,
 ) -> dict[str, Any]:
     """Execute a single auto-class tool.
 
@@ -572,7 +578,7 @@ async def _run_auto_tool(
     the UI as a confirm card either. ``registry`` is the turn's already-built
     ``WizardToolRegistry``; it is built on demand only when omitted.
     """
-    if registry is None:
+    if registry is _REGISTRY_OMITTED:
         try:
             from nvh.integrations.wizard.tools import default_registry
 
@@ -580,6 +586,11 @@ async def _run_auto_tool(
         except Exception as exc:
             logger.debug("auto-tool: registry not available (%s)", exc)
             return {"ok": False, "error": "tool registry unavailable"}
+
+    # A turn that failed to bind its trusted policy passes None explicitly.
+    # Rebuilding from disk here could silently disable its shared policy.
+    if registry is None:
+        return {"ok": False, "error": "tool registry unavailable"}
 
     tool = registry.get(name)
     if tool is None:
@@ -1251,12 +1262,13 @@ async def _prepare_turn(
     # against it and classifies deferred calls with it. Best-effort — if it
     # isn't available (e.g. import order during tests) the tools block is
     # omitted and nothing can run.
+    admission = engine.registry.admission if engine is not None else None
     registry: Any | None = None
     tool_schemas: list[dict[str, Any]] = []
     try:
         from nvh.integrations.wizard.tools import default_registry
 
-        registry = default_registry()
+        registry = default_registry(admission=admission)
         tool_schemas = [t.as_public_dict() for t in registry.list_tools()]
     except Exception as exc:
         logger.debug("%s: tool registry not available (%s)", label, exc)
@@ -1321,7 +1333,7 @@ async def _prepare_turn(
     # they've already written down. Free recall — saves a tool round-trip.
     vault_recall: str | None = None
     if enable_followup and _autofold_enabled():
-        vault_recall = await _auto_fold_vault_chunk(question, home_dir=home_dir)
+        vault_recall = await _auto_fold_vault_chunk(question, home_dir=home_dir, admission=admission)
 
     system_prompt = prof.apply_to_prompt(build_system_prompt(
         snapshot, tools=tool_schemas, vault_recall=vault_recall, findings=findings,

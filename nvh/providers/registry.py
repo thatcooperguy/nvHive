@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from nvh.config.settings import CouncilConfig
+from nvh.core.atohi import AdmissionBroker, AdmittedProvider, AtohiAdmission
 from nvh.providers.base import ModelInfo, Provider
 from nvh.providers.lazy_provider import LazyProvider
 from nvh.providers.specs import PROVIDER_SPECS
@@ -100,17 +101,80 @@ def lazy_adapter(name: str, ptype: str = "", **kwargs: Any) -> LazyProvider:
 class ProviderRegistry:
     """Central registry for all LLM provider adapters."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, atohi_broker: AdmissionBroker | None = None) -> None:
         self._providers: dict[str, Provider] = {}
         self._model_catalog: dict[str, ModelInfo] = {}
+        self._atohi_broker = atohi_broker
+        self._admission: AtohiAdmission | None = None
+        self._provider_types: dict[str, str] = {}
+        self._bound_admission = False
+        self._admitted: dict[str, AdmittedProvider] = {}
+
+    def _matches_admission(self, config: CouncilConfig) -> bool:
+        return self._admission is not None and (
+            self._admission.enabled == config.atohi.enabled
+            and self._admission.managed_providers == frozenset(config.atohi.managed_providers)
+            and self._provider_types == {
+                name: value.type or name for name, value in config.providers.items()
+            }
+        )
+
+    def scoped(self, config: CouncilConfig) -> ProviderRegistry:
+        """Bind one caller's policy while preserving shared adapter registration.
+
+        Engine and its Council reuse a matching bound view. Other callers share
+        raw adapters/catalog, never policy or wrappers; later registrations from
+        either the original registry or the engine remain immediately visible.
+        """
+        if self._bound_admission and self._matches_admission(config):
+            return self
+        view = ProviderRegistry(atohi_broker=self._atohi_broker)
+        view._providers = self._providers
+        view._model_catalog = self._model_catalog
+        view.configure_admission(config)
+        view._bound_admission = True
+        return view
+
+    def configure_admission(self, config: CouncilConfig) -> None:
+        if self._bound_admission:
+            if not self._matches_admission(config):
+                raise ValueError("Bound admission policy cannot change; create a new scoped registry")
+            return
+        self._admission = AtohiAdmission(config.atohi, broker=self._atohi_broker)
+        self._provider_types = {name: value.type or name for name, value in config.providers.items()}
+        self._admitted.clear()
+
+    def check_admission_available(self) -> None:
+        """Fail before fan-out or initialization can contact any provider."""
+        if self._admission is not None:
+            self._admission.require_broker()
+
+    @property
+    def admission(self) -> AtohiAdmission:
+        """The configured policy for trusted auxiliary calls owned by this view."""
+        if self._admission is None:
+            raise ValueError("Registry admission policy is not configured")
+        return self._admission
 
     def register(self, name: str, provider: Provider) -> None:
+        if isinstance(provider, AdmittedProvider):
+            provider = provider.provider
         self._providers[name] = provider
+        self._admitted.pop(name, None)
 
     def get(self, name: str) -> Provider:
         if name not in self._providers:
             raise KeyError(f"Provider '{name}' is not registered. Available: {list(self._providers.keys())}")
-        return self._providers[name]
+        provider = self._providers[name]
+        if self._admission is not None and self._admission.manages(
+            name, self._provider_types.get(name, name),
+        ):
+            wrapped = self._admitted.get(name)
+            if wrapped is None or wrapped.provider is not provider:
+                wrapped = AdmittedProvider(provider, self._admission, name)
+                self._admitted[name] = wrapped
+            return wrapped
+        return provider
 
     def list_providers(self) -> list[str]:
         return list(self._providers.keys())
@@ -158,6 +222,8 @@ class ProviderRegistry:
 
     def setup_from_config(self, config: CouncilConfig) -> list[str]:
         """Initialize provider adapters from config. Returns list of enabled provider names."""
+        self.configure_admission(config)
+        self.check_admission_available()
         enabled = []
 
         for name, pconfig in config.providers.items():

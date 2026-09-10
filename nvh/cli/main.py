@@ -864,7 +864,13 @@ for _adv_name in KNOWN_ADVISORS:
 
 def _run(coro):
     """Run an async function from sync CLI context."""
-    return asyncio.run(coro)
+    from nvh.core.atohi import ResourcePaused
+
+    try:
+        return asyncio.run(coro)
+    except ResourcePaused as exc:
+        console.print(f"[yellow]Work paused by resource admission ({exc.reason}). No automatic retry was started.[/yellow]")
+        raise typer.Exit(code=1) from None
 
 
 def _get_engine():
@@ -4994,12 +5000,17 @@ def bench(
     async def _run_bench():
         import httpx
 
+        from nvh.config.settings import load_config
+        from nvh.core.atohi import AtohiAdmission
         from nvh.core.benchmark import (
             BENCHMARK_PROMPTS,
             COMMUNITY_BASELINES,
         )
         from nvh.providers.ollama_provider import OllamaProvider
         from nvh.utils.gpu import detect_gpus, format_gpu_memory
+
+        admission = AtohiAdmission(load_config().atohi)
+        admission.require_broker()
 
         # Detect GPU
         gpus = detect_gpus()
@@ -5060,6 +5071,7 @@ def bench(
                     model=f"ollama/{bench_model}",
                     prompt=bp["prompt"],
                     max_tokens=bp["max_tokens"],
+                    admission=admission,
                 )
                 results_data.append((bp["name"], result))
 

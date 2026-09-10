@@ -422,7 +422,7 @@ class TestEngineQueryAndCompare:
         engine = Engine(config=config, registry=reg)
         engine._initialized = True
 
-        resp = await engine.query(prompt="hello", system_prompt="You are helpful")
+        resp = await engine.query(prompt="hello", provider="alpha", system_prompt="You are helpful")
         assert "got system" in resp.content
 
     @pytest.mark.asyncio

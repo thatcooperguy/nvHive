@@ -722,8 +722,8 @@ def start_ollama(log_dir: str | None = None) -> tuple[bool, str]:
         # install.sh had already booted Ollama still hit the slow cold
         # first turn the preload exists to remove. Fire-and-forget +
         # NVH_OLLAMA_PRELOAD=0 opt-out, same as the spawn path below.
-        _preload_default_model()
-        return True, f"already running ({reason})"
+        preload_note = _preload_default_model()
+        return True, f"already running ({reason})" + (f"; {preload_note}" if preload_note else "")
     # Port is held but unhealthy → kill the stale process so the new
     # spawn can bind. Same pattern as start_api below.
     if port_listening(OLLAMA_PORT):
@@ -803,12 +803,12 @@ def start_ollama(log_dir: str | None = None) -> tuple[bool, str]:
     timeout = ollama_boot_timeout()
     ok, reason = _wait_for(lambda: ollama_healthy(OLLAMA_PORT), timeout)
     if ok:
-        _preload_default_model()
-        return True, f"healthy after wait ({reason})"
+        preload_note = _preload_default_model()
+        return True, f"healthy after wait ({reason})" + (f"; {preload_note}" if preload_note else "")
     return False, f"did not bind 11434 in {timeout}s ({reason})"
 
 
-def _preload_default_model() -> None:
+def _preload_default_model() -> str | None:
     """Fire-and-forget Ollama keep-alive preload of the default model.
 
     Closes the gap from the 2026-05-22 audit (B2): `ollama_healthy`
@@ -824,7 +824,16 @@ def _preload_default_model() -> None:
     (e.g. unit tests, scripted use).
     """
     if os.environ.get("NVH_OLLAMA_PRELOAD", "1").lower() in {"0", "false", "no", "off"}:
-        return
+        return None
+    # This detached, synchronous convenience path cannot hold/cancel a native
+    # lease. Resolve policy before a model override can bypass configuration.
+    try:
+        from nvh.config.settings import load_config
+
+        if load_config().atohi.enabled:
+            return "model preload not attempted: shared resource admission is enabled"
+    except Exception:
+        return "model preload not attempted: resource admission settings could not be read"
     model = os.environ.get("NVH_DEFAULT_OLLAMA_MODEL", "").strip()
     if not model:
         # Best-effort lookup of the configured default model. Skip if
@@ -855,9 +864,9 @@ def _preload_default_model() -> None:
                         break
                     # Non-Ollama advisor default — keep scanning.
         except Exception:
-            return
+            return None
     if not model:
-        return
+        return None
 
     def _kick() -> None:
         # Empty prompt + keep_alive is Ollama's documented warmup pattern.
@@ -884,6 +893,7 @@ def _preload_default_model() -> None:
 
     import threading
     threading.Thread(target=_kick, name="ollama-preload", daemon=True).start()
+    return None
 
 
 def start_api(

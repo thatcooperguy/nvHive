@@ -259,7 +259,7 @@ class TestConversationEndpoints:
 
     def test_query_missing_conv(self, client):
         # Unknown conversation id is a client error (404), not a 500.
-        r = client.post("/v1/conversations/no-conv/query", json={"prompt": "Hi"})
+        r = client.post("/v1/conversations/no-conv/query", json={"prompt": "Hi", "provider": "alpha"})
         assert r.status_code == 404
 
     def test_conversations_create_and_list(self, client):

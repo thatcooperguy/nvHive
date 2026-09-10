@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -483,7 +484,8 @@ class TestAPIEndpointCoverage:
 
     def test_sandbox_status(self, test_client: TestClient) -> None:
         """GET /v1/sandbox/status reports sandbox availability."""
-        resp = test_client.get("/v1/sandbox/status")
+        with patch("nvh.sandbox.executor.SandboxExecutor._check_docker", new=AsyncMock(return_value=False)):
+            resp = test_client.get("/v1/sandbox/status")
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "success"
