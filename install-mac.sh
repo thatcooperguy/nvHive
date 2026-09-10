@@ -33,17 +33,30 @@ HIVE_CONFIG_HOME="$NVH_CONFIG"
 export NVH_HOME NVH_BIN NVH_MODELS OLLAMA_MODELS NVH_CONFIG HIVE_CONFIG_HOME
 
 write_nvh_env() {
-cat > "$NVH_HOME/nvh-env.sh" << ENVEOF
-export NVH_HOME="$NVH_HOME"
-export NVH_VENV="$NVH_VENV"
-export NVH_BIN="$NVH_BIN"
-export NVH_MODELS="$NVH_MODELS"
-export OLLAMA_MODELS="$OLLAMA_MODELS"
-export NVH_CONFIG="$NVH_CONFIG"
-export HIVE_CONFIG_HOME="$HIVE_CONFIG_HOME"
-export PATH="$NVH_VENV/bin:$NVH_BIN:\$PATH"
-ENVEOF
-chmod 600 "$NVH_HOME/nvh-env.sh" 2>/dev/null || true
+    # Persist literal paths safely for both Bash and the macOS default Zsh.
+    # Values containing spaces, dollar signs or backticks must not become code.
+    {
+        printf 'export NVH_HOME=%q\n' "$NVH_HOME"
+        printf 'export NVH_VENV=%q\n' "$NVH_VENV"
+        printf 'export NVH_BIN=%q\n' "$NVH_BIN"
+        printf 'export NVH_MODELS=%q\n' "$NVH_MODELS"
+        printf 'export OLLAMA_MODELS=%q\n' "$OLLAMA_MODELS"
+        printf 'export NVH_CONFIG=%q\n' "$NVH_CONFIG"
+        printf 'export HIVE_CONFIG_HOME=%q\n' "$HIVE_CONFIG_HOME"
+        printf 'export PATH="$NVH_VENV/bin:$NVH_BIN:$PATH"\n'
+    } > "$NVH_HOME/nvh-env.sh"
+    chmod 600 "$NVH_HOME/nvh-env.sh"
+}
+
+persist_nvh_environment() {
+    mkdir -p "$NVH_HOME" "$NVH_BIN" "$NVH_MODELS" "$OLLAMA_MODELS" "$NVH_CONFIG"
+    write_nvh_env
+    local rc="$HOME/.zshrc" env_path hook
+    printf -v env_path '%q' "$NVH_HOME/nvh-env.sh"
+    hook="[ -f $env_path ] && source $env_path"
+    if ! grep -qxF -- "$hook" "$rc" 2>/dev/null; then
+        printf '\n# NVHive — Multi-LLM Orchestration (NVH_HOME, config dir, PATH)\n%s\n' "$hook" >> "$rc"
+    fi
 }
 
 echo ""
@@ -122,9 +135,22 @@ if [ -d "$NVH_REPO" ] && [ -d "$NVH_VENV" ]; then
         pip install -q -e "$NVH_REPO" 2>/dev/null
     else
         source "$NVH_VENV/bin/activate"
-        (cd "$NVH_REPO" && git pull --quiet 2>/dev/null && pip install -q -e . 2>/dev/null) || true
+        # A fallback tarball install has no Git metadata; reinstall its local
+        # package without pretending that an upstream update was performed.
+        if [ -d "$NVH_REPO/.git" ] || [ -f "$NVH_REPO/.git" ]; then
+            if ! (cd "$NVH_REPO" && git pull --quiet); then
+                echo -e "${R}NVHive update did not complete. Resolve the Git error and retry.${N}"
+                exit 1
+            fi
+        fi
+        if ! pip install -q -e "$NVH_REPO"; then
+            echo -e "${R}NVHive package update failed. Repair the Python environment and retry.${N}"
+            exit 1
+        fi
     fi
     export PATH="$NVH_VENV/bin:$PATH"
+    [ -x "$NVH_VENV/bin/nvh" ] || { echo -e "${R}nvh command not found in the updated environment.${N}"; exit 1; }
+    persist_nvh_environment
     echo -e "${G}NVHive ready.${N}"
     echo -e "  Type ${G}nvh${N} to start chatting"
     echo ""
@@ -261,12 +287,7 @@ fi
 # ---------------------------------------------------------------------------
 # Add to ~/.zshrc (macOS default shell)
 # ---------------------------------------------------------------------------
-RC="$HOME/.zshrc"
-grep -qF "$NVH_HOME/nvh-env.sh" "$RC" 2>/dev/null || {
-    echo "" >> "$RC"
-    echo "# NVHive — Multi-LLM Orchestration (NVH_HOME, config dir, PATH)" >> "$RC"
-    echo "[ -f \"$NVH_HOME/nvh-env.sh\" ] && source \"$NVH_HOME/nvh-env.sh\"" >> "$RC"
-}
+persist_nvh_environment
 
 # ---------------------------------------------------------------------------
 # Install Ollama (Apple Silicon = Metal acceleration; Intel = CPU)

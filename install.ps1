@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # NVHive — Windows PowerShell Installer
 #
 # Install (run as regular user — no admin needed):
@@ -16,7 +16,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$NVH_HOME_CONFIGURED = [bool]$env:NVH_HOME
+$NVH_HOME_CONFIGURED = [bool]($env:NVH_HOME -or $env:NVHIVE_HOME)
 $NVH_HOME   = if ($env:NVH_HOME) { $env:NVH_HOME } elseif ($env:NVHIVE_HOME) { $env:NVHIVE_HOME } else { "$HOME\.nvh" }
 $NVH_VENV   = "$NVH_HOME\venv"
 $NVH_REPO   = "$NVH_HOME\repo"
@@ -34,6 +34,28 @@ function Write-Yellow { param($msg) Write-Host $msg -ForegroundColor Yellow }
 function Write-Blue   { param($msg) Write-Host $msg -ForegroundColor Cyan   }
 function Write-Red    { param($msg) Write-Host $msg -ForegroundColor Red    }
 function Write-Gray   { param($msg) Write-Host $msg -ForegroundColor DarkGray }
+
+# Save explicit overrides only after a successful package installation. The
+# legacy home alias is normalized to NVH_HOME for later shells. An explicitly
+# chosen default config path must also replace a stale saved custom path.
+function Save-WorkspaceEnvironment {
+    if ($NVH_HOME_CONFIGURED) {
+        $savedHome = [System.Environment]::GetEnvironmentVariable("NVH_HOME", "User")
+        if ($savedHome -ne $NVH_HOME) {
+            [System.Environment]::SetEnvironmentVariable("NVH_HOME", $NVH_HOME, "User")
+            Write-Green "Saved NVH_HOME=$NVH_HOME to your user environment"
+        }
+    }
+    if ($NVH_CONFIG_CONFIGURED) {
+        foreach ($configVar in @("NVH_CONFIG", "HIVE_CONFIG_HOME")) {
+            $savedConfig = [System.Environment]::GetEnvironmentVariable($configVar, "User")
+            if ($savedConfig -ne $NVH_CONFIG) {
+                [System.Environment]::SetEnvironmentVariable($configVar, $NVH_CONFIG, "User")
+            }
+        }
+        Write-Green "Saved NVH_CONFIG=$NVH_CONFIG (and the HIVE_CONFIG_HOME alias) to your user environment"
+    }
+}
 
 Write-Host ""
 Write-Green "╔══════════════════════════════════════╗"
@@ -115,6 +137,11 @@ if ((Test-Path $NVH_REPO) -and (Test-Path $NVH_VENV)) {
         & "$NVH_VENV\Scripts\pip" install -q --upgrade pip 2>$null
         & "$NVH_VENV\Scripts\pip" install -q -e "$NVH_REPO[serve,nvidia]" 2>$null
     }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Red "Install failed. Your saved workspace settings were not changed."
+        exit 1
+    }
+    Save-WorkspaceEnvironment
     Write-Green "NVHive ready."
     Write-Host ""
     Write-Host "  Type " -NoNewline; Write-Green "nvh" -NoNewline; Write-Host " to start chatting"
@@ -268,28 +295,6 @@ if ($userPath -notlike "*$scriptsDir*") {
 }
 
 # ---------------------------------------------------------------------------
-# Remember a non-default NVH_HOME — and a non-default config dir — so every
-# later shell finds the same home and the same config.yaml / .env
-# (install.sh does this through nvh-env.sh + a shell-profile hook)
-# ---------------------------------------------------------------------------
-if ($NVH_HOME_CONFIGURED) {
-    $savedHome = [System.Environment]::GetEnvironmentVariable("NVH_HOME", "User")
-    if ($savedHome -ne $NVH_HOME) {
-        [System.Environment]::SetEnvironmentVariable("NVH_HOME", $NVH_HOME, "User")
-        Write-Green "Saved NVH_HOME=$NVH_HOME to your user environment"
-    }
-}
-if ($NVH_CONFIG_CONFIGURED -and ($NVH_CONFIG -ne "$NVH_HOME\config")) {
-    foreach ($configVar in @("NVH_CONFIG", "HIVE_CONFIG_HOME")) {
-        $savedConfig = [System.Environment]::GetEnvironmentVariable($configVar, "User")
-        if ($savedConfig -ne $NVH_CONFIG) {
-            [System.Environment]::SetEnvironmentVariable($configVar, $NVH_CONFIG, "User")
-        }
-    }
-    Write-Green "Saved NVH_CONFIG=$NVH_CONFIG (and the HIVE_CONFIG_HOME alias) to your user environment"
-}
-
-# ---------------------------------------------------------------------------
 # Install Ollama for Windows (only if NVIDIA GPU present)
 # ---------------------------------------------------------------------------
 if ($GPU_NAME) {
@@ -359,6 +364,8 @@ try {
 } catch {
     # Non-fatal — shortcut creation can fail in some environments
 }
+
+Save-WorkspaceEnvironment
 
 Write-Host ""
 Write-Green "╔══════════════════════════════════════╗"
