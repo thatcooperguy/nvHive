@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from pydantic import ValidationError
@@ -19,7 +21,9 @@ from nvh.config.settings import (
 from nvh.core.atohi import (
     AdmissionRequest,
     AdmittedProvider,
+    AllocationIdentity,
     AtohiAdmission,
+    ModelSession,
     ResourcePaused,
     wait_resource_tasks,
 )
@@ -47,6 +51,8 @@ class BrokerDouble:
         self.exits = 0
         self.watch_error = False
         self.exit_error = False
+        self.transports = {}
+        self.transport_for = None
 
     async def wait_revoked(self):
         await self.revoked.wait()
@@ -57,11 +63,37 @@ class BrokerDouble:
     async def admit(self, request):
         self.requests.append(request)
         try:
-            yield self
+            yield fixture_model_lease(self, request)
         finally:
             self.exits += 1
             if self.exit_error:
                 raise ConnectionError("untrusted release detail")
+
+
+def fixture_model_lease(broker, request):
+    """Explicitly issue an inert model handle for existing lifecycle fixtures."""
+    if request.model is None:
+        return broker
+    transports = getattr(broker, "transports", {})
+    transport = transports.get(request.provider)
+    if transport is None and getattr(broker, "transport_for", None) is not None:
+        transport = broker.transport_for(request.provider)
+    if transport is None:
+        raise AssertionError("fixture must explicitly bind an owned transport")
+    allocation = AllocationIdentity("fixture-job", "fixture-allocation", 1)
+    deadline = time.monotonic() + 30
+    return SimpleNamespace(allocation=allocation, expires_at_monotonic=deadline,
+        model_session=ModelSession(allocation, request.provider, request.model,
+                                   request.operation, deadline, transport),
+        wait_revoked=broker.wait_revoked)
+
+
+def model_wrapper(provider, admission, name):
+    broker = admission._broker
+    if not hasattr(broker, "transports"):
+        broker.transports = {}
+    broker.transports[name] = provider
+    return AdmittedProvider(provider, admission, name, default_model="test")
 
 
 class ProviderDouble:
@@ -93,7 +125,7 @@ class ProviderDouble:
         finally:
             self.closed.set()
 
-    async def health_check(self):
+    async def health_check(self, **kwargs):
         return await self.complete()
 
     async def list_models(self):
@@ -121,6 +153,8 @@ def registry(cfg, broker=None, *, hang=True):
     for name, provider in providers.items():
         reg.register(name, provider)
     reg.configure_admission(cfg)
+    if broker is not None:
+        broker.transport_for = lambda name: reg._providers[name]
     return reg, providers
 
 
@@ -212,11 +246,10 @@ async def test_embedding_revocation_cancels_batch_once_without_auto_pull(monkeyp
         finally:
             closed.set()
 
-    client = AsyncMock()
-    client.post.side_effect = post
-    context = AsyncMock()
-    context.__aenter__.return_value = client
-    monkeypatch.setattr(embedder.httpx, "AsyncClient", lambda **kwargs: context)
+    owned_batch = AsyncMock(side_effect=post)
+    broker.transports["ollama"] = SimpleNamespace(embeddings=owned_batch)
+    client = Mock(side_effect=AssertionError("shared HTTP transport touched"))
+    monkeypatch.setattr(embedder.httpx, "AsyncClient", client)
     pull = AsyncMock()
     monkeypatch.setattr(embedder, "_pull_ollama_model", pull)
     task = asyncio.create_task(embedder.embed_texts(["one", "two"], admission=admission))
@@ -225,9 +258,10 @@ async def test_embedding_revocation_cancels_batch_once_without_auto_pull(monkeyp
     with pytest.raises(ResourcePaused):
         await asyncio.wait_for(task, 1)
     assert closed.is_set()
-    assert client.post.await_count == 1
+    assert owned_batch.await_count == 1
+    client.assert_not_called()
     pull.assert_not_awaited()
-    assert broker.requests == [AdmissionRequest("ollama", "embeddings")]
+    assert broker.requests == [AdmissionRequest("ollama", "embeddings", embedder.embed_model_name())]
 
 
 @pytest.mark.asyncio
@@ -511,7 +545,7 @@ async def test_final_chunk_waits_for_broker_scope_and_cannot_hide_exit_failure()
         broker = BrokerDouble()
         broker.exit_error = exit_error
         admission = AtohiAdmission(AtohiConfig(enabled=True), broker=broker)
-        provider = AdmittedProvider(ProviderDouble(), admission, "ollama")
+        provider = model_wrapper(ProviderDouble(), admission, "ollama")
         stream = provider.stream([])
         assert (await anext(stream)).is_final is False
         if exit_error:
@@ -527,7 +561,7 @@ async def test_final_chunk_waits_for_broker_scope_and_cannot_hide_exit_failure()
 async def test_wrapped_stream_early_close_drains_provider_and_scope():
     broker = BrokerDouble()
     original = ProviderDouble(hang=True)
-    provider = AdmittedProvider(original, AtohiAdmission(AtohiConfig(enabled=True), broker=broker), "ollama")
+    provider = model_wrapper(original, AtohiAdmission(AtohiConfig(enabled=True), broker=broker), "ollama")
     stream = provider.stream([])
     await anext(stream)
     await stream.aclose()
@@ -590,7 +624,7 @@ async def test_final_chunk_cannot_hide_pause_or_unknown_cleanup(failure):
 
     broker = BrokerDouble()
     admission = AtohiAdmission(AtohiConfig(enabled=True), broker=broker)
-    provider = AdmittedProvider(CleanupFailure(), admission, "ollama")
+    provider = model_wrapper(CleanupFailure(), admission, "ollama")
     with pytest.raises(ResourcePaused):
         await anext(provider.stream([]))
     assert broker.exits == 1

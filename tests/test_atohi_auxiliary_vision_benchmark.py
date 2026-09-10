@@ -10,10 +10,11 @@ import pytest
 
 from nvh.config.settings import AtohiConfig, CouncilConfig
 from nvh.core import benchmark, vision_tools
-from nvh.core.atohi import AdmittedProvider, AtohiAdmission, ResourcePaused
+from nvh.core.atohi import AtohiAdmission, ResourcePaused
 from nvh.core.tools import Tool, ToolRegistry
 from nvh.integrations.wizard import vision_bridge
-from nvh.providers.base import StreamChunk
+from nvh.providers.base import CompletionResponse, StreamChunk, Usage
+from tests.test_atohi_admission import fixture_model_lease, model_wrapper
 
 
 class RawProvider:
@@ -94,6 +95,7 @@ class Broker:
         self.requests = []
         self.exits = 0
         self.revoke_at_exit = revoke_at_exit
+        self.transports = {}
 
     async def wait_revoked(self):
         await self.revoked.wait()
@@ -102,7 +104,7 @@ class Broker:
     async def admit(self, request):
         self.requests.append(request)
         try:
-            yield self
+            yield fixture_model_lease(self, request)
         finally:
             self.exits += 1
             if self.revoke_at_exit:
@@ -131,21 +133,20 @@ async def test_explicit_vision_policy_cannot_be_downgraded_by_disk(monkeypatch, 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_vision_request_drains_http_cleanup_on_revocation_or_cancel(fake_http, cancel):
+async def test_vision_request_drains_owned_cleanup_on_revocation_or_cancel(fake_http, cancel):
     broker = Broker()
     policy = AtohiAdmission(AtohiConfig(enabled=True), broker=broker)
     started, cleaned = asyncio.Event(), asyncio.Event()
 
     async def request(*args, **kwargs):
         started.set()
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await asyncio.sleep(0)
+            cleaned.set()
 
-    async def close(*args):
-        await asyncio.sleep(0)
-        cleaned.set()
-
-    fake_http.post.side_effect = request
-    fake_http.__aexit__.side_effect = close
+    broker.transports["ollama"] = SimpleNamespace(complete=request)
     task = asyncio.create_task(vision_tools._analyze_with_ollama("data", "question", "test", admission=policy))
     await asyncio.wait_for(started.wait(), 2)
     if cancel:
@@ -156,22 +157,27 @@ async def test_vision_request_drains_http_cleanup_on_revocation_or_cancel(fake_h
         await asyncio.wait_for(task, 2)
     assert cleaned.is_set()
     assert broker.exits == 1
+    fake_http.post.assert_not_awaited()
     assert [request.operation for request in broker.requests] == ["complete"]
 
 
 @pytest.mark.asyncio
-async def test_http_cleanup_revocation_prevents_vision_success(fake_http):
+async def test_owned_cleanup_revocation_prevents_vision_success(fake_http):
     broker = Broker()
     policy = AtohiAdmission(AtohiConfig(enabled=True), broker=broker)
 
-    async def close(*args):
-        broker.revoked.set()
-        await asyncio.sleep(0)
+    async def request(*args, **kwargs):
+        try:
+            return CompletionResponse(content="test", model="test", provider="ollama", usage=Usage())
+        finally:
+            broker.revoked.set()
+            await asyncio.sleep(0)
 
-    fake_http.__aexit__.side_effect = close
+    broker.transports["ollama"] = SimpleNamespace(complete=request)
     with pytest.raises(ResourcePaused):
         await vision_tools._analyze_with_ollama("data", "question", "test", admission=policy)
     assert broker.exits == 1
+    fake_http.post.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -234,7 +240,7 @@ async def test_benchmark_preserves_wrapped_authority_and_counts_one_lease(monkey
     broker = Broker()
     policy = AtohiAdmission(AtohiConfig(enabled=True), broker=broker)
     raw = RawProvider()
-    wrapped = AdmittedProvider(raw, policy, "ollama")
+    wrapped = model_wrapper(raw, policy, "ollama")
     result = await benchmark.run_single_benchmark(wrapped, "test", "question")
     assert result.output_tokens == 1 and raw.calls == 1
     assert len(broker.requests) == broker.exits == 1
@@ -255,6 +261,8 @@ async def test_benchmark_retains_managed_alias_lease(monkeypatch, replace_policy
     scoped = registry.scoped(cfg)
     wrapped = scoped.get("spark")
     other = Broker()
+    broker.transports["spark"] = raw
+    other.transports["spark"] = raw
     policy = AtohiAdmission(AtohiConfig(enabled=True), broker=other) if replace_policy else scoped.admission
     result = await benchmark.run_single_benchmark(wrapped, "test", "question", admission=policy)
     assert result.output_tokens == raw.calls == 1
@@ -277,12 +285,15 @@ async def test_managed_cloud_vision_uses_canonical_provider_policy(monkeypatch, 
     completion = AsyncMock(return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="test"))]))
     monkeypatch.setitem(sys.modules, "litellm", SimpleNamespace(acompletion=completion))
     broker = Broker(revoke_at_exit=True)
+    owned = AsyncMock(return_value=CompletionResponse(content="test", model="test", provider=provider_name, usage=Usage()))
+    broker.transports[provider_name] = SimpleNamespace(complete=owned)
     policy = AtohiAdmission(AtohiConfig(enabled=True, managed_providers=[provider_name]), broker=broker)
     with pytest.raises(ResourcePaused):
         await vision_tools._analyze_with_cloud("data", "image/png", "question", admission=policy)
     assert len(broker.requests) == broker.exits == 1
     assert broker.requests[0].provider == provider_name
-    completion.assert_awaited_once()
+    owned.assert_awaited_once()
+    completion.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -291,6 +302,7 @@ async def test_benchmark_broker_exit_revocation_never_returns_result(monkeypatch
     broker = Broker(revoke_at_exit=True)
     raw = RawProvider()
     policy = AtohiAdmission(AtohiConfig(enabled=True), broker=broker)
+    broker.transports["ollama"] = raw
     with pytest.raises(ResourcePaused):
         await benchmark.run_single_benchmark(raw, "test", "question", admission=policy)
     assert raw.calls == broker.exits == 1

@@ -107,6 +107,7 @@ class ProviderRegistry:
         self._atohi_broker = atohi_broker
         self._admission: AtohiAdmission | None = None
         self._provider_types: dict[str, str] = {}
+        self._default_models: dict[str, str] = {}
         self._bound_admission = False
         self._admitted: dict[str, AdmittedProvider] = {}
 
@@ -117,6 +118,7 @@ class ProviderRegistry:
             and self._provider_types == {
                 name: value.type or name for name, value in config.providers.items()
             }
+            and self._default_models == {name: value.default_model for name, value in config.providers.items()}
         )
 
     def scoped(self, config: CouncilConfig) -> ProviderRegistry:
@@ -142,6 +144,7 @@ class ProviderRegistry:
             return
         self._admission = AtohiAdmission(config.atohi, broker=self._atohi_broker)
         self._provider_types = {name: value.type or name for name, value in config.providers.items()}
+        self._default_models = {name: value.default_model for name, value in config.providers.items()}
         self._admitted.clear()
 
     def check_admission_available(self) -> None:
@@ -171,7 +174,8 @@ class ProviderRegistry:
         ):
             wrapped = self._admitted.get(name)
             if wrapped is None or wrapped.provider is not provider:
-                wrapped = AdmittedProvider(provider, self._admission, name)
+                wrapped = AdmittedProvider(provider, self._admission, name,
+                                           default_model=self._default_models.get(name, ""))
                 self._admitted[name] = wrapped
             return wrapped
         return provider

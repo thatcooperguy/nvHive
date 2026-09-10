@@ -7,12 +7,19 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from nvh.core.atohi import AdmittedProvider, AtohiAdmission, ResourcePaused
+from nvh.core.atohi import AtohiAdmission, ResourcePaused
 from nvh.core.council import CouncilOrchestrator
 from nvh.core.engine import Engine
 from nvh.providers import registry as registry_module
 from nvh.providers.base import StreamChunk
-from tests.test_atohi_admission import BrokerDouble, ProviderDouble, config, registry
+from tests.test_atohi_admission import (
+    BrokerDouble,
+    ProviderDouble,
+    config,
+    fixture_model_lease,
+    model_wrapper,
+    registry,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -130,7 +137,7 @@ async def test_revocation_during_upstream_cleanup_prevents_final_success(watch_e
                 await finish_cleanup.wait()
                 closed.set()
 
-    wrapper = AdmittedProvider(
+    wrapper = model_wrapper(
         ClosingProvider(), AtohiAdmission(config().atohi, broker=broker), "ollama",
     )
     iterator = wrapper.stream([])
@@ -160,14 +167,14 @@ async def test_revocation_during_broker_exit_also_prevents_final_success():
         async def admit(self, request):
             self.requests.append(request)
             try:
-                yield self
+                yield fixture_model_lease(self, request)
             finally:
                 self.revoked.set()
                 await asyncio.sleep(0)
                 self.exits += 1
 
     broker = ExitRevokingBroker()
-    wrapper = AdmittedProvider(
+    wrapper = model_wrapper(
         ProviderDouble(), AtohiAdmission(config().atohi, broker=broker), "ollama",
     )
     stream = wrapper.stream([])
@@ -189,7 +196,7 @@ async def test_nonstream_broker_exit_revocation_prevents_success(operation):
         async def admit(self, request):
             self.requests.append(request)
             try:
-                yield self
+                yield fixture_model_lease(self, request)
             finally:
                 self.revoked.set()
                 await asyncio.sleep(0)
@@ -197,7 +204,7 @@ async def test_nonstream_broker_exit_revocation_prevents_success(operation):
 
     broker = ExitRevokingBroker()
     provider = ProviderDouble()
-    wrapper = AdmittedProvider(provider, AtohiAdmission(config().atohi, broker=broker), "ollama")
+    wrapper = model_wrapper(provider, AtohiAdmission(config().atohi, broker=broker), "ollama")
     with pytest.raises(ResourcePaused, match="resource_revoked"):
         if operation == "complete":
             await wrapper.complete([])
@@ -222,7 +229,7 @@ async def test_revocation_first_drains_upstream_cleanup_without_second_cancellat
                 await finish_cleanup.wait()
                 closed.set()
 
-    wrapper = AdmittedProvider(
+    wrapper = model_wrapper(
         SlowClosingProvider(), AtohiAdmission(config().atohi, broker=broker), "ollama",
     )
     stream = wrapper.stream([])
@@ -264,7 +271,7 @@ async def test_unrevoked_slow_cleanup_keeps_watch_live_and_preserves_final_tool_
                 cleanup_started.set()
                 await finish_cleanup.wait()
 
-    wrapper = AdmittedProvider(
+    wrapper = model_wrapper(
         ToolProvider(), AtohiAdmission(config().atohi, broker=broker), "ollama",
     )
     stream = wrapper.stream([], tools=[{"type": "function"}], tool_choice="required")
@@ -275,7 +282,7 @@ async def test_unrevoked_slow_cleanup_keeps_watch_live_and_preserves_final_tool_
         finish_cleanup.set()
         final = await asyncio.wait_for(pull, 1)
         assert final.is_final and final.tool_calls == tool_calls
-        assert captured == {"tools": [{"type": "function"}], "tool_choice": "required"}
+        assert captured == {"tools": [{"type": "function"}], "tool_choice": "required", "model": "test"}
         assert broker.exits == 1
     finally:
         finish_cleanup.set()

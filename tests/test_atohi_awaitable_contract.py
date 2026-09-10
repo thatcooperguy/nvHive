@@ -6,8 +6,9 @@ from contextlib import asynccontextmanager
 import pytest
 
 from nvh.config.settings import AtohiConfig
-from nvh.core.atohi import AdmissionRequest, AdmittedProvider, AtohiAdmission, ResourcePaused
+from nvh.core.atohi import AdmissionRequest, AtohiAdmission, ResourcePaused
 from nvh.providers.base import StreamChunk
+from tests.test_atohi_admission import fixture_model_lease, model_wrapper
 
 
 class Broker:
@@ -21,7 +22,7 @@ class Broker:
     @asynccontextmanager
     async def admit(self, request):
         try:
-            yield self
+            yield fixture_model_lease(self, request)
         finally:
             self.exits += 1
 
@@ -78,7 +79,7 @@ async def test_returned_task_cleanup_drains_before_lease_exit(caller_cancel):
         @asynccontextmanager
         async def admit(self, request):
             try:
-                yield self
+                yield fixture_model_lease(self, request)
             finally:
                 assert cleaned.is_set(), "lease exited before task cleanup"
                 self.exits += 1
@@ -158,7 +159,7 @@ async def test_plain_async_iterator_without_aclose_keeps_final_after_release():
 
     broker = Broker()
     policy = AtohiAdmission(AtohiConfig(enabled=True), broker=broker)
-    provider = AdmittedProvider(Provider(), policy, "ollama")
+    provider = model_wrapper(Provider(), policy, "ollama")
     seen = []
     async for chunk in provider.stream():
         seen.append((chunk.is_final, broker.exits))

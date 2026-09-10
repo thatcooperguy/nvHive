@@ -58,6 +58,24 @@ There is no endpoint, token, arbitrary import path, executable, or granted flag
 that can turn this into a working lease. The code-only `AdmissionBroker` protocol
 is an integration boundary exercised with hermetic test doubles.
 
+Managed dispatch additionally requires a typed, in-process `ModelSession` from
+that trusted broker. It binds one explicit provider, model and operation to a
+job/allocation/generation identity and a process-local monotonic lease deadline.
+Registry calls, RAG embeddings and managed vision use only its issued transport;
+they never retarget a shared adapter, auto-pull, or fall back after a bound call
+fails. Missing, mismatched, replaced, expired or revoked handles pause the call,
+including revocation during cleanup before the final result. Registry default
+models are captured with the engine policy; automatic model selection is refused
+on this path. Disabled mode retains the ordinary providers. This is a local
+application boundary, not a credential or implemented model-session issuer:
+`job.running`, event dictionaries and controller release events provide no
+model access. The future issuer must privately bind the consumed node/boot/epoch/
+spec/launch authority and the owned model-server lifetime; closing its client
+still does not establish physical GPU release.
+Generic `run`/`stream` lifecycle primitives remain trusted extension plumbing;
+they do not authorize new raw model callbacks. Managed model code must use the
+session-bound dispatch path.
+
 Revocation or uncertain ownership raises `ResourcePaused`, outside ordinary
 provider errors. Chat does not fall back to cloud, embeddings do not retry or
 auto-pull, and council/comparison sessions cancel and await their cooperating
