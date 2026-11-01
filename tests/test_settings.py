@@ -56,6 +56,35 @@ class TestSettingsLoading:
         with pytest.raises(ValueError, match="must be a YAML mapping"):
             _load_yaml(bad)
 
+    def test_load_yaml_reads_utf8_with_optional_bom(self, tmp_path: Path) -> None:
+        """A BOM (Windows editors, PS 5.1 Set-Content) and non-ASCII text load
+        the same on every locale: the first key is `version`, not `\\ufeffversion`."""
+        cfg = tmp_path / "config.yaml"
+        cfg.write_bytes(
+            "\ufeffversion: \"1\"\n# caf\u00e9 \u2014 notes\ndefaults:\n  provider: \"\u00fcber\"\n".encode("utf-8")
+        )
+        raw = _load_yaml(cfg)
+        assert list(raw)[0] == "version"
+        assert raw["defaults"]["provider"] == "\u00fcber"
+
+    def test_load_yaml_non_utf8_is_one_actionable_error(self, tmp_path: Path) -> None:
+        """A config saved in a legacy code page fails with one sentence that names
+        the fix, not a UnicodeDecodeError traceback."""
+        cfg = tmp_path / "config.yaml"
+        cfg.write_bytes("version: \"1\"\n# caf\u00e9\n".encode("cp1252"))
+        with pytest.raises(ValueError, match="not UTF-8 text") as exc:
+            _load_yaml(cfg)
+        assert "nvh config init --force" in str(exc.value)
+
+    def test_save_config_writes_utf8(self, tmp_path: Path) -> None:
+        """save_config writes UTF-8 whatever the locale, and load_config reads it back."""
+        target = tmp_path / "config.yaml"
+        config = CouncilConfig()
+        config.profiles["caf\u00e9-\u00fcber"] = ProfileConfig()
+        save_config(config, target)
+        assert "caf\u00e9-\u00fcber" in target.read_bytes().decode("utf-8")
+        assert "caf\u00e9-\u00fcber" in load_config(config_path=target).profiles
+
     def test_profile_merge_via_arg(self, tmp_path: Path) -> None:
         """load_config with profile= merges profile section."""
         cfg_file = tmp_path / "config.yaml"

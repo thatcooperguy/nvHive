@@ -346,7 +346,10 @@ def _legacy_user_config_exists() -> bool:
 def _load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML file and apply env var interpolation."""
     try:
-        with open(path) as f:
+        # UTF-8 with an optional byte-order mark: an editor on Windows (or
+        # Windows PowerShell 5.1's Set-Content) may have written one, and the
+        # locale codec would read it into the first key as `\ufeffversion`.
+        with open(path, encoding="utf-8-sig") as f:
             raw = yaml.safe_load(f) or {}
     except yaml.YAMLError as e:
         _log.error("Invalid YAML in %s: %s", path, e)
@@ -358,6 +361,13 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     except PermissionError:
         _log.error("Cannot read config file (permission denied): %s", path)
         raise
+    except UnicodeDecodeError as e:
+        _log.error("Config file is not UTF-8: %s (%s)", path, e)
+        raise ValueError(
+            f"Config file is not UTF-8 text: {path}\n"
+            f"Error: {e}\n"
+            f"Re-save the file as UTF-8 or regenerate with: nvh config init --force"
+        ) from e
     if not isinstance(raw, dict):
         _log.error("Config file must be a YAML mapping, got %s", type(raw).__name__)
         raise ValueError(
@@ -449,8 +459,8 @@ def save_config(config: CouncilConfig, path: Path | None = None) -> Path:
     target = path or Path(DEFAULT_CONFIG_PATH)
     target.parent.mkdir(parents=True, exist_ok=True)
     data = config.model_dump(mode="json", exclude_defaults=False)
-    with open(target, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+    with open(target, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
     return target
 
 

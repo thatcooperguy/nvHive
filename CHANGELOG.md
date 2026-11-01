@@ -146,6 +146,30 @@ material.
   on `__file__` outside a two-row allow table.
 
 ### Changed
+- **Installers write nvh's own config template.** `install.sh`, `install.ps1`
+  and `install-mac.sh` no longer carry a hand-typed `config.yaml`: after the
+  venv install they run the installed package's `generate_default_config()`
+  (the file `nvh config init` writes, every advisor stanza rendered from the
+  provider spec table, so LLM7 starts on the served `gpt-oss:20b` rather than
+  the retired id the heredocs still shipped) and then rewrite the whole Ollama
+  `default_model` line with the machine's `nvh models tiers` pick as before.
+  The Ollama stanza, which the template writes disabled, is switched on
+  wherever the installer sets Ollama up (every Linux install, a Windows box
+  with an NVIDIA GPU, an Apple Silicon Mac), tier pick or not; Intel Macs and
+  GPU-less Windows keep it as nvh renders it. A failed or blank render writes
+  nothing, prints one line naming `nvh config init` (and, on Linux, the
+  `pip-install.log` that holds the reason) and the install continues; the
+  rewrite is atomic and a failed rewrite leaves the rendered file in place and
+  says so, on fresh installs and on the re-run path alike. A fresh install's
+  config therefore also picks up the template's long-standing defaults the
+  heredocs had drifted from: budget 5 USD/day and 20 USD/month with a 0.80
+  alert threshold, Ollama at `127.0.0.1:11434`, all 22 advisor stanzas (cloud
+  ones disabled until a key is added) and the council, routing and logging
+  sections. `tests/test_release_hardening.py` pins the contract for all three
+  installers and runs each shell installer's rewrite against the real
+  template; `ci/test-windows-installer.ps1` asserts the stderr merge, the
+  exit-code read, the UTF-8 swap-and-restore and the BOM-free write (23
+  cases).
 - Importing `nvh` exports `LITELLM_LOCAL_MODEL_COST_MAP=True` unless the
   variable is already set: LiteLLM's table is the one bundled with the
   installed release, no price map is fetched from GitHub at import (an
@@ -192,6 +216,13 @@ material.
   three autouse fixtures, the opt-outs and `gen_capabilities.py --drift`.
 
 ### Fixed
+- `install.ps1` writes `config.yaml` as UTF-8 without a byte-order mark
+  (Windows PowerShell 5.1's `Set-Content -Encoding UTF8` wrote one) and tests
+  the config path literally, so an existing config under a bracketed
+  `NVH_HOME` is never overwritten. The config loader reads `config.yaml` as
+  UTF-8 with an optional BOM and `save_config` writes UTF-8 explicitly, so a
+  file saved by a BOM-writing editor no longer loads its first key as
+  `\ufeffversion` and non-ASCII values round-trip on every locale.
 - The `GET /models` probe body is streamed and capped, a deeply nested body
   no longer escapes `health_check` as a RecursionError, and the key never
   lands in the probe URL or the health error text; the `httpx` logger stays

@@ -1060,10 +1060,50 @@ resolve_default_ollama_model() {
     [ -n "$DEFAULT_OLLAMA_MODEL" ]
 }
 
+write_default_config() {
+    # Render nvh's own default config.yaml into $1 with the freshly
+    # installed package: nvh.config.settings.generate_default_config()
+    # builds the advisor stanzas from the provider spec table and fills the
+    # Ollama default_model from the tier table, so this is byte for byte the
+    # file `nvh config init` writes. Until 0.45 the installer carried a
+    # hand-typed heredoc instead, and its cloud model ids drifted from the
+    # spec (LLM7's default was a retired id). The render goes to a sibling
+    # temp file, never stdout: the whole run is tee'd to install.log (see
+    # the exec above); its stderr lands in pip-install.log. A failed, empty
+    # or blank render writes nothing, prints one line naming `nvh config
+    # init` as the way to create the file and the log that holds the
+    # reason, and returns 1; the caller continues, it is not fatal.
+    local cfg="$1"
+    local py tmp
+    py="$(nvh_env_python)"
+    tmp="$cfg.tmp.$$"
+    if ! "$py" -c "from nvh.config.settings import generate_default_config; import sys; sys.stdout.write(generate_default_config())" >"$tmp" 2>>"$NVH_LOGS/pip-install.log" \
+        || ! grep -q '[^[:space:]]' "$tmp"; then
+        rm -f "$tmp"
+        echo -e "${Y}Could not render the default config from the installed nvh; create it later with 'nvh config init'. Log: $NVH_LOGS/pip-install.log${N}"
+        return 1
+    fi
+    mv -f "$tmp" "$cfg"
+}
+
 set_config_ollama_model() {
+    # set_config_ollama_model <config.yaml> <ollama tag> [enable]
+    # Rewrites every `default_model: ollama/...` line to the given tag, so
+    # the shell's tier pick wins over the template's own default; an empty
+    # tag (no tier resolved) leaves that line exactly as nvh rendered it,
+    # nothing is guessed. With a third argument of 1 (fresh installs only)
+    # the Ollama stanza, which nvh's template writes disabled, is switched
+    # on as well: the same flip `nvh config init` makes when a daemon
+    # answers. Every Linux install sets Ollama up below, so the flip does
+    # not wait for a tier pick. The rewrite goes through a sibling temp file
+    # and os.replace, so a failure leaves the file as it was.
     local cfg="$1"
     local model="$2"
-    CFG="$cfg" MODEL="$model" "$PYTHON" - <<'PY'
+    local enable="${3:-0}"
+    if [ -z "$model" ] && [ "$enable" != "1" ]; then
+        return 0
+    fi
+    CFG="$cfg" MODEL="$model" ENABLE="$enable" "$PYTHON" - <<'PY'
 import os
 import re
 from pathlib import Path
@@ -1071,13 +1111,6 @@ from pathlib import Path
 path = Path(os.environ["CFG"])
 model = os.environ["MODEL"]
 text = path.read_text(encoding="utf-8")
-if not model:
-    # No tier could be resolved: drop the placeholder line so nvh's own
-    # default applies instead of a literal "__NVH_DEFAULT_OLLAMA_MODEL__".
-    keep = [line for line in text.split("\n") if "__NVH_DEFAULT_OLLAMA_MODEL__" not in line]
-    path.write_text("\n".join(keep), encoding="utf-8")
-    raise SystemExit(0)
-updated = text.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model)
 # Replace the entire `default_model:` line for ollama/* values rather
 # than substring-matching. The previous partial-match regex (#63) fixed
 # the FORWARD case where the existing value was a clean model name, but
@@ -1088,17 +1121,23 @@ updated = text.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model)
 # model name" regex can see. Replacing the whole line is robust to any
 # past corruption pattern AND any future quoting style the writer
 # happens to produce.
-import re as _re
-default_re = _re.compile(r'^(\s*)default_model:\s*[\'"]?ollama/')
+default_re = re.compile(r'^(\s*)default_model:\s*[\'"]?ollama/')
 out_lines = []
-for line in updated.split("\n"):
+for line in text.split("\n"):
     m = default_re.match(line)
-    if m:
+    if m and model:
         out_lines.append(f'{m.group(1)}default_model: "ollama/{model}"')
     else:
         out_lines.append(line)
 updated = "\n".join(out_lines)
-path.write_text(updated, encoding="utf-8")
+if os.environ.get("ENABLE") == "1":
+    updated = updated.replace(
+        "    type: ollama\n    enabled: false",
+        "    type: ollama\n    enabled: true",
+    )
+tmp = path.with_name(f"{path.name}.rewrite.{os.getpid()}")
+tmp.write_text(updated, encoding="utf-8")
+os.replace(tmp, path)
 PY
 }
 
@@ -1112,8 +1151,14 @@ sync_ollama_default_model_config() {
     # trailer. The set_config_ollama_model function now does whole-line
     # replacement so it's safe to invoke on any malformed value.
     if grep -Eq "default_model:[[:space:]]*[\"']?ollama/" "$cfg"; then
-        set_config_ollama_model "$cfg" "$DEFAULT_OLLAMA_MODEL"
-        echo -e "${G}Ollama config aligned to GPU recommendation: $DEFAULT_OLLAMA_MODEL${N}"
+        # The rewrite is atomic (temp file + rename), so a failure leaves the
+        # existing config exactly as it was; say so instead of aborting the
+        # re-run under set -e.
+        if set_config_ollama_model "$cfg" "$DEFAULT_OLLAMA_MODEL"; then
+            echo -e "${G}Ollama config aligned to GPU recommendation: $DEFAULT_OLLAMA_MODEL${N}"
+        else
+            echo -e "${Y}Existing config left as it was: $cfg (the Ollama default_model line could not be rewritten; 'nvh models pull --recommended' picks a model later).${N}"
+        fi
     fi
 }
 
@@ -1933,62 +1978,20 @@ fi
 HIVE_DIR="$HIVE_CONFIG_HOME"
 mkdir -p "$HIVE_DIR"
 if [ ! -f "$HIVE_DIR/config.yaml" ]; then
-    echo -e "${B}Creating auto-config (Ollama + LLM7 enabled by default)...${N}"
-    cat > "$HIVE_DIR/config.yaml" << 'CFGEOF'
-version: "1"
-
-defaults:
-  mode: ask
-  output: text
-  stream: true
-  max_tokens: 4096
-  temperature: 1.0
-  show_metadata: true
-
-advisors:
-  ollama:
-    base_url: http://localhost:11434
-    default_model: "ollama/__NVH_DEFAULT_OLLAMA_MODEL__"
-    type: ollama
-    enabled: true
-
-  llm7:
-    default_model: gpt-oss
-    type: llm7
-    enabled: true
-
-  groq:
-    api_key: ${GROQ_API_KEY}
-    default_model: groq/openai/gpt-oss-120b
-    enabled: false
-
-  openai:
-    api_key: ${OPENAI_API_KEY}
-    default_model: gpt-5.6-terra
-    enabled: false
-
-  anthropic:
-    api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-sonnet-5
-    enabled: false
-
-  google:
-    api_key: ${GOOGLE_API_KEY}
-    default_model: gemini/gemini-3.7-flash
-    enabled: false
-
-budget:
-  daily_limit_usd: 10
-  monthly_limit_usd: 50
-  hard_stop: true
-
-cache:
-  enabled: true
-  ttl_seconds: 86400
-  max_size: 1000
-CFGEOF
-    set_config_ollama_model "$HIVE_DIR/config.yaml" "$DEFAULT_OLLAMA_MODEL"
-    echo -e "${G}Config created: $HIVE_DIR/config.yaml${N}"
+    echo -e "${B}Creating auto-config...${N}"
+    # nvh renders its own template (write_default_config); the shell's tier
+    # pick then rewrites the Ollama default_model line, and the stanza is
+    # switched on because this install sets Ollama up below on every Linux
+    # box, tier pick or not. Which other providers start enabled is the
+    # spec table's call, so nothing is announced about it here. A failed
+    # rewrite keeps the file as nvh rendered it and says so.
+    if write_default_config "$HIVE_DIR/config.yaml"; then
+        if set_config_ollama_model "$HIVE_DIR/config.yaml" "$DEFAULT_OLLAMA_MODEL" 1; then
+            echo -e "${G}Config created: $HIVE_DIR/config.yaml${N}"
+        else
+            echo -e "${Y}Config created as nvh renders it: $HIVE_DIR/config.yaml (the Ollama stanza could not be adjusted; 'nvh config init --force' redoes it once Ollama is up).${N}"
+        fi
+    fi
 else
     sync_ollama_default_model_config
 fi

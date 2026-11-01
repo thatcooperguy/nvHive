@@ -323,6 +323,220 @@ try {
         }
     }
     $caseCount++
+
+    # -----------------------------------------------------------------------
+    # Auto-config contract. Mocked environment only: the config helpers are
+    # dot-sourced from the parsed installer with their one native call (the
+    # venv python) swapped for a fake the way the fast path's are, so the only
+    # write is one temp file. The installer must write what nvh's own
+    # generate_default_config() printed (UTF-8, no byte-order mark), rewrite
+    # only the Ollama default_model line to the tier pick, switch the Ollama
+    # stanza on only for a GPU install (which sets Ollama up, tier pick or
+    # not), and write nothing (naming `nvh config init`) when the python
+    # answer fails or is empty.
+    # -----------------------------------------------------------------------
+    & {
+        $said = [System.Collections.Generic.List[string]]::new()
+        function Write-Green  { param($msg) $said.Add("green: $msg") }
+        function Write-Yellow { param($msg) $said.Add("yellow: $msg") }
+        function Write-Blue {} function Write-Red {} function Write-Gray {} function Write-Host {}
+        foreach ($name in @('Get-NvhDefaultConfig', 'Set-NvhConfigOllamaModel', 'Write-NvhDefaultConfig')) {
+            . ([scriptblock]::Create((Convert-TestFragment (Get-InstallerFunction $name))))
+        }
+
+        # Structure: the template is nvh's own, read from the venv interpreter's
+        # stdout; no here-string placeholder remains; the one write sits behind
+        # the existing-file check.
+        $generatorText = (Get-InstallerFunction 'Get-NvhDefaultConfig').Extent.Text
+        Assert-Contains $generatorText 'from nvh.config.settings import generate_default_config' 'the config is nvh''s own template'
+        Assert-Contains $generatorText 'sys.stdout.write(generate_default_config())' 'the template is captured from stdout'
+        Assert-NotContains $ast.Extent.Text '__NVH_DEFAULT_OLLAMA_MODEL__' 'no hand-typed config placeholder remains'
+        $configCalls = @($ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Write-NvhDefaultConfig'
+        }, $true))
+        Assert-Equal 1 $configCalls.Count 'the fresh path writes the config once'
+        $configGuard = $configCalls[0].Parent
+        while ($configGuard -and -not ($configGuard -is [System.Management.Automation.Language.IfStatementAst])) { $configGuard = $configGuard.Parent }
+        if (-not $configGuard) { throw 'The config write must stay behind the existing-file check' }
+        Assert-Equal '-not (Test-Path -LiteralPath $configFile)' $configGuard.Clauses[0].Item1.Extent.Text 'an existing config.yaml is never overwritten, its path taken literally'
+        if ($configGuard.Extent.StartOffset -lt $fast.Extent.EndOffset) { throw 'The config write belongs to the fresh path' }
+        Assert-Contains $configCalls[0].Extent.Text '-EnableOllama:([bool]$GPU_NAME)' 'the Ollama stanza is switched on only for the Ollama a GPU install sets up'
+
+        # The plumbing the mocked runs below swap out (Invoke-TestNative replaces the
+        # whole `& $Python ... 2>&1` call): stderr is merged into the stream, the
+        # native exit code is read right after the call inside the try, Python's
+        # stdout is forced to UTF-8 for the call and both encodings are restored
+        # in the finally, and the file is written as UTF-8 without a BOM.
+        $generatorFn = Get-InstallerFunction 'Get-NvhDefaultConfig'
+        $generatorCall = @($generatorFn.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.CommandAst] -and
+            $n.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand
+        }, $true))
+        Assert-Equal 1 $generatorCall.Count 'the generator is one native call'
+        Assert-Equal 1 $generatorCall[0].Redirections.Count 'the generator call carries one redirection'
+        Assert-Equal '2>&1' $generatorCall[0].Redirections[0].Extent.Text 'stderr is merged so a traceback reaches neither the console nor the file'
+        $generatorTry = @($generatorFn.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and
+            $n.Body.Extent.StartOffset -le $generatorCall[0].Extent.StartOffset -and
+            $n.Body.Extent.EndOffset -ge $generatorCall[0].Extent.EndOffset
+        }, $true))
+        Assert-Equal 1 $generatorTry.Count 'the generator call runs inside one try/finally'
+        $exitRead = @($generatorTry[0].Body.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            $n.Left.Extent.Text -eq '$exit' -and $n.Right.Extent.Text -eq '$LASTEXITCODE'
+        }, $true))
+        Assert-Equal 1 $exitRead.Count 'the native exit code ($LASTEXITCODE, not $?) is read inside the try'
+        if ($exitRead[0].Extent.StartOffset -lt $generatorCall[0].Extent.EndOffset) { throw 'the exit code must be read right after the generator call' }
+        Assert-Contains $generatorTry[0].Body.Extent.Text '$env:PYTHONIOENCODING = "utf-8"' 'Python writes UTF-8 for the call whatever the console code page'
+        Assert-Contains $generatorTry[0].Finally.Extent.Text '$env:PYTHONIOENCODING = $savedIoEncoding' 'PYTHONIOENCODING is restored afterwards'
+        Assert-Contains $generatorTry[0].Finally.Extent.Text '[Console]::OutputEncoding = $savedConsoleEncoding' 'the console encoding is restored afterwards'
+        $writerText = (Get-InstallerFunction 'Write-NvhDefaultConfig').Extent.Text
+        Assert-Contains $writerText '[System.IO.File]::WriteAllLines' 'the file is written through .NET with an explicit encoding'
+        Assert-Contains $writerText 'New-Object System.Text.UTF8Encoding $false' 'the file is UTF-8 without a byte-order mark'
+        Assert-NotContains $writerText 'Set-Content' 'Set-Content -Encoding UTF8 writes a BOM under Windows PowerShell 5.1'
+
+        # A stand-in template in the shape generate_default_config() prints (made-up ids: no real tag here).
+        $template = @(
+            'version: "1"',
+            '',
+            'advisors:',
+            '  ollama:',
+            '    base_url: http://127.0.0.1:11434',
+            '    default_model: ollama/template-default',
+            '    type: ollama',
+            '    enabled: false',
+            '',
+            '  llm7:',
+            '    api_key: ${LLM7_API_KEY:-anonymous}',
+            '    default_model: served-default',
+            '    fallback_model: served-fallback',
+            '    enabled: true',
+            '',
+            '  groq:',
+            '    api_key: ${GROQ_API_KEY}',
+            '    default_model: groq/served-default',
+            '    enabled: false',
+            '',
+            'budget:',
+            '  daily_limit_usd: 5'
+        )
+        $ollamaLine = 5
+        $ollamaEnabledLine = 7
+        $fakePython = 'C:\fake\venv\Scripts\python.exe'
+        $probe = Join-Path ([System.IO.Path]::GetTempPath()) ("nvh-installer-config-" + [guid]::NewGuid().ToString('n') + ".yaml")
+        try {
+            # Tier pick resolved, GPU install: the whole Ollama default_model line becomes the pick and the
+            # stanza's `enabled: false` (right after `type: ollama`) is switched on; nothing else moves.
+            function Invoke-TestNative { $script:LASTEXITCODE = 0; $global:LASTEXITCODE = 0; $template }
+            Write-NvhDefaultConfig -Python $fakePython -Path $probe -Model 'picked-tag:7b' -EnableOllama
+            $written = @(Get-Content -LiteralPath $probe -Encoding UTF8)
+            Assert-Equal $template.Count $written.Count 'every template line is written, no more'
+            Assert-Equal '    default_model: "ollama/picked-tag:7b"' $written[$ollamaLine] 'the Ollama default_model line is rewritten whole to the tier pick'
+            Assert-Equal '    enabled: true' $written[$ollamaEnabledLine] 'the Ollama stanza is switched on for the Ollama this install sets up'
+            for ($i = 0; $i -lt $template.Count; $i++) {
+                if ($i -ne $ollamaLine -and $i -ne $ollamaEnabledLine) { Assert-Equal $template[$i] $written[$i] "line $i (cloud stanzas and the rest) is untouched" }
+            }
+            Assert-Equal 1 @($said | Where-Object { $_ -eq "green: Config created: $probe" }).Count 'the success message names the file'
+            Assert-Equal 0 @($said | Where-Object { $_ -like 'yellow: *' }).Count 'no warning on success'
+            $bytes = [System.IO.File]::ReadAllBytes($probe)
+            if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                throw 'config.yaml must not start with a byte-order mark: nvh''s loader opens it with the locale codec'
+            }
+            Assert-Equal 'version: "1"' ([System.Text.Encoding]::UTF8.GetString($bytes, 0, 12)) 'the file starts with the template''s first line, byte for byte'
+
+            # Tier pick resolved, no GPU (no Ollama set up): the model line is rewritten, the stanza stays as nvh renders it.
+            Remove-Item -LiteralPath $probe -Force
+            $said.Clear()
+            Write-NvhDefaultConfig -Python $fakePython -Path $probe -Model 'picked-tag:7b'
+            $written = @(Get-Content -LiteralPath $probe -Encoding UTF8)
+            Assert-Equal '    default_model: "ollama/picked-tag:7b"' $written[$ollamaLine] 'the tier pick is written without a GPU too'
+            for ($i = 0; $i -lt $template.Count; $i++) {
+                if ($i -ne $ollamaLine) { Assert-Equal $template[$i] $written[$i] "line $i is untouched without -EnableOllama" }
+            }
+
+            # No tier pick, GPU install: the template's own default_model stays, as `nvh config init` leaves it,
+            # but the stanza is still switched on: this install sets Ollama up below either way.
+            Remove-Item -LiteralPath $probe -Force
+            $said.Clear()
+            Write-NvhDefaultConfig -Python $fakePython -Path $probe -Model '' -EnableOllama
+            $written = @(Get-Content -LiteralPath $probe -Encoding UTF8)
+            Assert-Equal $template[$ollamaLine] $written[$ollamaLine] 'without a tier pick the template''s own Ollama default stays'
+            Assert-Equal '    enabled: true' $written[$ollamaEnabledLine] 'without a tier pick the stanza is still switched on for the Ollama this install sets up'
+            for ($i = 0; $i -lt $template.Count; $i++) {
+                if ($i -ne $ollamaEnabledLine) { Assert-Equal $template[$i] $written[$i] "line $i is untouched without a tier pick" }
+            }
+
+            # No tier pick, no GPU: the template is written verbatim.
+            Remove-Item -LiteralPath $probe -Force
+            $said.Clear()
+            Write-NvhDefaultConfig -Python $fakePython -Path $probe -Model ''
+            $written = @(Get-Content -LiteralPath $probe -Encoding UTF8)
+            Assert-Equal ($template -join "`n") ($written -join "`n") 'without a tier pick or a GPU the template is written verbatim'
+
+            # stderr noise with a clean exit (a warning on import) never lands in the file.
+            Remove-Item -LiteralPath $probe -Force
+            $said.Clear()
+            function Invoke-TestNative {
+                $script:LASTEXITCODE = 0; $global:LASTEXITCODE = 0
+                [System.Management.Automation.ErrorRecord]::new([System.Exception]::new('UserWarning: noise on stderr'), 'NativeCommandError', [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+                $template
+            }
+            Write-NvhDefaultConfig -Python $fakePython -Path $probe -Model 'picked-tag:7b'
+            $written = @(Get-Content -LiteralPath $probe -Encoding UTF8)
+            Assert-Equal $template.Count $written.Count 'stderr lines never land in config.yaml'
+            Assert-Equal '    default_model: "ollama/picked-tag:7b"' $written[$ollamaLine] 'the rewrite still applies with stderr noise'
+
+            # A failing generator (non-zero exit, even with partial output) writes nothing and says how to get the file.
+            Remove-Item -LiteralPath $probe -Force
+            $said.Clear()
+            function Invoke-TestNative {
+                $script:LASTEXITCODE = 1; $global:LASTEXITCODE = 1
+                'version: "1"'
+                [System.Management.Automation.ErrorRecord]::new([System.Exception]::new('ModuleNotFoundError: No module named nvh'), 'NativeCommandError', [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+            }
+            Write-NvhDefaultConfig -Python $fakePython -Path $probe -Model 'picked-tag:7b'
+            if (Test-Path -LiteralPath $probe) { throw 'a failing generator must write nothing' }
+            $yellow = @($said | Where-Object { $_ -like 'yellow: *' })
+            Assert-Equal 1 $yellow.Count 'one honest line on failure'
+            Assert-Contains $yellow[0] 'nvh config init' 'the honest line names nvh config init'
+            Assert-Contains $yellow[0] $probe 'the honest line names the file it did not write'
+            Assert-Equal 0 @($said | Where-Object { $_ -like 'green: *' }).Count 'no "Config created" on failure'
+
+            # An empty or whitespace-only answer with a clean exit is a failure too.
+            foreach ($answer in @({ }, { '' }, { ''; '   ' })) {
+                $said.Clear()
+                function Invoke-TestNative { $script:LASTEXITCODE = 0; $global:LASTEXITCODE = 0; & $answer }
+                Write-NvhDefaultConfig -Python $fakePython -Path $probe -Model 'picked-tag:7b'
+                if (Test-Path -LiteralPath $probe) { throw 'an empty generator answer must write nothing' }
+                Assert-Equal 1 @($said | Where-Object { $_ -like 'yellow: *nvh config init*' }).Count 'an empty answer gets the honest line'
+                Assert-Equal 0 @($said | Where-Object { $_ -like 'green: *' }).Count 'an empty answer is not a created config'
+            }
+
+            # The rewrite is whole-line and Ollama-only: quoting and past corruption go, other models stay.
+            $rewritten = Set-NvhConfigOllamaModel -Model 'picked-tag:7b' -Lines @(
+                '    default_model: "ollama/old"-trailer"', "`tdefault_model: 'ollama/old'", '    fallback_model: ollama/keep', '    default_model: groq/keep', 'default_model: ollama/top')
+            Assert-Equal '    default_model: "ollama/picked-tag:7b"' $rewritten[0] 'a corrupted quoted line is replaced whole'
+            Assert-Equal "`tdefault_model: `"ollama/picked-tag:7b`"" $rewritten[1] 'indentation is kept whatever it is'
+            Assert-Equal '    fallback_model: ollama/keep' $rewritten[2] 'fallback_model lines are not default_model lines'
+            Assert-Equal '    default_model: groq/keep' $rewritten[3] 'a cloud default_model is never touched'
+            Assert-Equal 'default_model: "ollama/picked-tag:7b"' $rewritten[4] 'no indentation is fine too'
+            $kept = Set-NvhConfigOllamaModel -Model '' -Lines $template[0..4]
+            Assert-Equal 5 @($kept).Count 'an empty pick keeps every line'
+            Assert-Equal ($template[0..4] -join "`n") ($kept -join "`n") 'an empty pick changes nothing'
+            # The switch flips only the `enabled: false` right after `type: ollama`; other bespoke stanzas keep theirs.
+            $flipped = Set-NvhConfigOllamaModel -Model 'picked-tag:7b' -EnableOllama -Lines @(
+                '  ollama:', '    type: ollama', '    enabled: false', '  mock:', '    type: mock', '    enabled: false', '    default_model: ollama/x')
+            Assert-Equal '    enabled: true' $flipped[2] 'only the enabled line right after type: ollama is switched on'
+            Assert-Equal '    enabled: false' $flipped[5] 'another bespoke stanza keeps its enabled line'
+            Assert-Equal '    default_model: "ollama/picked-tag:7b"' $flipped[6] 'the model rewrite still applies alongside the flip'
+            $flippedOnly = Set-NvhConfigOllamaModel -Model '' -EnableOllama -Lines @('    default_model: ollama/template-default', '    type: ollama', '    enabled: false')
+            Assert-Equal '    default_model: ollama/template-default' $flippedOnly[0] 'no tier pick, the template''s own model line stays'
+            Assert-Equal '    enabled: true' $flippedOnly[2] 'no tier pick, the stanza is still switched on: Ollama is set up either way'
+        } finally {
+            Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+        }
+    }
+    $caseCount++
 } finally {
     foreach ($name in $savedProcess.Keys) {
         [Environment]::SetEnvironmentVariable($name, $savedProcess[$name], 'Process')
@@ -330,4 +544,4 @@ try {
     if ($hadGlobalExit) { $global:LASTEXITCODE = $savedGlobalExit }
     else { Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue }
 }
-Write-Host "PASS: $caseCount Windows workspace contract cases (including the ARM64 mocked case); no installer or user-environment writes."
+Write-Host "PASS: $caseCount Windows workspace contract cases (including the ARM64 and auto-config mocked cases); no installer or user-environment writes."

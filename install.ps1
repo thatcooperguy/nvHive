@@ -343,66 +343,104 @@ if ($DefaultModel) {
 # ---------------------------------------------------------------------------
 # Auto-config
 # ---------------------------------------------------------------------------
+# config.yaml is nvh's own template. nvh.config.settings.generate_default_config()
+# renders every advisor stanza from the provider spec table and fills the
+# Ollama default from the tier table, and `nvh config init` writes exactly the
+# same text, so this installer types no provider id and no model tag. Its one
+# contribution is the Ollama default_model line, rewritten whole to this
+# machine's tier pick (resolved above) so the shell's sizing wins over the
+# template's smallest-tier default. History: until 0.45 this file carried a
+# hand-typed config here-string whose LLM7 model id the registry had retired.
+
+# The rendered template from the installed nvh, as lines, or `$null` when that
+# interpreter could not produce one (non-zero exit or empty output). Python
+# writes UTF-8 and PowerShell decodes it as UTF-8 whatever the console code
+# page; both settings are restored afterwards. Never fatal: the caller says so
+# and the install goes on.
+function Get-NvhDefaultConfig {
+    param([string]$Python)
+    $ErrorActionPreference = "Continue"
+    $generator = "from nvh.config.settings import generate_default_config; import sys; sys.stdout.write(generate_default_config())"
+    $savedIoEncoding = $env:PYTHONIOENCODING
+    $savedConsoleEncoding = $null
+    try { $savedConsoleEncoding = [Console]::OutputEncoding } catch { }
+    $raw = @()
+    $exit = 1
+    try {
+        $env:PYTHONIOENCODING = "utf-8"
+        try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
+        $raw = @(& $Python -c $generator 2>&1)
+        $exit = $LASTEXITCODE
+    } catch {
+        $raw = @()
+        $exit = 1
+    } finally {
+        $env:PYTHONIOENCODING = $savedIoEncoding
+        if ($savedConsoleEncoding) { try { [Console]::OutputEncoding = $savedConsoleEncoding } catch { } }
+    }
+    # stderr arrives as ErrorRecords through 2>&1; only stdout is the template.
+    $lines = @($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" -split "`r?`n" })
+    if ($exit -ne 0 -or @($lines | Where-Object { $_.Trim() }).Count -eq 0) { return $null }
+    return ,$lines
+}
+
+# Pure: the config lines with the Ollama stanza's `default_model: ollama/...`
+# line (no other stanza names an ollama/ model) rewritten whole to $Model,
+# exactly as install.sh's set_config_ollama_model does it, so any quoting or
+# past corruption of that line is replaced rather than patched; an empty
+# $Model (no tier resolved) leaves that line exactly as nvh rendered it,
+# nothing is guessed. With -EnableOllama the stanza, which nvh's template
+# writes disabled, is switched on as well (the `enabled: false` line right
+# after `type: ollama`): the same flip `nvh config init` makes when a daemon
+# answers, for the Ollama this install sets up below, tier pick or not.
+function Set-NvhConfigOllamaModel {
+    param([string[]]$Lines, [string]$Model, [switch]$EnableOllama)
+    $out = @($Lines)
+    if ($Model -or $EnableOllama) {
+        $previous = ""
+        $out = @(foreach ($line in @($Lines)) {
+            if ($Model -and $line -match '^(\s*)default_model:\s*[''"]?ollama/') {
+                $Matches[1] + 'default_model: "ollama/' + $Model + '"'
+            } elseif ($EnableOllama -and $previous -match '^\s*type:\s*ollama\s*$' -and $line -match '^(\s*)enabled:\s*false\s*$') {
+                $Matches[1] + 'enabled: true'
+            } else {
+                $line
+            }
+            $previous = $line
+        })
+    }
+    return ,$out
+}
+
+# Create $Path from the installed nvh's template with the Ollama default
+# rewritten to $Model when one resolved (and the stanza switched on with
+# -EnableOllama). When no template could be produced nothing is written and
+# the install goes on: `nvh config init` writes the same file later. The file
+# is UTF-8 without a byte-order mark (Set-Content -Encoding UTF8 writes one
+# under Windows PowerShell 5.1, and nvh's loader, which opens config.yaml with
+# the locale codec, would read it into the first key), and $Path is taken
+# literally, never as a wildcard pattern.
+function Write-NvhDefaultConfig {
+    param([string]$Python, [string]$Path, [string]$Model, [switch]$EnableOllama)
+    $lines = Get-NvhDefaultConfig -Python $Python
+    if ($null -eq $lines) {
+        Write-Yellow "Could not generate the default config from the installed nvh (its Python exited non-zero or printed nothing); run 'nvh config init' later to create $Path."
+        return
+    }
+    $lines = Set-NvhConfigOllamaModel -Lines $lines -Model $Model -EnableOllama:$EnableOllama
+    $target = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    [System.IO.File]::WriteAllLines($target, [string[]]$lines, (New-Object System.Text.UTF8Encoding $false))
+    Write-Green "Config created: $Path"
+}
+
 New-Item -ItemType Directory -Force -Path $NVH_CONFIG | Out-Null
 $configFile = "$NVH_CONFIG\config.yaml"
-if (-not (Test-Path $configFile)) {
+if (-not (Test-Path -LiteralPath $configFile)) {
     Write-Blue "Creating auto-config..."
-    $configText = @'
-version: "1"
-
-defaults:
-  mode: ask
-  output: text
-  stream: true
-  max_tokens: 4096
-  temperature: 1.0
-  show_metadata: true
-
-advisors:
-  ollama:
-    base_url: http://localhost:11434
-    default_model: ollama/__NVH_DEFAULT_OLLAMA_MODEL__
-    type: ollama
-    enabled: true
-
-  llm7:
-    default_model: gpt-oss
-    type: llm7
-    enabled: true
-
-  groq:
-    api_key: ${GROQ_API_KEY}
-    default_model: groq/openai/gpt-oss-120b
-    enabled: false
-
-  openai:
-    api_key: ${OPENAI_API_KEY}
-    default_model: gpt-5.6-terra
-    enabled: false
-
-  anthropic:
-    api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-sonnet-5
-    enabled: false
-
-budget:
-  daily_limit_usd: 10
-  monthly_limit_usd: 50
-  hard_stop: true
-
-cache:
-  enabled: true
-  ttl_seconds: 86400
-  max_size: 1000
-'@
-    if ($DefaultModel) {
-        $configText = $configText.Replace("__NVH_DEFAULT_OLLAMA_MODEL__", $DefaultModel)
-    } else {
-        # No tier resolved: drop the line so nvh's own default applies.
-        $configText = (($configText -split "`r?`n") | Where-Object { $_ -notmatch "__NVH_DEFAULT_OLLAMA_MODEL__" }) -join "`n"
-    }
-    $configText | Set-Content -Path $configFile -Encoding UTF8
-    Write-Green "Config created: $configFile"
+    # The Ollama stanza is switched on whenever this install sets Ollama up
+    # below (an NVIDIA GPU was found), tier pick or not; otherwise it stays
+    # as nvh renders it.
+    Write-NvhDefaultConfig -Python $venvPython -Path $configFile -Model $DefaultModel -EnableOllama:([bool]$GPU_NAME)
 }
 
 # ---------------------------------------------------------------------------

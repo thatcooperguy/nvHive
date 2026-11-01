@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -254,7 +256,32 @@ def test_linux_installer_aligns_gpu_model_config_and_auto_launch() -> None:
     # multimodal refactor so refactoring this code path requires an
     # intentional update.
     assert "sync_ollama_default_model_config" in install
-    assert 'default_model: "ollama/__NVH_DEFAULT_OLLAMA_MODEL__"' in install
+    # 0.45 (Wave 4b): the installer carries no config YAML of its own. The
+    # venv Python renders nvh.config.settings.generate_default_config() (the
+    # advisor stanzas from the provider spec table, the Ollama default from
+    # the tier table) into config.yaml, the file `nvh config init` writes,
+    # and set_config_ollama_model then rewrites the whole `default_model:
+    # ollama/...` line with the shell's tier pick and, because every Linux
+    # install sets Ollama up, switches the Ollama stanza on (third argument
+    # `1`, independent of the tier pick). A failed render is not fatal and
+    # names `nvh config init` as the way to create the file plus the log that
+    # holds the reason; the banner claims nothing about which providers start
+    # enabled (that is the spec table's call). The rewrite itself is exercised
+    # by test_installer_ollama_rewrite_touches_only_the_ollama_stanza.
+    assert "write_default_config" in install
+    assert (
+        '-c "from nvh.config.settings import generate_default_config; '
+        'import sys; sys.stdout.write(generate_default_config())"'
+    ) in install
+    assert "nvh config init" in install
+    assert "'nvh config init'. Log: $NVH_LOGS/pip-install.log" in install
+    assert "CFGEOF" not in install
+    assert "__NVH_DEFAULT_OLLAMA_MODEL__" not in install
+    assert re.search(r"^\s*default_model:", install, re.M) is None
+    assert 'if set_config_ollama_model "$HIVE_DIR/config.yaml" "$DEFAULT_OLLAMA_MODEL" 1; then' in install
+    assert '"    type: ollama\\n    enabled: false"' in install
+    assert 'echo -e "${B}Creating auto-config...${N}"' in install
+    assert "enabled by default" not in install
     assert 'MODEL="$DEFAULT_OLLAMA_MODEL"' in install
     assert "launch_webui_after_install" in install
     assert "NVH_INSTALL_LAUNCH" in install
@@ -346,17 +373,105 @@ def test_windows_and_mac_installers_read_the_tier_table() -> None:
     chat pick (`nvh models tiers --pick chat`) instead of carrying a ladder of
     their own; the Mac pool is unified (hw.memsize), so it is passed in and
     the table takes its OS reserve off it exactly as it does for a GB10.
+    Both write nvh's own template (generate_default_config()) and then rewrite
+    the whole Ollama default_model line with that pick; neither carries YAML
+    or a placeholder of its own, and each switches the Ollama stanza on only
+    where it sets Ollama up (an NVIDIA GPU on Windows, Apple Silicon on a Mac),
+    tier pick or not.
     """
     for name in ("install.ps1", "install-mac.sh"):
         text = (ROOT / name).read_text(encoding="utf-8")
         assert "models tiers --pick chat" in text, name
-        assert "__NVH_DEFAULT_OLLAMA_MODEL__" in text, name
+        # 0.45 (Wave 4b): no installer carries config YAML; the venv Python
+        # renders generate_default_config() and the installer rewrites the
+        # whole `default_model: ollama/...` line (the regex fragment below).
+        assert "__NVH_DEFAULT_OLLAMA_MODEL__" not in text, name
+        assert (
+            "from nvh.config.settings import generate_default_config; "
+            "import sys; sys.stdout.write(generate_default_config())"
+        ) in text, name
+        assert "nvh config init" in text, name
+        assert "CFGEOF" not in text, name
+        assert re.search(r"^\s*default_model:", text, re.M) is None, name
+        assert "default_model:\\s*[" in text, name
         code = _shell_code_only(text)
         for tag in (*lm.all_tags(), *RETIRED_TAGS):
             assert not _tag_in_code(tag, code), f"{name} hard-codes {tag!r}"
     mac = (ROOT / "install-mac.sh").read_text(encoding="utf-8")
     assert '--unified-gb "$MEM_GB"' in mac
     assert "hw.memsize" in mac
+    assert "write_default_config" in mac
+    assert 'if [ "$APPLE_SILICON" = "true" ]; then OLLAMA_STANZA_ENABLE=1; fi' in mac
+    assert (
+        'if set_config_ollama_model "$NVH_CONFIG/config.yaml" "$DEFAULT_OLLAMA_MODEL" "$OLLAMA_STANZA_ENABLE"; then'
+    ) in mac
+    assert '"    type: ollama\\n    enabled: false"' in mac
+    ps1 = (ROOT / "install.ps1").read_text(encoding="utf-8")
+    assert "-EnableOllama:([bool]$GPU_NAME)" in ps1
+    # Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a BOM that
+    # nvh's locale-codec loader would read into the first key; the installer
+    # writes UTF-8 without one and takes the path literally.
+    assert "[System.IO.File]::WriteAllLines" in ps1
+    assert "New-Object System.Text.UTF8Encoding $false" in ps1
+    writer = re.search(r"^function Write-NvhDefaultConfig \{\n.*?^\}\n", ps1, re.M | re.S)
+    assert writer and "Set-Content" not in writer.group(0)
+    assert "Test-Path -LiteralPath $configFile" in ps1
+
+
+_OLLAMA_REWRITE_HEREDOC = re.compile(
+    r"^set_config_ollama_model\(\) \{\n.*?<<'PY'\n(?P<py>.*?)\nPY\n", re.M | re.S
+)
+
+
+@pytest.mark.parametrize("name", ["install.sh", "install-mac.sh"])
+@pytest.mark.parametrize(
+    ("model", "enable"),
+    [("picked-tag:7b", "1"), ("picked-tag:7b", "0"), ("", "1"), ("", "0")],
+)
+def test_installer_ollama_rewrite_touches_only_the_ollama_stanza(
+    tmp_path: Path, name: str, model: str, enable: str,
+) -> None:
+    """The Python post-step install.sh / install-mac.sh run on the rendered
+    template (the heredoc inside set_config_ollama_model, executed here as the
+    installer does) rewrites the Ollama `default_model` line to the shell's
+    tier pick when one resolved and, with the enable flag, flips only the
+    Ollama stanza's `enabled: false`, tier pick or not; every other line of
+    generate_default_config() -- the cloud stanzas from the spec table
+    included -- is byte-identical, and no temp file is left behind."""
+    from nvh.config.settings import generate_default_config
+
+    text = (ROOT / name).read_text(encoding="utf-8")
+    match = _OLLAMA_REWRITE_HEREDOC.search(text)
+    assert match, f"{name} no longer embeds the Ollama rewrite"
+    cfg = tmp_path / "config.yaml"
+    template = generate_default_config()
+    cfg.write_text(template, encoding="utf-8", newline="\n")
+    env = {**os.environ, "CFG": str(cfg), "MODEL": model, "ENABLE": enable}
+    # bash feeds the heredoc to python as the UTF-8 bytes of the file, so the
+    # stdin encoding is pinned rather than left to this box's locale.
+    proc = subprocess.run(
+        [sys.executable, "-"], input=match.group("py"), env=env,
+        capture_output=True, encoding="utf-8", timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert [p.name for p in tmp_path.iterdir()] == ["config.yaml"], "no temp file left behind"
+    before = template.split("\n")
+    after = cfg.read_text(encoding="utf-8").split("\n")
+    assert len(after) == len(before)
+    ollama_lines = [i for i, line in enumerate(before) if re.match(r"^\s*default_model:\s*ollama/", line)]
+    assert len(ollama_lines) == 1
+    enabled_lines = [
+        i for i, line in enumerate(before)
+        if i and before[i - 1].strip() == "type: ollama" and line.strip() == "enabled: false"
+    ]
+    assert len(enabled_lines) == 1
+    for i, (old, new) in enumerate(zip(before, after, strict=True)):
+        if i == ollama_lines[0] and model:
+            assert new == f'    default_model: "ollama/{model}"', (name, i)
+        elif i == enabled_lines[0] and enable == "1":
+            assert new == "    enabled: true", (name, i)
+        else:
+            assert new == old, (name, i)
 
 
 def test_install_ollama_startup_has_health_wait_and_logging() -> None:

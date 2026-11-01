@@ -59,6 +59,67 @@ persist_nvh_environment() {
     fi
 }
 
+write_default_config() {
+    # Render nvh's own default config.yaml into $1 with the venv Python:
+    # nvh.config.settings.generate_default_config() builds the advisor
+    # stanzas from the provider spec table and fills the Ollama default from
+    # the tier table, so this is the file `nvh config init` writes (install.sh
+    # does the same). The render goes to a sibling temp file and is moved into
+    # place only when it is non-blank, so a failure leaves nothing behind; its
+    # stderr reaches the terminal. Returns 1 on failure after one honest line
+    # naming `nvh config init`; the caller continues, it is not fatal.
+    local cfg="$1"
+    local tmp="$cfg.tmp.$$"
+    if ! "$NVH_VENV/bin/python" -c 'from nvh.config.settings import generate_default_config; import sys; sys.stdout.write(generate_default_config())' >"$tmp" \
+        || ! grep -q '[^[:space:]]' "$tmp"; then
+        rm -f "$tmp"
+        echo -e "${Y}Could not render the default config from the installed nvh; run 'nvh config init' to create $cfg.${N}"
+        return 1
+    fi
+    mv -f "$tmp" "$cfg"
+}
+
+set_config_ollama_model() {
+    # set_config_ollama_model <config.yaml> <ollama tag> [enable]
+    # Rewrite the whole `default_model: ollama/...` line with the shell's tier
+    # pick (the same whole-line replacement install.sh makes), so the pick made
+    # from this Mac's unified pool wins over the template's own Ollama line; an
+    # empty pick leaves that line alone. With a third argument of 1 the Ollama
+    # stanza, which nvh's template writes disabled, is switched on as well (the
+    # flip `nvh config init` makes when a daemon answers): the caller passes it
+    # on Apple Silicon, where this install sets Ollama up and pulls the pick,
+    # tier pick or not. The rewrite goes through a sibling temp file and
+    # os.replace, so a failure leaves the file as it was.
+    local cfg="$1"
+    local model="$2"
+    local enable="${3:-0}"
+    if [ -z "$model" ] && [ "$enable" != "1" ]; then
+        return 0
+    fi
+    CFG="$cfg" MODEL="$model" ENABLE="$enable" "$NVH_VENV/bin/python" - <<'PY'
+import os
+import re
+from pathlib import Path
+
+path = Path(os.environ["CFG"])
+model = os.environ["MODEL"]
+default_re = re.compile(r'^(\s*)default_model:\s*[\'"]?ollama/')
+out_lines = []
+for line in path.read_text(encoding="utf-8").split("\n"):
+    m = default_re.match(line)
+    out_lines.append(f'{m.group(1)}default_model: "ollama/{model}"' if m and model else line)
+updated = "\n".join(out_lines)
+if os.environ.get("ENABLE") == "1":
+    updated = updated.replace(
+        "    type: ollama\n    enabled: false",
+        "    type: ollama\n    enabled: true",
+    )
+tmp = path.with_name(f"{path.name}.rewrite.{os.getpid()}")
+tmp.write_text(updated, encoding="utf-8")
+os.replace(tmp, path)
+PY
+}
+
 echo ""
 echo -e "${G}╔══════════════════════════════════════╗${N}"
 echo -e "${G}║    NVHive — macOS Quick Install      ║${N}"
@@ -216,72 +277,26 @@ fi
 # ---------------------------------------------------------------------------
 # Auto-config
 # ---------------------------------------------------------------------------
+# nvh owns the one default-config template: `nvh config init` writes
+# generate_default_config(), whose advisor stanzas are rendered from the
+# provider facts table. The installer writes that same file and then lets
+# this Mac's tier pick override the Ollama line; no provider or model is
+# typed here. If the installed nvh cannot render it, nothing is written and
+# `nvh config init` creates it later.
 mkdir -p "$NVH_CONFIG"
 if [ ! -f "$NVH_CONFIG/config.yaml" ]; then
     echo -e "${B}Creating auto-config...${N}"
-    cat > "$NVH_CONFIG/config.yaml" << 'CFGEOF'
-version: "1"
-
-defaults:
-  mode: ask
-  output: text
-  stream: true
-  max_tokens: 4096
-  temperature: 1.0
-  show_metadata: true
-
-advisors:
-  ollama:
-    base_url: http://localhost:11434
-    default_model: ollama/__NVH_DEFAULT_OLLAMA_MODEL__
-    type: ollama
-    enabled: true
-
-  llm7:
-    default_model: gpt-oss
-    type: llm7
-    enabled: true
-
-  groq:
-    api_key: ${GROQ_API_KEY}
-    default_model: groq/openai/gpt-oss-120b
-    enabled: false
-
-  openai:
-    api_key: ${OPENAI_API_KEY}
-    default_model: gpt-5.6-terra
-    enabled: false
-
-  anthropic:
-    api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-sonnet-5
-    enabled: false
-
-budget:
-  daily_limit_usd: 10
-  monthly_limit_usd: 50
-  hard_stop: true
-
-cache:
-  enabled: true
-  ttl_seconds: 86400
-  max_size: 1000
-CFGEOF
-    CFG="$NVH_CONFIG/config.yaml" MODEL="$DEFAULT_OLLAMA_MODEL" "$NVH_VENV/bin/python" - <<'PY'
-import os
-from pathlib import Path
-
-path = Path(os.environ["CFG"])
-model = os.environ["MODEL"]
-lines = path.read_text(encoding="utf-8").split("\n")
-if model:
-    lines = [line.replace("__NVH_DEFAULT_OLLAMA_MODEL__", model) for line in lines]
-else:
-    # No tier resolved: drop the line so nvh's own default applies.
-    lines = [line for line in lines if "__NVH_DEFAULT_OLLAMA_MODEL__" not in line]
-path.write_text("\n".join(lines), encoding="utf-8")
-PY
-    echo -e "${G}Config created: $NVH_CONFIG/config.yaml${N}"
+    # The Ollama stanza is switched on only where this install sets Ollama up
+    # below (Apple Silicon); an Intel Mac keeps it as nvh renders it.
+    OLLAMA_STANZA_ENABLE=0
+    if [ "$APPLE_SILICON" = "true" ]; then OLLAMA_STANZA_ENABLE=1; fi
+    if write_default_config "$NVH_CONFIG/config.yaml"; then
+        if set_config_ollama_model "$NVH_CONFIG/config.yaml" "$DEFAULT_OLLAMA_MODEL" "$OLLAMA_STANZA_ENABLE"; then
+            echo -e "${G}Config created: $NVH_CONFIG/config.yaml${N}"
+        else
+            echo -e "${Y}Config created as nvh renders it: $NVH_CONFIG/config.yaml (the Ollama stanza could not be adjusted; 'nvh config init --force' redoes it once Ollama is up).${N}"
+        fi
+    fi
 fi
 
 # ---------------------------------------------------------------------------
