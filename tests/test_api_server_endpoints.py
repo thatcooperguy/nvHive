@@ -1502,8 +1502,12 @@ class TestRunServerDefaults:
         fake_uvicorn = types.ModuleType("uvicorn")
         fake_uvicorn.run = lambda *a, **kw: calls.append((a, kw))  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+        # run_server() writes these into os.environ; `delenv(raising=False)` on
+        # an absent name records nothing, so the values would leak into every
+        # later test in the process (CI runs one process). Own them first.
         for var in ("NVH_API_PORT", "NVH_API_SERVER_PROCESS", "NVH_API_BIND_HOST"):
-            monkeypatch.delenv(var, raising=False)
+            monkeypatch.setenv(var, os.environ.get(var, ""))
+            monkeypatch.delenv(var)
         monkeypatch.setattr(app.state, "bind_host", None, raising=False)
         return calls
 

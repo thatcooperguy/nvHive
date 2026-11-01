@@ -33,6 +33,8 @@ def test_service_registry_reports_comfyui_url(tmp_path, monkeypatch) -> None:
 
 def test_service_registry_summarizes_api_webui_and_ollama(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    for var in ("NVH_API_PORT", "NVH_API_SERVER_PROCESS", "NVH_API_BIND_HOST"):
+        monkeypatch.delenv(var, raising=False)  # a leaked run_server() env must not pick the port
     monkeypatch.setattr(service_registry, "_port_open", lambda host, port, timeout=0.25: port in {8000, 3000, 11434})
     monkeypatch.setattr(service_registry, "_http_ok", lambda url, timeout=0.75: True)
 
@@ -76,6 +78,8 @@ def test_service_registry_summarizes_api_webui_and_ollama(tmp_path, monkeypatch)
 
 def test_service_health_report_includes_ports_actions_and_friendly_copy(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("NVH_HOME", str(tmp_path / "nvh"))
+    for var in ("NVH_API_PORT", "NVH_API_SERVER_PROCESS", "NVH_API_BIND_HOST"):
+        monkeypatch.delenv(var, raising=False)  # a leaked run_server() env must not pick the port
     monkeypatch.setattr(service_registry, "_port_open", lambda host, port, timeout=0.25: port == 8000)
     monkeypatch.setattr(service_registry, "_http_ok", lambda url, timeout=0.75: "8000" in url)
 
