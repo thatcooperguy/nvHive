@@ -1726,3 +1726,175 @@ class TestModelsEndpoint:
             assert {"supports_function_calling", "cost_known", "deprecation_date", "successor"} <= set(row)
         finally:
             server_module._LIVE_MODELS_CACHE.clear()
+
+
+class TestCostKnown:
+    """``cost_known`` rides beside every ``cost_usd`` the API sends (0.46): the
+    catalog's verdict on the model that answered, so a client can tell a
+    free reply from a $0 nobody priced."""
+
+    @staticmethod
+    def _sse_done(text: str) -> dict:
+        blocks = [b for b in text.split("\n\n") if b.startswith("event: done")]
+        assert blocks, text
+        return json.loads(blocks[0].split("data: ", 1)[1])
+
+    def test_query_envelope_carries_cost_known(self, client):
+        r = client.post("/v1/query", json={"prompt": "hi", "provider": "alpha"})
+        assert r.status_code == 200
+        data = r.json()["data"]
+        # The mock provider bills $0.001: a non-zero cost is known whatever
+        # the catalog says about model "m".
+        assert data["cost_usd"] == "0.001" and data["cost_known"] is True
+
+    def test_sse_done_event_carries_cost_known(self, client):
+        r = client.post("/v1/query", json={"prompt": "hi", "provider": "alpha", "stream": True})
+        assert r.status_code == 200
+        done = self._sse_done(r.text)
+        assert done["cost_usd"] == "0.001" and done["cost_known"] is True
+
+    def test_council_envelope_carries_cost_known(self, client):
+        r = client.post("/v1/council", json={"prompt": "hi", "members": ["alpha"], "synthesize": False})
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["cost_known"] is True
+        assert data["member_responses"] and all(
+            m["cost_known"] is True for m in data["member_responses"].values()
+        )
+
+    def test_serialize_completion_asks_the_catalog_about_a_zero_bill(self):
+        """A $0 reply is known only when the catalog prices the model or the
+        provider is zero_cost; an unlisted model on a paid provider is
+        unknown. The verdict is the loaded catalog's, never a table here."""
+        orig = server_module._engine
+        server_module._engine = _make_engine()
+        try:
+            reg = server_module._engine.registry
+            reg.load_capabilities()
+            rows = reg.list_models()
+            priced = next(m for m in rows if m.cost_known)
+            unpriced = next((m for m in rows if not m.cost_known), None)
+
+            metered = Usage(input_tokens=3, output_tokens=2, total_tokens=5)
+
+            def zero(model, provider, usage=metered):
+                return CompletionResponse(content="", model=model, provider=provider,
+                                          usage=usage, cost_usd=Decimal("0"))
+
+            assert server_module._serialize_completion(zero(priced.model_id, priced.provider))["cost_known"] is True
+            if unpriced is not None:
+                assert server_module._serialize_completion(
+                    zero(unpriced.model_id, unpriced.provider))["cost_known"] is False
+            assert server_module._serialize_completion(zero("nobody/priced-this", "openai"))["cost_known"] is False
+            # No row, but a zero_cost provider: a known $0.
+            assert server_module._serialize_completion(zero("nobody/priced-this", "ollama"))["cost_known"] is True
+            billed = CompletionResponse(content="", model="nobody/priced-this", provider="openai",
+                                        usage=Usage(), cost_usd=Decimal("0.002"))
+            assert server_module._serialize_completion(billed)["cost_known"] is True
+        finally:
+            server_module._engine = orig
+
+    def test_a_zero_from_a_paid_model_is_known_only_when_the_reply_was_metered(self):
+        """A priced (paid) model's $0 with no usage was billed upstream: unknown.
+        With tokens it is a known $0. An id the YAML catalog lacks but LiteLLM's
+        table prices gets the same verdict from that table (derived, not typed)."""
+        from nvh.providers.registry import _litellm_table
+
+        orig = server_module._engine
+        server_module._engine = _make_engine()
+        try:
+            reg = server_module._engine.registry
+            reg.load_capabilities()
+            rows = reg.list_models()
+            paid = next(m for m in rows if m.cost_known and (m.input_cost_per_1m_tokens or m.output_cost_per_1m_tokens))
+
+            def zero(model, provider, usage):
+                return CompletionResponse(content="", model=model, provider=provider, usage=usage, cost_usd=Decimal("0"))
+
+            metered = Usage(input_tokens=3, output_tokens=2, total_tokens=5)
+            assert server_module._serialize_completion(zero(paid.model_id, paid.provider, metered))["cost_known"] is True
+            assert server_module._serialize_completion(zero(paid.model_id, paid.provider, Usage()))["cost_known"] is False
+            table = _litellm_table() or {}
+            listed = {m.model_id for m in rows}
+            echoed = next((k for k, v in table.items() if isinstance(v, dict) and v.get("litellm_provider") == "openai"
+                           and v.get("input_cost_per_token") and k not in listed), None)
+            if echoed is not None:
+                assert server_module._serialize_completion(zero(echoed, "openai", metered))["cost_known"] is True
+                assert server_module._serialize_completion(zero(echoed, "openai", Usage()))["cost_known"] is False
+        finally:
+            server_module._engine = orig
+
+    def test_a_cache_hit_is_a_known_zero_whatever_model_id_the_provider_echoed(self):
+        """The cached copy costs $0 by construction and keeps the provider's
+        echoed model id (a dated snapshot the catalog may not list):
+        ``cache_hit`` decides, the same reply uncached is unknown."""
+        hit = CompletionResponse(content="", model="nobody/priced-this", provider="openai",
+                                 usage=Usage(input_tokens=3, output_tokens=2, total_tokens=5),
+                                 cost_usd=Decimal("0"), cache_hit=True)
+        assert server_module._serialize_completion(hit)["cost_known"] is True
+        miss = hit.model_copy(update={"cache_hit": False})
+        assert server_module._serialize_completion(miss)["cost_known"] is False
+
+    def test_a_council_that_priced_nothing_is_not_a_known_zero(self, client):
+        """Every member failed and nothing was synthesised: ``all([])`` must not
+        turn the $0 total into a price."""
+        from nvh.core.council import CouncilResponse
+
+        empty = CouncilResponse(
+            member_responses={}, failed_members={"alpha": "Timed out"}, synthesis=None, strategy="majority_vote",
+            total_cost_usd=Decimal("0"), total_latency_ms=1, quorum_met=False, members=[],
+        )
+        with patch.object(server_module._engine, "run_council", new_callable=AsyncMock, return_value=empty):
+            r = client.post("/v1/council", json={"prompt": "hi", "members": ["alpha"], "synthesize": False})
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["member_responses"] == {} and data["total_cost_usd"] == "0" and data["cost_known"] is False
+
+    def test_persisted_messages_carry_the_catalogs_verdict_on_reload(self, client):
+        """A stored assistant row keeps model, provider, cost and tokens, so the
+        verdict is recomputed on read and a reload shows the pill the live reply
+        did; a row without a model (a council total) carries no verdict."""
+        cid = client.post("/v1/conversations", json={"title": "Pills"}).json()["data"]["id"]
+        url = f"/v1/conversations/{cid}/messages"
+        user = client.post(url, json={"role": "user", "content": "hello", "tokens": 3}).json()["data"]
+        billed = client.post(url, json={"role": "assistant", "content": "a", "provider": "alpha", "model": "m",
+                                        "tokens": 7, "cost_usd": "0.002"}).json()["data"]
+        unpriced = client.post(url, json={"role": "assistant", "content": "b", "provider": "alpha", "model": "m",
+                                          "tokens": 7, "cost_usd": "0"}).json()["data"]
+        free = client.post(url, json={"role": "assistant", "content": "c", "provider": "ollama",
+                                      "model": "nobody/priced-this", "tokens": 7, "cost_usd": "0"}).json()["data"]
+        council = client.post(url, json={"role": "assistant", "content": "d", "tokens": 0, "cost_usd": "0"}).json()["data"]
+        assert "cost_known" not in user and "cost_known" not in council
+        assert billed["cost_known"] is True and unpriced["cost_known"] is False and free["cost_known"] is True
+        detail = client.get(f"/v1/conversations/{cid}").json()["data"]
+        by_content = {m["content"]: m for m in detail["messages"]}
+        assert "cost_known" not in by_content["hello"] and "cost_known" not in by_content["d"]
+        assert by_content["a"]["cost_known"] is True
+        assert by_content["b"]["cost_known"] is False
+        assert by_content["c"]["cost_known"] is True
+
+    def test_agent_envelope_cost_known_until_the_loop_records_it(self):
+        """``/v1/smart``'s agent envelope: AgentResult.cost_known is the loop's
+        verdict (every step's model checked as it answered); a result without
+        the flag (a test double) is known only when every step reported a cost
+        and the total is non-zero (a $0 the steps cannot attribute is unknown)."""
+        from types import SimpleNamespace
+
+        from nvh.core.agent_loop import AgentResult
+
+        def step(cost):
+            return SimpleNamespace(cost_usd=cost)
+
+        def result(steps, total, **extra):
+            return SimpleNamespace(steps=steps, total_cost_usd=Decimal(total), **extra)
+
+        known = server_module._agent_cost_known
+        assert known(result([step(Decimal("0.01"))], "0.01")) is True
+        assert known(result([step(None), step(Decimal("0.01"))], "0.01")) is False
+        assert known(result([step(Decimal("0"))], "0")) is False
+        assert known(result([], "0", cost_known=True)) is True
+        assert known(result([step(Decimal("0.01"))], "0.01", cost_known=False)) is False
+        # The real AgentResult carries the loop's verdict: a free local run is a known $0.
+        free_run = AgentResult(task="t", final_response="", steps=[], total_iterations=1, total_tool_calls=0,
+                               completed=True, total_cost_usd=Decimal("0"), cost_known=True)
+        assert known(free_run) is True and AgentResult.__dataclass_fields__["cost_known"].default is True

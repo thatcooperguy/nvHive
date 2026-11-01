@@ -1,15 +1,38 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { costPill, formatCardCost } from '@/lib/cost';
+import type { CostPillState } from '@/lib/cost';
 import type { ChatMessage as ChatMessageType } from '@/lib/types';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function formatUSD(val: string | null | undefined): string {
-  if (!val) return '';
-  const n = parseFloat(val);
-  if (isNaN(n) || n === 0) return 'FREE';
-  return n < 0.001 ? `$${n.toFixed(5)}` : `$${n.toFixed(4)}`;
+/** Green for a priced zero, faint grey for an unknown cost, amber for a price. */
+function costPillColor(state: CostPillState): string {
+  return state === 'zero'
+    ? 'text-[#5a9100]'
+    : state === 'unknown'
+      ? 'text-[#a3a3a3] dark:text-[#737373]'
+      : 'text-[#d97706]';
+}
+
+/** The card's cost pill: "$x" when priced, "$0.0000" when a priced model cost
+ * nothing (never hidden), "cost unknown" with a hover explanation when the
+ * catalog has no price for the model (`cost_known: false`) — lib/cost.ts. */
+function CardCostPill({ costUsd, costKnown }: { costUsd: string | null | undefined; costKnown?: boolean }) {
+  const pill = costPill(costUsd, costKnown, formatCardCost);
+  if (!pill) return null;
+  const color = costPillColor(pill.state);
+  return (
+    <span
+      className={`text-[10px] font-mono ${color}`}
+      title={pill.title}
+      style={pill.title ? { cursor: 'help' } : undefined}
+      data-cost-state={pill.state}
+    >
+      {pill.text}
+    </span>
+  );
 }
 
 function timeStr(ts: number): string {
@@ -407,6 +430,9 @@ interface ExpertPanelProps {
 export function CouncilExpertPanel({ data }: ExpertPanelProps) {
   const COLORS = ['#2563eb', '#7c3aed', '#16a34a', '#d97706', '#0891b2', '#ea580c'];
   const order = data.member_order ?? Object.keys(data.member_responses);
+  // The total from `council_complete`: a price only when every member (and the
+  // synthesis) was priced, so the same three states as the cards.
+  const total = costPill(data.total_cost, data.cost_known, formatCardCost);
 
   return (
     <div className="space-y-3 p-4">
@@ -432,17 +458,20 @@ export function CouncilExpertPanel({ data }: ExpertPanelProps) {
             </div>
             <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
               <span>{member.tokens} tokens</span>
-              {member.cost && parseFloat(member.cost) > 0 && (
-                <span className="text-[#d97706]">${parseFloat(member.cost).toFixed(4)}</span>
-              )}
+              <CardCostPill costUsd={member.cost} costKnown={member.cost_known} />
               {member.latency_ms && <span>{member.latency_ms}ms</span>}
             </div>
           </div>
         );
       })}
-      {data.total_cost && parseFloat(data.total_cost) > 0 && (
-        <div className="text-[10px] font-mono text-[#d97706] pt-2 border-t border-[#e5e5e5] dark:border-[#262626]">
-          Total: ${parseFloat(data.total_cost).toFixed(4)}
+      {total && (
+        <div
+          className={`text-[10px] font-mono ${costPillColor(total.state)} pt-2 border-t border-[#e5e5e5] dark:border-[#262626]`}
+          title={total.title}
+          style={total.title ? { cursor: 'help' } : undefined}
+          data-cost-state={total.state}
+        >
+          Total: {total.text}
         </div>
       )}
     </div>
@@ -493,7 +522,6 @@ export default function ChatMessage({ message }: ChatMessageProps) {
   }
 
   // Assistant message
-  const costStr = formatUSD(message.cost_usd);
   const isCouncil = message.mode === 'council' || !!message.council_data;
   const isCompare = message.mode === 'compare' || !!message.compare_data;
 
@@ -544,11 +572,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
             {message.tokens && message.tokens > 0 && (
               <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{message.tokens} tokens</span>
             )}
-            {costStr && (
-              <span className={`text-[10px] font-mono ${costStr === 'FREE' ? 'text-[#5a9100]' : 'text-[#d97706]'}`}>
-                {costStr}
-              </span>
-            )}
+            <CardCostPill costUsd={message.cost_usd} costKnown={message.cost_known} />
             {message.latency_ms && message.latency_ms > 0 && (
               <span className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{message.latency_ms}ms</span>
             )}
@@ -585,11 +609,7 @@ function CompareContent({ data }: { data: NonNullable<ChatMessageType['compare_d
             </div>
             <div className="flex gap-3 mt-2 text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
               {resp.tokens && <span>{resp.tokens} tokens</span>}
-              {resp.cost_usd && parseFloat(resp.cost_usd) > 0 ? (
-                <span className="text-[#d97706]">${parseFloat(resp.cost_usd).toFixed(4)}</span>
-              ) : (
-                <span className="text-[#5a9100]">FREE</span>
-              )}
+              <CardCostPill costUsd={resp.cost_usd} costKnown={resp.cost_known} />
               {resp.latency_ms && <span>{Math.round(resp.latency_ms)}ms</span>}
             </div>
           </div>

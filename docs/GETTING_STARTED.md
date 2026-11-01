@@ -278,12 +278,17 @@ is quoted in the plan's notes. Further rules of the road:
   the run stops before the script runs when the file has changed. The VS Code
   `.deb` is verified against Microsoft's published manifest and its version is
   recorded, so no step installs an unverified vendor package as root.
-- **Cancelling.** Stopping a running playbook from the Jobs panel stops it
-  after the current step: nothing further starts, and the receipt says which
-  step it stopped after. A host command already in flight cannot be
-  interrupted (it may finish on its own); the receipt and the vault note then
-  record it as in flight, so `nvh playbook list` and the repair plan stay
-  honest.
+- **Cancelling.** Stopping a running playbook from the Jobs panel stops the
+  command that is running as well as everything after it: the step's process
+  group gets SIGTERM, five seconds, then SIGKILL (and, for a `sudo` step whose
+  root-owned command outlives that, `sudo -n kill -KILL` on the group),
+  nothing further starts, and the receipt says which step it stopped during
+  or after, with the exit code and the output that had arrived. A command
+  that finished on its own before the stop landed is recorded as its plain
+  exit, and when the signals cannot be shown to have stopped a command the
+  receipt and the vault note say so (`kill_failed`: it may still be running
+  on the host) rather than claiming a kill, so `nvh playbook list` and the
+  repair plan stay honest.
 - **Linux only.** `nvh playbook plan` and `install` — and the Wizard's
   `playbook_plan` / `playbook_install` — refuse in plain words on Windows and
   macOS, where the steps (apt, systemd, docker) cannot run; `nvh playbook

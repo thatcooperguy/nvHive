@@ -72,11 +72,14 @@ import asyncio
 import getpass
 import json
 import logging
+import os
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
@@ -91,6 +94,27 @@ DEFAULT_TIMEOUT_S = 120
 INSTALL_TIMEOUT_S = 900
 PROBE_TIMEOUT_S = 5
 MAX_PACKAGES = 20
+#: Seconds between the killable runner's re-reads of the cancel flag while a command runs (each wait is a
+#: blocking ``communicate(timeout=...)``, not a spin).
+CANCEL_POLL_S = 0.5
+#: Seconds a signalled process group gets after SIGTERM before SIGKILL.
+KILL_GRACE_S = 5.0
+#: Seconds ``sudo -n kill -KILL`` gets: the root escalation for a ``sudo`` step whose command outlived SIGKILL.
+KILL_ESCALATE_S = 3.0
+#: Seconds the killable runner waits for a reaped child's pipes after the kill before closing them itself.
+KILL_PIPE_WAIT_S = 1.0
+
+
+def stop_worst_case_s(*, poll_s: float = CANCEL_POLL_S, grace_s: float = KILL_GRACE_S) -> float:
+    """The longest :func:`run_host_command_killable` can take to report after the cancel flag goes up.
+
+    One poll (the flag is read between ``communicate`` timeouts), the
+    SIGTERM grace, the SIGKILL grace, the root escalation and its grace (a
+    ``sudo`` step whose command outlived SIGKILL), then the wait for a
+    reaped child's pipes. The playbook engine's cancel handler waits this
+    long, plus slack of its own, for the runner's report.
+    """
+    return poll_s + 2 * grace_s + KILL_ESCALATE_S + grace_s + KILL_PIPE_WAIT_S
 
 NEEDS_TERMINAL_HINT = "run this in a terminal; nvHive never asks for your password"
 CANNOT_ELEVATE_ERROR = "this account cannot elevate"
@@ -326,6 +350,47 @@ def render_command(argv: Sequence[str], *, sudo: bool = False, sudo_user: str | 
     return shlex.join(_human_argv(argv, sudo=sudo, sudo_user=sudo_user))
 
 
+def _resolve_host_command(
+    argv: Sequence[str], *, sudo: bool, sudo_user: str | None, interactive: bool,
+) -> list[str] | dict[str, Any]:
+    """Steps 1 and 2 of :func:`run_host_command`: the argv to spawn, or the refusal dict to return.
+
+    Shared with :func:`run_host_command_killable` so both runners refuse the
+    same commands and pick the same ``sudo`` prefix -- one deny list, one
+    elevation rule, whatever spawns afterwards.
+    """
+    words = [str(w) for w in argv]
+    if not words:
+        return {"ok": False, "error": "empty command"}
+    if not sudo:
+        sudo_user = None
+    human = render_command(words, sudo=sudo, sudo_user=sudo_user)
+
+    reason = denied_reason(_human_argv(words, sudo=sudo, sudo_user=sudo_user))
+    if reason:
+        return {"ok": False, "denied": True, "error": reason, "command": human}
+    if not sudo:
+        return words
+
+    facts = _facts()
+    unsupported = system_changes_unavailable(facts.os)
+    if unsupported:
+        return {"ok": False, "unsupported_host": True, "applied": False, "error": unsupported, "command": human}
+    as_user = ["-u", sudo_user] if sudo_user else []
+    if facts.has_root and not sudo_user:
+        return words
+    if interactive:
+        elevates = facts.has_root or facts.can_sudo or facts.in_sudo_group
+        if not elevates and not getattr(facts, "host_probe_pending", False):
+            return {"ok": False, "error": CANNOT_ELEVATE_ERROR, "command": human}
+        return ["sudo", *as_user, *words]
+    if facts.can_sudo or facts.has_root:
+        return ["sudo", "-n", *as_user, *words]
+    if facts.in_sudo_group:
+        return {"ok": False, "needs_terminal": True, "command": human, "hint": NEEDS_TERMINAL_HINT}
+    return {"ok": False, "error": CANNOT_ELEVATE_ERROR, "command": human}
+
+
 def run_host_command(
     argv: Sequence[str],
     *,
@@ -337,9 +402,11 @@ def run_host_command(
 ) -> dict[str, Any]:
     """Run one host command; never raises, never asks for a password itself.
 
-    The one runner behind the Wizard's privileged tools and playbook jobs
-    (``interactive=False``) and the CLI's ``nvh playbook install`` in the
-    user's own terminal (``interactive=True``). Order of business:
+    The runner behind the Wizard's privileged tools, the playbook jobs'
+    check probes (``interactive=False``) and the CLI's ``nvh playbook
+    install`` in the user's own terminal (``interactive=True``); the jobs'
+    steps go through :func:`run_host_command_killable`, which shares steps
+    1 and 2 below. Order of business:
 
     1. :func:`denied_reason` on the rendered command → ``{ok: False, denied: True, error}``.
     2. ``sudo=True`` picks the prefix from the platform facts. Off Linux there
@@ -371,39 +438,14 @@ def run_host_command(
 
     Returns ``{ok, command, exit_code, stdout, stderr}`` on a run
     (``ok`` is ``exit_code == 0``), or one of the refusal shapes above.
+
+    The playbook job runner's steps go through
+    :func:`run_host_command_killable` instead: the same steps 1 and 2
+    (:func:`_resolve_host_command`), then a spawn a cancel can kill.
     """
-    words = [str(w) for w in argv]
-    if not words:
-        return {"ok": False, "error": "empty command"}
-    if not sudo:
-        sudo_user = None
-    human = render_command(words, sudo=sudo, sudo_user=sudo_user)
-
-    reason = denied_reason(_human_argv(words, sudo=sudo, sudo_user=sudo_user))
-    if reason:
-        return {"ok": False, "denied": True, "error": reason, "command": human}
-
-    full = words
-    if sudo:
-        facts = _facts()
-        unsupported = system_changes_unavailable(facts.os)
-        if unsupported:
-            return {"ok": False, "unsupported_host": True, "applied": False, "error": unsupported, "command": human}
-        as_user = ["-u", sudo_user] if sudo_user else []
-        if facts.has_root and not sudo_user:
-            full = words
-        elif interactive:
-            elevates = facts.has_root or facts.can_sudo or facts.in_sudo_group
-            if not elevates and not getattr(facts, "host_probe_pending", False):
-                return {"ok": False, "error": CANNOT_ELEVATE_ERROR, "command": human}
-            full = ["sudo", *as_user, *words]
-        elif facts.can_sudo or facts.has_root:
-            full = ["sudo", "-n", *as_user, *words]
-        elif facts.in_sudo_group:
-            return {"ok": False, "needs_terminal": True, "command": human, "hint": NEEDS_TERMINAL_HINT}
-        else:
-            return {"ok": False, "error": CANNOT_ELEVATE_ERROR, "command": human}
-
+    full = _resolve_host_command(argv, sudo=sudo, sudo_user=sudo_user, interactive=interactive)
+    if isinstance(full, dict):
+        return full
     rendered = shlex.join(full)
     # ``capture_output`` and explicit ``stdout``/``stderr`` are mutually exclusive
     # for subprocess.run, so the streaming (echo) form passes the latter.
@@ -429,6 +471,244 @@ def run_host_command(
         "stdout": _clean_output(proc.stdout),
         "stderr": _clean_output(proc.stderr),
     }
+
+
+def _own_process_group_kwargs() -> dict[str, Any]:
+    """``Popen`` keywords that put the command in a process group of its own, so a kill reaches its children too.
+
+    POSIX: ``start_new_session=True`` (``setsid()`` in the child, so its
+    process-group id is its pid). Windows: ``CREATE_NEW_PROCESS_GROUP`` --
+    the playbook engine refuses off Linux before anything spawns, so this
+    branch keeps the module importable and the runner usable from a test,
+    nothing more (a faked ``subprocess`` may lack the constant: no flag then).
+    """
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}
+
+
+def _root_kill_supported() -> bool:
+    """Whether ``sudo -n kill`` can end a ``sudo`` step's group here (POSIX only; a test seam)."""
+    return os.name != "nt"
+
+
+def _signal_group(proc: Any, *, hard: bool) -> None:
+    """SIGTERM (``hard=False``) or SIGKILL (``hard=True``) the command's whole process group; never raises.
+
+    The group id is the child's pid (:func:`_own_process_group_kwargs`), so
+    a ``sudo`` step's ``sudo`` and the command it runs are both signalled --
+    and ``sudo`` relays a SIGTERM to its command in any case. A group that
+    is already gone is not an error. Off POSIX, or when the group cannot be
+    signalled, the child alone is terminated or killed. Nothing here says
+    whether a signal was delivered: an unprivileged nvHive cannot signal the
+    root-owned command behind ``sudo -n`` (EPERM per process, and ``killpg``
+    still returns 0 for the ``sudo`` it could reach), so :func:`_stop_group`
+    judges the stop by ``poll()`` and the pipes, never by the send. Tests
+    patch this one seam so a fake process is signalled instead of a real pid.
+    """
+    if os.name != "nt":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL if hard else signal.SIGTERM)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass  # EPERM and friends: fall back to the child itself
+    try:
+        (proc.kill if hard else proc.terminate)()
+    except OSError:
+        pass
+
+
+@dataclass
+class _Stop:
+    """What :func:`_stop_group` found.
+
+    ``how`` is the signal that ended the command (``"SIGTERM"`` /
+    ``"SIGKILL"``), or ``None`` when it had already exited on its own before
+    any signal was sent (the poll had not reaped it yet): a plain exit, not
+    a kill. ``survivor`` is set when the kill did not reach everything --
+    the child itself is still alive after SIGKILL, or a process outside the
+    signal's reach kept the command's pipes open -- and says what, in the
+    words the receipt carries.
+    """
+
+    stdout: bytes | None
+    stderr: bytes | None
+    how: str | None
+    survivor: str | None = None
+
+
+def _root_kill_group(pgid: int) -> None:
+    """``sudo -n kill -KILL -- -<pgid>``: end a ``sudo`` step's group as root; never raises, bounded by ``KILL_ESCALATE_S``.
+
+    The command behind ``sudo -n`` runs as root, so an unprivileged
+    ``killpg`` skips it (EPERM per process, silently) and SIGKILL, unlike
+    SIGTERM, is nothing ``sudo`` can relay. The same passwordless sudo that
+    started the step can end it; without one the attempt fails fast.
+    """
+    try:
+        subprocess.run(
+            ["sudo", "-n", "kill", "-KILL", "--", f"-{pgid}"],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=KILL_ESCALATE_S,
+        )
+    except Exception:
+        pass
+
+
+def _stop_group(proc: Any, *, grace_s: float, sudo: bool = False) -> _Stop:
+    """Stop a running command's process group: SIGTERM, wait ``grace_s``, SIGKILL, then (a ``sudo`` step) ``sudo -n kill``.
+
+    ``communicate`` drains and closes the pipes and reaps the child (no
+    zombie). A command that exited on its own since the last poll is reaped
+    and reported as the plain exit it was (``how`` ``None``), never as a
+    kill. When something still holds the pipes after SIGKILL (and, for a
+    ``sudo`` step, the root escalation), they are closed here so no reader
+    hangs on them -- the output that had arrived is lost with them -- and
+    ``survivor`` says what the kill did not reach, so the receipt records the
+    command as possibly still running rather than as killed.
+    """
+    if proc.poll() is not None:
+        try:
+            out, err = proc.communicate(timeout=grace_s)
+            return _Stop(out, err, None)
+        except subprocess.TimeoutExpired:
+            _close_pipes(proc)
+            return _Stop(None, None, None)
+    _signal_group(proc, hard=False)
+    try:
+        out, err = proc.communicate(timeout=grace_s)
+        return _Stop(out, err, "SIGTERM")
+    except subprocess.TimeoutExpired:
+        pass
+    _signal_group(proc, hard=True)
+    try:
+        out, err = proc.communicate(timeout=grace_s)
+        return _Stop(out, err, "SIGKILL")
+    except subprocess.TimeoutExpired:
+        pass
+    if sudo and _root_kill_supported():
+        _root_kill_group(proc.pid)
+        try:
+            out, err = proc.communicate(timeout=grace_s)
+            return _Stop(out, err, "SIGKILL")
+        except subprocess.TimeoutExpired:
+            pass
+    _close_pipes(proc)
+    try:
+        proc.wait(timeout=KILL_PIPE_WAIT_S)
+    except Exception:
+        pass
+    if proc.returncode is None:
+        return _Stop(None, None, "SIGKILL", survivor="the command did not stop")
+    if sudo:
+        return _Stop(
+            None, None, "SIGKILL",
+            survivor="`sudo` died but the command it ran as root kept going (nvHive cannot signal a root process)",
+        )
+    return _Stop(None, None, "SIGKILL", survivor="a process it started kept running")
+
+
+def _close_pipes(proc: Any) -> None:
+    """Close the command's stdout/stderr pipes ourselves (something else still holds the write ends)."""
+    for stream in (proc.stdout, proc.stderr):
+        try:
+            if stream is not None:
+                stream.close()
+        except Exception:
+            pass
+
+
+def run_host_command_killable(
+    argv: Sequence[str],
+    *,
+    sudo: bool,
+    timeout: float = DEFAULT_TIMEOUT_S,
+    sudo_user: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
+    poll_s: float = CANCEL_POLL_S,
+    grace_s: float = KILL_GRACE_S,
+) -> dict[str, Any]:
+    """:func:`run_host_command` for a command a cancel must be able to stop; never raises, never prompts.
+
+    The playbook job runner's step runner. The same deny list and the same
+    ``sudo -n`` rule as :func:`run_host_command` (:func:`_resolve_host_command`)
+    and the same ``stdin=DEVNULL``; then ``subprocess.Popen`` in a process
+    group of its own (:func:`_own_process_group_kwargs`) with stdout and
+    stderr piped. While the command runs the calling thread wakes every
+    ``poll_s`` seconds (``communicate(timeout=poll_s)`` -- a blocking wait,
+    not a spin; retrying it loses no output) and asks ``should_stop()``; the
+    first True sends the whole group SIGTERM, waits ``grace_s``, then
+    SIGKILL (:func:`_stop_group`), and the result carries ``killed``
+    (``"SIGTERM"`` / ``"SIGKILL"``) with the exit code the signal left
+    (``-15`` / ``-9`` on POSIX). A command that had exited on its own
+    between the poll and the stop is reported as that plain exit, with no
+    ``killed``. A ``sudo`` step whose root-owned command outlives SIGKILL is
+    killed as root (``sudo -n kill -KILL`` on the group); when the signals
+    still cannot be shown to have stopped the command -- it is alive after
+    all of them, or something it started keeps its pipes open -- the result
+    carries ``kill_failed`` (why, in the receipt's words) instead of
+    ``killed``, so nothing downstream claims a kill that did not happen.
+    ``timeout`` is enforced the same way: the group is killed and the result
+    is the ``timed_out`` refusal :func:`run_host_command` returns.
+    ``communicate`` drains and closes the pipes and reaps the child, so a
+    killed command leaves no zombie and no open pipe behind. A
+    ``should_stop`` that raises is read as False -- a flag that cannot be
+    read is not a cancel.
+
+    Returns ``{ok, command, exit_code, stdout, stderr}`` as
+    :func:`run_host_command` does (plus ``killed`` or ``kill_failed`` after
+    a stop), or one of its refusal shapes.
+    """
+    full = _resolve_host_command(argv, sudo=sudo, sudo_user=sudo_user, interactive=False)
+    if isinstance(full, dict):
+        return full
+    rendered = shlex.join(full)
+    try:
+        proc = subprocess.Popen(
+            full, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            **_own_process_group_kwargs(),
+        )
+    except FileNotFoundError:
+        return {"ok": False, "error": f"{full[0]}: command not found", "command": rendered}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}", "command": rendered}
+
+    deadline = time.monotonic() + timeout
+    killed: str | None = None
+    survivor: str | None = None
+    sudo_step = full[0] == "sudo"
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _stop_group(proc, grace_s=grace_s, sudo=sudo_step)
+            return {"ok": False, "error": f"timed out after {timeout:g}s", "timed_out": True, "command": rendered}
+        try:
+            out, err = proc.communicate(timeout=max(0.01, min(poll_s, remaining)))
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            stop = bool(should_stop()) if should_stop is not None else False
+        except Exception:
+            stop = False
+        if stop:
+            stopped = _stop_group(proc, grace_s=grace_s, sudo=sudo_step)
+            out, err, killed, survivor = stopped.stdout, stopped.stderr, stopped.how, stopped.survivor
+            break
+
+    result: dict[str, Any] = {
+        "ok": proc.returncode == 0,
+        "command": rendered,
+        "exit_code": proc.returncode,
+        "stdout": _clean_output(out),
+        "stderr": _clean_output(err),
+    }
+    if survivor:
+        result["kill_failed"] = survivor  # signalled, not shown to have stopped: never "killed"
+    elif killed:
+        result["killed"] = killed
+    return result
 
 
 def _probe(argv: Sequence[str], *, timeout: float = PROBE_TIMEOUT_S) -> dict[str, Any] | None:

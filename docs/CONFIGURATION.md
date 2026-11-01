@@ -290,7 +290,12 @@ litellm <version>` header line is informational and not compared. A row
 that no source prices loads with `cost_known: false`: `nvh model list`
 prints `cost unknown` instead of `$0`, the router scores it as neutral
 rather than free, and the first request billed at the catalog rate or at
-`$0` logs once per model per process. Hugging Face's rows are `cost unknown`
+`$0` logs once per model per process. Every API envelope that carries
+`cost_usd` carries `cost_known` beside it, and the WebUI's cost pill shows
+`cost unknown` for `false`: a non-zero bill, a cache hit and a zero-cost
+provider's `$0` are known, a priced model's `$0` only when the provider
+metered the usage, and a council in which nothing was priced is unknown.
+Hugging Face's rows are `cost unknown`
 by design (`ProviderSpec.metered_upstream`): LiteLLM bills Inference
 Providers at `$0` and the upstream provider's rate lands on the HF account.
 A context window of `0` means unknown and is shown as `—`.

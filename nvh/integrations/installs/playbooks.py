@@ -21,7 +21,11 @@ systemd and docker, and the Spark runs DGX OS.
 
 Steps compile into :class:`nvh.integrations.wizard.system_settings.Step` /
 :class:`~nvh.integrations.wizard.system_settings.Plan` and both drivers run
-them through the one :func:`~nvh.integrations.wizard.system_settings.run_host_command`,
+them through that module's runners -- the job path's steps through
+:func:`~nvh.integrations.wizard.system_settings.run_host_command_killable`,
+its check probes and the CLI path through
+:func:`~nvh.integrations.wizard.system_settings.run_host_command`, which
+share one deny list and one sudo rule (``_resolve_host_command``) --
 so the deny list (``denied_reason``), the sudo matrix, timeouts and output
 redaction are inherited rather than re-implemented: the job path runs it as
 the Wizard does (``sudo -n`` only where the platform facts found passwordless
@@ -74,15 +78,30 @@ Every run that touched the host writes an install receipt (kind ``playbook``,
 honest ``no_root = not any sudo step ran``, repair plan
 ``nvh playbook install <id>``) and a vault ``Decisions/`` note through
 :func:`nvh.integrations.wizard.tools.audit_privileged_change` — including a
-cancelled job. Cancel semantics (W1-lite): the engine re-reads the job's
-``cancel_requested`` flag before every check probe and host command and after
-every step, so a cancel that arrives between steps stops the run before the
-next command starts and the receipt says ``stopped after step N``; a cancel
-that lands while a host command is running records that command as in
-flight (the worker thread cannot be interrupted, so it may have finished on
-the host); a job consumer that closes the stream early still gets the
-receipt written from the engine's close handler. Process-group kill is not
-attempted.
+cancelled job. Cancel semantics (W1-lite, and the 0.46 kill): the engine
+re-reads the job's ``cancel_requested`` flag before every check probe and
+host command and after every step, so a cancel that arrives between steps
+stops the run before the next command starts and the receipt says ``stopped
+after step N``. A job's host command runs in a process group of its own
+(:func:`~nvh.integrations.wizard.system_settings.run_host_command_killable`):
+its worker thread re-reads the same flag every ``CANCEL_POLL_S`` seconds
+while the command runs and, when it is up, SIGTERMs the group, waits
+``KILL_GRACE_S`` and SIGKILLs it -- the receipt says ``stopped during step N
+(command killed)`` with the exit code the signal left, pipes drained and
+closed, no zombie -- and the engine yields its own ``canceled`` event, so the
+job log and the vault note carry that account rather than a generic line.
+A command that exited on its own before the signal is recorded as the plain
+exit it was (``stopped after step N``), never as a kill; one the signals did
+not stop for sure (a root-owned command behind ``sudo`` that outlived
+SIGKILL and the ``sudo -n kill`` escalation) is recorded with ``kill_failed``
+as ``may still be running on the host``, not as killed; a step whose own
+deadline fired as the cancel landed keeps its ``timed out`` record. A repeat
+cancel while the handler waits for the runner's report does not cut the
+wait short. A
+task cancelled without the job's flag (a server shutdown) leaves the command
+alone and records it as in flight (it may finish on the host); a job consumer
+that closes the stream early still gets the receipt written from the engine's
+close handler.
 """
 
 from __future__ import annotations
@@ -99,7 +118,12 @@ from typing import Any
 import nvh.core.local_models as lm
 from nvh.integrations.services import receipts as _receipts
 from nvh.integrations.wizard import system_settings as ss
-from nvh.integrations.wizard.system_settings import Plan, Step, run_host_command
+from nvh.integrations.wizard.system_settings import (
+    Plan,
+    Step,
+    run_host_command,
+    run_host_command_killable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +167,9 @@ INSTALL_TIMEOUT_S = ss.INSTALL_TIMEOUT_S
 #: Model pulls, container image pulls and CUDA builds.
 LONG_TIMEOUT_S = 3600
 CHECK_TIMEOUT_S = 30
+#: The killable runner's poll cadence and SIGTERM grace (:mod:`system_settings` owns the values; read at call time).
+CANCEL_POLL_S = ss.CANCEL_POLL_S
+KILL_GRACE_S = ss.KILL_GRACE_S
 #: Lines of a step's output kept in the ``log`` event (the receipt and the audit keep more).
 LOG_TAIL_LINES = 20
 
@@ -1800,10 +1827,120 @@ CheckCommand = Callable[[Sequence[str]], Awaitable[dict[str, Any]]]
 CancelRequested = Callable[[], bool]
 
 
-async def _host_run(step: Step) -> dict[str, Any]:
+async def _host_run(step: Step, *, should_stop: CancelRequested | None = None) -> dict[str, Any]:
+    """One step on the host, in a worker thread, through the killable runner (the job path).
+
+    ``should_stop`` is the job's cancel flag: the thread polls it every
+    ``CANCEL_POLL_S`` seconds while the command runs and kills the command's
+    process group (SIGTERM, ``KILL_GRACE_S``, SIGKILL) when it goes up.
+    """
     return await asyncio.to_thread(
-        run_host_command, list(step.argv), sudo=step.sudo, sudo_user=step.sudo_user, timeout=step.timeout,
+        run_host_command_killable, list(step.argv), sudo=step.sudo, sudo_user=step.sudo_user, timeout=step.timeout,
+        should_stop=should_stop, poll_s=CANCEL_POLL_S, grace_s=KILL_GRACE_S,
     )
+
+
+def _flag_up(cancel_requested: CancelRequested | None, playbook_id: str) -> bool:
+    """Read the job's cancel flag; ``False`` without one, and when it cannot be read (that is not a cancel)."""
+    if cancel_requested is None:
+        return False
+    try:
+        return bool(cancel_requested())
+    except Exception:
+        logger.debug("cancel flag unreadable for playbook '%s'", playbook_id, exc_info=True)
+        return False
+
+
+def _settle_bound() -> float:
+    """How long the cancel handler waits for the runner thread's report: the runner's own worst case, plus slack.
+
+    The runner's side (:func:`system_settings.stop_worst_case_s`): one
+    poll, the SIGTERM grace, the SIGKILL grace, the root escalation and
+    its grace, the pipe wait. The slack covers the thread hand-off, the
+    output clean-up and event-loop latency, so a report that arrives at
+    the runner's worst case is still taken rather than dropped.
+    """
+    return ss.stop_worst_case_s(poll_s=CANCEL_POLL_S, grace_s=KILL_GRACE_S) + 2 * CANCEL_POLL_S + 2.0
+
+
+async def _settle_in_flight(
+    pending: asyncio.Future[dict[str, Any]] | None, timeout: float,
+) -> tuple[dict[str, Any] | None, int]:
+    """The runner's result once the cancelled step's thread reports back, and how many repeat cancels were absorbed.
+
+    Never cancels ``pending`` -- the thread is killing the command and must
+    finish its account. A repeat cancel of the task while waiting (the
+    Cancel button pressed again, the endpoint called twice) is absorbed and
+    counted so the wait still ends with the runner's report or at
+    ``timeout``; the caller uncancels the task once per absorbed cancel.
+    The result is ``None`` when the runner did not report in time.
+    """
+    if pending is None:
+        return None, 0
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    swallowed = 0
+    while not pending.done():
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
+        try:
+            await asyncio.wait({pending}, timeout=remaining)
+        except asyncio.CancelledError:
+            swallowed += 1
+    if not pending.done() or pending.cancelled() or pending.exception() is not None:
+        return None, swallowed
+    result = pending.result()
+    return (result if isinstance(result, dict) else None), swallowed
+
+
+def _forget(pending: asyncio.Future[Any] | None) -> None:
+    """Let a shielded step future finish on its own, without an "exception was never retrieved" warning."""
+    if pending is not None and not pending.done():
+        pending.add_done_callback(lambda fut: fut.cancelled() or fut.exception())
+
+
+def _killed_message(step_number: int, command: str, how: str) -> str:
+    """The mid-step cancel wording: the command was running and the runner killed its process group."""
+    if how == "SIGKILL":
+        ending = f"ignored SIGTERM for {KILL_GRACE_S:g}s and was killed with SIGKILL"
+    else:
+        ending = "was stopped with SIGTERM"
+    return f"canceled by the user — stopped during step {step_number} (command killed); `{command}` {ending}"
+
+
+def _kill_failed_message(step_number: int, title: str, command: str, reason: str) -> str:
+    """The wording when the runner signalled the command but cannot vouch that it stopped."""
+    return (
+        f"canceled by the user during step {step_number} ({title}) — `{command}` was signalled (SIGTERM, then SIGKILL) "
+        f"but {reason}; it may still be running on the host"
+    )
+
+
+def _timed_out_message(step_number: int, title: str, command: str, error: str) -> str:
+    """The wording when the step's own deadline killed the command as the cancel landed."""
+    return f"canceled by the user during step {step_number} ({title}) — `{command}` {error} and was killed by its deadline"
+
+
+def _unsettled_row(in_flight: Mapping[str, Any], result: Mapping[str, Any], **marks: Any) -> dict[str, Any]:
+    """The executed-steps row of a command the cancel did not stop for sure (``kill_failed`` / ``timed_out`` marks)."""
+    return {
+        **in_flight, "command": result.get("command") or in_flight["command"], "exit_code": result.get("exit_code"),
+        "stdout": result.get("stdout", ""), "stderr": result.get("stderr", ""), "canceled": True, **marks,
+    }
+
+
+def _killed_row(in_flight: Mapping[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
+    """The executed-steps row of a killed command: what ran, the exit code the signal left, the output that arrived."""
+    return {
+        **in_flight, "command": result.get("command") or in_flight["command"], "exit_code": result.get("exit_code"),
+        "stdout": result.get("stdout", ""), "stderr": result.get("stderr", ""), "canceled": True, "killed": result["killed"],
+    }
+
+
+def _killed_in_flight(in_flight: Mapping[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
+    """The receipt's ``in_flight`` record of a killed command: the step as the card showed it, plus how it ended."""
+    return {**in_flight, "killed": result["killed"], "exit_code": result.get("exit_code")}
 
 
 async def _host_check(argv: Sequence[str]) -> dict[str, Any]:
@@ -1826,8 +1963,11 @@ def _write_playbook_receipt(
     Sticky across runs: a second run that skipped the sudo steps (already
     done) must not turn an earlier ``no_root: False`` back into True. A
     cancelled run records ``stopped_after_step`` (how many steps had
-    finished) and ``in_flight`` (the command that was running, or ``None``
-    when the cancel landed between steps).
+    finished) and ``in_flight`` (the command that was running -- with
+    ``killed`` and the signal's exit code when the runner killed it -- or
+    ``None`` when the cancel landed between steps); a killed step's row
+    carries ``canceled`` and ``killed`` too, one the signals did not stop
+    for sure ``kill_failed``, one its deadline killed ``timed_out``.
     """
     try:
         try:
@@ -1844,6 +1984,9 @@ def _write_playbook_receipt(
                 {
                     "title": s.get("title"), "command": s.get("command"), "exit_code": s.get("exit_code"),
                     **({"canceled": True} if s.get("canceled") else {}),
+                    **({"killed": s["killed"]} if s.get("killed") else {}),
+                    **({"kill_failed": s["kill_failed"]} if s.get("kill_failed") else {}),
+                    **({"timed_out": True} if s.get("timed_out") else {}),
                 }
                 for s in result.get("steps", [])
             ],
@@ -1971,17 +2114,27 @@ async def _engine(
     (``needs_terminal`` / ``denied`` / the exit code) or ``canceled``. The
     receipt and the vault audit are written before the final event.
 
-    Cancel (W1-lite, decision 16): ``cancel_requested`` -- the job's flag,
-    re-read from disk -- is consulted before each check probe, after it (so
-    a flag raised while the probe ran never starts the command) and after
-    each step, whether it passed or failed; when it is up the run stops
-    there and the receipt says ``stopped after step N`` with ``in_flight:
-    None``. A cancel that lands while the engine awaits a host command
-    arrives as ``CancelledError`` (:func:`jobs.cancel_job` cancels the
-    consumer task): the command is recorded as in flight, because the
-    worker thread running it cannot be interrupted and it may finish on the
-    host; the cancellation is then re-raised for the job to mark itself
-    canceled. A consumer that closes the stream at a yield instead (the job
+    Cancel (W1-lite, decision 16; the 0.46 kill): ``cancel_requested`` --
+    the job's flag, re-read from disk -- is consulted before each check
+    probe, after it (so a flag raised while the probe ran never starts the
+    command) and after each step, whether it passed or failed; when it is up
+    the run stops there and the receipt says ``stopped after step N`` with
+    ``in_flight: None``. While a host command runs, the job path's runner
+    (:func:`~nvh.integrations.wizard.system_settings.run_host_command_killable`)
+    polls the same flag from its worker thread and kills the command's
+    process group when it goes up; its result then says ``killed`` and the
+    run is a cancel ``stopped during step N (command killed)``, recorded with
+    the exit code the signal left. The cancel itself lands as
+    ``CancelledError`` at the shielded ``await`` of the step
+    (:func:`jobs.cancel_job` sets the flag, then cancels the consumer task):
+    the handler waits -- bounded by :func:`_settle_bound` -- for the runner's
+    report, records it (a command that finished before the kill landed is
+    recorded like a flag read after a step) and yields the ``canceled``
+    event itself, so the job log keeps this account rather than the job's
+    generic line. A task cancelled without the flag (a server shutdown) does
+    not wait: the command is left alone, recorded as in flight -- it may
+    finish on the host -- and the cancellation is re-raised, as before. A
+    consumer that closes the stream at a yield instead (the job
     consumer saw the flag before this engine's next read of it) lands here
     as ``GeneratorExit``: the receipt and the note are written from that
     handler too, so a run that touched the host always leaves them, whatever
@@ -2012,13 +2165,7 @@ async def _engine(
         return
 
     def stop_requested() -> bool:
-        if cancel_requested is None:
-            return False
-        try:
-            return bool(cancel_requested())
-        except Exception:  # a flag that cannot be read is not a cancel
-            logger.debug("cancel flag unreadable for playbook '%s'", playbook.id, exc_info=True)
-            return False
+        return _flag_up(cancel_requested, playbook.id)
 
     executed: list[dict[str, Any]] = []
     verify_results: list[dict[str, Any]] = []
@@ -2030,7 +2177,10 @@ async def _engine(
     title = ""
     settled = 0  # steps finished or skipped so far: where a stream closed at a yield stopped the run
     stopped_after: int | None = None  # steps finished when a cancel stopped the run between steps
-    in_flight: dict[str, Any] | None = None  # set while a host command runs; the one thing a cancel cannot stop
+    in_flight: dict[str, Any] | None = None  # set while a host command runs (the record a cancel lands on)
+    pending: asyncio.Future[dict[str, Any]] | None = None  # the running step, shielded so a cancel cannot lose its result
+    killed_record: dict[str, Any] | None = None  # the in-flight record of a command a cancel killed (or left running)
+    cancel_record: tuple[dict[str, Any], str | None, dict[str, Any] | None] | None = None  # written by the cancel handler
     try:
         for index, (pstep, step) in enumerate(zip(executable, plan.steps, strict=True)):
             position, title = index, _render(pstep.title, ctx)
@@ -2054,8 +2204,32 @@ async def _engine(
                     error_msg = _stopped_message(index, total)
                     break
             in_flight = {"step": index, "title": title, "command": command, "sudo": step.sudo}
-            result = await run_cmd(step)
-            in_flight = None
+            # Shielded: a cancel that lands here must not take the runner's result with it -- the
+            # thread goes on to kill the command, and its report is what the cancel handler waits for.
+            pending = asyncio.ensure_future(run_cmd(step))
+            result = await asyncio.shield(pending)
+            running, in_flight, pending = in_flight, None, None
+            if result.get("killed"):
+                # The runner polls the same flag and killed the command itself (the flag went up on disk
+                # without the task being cancelled): a cancel stopped during this step, recorded with the
+                # exit code the signal left.
+                outcome, stopped_after, remaining = "canceled", index, total - index
+                error_msg = _killed_message(index + 1, result["command"], result["killed"])
+                executed.append(_killed_row(running, result))
+                killed_record = _killed_in_flight(running, result)
+                if step.sudo:
+                    any_sudo_ran = True
+                break
+            if result.get("kill_failed"):
+                # The runner saw the flag and signalled the command but cannot vouch that it stopped (a
+                # root-owned command behind sudo, say): a cancel, recorded as possibly still running.
+                outcome, stopped_after, remaining = "canceled", index, total - index
+                error_msg = _kill_failed_message(index + 1, title, result.get("command") or command, result["kill_failed"])
+                executed.append(_unsettled_row(running, result, kill_failed=result["kill_failed"]))
+                killed_record = {**running, "kill_failed": result["kill_failed"], "exit_code": result.get("exit_code")}
+                if step.sudo:
+                    any_sudo_ran = True
+                break
             if result.get("needs_terminal"):
                 outcome = "needs_terminal"
                 remaining = total - index
@@ -2069,6 +2243,8 @@ async def _engine(
                 outcome = "failed"
                 remaining = total - index
                 error_msg = str(result.get("error") or "command did not run")
+                if result.get("timed_out") and step.sudo:
+                    any_sudo_ran = True  # it ran until its deadline: no_root stays honest
                 yield {**head, "event": "step", "status": "failed", "message": error_msg, "error": error_msg, "denied": bool(result.get("denied"))}
                 break
             executed.append({
@@ -2119,33 +2295,85 @@ async def _engine(
                 }
     except asyncio.CancelledError:
         # The job was cancelled while this was awaiting a host command or a
-        # probe. Nothing after this point may await: record what ran (and
-        # what was running) so the receipt and the vault note exist, then let
-        # the cancellation continue to the job consumer.
+        # probe. The one await allowed here is the bounded wait for the
+        # runner's report, and only when the job's own flag is up:
+        # ``cancel_job`` sets it before cancelling the task, so the runner
+        # thread -- polling that flag -- is killing the command's process
+        # group right now and will say how it went. Without the flag (the
+        # task was cancelled from outside the job: a server shutdown) the
+        # command is left alone and recorded as in flight, as before.
         outcome = "canceled"
         remaining = max(0, total - position)
         stopped_after = position
+        user_cancel = stop_requested()
+        swallowed = 0  # repeat cancels absorbed while waiting for the runner's report
         if position >= total:
             error_msg = f"canceled by the user during verification; all {total} step(s) had finished"
         elif in_flight is not None:
-            error_msg = (
-                f"canceled by the user during step {position + 1} ({title}) — `{in_flight['command']}` was already "
-                "running and may have completed on the host"
-            )
-            executed.append({**in_flight, "exit_code": None, "stdout": "", "stderr": "", "canceled": True})
-            if in_flight["sudo"]:
+            settled, swallowed = (await _settle_in_flight(pending, _settle_bound())) if user_cancel else (None, 0)
+            spawned = True
+            if settled is not None and settled.get("killed"):
+                error_msg = _killed_message(position + 1, settled["command"], settled["killed"])
+                executed.append(_killed_row(in_flight, settled))
+                killed_record = _killed_in_flight(in_flight, settled)
+            elif settled is not None and settled.get("kill_failed"):
+                # Signalled, but not shown to have stopped: the honest record is "may still be running".
+                error_msg = _kill_failed_message(
+                    position + 1, title, settled.get("command") or in_flight["command"], settled["kill_failed"],
+                )
+                executed.append(_unsettled_row(in_flight, settled, kill_failed=settled["kill_failed"]))
+                killed_record = {**in_flight, "kill_failed": settled["kill_failed"], "exit_code": settled.get("exit_code")}
+            elif settled is not None and settled.get("timed_out"):
+                # The step's own deadline fired as the cancel landed: the command ran until then and the
+                # deadline killed it. It did run (a sudo step counts), so the row and the receipt say so.
+                error_msg = _timed_out_message(
+                    position + 1, title, settled.get("command") or in_flight["command"], str(settled.get("error") or "timed out"),
+                )
+                executed.append(_unsettled_row(in_flight, settled, timed_out=True))
+                killed_record = {**in_flight, "timed_out": True, "exit_code": None}
+            elif settled is not None and "exit_code" in settled:
+                # The command finished before the kill landed: the record a flag read after the step leaves.
+                executed.append({
+                    "step": position, "title": title, "command": settled["command"], "exit_code": settled["exit_code"],
+                    "stdout": settled.get("stdout", ""), "stderr": settled.get("stderr", ""),
+                })
+                stopped_after, remaining = position + 1, total - position - 1
+                error_msg = _stopped_message(position + 1, total)
+                if not settled.get("ok"):
+                    error_msg += f"; step {position + 1} ({title}) had exited {settled['exit_code']}"
+            elif settled is not None:
+                spawned = False  # refused (denied, needs a terminal, not found) as the cancel landed: nothing ran
+                error_msg = _stopped_message(position, total)
+            else:
+                _forget(pending)
+                error_msg = (
+                    f"canceled by the user during step {position + 1} ({title}) — `{in_flight['command']}` was already "
+                    "running and may have completed on the host"
+                )
+                executed.append({**in_flight, "exit_code": None, "stdout": "", "stderr": "", "canceled": True})
+                killed_record = dict(in_flight)
+            if spawned and in_flight["sudo"]:
                 any_sudo_ran = True  # a sudo command was spawned; assume it ran
         else:
             error_msg = (
                 f"canceled by the user during step {position + 1} ({title}) while its check probe ran; "
                 "no host command was in flight"
             )
-        _record_run(
+        cancel_record = _record_run(
             playbook, ctx, plan, outcome=outcome, error_msg=error_msg, remaining=remaining, executed=executed,
             any_sudo_ran=any_sudo_ran, verify_results=verify_results, manual=manual, mode=mode, home_dir=home_dir,
-            stopped_after=stopped_after, in_flight=in_flight,
+            stopped_after=stopped_after, in_flight=killed_record,
         )
-        raise
+        if not user_cancel:
+            raise
+        # The job's own cancel is honoured: the receipt is written and the command stopped (or recorded as
+        # left running). The engine's account goes out as the ``canceled`` event below -- the job consumer
+        # keeps a source's own ``canceled`` payload -- instead of the generic line a bare CancelledError
+        # would make it write; the task is told its cancellation was handled.
+        task = asyncio.current_task()
+        if task is not None:
+            for _ in range(1 + swallowed):  # the cancel that landed here, plus any absorbed while waiting
+                task.uncancel()
     except GeneratorExit:
         # The consumer closed the stream at one of the yields above (the job
         # consumer saw ``cancel_requested`` before this engine's next read of
@@ -2169,11 +2397,14 @@ async def _engine(
         )
         raise
 
-    result, receipt_path, audit = _record_run(
-        playbook, ctx, plan, outcome=outcome, error_msg=error_msg, remaining=remaining, executed=executed,
-        any_sudo_ran=any_sudo_ran, verify_results=verify_results, manual=manual, mode=mode, home_dir=home_dir,
-        stopped_after=stopped_after, in_flight=None,
-    )
+    if cancel_record is not None:
+        result, receipt_path, audit = cancel_record
+    else:
+        result, receipt_path, audit = _record_run(
+            playbook, ctx, plan, outcome=outcome, error_msg=error_msg, remaining=remaining, executed=executed,
+            any_sudo_ran=any_sudo_ran, verify_results=verify_results, manual=manual, mode=mode, home_dir=home_dir,
+            stopped_after=stopped_after, in_flight=killed_record,
+        )
     applied = result["applied"]
     final = {
         **base, "applied": applied, "partial": result["partial"], "outcome": outcome, "no_root": not any_sudo_ran,
@@ -2196,7 +2427,7 @@ async def _engine(
     elif outcome == "canceled":
         yield {
             **final, "event": "canceled", "status": "canceled", "canceled": True, "stopped_after_step": stopped_after,
-            "in_flight": None, "message": error_msg, "error": error_msg,
+            "in_flight": killed_record, "message": error_msg, "error": error_msg,
         }
     else:
         yield {**final, "event": "error", "status": "failed", "message": error_msg, "error": error_msg}
@@ -2211,7 +2442,9 @@ async def run_playbook_events(
     ``resolved`` is the ``(playbook, ctx, plan)`` :func:`start_run` already
     compiled and showed on the card; without it the playbook is resolved here
     and a refusal becomes the one ``error`` event. ``cancel_requested`` reads
-    the job's flag so the engine can stop between steps.
+    the job's flag: the engine stops between steps on it, and the runner
+    thread polls it while a command runs so it can kill the command's process
+    group (:func:`_host_run`).
     """
     if resolved is None:
         found = _resolve(playbook.id, home_dir)
@@ -2221,8 +2454,12 @@ async def run_playbook_events(
             return
         resolved = found
     _, ctx, plan = resolved
+
+    async def run_cmd(step: Step) -> dict[str, Any]:
+        return await _host_run(step, should_stop=lambda: _flag_up(cancel_requested, playbook.id))
+
     async for event in _engine(
-        playbook, ctx, plan, run_cmd=_host_run, check_cmd=_host_check, home_dir=home_dir, mode="job",
+        playbook, ctx, plan, run_cmd=run_cmd, check_cmd=_host_check, home_dir=home_dir, mode="job",
         cancel_requested=cancel_requested,
     ):
         yield event
@@ -2251,8 +2488,9 @@ def start_run(playbook_id: str, *, home_dir: str | Path | None = None) -> dict[s
     ``applied`` is ``False`` on purpose: the registry must not audit the
     *start*; the runner writes the receipt and the vault note when the run
     finishes, having seen what actually ran. The engine reads the job's own
-    ``cancel_requested`` flag between steps (the id is known once the job
-    exists; the task only starts on the next loop iteration).
+    ``cancel_requested`` flag between steps, and the runner thread polls it
+    while a command runs (the id is known once the job exists; the task only
+    starts on the next loop iteration).
     """
     resolved = _resolve(playbook_id, home_dir)
     if isinstance(resolved, dict):

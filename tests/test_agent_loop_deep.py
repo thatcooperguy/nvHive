@@ -4,9 +4,9 @@ Covers _extract_tool_calls and run_agent_loop with mocked engine/tools.
 No real API calls, no real filesystem changes.
 
 The protocol is ``TOOL_CALL: {"name": ..., "arguments": {...}}`` (0.44 D3,
-one text protocol shared with the Wizard chat); the pre-0.44 fenced
+one text protocol shared with the Wizard chat). The pre-0.44 fenced
 ```` ```tool_call ```` block and bare ``{"tool": ..., "args": {...}}`` object
-are still *parsed* for one release, never taught.
+were parsed through 0.45 and are ordinary text since 0.46: never a call.
 """
 
 from __future__ import annotations
@@ -61,34 +61,32 @@ class TestExtractToolCalls:
         calls = _extract_tool_calls(text)
         assert [c["args"]["path"] for c in calls] == ["a.py", "b.py"]
 
-    def test_extracts_fenced_tool_call(self):
-        """Deprecated form, still parsed for one release."""
+    def test_fenced_block_is_ordinary_text_not_a_call(self):
+        """The pre-0.44 fenced form was dropped in 0.46: no call, text untouched."""
         text = 'Some thought\n```tool_call\n{"tool": "read_file", "args": {"path": "main.py"}}\n```'
-        calls = _extract_tool_calls(text)
-        assert len(calls) == 1
-        assert calls[0]["tool"] == "read_file"
-        assert calls[0]["args"]["path"] == "main.py"
+        assert _extract_tool_calls(text) == []
+        thought, calls = _calls_from_response(SimpleNamespace(content=text, tool_calls=None))
+        assert calls == [] and thought == text
 
-    def test_extracts_multiple_fenced_blocks(self):
+    def test_fenced_blocks_stay_in_the_text_while_the_line_beside_them_parses(self):
         text = (
             '```tool_call\n{"tool": "read_file", "args": {"path": "a.py"}}\n```\n'
             'some text\n'
-            '```tool_call\n{"tool": "list_files", "args": {"pattern": "*.py"}}\n```'
+            'TOOL_CALL: {"name": "list_files", "arguments": {"pattern": "*.py"}}\n'
+            '```tool_call\n{"tool": "write_file", "args": {"path": "b.py"}}\n```'
         )
         calls = _extract_tool_calls(text)
-        assert len(calls) == 2
-        assert calls[0]["tool"] == "read_file"
-        assert calls[1]["tool"] == "list_files"
+        assert calls == [{"tool": "list_files", "args": {"pattern": "*.py"}}]
+        thought, _calls = _calls_from_response(SimpleNamespace(content=text, tool_calls=None))
+        assert thought.count("```tool_call") == 2 and "TOOL_CALL" not in thought
 
-    def test_extracts_inline_tool_call(self):
-        """Deprecated bare object, still parsed for one release."""
+    def test_bare_object_in_prose_is_not_a_call(self):
+        """The pre-0.44 bare object was dropped in 0.46: a quoted or pasted one never runs a tool."""
         text = 'I will use {"tool": "search_files", "args": {"query": "TODO"}} to find items.'
-        calls = _extract_tool_calls(text)
-        assert len(calls) == 1
-        assert calls[0]["tool"] == "search_files"
+        assert _extract_tool_calls(text) == []
 
     def test_ignores_invalid_json(self):
-        text = '```tool_call\n{not valid json}\n```'
+        text = 'TOOL_CALL: {not valid json}'
         calls = _extract_tool_calls(text)
         assert len(calls) == 0
 
@@ -143,12 +141,15 @@ class TestExtractToolCalls:
         calls = _extract_tool_calls(blocks)
         assert len(calls) == MAX_TOOL_CALLS_PER_TURN
 
-    def test_deduplicates_fenced_and_inline(self):
-        """If the same call appears both fenced and inline, it should not be duplicated."""
-        call_json = '{"tool": "read_file", "args": {"path": "x.py"}}'
-        text = f'```tool_call\n{call_json}\n```\nAlso {call_json} inline.'
+    def test_deduplicates_repeated_identical_protocol_lines(self):
+        """The same call written twice (in either key spelling) collapses to one."""
+        text = (
+            'TOOL_CALL: {"name": "read_file", "arguments": {"path": "x.py"}}\n'
+            'Again:\n'
+            'TOOL_CALL: {"tool": "read_file", "args": {"path": "x.py"}}'
+        )
         calls = _extract_tool_calls(text)
-        assert len(calls) == 1
+        assert calls == [{"tool": "read_file", "args": {"path": "x.py"}}]
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +307,47 @@ async def test_loop_reads_native_tool_calls_from_the_response():
 
 
 @pytest.mark.asyncio
+async def test_result_cost_known_is_the_catalogs_verdict_on_every_step():
+    """AgentResult.cost_known (0.46): each step records the model and provider
+    that answered, and the result is known only when every step's cost was a
+    price the catalog vouches for -- a free local run is a known $0, a $0
+    nobody priced or a step with no cost at all makes the total a floor."""
+    def reply(provider, cost):
+        return CompletionResponse(
+            content="Final.", model="nobody/priced-this", provider=provider,
+            usage=Usage(input_tokens=5, output_tokens=1, total_tokens=6), cost_usd=Decimal(cost),
+        )
+
+    def engine_for(*replies):
+        engine = AsyncMock()
+        engine.registry = ProviderRegistry().scoped(CouncilConfig())
+        engine.query = AsyncMock(side_effect=list(replies))
+        return engine
+
+    free = await run_agent_loop("x", engine_for(reply("ollama", "0")), tools=_make_mock_registry())
+    assert free.cost_known is True and free.total_cost_usd == 0
+    assert (free.steps[0].model, free.steps[0].provider) == ("nobody/priced-this", "ollama")
+    unpriced = await run_agent_loop("x", engine_for(reply("openai", "0")), tools=_make_mock_registry())
+    assert unpriced.cost_known is False
+    billed = await run_agent_loop("x", engine_for(reply("openai", "0.002")), tools=_make_mock_registry())
+    assert billed.cost_known is True and billed.total_cost_usd == Decimal("0.002")
+    no_cost = await run_agent_loop("x", _make_costed_engine([("Final.", None)]), tools=_make_mock_registry())
+    assert no_cost.cost_known is False
+    # One unpriced step among priced ones is enough: the total is a floor.
+    mixed = await run_agent_loop(
+        "x",
+        engine_for(
+            CompletionResponse(content='TOOL_CALL: {"name": "read_file", "arguments": {"path": "a"}}', model="m",
+                               provider="ollama", usage=Usage(input_tokens=5, output_tokens=1, total_tokens=6),
+                               cost_usd=Decimal("0")),
+            reply("openai", "0"),
+        ),
+        tools=_make_mock_registry(),
+    )
+    assert mixed.total_tool_calls == 1 and mixed.cost_known is False
+
+
+@pytest.mark.asyncio
 async def test_loop_passes_role_guidance_ahead_of_the_one_prompt():
     engine = _make_mock_engine(["Final."])
     await run_agent_loop("x", engine, tools=_make_mock_registry(), system_prompt="BE A CODER")
@@ -318,7 +360,7 @@ async def test_loop_passes_role_guidance_ahead_of_the_one_prompt():
 async def test_loop_blocks_unsafe_tool_without_approval_callback():
     """Unsafe tools must not execute unless an approval callback is available."""
     engine = _make_mock_engine([
-        '```tool_call\n{"tool": "write_file", "args": {"path": "x.py", "content": "x"}}\n```',
+        'TOOL_CALL: {"name": "write_file", "arguments": {"path": "x.py", "content": "x"}}',
         "I could not write the file.",
     ])
     registry = _make_mock_registry()
@@ -337,7 +379,7 @@ async def test_loop_blocks_unsafe_tool_without_approval_callback():
 async def test_loop_runs_unsafe_tool_when_approved():
     """Unsafe tools execute only after the approval callback allows them."""
     engine = _make_mock_engine([
-        '```tool_call\n{"tool": "write_file", "args": {"path": "x.py", "content": "x"}}\n```',
+        'TOOL_CALL: {"name": "write_file", "arguments": {"path": "x.py", "content": "x"}}',
         "Done.",
     ])
     registry = _make_mock_registry()
@@ -364,7 +406,7 @@ async def test_loop_runs_unsafe_tool_when_approved():
 async def test_loop_unknown_tool_produces_error_result():
     """If agent requests a tool that doesn't exist, error result is recorded."""
     engine = _make_mock_engine([
-        '```tool_call\n{"tool": "nonexistent_tool", "args": {}}\n```',
+        'TOOL_CALL: {"name": "nonexistent_tool", "arguments": {}}',
         "I could not find that tool. Here's my answer instead.",
     ])
     registry = _make_mock_registry()
@@ -379,10 +421,27 @@ async def test_loop_unknown_tool_produces_error_result():
 
 
 @pytest.mark.asyncio
+async def test_loop_treats_a_fenced_block_as_the_final_answer_since_0_46():
+    """A model still writing the pre-0.44 fenced block runs nothing: the loop
+    reads no call, so the text is its final answer and no tool is executed."""
+    fenced = 'On it.\n```tool_call\n{"tool": "write_file", "args": {"path": "x.py", "content": "x"}}\n```'
+    engine = _make_mock_engine([fenced, "never reached"])
+    registry = _make_mock_registry()
+
+    result = await run_agent_loop("Write a file", engine, tools=registry)
+
+    assert result.completed is True and result.total_iterations == 1
+    assert result.total_tool_calls == 0
+    registry.execute.assert_not_called()
+    assert result.final_response == fenced
+    assert engine.query.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_loop_respects_max_iterations():
     """Loop stops at max_iterations even if agent keeps calling tools."""
     # Always return a tool call so the loop never naturally ends
-    tool_response = '```tool_call\n{"tool": "read_file", "args": {"path": "x.py"}}\n```'
+    tool_response = 'TOOL_CALL: {"name": "read_file", "arguments": {"path": "x.py"}}'
     engine = _make_mock_engine([tool_response] * 5)
     registry = _make_mock_registry()
 
@@ -426,10 +485,10 @@ async def test_on_step_callback_called():
 async def test_loop_compresses_history_after_iteration_3():
     """After iteration 3, the message list is compressed to save tokens."""
     responses = [
-        '```tool_call\n{"tool": "read_file", "args": {"path": "a.py"}}\n```',
-        '```tool_call\n{"tool": "read_file", "args": {"path": "b.py"}}\n```',
-        '```tool_call\n{"tool": "read_file", "args": {"path": "c.py"}}\n```',
-        '```tool_call\n{"tool": "read_file", "args": {"path": "d.py"}}\n```',
+        'TOOL_CALL: {"name": "read_file", "arguments": {"path": "a.py"}}',
+        'TOOL_CALL: {"name": "read_file", "arguments": {"path": "b.py"}}',
+        'TOOL_CALL: {"name": "read_file", "arguments": {"path": "c.py"}}',
+        'TOOL_CALL: {"name": "read_file", "arguments": {"path": "d.py"}}',
         "Done reading all files.",
     ]
     engine = _make_mock_engine(responses)
@@ -523,11 +582,13 @@ async def test_on_step_sees_the_step_cost():
 
 
 class TestAgentLoopDeep:
-    def test_extract_tool_calls_json_block(self):
+    def test_extract_tool_calls_multiline_json_object(self):
+        '''The object after the marker may span lines.'''
         text = '''Let me read the file.
-```tool_call
-{"tool": "read_file", "args": {"path": "main.py"}}
-```
+TOOL_CALL: {
+  "name": "read_file",
+  "arguments": {"path": "main.py"}
+}
 '''
         calls = _extract_tool_calls(text)
         assert len(calls) == 1
@@ -535,13 +596,9 @@ class TestAgentLoopDeep:
 
     def test_extract_tool_calls_multiple(self):
         text = '''
-```tool_call
-{"tool": "read_file", "args": {"path": "a.py"}}
-```
+TOOL_CALL: {"name": "read_file", "arguments": {"path": "a.py"}}
 Then I'll write:
-```tool_call
-{"tool": "write_file", "args": {"path": "b.py", "content": "hello"}}
-```
+TOOL_CALL: {"name": "write_file", "arguments": {"path": "b.py", "content": "hello"}}
 '''
         calls = _extract_tool_calls(text)
         assert len(calls) == 2
@@ -551,16 +608,14 @@ Then I'll write:
         assert calls == []
 
     def test_extract_tool_calls_malformed_json(self):
-        text = '''```tool_call
-{"tool": "read_file", "args": {invalid json}}
-```'''
+        text = 'TOOL_CALL: {"name": "read_file", "arguments": {invalid json}}'
         calls = _extract_tool_calls(text)
         assert calls == []
 
     def test_extract_tool_calls_max_limit(self):
         # Generate more than MAX_TOOL_CALLS_PER_TURN
         blocks = "\n".join(
-            f'```tool_call\n{{"tool": "read_file", "args": {{"path": "file{i}.py"}}}}\n```'
+            f'TOOL_CALL: {{"name": "read_file", "arguments": {{"path": "file{i}.py"}}}}'
             for i in range(MAX_TOOL_CALLS_PER_TURN + 3)
         )
         calls = _extract_tool_calls(blocks)
@@ -592,7 +647,7 @@ Then I'll write:
                 call_count += 1
                 if call_count == 1:
                     return CompletionResponse(
-                        content='```tool_call\n{"tool": "list_files", "args": {"pattern": "*.py"}}\n```',
+                        content='TOOL_CALL: {"name": "list_files", "arguments": {"pattern": "*.py"}}',
                         model="m", provider="mock",
                         usage=Usage(total_tokens=10), cost_usd=Decimal("0"), latency_ms=1,
                     )

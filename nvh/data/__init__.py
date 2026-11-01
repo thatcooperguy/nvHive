@@ -9,10 +9,13 @@ The loaders that used to walk up from ``__file__``
 (``Path(__file__).parent.parent / "config"``: the model catalog, the
 benchmark prompts, the workflow templates) ask this module instead, so the
 lookup follows the import system rather than assuming the source tree's
-shape; the ``catalog/`` and ``prompts/`` readers already go through
-``importlib.resources`` on their own sub-packages. tests/test_single_root.py
-checks that every file the globs ship resolves here and that no module under
-nvh/ anchors a data path on ``__file__``.
+shape; since 0.46 the ``catalog/`` and ``prompts/`` readers (the setup
+catalog, the Agent Library, the Wizard system prompt) come through here too
+instead of calling ``importlib.resources`` on their own sub-packages.
+tests/test_single_root.py checks that every file the globs ship resolves
+here and that no module under nvh/ anchors a data path on ``__file__``;
+tests/test_bundled_data_access.py checks that this is the only module under
+nvh/ that touches ``importlib.resources`` at all.
 
 Everything is anchored on the top-level ``nvh`` package and the directory
 name is joined onto it (``resources.files("nvh") / "workflows"``), which

@@ -93,6 +93,24 @@ class CouncilOrchestrator:
     # 0.0 = circuit breaker open (hard fail); 0.3 = half-open (probing); >0.3 = closed.
     _MIN_HEALTH = 0.2
 
+    def _cost_known(self, resp: CompletionResponse) -> bool:
+        """``cost_known`` for a streamed member or synthesis event: the catalog's verdict on the model that answered.
+
+        :func:`nvh.core.agent_loop.model_cost_known` -- the row's ``cost_known``,
+        a ``zero_cost`` provider's $0, a non-zero bill always known, an
+        unmetered $0 only for a free model -- so the web council card can tell
+        a free member from a $0 nobody priced. A failing lookup is unknown.
+        """
+        from nvh.core.agent_loop import model_cost_known, usage_metered
+
+        try:
+            return model_cost_known(
+                self.registry, resp.model, provider=resp.provider, cost_usd=resp.cost_usd,
+                metered=usage_metered(resp.usage),
+            )
+        except Exception:
+            return False
+
     def _is_healthy(self, provider: str) -> bool:
         """Return True if provider is healthy enough to try.
 
@@ -668,6 +686,7 @@ class CouncilOrchestrator:
                     "content": accumulated,
                     "tokens": tokens,
                     "cost": cost_usd,
+                    "cost_known": self._cost_known(resp),
                     "latency_ms": latency_ms,
                 })
 
@@ -724,7 +743,8 @@ class CouncilOrchestrator:
                                 "accumulated": synthesis.content, "provider": synthesis.provider})
                 await on_event({"type": "synthesis_complete", "content": synthesis.content,
                                 "tokens": synthesis.usage.total_tokens,
-                                "cost": str(synthesis.cost_usd), "provider": synthesis.provider})
+                                "cost": str(synthesis.cost_usd), "cost_known": self._cost_known(synthesis),
+                                "provider": synthesis.provider})
             except Exception as exc:
                 failed_members["_synthesis"] = str(exc)
                 await on_event({"type": "error", "error": str(exc), "phase": "synthesis"})
@@ -889,6 +909,7 @@ class CouncilOrchestrator:
                             "content": synth_accumulated,
                             "tokens": synth_tokens,
                             "cost": synth_cost,
+                            "cost_known": self._cost_known(synthesis),
                             "provider": synth_provider_name,
                         })
                         synth_error = None
@@ -966,9 +987,15 @@ class CouncilOrchestrator:
                       + (synthesis.cost_usd if synthesis else Decimal("0")))
         total_elapsed = int((time.monotonic() - start) * 1000)
 
+        # The total is a price only when every member (and the synthesis) was
+        # priced; one unpriced model makes it a floor, and a council that
+        # priced nothing (every member failed) is not a known $0 -- the same
+        # rule as the REST envelope's.
+        total_known = bool(member_responses) and all(self._cost_known(r) for r in member_responses.values())
         await on_event({
             "type": "council_complete",
             "total_cost": str(total_cost),
+            "cost_known": total_known and (synthesis is None or self._cost_known(synthesis)),
             "total_latency_ms": total_elapsed,
             "quorum_met": quorum_met,
             "confidence_score": confidence_score,

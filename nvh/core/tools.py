@@ -55,11 +55,11 @@ Models without native function calling emit one line per call::
 
     TOOL_CALL: {"name": "<tool_name>", "arguments": {...}}
 
-:func:`parse_tool_calls` reads it back. The pre-0.44 fenced ```` ```tool_call ````
-block and the bare ``{"tool": ..., "args": {...}}`` object are still parsed
-on the agent-loop path only (``legacy=True``; never emitted, never taught,
-never read by the Wizard) and go away in 0.46 (0.44 said one release; 0.45
-still accepts them).
+:func:`parse_tool_calls` reads it back, and nothing else: the pre-0.44 fenced
+```` ```tool_call ```` block and the bare ``{"tool": ..., "args": {...}}``
+object were never emitted or taught, and since 0.46 they are ordinary text on
+every path (they stay in the stripped text and produce no call). The
+``{"tool", "args"}`` key spelling *inside* a ``TOOL_CALL:`` line is still read.
 
 Native function calling (D3) degrades: ``Provider.complete/stream`` accept
 ``tools=`` / ``tool_choice=`` and answer ``tool_calls`` in the OpenAI wire
@@ -377,11 +377,10 @@ def _pinned_arguments(plan: Any) -> dict[str, Any]:
 # ────────────────────────────────────────────────────────────────────────────
 
 _MARKER_RE = re.compile(r"TOOL_CALL\s*:\s*", re.IGNORECASE)
-# Deprecated (parsed through 0.44 by the agent loop only — ``legacy=True`` —
-# dropped in 0.46): the pre-0.44 agent-loop fenced block and its bare inline
-# object. Never emitted, never taught, never read on the Wizard path.
-_FENCED_RE = re.compile(r"```tool_call\s*\n(.*?)\n\s*```", re.DOTALL | re.IGNORECASE)
-_INLINE_LEGACY_RE = re.compile(r'\{\s*"tool"\s*:\s*"[^"]+"\s*,\s*"args"\s*:\s*\{')
+# The marker is the whole grammar. The pre-0.44 fenced ```tool_call block and
+# the bare {"tool": ..., "args": {...}} object (read by the agent loop alone,
+# ``legacy=True``, through 0.45) are ordinary text since 0.46: nothing here
+# matches them.
 
 
 def format_tool_call(name: str, arguments: Mapping[str, Any] | None = None) -> str:
@@ -451,11 +450,7 @@ def _line_end(text: str, index: int) -> int:
     return len(text) if newline < 0 else newline
 
 
-def _overlaps(span: tuple[int, int], spans: list[tuple[int, int]]) -> bool:
-    return any(start < span[1] and span[0] < end for start, end in spans)
-
-
-def parse_tool_calls(text: str, *, legacy: bool = False) -> tuple[str, list[dict[str, Any]]]:
+def parse_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
     """Read every tool call out of a model's text; ``(text without the calls, [{name, arguments}])``.
 
     The protocol is ``TOOL_CALL: {json}`` — the JSON object may span lines and
@@ -467,11 +462,12 @@ def parse_tool_calls(text: str, *, legacy: bool = False) -> tuple[str, list[dict
     JSON") and is left exactly as written. Repeated identical calls collapse
     to one.
 
-    ``legacy=True`` — the agent loop only, for one release — also reads the
-    pre-0.44 fenced ```` ```tool_call ```` block and the bare
-    ``{"tool": …, "args": {…}}`` object. The Wizard never emitted or taught
-    those, so its path keeps the default: a quoted log line or pasted config
-    that happens to contain such an object is never a call.
+    Nothing else is a call. The pre-0.44 fenced ```` ```tool_call ```` block and
+    the bare ``{"tool": …, "args": {…}}`` object (read by the agent loop alone
+    through 0.45) are ordinary text since 0.46: a quoted log line, a pasted
+    config or a model still writing the old block leaves the text exactly as
+    written and runs no tool. The Wizard and the agent loop share this one
+    grammar.
     """
     if not text:
         return "", []
@@ -491,20 +487,6 @@ def parse_tool_calls(text: str, *, legacy: bool = False) -> tuple[str, list[dict
                 _add(None, (match.start(), _line_end(text, brace)))
             else:
                 _add(_parse_call_json(text[brace:end]), (match.start(), end))
-
-    if legacy:
-        for match in _FENCED_RE.finditer(text):  # deprecated form
-            if _overlaps(match.span(), spans):
-                continue
-            body = _MARKER_RE.sub("", match.group(1).strip(), count=1)
-            _add(_parse_call_json(body), match.span())
-
-        for match in _INLINE_LEGACY_RE.finditer(text):  # deprecated form
-            if _overlaps((match.start(), match.start() + 1), spans):
-                continue
-            end = _json_object_span(text, match.start())
-            if end is not None:
-                _add(_parse_call_json(text[match.start():end]), (match.start(), end))
 
     stripped = text
     for start, end in sorted(spans, reverse=True):

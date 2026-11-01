@@ -39,7 +39,12 @@ from pathlib import Path
 from typing import Any
 
 from nvh.core import local_models
-from nvh.core.agent_loop import AgentResult, response_cost_usd, run_agent_loop
+from nvh.core.agent_loop import (  # noqa: F401  (model_cost_known is re-exported: the wizard, the API and tests import it from here)
+    AgentResult,
+    model_cost_known,
+    response_cost_usd,
+    run_agent_loop,
+)
 from nvh.core.tools import ToolRegistry
 
 logger = logging.getLogger(__name__)

@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 import os
 import time
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from nvh.data import read_json
 from nvh.integrations.workspace.storage import storage_layout
 
 DEFAULT_CATALOG_URL = (
@@ -149,13 +149,13 @@ def _generated_fallback_catalog() -> dict[str, Any]:
 
 
 def bundled_catalog() -> dict[str, Any]:
+    """The catalog shipped inside the package (nvh/catalog/nvhive-catalog.json).
+
+    Read through :mod:`nvh.data` like every other bundled file; a missing,
+    unparsable or schema-mismatched file falls back to the generated catalog.
+    """
     try:
-        payload = (
-            resources.files("nvh.catalog")
-            .joinpath("nvhive-catalog.json")
-            .read_text(encoding="utf-8")
-        )
-        return _validate_catalog(json.loads(payload))
+        return _validate_catalog(read_json("catalog", "nvhive-catalog.json"))
     except Exception:
         return _generated_fallback_catalog()
 

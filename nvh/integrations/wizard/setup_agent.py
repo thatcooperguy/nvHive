@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, dataclass
-from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from nvh.data import read_text
 from nvh.integrations.installs.comfyui import detect_comfyui
 from nvh.integrations.installs.studio_packs import catalog_with_status, model_catalog_with_status
 from nvh.integrations.local_chat import local_chat_smoke_status
@@ -95,9 +95,7 @@ class SetupIssue:
 def nvwizard_system_prompt() -> str:
     """Return packaged product grounding for deterministic and LLM-backed helpers."""
     try:
-        return resources.files("nvh.prompts").joinpath("nvwizard_system.md").read_text(
-            encoding="utf-8",
-        ).strip()
+        return read_text("prompts", "nvwizard_system.md").strip()
     except Exception as exc:
         logger.warning("nvwizard_system.md unreadable, using built-in fallback: %s", exc)
         return PRODUCT_CONTEXT_FALLBACK.strip()

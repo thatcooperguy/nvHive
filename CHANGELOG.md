@@ -2,6 +2,99 @@
 
 ## [Unreleased]
 
+### Added
+- **Cost pills tell a free reply from a $0 nobody priced.** Every API
+  envelope that carries `cost_usd` now carries `cost_known` beside it: the
+  Wizard chat envelope, its persisted meta tail and the stream `done` event,
+  `/v1/query` (JSON, SSE `done`, WS `complete`), `/v1/compare`, `/v1/council`
+  (members, synthesis and the total, on REST and on the WebSocket's
+  `member_complete` / `synthesis_complete` / `council_complete` events),
+  persisted chat rows (recomputed on read from the stored model, provider,
+  cost and tokens) and the `/v1/smart` agent envelope (each step now records
+  the model and provider that answered, so a free local run is a known $0).
+  The verdict derives from the catalog lookup that priced the request
+  (`nvh.core.agent_loop.model_cost_known`, re-exported by
+  `nvh.core.agentic`), never a hand-typed table: a non-zero bill is known; a
+  priced model's `$0` is known only when the provider metered the usage; a
+  `zero_cost` provider's `$0` and a cache hit are known whatever id the
+  provider echoed; an id the YAML catalog lacks falls back to LiteLLM's own
+  price table and the served spelling falls back to the routed model; a
+  council in which nothing was priced is unknown. The web UI renders three
+  states from it (new `web/lib/cost.ts`, shared by the Wizard footer, the
+  chat and compare cards and the council expert panel): a priced cost as
+  before, a priced `$0` as `$0.0000` instead of the old green `FREE`, and
+  `cost_known: false` as `cost unknown` with a hover title saying the model
+  has no price in the catalog. A reloaded turn restores the same pill; a
+  persisted `$0` row that predates the field keeps its historical "priced"
+  reading rather than being called unknown.
+- **Cancelling a playbook job stops the command that is running**, not just
+  the next one. Each job-path step runs in its own process group through
+  `run_host_command_killable` (same deny list and `sudo -n` rule as
+  `run_host_command`, shared via `_resolve_host_command`); the worker
+  re-reads the job's `cancel_requested` flag every 0.5 s and, when it is up,
+  polls once (a command that exited on its own is recorded as its plain exit,
+  never as a kill), sends the group SIGTERM, waits 5 s, then SIGKILL, and for
+  a `sudo` step whose root-owned command outlives SIGKILL escalates with
+  `sudo -n kill -KILL` on the group. The receipt records `stopped during step
+  N (command killed)` with the signal's exit code and the output that had
+  arrived (`killed` on the step row and on `in_flight`), the engine yields
+  its own `canceled` event so the job log, the job's message and the vault
+  `Decisions/` note carry the same account, and the between-steps wording
+  `stopped after step N` is unchanged. When the signals cannot be shown to
+  have stopped the command (alive after all of them, or a process outside
+  nvHive's reach keeps its pipes) the record is `kill_failed` with the reason
+  and the receipt says the command may still be running on the host, rather
+  than claiming a kill; a step whose own deadline fires as the cancel lands is
+  recorded as a step that ran and timed out, with receipt and audit written;
+  a repeat cancel during the bounded wait keeps the runner's report; the wait
+  is the runner's worst case plus slack from one formula
+  (`system_settings.stop_worst_case_s`). A task cancelled from outside the
+  job (a server shutdown) still leaves the command alone and records it as
+  in flight. Windows keeps importing the module; the engine refuses off Linux
+  as before. Tests: fake-process unit tests for the runner and the engine's
+  cancel decision on every platform, plus a POSIX-only integration test that
+  kills a real `sleep 30` and a SIGTERM-ignoring `bash` with their groups
+  (its first real run is ubuntu CI; the root escalation is exercised through
+  a fake process only).
+- **`tests/test_bundled_data_access.py`** guards that `nvh/data/__init__.py`
+  is the only module under `nvh/` that touches `importlib.resources` (any
+  spelling, the `importlib_resources` backport and `pkgutil.get_data`
+  included) and pins that the three routed loaders below return byte for
+  byte what the direct read returned.
+
+### Changed
+- **`--verify` honours `exclude_providers`, and is independent or not at
+  all.** The cross-check takes the exclusion set the answer was produced
+  under (the engine forwards it from both verify sites, escalate and plain
+  path), never picks an excluded advisor as the verifier (the filter applies
+  before the health pick, so the all-unhealthy fallback cannot resurrect
+  one) and passes the set into its own `engine.query` so the verifier's
+  fallback chain cannot land there either: a `--focus research` answer,
+  grounded or in privacy mode, is never re-checked by Perplexity. When the
+  only advisor left is the answer's own provider (an exclusion that leaves
+  just the answerer, or a single-provider install) the result is
+  `unverified` with `No independent verifier available` instead of the old
+  same-provider self-check wearing a `Verified` badge. Pinned by
+  `tests/test_verify_exclude_providers.py` and the forwarding tests in
+  `tests/test_engine_query.py`.
+- **The last three bundled-file readers go through `nvh.data`.** The setup
+  catalog (`nvh/catalog/nvhive-catalog.json`), the Agent Library
+  (`nvh/catalog/agent-library.json`) and the Wizard system prompt
+  (`nvh/prompts/nvwizard_system.md`) read through `read_json` / `read_text`
+  like every other shipped file; their fallbacks (generated catalog, empty
+  library with one warning, built-in prompt with one warning) are unchanged.
+
+### Removed
+- **The pre-0.44 tool-call forms.** The agent loop no longer reads the
+  fenced `tool_call` block or the bare `{"tool": ..., "args": {...}}` object
+  (deprecated in 0.44, still parsed on the agent-loop path in 0.45).
+  `nvh.core.tools.parse_tool_calls` lost its `legacy` parameter (passing it
+  is a `TypeError`); the only grammar on every path is the `TOOL_CALL:
+  {json}` line (the `{"tool", "args"}` key spelling inside that line is
+  still read) plus a provider's native `tool_calls`. A fenced block or bare
+  object a model still writes is ordinary text: it stays in the reply, runs
+  no tool, and the loop treats the reply as its final answer.
+
 ## [0.45.0] - 2026-11-01
 
 Refresh completion and Spark hygiene. The model catalog reads price, context

@@ -8,8 +8,8 @@
     from deltas on ``stream()`` (final chunk);
   - Ollama sends ``tools`` to ``/api/chat`` only when ``/api/show`` lists the
     ``tools`` capability, and maps ``message.tool_calls`` back;
-  - the text protocol ``TOOL_CALL: {json}`` is the fallback everywhere and the
-    deprecated fenced form is still parsed;
+  - the text protocol ``TOOL_CALL: {json}`` is the fallback everywhere; the
+    pre-0.44 fenced block and bare object are ordinary text since 0.46;
   - the Wizard chat asks the provider before sending ``tools=`` and reads both
     channels.
 
@@ -415,19 +415,29 @@ def test_normalize_and_wire_round_trip() -> None:
     assert normalize_tool_calls(None) == [] and normalize_tool_calls("TOOL_CALL: {}") == []
 
 
-def test_fenced_form_is_still_parsed_by_the_agent_loop_but_the_line_is_the_protocol() -> None:
-    text, calls = parse_tool_calls(
-        'a\n```tool_call\n{"tool": "x", "args": {"k": 1}}\n```\nTOOL_CALL: {"name": "y", "arguments": {}}', legacy=True,
-    )
-    assert calls == [{"name": "y", "arguments": {}}, {"name": "x", "arguments": {"k": 1}}]
-    assert text == "a"
+def test_fenced_block_is_ordinary_text_since_0_46_only_the_line_is_the_protocol() -> None:
+    """0.44 deprecated the pre-0.44 fenced block and bare object, 0.45 still read
+    them on the agent-loop path (``legacy=True``), 0.46 drops them: the parser has
+    no ``legacy`` parameter any more, the block stays in the stripped text verbatim
+    and only the ``TOOL_CALL:`` line beside it is a call — on both paths."""
+    from nvh.core.agent_loop import _extract_tool_calls as agent_extract
+
+    fenced = 'a\n```tool_call\n{"tool": "x", "args": {"k": 1}}\n```'
+    with_line = f'{fenced}\nTOOL_CALL: {{"name": "y", "arguments": {{}}}}'
+    text, calls = parse_tool_calls(with_line)
+    assert calls == [{"name": "y", "arguments": {}}]
+    assert text == fenced
+    assert chat_mod._extract_tool_calls(with_line) == (fenced, [{"name": "y", "arguments": {}}])
+    assert agent_extract(with_line) == [{"tool": "y", "args": {}}]
+    with pytest.raises(TypeError):
+        parse_tool_calls("x", legacy=True)  # type: ignore[call-arg]
 
 
-def test_marker_only_by_default_prose_and_quoted_objects_are_never_calls() -> None:
-    """The Wizard path: only ``TOOL_CALL: {json}`` is a call. A prose mention of the
-    marker stays in the answer, and a pasted / quoted ``{"tool": …, "args": …}`` or
-    fenced block never runs a tool. The agent loop alone keeps the deprecated
-    forms for one release (``legacy=True``)."""
+def test_marker_only_prose_and_quoted_objects_are_never_calls_on_either_path() -> None:
+    """Only ``TOOL_CALL: {json}`` is a call, on the Wizard path and in the agent
+    loop alike. A prose mention of the marker stays in the answer, and a pasted /
+    quoted ``{"tool": …, "args": …}`` or fenced block never runs a tool anywhere
+    (the agent loop's one-release ``legacy=True`` ended with 0.45)."""
     from nvh.core.agent_loop import _extract_tool_calls as agent_extract
 
     prose = "I would then write TOOL_CALL: followed by JSON.\nAnything else?"
@@ -439,8 +449,8 @@ def test_marker_only_by_default_prose_and_quoted_objects_are_never_calls() -> No
     assert chat_mod._extract_tool_calls(quoted) == (quoted, [])
     fenced = 'a\n```tool_call\n{"tool": "refresh_models", "args": {}}\n```'
     assert chat_mod._extract_tool_calls(fenced) == (fenced, [])
-    assert agent_extract(quoted) == [{"tool": "refresh_models", "args": {}}]
-    assert agent_extract(fenced) == [{"tool": "refresh_models", "args": {}}]
+    assert agent_extract(quoted) == []
+    assert agent_extract(fenced) == []
 
     # A marker *with* a malformed or unbalanced object is still stripped and dropped.
     assert parse_tool_calls('All good.\nTOOL_CALL: {"name": "refresh_models", "arguments": {oops}}') == ("All good.", [])

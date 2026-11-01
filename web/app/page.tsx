@@ -574,6 +574,7 @@ export default function ChatPage() {
           provider: m.provider,
           model: m.model,
           cost_usd: m.cost_usd,
+          cost_known: m.cost_known,
           tokens: m.tokens,
           latency_ms: m.latency_ms,
           timestamp: m.timestamp,
@@ -769,6 +770,7 @@ export default function ChatPage() {
             model: resp.model,
             tokens: resp.usage?.total_tokens,
             cost_usd: resp.cost_usd ?? null,
+            cost_known: resp.cost_known,
             latency_ms: resp.latency_ms,
             timestamp: Date.now(),
           });
@@ -800,6 +802,7 @@ export default function ChatPage() {
             model: done.model,
             tokens: done.usage?.total_tokens,
             cost_usd: done.cost_usd ?? null,
+            cost_known: done.cost_known,
             timestamp: Date.now(),
           });
         },
@@ -879,10 +882,10 @@ export default function ChatPage() {
               [member]: { ...(prev[member] ?? { label: member, provider: member.split(':')[0], persona: '', tokens: 0, cost: '0', latency_ms: 0, elapsedMs: 0 }), accumulated, status: 'streaming' },
             }));
           },
-          onMemberComplete: (member, content, tokens, cost, latency) => {
+          onMemberComplete: (member, content, tokens, cost, latency, costKnown) => {
             updateMemberStates(prev => ({
               ...prev,
-              [member]: { ...(prev[member] ?? { label: member, provider: member.split(':')[0], persona: '', accumulated: '', elapsedMs: 0 }), status: 'complete', accumulated: content, tokens, cost, latency_ms: latency },
+              [member]: { ...(prev[member] ?? { label: member, provider: member.split(':')[0], persona: '', accumulated: '', elapsedMs: 0 }), status: 'complete', accumulated: content, tokens, cost, cost_known: costKnown, latency_ms: latency },
             }));
             completedCostRef.current += parseFloat(cost) || 0;
           },
@@ -916,7 +919,7 @@ export default function ChatPage() {
               prev.map(m => m.id === assistantMsgId ? { ...m, content } : m)
             );
           },
-          onComplete: (totalCost) => {
+          onComplete: (totalCost, _totalLatency, _quorumMet, costKnown) => {
             setCouncilPhase('done');
             setStreaming(false);
             wsRef.current = null;
@@ -930,10 +933,11 @@ export default function ChatPage() {
                   model: memberModelByLabelRef.current[label] ?? state.provider,
                   tokens: state.tokens,
                   cost: state.cost,
+                  cost_known: state.cost_known,
                   latency_ms: state.latency_ms,
                 },
               ])
-            ) as Record<string, { content: string; provider: string; model: string; tokens: number; cost: string; latency_ms?: number }>;
+            ) as Record<string, { content: string; provider: string; model: string; tokens: number; cost: string; cost_known?: boolean; latency_ms?: number }>;
             // Read from the ref so we get the live synthesis, not the
             // closure value captured when handleSubmit was built.
             const finalContent = synthesisContentRef.current;
@@ -944,11 +948,13 @@ export default function ChatPage() {
               streaming: false,
               mode: 'council',
               cost_usd: totalCost,
+              cost_known: costKnown,
               timestamp: Date.now(),
               council_data: {
                 member_responses: memberStatesSnapshot,
                 synthesis: finalContent,
                 total_cost: totalCost,
+                cost_known: costKnown,
                 member_order: Object.keys(memberStatesSnapshot),
               },
             });
@@ -985,6 +991,7 @@ export default function ChatPage() {
             model: resp.model,
             tokens: resp.usage?.total_tokens,
             cost_usd: resp.cost_usd,
+            cost_known: resp.cost_known,
             latency_ms: resp.latency_ms,
             cache_hit: resp.cache_hit,
           };

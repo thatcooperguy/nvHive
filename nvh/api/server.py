@@ -587,6 +587,57 @@ def _response_envelope(data: Any) -> dict[str, Any]:
     return {"status": "success", "data": data}
 
 
+def _catalog_cost_known(
+    model: str | None, provider: str | None, cost_usd: Any, *, metered: bool = True, routed_model: str | None = None,
+) -> bool:
+    """``cost_known`` for an envelope's ``cost_usd``: the catalog's verdict on
+    the model that answered (:func:`nvh.core.agent_loop.model_cost_known` —
+    the row's ``cost_known``, a ``zero_cost`` provider's $0, LiteLLM's own
+    table for an id the YAML catalog lacks, a non-zero bill always known; an
+    unmetered $0 is known only for a free model). False means the $0 beside
+    it is a placeholder the client shows as "cost unknown", not "free".
+    ``routed_model`` is the id that was asked for, looked up when the
+    provider echoed another spelling."""
+    from nvh.core.agent_loop import model_cost_known
+
+    try:
+        return model_cost_known(
+            getattr(_engine, "registry", None), model, provider=provider, cost_usd=cost_usd,
+            metered=metered, routed_model=routed_model,
+        )
+    except Exception:
+        logger.debug("cost_known lookup failed for %s", model, exc_info=True)
+        return False
+
+
+def _metered(usage: Any) -> bool:
+    """Whether a reply's usage reports any tokens (:func:`nvh.core.agent_loop.usage_metered`)."""
+    from nvh.core.agent_loop import usage_metered
+
+    return usage_metered(usage)
+
+
+def _agent_cost_known(result: Any) -> bool:
+    """``cost_known`` for the ``/v1/smart`` agent envelope.
+
+    ``AgentResult.cost_known`` is the loop's own verdict (every step's model
+    checked against the catalog as it answered). A result without the flag
+    (a test double) falls back to: known only when every step reported a
+    cost and the total is non-zero — a $0 total nothing attributes to a
+    free model reads as "unknown", never as "free".
+    """
+    known = getattr(result, "cost_known", None)
+    if isinstance(known, bool):
+        return known
+    steps = getattr(result, "steps", None) or []
+    if any(getattr(step, "cost_usd", None) is None for step in steps):
+        return False
+    try:
+        return Decimal(str(result.total_cost_usd)) > 0
+    except (ArithmeticError, TypeError, ValueError):
+        return False
+
+
 def _serialize_completion(resp: CompletionResponse) -> dict[str, Any]:
     return {
         "content": resp.content,
@@ -594,6 +645,13 @@ def _serialize_completion(resp: CompletionResponse) -> dict[str, Any]:
         "provider": resp.provider,
         "usage": resp.usage.model_dump(),
         "cost_usd": _decimal_to_str(resp.cost_usd),
+        # False = no price in the catalog for this model: cost_usd is a
+        # placeholder $0 the client renders as "cost unknown". A cache hit
+        # is a known $0 by construction (nothing was billed for the copy); an
+        # unmetered $0 from a paid model is unknown (it was billed upstream).
+        "cost_known": bool(resp.cache_hit) or _catalog_cost_known(
+            resp.model, resp.provider, resp.cost_usd, metered=_metered(resp.usage),
+        ),
         "latency_ms": resp.latency_ms,
         "finish_reason": resp.finish_reason.value,
         "cache_hit": resp.cache_hit,
@@ -833,6 +891,10 @@ async def _sse_query_stream(
                 done_payload["usage"] = last_chunk.usage.model_dump()
             if last_chunk.cost_usd is not None:
                 done_payload["cost_usd"] = _decimal_to_str(last_chunk.cost_usd)
+                done_payload["cost_known"] = _catalog_cost_known(
+                    last_chunk.model or decision.model, decision.provider, last_chunk.cost_usd,
+                    metered=_metered(last_chunk.usage), routed_model=decision.model,
+                )
             if last_chunk.finish_reason:
                 done_payload["finish_reason"] = last_chunk.finish_reason.value
 
@@ -3343,16 +3405,23 @@ async def council_query(request: CouncilRequest, _auth: None = Depends(require_a
         label: _serialize_completion(resp)
         for label, resp in result.member_responses.items()
     }
+    synthesis_data = _serialize_completion(result.synthesis) if result.synthesis else None
 
     data: dict[str, Any] = {
         "member_responses": member_data,
         "failed_members": result.failed_members,
         "strategy": result.strategy,
         "total_cost_usd": _decimal_to_str(result.total_cost_usd),
+        # The total is a price only when every member (and the synthesis)
+        # was priced; one unpriced model makes the sum a floor, and a council
+        # that priced nothing (every member failed) is not a known $0.
+        "cost_known": bool(member_data)
+        and all(m["cost_known"] for m in member_data.values())
+        and (synthesis_data is None or synthesis_data["cost_known"]),
         "total_latency_ms": result.total_latency_ms,
         "quorum_met": result.quorum_met,
         "agents_used": result.agents_used,
-        "synthesis": _serialize_completion(result.synthesis) if result.synthesis else None,
+        "synthesis": synthesis_data,
         "members": [
             {
                 "provider": m.provider,
@@ -3709,6 +3778,7 @@ async def smart_query(request: QueryRequest, _auth: None = Depends(require_auth)
                 "steps": result.total_iterations,
                 "tool_calls": result.total_tool_calls,
                 "total_cost_usd": _decimal_to_str(result.total_cost_usd),
+                "cost_known": _agent_cost_known(result),
             })
         except Exception as exc:
             return _response_envelope({
@@ -3898,6 +3968,10 @@ async def ws_query(websocket: WebSocket) -> None:
                 complete_payload["usage"] = last_chunk.usage.model_dump()
             if last_chunk.cost_usd is not None:
                 complete_payload["cost_usd"] = _decimal_to_str(last_chunk.cost_usd)
+                complete_payload["cost_known"] = _catalog_cost_known(
+                    last_chunk.model or decision.model, decision.provider, last_chunk.cost_usd,
+                    metered=_metered(last_chunk.usage), routed_model=decision.model,
+                )
             if last_chunk.finish_reason:
                 complete_payload["finish_reason"] = last_chunk.finish_reason.value
 
@@ -5095,7 +5169,8 @@ def _serialize_conversation(conv: Any) -> dict[str, Any]:
 
 
 def _serialize_message(msg: Any) -> dict[str, Any]:
-    return {
+    tokens = (msg.input_tokens or 0) + (msg.output_tokens or 0)
+    data = {
         "id": msg.id,
         "conversation_id": msg.conversation_id,
         "sequence": msg.sequence,
@@ -5105,11 +5180,18 @@ def _serialize_message(msg: Any) -> dict[str, Any]:
         "model": msg.model,
         "input_tokens": msg.input_tokens,
         "output_tokens": msg.output_tokens,
-        "tokens": (msg.input_tokens or 0) + (msg.output_tokens or 0),
+        "tokens": tokens,
         "cost_usd": str(msg.cost_usd),
         "latency_ms": msg.latency_ms,
         "timestamp": _epoch_ms(msg.created_at),
     }
+    if msg.role == "assistant" and msg.model:
+        # The row keeps model, provider, cost and tokens, so the catalog's
+        # verdict is recomputed on read and a reload renders the pill the live
+        # reply did. A row without a model (a council total) carries none: the
+        # client keeps that row's historical meaning.
+        data["cost_known"] = _catalog_cost_known(msg.model, msg.provider, msg.cost_usd, metered=tokens > 0)
+    return data
 
 
 class ConversationQueryRequest(BaseModel):

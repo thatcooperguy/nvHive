@@ -2,9 +2,11 @@
 
 Hermetic throughout: ``NVH_HOME`` is ``tmp_path``, platform facts are seeded
 (never probed), the login name is ``alice``, and ``subprocess`` inside
-:mod:`system_settings` is a recording fake — both drivers spawn through the
-one ``run_host_command`` there (the job path as the Wizard does, the terminal
-path with ``interactive=True``). Nothing here runs ``sudo``, ``apt``,
+:mod:`system_settings` is a recording fake — both drivers spawn through that
+module's runners (the job path's steps through ``run_host_command_killable``'s
+``Popen`` in their own process group, its checks and the terminal path through
+``run_host_command``'s ``run``, ``interactive=True`` for the terminal's
+steps). Nothing here runs ``sudo``, ``apt``,
 ``docker`` or ``curl`` for real; the jobs module is the real one, in-process,
 writing under ``tmp_path``; the upstream drift check is driven through a fake
 fetcher.
@@ -26,7 +28,9 @@ Invariants pinned (design brief phase 2b §2-4, §9; Wave 4 S1):
   - The runner skips steps whose check exits 0, stops at the first failure,
     hands off with ONE command (``nvh playbook install <id>``) when sudo needs
     a password, stops between steps when the job's cancel flag is up (and the
-    receipt says ``stopped after step N``), writes a receipt with an honest,
+    receipt says ``stopped after step N``), kills a running command's process
+    group when the flag goes up mid-step (``stopped during step N (command
+    killed)``, the job log keeping the engine's account), writes a receipt with an honest,
     sticky ``no_root`` and one vault ``Decisions/`` note per run that touched
     the host.
   - Plan and install refuse off-Linux in plain words; the catalogue still lists.
@@ -39,10 +43,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib.util
+import io
 import json
+import os
 import re
 import shlex
 import threading
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -111,8 +119,68 @@ def _hermetic(monkeypatch, tmp_path: Path) -> None:
     seed()
 
 
+@dataclass
+class Hang:
+    """A responder answer for a command that runs until signalled: dies on SIGTERM, or only on SIGKILL when ``stubborn``.
+
+    ``partial`` is the stdout that had arrived when it was killed; ``started``
+    is set the first time the runner waits on it.
+    """
+
+    partial: str = ""
+    stubborn: bool = False
+    started: threading.Event = field(default_factory=threading.Event)
+
+    def dies_on(self, signals: list[str]) -> bool:
+        return "SIGKILL" in signals or (not self.stubborn and "SIGTERM" in signals)
+
+
+class FakeProc:
+    """What ``FakeSubprocess.Popen`` returns: ``communicate`` answers at once from ``(code, out, err)``, or keeps
+    timing out on a :class:`Hang` until the runner's ``_signal_group`` seam (patched to :meth:`signal_group`) has sent
+    a signal it dies on. The pid is a decoy -- the seam is patched, so nothing ever signals it for real."""
+
+    def __init__(self, fake: FakeSubprocess, argv: list[str], answer: Any) -> None:
+        self.fake, self.args, self.pid = fake, list(argv), 424242
+        self.returncode: int | None = None
+        self.signals: list[str] = []
+        self.stdout, self.stderr = io.BytesIO(), io.BytesIO()
+        self._answer = answer
+
+    def communicate(self, timeout: float | None = None) -> tuple[bytes, bytes]:
+        answer = self._answer
+        if isinstance(answer, Hang):
+            if not answer.dies_on(self.signals):
+                answer.started.set()
+                time.sleep(min(timeout, 0.02) if timeout else 0.02)  # the real wait blocks; keep the poll honest, not hot
+                raise self.fake.TimeoutExpired(self.args, timeout)
+            code, out, err = (-9 if "SIGKILL" in self.signals else -15), answer.partial, ""
+        else:
+            code, out, err = answer
+        self.returncode = code
+        self.stdout.close()
+        self.stderr.close()
+        return out.encode(), err.encode()
+
+    def signal_group(self, *, hard: bool) -> None:
+        self.signals.append("SIGKILL" if hard else "SIGTERM")
+
+    def terminate(self) -> None:
+        self.signal_group(hard=False)
+
+    def kill(self) -> None:
+        self.signal_group(hard=True)
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int | None:
+        return self.returncode
+
+
 class FakeSubprocess:
-    """Stands in for the ``subprocess`` module; ``responder(argv) -> (code, stdout, stderr)``."""
+    """Stands in for the ``subprocess`` module; ``responder(argv) -> (code, stdout, stderr)``, a :class:`Hang`, or an
+    exception to raise. ``run`` is the probe / terminal path, ``Popen`` the job path's killable step runner."""
 
     DEVNULL = -3
     PIPE = -1
@@ -124,23 +192,34 @@ class FakeSubprocess:
     def __init__(self, responder=None) -> None:
         self.calls: list[list[str]] = []
         self.kwargs: list[dict[str, Any]] = []
+        self.procs: list[FakeProc] = []
         self.responder = responder or (lambda argv: (0, "done\n", ""))
 
-    def run(self, argv, **kwargs):
+    def _answer(self, argv, kwargs):
         self.calls.append(list(argv))
         self.kwargs.append(kwargs)
         answer = self.responder(list(argv))
         if isinstance(answer, BaseException):
             raise answer
-        code, out, err = answer
+        return answer
+
+    def run(self, argv, **kwargs):
+        code, out, err = self._answer(argv, kwargs)
         return SimpleNamespace(returncode=code, stdout=out.encode(), stderr=err.encode())
+
+    def Popen(self, argv, **kwargs):  # noqa: N802 — must match subprocess's name
+        proc = FakeProc(self, argv, self._answer(argv, kwargs))
+        self.procs.append(proc)
+        return proc
 
 
 @pytest.fixture()
 def fake_host(monkeypatch) -> FakeSubprocess:
-    """The job path: ``run_host_command`` inside system_settings."""
+    """The job path: ``run_host_command`` (probes) and ``run_host_command_killable`` (steps) inside system_settings.
+    The group-signal seam is patched too, so a kill reaches the fake process and never a real pid."""
     fake = FakeSubprocess()
     monkeypatch.setattr(ss, "subprocess", fake)
+    monkeypatch.setattr(ss, "_signal_group", lambda proc, *, hard: proc.signal_group(hard=hard))
     return fake
 
 
@@ -919,61 +998,120 @@ async def test_docker_group_step_halts_with_the_relogin_note_and_no_root_stays_h
 
 
 @pytest.mark.asyncio
-async def test_cancel_mid_step_still_writes_the_receipt_and_the_audit(fake_host: FakeSubprocess, tmp_path: Path) -> None:
-    """POST /v1/jobs/{id}/cancel → cancel_job → task.cancel(): the CancelledError lands inside the engine's
-    ``await run_cmd``. The step already done and the one in flight (its thread cannot be interrupted, so the
-    command may finish on the host) both reach the receipt and the vault note before the job marks itself canceled;
-    the receipt tells this case (``in_flight`` set) from a stop between steps (``in_flight: None``)."""
+async def test_cancel_mid_step_kills_the_command_group_and_writes_the_receipt_and_the_audit(fake_host: FakeSubprocess, tmp_path: Path) -> None:
+    """POST /v1/jobs/{id}/cancel → cancel_job sets the flag, then task.cancel(): the CancelledError lands at the engine's
+    shielded ``await`` of step 2 while the runner thread, polling the same flag, SIGTERMs the command's own process
+    group. The engine waits for the thread's report and records the kill -- the signal's exit code, the output that had
+    arrived -- in the receipt (``stopped during step 2 (command killed)``), the vault note and the job log, which keeps
+    the engine's own account rather than the job's generic line; the receipt tells this case (``in_flight`` with
+    ``killed``) from a stop between steps (``in_flight: None``)."""
     seed(can_sudo=True)
-    started, release = threading.Event(), threading.Event()
+    hang = Hang(partial="Reading package lists...\n")
 
     def responder(argv: list[str]):
         if argv[:2] == ["systemctl", "is-active"] or argv[:2] == ["dpkg", "-s"]:
             return (1, "", "")  # nothing installed or active yet
         if argv[:4] == ["sudo", "-n", "apt", "install"]:
-            started.set()
-            release.wait(10)  # blocks the worker thread like a real apt would
-            return (0, "Setting up openssh-server\n", "")
+            return hang  # runs until signalled, like a real apt would
         return (0, "", "")
 
     fake_host.responder = responder
-    out = pb.start_run("tailscale")  # step 1: sudo -n apt update; step 2: sudo -n apt install -y openssh-server (blocks)
+    out = pb.start_run("tailscale")  # step 1: sudo -n apt update; step 2: sudo -n apt install -y openssh-server (hangs)
     task = jobs._TASKS[out["job_id"]]
-    try:
-        for _ in range(500):
-            if started.is_set():
-                break
-            await asyncio.sleep(0.01)
-        assert started.is_set()
-        jobs.cancel_job(out["job_id"])
-        with pytest.raises(asyncio.CancelledError):
-            await task
-    finally:
-        release.set()
+    for _ in range(500):
+        if hang.started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert hang.started.is_set()
+    jobs.cancel_job(out["job_id"])
+    await task  # the engine honours the cancel itself: no CancelledError escapes the job
+
+    proc = fake_host.procs[-1]
+    assert proc.args == ["sudo", "-n", "apt", "install", "-y", "openssh-server"] and proc.signals == ["SIGTERM"]
+    assert proc.returncode == -15 and proc.stdout.closed and proc.stderr.closed
+    spawn = fake_host.kwargs[-1]
+    assert spawn["stdin"] == FakeSubprocess.DEVNULL and spawn["stdout"] == FakeSubprocess.PIPE and spawn["stderr"] == FakeSubprocess.PIPE
+    assert spawn.get("start_new_session") is True if os.name != "nt" else "creationflags" in spawn
 
     job = jobs.load_job(out["job_id"])
-    assert job["status"] == "canceled"
     payloads = [record["payload"] for record in jobs.read_events(out["job_id"], limit=500)]
-    assert payloads[-1]["event"] == "canceled"
-    assert fake_host.calls[-1] == ["sudo", "-n", "apt", "install", "-y", "openssh-server"]
+    final = payloads[-1]
+    assert job["status"] == "canceled" and final["event"] == "canceled" and final["status"] == "canceled"
+    assert "stopped during step 2 (command killed)" in final["message"] and "SIGTERM" in final["message"]
+    assert final["stopped_after_step"] == 1 and final["steps_run"] == 2
+    assert final["in_flight"]["killed"] == "SIGTERM" and final["in_flight"]["exit_code"] == -15
+    assert final["in_flight"]["command"] == "sudo apt install -y openssh-server" and final["in_flight"]["sudo"] is True
+    assert job["message"] == final["message"]  # the job log keeps the engine's account, not "Install job canceled by user."
+    assert Path(final["receipt_path"]) == receipts.receipt_path("playbook", "tailscale") and final["audit"]["saved"] is True
 
     receipt = receipts.load_receipt("playbook:tailscale")
     assert receipt["status"] == "partial" and receipt["no_root"] is False  # a sudo step ran; another was spawned
     assert receipt["metadata"]["outcome"] == "canceled" and receipt["metadata"]["requires_sudo"] is True
     steps = receipt["metadata"]["steps"]
-    assert [s["exit_code"] for s in steps] == [0, None] and steps[1].get("canceled") is True
-    assert steps[1]["command"] == "sudo apt install -y openssh-server"
+    assert [s["exit_code"] for s in steps] == [0, -15] and steps[1]["canceled"] is True and steps[1]["killed"] == "SIGTERM"
+    assert steps[1]["command"] == "sudo -n apt install -y openssh-server" and "canceled" not in steps[0]
     assert receipt["metadata"]["stopped_after_step"] == 1
-    assert receipt["metadata"]["in_flight"]["command"] == "sudo apt install -y openssh-server" and receipt["metadata"]["in_flight"]["sudo"] is True
+    assert receipt["metadata"]["in_flight"]["killed"] == "SIGTERM" and receipt["metadata"]["in_flight"]["sudo"] is True
     assert receipts.repair_plan("playbook:tailscale")["safe_to_run_without_root"] is False
 
     notes = _decisions(tmp_path)
     assert len(notes) == 1
     text = notes[0].read_text(encoding="utf-8")
     assert text.startswith("# Privileged change (partial): Install the tailscale playbook")
-    assert "Outcome: partial — canceled by the user during step 2 (Install the OpenSSH server (if needed))" in text
-    assert "may have completed on the host" in text and "`sudo -n apt update` — exit 0" in text
-    assert "exit None" in text  # the in-flight command, recorded without pretending to know its exit code
+    assert "Outcome: partial — canceled by the user — stopped during step 2 (command killed)" in text
+    assert "`sudo -n apt update` — exit 0" in text and "`sudo -n apt install -y openssh-server` — exit -15" in text
+    assert "Reading package lists..." in text  # the output that had arrived before the kill
+    assert "may have completed" not in text and "exit None" not in text
+
+
+@pytest.mark.asyncio
+async def test_cancel_flag_raised_on_disk_mid_step_is_killed_by_the_runner_thread(fake_host: FakeSubprocess, tmp_path: Path) -> None:
+    """The flag alone, without ``task.cancel()`` (the job record was edited, or the request raced the task): the runner
+    thread re-reads it between polls and kills the group itself -- here a command that ignores SIGTERM, so SIGKILL
+    follows the grace -- and the engine records a cancel stopped during that step on its ordinary path, yielding its
+    own ``canceled`` event. The between-steps wording is untouched."""
+    seed(can_sudo=True)
+    holder: dict[str, str] = {}
+    hang = Hang(stubborn=True)
+
+    def responder(argv: list[str]):
+        if argv[:2] == ["systemctl", "is-active"] or argv[:2] == ["dpkg", "-s"]:
+            return (1, "", "")
+        if argv[:4] == ["sudo", "-n", "apt", "install"]:
+            job = jobs.load_job(holder["id"], reconcile=False, include_recent_events=False)
+            job["cancel_requested"] = True
+            jobs._write_job(job)
+            return hang
+        return (0, "", "")
+
+    fake_host.responder = responder
+    out = pb.start_run("tailscale")
+    holder["id"] = out["job_id"]
+    events = await _drain(out["job_id"])
+    proc = fake_host.procs[-1]
+    assert proc.args == ["sudo", "-n", "apt", "install", "-y", "openssh-server"]
+    assert proc.signals == ["SIGTERM", "SIGKILL"] and proc.returncode == -9
+    assert fake_host.calls[-1] == proc.args  # nothing after the killed step
+
+    final = events[-1]
+    assert final["event"] == "canceled" and final["status"] == "canceled" and final["canceled"] is True
+    assert "stopped during step 2 (command killed)" in final["message"] and "SIGKILL" in final["message"]
+    assert final["stopped_after_step"] == 1 and final["steps_run"] == 2 and final["in_flight"]["killed"] == "SIGKILL"
+    job = jobs.load_job(out["job_id"])
+    assert job["status"] == "canceled" and job["message"] == final["message"]
+
+    receipt = receipts.load_receipt("playbook:tailscale")
+    assert receipt["status"] == "partial" and receipt["no_root"] is False
+    assert receipt["metadata"]["outcome"] == "canceled" and receipt["metadata"]["stopped_after_step"] == 1
+    steps = receipt["metadata"]["steps"]
+    assert [s["exit_code"] for s in steps] == [0, -9] and steps[1]["killed"] == "SIGKILL" and steps[1]["canceled"] is True
+    assert receipt["metadata"]["in_flight"]["killed"] == "SIGKILL" and receipt["metadata"]["in_flight"]["exit_code"] == -9
+    notes = _decisions(tmp_path)
+    assert len(notes) == 1
+    text = notes[0].read_text(encoding="utf-8")
+    assert "Outcome: partial — canceled by the user — stopped during step 2 (command killed)" in text
+    assert "`sudo -n apt install -y openssh-server` — exit -9" in text
+    assert pb._stopped_message(1, 11) == "canceled by the user — stopped after step 1 of 11; no command was in flight"
 
 
 @pytest.mark.asyncio

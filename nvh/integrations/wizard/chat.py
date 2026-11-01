@@ -554,6 +554,34 @@ def _persistable_calls(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _turn_cost_known(
+    engine: Any, *, model: str | None, provider: str | None, cost_usd: float, tokens: int = 0,
+    routed_model: str | None = None,
+) -> bool:
+    """``cost_known`` for a turn's envelope and its persisted meta.
+
+    The catalog's verdict on the model that answered
+    (:func:`nvh.core.agent_loop.model_cost_known`: the row's ``cost_known``,
+    a ``zero_cost`` provider's $0, LiteLLM's table for an id the catalog
+    lacks, a non-zero meter always known), so the UI can tell a free turn
+    from a $0 nobody priced. ``tokens`` is what the provider metered for the
+    turn: a $0 with no usage from a paid model was billed upstream and is
+    unknown, never "free". ``routed_model`` is the router's pick, looked up
+    when the model the provider named has no row. A lookup that fails is
+    "unknown", never a silent "priced".
+    """
+    from nvh.core.agent_loop import model_cost_known
+
+    try:
+        return model_cost_known(
+            engine.registry, model, provider=provider, cost_usd=cost_usd, metered=tokens > 0,
+            routed_model=routed_model if routed_model != model else None,
+        )
+    except Exception:
+        logger.debug("wizard_chat: cost_known lookup failed", exc_info=True)
+        return False
+
+
 def _cost_ceiling_reached(ceiling: float | None, total_cost_usd: float) -> bool:
     """True when a profile's per-turn ceiling is set and the running cost hit it."""
     return ceiling is not None and total_cost_usd >= ceiling
@@ -1697,6 +1725,9 @@ async def wizard_chat(
             total_input_tokens: int = 0
             total_output_tokens: int = 0
             fallback_from: str | None = None
+            # The model that answered, in the provider's spelling: its catalog
+            # row decides cost_known (decision.model when a response names none).
+            used_model: str = ""
             # Set to True if a profile's max_cost_usd_per_turn aborted the
             # follow-up loop early. The UI uses this to explain why the
             # answer is the first iteration's draft instead of a tool-grounded
@@ -1734,6 +1765,8 @@ async def wizard_chat(
                 except Exception:
                     pass
                 total_latency_ms += int(response.latency_ms or 0)
+                if isinstance(getattr(response, "model", None), str) and response.model:
+                    used_model = response.model
                 if response.usage is not None:
                     total_input_tokens += int(response.usage.input_tokens or 0)
                     total_output_tokens += int(response.usage.output_tokens or 0)
@@ -1787,6 +1820,11 @@ async def wizard_chat(
                     # Only confirm-class calls / refusals — stop iterating.
                     break
 
+            cost_known = _turn_cost_known(
+                engine, model=used_model or decision.model, provider=decision.provider,
+                cost_usd=total_cost_usd, tokens=total_input_tokens + total_output_tokens,
+                routed_model=decision.model,
+            )
             await _persist_wizard_turn(
                 conversation_id,
                 user_question=question,
@@ -1799,6 +1837,7 @@ async def wizard_chat(
                     tool_results=state.tool_results,
                     deferred_tool_calls=state.deferred_auto,
                     cost_usd=total_cost_usd,
+                    cost_known=cost_known,
                     latency_ms=total_latency_ms,
                 ),
             )
@@ -1814,6 +1853,9 @@ async def wizard_chat(
                 "deferred_tool_calls": state.deferred_auto,
                 "iterations": state.iterations,
                 "cost_usd": total_cost_usd,
+                # False = the catalog has no price for the model that answered,
+                # so cost_usd is a placeholder $0, not "free".
+                "cost_known": cost_known,
                 "latency_ms": total_latency_ms,
                 "input_tokens": total_input_tokens,
                 "output_tokens": total_output_tokens,
@@ -1892,8 +1934,9 @@ async def _filtered_token_stream(
 ) -> AsyncIterator[tuple[str, Any]]:
     """Yield ``("token", text)`` for user-visible token deltas, hiding any
     line that starts with ``TOOL_CALL:`` from the live stream. At the end
-    yields ``("meter", {cost_usd, input_tokens, output_tokens})`` — read from
-    the last chunk that reported usage/cost, zeros if none did — then
+    yields ``("meter", {cost_usd, input_tokens, output_tokens, model})`` —
+    read from the last chunk that reported usage/cost, zeros if none did,
+    ``model`` the last chunk's string ``model`` or ``""`` — then
     ``("tool_calls", [...])`` when a chunk carried native ``tool_calls`` (the
     final chunk of a provider that took ``tools=``; the wire shape, as-is),
     and finally ``("full", accumulated)`` so the caller can parse markers
@@ -1908,6 +1951,7 @@ async def _filtered_token_stream(
     cost_usd = 0.0
     input_tokens = 0
     output_tokens = 0
+    model = ""
     native_calls: list[Any] | None = None
 
     async for chunk in stream:
@@ -1916,6 +1960,9 @@ async def _filtered_token_stream(
         chunk_cost, chunk_in, chunk_out = _meter_from_chunk(chunk)
         if chunk_cost is not None:
             cost_usd = chunk_cost
+        chunk_model = getattr(chunk, "model", None)
+        if isinstance(chunk_model, str) and chunk_model:
+            model = chunk_model
         if chunk_in is not None:
             input_tokens = chunk_in
         if chunk_out is not None:
@@ -1960,6 +2007,7 @@ async def _filtered_token_stream(
         "cost_usd": cost_usd,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "model": model,
     })
     if native_calls:
         yield ("tool_calls", native_calls)
@@ -1993,7 +2041,8 @@ async def wizard_chat_stream(
       - ``{"type": "done", "answer": str, "used_provider": str,
             "used_model": str, "tool_calls": [...], "tool_results": [...],
             "deferred_tool_calls": [{name, arguments, reason}, ...],
-            "iterations": int, "cost_usd": float, "latency_ms": int,
+            "iterations": int, "cost_usd": float, "cost_known": bool,
+            "latency_ms": int,
             "cost_ceiling_hit": bool, "cost_ceiling_usd": float | None,
             "used_profile": str | None, "profile_reason": str | None}`` —
         ``deferred_tool_calls`` are auto-class calls the loop did not run
@@ -2069,6 +2118,9 @@ async def wizard_chat_stream(
         total_latency_ms: int = 0
         total_input_tokens: int = 0
         total_output_tokens: int = 0
+        # The model the final chunk named, else decision.model: its catalog
+        # row decides cost_known.
+        used_model: str = ""
         cost_ceiling_hit = False
 
         iter_cap = _clamp_max_iterations(max_iterations)
@@ -2100,6 +2152,8 @@ async def wizard_chat_stream(
                     total_cost_usd += payload["cost_usd"]
                     total_input_tokens += payload["input_tokens"]
                     total_output_tokens += payload["output_tokens"]
+                    if payload.get("model"):
+                        used_model = payload["model"]
                 elif kind == "tool_calls":
                     native_raw = payload
                 else:
@@ -2146,6 +2200,11 @@ async def wizard_chat_stream(
             confirm_emitted = True
             yield {"type": "confirm_required", "tool_calls": list(state.pending_confirm)}
 
+        cost_known = _turn_cost_known(
+            engine, model=used_model or decision.model, provider=decision.provider,
+            cost_usd=total_cost_usd, tokens=total_input_tokens + total_output_tokens,
+            routed_model=decision.model,
+        )
         await _persist_wizard_turn(
             conversation_id,
             user_question=question,
@@ -2158,6 +2217,7 @@ async def wizard_chat_stream(
                 tool_results=state.tool_results,
                 deferred_tool_calls=state.deferred_auto,
                 cost_usd=total_cost_usd,
+                cost_known=cost_known,
                 latency_ms=total_latency_ms,
                 streamed=True,
             ),
@@ -2173,9 +2233,11 @@ async def wizard_chat_stream(
             "deferred_tool_calls": state.deferred_auto,
             "iterations": state.iterations,
             # Read from the final StreamChunk's usage/cost per iteration; a
-            # provider that reports none leaves these at 0 and the UI hides
-            # the meter.
+            # provider that reports none leaves these at 0. cost_known tells
+            # the UI whether that 0 is a price (the catalog knows the model)
+            # or a placeholder it must show as "cost unknown".
             "cost_usd": total_cost_usd,
+            "cost_known": cost_known,
             "latency_ms": total_latency_ms,
             "input_tokens": total_input_tokens,
             "output_tokens": total_output_tokens,

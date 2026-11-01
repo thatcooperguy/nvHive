@@ -58,6 +58,11 @@ class AgentStep:
     # What the provider said this step's one completion cost; ``None`` when
     # the response carried no usable ``cost_usd`` (not ``$0``: unknown).
     cost_usd: Decimal | None = None
+    # Which model answered this step (the response's own ``model`` /
+    # ``provider``), so the step's $0 can be attributed: a free model's or
+    # a placeholder nobody priced (:func:`model_cost_known`).
+    model: str = ""
+    provider: str = ""
 
 
 @dataclass
@@ -73,6 +78,11 @@ class AgentResult:
     # The sum of every step's ``cost_usd``; a step whose provider reported no
     # cost adds nothing, so this is a floor, not a guess.
     total_cost_usd: Decimal = Decimal("0")
+    # True when every step's cost was a price the catalog vouches for
+    # (:func:`model_cost_known` on the model that answered it); False once
+    # any step reported no cost or a $0 nobody priced -- the total is then
+    # a floor the API reports as ``cost_known: false``, never as "free".
+    cost_known: bool = True
 
 
 DESKTOP_AGENT_SUPPLEMENT = """
@@ -222,10 +232,10 @@ def _as_step_calls(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _extract_tool_calls(response_text: str) -> list[dict]:
-    """The tool calls in a model's text — ``TOOL_CALL: {json}`` lines (the deprecated
-    fenced block and bare object too, until 0.46: ``legacy=True`` is this
-    loop's alone) — as ``[{tool, args}]``."""
-    _stripped, calls = parse_tool_calls(response_text or "", legacy=True)
+    """The tool calls in a model's text — ``TOOL_CALL: {json}`` lines, the one
+    grammar shared with the Wizard — as ``[{tool, args}]``. A pre-0.44 fenced
+    block or bare object is ordinary text (dropped in 0.46) and yields no call."""
+    _stripped, calls = parse_tool_calls(response_text or "")
     return _as_step_calls(calls)
 
 
@@ -237,7 +247,7 @@ def _calls_from_response(response: Any) -> tuple[str, list[dict]]:
     back has the markers stripped.
     """
     text = getattr(response, "content", "") or ""
-    stripped, text_calls = parse_tool_calls(text, legacy=True)
+    stripped, text_calls = parse_tool_calls(text)
     native = normalize_tool_calls(getattr(response, "tool_calls", None))
     calls = native or text_calls
     return stripped, _as_step_calls(calls)
@@ -280,6 +290,138 @@ def response_cost_usd(response: Any) -> Decimal | None:
     else:
         return None
     return cost if cost.is_finite() else None
+
+
+def usage_metered(usage: Any) -> bool:
+    """Whether a reply's ``usage`` reports any tokens, i.e. the provider metered it."""
+    if usage is None:
+        return False
+    for name in ("total_tokens", "input_tokens", "output_tokens"):
+        value = getattr(usage, name, 0)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return True
+    return False
+
+
+def _is_zero(value: Any) -> bool:
+    """True when ``value`` is a number equal to zero (a free price)."""
+    try:
+        return Decimal(str(value)) == 0
+    except (InvalidOperation, ValueError, TypeError):
+        return False
+
+
+def _price_source(
+    registry: Any, model: str | None, provider: str | None, routed_model: str | None,
+) -> tuple[bool, bool]:
+    """``(priced, free)`` for a model, from the sources that price a request, in the order the bill consults them.
+
+    The catalog row (``registry.get_model_info``) for the model that answered,
+    else for the routed one (a provider may echo a dated snapshot id for the
+    id it was asked for); without a row, a ``zero_cost`` provider's model is
+    free; else LiteLLM's own table (``litellm.model_cost``, the id or its
+    provider-routed spelling -- the lookup :mod:`nvh.providers.registry`
+    builds rows from) for a model the YAML catalog does not list. Nothing
+    here is a hand-typed price: ``free`` is a $0 price one of those sources
+    states, ``priced`` is that one of them states a price at all.
+    """
+    for candidate in (model, routed_model):
+        if not candidate or registry is None:
+            continue
+        try:
+            info = registry.get_model_info(candidate)
+        except Exception:
+            info = None
+        if info is not None:
+            known = bool(getattr(info, "cost_known", True))
+            free = known and _is_zero(getattr(info, "input_cost_per_1m_tokens", None)) and _is_zero(
+                getattr(info, "output_cost_per_1m_tokens", None),
+            )
+            return known, free
+    from nvh.providers.specs import PROVIDER_FACTS
+
+    spec = PROVIDER_FACTS.get(provider or "")
+    if spec is not None and spec.zero_cost:
+        return True, True
+    from nvh.providers.registry import _litellm_facts, _litellm_table
+
+    table = _litellm_table()
+    for candidate in (model, routed_model):
+        if not candidate:
+            continue
+        facts = _litellm_facts(table, candidate, provider or "")
+        if facts is None:
+            continue
+        in_cost, out_cost = facts.get("input_cost_per_token"), facts.get("output_cost_per_token")
+        if in_cost is None and out_cost is None:
+            continue
+        return True, _is_zero(in_cost or 0) and _is_zero(out_cost or 0)
+    return False, False
+
+
+def model_cost_known(
+    registry: Any,
+    model: str | None,
+    *,
+    provider: str | None = None,
+    cost_usd: Any = None,
+    metered: bool = True,
+    routed_model: str | None = None,
+) -> bool:
+    """Whether a reply's ``cost_usd`` is a price or a placeholder ``$0``.
+
+    The answer is the catalog's, the same lookup that priced the request
+    (``ProviderRegistry.get_model_info`` -> ``ModelInfo.cost_known``, which
+    :mod:`nvh.providers.registry` sets from LiteLLM's table, the explicit
+    overrides and the provider's ``zero_cost`` flag; then LiteLLM's table
+    itself for an id the YAML catalog does not list), so a model is never
+    priced or unpriced by a table written here (:func:`_price_source`):
+
+    - a non-zero ``cost_usd`` was priced by *something*, so it is known;
+    - no source prices the model: unknown;
+    - a priced model's $0 is known when the reply was *metered* (the
+      provider reported usage); an unmetered $0 is known only when the
+      model is free (a $0 price) -- a paid model's reply the provider did
+      not meter was billed upstream, so its $0 is unknown, never "free".
+
+    *routed_model* is the id that was asked for when *model* is the one the
+    provider echoed (a dated snapshot, say); it is looked up when *model*
+    has no row. API envelopes carry the result as ``cost_known`` next to
+    ``cost_usd`` so a client can show "cost unknown" instead of a $0
+    nobody vouched for.
+    """
+    if cost_usd is not None:
+        try:
+            if Decimal(str(cost_usd)) > 0:
+                return True
+        except (ArithmeticError, TypeError, ValueError):
+            pass
+    priced, free = _price_source(registry, model, provider, routed_model)
+    if not priced:
+        return False
+    return bool(metered) or free
+
+
+def _step_attribution(response: Any) -> tuple[str, str]:
+    """``(model, provider)`` a completion names, as strings (a test double may carry anything)."""
+    model = getattr(response, "model", "")
+    provider = getattr(response, "provider", "")
+    return (model if isinstance(model, str) else ""), (provider if isinstance(provider, str) else "")
+
+
+def _step_cost_known(engine: Any, response: Any, step_cost: Decimal | None) -> bool:
+    """Whether one step's cost is a price: a reported cost the catalog vouches for; a lookup that fails is unknown."""
+    if step_cost is None:
+        return False
+    model, provider = _step_attribution(response)
+    try:
+        return model_cost_known(
+            getattr(engine, "registry", None), model, provider=provider, cost_usd=step_cost,
+            metered=usage_metered(getattr(response, "usage", None)),
+        )
+    except Exception:
+        logger.debug("agent step cost_known lookup failed", exc_info=True)
+        return False
 
 
 async def run_agent_loop(
@@ -335,6 +477,7 @@ async def run_agent_loop(
     steps: list[AgentStep] = []
     total_tool_calls = 0
     total_cost = Decimal("0")
+    cost_known = True  # False once any step's cost is unknown: the total is then a floor, not a price
 
     for iteration in range(max_iterations):
         # Get LLM response
@@ -359,12 +502,16 @@ async def run_agent_loop(
                 completed=False,
                 error=str(e),
                 total_cost_usd=total_cost,
+                cost_known=cost_known,
             )
 
         # The provider's own figure for this one call; unknown adds nothing.
         step_cost = response_cost_usd(response)
         if step_cost is not None:
             total_cost += step_cost
+        step_model, step_provider = _step_attribution(response)
+        if not _step_cost_known(engine, response, step_cost):
+            cost_known = False
 
         response_text = response.content or ""
 
@@ -382,6 +529,8 @@ async def run_agent_loop(
                 tool_results=[],
                 response=final,
                 cost_usd=step_cost,
+                model=step_model,
+                provider=step_provider,
             )
             steps.append(step)
             if on_step:
@@ -395,6 +544,7 @@ async def run_agent_loop(
                 total_tool_calls=total_tool_calls,
                 completed=True,
                 total_cost_usd=total_cost,
+                cost_known=cost_known,
             )
 
         # Execute tool calls
@@ -470,6 +620,8 @@ async def run_agent_loop(
             tool_results=tool_results,
             response=response_text,
             cost_usd=step_cost,
+            model=step_model,
+            provider=step_provider,
         )
         steps.append(step)
         if on_step:
@@ -526,6 +678,7 @@ async def run_agent_loop(
         completed=False,
         error="Max iterations reached",
         total_cost_usd=total_cost,
+        cost_known=cost_known,
     )
 
 
@@ -538,6 +691,8 @@ __all__ = [
     "AgentResult",
     "AgentStep",
     "build_agent_system_prompt",
+    "model_cost_known",
     "response_cost_usd",
     "run_agent_loop",
+    "usage_metered",
 ]

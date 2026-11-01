@@ -53,6 +53,7 @@ files are guards rather than unit tests:
 | `test_mcp_cabinet_sync.py` | the MCP server's cabinet set is `COUNCIL_PRESETS` |
 | `test_provider_defaults.py` | the settings template and the API server's copy of the provider defaults carry the same, current model IDs |
 | `test_single_provider_table.py` | no file under `nvh/`, `scripts/` or the WebUI setup page types a provider fact (display name, key variable, URL, model id) that `nvh/providers/specs.py` already holds |
+| `test_bundled_data_access.py` | `nvh/data/__init__.py` is the only module under `nvh/` that touches `importlib.resources` (any spelling, the `importlib_resources` backport and `pkgutil.get_data` included); the setup catalog, Agent Library and Wizard prompt loaders return what the direct read returned |
 | `test_capabilities_catalog.py` | `nvh/config/capabilities.yaml` is canonical (`scripts/gen_capabilities.py --check`), every hand-typed override row has a `source:`, every provider default and fallback has a price source on whatever LiteLLM is installed (Hugging Face excepted: metered upstream, loads as cost unknown), retired rows equal the rename table, and loading the shipped catalog opens no socket and attempts no HTTP request |
 | `test_model_currency.py` | `network` tier: the providers still serve the catalog's and the specs' model ids; its offline drift report (each override beside today's LiteLLM value, each active row nothing prices any more) is pinned without the network |
 | `test_release_hardening.py` | `install.sh`, `nvh services` and the docs keep the bring-up contract |

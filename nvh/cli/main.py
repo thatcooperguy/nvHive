@@ -1183,6 +1183,9 @@ def _ask(
                         # searches again: the prompt is already grounded on nvHive's
                         # web search, or (privacy / local mode) must not reach a
                         # search engine at all. The pinned advisor itself is kept.
+                        # The --verify cross-check runs under the same set: its
+                        # verifier is picked from, and falls back within, the
+                        # advisors that are left (smart_query.verify_response).
                         exclude_providers=SEARCH_NATIVE_PROVIDERS if focus == "research" else frozenset(),
                     )
 

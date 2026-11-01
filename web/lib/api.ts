@@ -980,6 +980,8 @@ export interface ConversationMessage {
   provider?: string;
   model?: string;
   cost_usd?: string | null;
+  /** Recomputed by the server from the row's model/provider/cost/tokens; absent on rows without a model. */
+  cost_known?: boolean;
   tokens?: number;
   latency_ms?: number;
   timestamp: number;
@@ -1375,6 +1377,9 @@ export interface WizardChatResult {
   iterations?: number;
   // Aggregated across the full follow-up loop, not just the last iteration.
   cost_usd?: number;
+  /** False = the catalog has no price for the model that answered, so cost_usd
+   * is a placeholder $0 — the footer shows "cost unknown" (lib/cost.ts). */
+  cost_known?: boolean;
   latency_ms?: number;
   input_tokens?: number;
   output_tokens?: number;
@@ -1677,6 +1682,8 @@ export type WizardStreamEvent =
       tool_results: WizardChatToolResult[];
       iterations: number;
       cost_usd?: number;
+      /** False = no catalog price for the model: cost_usd is a placeholder $0. */
+      cost_known?: boolean;
       latency_ms?: number;
       fallback_from?: string | null;
       cost_ceiling_hit?: boolean;
@@ -2130,12 +2137,12 @@ export function streamCouncil(
     onStart?: (data: WsCouncilStart) => void;
     onMemberStart?: (member: string, persona: string) => void;
     onMemberChunk?: (member: string, delta: string, accumulated: string) => void;
-    onMemberComplete?: (member: string, content: string, tokens: number, cost: string, latency: number) => void;
+    onMemberComplete?: (member: string, content: string, tokens: number, cost: string, latency: number, costKnown?: boolean) => void;
     onMemberFailed?: (member: string, error: string) => void;
     onSynthesisStart?: () => void;
     onSynthesisChunk?: (delta: string, accumulated: string) => void;
-    onSynthesisComplete?: (content: string, tokens: number, cost: string) => void;
-    onComplete?: (totalCost: string, totalLatency: number, quorumMet: boolean) => void;
+    onSynthesisComplete?: (content: string, tokens: number, cost: string, costKnown?: boolean) => void;
+    onComplete?: (totalCost: string, totalLatency: number, quorumMet: boolean, costKnown?: boolean) => void;
     onError?: (error: string) => void;
   }
 ): WebSocket {
@@ -2160,7 +2167,7 @@ export function streamCouncil(
           callbacks.onMemberChunk?.(msg.member, msg.delta, msg.accumulated);
           break;
         case 'member_complete':
-          callbacks.onMemberComplete?.(msg.member, msg.content, msg.tokens, msg.cost, msg.latency_ms);
+          callbacks.onMemberComplete?.(msg.member, msg.content, msg.tokens, msg.cost, msg.latency_ms, msg.cost_known);
           break;
         case 'member_failed':
           callbacks.onMemberFailed?.(msg.member, msg.error);
@@ -2172,10 +2179,10 @@ export function streamCouncil(
           callbacks.onSynthesisChunk?.(msg.delta, msg.accumulated);
           break;
         case 'synthesis_complete':
-          callbacks.onSynthesisComplete?.(msg.content, msg.tokens, msg.cost);
+          callbacks.onSynthesisComplete?.(msg.content, msg.tokens, msg.cost, msg.cost_known);
           break;
         case 'council_complete':
-          callbacks.onComplete?.(msg.total_cost, msg.total_latency_ms, msg.quorum_met);
+          callbacks.onComplete?.(msg.total_cost, msg.total_latency_ms, msg.quorum_met, msg.cost_known);
           ws.close();
           break;
         case 'error':

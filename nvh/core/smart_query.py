@@ -2,12 +2,14 @@
 
 These features make every query smarter:
 - Escalation: tries free first, escalates to premium only when needed
-- Verification: cross-checks responses with a second model
+- Verification: cross-checks responses with a second model, picked from
+  (and falling back within) the advisors the caller did not exclude
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -224,16 +226,34 @@ async def verify_response(
     question: str,
     response_text: str,
     response_provider: str,
+    *,
+    exclude_providers: Collection[str] = frozenset(),
 ) -> VerificationResult:
     """Have a different model verify a response.
 
-    Picks a verifier that is NOT the same provider that
-    generated the response (independent verification).
+    Picks a verifier that is NOT the same provider that generated the
+    response (independent verification). When no other advisor is
+    available -- a single-provider install, or an exclusion that leaves
+    only the answer's own provider -- the result is ``unverified`` with
+    ``issues == ["No independent verifier available"]``: a model grading
+    its own answer is not a verification, so it never wears a verdict.
+
+    *exclude_providers* is the set the answer itself was produced under
+    (``Engine.query(exclude_providers=)``: a ``--focus research`` turn,
+    grounded or in privacy mode, keeps the search-native advisors out).
+    The cross-check honours it twice over: an excluded advisor is never
+    picked as the verifier, and the verifier's own ``engine.query``
+    carries the same set so its fallback chain cannot land there either.
+    A grounded answer is never re-checked by an advisor that would
+    search again. When nothing is left outside the set the result is
+    ``unverified`` rather than a check by an excluded advisor.
     """
+    excluded = frozenset(exclude_providers)
     # Pick a different provider for verification — prefer healthy ones so
     # we don't burn budget on a circuit-broken advisor and mislabel the
-    # response as "unverified".
-    available = engine.registry.list_enabled()
+    # response as "unverified". The caller's exclusion applies before the
+    # health pick, so the all-unhealthy fallback cannot resurrect one.
+    available = [p for p in engine.registry.list_enabled() if p not in excluded]
 
     def _healthy(p: str) -> bool:
         try:
@@ -249,14 +269,15 @@ async def verify_response(
         if p != response_provider:
             verifier = p
             break
-    if not verifier:
-        verifier = pool[0] if pool else None
 
     if not verifier:
+        # Nothing independent is left: no advisor at all, or only the one
+        # that wrote the answer. Say so rather than have it grade itself.
+        reason = "No verifier available" if not pool else "No independent verifier available"
         return VerificationResult(
             verdict="unverified",
             confidence=0.5,
-            issues=["No verifier available"],
+            issues=[reason],
             correction=None,
             verifier_provider="none",
         )
@@ -267,7 +288,9 @@ async def verify_response(
     )
 
     try:
-        # Force verify=False and escalate=False to prevent infinite loops
+        # Force verify=False and escalate=False to prevent infinite loops.
+        # The exclusion rides along: the verifier is the explicit pick (kept
+        # by the engine), its fallback chain drops the excluded advisors.
         result = await engine.query(
             prompt=prompt,
             provider=verifier,
@@ -275,6 +298,7 @@ async def verify_response(
             max_tokens=300,
             escalate=False,
             verify=False,
+            exclude_providers=excluded,
         )
         return _parse_verification(result.content, verifier)
     except Exception as exc:

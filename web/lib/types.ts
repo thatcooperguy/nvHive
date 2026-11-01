@@ -19,6 +19,9 @@ export interface CompletionResponse {
   provider: string;
   usage: TokenUsage;
   cost_usd: string | null;
+  /** False = the catalog has no price for `model`: cost_usd is a placeholder
+   * $0 the UI renders as "cost unknown" (lib/cost.ts). */
+  cost_known?: boolean;
   latency_ms: number;
   finish_reason: string;
   cache_hit: boolean;
@@ -77,6 +80,8 @@ export interface StreamDonePayload {
   model: string;
   usage?: TokenUsage;
   cost_usd?: string;
+  /** Sent with cost_usd: false = no catalog price for the model (lib/cost.ts). */
+  cost_known?: boolean;
   finish_reason?: string;
 }
 
@@ -224,6 +229,8 @@ export interface WsQueryComplete {
   model: string;
   usage?: TokenUsage;
   cost_usd?: string;
+  /** Sent with cost_usd: false = no catalog price for the model (lib/cost.ts). */
+  cost_known?: boolean;
   finish_reason?: string;
 }
 
@@ -263,6 +270,8 @@ export interface WsMemberComplete {
   content: string;
   tokens: number;
   cost: string;
+  /** The catalog's verdict on `cost` (0.46); undefined from an older server. */
+  cost_known?: boolean;
   latency_ms: number;
 }
 
@@ -287,11 +296,14 @@ export interface WsSynthesisComplete {
   content: string;
   tokens: number;
   cost: string;
+  cost_known?: boolean;
 }
 
 export interface WsCouncilComplete {
   type: 'council_complete';
   total_cost: string;
+  /** True only when every member (and the synthesis) was priced; one unpriced model makes the total a floor. */
+  cost_known?: boolean;
   total_latency_ms: number;
   quorum_met: boolean;
 }
@@ -319,6 +331,7 @@ export interface MemberStreamState {
   accumulated: string;
   tokens: number;
   cost: string;
+  cost_known?: boolean;
   latency_ms: number;
   elapsedMs: number;  // live timer while streaming
   error?: string;
@@ -1510,6 +1523,8 @@ export interface ChatMessage {
   model?: string;
   mode?: ChatMode;
   cost_usd?: string | null;
+  /** From the API's `cost_known`; undefined on rows that predate it. */
+  cost_known?: boolean;
   tokens?: number;
   latency_ms?: number;
   streaming?: boolean;
@@ -1520,10 +1535,13 @@ export interface ChatMessage {
       model: string;
       tokens: number;
       cost: string;
+      cost_known?: boolean;
       latency_ms?: number;
     }>;
     synthesis?: string;
     total_cost?: string;
+    /** From `council_complete`: every member (and the synthesis) priced. */
+    cost_known?: boolean;
     member_order?: string[];
   };
   compare_data?: Record<string, {
@@ -1531,6 +1549,7 @@ export interface ChatMessage {
     model: string;
     tokens?: number;
     cost_usd?: string | null;
+    cost_known?: boolean;
     latency_ms?: number;
     cache_hit?: boolean;
   }>;

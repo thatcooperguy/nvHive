@@ -561,7 +561,9 @@ class Engine:
         to the best strategy if the response confidence is too low.
 
         When *verify* is ``True``, a different provider cross-checks the
-        response for hallucinations and logical errors.
+        response for hallucinations and logical errors. The verifier is
+        picked from, and falls back within, the advisors *exclude_providers*
+        leaves (:func:`nvh.core.smart_query.verify_response`).
         """
         # --- Confidence-gated escalation (delegates the whole query) ---
         if escalate and not provider:
@@ -592,6 +594,7 @@ class Engine:
 
                 verification = await verify_response(
                     self, prompt, resp.content, resp.provider,
+                    exclude_providers=exclude_providers,
                 )
                 resp.metadata["verification"] = {
                     "verdict": verification.verdict,
@@ -810,6 +813,7 @@ class Engine:
 
             verification = await verify_response(
                 self, prompt, response.content, response.provider,
+                exclude_providers=exclude_providers,
             )
             response.metadata["verification"] = {
                 "verdict": verification.verdict,

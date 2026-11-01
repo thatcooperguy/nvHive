@@ -29,7 +29,6 @@ users who want to tweak one save a copy under a new name.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from collections.abc import Iterable
@@ -297,15 +296,10 @@ def _load_library_profiles() -> list[AgentProfile]:
     Failure-tolerant: a missing/corrupt catalog logs one warning and
     returns [] — the six core built-ins keep the product working.
     """
-    from importlib import resources
+    from nvh.data import read_json
 
     try:
-        raw = (
-            resources.files("nvh.catalog")
-            .joinpath("agent-library.json")
-            .read_text(encoding="utf-8")
-        )
-        data = json.loads(raw)
+        data = read_json("catalog", "agent-library.json")
     except Exception as exc:  # missing from a broken wheel, bad JSON, …
         logger.warning("agent library catalog unavailable: %s", exc)
         return []

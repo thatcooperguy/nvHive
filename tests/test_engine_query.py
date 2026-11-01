@@ -210,6 +210,25 @@ class TestEngineQuery:
             assert result.metadata["verification"]["confidence"] == 0.95
 
     @pytest.mark.asyncio
+    async def test_query_with_verify_hands_the_exclusion_to_the_verifier(self):
+        """The cross-check runs under the same ``exclude_providers`` the answer did (escalate path)."""
+        fake_resp = _resp()
+        fake_resp.metadata = {}
+        with (
+            patch("nvh.core.engine.Engine.__init__", return_value=None),
+            patch("nvh.core.smart_query.query_with_escalation", new_callable=AsyncMock) as mock_esc,
+            patch("nvh.core.smart_query.verify_response", new_callable=AsyncMock) as mock_ver,
+        ):
+            mock_esc.return_value = (fake_resp, {"escalated": False})
+            mock_ver.return_value = MagicMock(
+                verdict="correct", confidence=0.9, issues=[], correction=None, verifier_provider="provB",
+            )
+            engine = Engine.__new__(Engine)
+            engine.config = _build_config()
+            await engine.query("test", escalate=True, verify=True, exclude_providers=frozenset({"perplexity"}))
+            assert mock_ver.await_args.kwargs["exclude_providers"] == frozenset({"perplexity"})
+
+    @pytest.mark.asyncio
     async def test_check_budget_daily_exceeded_raises(self):
         """_check_budget raises BudgetExceededError when daily limit reached."""
         with patch("nvh.core.engine.Engine.__init__", return_value=None):
@@ -612,6 +631,44 @@ async def test_query_stream_exclude_providers_skips_them(db):
 
     resp = await engine.query_stream("grounded", provider="alpha")
     assert resp.provider == "search"
+
+
+@pytest.mark.asyncio
+async def test_query_plain_path_hands_the_exclusion_to_the_verifier(db):
+    """Without escalation the verify call sits after the answer; it carries the same set."""
+    engine = _build_engine(("alpha", "search"))
+    with (
+        patch.object(engine, "_check_connectivity", return_value=True),
+        patch("nvh.core.smart_query.verify_response", new_callable=AsyncMock) as mock_ver,
+    ):
+        mock_ver.return_value = MagicMock(
+            verdict="correct", confidence=0.9, issues=[], correction=None, verifier_provider="search",
+        )
+        resp = await engine.query(
+            "hello there", provider="alpha", use_cache=False, verify=True,
+            exclude_providers=frozenset({"search"}),
+        )
+    assert resp.metadata["verification"]["verdict"] == "correct"
+    assert mock_ver.await_args.args[1:] == ("hello there", "reply from alpha", "alpha")
+    assert mock_ver.await_args.kwargs["exclude_providers"] == frozenset({"search"})
+
+
+@pytest.mark.asyncio
+async def test_verify_never_picks_an_excluded_advisor_end_to_end(db):
+    """The real verifier under the engine: with [alpha, search] enabled and ``search`` excluded, an answer from
+    alpha has no independent advisor left, so the cross-check is ``unverified`` (never a search check, never
+    alpha grading itself); without the exclusion ``search`` verifies it."""
+    engine = _build_engine(("alpha", "search"))
+    with patch.object(engine, "_check_connectivity", return_value=True):
+        grounded = await engine.query(
+            "hello there", provider="alpha", use_cache=False, verify=True,
+            exclude_providers=frozenset({"search"}),
+        )
+        plain = await engine.query("hello there", provider="alpha", use_cache=False, verify=True)
+    assert grounded.metadata["verification"]["verifier"] == "none"
+    assert grounded.metadata["verification"]["verdict"] == "unverified"
+    assert grounded.metadata["verification"]["issues"] == ["No independent verifier available"]
+    assert plain.metadata["verification"]["verifier"] == "search"
 
 
 @pytest.mark.asyncio

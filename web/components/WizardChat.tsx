@@ -128,6 +128,7 @@ import {
   sayMascotTip,
   setMascotState,
 } from '@/lib/mascot';
+import { costKnownFlag, costNumber, costPill, formatWizardCost } from '@/lib/cost';
 import { metaNumber, parseWizardMeta } from '@/lib/wizardMeta';
 
 interface Message {
@@ -173,8 +174,11 @@ interface Message {
   usedModel?: string | null;
   // Cost + latency + fallback signal for the meter footer. All optional —
   // the streaming path only fills these on `done`, the non-streaming path
-  // fills them at result time. Footer hides values that are zero/missing.
+  // fills them at result time. Footer hides values that are zero/missing,
+  // except the cost: a priced $0 shows as "$0.0000" and `costKnown === false`
+  // (no catalog price for the model) shows as "cost unknown" — lib/cost.ts.
   costUsd?: number;
+  costKnown?: boolean;
   latencyMs?: number;
   fallbackFrom?: string | null;
   // Why no LLM answered a deterministic turn — the stream `error` event's
@@ -312,6 +316,23 @@ function isDeliberateRefusalMessage(message: Message): boolean {
 }
 
 /** `fallback_reason` from a persisted wizard-meta tail (deterministic rows only). */
+/** The footer's cost pill: "$x" when priced, "$0.0000" when a priced model
+ * cost nothing (never hidden), "cost unknown" with a hover explanation when
+ * the catalog has no price for the model (`cost_known: false`) — lib/cost.ts. */
+function CostPillSpan({ costUsd, costKnown }: { costUsd?: number; costKnown?: boolean }) {
+  const pill = costPill(costUsd, costKnown, formatWizardCost);
+  if (!pill) return null;
+  return (
+    <span
+      title={pill.title}
+      style={pill.title ? { cursor: 'help' } : undefined}
+      data-cost-state={pill.state}
+    >
+      · {pill.text}
+    </span>
+  );
+}
+
 function metaFallbackReason(meta: Record<string, unknown> | null): string | null | undefined {
   if (!meta || !('fallback_reason' in meta)) return undefined;
   return typeof meta.fallback_reason === 'string' && meta.fallback_reason ? meta.fallback_reason : null;
@@ -727,7 +748,10 @@ export default function WizardChat() {
             usedProvider: m.provider || undefined,
             usedModel: m.model || undefined,
             iterations: metaNumber(meta?.iterations),
-            costUsd: metaNumber(meta?.cost_usd),
+            // costNumber keeps a persisted $0 (metaNumber would drop it) so a
+            // reload renders the same pill the live turn did.
+            costUsd: costNumber(meta?.cost_usd),
+            costKnown: costKnownFlag(meta?.cost_known),
             latencyMs: metaNumber(meta?.latency_ms),
             // Attribution survives reload: the tail carries used_profile
             // (null = general Wizard) and profile_reason once the API persists them.
@@ -1189,6 +1213,7 @@ export default function WizardChat() {
               usedModel: event.used_model,
               iterations: event.iterations,
               costUsd: event.cost_usd,
+              costKnown: event.cost_known,
               latencyMs: event.latency_ms,
               fallbackFrom: event.fallback_from,
               costCeilingHit: event.cost_ceiling_hit,
@@ -1966,9 +1991,7 @@ function MessageBlock({
             {typeof message.latencyMs === 'number' && message.latencyMs > 0 && (
               <span>· {(message.latencyMs / 1000).toFixed(1)}s</span>
             )}
-            {typeof message.costUsd === 'number' && message.costUsd > 0 && (
-              <span>· ${message.costUsd.toFixed(message.costUsd >= 0.01 ? 3 : 5)}</span>
-            )}
+            <CostPillSpan costUsd={message.costUsd} costKnown={message.costKnown} />
           </div>
         )}
 

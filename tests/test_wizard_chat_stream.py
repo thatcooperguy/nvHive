@@ -318,3 +318,123 @@ async def test_prepare_turn_leaves_the_prompt_to_the_channel_decision(tmp_path) 
     assert turn.native is True and "TOOL_CALL" not in turn.system_prompt and "TOOL_RESULT" in turn.system_prompt
     assert await chat_mod._choose_tool_channel(turn, MagicMock(), "m") == {}
     assert turn.native is False and "TOOL_CALL: {" in turn.system_prompt
+
+
+# ── cost_known on the done event (0.46) ─────────────────────────────────────
+
+
+def _chunk_engine(chunks: list[MagicMock]) -> MagicMock:
+    """An engine whose provider.stream yields exactly ``chunks`` once."""
+    async def _gen():
+        for c in chunks:
+            yield c
+
+    engine = _fake_engine([])
+    engine.registry.get.return_value.stream = MagicMock(return_value=_gen())
+    return engine
+
+
+@pytest.mark.asyncio
+async def test_stream_done_carries_the_catalogs_cost_known_for_the_routed_model() -> None:
+    """``done.cost_known`` is the catalog row's verdict on the model the turn
+    used; with no chunk naming a model that is the router's pick. False
+    means the $0 beside it is a placeholder the UI shows as "cost unknown"."""
+    from nvh.integrations.wizard import chat as chat_mod
+    from nvh.providers.base import ModelInfo
+
+    for known in (True, False):
+        engine = _fake_engine([["Hello ", "world"]])
+        engine.registry.get_model_info = MagicMock(
+            return_value=ModelInfo(model_id="ollama/gemma3:4b", provider="ollama", cost_known=known),
+        )
+        with (
+            patch("nvh.api.server.get_engine", return_value=engine),
+            patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+        ):
+            events = [e async for e in chat_mod.wizard_chat_stream("hi")]
+        done = events[-1]
+        assert done["type"] == "done"
+        assert done["cost_usd"] == 0.0
+        assert done["cost_known"] is known
+        engine.registry.get_model_info.assert_called_with("ollama/gemma3:4b")
+
+
+@pytest.mark.asyncio
+async def test_stream_done_looks_up_the_model_the_final_chunk_named() -> None:
+    """A provider that names the model it actually served on its chunks is
+    looked up by that spelling, not the router's; a non-str ``model`` (test
+    doubles) is ignored."""
+    from decimal import Decimal
+
+    from nvh.integrations.wizard import chat as chat_mod
+    from nvh.providers.base import Usage
+
+    final = MagicMock(delta="", model="ollama/served:1b", cost_usd=Decimal("0"),
+                      usage=Usage(input_tokens=3, output_tokens=2, total_tokens=5))
+    engine = _chunk_engine([MagicMock(delta="Hi"), final])
+    engine.registry.get_model_info = MagicMock(return_value=None)  # no row
+    with (
+        patch("nvh.api.server.get_engine", return_value=engine),
+        patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+    ):
+        events = [e async for e in chat_mod.wizard_chat_stream("hi")]
+    done = events[-1]
+    assert done["type"] == "done"
+    # The served spelling first; the router's pick is asked only because it had no row.
+    engine.registry.get_model_info.assert_any_call("ollama/served:1b")
+    assert [c.args[0] for c in engine.registry.get_model_info.call_args_list][:2] == ["ollama/served:1b", "ollama/gemma3:4b"]
+    # No row, but ollama is a zero_cost provider: a known $0.
+    assert done["cost_usd"] == 0.0 and done["cost_known"] is True
+    assert done["input_tokens"] == 3 and done["output_tokens"] == 2
+
+
+@pytest.mark.asyncio
+async def test_stream_done_unmetered_zero_on_a_paid_model_is_not_known() -> None:
+    """A priced (paid) row, $0 and no usage on any chunk: the provider did not
+    meter the turn, so the $0 was billed upstream and is unknown -- the old
+    ``costUsd > 0`` footer guard's promise, kept. The same row with tokens
+    is a known $0."""
+    from decimal import Decimal
+
+    from nvh.integrations.wizard import chat as chat_mod
+    from nvh.providers.base import ModelInfo, Usage
+
+    paid = ModelInfo(
+        model_id="paid/x", provider="openai", cost_known=True,
+        input_cost_per_1m_tokens=Decimal("2.5"), output_cost_per_1m_tokens=Decimal("10"),
+    )
+    for usage, expected in ((None, False), (Usage(input_tokens=3, output_tokens=2, total_tokens=5), True)):
+        final = MagicMock(delta="", model="paid/x", cost_usd=Decimal("0"), usage=usage)
+        engine = _chunk_engine([MagicMock(delta="Hi"), final])
+        engine.router.route.return_value.provider = "openai"
+        engine.router.route.return_value.model = "paid/x"
+        engine.registry.get_model_info = MagicMock(return_value=paid)
+        with (
+            patch("nvh.api.server.get_engine", return_value=engine),
+            patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+        ):
+            events = [e async for e in chat_mod.wizard_chat_stream("hi")]
+        done = events[-1]
+        assert done["type"] == "done" and done["cost_usd"] == 0.0
+        assert done["cost_known"] is expected, (usage, done)
+
+
+@pytest.mark.asyncio
+async def test_stream_done_non_zero_cost_is_known_even_without_a_row() -> None:
+    from decimal import Decimal
+
+    from nvh.integrations.wizard import chat as chat_mod
+
+    final = MagicMock(delta="", model="", cost_usd=Decimal("0.004"), usage=None)
+    engine = _chunk_engine([MagicMock(delta="Hi"), final])
+    engine.router.route.return_value.provider = "openai"
+    engine.router.route.return_value.model = "gpt-unlisted"
+    engine.registry.get_model_info = MagicMock(return_value=None)
+    with (
+        patch("nvh.api.server.get_engine", return_value=engine),
+        patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+    ):
+        events = [e async for e in chat_mod.wizard_chat_stream("hi")]
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["cost_usd"] == pytest.approx(0.004) and done["cost_known"] is True

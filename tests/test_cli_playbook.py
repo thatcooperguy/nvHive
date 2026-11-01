@@ -4,9 +4,10 @@ Hermetic throughout: ``NVH_HOME`` is ``tmp_path``, the platform facts are the
 seeded neutral ones from tests/conftest.py (no sudo, no root), the login name
 is ``alice`` and ``playbooks.run_in_terminal`` is a recording fake — nothing
 here runs ``sudo``, ``apt``, ``docker`` or ``curl``. A guard replaces the
-``subprocess`` module seen by system_settings — the one runner both the job
-and the terminal path spawn through — so a slip past the fake fails loudly
-instead of spawning anything.
+``subprocess`` module seen by system_settings — the two runners (``run`` for
+the probes and the terminal path, ``Popen`` for the job path's steps) both
+spawn through it — so a slip past the fake fails loudly instead of spawning
+anything.
 
 ``list`` and ``plan`` drive the real ``catalogue()`` / ``plan_dict()`` (pure:
 they only compile and read receipts) so the CLI renders the shape the module
@@ -53,13 +54,16 @@ def _cells(out: str, playbook_id: str) -> list[str]:
 
 
 class _NoSpawn:
-    """Stands in for ``subprocess``: any ``run`` is a test failure."""
+    """Stands in for ``subprocess``: any ``run`` (probes, terminal path) or ``Popen`` (job steps) is a test failure."""
 
     DEVNULL = subprocess.DEVNULL
     PIPE = subprocess.PIPE
     TimeoutExpired = subprocess.TimeoutExpired
 
     def run(self, argv, **kwargs):
+        raise AssertionError(f"the CLI must never spawn a host command in tests: {argv}")
+
+    def Popen(self, argv, **kwargs):  # noqa: N802 — must match subprocess's name
         raise AssertionError(f"the CLI must never spawn a host command in tests: {argv}")
 
 
