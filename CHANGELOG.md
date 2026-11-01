@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.44.1] - 2026-11-01
+
+Currency and loopback defaults; no feature changes.
+
 ### Added
 - **SECURITY.md**: the trust boundary as the code enforces it (open mode and
   `HIVE_API_KEY`, loopback defaults, `HIVE_CORS_ORIGINS` /
