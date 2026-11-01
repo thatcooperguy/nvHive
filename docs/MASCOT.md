@@ -33,7 +33,7 @@ here; when it does, it is a file swap.
   "states": {
     "idle":     { "frames": [0, 1, 2, 3],     "loop": true,  "fps": 3 },
     "thinking": { "frames": [4, 5, 6, 7],     "loop": true,  "fps": 5 },
-    "working":  { "frames": [8, 9, 10, 11],   "loop": true },
+    "working":  { "frames": [8, 9, 10, 11],   "loop": true,  "fps": 8 },
     "asking":   { "frames": [12, 13, 14, 15], "loop": true,  "fps": 4 },
     "happy":    { "frames": [16, 17, 18, 19], "loop": false, "next": "idle", "holdMs": 1500 },
     "error":    { "frames": [20, 21, 22, 23], "loop": false, "next": "idle", "holdMs": 3000, "fps": 12 },

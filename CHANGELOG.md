@@ -2,15 +2,27 @@
 
 ## [Unreleased]
 
-### Council correctness
-- MCP and OpenAI/Anthropic-compatible throwdown requests now share an actual
-  two-round analysis/critique workflow with a final answer. Both rounds and
-  their reported costs are retained; failed quorum stops further stages.
-- Majority voting now counts matching answers, labels ties and pluralities,
-  and uses weights only to break ties. Streaming honors the selected strategy.
-- Council accounting includes agreement calls, intermediate syntheses and
-  reported partial-stream usage; total latency includes synthesis and retries.
-  Compatible API usage and the budget ledger include this auxiliary work.
+## [0.44.0] - 2026-10-31
+
+The first release published since 0.42.0. It ships everything merged to main
+since then, including the 0.43.0 section below, which was merged on
+2026-09-03 but never tagged or published. Refresh wave 1 lands (#132):
+provider facts live on `ProviderSpec` and `docs/PROVIDERS.md` is generated
+from them, `NVH_HOME` is the only root with a one-shot migration of the
+legacy homes, and one `Tool` / `ToolRegistry` serves the agent and the
+Wizard, with native function calling where the model can take it. The Spark
+concierge gains its privileged tier (Phase 2a: system settings tools behind
+red approval cards, `NVH_ALLOW_PRIVILEGED=0` as the kill switch), the Spark
+playbooks as approved, audited runs (Phase 2b) and the bridge that brings
+`shell`, `run_code` and image analysis into the Wizard chat (Phase 3). Spark
+playbooks are extracted from upstream READMEs and have not yet been
+exercised by maintainers on DGX Spark hardware. PRs #138, #141 and #142 add
+council correctness fixes, legacy-migration and installer hardening, and a
+shared-compute admission boundary, disabled by default; no broker ships (the
+`atohi:` stanza and `nvh/core/atohi.py`). This release is pilot-ready, not
+production-ready: the target-VM acceptance checklist in
+[docs/MAINTAINERS.md](docs/MAINTAINERS.md#production-readiness) has not been
+run on this tree.
 
 ### Added
 - **Privileged Wizard tools (Spark concierge Phase 2a).** A third safety
@@ -56,6 +68,44 @@
   suspending a headless Spark, the OOBE user's missing docker group, UFW
   scoped to `tailscale0`, per-user Wi-Fi — and never asks for or accepts a
   password.
+- **A shared-compute admission boundary, disabled by default; no broker
+  ships** (#141). `nvh/core/atohi.py` defines the `AdmissionBroker`
+  protocol, `ResourcePaused` and a per-engine admission policy, configured
+  by the top-level `atohi:` stanza (`enabled: false`,
+  `managed_providers: []`; profile overlays cannot replace it). Enabled, the
+  Ollama and Triton provider types, any provider named in
+  `managed_providers`, local RAG embeddings, built-in vision and the
+  benchmark helpers require admission, and the API and Wizard pass the
+  owning Engine's policy through ingestion, vault indexing, retrieval and
+  recall; each Engine binds its own policy, and a bound policy cannot be
+  changed afterwards (create a new scoped registry or restart). Revocation
+  or uncertain ownership raises `ResourcePaused` outside the ordinary
+  provider errors: chat never falls back to cloud, embeddings never retry or
+  auto-pull, councils cancel and drain their cooperating tasks, CLI async
+  commands exit 1, HTTP query, council, comparison, Wizard and RAG endpoints
+  return 409 with code `resource_paused`, status `paused` and
+  `automatic_retry: false`, streaming HTTP and WebSocket endpoints send a
+  terminal error carrying the same fields and no completion event, and the
+  compatible chat APIs report the pause the same way with no success marker.
+  Enabled without a broker it fails closed (`broker_unavailable`): the
+  shipped application supplies no broker, endpoint, token or granted flag,
+  so leave it disabled
+  ([docs/CONFIGURATION.md](docs/CONFIGURATION.md#atohi-admission-disabled)).
+- **Managed model calls bind to allocation-owned transports** (#142). In
+  shared mode a call reaches a model only through a typed, in-process
+  `ModelSession` issued by the trusted broker: one provider, model and
+  operation (complete, stream, health check or embeddings) bound to a
+  job/allocation/generation identity, a process-local monotonic lease
+  deadline and the issuer's `OwnedModelTransport`. Registry providers, local
+  RAG embeddings and built-in vision use only that transport; they never
+  retarget a shared URL, auto-pull or fall back to another model after a
+  bound call fails, and automatic model selection is refused on this path.
+  A missing, mismatched, replaced, expired or revoked session pauses the
+  call with `ResourcePaused`, including revocation during cleanup before
+  the final result or final stream chunk. Disabled mode keeps the ordinary
+  providers unchanged. This is the application-side dispatch boundary only:
+  the production broker and session issuer, and any proof of physical GPU
+  release, remain outstanding.
 
 ### Changed
 - The Wizard concierge routes settings questions to `device-settings`: the
@@ -230,6 +280,66 @@
   SearXNG default). Every tool result is redacted and capped whatever its
   shape. MCP tools can join the agent registry with `NVH_AGENT_MCP_TOOLS=1`.
 
+### Fixed
+- MCP and OpenAI/Anthropic-compatible throwdown requests now share an
+  actual two-round analysis/critique workflow with a final answer. Both
+  rounds and their reported costs are retained; failed quorum stops further
+  stages (#138).
+- Majority voting now counts matching answers, labels ties and pluralities,
+  and uses weights only to break ties. Streaming honors the selected
+  strategy (#138).
+- Council accounting includes agreement calls, intermediate syntheses and
+  reported partial-stream usage; total latency includes synthesis and
+  retries. Compatible API usage and the budget ledger include this
+  auxiliary work (#138).
+- **Legacy-home migration hardening** (#138). The one-shot import of the
+  pre-0.44 homes ("Legacy homes (pre-0.44)" in
+  [docs/CONFIGURATION.md](docs/CONFIGURATION.md#legacy-homes-pre-044))
+  copies the state database as a consistent SQLite snapshot through the
+  backup API, so committed WAL pages are included (the earlier copy could
+  lose them), and publishes it by hard link without replacing an existing
+  file. Cooperating migrations serialize on a persistent SQLite lock under
+  `state/.legacy-migration-lock.sqlite3`, and after taking it the importer
+  rechecks the marker and every destination. Other files, directories and
+  links are staged privately beside their destination and published with a
+  no-replace rename (Windows rename semantics, `renameat2(RENAME_NOREPLACE)`
+  on Linux, `renamex_np(RENAME_EXCL)` on macOS), so a competing destination,
+  including an empty directory or a dangling link, is never replaced or
+  deleted; a filesystem without that operation fails safely instead of
+  falling back to an overwriting rename. The `.pre-0.44-merge` backup of a
+  merged `.env` / `config.yaml` snapshots the old contents even when the
+  layout copy is a link. A lock failure or a failed state import stops
+  default database initialization instead of creating an empty database
+  that would hide the legacy data, and an interrupted import is reported and
+  retried on the next command rather than recorded as done. The Windows and
+  macOS legs of `.github/workflows/migration.yml` run the native filesystem
+  and process-interruption contracts on every push or pull request that
+  touches this code.
+- **Installer fixes and contract suites** (#138). `install.sh`,
+  `install-mac.sh` and `install.ps1` preserve an explicit `NVH_HOME` /
+  `NVH_CONFIG` workspace override and normalize the legacy
+  `HIVE_CONFIG_HOME` alias (Windows saves the override to the user
+  environment only after a successful package install); the shell
+  installers write generated paths with `printf %q` so a space or quote in
+  a path cannot break them; `install-mac.sh` stops reporting a successful
+  update after a Git or package failure. `ci/integration-test-install.sh`
+  installs the exact committed candidate from an isolated Git bundle in a
+  disposable Ubuntu container with no GPU and no model downloads, then
+  verifies the CLI, the saved configuration and a running local Ollama;
+  `ci/test-windows-installer.ps1` (PowerShell 5 and 7),
+  `ci/test-macos-installer.py`, `ci/test-linux-installer-env.py` and
+  `ci/test-installer-harness.py` run the extracted installer logic against
+  fake homes and inert commands with no installation.
+  `.github/workflows/installer.yml` runs all of them on installer pull
+  requests and on dispatch. These are control-flow and path checks, not
+  Windows or macOS dependency installations ("Kinds of tests" in
+  [docs/TESTING.md](docs/TESTING.md#kinds-of-tests)).
+- **Live-provider CLI queries are opt-in** (#138). The `TestCLIQuery` cases
+  in `tests/test_cli_e2e.py` that spawn `nvh` against configured live
+  providers are skipped unless `NVH_NETWORK_TESTS=1` is set, the same switch
+  that already gates the Ollama registry probe in
+  `tests/test_local_models.py`, so the default suite reaches no provider.
+
 ### Security
 - **The red-card click is verifiable server-side.** Every surfaced
   privileged call carries an HMAC approval token (15 minutes, single use,
@@ -284,6 +394,8 @@
   generated [MODELS.md](docs/MODELS.md) table and `nvh models tiers`.
 
 ## [0.43.0] - 2026-09-03
+
+Merged to main 2026-09-03; never tagged or published; first shipped in 0.44.0.
 
 The concierge release. nvHive turns toward NVIDIA's owned unified-memory
 desktops — DGX Spark today, RTX Spark when it ships — as an on-device helper

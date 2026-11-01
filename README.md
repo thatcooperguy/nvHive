@@ -16,7 +16,7 @@ No root. No Docker. Survives reconnects.
 curl -sSL https://raw.githubusercontent.com/thatcooperguy/nvHive/main/install.sh | bash
 ```
 
-Works on any rented NVIDIA GPU desktop — RunPod, Lambda, Vast, … — anywhere you can open a terminal on an NVIDIA machine. A few minutes later your browser opens on a dashboard where everything already works:
+Works on any rented NVIDIA GPU desktop — RunPod, Lambda, Vast, … — or your own DGX Spark, anywhere you can open a terminal on an NVIDIA machine. A few minutes later your browser opens on a dashboard where everything already works:
 
 - **A local LLM picked for your GPU's VRAM** — chat and image understanding with nothing leaving the machine
 - **An AI Wizard that knows your workspace** — reads live GPU/service state, fixes problems, RAGs over your files, searches the web
@@ -33,7 +33,7 @@ The browser only opens after every service passes a health check — including a
 
 **AI Wizard.** A streaming, tool-using assistant grounded in live workspace state. It can refresh models, run safe repairs, ingest files you drag into chat (PDFs included), and cite web sources — showing cost and latency per response. Attach external [MCP tool servers](docs/INTEGRATIONS.md#nvhive-as-an-mcp-client) and their tools join its toolset.
 
-**Agent Library and council mode.** 106 agent profiles across 40 categories — coding, research, creative, GPU media, ops, smart home, first-run setup — each mappable to a local or cloud model. Council mode runs one question through multiple models in parallel and synthesizes the answers: `nvh convene "Redis or Postgres for session storage?"`. [Cabinets →](docs/CONFIGURATION.md#council-cabinets)
+**Agent Library and council mode.** 106 agent profiles grouped by category — coding, research, creative, GPU media, ops, smart home, first-run setup — each mappable to a local or cloud model. Council mode runs one question through multiple models in parallel and synthesizes the answers: `nvh convene "Redis or Postgres for session storage?"`. [Cabinets →](docs/CONFIGURATION.md#council-cabinets)
 
 ![Agent Library — built-in agent profiles grouped by category](docs/screenshots/agent-library.png)
 
@@ -41,11 +41,13 @@ The browser only opens after every service passes a health check — including a
 
 **Studio packs.** Rootless one-command installs for ComfyUI, Blender, game-dev tooling, and music production: `nvh studio --install comfy -y`.
 
+**Spark playbooks.** On a DGX Spark the Wizard runs NVIDIA's install playbooks as approved, audited plans: every `sudo` command is shown on a red card before anything runs, when sudo needs a password the run stops and hands you the one command to run in your own terminal (`nvh playbook install <id>`), and `NVH_ALLOW_PRIVILEGED=0` switches the privileged tools off. The playbooks are extracted from the upstream READMEs and have not yet been exercised by maintainers on DGX Spark hardware. [Spark playbooks →](docs/GETTING_STARTED.md#spark-playbooks)
+
 **Built for machines that disappear.** Everything lives under `NVH_HOME` on the persistent volume. Downloads run as resumable jobs. `nvh snapshot save` / `restore` moves your whole state to a brand-new VM. If your persistent mount isn't auto-detected: `export NVH_HOME=/mnt/persist/nvhive` before installing.
 
 ## Requirements
 
-- **Linux x86_64** (primary target; Windows/macOS binaries on the [Releases page](https://github.com/thatcooperguy/nvHive/releases/latest))
+- **Linux x86_64 and arm64 (DGX Spark)** are the supported targets and the two CI platforms; single-file binaries for Linux x86_64, Linux arm64, macOS arm64 and Windows x86_64 are built for every tagged release on the [Releases page](https://github.com/thatcooperguy/nvHive/releases/latest)
 - **No root, no Docker** — everything installs to user-owned paths
 - **Python 3.11+**, or none at all (`NVH_USE_BINARY=1` with `start-linux.sh` fetches a single-file binary)
 - **GPU optional** — CPU-only machines get a small local model plus cloud free tiers

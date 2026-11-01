@@ -45,21 +45,21 @@ files are guards rather than unit tests:
 
 ## Kinds of tests
 
-- **Unit** â€” the bulk: routing, council, agents, tools, storage, config.
+- **Unit** - the bulk: routing, council, agents, tools, storage, config.
   Providers are exercised through `MockProvider` (`nvh/providers/mock_provider.py`)
   or by patching `litellm`; nothing in the default run talks to a real
   provider.
-- **API** â€” FastAPI's `TestClient` runs `nvh.api.server:app` in-process
+- **API** - FastAPI's `TestClient` runs `nvh.api.server:app` in-process
   (`test_api.py`, `test_auth.py`, `test_chat_history.py`, ...).
-- **Live server** â€” `test_live_api.py` spawns `uvicorn` on a free port and
+- **Live server** - `test_live_api.py` spawns `uvicorn` on a free port and
   probes `/v1/health`, CORS and a WebSocket upgrade; this is the only place
   lifespan startup runs for real.
-- **CLI** â€” `test_cli_inprocess.py` drives the Typer app with `CliRunner`;
+- **CLI** - `test_cli_inprocess.py` drives the Typer app with `CliRunner`;
   `test_cli_e2e.py` spawns the `nvh` console script (`encoding="utf-8",
-  errors="replace"` â€” copy that on Windows).
-- **MCP** â€” `test_mcp_client.py` runs a real stdio MCP server through the SDK
+  errors="replace"` - copy that on Windows).
+- **MCP** - `test_mcp_client.py` runs a real stdio MCP server through the SDK
   pinned in the `dev` extra.
-- **Installer** â€” `ci/integration-test-install.sh` installs the exact clean,
+- **Installer** - `ci/integration-test-install.sh` installs the exact clean,
   committed checkout in a disposable Ubuntu container with no GPU access.
   The installer workflow runs `NVH_TEST_SKIP_MODEL=1 bash ci/integration-test-install.sh`
   for installer pull requests. This downloads the Ollama binary and Python
@@ -106,9 +106,10 @@ excluded from the coverage metric and covered by the subprocess tests instead.
 
 ## Writing a test
 
-- Isolate the workspace: point `NVH_HOME` (and `HIVE_CONFIG_HOME` when the
-  test reads config) at `tmp_path` with `monkeypatch.setenv`, and call
-  `nvh.providers.registry.reset_registry()` if you register providers.
+- Isolate the workspace: point `NVH_HOME` (and `NVH_CONFIG`, legacy alias
+  `HIVE_CONFIG_HOME`, when the test reads config) at `tmp_path` with
+  `monkeypatch.setenv`, and call `nvh.providers.registry.reset_registry()`
+  if you register providers.
 - No network, no keys, no real Ollama in the default run. If a test must
   reach one, skip it unless an explicit opt-in variable is set.
 - Prefer testing behaviour through the public entry point (`Engine`, the
@@ -119,7 +120,7 @@ excluded from the coverage metric and covered by the subprocess tests instead.
   Pin a fake provider when testing query behavior unrelated to connectivity,
   and mock host tools such as Docker in endpoint shape tests.
 - Regenerate `docs/COMMANDS.md` when you add, rename or hide a command, and
-  keep counts out of prose â€” the parity tests will tell you if you forgot.
+  keep counts out of prose: the parity tests will tell you if you forgot.
 - A test that reads a doc (`test_release_hardening.py`,
   `test_docs_links.py`) is a contract: update the doc and the test together.
 
@@ -127,6 +128,8 @@ Run the focused admission regressions with:
 
 ```bash
 pytest tests/test_atohi_admission.py \
+  tests/test_atohi_awaitable_contract.py \
+  tests/test_atohi_bound_model_dispatch.py \
   tests/test_atohi_lifecycle_isolation.py \
   tests/test_atohi_setup_probes.py \
   tests/test_atohi_rag_binding.py \
@@ -137,7 +140,10 @@ pytest tests/test_atohi_admission.py \
 These tests use local provider, transport and broker doubles. They cover policy
 isolation across reused registries and tools, late adapter registration,
 revocation through transport cleanup and broker exit, setup/preload and RAG
-bindings, vision/benchmark admission, and terminal HTTP/SSE pause responses.
+bindings, vision/benchmark admission, terminal HTTP/SSE pause responses,
+asyncio Awaitable and iterator contracts under an inert lease authority, and
+registry/RAG dispatch over explicitly issued local test transports (Codex PRs
+#141 and #142).
 Setup tests also check that existing and migrated admission settings survive
 configuration rewriting. Council and agent fixtures use real registries with
 fake providers so policy binding follows the application path. No live model,
@@ -148,7 +154,7 @@ suite; paused-council partial-usage accounting remains a separate milestone.
 
 ```bash
 nvh status --smoke --strict            # offline workspace smoke test
-nvh services start                     # Ollama â†’ API â†’ WebUI â†’ Wizard answers
+nvh services start                     # Ollama -> API -> WebUI -> Wizard answers
 nvh status --report --live             # one live Wizard round-trip in the bundle
 nvh ask "hello" --local                # local path
 nvh convene "hello" --cabinet engineering

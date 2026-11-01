@@ -18,14 +18,23 @@ python -m pytest tests/ -q
 #   nvh/__init__.py::__version__ and web/lib/version.ts::NVHIVE_VERSION
 #   (tests/test_version.py and tests/test_release_hardening.py::
 #   test_webui_version_matches_package fail CI if any of them differ)
-# add the CHANGELOG.md section
-git commit -am "release: v0.42.0" && git push
-git tag v0.42.0 && git push origin v0.42.0
+# add the CHANGELOG.md section, then stage every file by name: `git commit -a`
+#   skips untracked files such as a new issue template, and a pushed commit
+#   that links to a file it does not carry fails tests/test_docs_links.py in CI
+git add CHANGELOG.md pyproject.toml nvh/__init__.py web/lib/version.ts README.md docs/ .github/ISSUE_TEMPLATE/
+git commit -s -m "Release 0.44.0: <one-line theme>" && git push
+git tag v0.44.0 && git push origin v0.44.0
 ```
+
+`web/package.json` and `vscode-nvhive/package.json` stay at `0.1.0` by
+decision (2026-10-31): neither is published on its own, so they are not
+release versions and no test compares them to the package.
 
 The tag push (format `vX.Y.Z`, lowercase `v`) triggers
 `.github/workflows/release.yml`: sdist + wheel, PyInstaller single-file
-binaries for Linux x86_64, macOS arm64 and Windows x86_64, and a GitHub
+binaries for Linux x86_64, Linux arm64 (DGX Spark, built on the
+`ubuntu-24.04-arm` runner), macOS arm64 and Windows x86_64, a `SHA256SUMS`
+file that `start-linux.sh` verifies its download against, and a GitHub
 Release with auto-generated notes. `publish.yml` runs on the same tag push
 and on `release: published`, checks the artifacts with `twine check` and
 uploads to PyPI through OIDC trusted publishing (environment `pypi`,
@@ -33,7 +42,7 @@ workflow file `publish.yml`, repository `thatcooperguy/nvHive`). It also
 accepts `workflow_dispatch` as a recovery path:
 
 ```bash
-gh workflow run publish.yml --ref v0.42.0 -f target=pypi
+gh workflow run publish.yml --ref v0.44.0 -f target=pypi
 ```
 
 Expect 6–10 minutes for the GitHub Release (binary builds dominate) plus a
@@ -41,14 +50,27 @@ minute for PyPI.
 
 ### Before tagging
 
-1. Tests green locally and on the last CI run of `main` (Linux, Python 3.11
-   and 3.12 — a red matrix is a release blocker).
+1. Tests green locally and on the last CI run of `main`. `ci.yml` runs the
+   suite on `ubuntu-latest` (Python 3.11 and 3.12) and on the
+   `ubuntu-24.04-arm` job (Python 3.12, the DGX Spark target), plus the
+   typecheck, webui, security and build jobs; a red matrix is a release
+   blocker. `migration.yml` (Windows and macOS migration contracts) fires on
+   any `main` push that touches `pyproject.toml`, so the version bump runs it
+   and it must be green too. `installer.yml` (installer contracts) runs on
+   pull requests that touch the installers and on `workflow_dispatch`; dispatch
+   it before a release that changed `install.sh`.
 2. `cd web && npx tsc --noEmit && npm run build` passes; a broken WebUI
    breaks first run for every user.
-3. `CHANGELOG.md` has the section; `docs/COMMANDS.md` is regenerated
-   (`python scripts/gen_commands_doc.py`) if any command changed, and
-   `docs/PROVIDERS.md` (`python scripts/gen_providers_doc.py`) after any change
-   to `nvh/providers/specs.py` (`tests/test_provider_docs_parity.py` runs `--check`).
+3. `CHANGELOG.md` has the section and the generated docs are current:
+   `docs/COMMANDS.md` (`python scripts/gen_commands_doc.py`,
+   `tests/test_commands_doc_parity.py`) if any command changed,
+   `docs/PROVIDERS.md` (`python scripts/gen_providers_doc.py`,
+   `tests/test_provider_docs_parity.py`) after any change to
+   `nvh/providers/specs.py`, and the generated blocks of `docs/MODELS.md`
+   (`python scripts/gen_models_doc.py`, `tests/test_models_doc_parity.py`)
+   after any change to `nvh/core/local_models.py` or the GB10 baselines in
+   `nvh/utils/gpu_emulation.py`. Each parity test runs its generator's
+   `--check`.
 4. README install URLs, PyPI metadata, release asset names, `NOTICE.md`,
    `TRADEMARKS.md` and the trusted-publisher settings all point at
    `thatcooperguy/nvHive` and the `nvhive` package.
@@ -60,7 +82,7 @@ minute for PyPI.
 ### Verifying, yanking, rolling back
 
 ```bash
-python -m venv /tmp/verify && /tmp/verify/bin/pip install nvhive==0.42.0
+python -m venv /tmp/verify && /tmp/verify/bin/pip install nvhive==0.44.0
 /tmp/verify/bin/nvh version && /tmp/verify/bin/nvh --help
 ```
 
@@ -68,7 +90,7 @@ A wrong version or an import failure means **yank** the release on PyPI
 (`Options > Yank release` — hides it from new installs, keeps it for pinned
 users) and fix forward with a patch release. Never delete or force-push a
 released tag. Users on a broken release pin the previous one
-(`pip install 'nvhive==0.41.1'`); WebUI-versus-backend drift is fixed by
+(`pip install 'nvhive==0.42.0'`); WebUI-versus-backend drift is fixed by
 `nvh webui --clean`.
 
 ### Workflow-scoped pushes
@@ -191,6 +213,37 @@ Target-VM acceptance, on a fresh no-root NVIDIA Linux cloud desktop:
 8. `export NVH_TARGET_VM_VALIDATED=1`, run `nvh webui`, open Advanced Details
    in the setup wizard and confirm Release Readiness is `production-ready`.
 
+### DGX Spark checklist
+
+The arm64 target (GB10, DGX OS) has the same bar. No maintainer has run this
+list on hardware yet, so the Spark playbooks ship as extracted from the
+upstream READMEs and not yet exercised by maintainers on DGX Spark hardware;
+until the list passes, Spark wording stays at "pilot-ready" and no release
+claims the playbooks were validated. On a Spark with a fresh `NVH_HOME`:
+
+1. Install with `install.sh`, or with `NVH_USE_BINARY=1 start-linux.sh`, which
+   picks `nvh-linux-arm64` and checks it against `SHA256SUMS`; confirm
+   `nvh version` matches the tag.
+2. `nvh status --deep` passes its GPU, disk, Ollama and storage checks, and
+   `nvh models pull --recommended` opens with `Detected N GB unified memory
+   (M GB model budget after the OS reserve)` before it pulls anything, naming
+   the pool as unified memory rather than VRAM (`nvh models list` prints only
+   the installed-model table and never that line).
+3. `nvh playbook list` and `nvh playbook plan ollama` print the plan with every
+   command tagged `sudo`, `user` or `manual`, and run nothing.
+4. With `NVH_ALLOW_PRIVILEGED=0` set for `nvh serve`, `GET /v1/wizard/tools`
+   reports `privileged_enabled: false` and lists `playbook_install` with
+   `enabled: false`, and a confirmed `playbook_install` call answers
+   `ok: false, disabled: true` naming the variable. Restart without it and
+   confirm the red card, with its approval token, appears before any `sudo`
+   command runs.
+5. `nvh playbook install ollama` in a terminal (sudo prompts there, never
+   nvHive); check the receipt in `nvh playbook list` and the note under the
+   vault's `Decisions/`, then run it again and confirm the finished steps are
+   skipped.
+6. Record the run on #137. Only after this step may the playbook sentence in
+   the CHANGELOG and README change to "exercised on hardware".
+
 Release language: "beta" or "pilot-ready" before the checklist passes,
 "production-ready" after. Do not publish a PyPI release as production-ready
 while the report says otherwise.
@@ -219,9 +272,12 @@ profile."
 
 ## Documentation
 
-- `docs/COMMANDS.md` is generated: `python scripts/gen_commands_doc.py`;
-  `docs/PROVIDERS.md`'s tables too: `python scripts/gen_providers_doc.py`
-  (`--check` in CI via `tests/test_commands_doc_parity.py`). Never hand-edit.
+- `docs/COMMANDS.md` is generated (`python scripts/gen_commands_doc.py`,
+  checked by `tests/test_commands_doc_parity.py`); so are `docs/PROVIDERS.md`'s
+  tables (`python scripts/gen_providers_doc.py`,
+  `tests/test_provider_docs_parity.py`) and the marker-delimited blocks of
+  `docs/MODELS.md` (`python scripts/gen_models_doc.py`,
+  `tests/test_models_doc_parity.py`). Never hand-edit a generated block.
 - No hand-typed inventory counts (providers, models, free tiers, cabinets,
   tools, personas, agents) in README, docs or CLI strings —
   `tests/test_marketing_parity.py` fails on any that disagree with the code.

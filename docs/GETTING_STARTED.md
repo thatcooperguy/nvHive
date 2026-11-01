@@ -69,7 +69,7 @@ nvh "Hello!"
 `nvh webui` starts the API and the dashboard; `nvh studio --install
 rootless-ollama -y` adds local models later. From a clone use `pip install -e
 ".[dev]"`. Without `NVH_HOME` set, state defaults to `~/.nvh` and config to
-`~/.hive/config.yaml` — fine on a laptop, wrong on an ephemeral VM.
+`~/.nvh/config/config.yaml`: fine on a laptop, wrong on an ephemeral VM.
 
 ### Reinstall or reset
 
@@ -194,18 +194,15 @@ loginctl enable-linger "$USER"      # survive logout
 ## Studio packs and the workstation
 
 `nvh studio` installs optional tool packs into user-owned directories under
-`NVH_HOME`. `nvh studio --list` shows exact pack status and disk estimates.
-
-| Bundle | Command | Installs |
-|---|---|---|
-| AI Starter | `nvh studio --install starter -y` | rootless Ollama, recommended local LLMs, agent lab, ComfyUI power nodes, game-dev lab |
-| LLMs | `nvh studio --install llms -y` | Gemma 3, Qwen 3, Llama 3.1, Qwen coder, DeepSeek reasoning, embeddings |
-| Agents | `nvh studio --install agents -y` | LangGraph, CrewAI, AutoGen, JupyterLab, OpenClaw |
-| ComfyUI | `nvh studio --install comfy -y` | ComfyUI Manager, Impact Pack, ControlNet Aux, Video Helper Suite, GGUF, rgthree |
-| Creative | `nvh studio --install creative -y` | Blender LTS portable, launcher, asset workspace |
-| Games | `nvh studio --install game -y` | Pygame/Panda3D lab, asset helpers, Wine mod workspace |
-| Music | `nvh studio --install music -y` | ACE-Step, Demucs, WhisperX, Audacity/LMMS AppImages |
-| Runtime fallback | `nvh studio --install python-runtime-fallback -y` | micromamba under `NVH_HOME` for images with a broken `venv` |
+`NVH_HOME`. `nvh studio --list` prints every pack with its status and disk
+estimate, then every bundle with the pack ids it expands to (`PACK_BUNDLES` in
+`nvh/integrations/installs/studio_packs.py` is the one source, so the list is
+not repeated here); the local model picks are the tier table in
+[MODELS.md](MODELS.md#local-models-by-vram). `nvh studio --install <id> -y`
+takes a bundle or a single pack id: `nvh studio --install starter -y` installs
+the AI Starter bundle, `nvh studio --install all -y` every pack, and
+`nvh studio --install python-runtime-fallback -y` just the one pack that puts
+micromamba under `NVH_HOME` for images with a broken `venv`.
 
 NemoClaw is the one pack that checks for Docker (it is an OpenShell sandbox
 stack); the Wizard marks it blocked unless Docker already works without sudo.
@@ -315,9 +312,10 @@ redacted bundle as `nvh status --report`.
 
 ### Windows and macOS
 
-Linux x86_64 is the supported target and the only one CI tests. Windows and
-macOS binaries are published on the Releases page and `pip install nvhive`
-works on both, best-effort. Windows notes:
+Linux x86_64 and arm64 (DGX Spark, DGX OS) are the supported targets and the
+two CI test platforms. Windows and macOS binaries are published on the
+Releases page and `pip install nvhive` works on both, best-effort. Windows
+notes:
 
 - `nvh` sets `PYTHONIOENCODING=utf-8` at startup; when calling
   `python -m nvh.cli.main` directly, set it yourself or box-drawing output
@@ -328,6 +326,15 @@ works on both, best-effort. Windows notes:
 - Port 80 needs an elevated terminal — use `nvh webui --port 3000`.
 - `pip install -e .` cannot overwrite a running `nvh.exe`; close terminals
   that used it, or run `python -m nvh.cli.main`.
+
+### Windows on Arm (RTX Spark)
+
+nvHive is untested on Windows on Arm. There is no windows-arm64 binary; x64
+Python under emulation is the only path we expect to work, and local models
+and device settings are unverified there. If you own an RTX Spark machine,
+please report what it shows through the
+[RTX Spark hardware facts](../.github/ISSUE_TEMPLATE/rtx-spark-facts.md) issue
+template (open a new issue on GitHub and pick it from the list).
 
 ## Next
 

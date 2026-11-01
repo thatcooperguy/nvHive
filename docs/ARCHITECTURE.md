@@ -57,16 +57,18 @@ nvh CLI · Web UI · Python SDK · MCP clients · OpenAI/Anthropic clients
 | Local intelligence | `nvh/core/orchestrator.py`, `nvh/core/smart_query.py` | VRAM-tiered local orchestration |
 | Council | `nvh/core/council.py`, `nvh/core/agents.py` | streaming council pipeline; persona pool and `COUNCIL_PRESETS` |
 | Agentic coding | `nvh/core/agent_loop.py`, `agentic.py`, `agent_review.py`, `agent_testgen.py`, `agent_guardrails.py` | `nvh do`, `nvh agent run`, `nvh review`, `nvh test-gen` |
-| Tools | `nvh/core/tools.py`, `system_tools.py`, `browser_tools.py`, `vision_tools.py` | `ToolRegistry`; safe vs confirm classes |
+| Tools | `nvh/core/tools.py`, `system_tools.py`, `browser_tools.py`, `vision_tools.py` | `ToolRegistry`; three safety classes (`auto`, `confirm`, `privileged`), HMAC approval tokens for privileged calls, the `NVH_ALLOW_PRIVILEGED` kill switch |
 | Sandbox | `nvh/sandbox/executor.py` | Docker isolation with an audited subprocess fallback |
+| Compute admission | `nvh/core/atohi.py` | `AdmissionBroker` protocol, `ResourcePaused`; a shared-compute admission boundary, disabled by default; no broker ships (the `atohi:` stanza, [CONFIGURATION.md](CONFIGURATION.md#atohi-admission-disabled)) |
 | Providers | `nvh/providers/specs.py`, `openai_compatible.py`, `registry.py`, `ollama_provider.py`, `triton_provider.py` | the `ProviderSpec` table, the one cloud adapter, lazy registration |
 | Config | `nvh/config/settings.py`, `nvh/config/capabilities.yaml` | Pydantic schema, env interpolation, model catalog |
 | Storage | `nvh/storage/` | SQLAlchemy + aiosqlite: conversations, routing outcomes, costs |
 | API | `nvh/api/server.py`, `nvh/api/proxy.py`, `nvh/api/services/query_service.py` | FastAPI app, compatible proxies, shared query service |
-| Wizard | `nvh/integrations/wizard/` | chat loop, tools, profiles, troubleshooter, reconnect, mission builder |
+| Wizard | `nvh/integrations/wizard/` (`chat.py`, `tools.py`, `profiles.py`, `concierge.py`, `system_settings.py`, `sandbox_tools.py`, `vision_bridge.py`) | chat loop, tools, profiles, the concierge that picks a hidden specialist per turn, privileged system-settings tools, the sandbox and vision bridges, troubleshooter, reconnect, mission builder |
 | Workspace | `nvh/integrations/workspace/` | `NVH_HOME` layout, mount autopilot, snapshot, vault, passport |
 | RAG | `nvh/integrations/rag/` | SQLite store, Ollama embeddings, chunker, vault bridge |
 | Installs | `nvh/integrations/installs/` | studio packs, ComfyUI, Node runtime, workstation, OpenClaw |
+| Spark playbooks | `nvh/integrations/installs/playbooks.py` | NVIDIA's DGX Spark playbooks as plans: plan, approve (red card or the CLI prompt), install with a receipt and a vault audit note; extracted from the upstream READMEs, not yet exercised by maintainers on hardware |
 | Services | `nvh/integrations/services/`, `nvh/cli/services.py` | background jobs, receipts, service registry, the bring-up pipeline |
 | Diagnostics | `nvh/integrations/diagnostics/` | boot preflight, smoke tests, model fit, production readiness, redacted reports |
 | MCP | `nvh/mcp_server.py`, `nvh/integrations/mcp_client.py` | server for coding tools; client for external tool servers |

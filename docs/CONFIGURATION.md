@@ -36,7 +36,8 @@ file before touching it.
 ### Atohi admission (disabled)
 
 nvHive includes a native admission and cancellation boundary for shared compute
-managed by [Atohi](https://github.com/thatcooperguy/atohi). It ships disabled:
+managed by [Atohi](https://github.com/thatcooperguy/atohi) (private repository).
+It ships disabled:
 
 ```yaml
 atohi:
@@ -273,7 +274,13 @@ check. Every per-user file nvHive touches — config, keys, the state database,
 schedules, workflows, plugins, the routing explanation — lives under one of
 these directories: `storage_layout()` in `nvh/integrations/workspace/storage.py`
 is the single path oracle and `tests/test_single_root.py` fails on any new
-hard-coded home path.
+hard-coded home path. Two of these stores hold records that other tools may
+import later: the REPL's `/remember` notes, which are ordinary vault notes
+under the `Wizard Memory` category tagged `#repl` (`state/memory/memories.json`
+is only the pre-0.42 file the legacy migration copies in once and the REPL
+turns into those notes once), and `state/schedules.json` (scheduled tasks).
+Their record ids and on-disk schema will be documented before either store is
+reshaped.
 
 | Directory | Override | Holds |
 |---|---|---|
@@ -390,7 +397,7 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVH_RAG_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for the RAG store |
 | `NVH_RAG_AUTO_PULL` | `1` | `0` stops the embedder pulling a missing embedding model on first use |
 | `NVH_WIZARD_PLUGIN_DIR` | `$NVH_HOME/plugins/` | directory of `.py` files exposing `register(reg)` that add Wizard tools — the one plugins directory, shared with provider plugins (only files that declare `register` are executed by the Wizard; `$NVH_HOME/wizard-tools/` is still read for one more release) |
-| `NVH_LEGACY_MIGRATION` | unset (on) | `0` disables the one-shot copy of the pre-0.44 `~/.hive` / `~/.council` / `~/nvh` files into `$NVH_HOME` (see [Where files live](#where-files-live)) |
+| `NVH_LEGACY_MIGRATION` | unset (on) | `0` disables the one-shot copy of the pre-0.44 `~/.hive` / `~/.council` / `~/nvh` files into `$NVH_HOME` (see [Legacy homes](#legacy-homes-pre-044)) |
 | `NVH_WIZARD_AUTOFOLD_VAULT` | `1` | `0` stops the Wizard folding a strongly matching vault note into its system prompt |
 | `NVH_SEARXNG_URL`, `BRAVE_API_KEY` | unset | backends for the one `web_search` implementation (the Wizard tool and the agent tool): SearXNG wins, then Brave, then key-free DuckDuckGo |
 | `HASS_URL` | unset | Home Assistant instance the Wizard's `home_assistant_*` tools talk to (`HOME_ASSISTANT_URL` is accepted too). Required whenever `HASS_TOKEN` is set — no address is ever guessed, so the token is never sent to whichever host answers an mDNS name. Prefer `https://`; plain `http://` is accepted only for loopback, RFC 1918 / IPv6-ULA addresses and `.local` names, and `home_assistant_status` then reports `insecure_transport: true` |
@@ -476,13 +483,19 @@ reporting usage may still incur a charge that nvHive cannot measure.
 
 Tools are functions the model may call while answering. They are opt-in:
 `nvh do "task"` and `nvh agent run "task"` use them, the REPL enables them
-with `/tools`, and the AI Wizard has its own set (`rag_ask`, `rag_ask_vault`,
-`rag_ingest`, `web_search`, `refresh_models`, `repair_workspace`,
-`validate_provider_key`, `save_provider_key`) plus any `mcp_<server>_<tool>`
-attached through [INTEGRATIONS.md](INTEGRATIONS.md#nvhive-as-an-mcp-client).
-Every tool is either **safe** (runs unattended) or **confirm** (asks first;
-`nvh do --auto` approves safe tools only). The registry is
-`nvh.core.tools.ToolRegistry`; the built-ins by area, confirm-class marked `*`:
+with `/tools`, and the AI Wizard has its own registry
+(`nvh.integrations.wizard.tools.WizardToolRegistry`, plus any
+`mcp_<server>_<tool>` attached through
+[INTEGRATIONS.md](INTEGRATIONS.md#nvhive-as-an-mcp-client)). Every tool
+carries one of three safety classes (`SAFETY_CLASSES` in `nvh/core/tools.py`):
+**auto** runs unattended, **confirm** asks first (`nvh do --auto` approves
+the auto class only), and **privileged** shows a red card with the exact
+commands and obeys the `NVH_ALLOW_PRIVILEGED` kill switch in
+[Environment variables](#environment-variables). The Wizard's privileged and
+bridged tools are described under
+[Code and images from the Wizard chat](#code-and-images-from-the-wizard-chat).
+The registry is `nvh.core.tools.ToolRegistry`; the built-ins by area,
+confirm-class marked `*`:
 
 | Area | Tools |
 |---|---|

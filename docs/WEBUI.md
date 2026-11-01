@@ -21,7 +21,7 @@ ports (3001, 3002, 8080) automatically, on `localhost`, `127.0.0.1`,
 | Sidebar | Route | What it does |
 |---|---|---|
 | Chat | `/` | Prompts in single, council or compare mode with streaming. Council mode has an **Advanced** drawer for cabinet, member count, strategy, synthesis provider and per-provider weights |
-| AI Wizard | `/wizard` | Tool-using assistant grounded in live workspace state: refreshes models, runs safe repairs, ingests dropped files (PDF included), searches the web, cites sources, shows cost and latency per reply. **Convene council** hands the draft to the chat page |
+| AI Wizard | `/wizard` | Tool-using assistant grounded in live workspace state: refreshes models, runs safe repairs, ingests dropped files (PDF included), searches the web, cites sources, shows cost and latency per reply. By default the concierge picks a hidden specialist from the Agent Library for each turn and the reply credits it; pin one under **Advanced**. Drop, paste or attach images and the Wizard can look at them (the per-message limit is in [CONFIGURATION.md](CONFIGURATION.md#code-and-images-from-the-wizard-chat)). A tool with side effects waits on a confirm card (**Run** / **Skip**); a privileged, sudo-class tool waits on a red approval card that lists the exact commands, and `NVH_ALLOW_PRIVILEGED=0` switches those off. **Convene council** hands the draft to the chat page |
 | Agents | `/agents` | The Agent Library — profiles grouped by category, each mappable to a local or cloud model; copy one into `$NVH_HOME/agent-profiles/` to customise |
 | Models | `/models` | The Model Manager: installed models, fit-ranked catalog, one-click install with live progress ([MODELS.md](MODELS.md)) |
 | Setup | `/setup` | Onboarding: storage check, GPU detection, local AI, free providers, ComfyUI and studio packs as resumable background jobs; **Advanced Details** exposes diagnostics and **Copy Error Report** |
@@ -63,6 +63,10 @@ rename, and a right-click menu (Pin, Rename, Export as Markdown, Delete).
 - Command palette (`Ctrl+K`); shortcuts `Ctrl+N` new chat, `Ctrl+B` sidebar,
   `Ctrl+/` help
 - Streaming over SSE and WebSocket; responsive down to phone width
+- Mascot: a sprite in the bottom-right corner mirrors what the Wizard is doing
+  (thinking, running a tool, waiting for your approval, done, error); click it
+  to ask the Wizard or hide it. States, manifest and how to swap the art:
+  [MASCOT.md](MASCOT.md)
 
 ## Screenshots
 

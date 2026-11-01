@@ -74,10 +74,16 @@ reaches zero errors, add it to the gated list in `.github/workflows/ci.yml`.
 ## Documentation
 
 - `docs/COMMANDS.md` is generated — run `python scripts/gen_commands_doc.py`
-  after adding, renaming or hiding a command; CI diffs it.
+  after adding, renaming or hiding a command; `tests/test_commands_doc_parity.py`
+  diffs it.
 - The provider table and free-tier ladder in `docs/PROVIDERS.md` are generated
   from `nvh/providers/specs.py` — run `python scripts/gen_providers_doc.py`
   after changing a spec row; `tests/test_provider_docs_parity.py` diffs it.
+- The marker-delimited blocks of `docs/MODELS.md` (tier table, OS
+  reserve, installer pull ladder, Wizard chat matrix, GB10 baselines) are
+  generated from `nvh/core/local_models.py` and `nvh/utils/gpu_emulation.py`:
+  run `python scripts/gen_models_doc.py` after changing a tier, a boundary, a
+  model tag or a measured baseline; `tests/test_models_doc_parity.py` diffs it.
 - Do not type inventory counts (providers, models, free tiers, cabinets, tools,
   personas, agents) into README, docs or CLI help. `tests/test_marketing_parity.py`
   fails on any count that disagrees with the code.
