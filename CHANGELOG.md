@@ -2,9 +2,12 @@
 
 ## [Unreleased]
 
-Wave 3 of the 2026-10-31 plan: the model catalog reads its facts from
-LiteLLM, the last hand-typed provider copies derive from `ProviderSpec`, and
-model lists are live. 0.45.0 material.
+Waves 3 and 4 of the 2026-10-31 plan: the model catalog reads its facts
+from LiteLLM, the last hand-typed provider copies derive from `ProviderSpec`,
+model lists are live, and the Spark hygiene that needs no hardware lands:
+playbook currency with a drift check, verified downloads, cancel between
+steps, honest refusals off Linux and an arch-aware `install.ps1`. 0.45.0
+material.
 
 ### Added
 - **LiteLLM-derived model facts.** LiteLLM's model table is now the one
@@ -63,6 +66,85 @@ model lists are live. 0.45.0 material.
   "Catalog and model currency" recipe; `docs/MAINTAINERS.md` pre-tag steps
   for `gen_capabilities.py --check` and the latest model-currency run.
 
+- **Spark playbooks follow today's upstream.** All playbooks are re-extracted
+  from NVIDIA's current `nvidia/playbook-<name>/` READMEs (ids stable,
+  `upstream_folder` recorded on every plan, catalogue row and receipt): the
+  ollama playbook is the DGX Spark branch of the "Run Local LLMs" guide,
+  comfy-ui the Z-Image-Turbo quick start, vllm the 128 GB Qwen3.8 27B NVFP4
+  row, and the deferred reasons are re-read from each README. New
+  `scripts/check_playbook_upstream.py` (`--check`, `--update`, `--show`)
+  snapshots every folder README and pinned asset into
+  `scripts/playbook_upstream_snapshot.json`; the weekly model-currency job
+  runs the check, and any HTTP answer other than 200 or 404 is "unreachable"
+  (exit 2, snapshot untouched), never false drift.
+- **Verified downloads.** Every upstream script a playbook step runs is
+  sha256-pinned in `UPSTREAM_ASSETS`, downloaded to `<file>.download` and
+  moved into place only by the verify step, so the gate runs on every run;
+  the VS Code `.deb` is verified against Microsoft's stable manifest with
+  explicit exits under `python3 -I -c` (`PYTHONOPTIMIZE` cannot strip it)
+  and its product version recorded. No step is `unpinned` except the
+  documented pipe-to-shell installers.
+- **Cancel between playbook steps.** The engine re-reads the job's cancel
+  flag before each check probe, after it and after every step, passed or
+  failed; the receipt says `stopped after step N` (an in-flight command is
+  recorded as such), the vault note is written even when the job consumer
+  closes the stream early, and the job log keeps the engine's own account.
+- **Honest refusals off Linux.** `system_settings_apply`, `apt_install`,
+  `snap_install`, `service_enable` and any `sudo` step refuse before
+  anything spawns with one sentence ("System changes are not available on
+  Windows yet", macOS variant), never prepend `sudo` and write no vault
+  note; plans still render with the sentence as a note; `system_settings_get`
+  exports `platform.os`, `sudo.host_probe_pending` and `system_changes`.
+  `nvh playbook plan` / `install` refuse the same way (exit 1) while
+  `playbook list` still shows the catalogue; the web setup page reads the
+  host OS from `/v1/wizard/context` and shows the sentence in place of the
+  Spark playbooks section.
+- **Arch-aware `install.ps1`.** Detects Windows on Arm, prefers a native
+  arm64 Python (falling back once to x64 under emulation when pip cannot
+  build a dependency), installs Ollama's `ollama-windows-arm64.zip` verified
+  against the release's `sha256sum.txt` instead of the x64 installer
+  (`NVH_OLLAMA_VERSION` pins a release), says that GPU acceleration is
+  unverified on Arm and prints an honest message when `nvidia-smi` is
+  absent; the x64 path is unchanged. `ci/test-windows-installer.ps1` gains a
+  mocked ARM64 case.
+- **`nvh status --deep` "Legacy homes (pre-0.44)" row** (`legacy_homes`):
+  a read-only view of the import (copied / merged / skipped counts, old
+  roots still present, items a run would still copy, items startup could
+  not copy with the reason, `NVH_LEGACY_MIGRATION=0` as a skipped row, a
+  still-set `HIVE_DATA_DIR`), backed by `legacy_migration_status()` so a
+  diagnostic can never start a second migration.
+- **Derived agent cost.** Every agent-loop step carries the provider's
+  reported `cost_usd` and `AgentResult.total_cost_usd` is the None-tolerant
+  sum; `nvh agent` derives `CodingResult.total_cost_usd` from the plan,
+  every worker, review round and quality-gate retry instead of a hardcoded
+  `$0`. `nvh do`, `nvh agent run`, the REPL agent task and the API agent
+  envelope print it.
+- **One set of tool instructions under native function calling.** When the
+  provider takes `tools=`, the Wizard's system prompt carries a short native
+  block (safety-class rules, tool names by class, the TOOL_RESULT and
+  privileged-outcome instructions) instead of the `TOOL_CALL:` text protocol
+  and schema list; the channel is decided once per turn and both are still
+  read. `Engine.query` / `query_stream` gain `exclude_providers`, honoured
+  by the router, the offline and orchestrator picks and the fallback chain,
+  and `nvh ask --focus research` passes the search-native set so a grounded
+  or privacy-mode prompt never falls back to Perplexity.
+- **Generated `docs/CONFIGURATION.md` blocks.** The Wizard tool roster (by
+  safety class, from `default_registry()`) and the council cabinet table
+  (from `COUNCIL_PRESETS` / `PRESET_DESCRIPTIONS`) are rendered by new
+  `scripts/gen_config_doc.py` (`--check` in CI) and parity-tested by
+  `tests/test_config_doc_parity.py`; the doc also documents the
+  `legacy_homes` row, the privileged tier off Linux and the native prompt
+  variant. The `--check` / rewrite contract every generator shares is one
+  function, `scripts/_gendoc.check_or_write`; `scripts/gen_capabilities.py`
+  uses it and gains `--drift` (the overrides-vs-LiteLLM report the weekly
+  job prints, moved out of the test module).
+- **Bundled data through `importlib.resources`.** New `nvh.data` helpers
+  (`bundled`, `bundled_path`, `read_text`, `read_json`, `read_yaml`) replace
+  `Path(__file__)` arithmetic in the catalog, benchmark and workflow
+  loaders; `tests/test_single_root.py` pins that every `package-data` glob
+  ships something, every data file is covered and no module anchors a path
+  on `__file__` outside a two-row allow table.
+
 ### Changed
 - Importing `nvh` exports `LITELLM_LOCAL_MODEL_COST_MAP=True` unless the
   variable is already set: LiteLLM's table is the one bundled with the
@@ -86,6 +168,29 @@ model lists are live. 0.45.0 material.
 - `nvh/config/model_overrides.json` ships in the wheel (`config/*.json`
   package data).
 
+- LLM7 currency from its anonymous model list (2026-11-01): default
+  `gpt-oss:20b`, fallback `minimax-m3`; the bare `gpt-oss` and `minimax-m2.7`
+  ids are retired with successors in `RETIRED_MODEL_RENAMES` and the catalog
+  (`nvh config migrate` rewrites them), the llm7 strengths copy no longer
+  names DeepSeek-R1, and `docs/PROVIDERS.md` is regenerated.
+- The cloud vision fallback (`nvh/core/vision_tools.py`) and the web
+  providers page's `.env` example derive from the spec table; the
+  single-provider-table guard scans every `web/app/**/*.tsx` page.
+- Tests: every test runs under a throwaway home. The autouse
+  `_hermetic_home` fixture in `tests/conftest.py` points `NVH_HOME` at a
+  fresh per-test directory, fakes `Path.home()` / `HOME` / `USERPROFILE`,
+  clears the storage knobs and re-derives the settings defaults, so no test
+  reads or writes the developer's `~/.nvh`, `~/.cursor`, `~/.hive` or
+  `~/.council` (the API's `require_auth` used to open the real state
+  database on every TestClient request); a module opts out with
+  `HERMETIC_HOME = False`. The per-file sweep before and after shows no
+  regression. The platform-detector tests assert real detection against
+  config files in the fake home with no `claude mcp list` subprocess.
+- `docs/GETTING_STARTED.md` Spark playbooks section (upstream folders and
+  the drift check, checksums, cancelling, Linux only); `docs/MAINTAINERS.md`
+  pre-tag steps name `gen_config_doc.py`; `docs/TESTING.md` documents the
+  three autouse fixtures, the opt-outs and `gen_capabilities.py --drift`.
+
 ### Fixed
 - The `GET /models` probe body is streamed and capped, a deeply nested body
   no longer escapes `health_check` as a RecursionError, and the key never
@@ -95,6 +200,20 @@ model lists are live. 0.45.0 material.
 - Dead `_PROVIDER_KEY_URLS` / `_PROVIDER_DOC_URLS` / `_PROVIDER_LOGO_SLUGS`
   maps removed from the API server; a bare `deprecation_date:` YAML override
   now loads; `docs/COMMANDS.md` regenerated (`Ollama (local)`).
+
+- The council drawer's cabinet picker renders again: `GET /v1/agents/presets`
+  answers with a dict but the web typed it as a list, so the Preset select
+  never appeared; `web/lib/cabinets.ts` adapts the dict in server order and
+  the `CabinetPicker` component is tested from a server-shaped payload.
+- `PRESET_DESCRIPTIONS` name the actual members of each council preset (the
+  `executive` blurb named roles it does not hold, `full_board` said "all");
+  the MCP `list_cabinets` table and the generated doc show the corrected
+  copy.
+- The workflow and benchmark YAML loaders read UTF-8 regardless of the
+  locale codec.
+- Three module-level `_hermetic_home` fixtures that shadowed the shared one
+  are removed and the opt-out is pinned by
+  `tests/test_conftest_hermetic_home_optout.py`.
 
 ## [0.44.1] - 2026-11-01
 

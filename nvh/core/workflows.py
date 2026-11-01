@@ -40,6 +40,8 @@ from typing import Any
 
 import yaml
 
+from nvh.data import bundled_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,7 +76,7 @@ class WorkflowResult:
 
 def load_workflow(path: Path) -> Workflow:
     """Load a workflow from a YAML file."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     steps = []
@@ -124,7 +126,8 @@ def discover_workflows(dirs: list[Path] | None = None) -> dict[str, Path]:
         dirs = default_workflow_dirs()
 
     # Also include the built-in workflow templates shipped with the package
-    _builtin = Path(__file__).parent.parent / "workflows"
+    # (nvh/workflows/, resolved through importlib.resources)
+    _builtin = bundled_path("workflows")
     if _builtin.is_dir():
         dirs = [_builtin] + list(dirs)
 

@@ -9,9 +9,17 @@
 #   $NVH_HOME\venv\       — Python virtual environment
 #   $NVH_HOME\config\     — config.yaml, API keys (.env)   ($NVH_CONFIG / HIVE_CONFIG_HOME)
 #   $NVH_HOME\state\      — the SQLite state database
+#   $NVH_HOME\ollama\     — Ollama's standalone CLI, on Windows on Arm only
 # Set NVH_HOME before running to install somewhere else (a persistent mount);
 # the installer then records it in your user environment so every later
 # `nvh` finds the same home.
+#
+# Windows on Arm (ARM64, RTX Spark-class devices): nvHive is untested there and
+# ships no arm64 binary. This installer detects the architecture, prefers a
+# native arm64 Python (falling back to an x64 Python under emulation when a
+# dependency has no win_arm64 wheel — tiktoken has none today), never installs
+# the x64 Ollama under emulation, and says plainly that GPU acceleration is
+# unverified on Windows on Arm. Nothing here claims the device works.
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -64,33 +72,117 @@ Write-Green "╚═════════════════════�
 Write-Host ""
 
 # ---------------------------------------------------------------------------
+# Host architecture: x64, or ARM64 (Windows on Arm)
+# ---------------------------------------------------------------------------
+# ARM64 shows up three ways. A native ARM64 PowerShell reports
+# PROCESSOR_ARCHITECTURE=ARM64; an x64 PowerShell running under emulation
+# reports PROCESSOR_ARCHITEW6432=ARM64 (the host's real ISA, which WOW64 sets
+# for the emulated process — exactly the correction nvh.utils.hw_ids makes);
+# and when neither variable says so, Win32_OperatingSystem.OSArchitecture reads
+# "ARM 64-bit Processor". Anything else is treated as x64 (today's behaviour).
+# The parameters exist so ci/test-windows-installer.ps1 can feed each signal.
+function Get-HostArchitecture {
+    param(
+        [string]$Wow64  = $env:PROCESSOR_ARCHITEW6432,
+        [string]$Native = $env:PROCESSOR_ARCHITECTURE
+    )
+    foreach ($value in @($Wow64, $Native)) {
+        if ($value -and ("$value".Trim() -ieq "ARM64")) { return "arm64" }
+    }
+    try {
+        $osArch = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).OSArchitecture
+        if ($osArch -and ("$osArch" -match "ARM")) { return "arm64" }
+    } catch { }
+    return "x64"
+}
+
+$HOST_ARCH = Get-HostArchitecture
+if ($HOST_ARCH -eq "arm64") {
+    Write-Yellow "Windows on Arm (ARM64) detected."
+    Write-Yellow "nvHive is untested on Windows on Arm: there is no arm64 nvHive binary, local models and GPU acceleration are unverified here, and this installer prefers native arm64 tools where they exist."
+}
+
+# ---------------------------------------------------------------------------
 # Find Python 3.11+
 # ---------------------------------------------------------------------------
-function Find-Python {
+# Every 3.11+ interpreter on PATH, with the ISA it was built for:
+# `platform.machine()` prints ARM64 for a native arm64 build and AMD64 for an
+# x64 build — including one running under emulation on an ARM64 host.
+function Get-PythonCandidates {
+    $found = @()
     foreach ($py in @("python3.12", "python3.11", "python3.13", "python3", "python")) {
         $p = Get-Command $py -ErrorAction SilentlyContinue
         if ($p) {
             $ver = & $p.Source --version 2>&1
-            if ($ver -match "3\.(1[1-9]|[2-9]\d)") { return $p.Source }
+            if ($ver -match "3\.(1[1-9]|[2-9]\d)") {
+                $machine = ""
+                try { $machine = "$(& $p.Source -c 'import platform; print(platform.machine())' 2>$null | Select-Object -Last 1)".Trim() } catch { $machine = "" }
+                $found += @{ Path = $p.Source; Version = "$ver".Trim(); Machine = $machine }
+            }
         }
     }
     # Check py launcher (Windows Python Launcher)
     $py = Get-Command py -ErrorAction SilentlyContinue
     if ($py) {
         $ver = & py --version 2>&1
-        if ($ver -match "3\.(1[1-9]|[2-9]\d)") { return "py" }
+        if ($ver -match "3\.(1[1-9]|[2-9]\d)") {
+            $machine = ""
+            try { $machine = "$(& py -c 'import platform; print(platform.machine())' 2>$null | Select-Object -Last 1)".Trim() } catch { $machine = "" }
+            $found += @{ Path = "py"; Version = "$ver".Trim(); Machine = $machine }
+        }
+    }
+    return ,$found
+}
+
+# Pure: which interpreter to use. On x64 the first candidate, as before. On
+# ARM64 the first native arm64 build; without one, the first x64 build, marked
+# Emulated so the messages below can say so. `$null` when there is none.
+function Select-PreferredPython {
+    param([array]$Candidates, [string]$HostArch)
+    $list = @($Candidates | Where-Object { $_ })
+    if ($list.Count -eq 0) { return $null }
+    if ($HostArch -ne "arm64") { return @{ Path = $list[0].Path; Emulated = $false } }
+    foreach ($candidate in $list) {
+        if ("$($candidate.Machine)" -ieq "ARM64") { return @{ Path = $candidate.Path; Emulated = $false } }
+    }
+    return @{ Path = $list[0].Path; Emulated = $true }
+}
+
+# Pure: the first x64 build among the candidates (the emulation fallback when
+# a native arm64 install cannot build a dependency), or `$null`.
+function Select-EmulatedPython {
+    param([array]$Candidates)
+    foreach ($candidate in @($Candidates | Where-Object { $_ })) {
+        if ("$($candidate.Machine)" -ieq "AMD64") { return $candidate.Path }
     }
     return $null
 }
 
-$PYTHON = Find-Python
+$PY_CANDIDATES = Get-PythonCandidates
+$pythonPick = Select-PreferredPython -Candidates $PY_CANDIDATES -HostArch $HOST_ARCH
+$PYTHON = if ($pythonPick) { $pythonPick.Path } else { $null }
+$PYTHON_EMULATED = [bool]($pythonPick -and $pythonPick.Emulated)
 if (-not $PYTHON) {
     Write-Yellow "Python 3.11+ not found."
     Write-Blue   "Trying winget install..."
     try {
-        winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+        if ($HOST_ARCH -eq "arm64") {
+            # python.org ships a native arm64 3.12 and winget's manifest carries it;
+            # an older winget without --architecture falls through to the default.
+            winget install Python.Python.3.12 --architecture arm64 --accept-package-agreements --accept-source-agreements
+            if ($LASTEXITCODE -ne 0) {
+                Write-Yellow "winget could not pick the arm64 build; installing the default (x64, runs under emulation)."
+                winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+            }
+        } else {
+            winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+        }
         $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";" + $env:PATH
-        $PYTHON = Find-Python
+        $PY_CANDIDATES = Get-PythonCandidates
+        $pythonPick = Select-PreferredPython -Candidates $PY_CANDIDATES -HostArch $HOST_ARCH
+        $PYTHON = if ($pythonPick) { $pythonPick.Path } else { $null }
+        $PYTHON_EMULATED = [bool]($pythonPick -and $pythonPick.Emulated)
+        if (-not $PYTHON) { throw "python still not on PATH" }
     } catch {
         Write-Red "Could not install Python automatically."
         Write-Yellow "Please install Python 3.12 from https://python.org/downloads"
@@ -99,6 +191,9 @@ if (-not $PYTHON) {
     }
 }
 Write-Gray "Python: $(& $PYTHON --version 2>&1) [$PYTHON]"
+if ($PYTHON_EMULATED) {
+    Write-Yellow "This is an x64 Python running under emulation (no native arm64 build found). It is the path we expect to work today: tiktoken, which nvHive's providers need, publishes no win_arm64 wheel."
+}
 
 # ---------------------------------------------------------------------------
 # Detect NVIDIA GPU via nvidia-smi
@@ -119,7 +214,16 @@ if ($nvidiaSmi) {
         }
     } catch { }
 }
-if (-not $GPU_NAME) { Write-Yellow "No NVIDIA GPU detected — CPU mode" }
+if (-not $GPU_NAME) {
+    if ($HOST_ARCH -eq "arm64") {
+        # Honest, not reassuring: without nvidia-smi this installer cannot tell
+        # whether an NVIDIA GPU is present, and it has no second probe to try.
+        Write-Yellow "nvidia-smi not found. On Windows on Arm nvHive cannot tell whether this machine has an NVIDIA GPU until NVIDIA's driver is installed, and local models are unverified here either way."
+        Write-Yellow "Cloud providers work now (nvh setup). If this is an RTX Spark-class device, install NVIDIA's Windows on Arm driver and re-run this installer to add Ollama."
+    } else {
+        Write-Yellow "No NVIDIA GPU detected — CPU mode"
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Fast path: already installed
@@ -187,8 +291,28 @@ Write-Blue "Creating Python environment..."
 Write-Blue "Installing NVHive (~60s)..."
 & "$NVH_VENV\Scripts\pip" install -q -e "$NVH_REPO[serve,nvidia]" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Red "Install failed. Check Python version (need 3.11+)."
-    exit 1
+    # On ARM64 with a native arm64 Python the usual cause is a dependency with
+    # no win_arm64 wheel (tiktoken) that pip then tries to build without Rust.
+    # One retry with an x64 Python under emulation, when the machine has one.
+    $retried = $false
+    if ($HOST_ARCH -eq "arm64" -and -not $PYTHON_EMULATED) {
+        $fallbackPython = Select-EmulatedPython -Candidates $PY_CANDIDATES
+        if ($fallbackPython) {
+            Write-Yellow "pip could not install nvHive with the native arm64 Python (a dependency has no win_arm64 wheel; tiktoken is one). Retrying with the x64 Python at $fallbackPython under emulation..."
+            Remove-Item -Recurse -Force $NVH_VENV -ErrorAction SilentlyContinue
+            & $fallbackPython -m venv $NVH_VENV
+            & "$NVH_VENV\Scripts\pip" install -q --upgrade pip 2>$null
+            & "$NVH_VENV\Scripts\pip" install -q -e "$NVH_REPO[serve,nvidia]" 2>$null
+            $retried = ($LASTEXITCODE -eq 0)
+            if ($retried) { $PYTHON = $fallbackPython; $PYTHON_EMULATED = $true }
+        } else {
+            Write-Yellow "pip could not install nvHive with the native arm64 Python and no x64 Python is installed. Install Python 3.12 (x64) from https://python.org/downloads — it runs under emulation — or install Rust so pip can build tiktoken, then re-run."
+        }
+    }
+    if (-not $retried) {
+        Write-Red "Install failed. Check Python version (need 3.11+)."
+        exit 1
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -295,26 +419,113 @@ if ($userPath -notlike "*$scriptsDir*") {
 }
 
 # ---------------------------------------------------------------------------
-# Install Ollama for Windows (only if NVIDIA GPU present)
+# Ollama for Windows (only if NVIDIA GPU present)
 # ---------------------------------------------------------------------------
+# x64: winget, then OllamaSetup.exe — unchanged. ARM64: Ollama's installer is
+# x64 only, so the one build that does not run under emulation is the
+# standalone CLI zip from the same GitHub release (ollama-windows-arm64.zip),
+# verified against that release's sha256sum.txt before anything is extracted
+# into $NVH_HOME\ollama. Set NVH_OLLAMA_VERSION (a release tag such as
+# v0.40.13) to pin a release instead of following "latest".
+$OLLAMA_RELEASE_BASE = if ($env:NVH_OLLAMA_VERSION) {
+    "https://github.com/ollama/ollama/releases/download/$($env:NVH_OLLAMA_VERSION)"
+} else {
+    "https://github.com/ollama/ollama/releases/latest/download"
+}
+
+# Pure: the release asset for a host architecture.
+function Get-OllamaAssetName {
+    param([string]$HostArch)
+    if ($HostArch -eq "arm64") { return "ollama-windows-arm64.zip" }
+    return "OllamaSetup.exe"
+}
+
+# Pure: the SHA-256 that a GNU-style manifest ("<hex>  ./<name>", one per
+# line, the form Ollama publishes as sha256sum.txt) lists for one asset, or
+# `$null` when the asset is not in it.
+function Get-ExpectedSha256 {
+    param([string]$ManifestText, [string]$AssetName)
+    foreach ($line in ("$ManifestText" -split "`r?`n")) {
+        if ($line -match '^\s*([0-9a-fA-F]{64})\s+\*?(?:\./)?(\S+)\s*$') {
+            if ($matches[2] -ieq $AssetName) { return $matches[1].ToLower() }
+        }
+    }
+    return $null
+}
+
+# Does the file on disk hash to the expected SHA-256? `$false` on any doubt
+# (no expectation, unreadable file), never `$true` by default.
+function Test-FileSha256 {
+    param([string]$Path, [string]$Expected)
+    if (-not $Expected) { return $false }
+    try { $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLower() } catch { return $false }
+    return ($actual -eq "$Expected".ToLower())
+}
+
+# The ARM64 branch: download the arm64 zip and its release manifest, verify,
+# extract into $Destination, put it on the user PATH. `$true` only when
+# ollama.exe is in place; every failure is said out loud and leaves nothing.
+function Install-OllamaArm64 {
+    param([string]$Destination)
+    $asset = Get-OllamaAssetName "arm64"
+    $zip = Join-Path $env:TEMP $asset
+    try {
+        Write-Blue "Downloading $asset (Ollama's native arm64 CLI; the Windows installer is x64 only)..."
+        Invoke-WebRequest -Uri "$OLLAMA_RELEASE_BASE/$asset" -OutFile $zip -UseBasicParsing
+        $manifest = (Invoke-WebRequest -Uri "$OLLAMA_RELEASE_BASE/sha256sum.txt" -UseBasicParsing).Content
+        $expected = Get-ExpectedSha256 -ManifestText "$manifest" -AssetName $asset
+        if (-not (Test-FileSha256 -Path $zip -Expected $expected)) {
+            Write-Red "$asset does not match the release's sha256sum.txt (or the manifest does not list it); not installing it."
+            return $false
+        }
+        New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+        Expand-Archive -Path $zip -DestinationPath $Destination -Force
+    } catch {
+        Write-Red "Could not download or extract $asset ($($_.Exception.Message))."
+        return $false
+    } finally {
+        Remove-Item $zip -ErrorAction SilentlyContinue
+    }
+    if (-not (Test-Path (Join-Path $Destination "ollama.exe"))) {
+        Write-Red "ollama.exe was not in $asset; nothing was installed."
+        return $false
+    }
+    $userPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
+    if ($userPath -notlike "*$Destination*") {
+        [System.Environment]::SetEnvironmentVariable("PATH", "$Destination;$userPath", "User")
+    }
+    $env:PATH = "$Destination;$env:PATH"
+    Write-Green "Ollama (arm64) installed to $Destination"
+    return $true
+}
+
 if ($GPU_NAME) {
     $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
     if (-not $ollamaCmd) {
-        Write-Blue "Installing Ollama..."
-        try {
-            winget install Ollama.Ollama --accept-package-agreements --accept-source-agreements 2>$null
-            $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";$env:PATH"
-            $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
-        } catch { }
+        if ($HOST_ARCH -eq "arm64") {
+            Write-Yellow "Windows on Arm: GPU acceleration is unverified on Windows on Arm — nvHive has not tested Ollama's arm64 build against an NVIDIA GPU here, and it may run on the CPU."
+            if (Install-OllamaArm64 -Destination "$NVH_HOME\ollama") {
+                $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
+            } else {
+                Write-Yellow "Ollama was not installed. Cloud providers work now: nvh setup"
+            }
+        } else {
+            Write-Blue "Installing Ollama..."
+            try {
+                winget install Ollama.Ollama --accept-package-agreements --accept-source-agreements 2>$null
+                $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";$env:PATH"
+                $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
+            } catch { }
 
-        if (-not $ollamaCmd) {
-            Write-Yellow "winget install failed, trying direct download..."
-            $ollamaInstaller = "$NVH_HOME\OllamaSetup.exe"
-            Invoke-WebRequest -Uri "https://ollama.com/download/OllamaSetup.exe" `
-                -OutFile $ollamaInstaller
-            Start-Process -FilePath $ollamaInstaller -ArgumentList "/SILENT" -Wait
-            Remove-Item $ollamaInstaller -ErrorAction SilentlyContinue
-            $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
+            if (-not $ollamaCmd) {
+                Write-Yellow "winget install failed, trying direct download..."
+                $ollamaInstaller = "$NVH_HOME\OllamaSetup.exe"
+                Invoke-WebRequest -Uri "https://ollama.com/download/OllamaSetup.exe" `
+                    -OutFile $ollamaInstaller
+                Start-Process -FilePath $ollamaInstaller -ArgumentList "/SILENT" -Wait
+                Remove-Item $ollamaInstaller -ErrorAction SilentlyContinue
+                $ollamaCmd = Get-Command ollama -ErrorAction SilentlyContinue
+            }
         }
     }
 
@@ -344,7 +555,11 @@ if ($GPU_NAME) {
         }
     }
 } else {
-    Write-Yellow "No NVIDIA GPU — skipping Ollama install. Use cloud providers: nvh setup"
+    if ($HOST_ARCH -eq "arm64") {
+        Write-Yellow "No NVIDIA GPU visible — skipping Ollama. On Windows on Arm an arm64 Ollama exists, but GPU acceleration is unverified there, so nothing is installed without a driver. Use cloud providers: nvh setup"
+    } else {
+        Write-Yellow "No NVIDIA GPU — skipping Ollama install. Use cloud providers: nvh setup"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -381,6 +596,9 @@ Write-Host "     System overview"
 Write-Host ""
 Write-Gray "  Install dir (NVH_HOME): $NVH_HOME"
 Write-Gray "  Config: $NVH_CONFIG\config.yaml"
+if ($HOST_ARCH -eq "arm64") {
+    Write-Gray "  Windows on Arm: untested; GPU acceleration unverified. Hardware facts welcome via the RTX Spark issue template."
+}
 Write-Host ""
 Write-Gray "(Restart your terminal for PATH changes to take effect)"
 Write-Host ""

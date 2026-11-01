@@ -219,10 +219,14 @@ NVIDIA publishes step-by-step install guides for the DGX Spark in
 [dgx-spark-playbooks](https://github.com/NVIDIA/dgx-spark-playbooks): Ollama,
 Open WebUI, ComfyUI, vLLM, llama.cpp, LM Studio, Tailscale, VS Code, the DGX
 Dashboard, CLI coding agents, OpenClaw and NemoClaw. nvHive ships them as
-runnable plans. A playbook's id is the upstream folder name, so every step
-traces back to its README (`nvidia/<id>`), and the plan mirrors the README's
-own skeleton: what you'll accomplish, prerequisites, numbered steps, verify,
-rollback, time and risk.
+runnable plans. A playbook's id is a stable short name (`ollama`, `vscode`);
+each maps to the upstream folder its steps were extracted from
+(`nvidia/playbook-<name>/`, shown as the source by `nvh playbook plan` and on
+the card), and the plan mirrors the README's own skeleton: what you'll
+accomplish, prerequisites, numbered steps, verify, rollback, time and risk.
+`scripts/check_playbook_upstream.py --check` compares today's upstream READMEs
+and scripts with the snapshot the plans were extracted from, so a rewrite
+upstream is noticed rather than silently shipped.
 
 Unlike [studio packs](#studio-packs-and-the-workstation), some playbook steps
 need `sudo`, so a playbook never runs silently:
@@ -242,8 +246,8 @@ need `sudo`, so a playbook never runs silently:
   `sudo` prompts you directly.
 - **A receipt and an audit note.** Every run that touches the host writes an
   install receipt (that is what `nvh playbook list` reports as installed) and
-  a note under the vault's `Decisions/` folder — complete, partial or failed,
-  with exit codes.
+  a note under the vault's `Decisions/` folder — complete, partial, failed or
+  cancelled, with exit codes.
 
 ```bash
 nvh playbook list             # id, title, sudo steps, manual steps, time, installed
@@ -256,7 +260,9 @@ Some steps stay yours: browser logins, API tokens (`HF_TOKEN` and
 `NGC_API_KEY` are declared prerequisites — nvHive never prompts for or stores
 them), interactive TUIs such as `ollama run` or the OpenClaw and NemoClaw
 onboarding, cabling, and servers that run in the foreground. The plan lists
-them as `manual` steps. Two further rules of the road:
+them as `manual` steps. The model a playbook pulls is this machine's pick from
+nvHive's tier table, never a hand-typed tag; the README's own recommendation
+is quoted in the plan's notes. Further rules of the road:
 
 - **Docker.** Playbooks that need Docker start by adding you to the `docker`
   group when you are not in it; the run then stops and asks you to log out and
@@ -265,14 +271,23 @@ them as `manual` steps. Two further rules of the road:
 - **Pipe-to-shell.** An upstream `curl … | sh` one-liner is never piped. The
   script is downloaded to `$NVH_HOME/playbooks/<id>/` and run from there; the
   plan marks the step `pipe-to-shell: unpinned` and quotes the upstream
-  command verbatim. Where the README publishes a sha256 (ComfyUI), the
-  download is verified first. A vendor package the README neither pins nor
-  checksums (the VS Code "latest stable" .deb, installed as root) carries the
-  same flag, shown as `unpinned download`, so the two installs read alike.
-- **Cancelling.** Stopping a running playbook from the Jobs panel cannot
-  interrupt the host command already in flight (it may finish on its own);
-  the receipt and the vault note still record what ran and what was running,
-  so `nvh playbook list` and the repair plan stay honest.
+  command verbatim.
+- **Checksums.** A script taken from the upstream repository (ComfyUI's
+  `setup.sh` and `launch.sh`, the vLLM launch script) is verified against a
+  sha256 nvHive pinned when it read the file — upstream publishes none — and
+  the run stops before the script runs when the file has changed. The VS Code
+  `.deb` is verified against Microsoft's published manifest and its version is
+  recorded, so no step installs an unverified vendor package as root.
+- **Cancelling.** Stopping a running playbook from the Jobs panel stops it
+  after the current step: nothing further starts, and the receipt says which
+  step it stopped after. A host command already in flight cannot be
+  interrupted (it may finish on its own); the receipt and the vault note then
+  record it as in flight, so `nvh playbook list` and the repair plan stay
+  honest.
+- **Linux only.** `nvh playbook plan` and `install` — and the Wizard's
+  `playbook_plan` / `playbook_install` — refuse in plain words on Windows and
+  macOS, where the steps (apt, systemd, docker) cannot run; `nvh playbook
+  list` still shows the catalogue.
 
 The DGX Dashboard's *Update Now* path (OS upgrade, firmware, reboot) is never
 automated. Where a rootless studio pack does the same job (Ollama, OpenClaw,

@@ -13,6 +13,7 @@ import logging
 import os
 import time
 from collections import OrderedDict
+from collections.abc import Collection
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -526,6 +527,7 @@ class Engine:
         history: list[Message] | None = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        exclude_providers: frozenset[str] = frozenset(),
     ) -> CompletionResponse:
         """Execute a single query with routing, fallback, caching, and budget enforcement.
 
@@ -540,6 +542,16 @@ class Engine:
         can take them and never to Perplexity's Responses surface, so the
         caller keeps parsing the ``TOOL_CALL:`` text protocol as the
         fallback. A cached answer is never used for a tool-bearing query.
+
+        *exclude_providers* names providers this call never routes to and
+        never falls back to: the router skips them when it scores
+        (``RoutingEngine.route(..., exclude=)``), the offline and
+        orchestrator picks skip them, and the fallback chain drops them
+        (:meth:`_get_fallback_chain`). An explicit *provider* is the
+        caller's own pick and is not filtered. The use: a ``--focus
+        research`` prompt already grounded on nvHive's web search must never
+        land on an advisor that searches again (``SEARCH_NATIVE_PROVIDERS``
+        in the CLI), not even as a fallback.
 
         When *privacy* is ``True``, cache reads/writes, query logging, and
         conversation persistence are all skipped so no data is stored.
@@ -569,6 +581,7 @@ class Engine:
                 continue_last=continue_last,
                 privacy=privacy,
                 history=history,
+                exclude_providers=exclude_providers,
             )
             # Attach escalation metadata
             resp.metadata.update(meta)
@@ -606,7 +619,7 @@ class Engine:
             if not is_online:
                 enabled = self.registry.list_enabled()
                 for _local in ("ollama", "llm7"):
-                    if _local in enabled:
+                    if _local in enabled and _local not in exclude_providers:
                         _effective_provider = _local
                         logger.info(
                             "Offline detected — auto-routing to local provider: %s",
@@ -625,7 +638,7 @@ class Engine:
         # Smart routing via local orchestrator (LIGHT+ mode), falls back to keywords
         _orchestrated_provider = _effective_provider
         if not _orchestrated_provider and self.orchestrator.is_active:
-            available = self.registry.list_enabled()
+            available = [p for p in self.registry.list_enabled() if p not in exclude_providers]
             orch_result = await self.orchestrator.smart_route(prompt, available)
             if orch_result and orch_result.get("advisor") in available:
                 _orchestrated_provider = orch_result["advisor"]
@@ -641,6 +654,7 @@ class Engine:
             provider_override=_orchestrated_provider,
             model_override=model,
             strategy=strategy,
+            exclude=exclude_providers,
         )
 
         # Save routing context for `nvh why`
@@ -690,6 +704,7 @@ class Engine:
             stream=stream,
             tools=tools,
             tool_choice=tool_choice,
+            exclude_providers=exclude_providers,
         )
 
         # Response evaluation via local orchestrator (FULL mode only)
@@ -703,7 +718,11 @@ class Engine:
             )
             if eval_result.get("should_retry") and not response.fallback_from:
                 retry_provider = eval_result.get("retry_with")
-                if retry_provider and retry_provider != response.provider:
+                if (
+                    retry_provider
+                    and retry_provider != response.provider
+                    and retry_provider not in exclude_providers
+                ):
                     logger.info(
                         "Orchestrator: retrying with %s (quality=%s, reason=%s)",
                         retry_provider,
@@ -726,6 +745,7 @@ class Engine:
                                 stream=stream,
                                 tools=tools,
                                 tool_choice=tool_choice,
+                                exclude_providers=exclude_providers,
                             )
                             response = retry_response
                         except Exception:
@@ -818,13 +838,17 @@ class Engine:
         on_token: Any = None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        exclude_providers: frozenset[str] = frozenset(),
     ) -> CompletionResponse:
         """Stream a query, calling on_token(delta) for each chunk.
 
         Returns the final collected CompletionResponse. This is a
         thin wrapper that sets up routing/messages like query() but
         uses stream_to_callback instead of collecting silently.
-        ``tools`` / ``tool_choice`` reach the provider as in :meth:`query`.
+        ``tools`` / ``tool_choice`` reach the provider as in :meth:`query`;
+        ``exclude_providers`` keeps the router and the fallback chain off
+        the named providers as in :meth:`query` (an explicit ``provider``
+        is not filtered).
         """
         await self.initialize()
 
@@ -840,6 +864,7 @@ class Engine:
             provider_override=provider,
             model_override=model,
             strategy="best",
+            exclude=exclude_providers,
         )
 
         # Build messages
@@ -849,7 +874,7 @@ class Engine:
         messages.append(Message(role="user", content=prompt))
 
         # Get the provider and stream
-        fallback_chain = self._get_fallback_chain(decision.provider)
+        fallback_chain = self._get_fallback_chain(decision.provider, exclude=exclude_providers)
         for i, provider_name in enumerate(fallback_chain):
             if not self.registry.has(provider_name):
                 continue
@@ -1210,9 +1235,14 @@ class Engine:
         stream: bool,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        exclude_providers: Collection[str] = frozenset(),
     ) -> CompletionResponse:
-        """Execute query with automatic fallback chain on failure."""
-        fallback_chain = self._get_fallback_chain(decision.provider)
+        """Execute query with automatic fallback chain on failure.
+
+        ``exclude_providers`` are dropped from the fallbacks
+        (:meth:`_get_fallback_chain`); the decision's own provider is kept.
+        """
+        fallback_chain = self._get_fallback_chain(decision.provider, exclude=exclude_providers)
         tool_kwargs = _tool_kwargs(tools, tool_choice)
         failure_log: list[str] = []  # track why each provider failed
 
@@ -1322,15 +1352,21 @@ class Engine:
             provider=decision.provider,
         )
 
-    def _get_fallback_chain(self, primary: str) -> list[str]:
-        """Build fallback chain: primary first, then configured fallback order."""
+    def _get_fallback_chain(self, primary: str, exclude: Collection[str] = ()) -> list[str]:
+        """Build fallback chain: primary first, then configured fallback order.
+
+        ``exclude`` names providers the chain never falls back to. The
+        primary is kept even when it is named: it is the caller's pick — an
+        explicit ``provider=`` or the router's decision made under the same
+        set — and the set governs only what is tried *after* it fails.
+        """
         chain = [primary]
         for p in self.config.council.fallback_order:
-            if p not in chain:
+            if p not in chain and p not in exclude:
                 chain.append(p)
         # Add any remaining enabled providers
         for p in self.registry.list_enabled():
-            if p not in chain:
+            if p not in chain and p not in exclude:
                 chain.append(p)
         return chain
 

@@ -529,16 +529,16 @@ COUNCIL_PRESETS: dict[str, list[PersonaTemplate]] = {
 # Human-readable blurb per preset, kept beside COUNCIL_PRESETS so surfaces
 # that list presets (MCP list_cabinets, docs) can't drift from the registry.
 PRESET_DESCRIPTIONS: dict[str, str] = {
-    "executive": "CEO, CTO, CFO, CMO, COO — strategic decisions",
-    "engineering": "Architect, Backend, Frontend, DevOps, QA — technical decisions",
+    "executive": "CTO, CEO, CFO, Product Manager — strategic decisions",
+    "engineering": "Architect, Backend, DevOps/SRE, Security, QA — technical decisions",
     "security_review": "Security analysts — vulnerability assessment",
     "code_review": "Senior engineers — code quality review",
-    "product": "Product managers, designers, analysts — product decisions",
+    "product": "CEO, Product Manager, UX Designer, Engineering Manager — product decisions",
     "product_resilience": (
         "Student advocate, PM, UX, SRE, QA, ML — onboarding and failure-mode review"
     ),
-    "data": "Data scientists, ML engineers — data analysis",
-    "full_board": "All expert personas",
+    "data": "Architect, DBA, Data Engineer, ML/AI Engineer — data analysis",
+    "full_board": "CTO, Architect, Backend, DevOps/SRE, Security, CEO, CFO — the widest panel",
     "homework_help": "Tutors across subjects — student help",
     "code_tutor": "Programming mentors — learn to code",
     "essay_review": "Writing coaches — improve essays",

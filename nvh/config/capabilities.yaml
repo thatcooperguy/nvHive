@@ -1361,6 +1361,8 @@ models:
   gpt-oss:
     provider: llm7
     display_name: GPT-OSS (LLM7)
+    status: retired
+    successor: gpt-oss:20b
     context_window: 131072
     max_output_tokens: 8192
     supports_tools: true
@@ -1385,11 +1387,61 @@ models:
   minimax-m2.7:
     provider: llm7
     display_name: MiniMax M2.7 (LLM7)
+    status: retired
+    successor: minimax-m3
     context_window: 180000
     max_output_tokens: 4096
     supports_tools: true
     supports_json_mode: true
     source: llm7.io model list (context, max output, tools, JSON); not a LiteLLM provider (openai/ route with api_base) and its bare ids are deliberately not registered with LiteLLM -- a registered bare `gpt-oss` would make litellm.get_llm_provider route it to OpenAI
+    typical_latency_ms: 700
+    capability_scores:
+      code_generation: 0.8
+      code_review: 0.78
+      code_debug: 0.77
+      reasoning: 0.8
+      math: 0.76
+      creative_writing: 0.75
+      summarization: 0.78
+      translation: 0.74
+      conversation: 0.82
+      question_answering: 0.8
+      structured_extraction: 0.76
+      multimodal: 0.0
+      long_context_analysis: 0.72
+      instruction_following: 0.8
+
+  gpt-oss:20b:
+    provider: llm7
+    display_name: GPT-OSS 20B (LLM7)
+    context_window: 128000
+    supports_tools: true
+    supports_json_mode: true
+    source: llm7.io model list, anonymous GET https://api.llm7.io/v1/models on 2026-11-01 (context_window.tokens, tools_calling, json_mode; the list states no max output); not a LiteLLM provider (openai/ route with api_base) and its bare ids are deliberately not registered with LiteLLM, where a registered bare id would route by name rather than to llm7's host
+    typical_latency_ms: 1500
+    capability_scores:
+      code_generation: 0.82
+      code_review: 0.8
+      code_debug: 0.8
+      reasoning: 0.9
+      math: 0.88
+      creative_writing: 0.7
+      summarization: 0.75
+      translation: 0.7
+      conversation: 0.72
+      question_answering: 0.82
+      structured_extraction: 0.74
+      multimodal: 0.0
+      long_context_analysis: 0.65
+      instruction_following: 0.78
+
+  minimax-m3:
+    provider: llm7
+    display_name: MiniMax M3 (LLM7)
+    context_window: 512000
+    supports_tools: true
+    supports_json_mode: true
+    source: llm7.io model list, anonymous GET https://api.llm7.io/v1/models on 2026-11-01 (context_window.tokens, tools_calling, json_mode; the list states no max output); not a LiteLLM provider (openai/ route with api_base) and its bare ids are deliberately not registered with LiteLLM, where a registered bare id would route by name rather than to llm7's host
     typical_latency_ms: 700
     capability_scores:
       code_generation: 0.8

@@ -46,6 +46,12 @@ real ``~/.hive`` by accident; a test of the migration itself sets it back to
 so pointing ``NVH_HOME`` at a fresh ``tmp_path`` and monkeypatching
 ``Path.home`` gives a clean slate; ``migrate_legacy_homes(force=True)`` re-runs
 over an existing marker.
+
+Read-only view: :func:`legacy_migration_status` reports the same state (the
+marker, the legacy roots still present, what a run would still copy, the
+failures of the last run *in this process*, the kill switch) without copying,
+locking or writing anything; ``nvh status --deep`` renders it as the
+``legacy_homes`` row, so a diagnostic can never trigger a second migration.
 """
 
 from __future__ import annotations
@@ -216,6 +222,44 @@ class LegacyMigration:
     moved: list[dict[str, str]] = field(default_factory=list)
     merged: list[dict[str, Any]] = field(default_factory=list)
     skipped: list[dict[str, str]] = field(default_factory=list)
+    failed: list[dict[str, str]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+#: The last report of :func:`migrate_legacy_homes` per marker path, in this
+#: process only. A failed run writes no marker, so this is the only place a
+#: read-only status can learn *why* the import is not recorded yet.
+_LAST_REPORTS: dict[str, LegacyMigration] = {}
+
+
+@dataclass
+class LegacyMigrationStatus:
+    """What :func:`legacy_migration_status` found, without running anything.
+
+    ``already_done`` / ``ran_at`` / ``moved`` / ``merged`` / ``skipped`` come
+    from the marker; ``legacy_roots`` are the old roots present *now*;
+    ``pending`` lists the targets a run would still copy (source present,
+    destination absent, not consumed by a one-shot importer — a merge into an
+    existing ``.env`` / ``config.yaml`` is not predicted); ``attempted`` /
+    ``failed`` come from the last run in this process. Under the kill switch
+    ``disabled`` is set and nothing under ``$HOME`` is read, so ``legacy_roots``
+    and ``pending`` stay empty.
+    """
+
+    layout_home: str
+    marker: str
+    disabled: bool = False
+    already_done: bool = False
+    ran_at: str | None = None
+    legacy_roots: dict[str, str] = field(default_factory=dict)
+    moved: list[dict[str, str]] = field(default_factory=list)
+    merged: list[dict[str, Any]] = field(default_factory=list)
+    skipped: list[dict[str, str]] = field(default_factory=list)
+    pending: list[dict[str, str]] = field(default_factory=list)
+    attempted: bool = False
     failed: list[dict[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -536,9 +580,13 @@ def migrate_legacy_homes(
         report.warnings.extend(legacy_env_warnings())
         for warning in report.warnings:
             _log.warning("%s", warning)
-        return report
-    with _migration_lock(layout):
-        return _migrate_locked(layout, report, force=force)
+    else:
+        with _migration_lock(layout):
+            report = _migrate_locked(layout, report, force=force)
+    # Remembered for legacy_migration_status(); a lock timeout raised above
+    # and is deliberately not recorded (nothing was attempted).
+    _LAST_REPORTS[report.marker] = report
+    return report
 
 
 def _migrate_locked(
@@ -613,3 +661,68 @@ def _migrate_locked(
     except OSError as exc:
         _log.warning("legacy migration: could not write marker %s: %s", marker, exc)
     return report
+
+
+# ---------------------------------------------------------------------------
+# The read-only view (``nvh status --deep`` → ``legacy_homes``)
+# ---------------------------------------------------------------------------
+
+
+def _pending_targets(layout: StorageLayout) -> list[dict[str, str]]:
+    """Targets a run would still *copy*: source present, destination absent, not consumed.
+
+    A destination that already exists is left out — the run would skip it or,
+    for ``.env`` / ``config.yaml``, merge into it, and whether a merge would
+    add anything is not predicted here. Nothing is written or locked.
+    """
+    pending: list[dict[str, str]] = []
+    for target in legacy_targets(layout):
+        if not target.source.exists() and not target.source.is_symlink():
+            continue
+        if _same_file(target.source, target.destination):
+            continue
+        if target.skip_if is not None and target.skip_if.exists():
+            continue
+        if os.path.lexists(target.destination):
+            continue
+        pending.append(
+            {"label": target.label, "source": str(target.source), "destination": str(target.destination)}
+        )
+    return pending
+
+
+def legacy_migration_status(layout: StorageLayout | None = None) -> LegacyMigrationStatus:
+    """Report the migration's state for ``layout`` without running it.
+
+    Read-only by construction: the marker is read, the legacy roots are
+    ``stat``-ed, the targets a run would still copy are listed and the last
+    report of this process (if any) supplies ``attempted`` / ``failed``. No
+    lock is taken, no directory is created and nothing is copied, so a
+    diagnostic that calls this cannot start a second migration. Under
+    ``NVH_LEGACY_MIGRATION=0`` only the marker (under ``NVH_HOME``) and the
+    environment are consulted — nothing under ``$HOME`` is read, matching the
+    kill switch's contract for :func:`migrate_legacy_homes`.
+    """
+    layout = layout or storage_layout()
+    marker = layout.state_dir / MARKER_NAME
+    status = LegacyMigrationStatus(layout_home=str(layout.home), marker=str(marker))
+    status.warnings.extend(legacy_env_warnings())
+    if marker.is_file():
+        recorded = LegacyMigration(layout_home=status.layout_home, marker=status.marker)
+        _read_marker(marker, recorded)
+        status.already_done = True
+        status.ran_at = recorded.ran_at
+        status.moved = recorded.moved
+        status.merged = recorded.merged
+        status.skipped = recorded.skipped
+    if not migration_enabled():
+        status.disabled = True
+        return status
+    last = _LAST_REPORTS.get(status.marker)
+    if last is not None:
+        status.attempted = True
+        status.failed = list(last.failed)
+    status.legacy_roots = {label: str(path) for label, path in legacy_roots_present().items()}
+    if status.legacy_roots and not status.already_done:
+        status.pending = _pending_targets(layout)
+    return status

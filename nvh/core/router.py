@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Any
 
@@ -426,15 +427,23 @@ class RoutingEngine:
         model_override: str | None = None,
         strategy: str = "best",
         input_tokens: int = 0,
+        exclude: Collection[str] = (),
     ) -> RoutingDecision:
         """Route a query to the best provider.
 
         Args:
             query: The user's query text
-            provider_override: Explicit provider choice (bypasses routing)
+            provider_override: Explicit provider choice (bypasses routing,
+                including ``exclude`` — an explicit pin is the caller's call)
             model_override: Explicit model choice
             strategy: 'best', 'cheapest', 'fastest', 'best-for-task'
             input_tokens: Estimated input token count
+            exclude: Providers routing must not choose this time — never
+                scored, never picked by a routing rule or the local-first
+                broker; recorded as ``excluded by the caller`` in the reason
+                when every provider was filtered out. When nothing else is
+                enabled the configured default is returned as it is when no
+                provider is enabled at all, and the reason says so.
         """
         import logging
         _log = logging.getLogger(__name__)
@@ -467,6 +476,8 @@ class RoutingEngine:
 
         # Check custom routing rules first
         for rule in self.config.routing.rules:
+            if rule.provider in exclude:
+                continue
             if self._rule_matches(rule, classification, input_tokens):
                 model = model_override or rule.model
                 if not model:
@@ -486,15 +497,21 @@ class RoutingEngine:
         # If Ollama is available with a Nemotron model, check if the query
         # is simple enough to handle locally. This saves money, keeps data
         # private, and only escalates to cloud when quality requires it.
-        if strategy in ("best", "cheapest") and "ollama" in self.registry.list_enabled():
+        enabled = self.registry.list_enabled()
+        if (
+            strategy in ("best", "cheapest")
+            and "ollama" in enabled
+            and "ollama" not in exclude
+        ):
             local_decision = self._try_local_first(
                 query, classification, model_override, input_tokens,
             )
             if local_decision:
                 return local_decision
 
-        # Score all available providers
-        available = self.registry.list_enabled()
+        # Score all available providers — minus the caller's exclusions
+        excluded = [p for p in enabled if p in exclude]
+        available = [p for p in enabled if p not in exclude]
         if not available:
             default = self.config.defaults.provider
             return RoutingDecision(
@@ -503,12 +520,15 @@ class RoutingEngine:
                 task_type=classification.task_type,
                 confidence=classification.confidence,
                 scores={},
-                reason="No providers available, using default",
+                reason=(
+                    f"No providers available after excluding {', '.join(excluded)}, using default"
+                    if excluded else "No providers available, using default"
+                ),
             )
 
         provider_scores: dict[str, dict[str, float]] = {}
         provider_models: dict[str, str] = {}
-        skipped_reasons: dict[str, str] = {}
+        skipped_reasons: dict[str, str] = {p: "excluded by the caller" for p in excluded}
 
         # Import advisor profiles once outside the loop
         try:
@@ -663,7 +683,9 @@ class RoutingEngine:
                 continue
 
         if not provider_scores:
-            default = self.config.defaults.provider or available[0]
+            default = self.config.defaults.provider
+            if not default or default in exclude:
+                default = available[0]
             skip_summary = "; ".join(f"{p}: {r}" for p, r in list(skipped_reasons.items())[:5])
             _log.warning(
                 "All providers filtered out during routing. Skipped: %s. Falling back to %s.",

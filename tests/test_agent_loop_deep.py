@@ -12,6 +12,7 @@ are still *parsed* for one release, never taught.
 from __future__ import annotations
 
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,6 +26,7 @@ from nvh.core.agent_loop import (
     _calls_from_response,
     _extract_tool_calls,
     build_agent_system_prompt,
+    response_cost_usd,
     run_agent_loop,
 )
 from nvh.core.tools import Tool, ToolRegistry, ToolResult
@@ -150,6 +152,42 @@ class TestExtractToolCalls:
 
 
 # ---------------------------------------------------------------------------
+# response_cost_usd
+# ---------------------------------------------------------------------------
+
+
+class TestResponseCostUsd:
+    """The per-call cost the loop reads off a provider response."""
+
+    def test_a_decimal_passes_through(self):
+        resp = CompletionResponse(content="x", model="m", provider="p", usage=Usage(), cost_usd=Decimal("0.0015"))
+        assert response_cost_usd(resp) == Decimal("0.0015")
+
+    def test_zero_is_a_known_zero_not_unknown(self):
+        """Local models and cache hits report ``Decimal("0")``: that is $0, not None."""
+        resp = CompletionResponse(content="x", model="m", provider="p", usage=Usage())
+        assert response_cost_usd(resp) == Decimal("0")
+
+    def test_none_and_missing_are_unknown(self):
+        assert response_cost_usd(SimpleNamespace(content="x", cost_usd=None)) is None
+        assert response_cost_usd(SimpleNamespace(content="x")) is None
+        assert response_cost_usd(None) is None
+
+    def test_plain_numbers_and_numeric_strings_become_exact_decimals(self):
+        assert response_cost_usd(SimpleNamespace(cost_usd=0.001)) == Decimal("0.001")
+        assert response_cost_usd(SimpleNamespace(cost_usd=2)) == Decimal("2")
+        assert response_cost_usd(SimpleNamespace(cost_usd="0.5")) == Decimal("0.5")
+
+    def test_garbage_is_unknown_never_zero(self):
+        """A MagicMock attribute, a bool, a non-numeric string or NaN add nothing."""
+        assert response_cost_usd(MagicMock()) is None
+        assert response_cost_usd(SimpleNamespace(cost_usd=True)) is None
+        assert response_cost_usd(SimpleNamespace(cost_usd="free")) is None
+        assert response_cost_usd(SimpleNamespace(cost_usd=Decimal("NaN"))) is None
+        assert response_cost_usd(SimpleNamespace(cost_usd=float("inf"))) is None
+
+
+# ---------------------------------------------------------------------------
 # run_agent_loop
 # ---------------------------------------------------------------------------
 
@@ -163,6 +201,27 @@ def _make_mock_engine(responses: list[str]):
         resp = MagicMock()
         resp.content = text
         side_effects.append(resp)
+    engine.query = AsyncMock(side_effect=side_effects)
+    return engine
+
+
+def _make_costed_engine(responses: list[tuple[str, Decimal | None]]):
+    """A mock engine whose replies carry a provider cost — or none at all.
+
+    A ``Decimal`` cost rides on a real ``CompletionResponse``; ``None`` stands
+    for a provider (or stream) that reported no cost and is a bare namespace,
+    since the response model types ``cost_usd`` as a ``Decimal``.
+    """
+    engine = AsyncMock()
+    engine.registry = ProviderRegistry().scoped(CouncilConfig())
+    side_effects: list[object] = []
+    for text, cost in responses:
+        if cost is None:
+            side_effects.append(SimpleNamespace(content=text, cost_usd=None, tool_calls=None))
+        else:
+            side_effects.append(CompletionResponse(
+                content=text, model="m", provider="p", usage=Usage(), cost_usd=cost,
+            ))
     engine.query = AsyncMock(side_effect=side_effects)
     return engine
 
@@ -201,6 +260,10 @@ async def test_loop_completes_on_no_tool_calls():
     assert result.total_iterations == 1
     assert result.total_tool_calls == 0
     assert "42" in result.final_response
+    # A MagicMock reply has no usable cost_usd: unknown, so the total stays $0
+    # and the step says so rather than inventing a figure.
+    assert result.total_cost_usd == Decimal("0")
+    assert result.steps[0].cost_usd is None
 
 
 @pytest.mark.asyncio
@@ -383,6 +446,75 @@ async def test_loop_compresses_history_after_iteration_3():
     # After iteration 3, prompts should contain "compressed"
     last_prompt = calls[4].kwargs.get("prompt", calls[4].args[0] if calls[4].args else "")
     assert "compressed" in last_prompt.lower() or "Progress" in last_prompt
+
+
+# ---------------------------------------------------------------------------
+# Per-call cost: surfaced on each step, summed on the result
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_loop_total_cost_is_the_sum_of_its_two_calls():
+    """Two provider calls, two reported costs: each step carries its own, the result the sum."""
+    engine = _make_costed_engine([
+        ('TOOL_CALL: {"name": "read_file", "arguments": {"path": "main.py"}}', Decimal("0.0015")),
+        ("The file prints hello.", Decimal("0.0025")),
+    ])
+    result = await run_agent_loop("Read main.py", engine, tools=_make_mock_registry())
+
+    assert result.completed is True and result.total_iterations == 2
+    assert [s.cost_usd for s in result.steps] == [Decimal("0.0015"), Decimal("0.0025")]
+    assert result.total_cost_usd == Decimal("0.004")
+    assert isinstance(result.total_cost_usd, Decimal)
+
+
+@pytest.mark.asyncio
+async def test_loop_tolerates_a_call_that_reports_no_cost():
+    """A None cost is unknown: the step records None and the sum skips it (no $0 pretence)."""
+    engine = _make_costed_engine([
+        ('TOOL_CALL: {"name": "read_file", "arguments": {"path": "main.py"}}', None),
+        ("Done.", Decimal("0.002")),
+    ])
+    result = await run_agent_loop("Read main.py", engine, tools=_make_mock_registry())
+
+    assert result.completed is True
+    assert result.steps[0].cost_usd is None
+    assert result.steps[1].cost_usd == Decimal("0.002")
+    assert result.total_cost_usd == Decimal("0.002")
+
+
+@pytest.mark.asyncio
+async def test_loop_keeps_the_cost_already_spent_when_the_engine_fails():
+    """Money spent before an engine error is still reported on the error result."""
+    first = CompletionResponse(
+        content='TOOL_CALL: {"name": "read_file", "arguments": {"path": "main.py"}}',
+        model="m", provider="p", usage=Usage(), cost_usd=Decimal("0.001"),
+    )
+    engine = AsyncMock()
+    engine.registry = ProviderRegistry().scoped(CouncilConfig())
+    engine.query = AsyncMock(side_effect=[first, RuntimeError("API is down")])
+    result = await run_agent_loop("Read main.py", engine, tools=_make_mock_registry())
+
+    assert result.completed is False and "API is down" in result.error
+    assert result.total_cost_usd == Decimal("0.001")
+
+
+@pytest.mark.asyncio
+async def test_loop_sums_cost_across_every_iteration_up_to_the_limit():
+    tool_response = 'TOOL_CALL: {"name": "read_file", "arguments": {"path": "x.py"}}'
+    engine = _make_costed_engine([(tool_response, Decimal("0.001"))] * 3)
+    result = await run_agent_loop("loop", engine, tools=_make_mock_registry(), max_iterations=3)
+
+    assert result.completed is False and "Max iterations" in result.error
+    assert result.total_cost_usd == Decimal("0.003")
+
+
+@pytest.mark.asyncio
+async def test_on_step_sees_the_step_cost():
+    engine = _make_costed_engine([("Final answer.", Decimal("0.0007"))])
+    seen: list[Decimal | None] = []
+    await run_agent_loop("x", engine, tools=_make_mock_registry(), on_step=lambda s: seen.append(s.cost_usd))
+    assert seen == [Decimal("0.0007")]
 
 
 # ---------------------------------------------------------------------------

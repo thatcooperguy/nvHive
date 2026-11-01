@@ -365,7 +365,7 @@ def servers_status(home_dir: str | Path | None = None) -> list[dict[str, Any]]:
 def _mcp_input_schema(schema: Any) -> dict[str, Any]:
     """The server's ``inputSchema`` as the tool's JSON Schema — kept whole, so native
     function calling gets the real shape and the Wizard view is derived from it
-    by :func:`nvh.core.tools.translate_parameters`, never re-typed here."""
+    by :func:`nvh.core.tools.parameters_from_json_schema`, never re-typed here."""
     if not isinstance(schema, dict) or not schema:
         return {"type": "object", "properties": {}}
     out = dict(schema)

@@ -47,6 +47,7 @@ import {
   installStudioModelsStream,
   executeWizardTool,
   followPlaybookJob,
+  getWizardContext,
   listPlaybooks,
   listWizardTools,
   type WizardToolExecuteResult,
@@ -58,6 +59,7 @@ import {
   PRIVILEGED_DISABLED_NOTE,
   PRIVILEGED_RUN_LABEL,
   PRIVILEGED_SUDO_NOTE,
+  hostOs,
   needsTerminal,
   planLines,
   playbookCardStatus,
@@ -65,8 +67,11 @@ import {
   playbookHandoffCommand,
   playbookOutcomeLabel,
   playbookRunStart,
+  systemChangesAvailable,
+  systemChangesUnavailableNote,
   terminalCommand,
   unwrapToolResult,
+  type HostOs,
   type PlaybookRunState,
   type ToolCardStatus,
 } from '@/lib/privileged';
@@ -892,6 +897,9 @@ export default function SetupPage() {
   const [savedKeys, setSavedKeys] = useState<Set<string>>(new Set());
   const [keyErrors, setKeyErrors] = useState<Record<string, string>>({});
   const [gpuInfo, setGpuInfo] = useState<GPUInfo | null>(null);
+  // The host OS from the Wizard context (`platform.os`); null until it answers
+  // or when it cannot. Decides whether the Spark playbooks section renders.
+  const [hostOsName, setHostOsName] = useState<HostOs | null>(null);
   const [gpuRecs, setGpuRecs] = useState<RecommendationsResult | null>(null);
   const [gpuLoading, setGpuLoading] = useState(false);
   const [comfyStatus, setComfyStatus] = useState<ComfyUIStatus | null>(null);
@@ -1359,6 +1367,18 @@ export default function SetupPage() {
         // GPU not available; leave null
       })
       .finally(() => setGpuLoading(false));
+
+    // Which OS the privileged tier is looking at. The Spark playbooks are
+    // Linux only (lib/privileged.ts "Host OS"): off Linux the studio step
+    // shows the server's sentence where the playbook section would be. A
+    // failed or platform-less answer leaves `null`, which keeps the section.
+    getWizardContext()
+      .then(ctx => {
+        if (!cancelled) setHostOsName(hostOs(ctx));
+      })
+      .catch(() => {
+        // The server's refusal still rules; the page just cannot pre-empt it.
+      });
 
     // Fetch ComfyUI status and curated example manifest for the visual workflow step.
     setComfyLoading(true);
@@ -5594,8 +5614,23 @@ export default function SetupPage() {
               </div>
             )}
 
-            {/* SPARK PLAYBOOKS — the privileged install tier, below the rootless pack grid */}
-            <SparkPlaybooksSection packs={studioPacks} />
+            {/* SPARK PLAYBOOKS — the privileged install tier, below the rootless pack grid.
+                Linux only: off Linux (Windows, Windows on Arm, macOS) the section is
+                replaced by the privileged tier's sentence (the one system_settings_apply
+                answers; playbook_plan / playbook_install refuse with their own sentence
+                that names the playbook, built from the same OS labels) instead of Plan
+                buttons whose Approve would refuse. Unknown OS keeps the section. */}
+            {systemChangesAvailable(hostOsName) === false ? (
+              <div className="space-y-2" id="spark-playbooks">
+                <div className="section-label">Spark playbooks</div>
+                <p className="text-xs font-mono text-[#a3a3a3] dark:text-[#737373]">
+                  {systemChangesUnavailableNote(hostOsName)}. The DGX Spark playbooks install with apt, systemd and sudo on
+                  DGX OS; the Wizard can still explain what each one does, and nothing here runs on this machine.
+                </p>
+              </div>
+            ) : (
+              <SparkPlaybooksSection packs={studioPacks} />
+            )}
           </div>
         )}
 

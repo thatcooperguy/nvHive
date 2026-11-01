@@ -266,13 +266,15 @@ async def _analyze_with_cloud(
                 {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_data}"}},
             ],
         }]
-        models_to_try = []
-        if os.environ.get("OPENAI_API_KEY"):
-            models_to_try.append(("openai", "gpt-5.6-terra"))
-        if os.environ.get("GOOGLE_API_KEY"):
-            models_to_try.append(("google", "gemini/gemini-3.7-flash"))
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            models_to_try.append(("anthropic", "claude-sonnet-5"))
+        # The spec table's defaults and key variables, so a model rename
+        # lands here with the provider row instead of drifting in a literal.
+        from nvh.providers.specs import PROVIDER_SPECS
+
+        models_to_try = [
+            (name, PROVIDER_SPECS[name].default_model)
+            for name in ("openai", "google", "anthropic")
+            if os.environ.get(PROVIDER_SPECS[name].key_env)
+        ]
 
         for provider_name, model in models_to_try:
             async def call(model=model):

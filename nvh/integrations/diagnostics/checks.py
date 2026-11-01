@@ -346,6 +346,86 @@ def _legacy_knowledge(ctx: CheckContext) -> CheckResult | None:
     return None
 
 
+@check("legacy_homes", "Legacy homes (pre-0.44)", DEEP)
+def _legacy_homes(ctx: CheckContext) -> CheckResult | None:
+    """The one-shot pre-0.44 home import, read-only: never runs it.
+
+    ``legacy_migration_status`` reads the marker, stats the old roots and lists
+    what a run would still copy; the import itself runs from key loading,
+    ``nvh config init``, ``load_config()`` and ``init_db`` — never from here, so
+    ``nvh status --deep`` cannot start a second migration. ``ctx.config`` is
+    deliberately not touched (loading it may run the import). Silent on a
+    fresh install: no old roots, no marker, no retired knob set.
+    """
+    from nvh.integrations.workspace.migrate_legacy import (
+        LEGACY_MIGRATION_ENV,
+        legacy_migration_status,
+    )
+    from nvh.integrations.workspace.storage import storage_layout
+
+    status = legacy_migration_status(storage_layout(ctx.home_dir))
+    data = status.as_dict()
+    roots = ", ".join(status.legacy_roots.values())
+    when = f"on {status.ran_at[:10]}" if status.ran_at else "(time not recorded)"
+    off = f"`{LEGACY_MIGRATION_ENV}=0` turns the import off"
+
+    if status.disabled:
+        detail = f"import disabled ({LEGACY_MIGRATION_ENV}=0)"
+        if status.already_done:
+            detail += f"; an earlier run was recorded {when}"
+        return CheckResult(status="skip", detail=detail, data=data)
+
+    if status.failed:
+        shown = "; ".join(f"{e.get('label', '?')}: {e.get('reason', '?')}" for e in status.failed[:3])
+        more = f" (+{len(status.failed) - 3} more)" if len(status.failed) > 3 else ""
+        return CheckResult(
+            status="warn",
+            detail=f"{len(status.failed)} item(s) could not be imported: {shown}{more}",
+            fix=(
+                "Fix the reason, then run any `nvh` command: the import retries until every "
+                f"item copies and only then records itself; {off}"
+            ),
+            data=data,
+        )
+
+    if status.already_done:
+        detail = (
+            f"imported {when}: {len(status.moved)} copied, {len(status.merged)} merged, "
+            f"{len(status.skipped)} skipped"
+        )
+        if status.legacy_roots:
+            detail += f"; old roots still present ({roots}) and can be removed once the copy is checked"
+        row = CheckResult(status="pass", detail=detail, data=data)
+    elif status.pending:
+        row = CheckResult(
+            status="warn",
+            detail=f"{len(status.pending)} item(s) in {roots} not yet imported into {status.layout_home}",
+            fix=f"Run `nvh config init` (or any command that loads keys) to import them now; {off}",
+            data=data,
+        )
+    elif status.legacy_roots:
+        row = CheckResult(
+            status="pass",
+            detail=f"old roots present ({roots}); every item already has a copy under {status.layout_home}",
+            data=data,
+        )
+    elif status.warnings:
+        return CheckResult(
+            status="warn",
+            detail="; ".join(status.warnings),
+            fix="Export NVH_STATE instead of the retired variable named above",
+            data=data,
+        )
+    else:
+        return None
+
+    if status.warnings:
+        row.status = "warn"
+        row.detail = f"{row.detail}; {'; '.join(status.warnings)}"
+        row.fix = row.fix or "Export NVH_STATE instead of the retired variable named above"
+    return row
+
+
 @check("receipts", "Install receipts", DEEP)
 def _receipts(ctx: CheckContext) -> CheckResult:
     from nvh.integrations.services.receipts import receipt_summary

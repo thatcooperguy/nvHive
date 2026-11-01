@@ -274,8 +274,10 @@ terminal card the user runs when a password is needed.
 1. **Mascot likeness.** Placeholder ships now; a Jensen sprite needs
    sign-off from the person and NVIDIA brand. Until then the manifest swap
    is documented in [MASCOT.md](../MASCOT.md).
-2. **Sudo default.** Proposed: privileged tools enabled when `can_sudo` is
-   true, every apply behind a red card, kill switch `NVH_ALLOW_PRIVILEGED=0`.
+2. **Sudo default.** Shipped in 0.44.0 (decision 15, 2026-10-31): the
+   privileged tier is on wherever sudo can be probed, every apply sits behind
+   a red card, `NVH_ALLOW_PRIVILEGED=0` turns it off; off Linux the tier
+   refuses in plain words (0.45).
 3. **Non-goals amendment.** "Everything works as an unprivileged user"
    stays true; add "and can do more, with approval, when the owner has
    root".

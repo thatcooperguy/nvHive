@@ -25,9 +25,11 @@ import {
   PRIVILEGED_DISABLED_NOTE,
   PRIVILEGED_RUN_LABEL,
   PRIVILEGED_SUDO_NOTE,
+  SYSTEM_CHANGES_UNAVAILABLE,
   applyPlaybookEvent,
   cardChrome,
   historyToolOutcome,
+  hostOs,
   initialPlaybookRun,
   isPendingStatus,
   isPrivilegedCall,
@@ -49,6 +51,8 @@ import {
   playbookStepIndex,
   playbookStepNumber,
   settlePlaybookRun,
+  systemChangesAvailable,
+  systemChangesUnavailableNote,
   terminalCommand,
   unwrapToolResult,
 } from './privileged.ts';
@@ -873,4 +877,51 @@ test('playbookProgressLabel: step N of total while running, counts settled steps
   assert.equal(playbookProgressLabel(s), 'step 1 of 3', 'one settled step, none running');
   const noTotal = applyPlaybookEvent(initialPlaybookRun({ job_id: 'j', playbook: '', steps_total: 0 }), { event: 'step', status: 'running', message: '', step: 0 });
   assert.equal(playbookProgressLabel(noTotal), 'step 1');
+});
+
+// ─── hostOs / systemChangesAvailable / systemChangesUnavailableNote ──────────
+//
+// The privileged tier is Linux only (system_settings.system_changes_unavailable);
+// the page reads the OS off the Wizard context's `platform` block.
+
+test('hostOs: reads platform.os from the Wizard context, normalises case, and is null without one', () => {
+  assert.equal(hostOs({ platform: { os: 'linux', device_class: 'dgx-spark' } }), 'linux');
+  assert.equal(hostOs({ platform: { os: 'windows', windows_on_arm: true } }), 'windows');
+  assert.equal(hostOs({ platform: { os: 'Windows ' } }), 'windows', 'case and whitespace are the server\'s business, not a different answer');
+  assert.equal(hostOs({ platform: { os: 'macos' } }), 'macos');
+  assert.equal(hostOs({ platform: { os: 'freebsd' } }), 'unknown', 'an OS the server does not name is unknown, like PlatformFacts.os');
+  assert.equal(hostOs({ platform: { os: 'unknown' } }), 'unknown');
+  // No answer: an older API without a platform block, an empty os, a failed call, junk.
+  assert.equal(hostOs({ platform: { device_class: 'unknown' } }), null);
+  assert.equal(hostOs({ platform: { os: '' } }), null);
+  assert.equal(hostOs({ platform: { os: 7 } }), null);
+  assert.equal(hostOs({ platform: null }), null);
+  assert.equal(hostOs({}), null);
+  assert.equal(hostOs(null), null);
+  assert.equal(hostOs(undefined), null);
+  assert.equal(hostOs('linux'), null, 'a bare string is not a context');
+});
+
+test('systemChangesAvailable: true on Linux, false wherever the server refuses, null when the OS is not known', () => {
+  assert.equal(systemChangesAvailable('linux'), true);
+  assert.equal(systemChangesAvailable('windows'), false);
+  assert.equal(systemChangesAvailable('macos'), false);
+  assert.equal(systemChangesAvailable('unknown'), false, 'the server refuses an unknown OS too');
+  assert.equal(systemChangesAvailable(null), null);
+  assert.equal(systemChangesAvailable(undefined), null);
+  // The page's rule: hide the Spark section only on a definite "no".
+  for (const os of ['linux', null, undefined]) assert.notEqual(systemChangesAvailable(os), false, String(os));
+});
+
+test('systemChangesUnavailableNote: the server\'s sentence, word for word, per OS', () => {
+  assert.equal(SYSTEM_CHANGES_UNAVAILABLE, 'System changes are not available on {os} yet');
+  assert.equal(systemChangesUnavailableNote('windows'), 'System changes are not available on Windows yet');
+  assert.equal(systemChangesUnavailableNote('macos'), 'System changes are not available on macOS yet');
+  assert.equal(systemChangesUnavailableNote('unknown'), 'System changes are not available on this platform yet');
+  assert.equal(systemChangesUnavailableNote(null), 'System changes are not available on this platform yet');
+  assert.equal(systemChangesUnavailableNote(undefined), 'System changes are not available on this platform yet');
+  // Linux never shows the note, but the helper still answers rather than throwing.
+  assert.equal(systemChangesUnavailableNote('linux'), 'System changes are not available on this platform yet');
+  // One sentence, no trailing stop: the page adds its own punctuation.
+  assert.doesNotMatch(systemChangesUnavailableNote('windows'), /[.!]$/);
 });

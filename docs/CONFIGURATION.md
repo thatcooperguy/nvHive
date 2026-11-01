@@ -446,6 +446,23 @@ have checked the copy. `NVH_LEGACY_MIGRATION=0` turns the whole thing off.
 (the migration warns while it is still set). `nvh snapshot` reads the
 database from wherever `NVH_STATE` puts it.
 
+`nvh status --deep` (alias `nvh doctor`) shows the import's state as the
+**Legacy homes (pre-0.44)** row (`legacy_homes`, next to the legacy
+knowledge-base row). The row is read-only: it reads
+`$NVH_STATE/legacy-migration.json`, checks which old roots still exist and
+lists what a run would still copy, and it never runs the import itself, so a
+diagnostic cannot start a second migration. A recorded import passes and
+reports how many items were copied, merged and skipped, naming the old roots
+while they are still present so you know they can be removed once you have
+checked the copy. Items the import would still copy warn with their count and
+the command that runs it (`nvh config init`, or any command that loads keys).
+An item the import could not copy when this command's own startup ran it
+warns with the item and the reason; the import retries on the next command
+and records itself only when every item copies. `NVH_LEGACY_MIGRATION=0`
+shows as a skipped row that names the switch, and a still-set `HIVE_DATA_DIR`
+warns with the `NVH_STATE` replacement. On a fresh install with no old roots
+and no marker the row is absent.
+
 ## Environment variables
 
 Storage overrides are in the table above. Everything else nvHive reads:
@@ -475,7 +492,7 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVH_FIREFOX_PROFILE` | `$NVH_STATE/browser-profiles/desktop` | isolated Firefox profile directory |
 | `NVH_SANDBOX_REQUIRE_DOCKER` | unset | `1`/`true`/`yes`: refuse `run_code`/`shell` instead of falling back to an unisolated subprocess (`nvh do --sandbox` sets it). Applies to the CLI/agent tools and to the Wizard's `shell` card, whose plan then reads "refused — Docker is unavailable and isolation is required" and executes nothing. The Wizard's `run_code` ignores this variable because it always requires Docker ([Tools](#tools)) |
 | `NVH_SANDBOX` | unset | pre-0.42 spelling of `NVH_SANDBOX_REQUIRE_DOCKER`, honoured for one more release; truthy fails closed the same way |
-| `NVH_ALLOW_PRIVILEGED` | unset (on) | `0`/`false`/`no`/`off` disables the Wizard's `privileged` tools (`system_settings_apply`, `apt_install`, `snap_install`, `service_enable`, `playbook_install`, `shell`): they stay listed with `enabled: false` and every call is refused naming this variable. Privileged tools always need a click on a red card showing the exact commands, use `sudo -n` only where the once-per-process probe found passwordless sudo, otherwise hand the command to a terminal, and record every apply that touched the host (complete, partial or failed) under the vault's `Decisions/`. The card carries an approval token bound to that exact call (15 minutes, single use) that the confirmed call must return; a confirmed call is also refused when the API runs in open mode (no `HIVE_API_KEY`) on a non-loopback bind, or arrives with a `Host`/`Origin` that is neither loopback nor in `HIVE_CORS_ORIGINS`. nvHive never prompts for, sees or stores a sudo password. Spark playbooks whose steps need sudo ([GETTING_STARTED.md](GETTING_STARTED.md#spark-playbooks)) obey it through `playbook_install`; the CLI path `nvh playbook install <id>` is not gated — it runs in your own terminal, where `sudo` prompts you directly |
+| `NVH_ALLOW_PRIVILEGED` | unset (on) | `0`/`false`/`no`/`off` disables the Wizard's `privileged` tools (`system_settings_apply`, `apt_install`, `snap_install`, `service_enable`, `playbook_install`, `shell`): they stay listed with `enabled: false` and every call is refused naming this variable. Privileged tools always need a click on a red card showing the exact commands, use `sudo -n` only where the once-per-process probe found passwordless sudo, otherwise hand the command to a terminal, and record every apply that touched the host (complete, partial or failed) under the vault's `Decisions/`. The card carries an approval token bound to that exact call (15 minutes, single use) that the confirmed call must return; a confirmed call is also refused when the API runs in open mode (no `HIVE_API_KEY`) on a non-loopback bind, or arrives with a `Host`/`Origin` that is neither loopback nor in `HIVE_CORS_ORIGINS`. nvHive never prompts for, sees or stores a sudo password. Spark playbooks whose steps need sudo ([GETTING_STARTED.md](GETTING_STARTED.md#spark-playbooks)) obey it through `playbook_install`; the CLI path `nvh playbook install <id>` is not gated — it runs in your own terminal, where `sudo` prompts you directly. The privileged tier is on by default on every platform where sudo can be probed; `NVH_ALLOW_PRIVILEGED=0` turns it off, and on Windows device changes are refused with a plain message (0.45). |
 | `NVH_BOOT_PREFLIGHT`, `NVH_BOOT_AUTO_REPAIR` | `1`, `1` | run the boot preflight at API start; let it apply safe repairs |
 | `NVH_TARGET_VM_VALIDATED` | unset | `1` after the target-VM checklist; gates `production-ready` |
 | `NVH_API_URL` | `http://127.0.0.1:8000` | API server the `nvh status --smoke` / `--report` probes exercise (`nvh test --api URL` sets it); requests carry `Authorization: Bearer $HIVE_API_KEY` when that is set |
@@ -486,7 +503,7 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVH_RAG_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model for the RAG store |
 | `NVH_RAG_AUTO_PULL` | `1` | `0` stops the embedder pulling a missing embedding model on first use |
 | `NVH_WIZARD_PLUGIN_DIR` | `$NVH_HOME/plugins/` | directory of `.py` files exposing `register(reg)` that add Wizard tools — the one plugins directory, shared with provider plugins (only files that declare `register` are executed by the Wizard; `$NVH_HOME/wizard-tools/` is still read for one more release) |
-| `NVH_LEGACY_MIGRATION` | unset (on) | `0` disables the one-shot copy of the pre-0.44 `~/.hive` / `~/.council` / `~/nvh` files into `$NVH_HOME` (see [Legacy homes](#legacy-homes-pre-044)) |
+| `NVH_LEGACY_MIGRATION` | unset (on) | `0` disables the one-shot copy of the pre-0.44 `~/.hive` / `~/.council` / `~/nvh` files into `$NVH_HOME` (see [Legacy homes](#legacy-homes-pre-044)); `nvh status --deep` then shows the `legacy_homes` row as skipped |
 | `NVH_WIZARD_AUTOFOLD_VAULT` | `1` | `0` stops the Wizard folding a strongly matching vault note into its system prompt |
 | `NVH_SEARXNG_URL`, `BRAVE_API_KEY` | unset | backends for the one `web_search` implementation (the Wizard tool and the agent tool): SearXNG wins, then Brave, then key-free DuckDuckGo |
 | `HASS_URL` | unset | Home Assistant instance the Wizard's `home_assistant_*` tools talk to (`HOME_ASSISTANT_URL` is accepted too). Required whenever `HASS_TOKEN` is set — no address is ever guessed, so the token is never sent to whichever host answers an mDNS name. Prefer `https://`; plain `http://` is accepted only for loopback, RFC 1918 / IPv6-ULA addresses and `.local` names, and `home_assistant_status` then reports `insecure_transport: true` |
@@ -529,23 +546,27 @@ re-reads it.
 drawer, `POST /v1/council`, the MCP `council` tool) picks a preset panel from
 `nvh.core.agents.COUNCIL_PRESETS`. `nvh agent presets` lists them live; `nvh
 agent analyze "question" -n 5` previews the panel `--auto-agents` would
-generate instead.
+generate instead. The table is generated from `COUNCIL_PRESETS` and
+`PRESET_DESCRIPTIONS` (the summary the MCP `list_cabinets` tool shows) by
+`scripts/gen_config_doc.py`.
 
-| Cabinet | Members |
-|---|---|
-| `executive` | CTO, CEO / Business Strategist, CFO / Financial Analyst, Product Manager |
-| `engineering` | Software Architect, Senior Backend Engineer, DevOps/SRE Engineer, Security Engineer, QA/Test Engineer |
-| `security_review` | Software Architect, DevOps/SRE Engineer, Security Engineer, Legal/Compliance Advisor |
-| `code_review` | Software Architect, Senior Backend Engineer, QA/Test Engineer, Performance Engineer |
-| `product` | CEO / Business Strategist, Product Manager, UX Designer, Engineering Manager |
-| `product_resilience` | DevOps/SRE Engineer, ML/AI Engineer, Product Manager, UX Designer, Underdog Student Advocate, QA/Test Engineer |
-| `data` | Software Architect, Database Administrator, Data Engineer, ML/AI Engineer |
-| `full_board` | CTO, Software Architect, Senior Backend Engineer, DevOps/SRE Engineer, Security Engineer, CEO / Business Strategist, CFO / Financial Analyst |
-| `homework_help` | Patient Tutor, Devil's Advocate, Study Coach |
-| `code_tutor` | Code Mentor, Bug Hunter, Best Practices Reviewer |
-| `essay_review` | Writing Coach, Logic Checker, Style Editor |
-| `study_group` | Socratic Questioner, ELI5 Explainer, Practice Problem Generator |
-| `exam_prep` | Exam Coach, Flashcard Creator, Weak Spot Finder |
+<!-- BEGIN GENERATED: council-cabinets -->
+| Cabinet | Members | Summary |
+|---|---|---|
+| `executive` | CTO, CEO / Business Strategist, CFO / Financial Analyst, Product Manager | CTO, CEO, CFO, Product Manager — strategic decisions |
+| `engineering` | Software Architect, Senior Backend Engineer, DevOps/SRE Engineer, Security Engineer, QA/Test Engineer | Architect, Backend, DevOps/SRE, Security, QA — technical decisions |
+| `security_review` | Software Architect, DevOps/SRE Engineer, Security Engineer, Legal/Compliance Advisor | Security analysts — vulnerability assessment |
+| `code_review` | Software Architect, Senior Backend Engineer, QA/Test Engineer, Performance Engineer | Senior engineers — code quality review |
+| `product` | CEO / Business Strategist, Product Manager, UX Designer, Engineering Manager | CEO, Product Manager, UX Designer, Engineering Manager — product decisions |
+| `product_resilience` | DevOps/SRE Engineer, ML/AI Engineer, Product Manager, UX Designer, Underdog Student Advocate, QA/Test Engineer | Student advocate, PM, UX, SRE, QA, ML — onboarding and failure-mode review |
+| `data` | Software Architect, Database Administrator, Data Engineer, ML/AI Engineer | Architect, DBA, Data Engineer, ML/AI Engineer — data analysis |
+| `full_board` | CTO, Software Architect, Senior Backend Engineer, DevOps/SRE Engineer, Security Engineer, CEO / Business Strategist, CFO / Financial Analyst | CTO, Architect, Backend, DevOps/SRE, Security, CEO, CFO — the widest panel |
+| `homework_help` | Patient Tutor, Devil's Advocate, Study Coach | Tutors across subjects — student help |
+| `code_tutor` | Code Mentor, Bug Hunter, Best Practices Reviewer | Programming mentors — learn to code |
+| `essay_review` | Writing Coach, Logic Checker, Style Editor | Writing coaches — improve essays |
+| `study_group` | Socratic Questioner, ELI5 Explainer, Practice Problem Generator | Study partners — exam prep |
+| `exam_prep` | Exam Coach, Flashcard Creator, Weak Spot Finder | Test prep specialists — practice questions |
+<!-- END GENERATED: council-cabinets -->
 
 Strategies: `weighted_consensus` (default; `--weights groq=0.5,google=0.5`),
 `majority_vote`, `best_of`. `--members` picks advisors explicitly,
@@ -601,6 +622,47 @@ redacted from outputs and long outputs are truncated. The deny list is applied
 to the argument each tool actually executes — `command` for `shell`, `code` for
 `run_code`.
 
+The AI Wizard's registry starts from the stock set below (`default_registry()`
+in `nvh/integrations/wizard/tools.py`; the table is generated from it by
+`scripts/gen_config_doc.py`, in the order `list_tools()` returns: by class,
+then by name). At run time the registry also gains packaged plugins
+(`nvh.wizard_tools` entry points), `.py` plugins from `NVH_WIZARD_PLUGIN_DIR`
+and the cached tools of attached MCP servers (`mcp_<server>_<tool>`,
+confirm-class unless the server's `auto_approve` list names them); those
+depend on the machine and are not listed.
+
+<!-- BEGIN GENERATED: wizard-tools -->
+| Tool | Class | What it does |
+|---|---|---|
+| `analyze_image` | auto | Look at an image the user attached (or a screenshot) and describe it or answer a question about it — contents, UI elements, charts, error dialogs. |
+| `diagnose` | auto | Refresh and return the current diagnostic findings (GPU, storage, providers, models, runtime). |
+| `home_assistant_entities` | auto | List Home Assistant entities (lights, switches, sensors, climate, ...) with their current state, optionally filtered by domain and/or a name search. |
+| `home_assistant_services` | auto | List the services Home Assistant exposes, per domain. |
+| `home_assistant_state` | auto | Read one Home Assistant entity's current state and attributes by exact entity_id. |
+| `home_assistant_status` | auto | Check the connection to the user's Home Assistant instance: whether HASS_URL/HASS_TOKEN are set, whether the API answers, and its version. |
+| `playbook_list` | auto | List the DGX Spark playbooks nvHive can run (Ollama, Open WebUI, ComfyUI, vLLM, llama.cpp, LM Studio, Tailscale, VS Code, DGX Dashboard, CLI coding agents, OpenClaw, NemoClaw): which steps need sudo, the manual steps, time and disk estimates, a rootless studio-pack alternative where one exists, and whether the install receipt says it is installed. |
+| `playbook_plan` | auto | Dry run of one Spark playbook: the exact commands in order, which run with sudo, the manual steps (browser logins, TUIs, foreground servers), how to verify, how to undo, estimates and warnings. |
+| `rag_ask` | auto | Search the local RAG index for chunks relevant to a question and return them with source citations. |
+| `rag_ask_vault` | auto | Search the nvHive Vault (user's own Markdown notes) for chunks relevant to a question. |
+| `read_text_from_image` | auto | Read all visible text out of an image (OCR via the vision model) — terminal screenshots, error messages, photographed labels or documents. |
+| `refresh_models` | auto | Re-query the local Ollama daemon for installed models so the picker stays fresh. |
+| `repair_workspace` | auto | Run the idempotent rootless safe-repair pass: env file, catalog cache, ComfyUI examples, model list, config validation. |
+| `system_settings_get` | auto | Read-only facts about this machine: hostname, DGX OS / distro version, kernel, NVIDIA driver and CUDA version, whether sudo is passwordless, docker group membership, the GNOME auto-suspend setting, ufw status, Tailscale state and unattended-upgrades. |
+| `system_settings_plan` | auto | Dry run of a catalogue system setting: the exact commands it would run, whether sudo is needed, what changes and how to undo it. |
+| `validate_provider_key` | auto | Validate an API key against its provider's health endpoint. |
+| `web_search` | auto | Run a web search via the active backend (SearXNG, Brave, or DuckDuckGo) and return top hits with title, URL, and snippet. |
+| `home_assistant_call` | confirm | Call a Home Assistant service, e.g. light.turn_on on light.kitchen with data {"brightness_pct": 40}. |
+| `rag_ingest` | confirm | Walk a folder, chunk + embed every text/source file, and store under a RAG collection. |
+| `run_code` | confirm | Execute a code snippet (python, javascript or bash) in the Docker sandbox: no network, read-only image, memory and time limits. |
+| `save_provider_key` | confirm | Save a validated API key to the rootless workspace config so the engine can use it. |
+| `apt_install` | privileged | Install Debian packages with `apt-get install -y --no-install-recommends` (sudo). |
+| `playbook_install` | privileged | Install a Spark playbook on this machine (steps may use sudo; Linux only). |
+| `service_enable` | privileged | Enable a systemd unit at boot and start it now: `systemctl enable --now <unit>` (sudo). |
+| `shell` | privileged | Run one shell command in the agent workspace (NVH_PROJECTS, default $NVH_HOME/projects). |
+| `snap_install` | privileged | Install snap packages with `snap install` (sudo). |
+| `system_settings_apply` | privileged | Apply a catalogue system setting on this machine (usually with sudo). |
+<!-- END GENERATED: wizard-tools -->
+
 ### Code and images from the Wizard chat
 
 The AI Wizard bridges four of the tools above into its own registry
@@ -611,6 +673,25 @@ and waits for a click, **privileged** shows a red card with the exact commands,
 carries a single-use approval token and is recorded under the vault's
 `Decisions/` (see `NVH_ALLOW_PRIVILEGED` above, which disables the class
 outright).
+
+The privileged tier is Linux only. Off Linux (Windows, Windows on Arm, macOS)
+`system_settings_apply`, `apt_install`, `snap_install`, `service_enable` and
+any sudo step refuse before anything runs with the sentence `System changes
+are not available on Windows yet` (`unsupported_host: true`, `applied:
+false`, no vault note) and never prepend `sudo`; `system_settings_plan` still
+renders and carries that sentence as its last note, and `playbook_install`
+(like `nvh playbook plan` / `install`) refuses with its own sentence while
+the catalogue stays listed. `system_settings_get` reports `platform.os`,
+`sudo.host_probe_pending` (true while the privilege probe is still running,
+so `can_sudo` / `in_sudo_group` are placeholders) and `system_changes:
+{available, note}`. On Linux the tier is on wherever sudo can be probed;
+`NVH_ALLOW_PRIVILEGED=0` turns it off.
+
+Under native function calling (a provider that vouches for the model) the
+Wizard's system prompt carries a short tool block — the safety-class rules,
+tool names by class and the TOOL_RESULT / privileged-outcome instructions —
+instead of the `TOOL_CALL:` text protocol and schema list; the channel is
+decided once per turn and both channels are still read.
 
 | Wizard tool | Class | Rules |
 |---|---|---|

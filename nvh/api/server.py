@@ -3708,6 +3708,7 @@ async def smart_query(request: QueryRequest, _auth: None = Depends(require_auth)
                 "completed": result.completed,
                 "steps": result.total_iterations,
                 "tool_calls": result.total_tool_calls,
+                "total_cost_usd": _decimal_to_str(result.total_cost_usd),
             })
         except Exception as exc:
             return _response_envelope({

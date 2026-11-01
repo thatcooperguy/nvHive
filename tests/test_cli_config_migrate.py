@@ -148,9 +148,12 @@ class TestRenameTable:
         assert rename_retired_model("together", "meta/llama-3.1-70b-instruct") is None
 
     def test_llm7_maps_to_its_own_lineup(self):
-        assert rename_retired_model("llm7", "gpt-4o-mini") == "gpt-oss"
-        assert rename_retired_model("llm7", "deepseek-r1-0528") == "gpt-oss"
-        assert rename_retired_model("llm7", "llama-3.3-70b") == "minimax-m2.7"
+        assert rename_retired_model("llm7", "gpt-4o-mini") == "gpt-oss:20b"
+        assert rename_retired_model("llm7", "deepseek-r1-0528") == "gpt-oss:20b"
+        assert rename_retired_model("llm7", "llama-3.3-70b") == "minimax-m3"
+        # The 2026-10 bare ids are retired in turn: the anonymous list serves the tagged ones.
+        assert rename_retired_model("llm7", "gpt-oss") == "gpt-oss:20b"
+        assert rename_retired_model("llm7", "minimax-m2.7") == "minimax-m3"
 
     def test_deepseek_reasoner_keeps_the_reasoning_tier(self):
         # The same model `nvh math` pins for deepseek — not the flash tier.
@@ -199,8 +202,8 @@ class TestMigrateConfigData:
         assert advisors["openai"]["fallback_model"] == "gpt-5.6-luna"
         assert advisors["groq"]["default_model"] == "groq/openai/gpt-oss-120b"
         assert advisors["groq"]["fallback_model"] == "groq/openai/gpt-oss-20b"
-        assert advisors["llm7"]["default_model"] == "gpt-oss"
-        assert advisors["llm7"]["fallback_model"] == "gpt-oss"
+        assert advisors["llm7"]["default_model"] == "gpt-oss:20b"
+        assert advisors["llm7"]["fallback_model"] == "gpt-oss:20b"
         assert advisors["nvidia"]["default_model"] == "nvidia_nim/meta/llama-3.3-70b-instruct"
         assert advisors["nvidia"]["fallback_model"] == "nvidia_nim/meta/llama-3.1-8b-instruct"
         # Not retired: untouched, including disabled blocks.
@@ -232,7 +235,7 @@ class TestMigrateConfigData:
 
         raw = {"defaults": {"provider": "llm7", "model": "gpt-4o"}}
         out, _ = migrate_config_data(raw)
-        assert out["defaults"]["model"] == "gpt-oss"
+        assert out["defaults"]["model"] == "gpt-oss:20b"
 
     def test_input_not_mutated(self):
         raw = yaml.safe_load(SHIPPED_CONFIG)

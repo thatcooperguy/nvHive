@@ -48,8 +48,8 @@ UNKNOWN_TO_LITELLM: dict[str, str] = {
     "huggingface/openai/gpt-oss-20b": "DB has no huggingface/ rows; billed by the upstream provider",
     # LLM7: an OpenAI-compatible endpoint LiteLLM does not know (openai/ route,
     # base_url, zero_cost); its bare IDs appear under no key.
-    "gpt-oss": "llm7 bare ID on the openai/ route; LiteLLM has no llm7 provider (zero_cost)",
-    "minimax-m2.7": "llm7 bare ID on the openai/ route; LiteLLM has no llm7 provider (zero_cost)",
+    "gpt-oss:20b": "llm7 bare ID on the openai/ route; LiteLLM has no llm7 provider (zero_cost)",
+    "minimax-m3": "llm7 bare ID on the openai/ route; LiteLLM has no llm7 provider (zero_cost)",
     # NVIDIA NIM: the DB's only nvidia_nim/ rows are rerankers.
     "nvidia_nim/meta/llama-3.3-70b-instruct": "DB's only nvidia_nim/ rows are rerankers",
     "nvidia_nim/meta/llama-3.1-8b-instruct": "DB's only nvidia_nim/ rows are rerankers",

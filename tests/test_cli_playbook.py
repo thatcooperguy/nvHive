@@ -275,14 +275,31 @@ class TestPlan:
         assert "curl -fsSL https://ollama.com/install.sh | sh" in out  # the upstream one-liner, verbatim
         assert plan["rootless_alternative"] and f"nvh studio --install {plan['rootless_alternative']} -y" in out
 
-    def test_unpinned_vendor_download_is_flagged_without_the_pipe_wording(self, runner: CliRunner):
+    def test_vscode_is_verified_against_the_manifest_and_carries_no_unpinned_flag(self, runner: CliRunner):
         plan = pb.plan_dict("vscode")
-        assert plan["unpinned"] and all(step["unpinned"] for step in plan["steps"])
+        assert plan["unpinned"] is False and not any(step["unpinned"] for step in plan["steps"])
         out = _one_line(runner.invoke(cli_main.app, ["playbook", "plan", "vscode"]).output)
-        assert "unpinned download" in out and "no version pin or checksum" in out
-        assert "pipe-to-shell" not in out  # a .deb is not a script piped into a shell
-        assert "sudo dpkg -i vscode-arm64.deb" in out  # the upstream commands, verbatim
-        assert out.count("unpinned download") == 2  # once per step, and not repeated as a plan note
+        assert "unpinned" not in out and "pipe-to-shell" not in out  # verified before apt, so no unpinned wording at all
+        assert "sha256" in out and "python3 -I -c" in out  # the verify step and its command are on the card
+        assert pb.VSCODE_SHA_MANIFEST_URL in out  # the manifest it is verified against, in the fetch step and the notes
+        assert "[sudo] Install VS Code" in out and "(1 of 5 need it)" in out  # apt is the only sudo step
+
+    def test_off_linux_plan_refuses_in_plain_words_and_exits_1(self, runner: CliRunner):
+        _seed(os="windows", in_sudo_group=True)
+        result = runner.invoke(cli_main.app, ["playbook", "plan", "vscode"])
+        assert result.exit_code == 1
+        out = _one_line(result.output)
+        assert "Spark playbooks run on Linux (DGX OS)" in out and "reports Windows" in out and "nothing was changed" in out
+        assert "$ " not in out  # no command is rendered for a host that cannot run it
+        assert "nvh playbook list shows the catalogue" in out
+        # The catalogue itself still lists everywhere.
+        listed = runner.invoke(cli_main.app, ["playbook", "list"])
+        assert listed.exit_code == 0 and _cells(listed.output, "vscode")[1] == pb.get_playbook("vscode").title
+
+    def test_source_is_todays_upstream_folder(self, runner: CliRunner):
+        out = _one_line(runner.invoke(cli_main.app, ["playbook", "plan", "ollama"]).output)
+        assert pb.UPSTREAM_TREE + "playbook-llms" in out  # ollama's steps come from the generic "Run Local LLMs" guide
+        assert pb.UPSTREAM_TREE + "ollama" + " " not in out
 
     def test_docker_playbook_names_the_usermod_step_and_the_stop(self, runner: CliRunner):
         result = runner.invoke(cli_main.app, ["playbook", "plan", "open-webui"])
@@ -347,7 +364,7 @@ class TestInstall:
         assert result.exit_code == 1
         out = _plain(result.output)
         # The library's question (one copy, `_confirm_question`), asked through typer.confirm.
-        assert "Run 2 command(s) (1 with sudo) for the vscode playbook?" in _one_line(out)
+        assert "Run 5 command(s) (1 with sudo) for the vscode playbook?" in _one_line(out)
         assert "Cancelled." in out
         assert len(fake_run.calls) == 1 and fake_run.calls[0]["assume_yes"] is False
         assert "STEP" not in out and "Receipt:" not in out  # the runner returned canceled before any step
@@ -357,7 +374,7 @@ class TestInstall:
         result = runner.invoke(cli_main.app, ["playbook", "install", "vscode"], input="n\n")
         assert result.exit_code == 1, result.output
         out = _plain(result.output)
-        assert "Run 2 command(s) (1 with sudo) for the vscode playbook?" in _one_line(out) and "Cancelled." in out
+        assert "Run 5 command(s) (1 with sudo) for the vscode playbook?" in _one_line(out) and "Cancelled." in out
         assert not (tmp_path / "receipts" / "playbook_vscode.json").exists()  # nothing ran, nothing recorded
         assert not (tmp_path / "vault" / "Decisions").exists()
 
@@ -440,6 +457,14 @@ class TestInstall:
         assert result.exit_code == 1
         assert "unknown playbook 'nope'" in _plain(result.output)
         assert fake_run.calls == []
+
+    def test_off_linux_install_refuses_before_the_runner_is_called(self, runner: CliRunner, fake_run: FakeTerminalRun):
+        _seed(os="macos", in_sudo_group=True)
+        result = runner.invoke(cli_main.app, ["playbook", "install", "vscode", "-y"])
+        assert result.exit_code == 1
+        out = _one_line(result.output)
+        assert "Spark playbooks run on Linux (DGX OS)" in out and "reports macOS" in out
+        assert fake_run.calls == [] and "STEP" not in out and "Receipt:" not in out
 
     def test_manual_only_playbook_asks_a_different_question(self, runner: CliRunner, monkeypatch):
         plan = pb.plan_dict("dgx-dashboard")
@@ -538,8 +563,13 @@ def test_docs_describe_the_approval_model_without_hand_typed_counts():
     root = Path(__file__).resolve().parents[1]
     getting_started = (root / "docs" / "GETTING_STARTED.md").read_text(encoding="utf-8")
     assert "## Spark playbooks" in getting_started
-    for phrase in ("nvh playbook list", "nvh playbook plan", "nvh playbook install", "never executes", "Decisions/", "never `newgrp`"):
+    for phrase in (
+        "nvh playbook list", "nvh playbook plan", "nvh playbook install", "never executes", "Decisions/", "never `newgrp`",
+        "nvidia/playbook-<name>/", "check_playbook_upstream.py", "after the current step", "Microsoft's published manifest",
+        "Linux only",
+    ):
         assert phrase in getting_started, phrase
+    assert "unpinned download" not in getting_started  # no shipped step installs an unverified vendor package any more
     configuration = (root / "docs" / "CONFIGURATION.md").read_text(encoding="utf-8")
     row = next(ln for ln in configuration.splitlines() if "`NVH_ALLOW_PRIVILEGED`" in ln)
     assert "playbook_install" in row and "nvh playbook install <id>" in row

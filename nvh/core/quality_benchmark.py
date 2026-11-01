@@ -25,6 +25,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from nvh.data import bundled_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -149,7 +151,7 @@ class QualityBenchmarkReport(BaseModel):
 def load_dataset(path: Path | None = None) -> list[BenchmarkPrompt]:
     """Load benchmark prompts from YAML file or built-in defaults."""
     if path and path.is_file():
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         raw_prompts = data.get("prompts", [])
         return [BenchmarkPrompt(**p) for p in raw_prompts]
@@ -158,8 +160,7 @@ def load_dataset(path: Path | None = None) -> list[BenchmarkPrompt]:
 
 def _builtin_prompts() -> list[BenchmarkPrompt]:
     """Return the built-in benchmark dataset."""
-    pkg_dir = Path(__file__).parent.parent / "config"
-    yaml_path = pkg_dir / "quality_benchmarks.yaml"
+    yaml_path = bundled_path("config", "quality_benchmarks.yaml")
     if yaml_path.is_file():
         return load_dataset(yaml_path)
 

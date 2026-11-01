@@ -560,7 +560,7 @@ async def _run_do_command_async(task: str, session: ReplSession, engine: Engine)
     console.print(
         f"\n[dim]{result.total_iterations} step(s) | "
         f"{result.total_tool_calls} tool call(s) | "
-        f"{elapsed:.1f}s | {status}[/dim]\n"
+        f"{elapsed:.1f}s | ${result.total_cost_usd:.4f} | {status}[/dim]\n"
     )
     if result.error and not result.completed:
         console.print(f"[dim yellow]Note: {result.error}[/dim yellow]\n")

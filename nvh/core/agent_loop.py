@@ -29,6 +29,7 @@ import inspect
 import json
 import logging
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from nvh.core.tools import (
@@ -54,6 +55,9 @@ class AgentStep:
     tool_calls: list[dict] # tools the agent wants to use: [{"tool": name, "args": {...}}]
     tool_results: list[ToolResult]
     response: str          # the agent's response after tool use
+    # What the provider said this step's one completion cost; ``None`` when
+    # the response carried no usable ``cost_usd`` (not ``$0``: unknown).
+    cost_usd: Decimal | None = None
 
 
 @dataclass
@@ -66,6 +70,9 @@ class AgentResult:
     total_tool_calls: int
     completed: bool        # did it finish naturally or hit limit?
     error: str = ""
+    # The sum of every step's ``cost_usd``; a step whose provider reported no
+    # cost adds nothing, so this is a floor, not a guess.
+    total_cost_usd: Decimal = Decimal("0")
 
 
 DESKTOP_AGENT_SUPPLEMENT = """
@@ -252,6 +259,29 @@ def _step_result(name: str, outcome: Any) -> ToolResult:
     return ToolResult(tool_name=name, success=True, output=str(outcome))
 
 
+def response_cost_usd(response: Any) -> Decimal | None:
+    """The ``cost_usd`` one completion reported, as a finite ``Decimal``, or ``None``.
+
+    Providers put a ``Decimal`` on :class:`~nvh.providers.base.CompletionResponse`
+    (``Decimal("0")`` for local models and cache hits); a stream's final chunk
+    or a test double may carry ``None``, a float, a string or nothing usable.
+    Only a finite number counts — anything else is "unknown", never ``$0``.
+    """
+    value = getattr(response, "cost_usd", None)
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, Decimal):
+        cost = value
+    elif isinstance(value, (int, float, str)):
+        try:
+            cost = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return None
+    else:
+        return None
+    return cost if cost.is_finite() else None
+
+
 async def run_agent_loop(
     task: str,
     engine,
@@ -304,6 +334,7 @@ async def run_agent_loop(
 
     steps: list[AgentStep] = []
     total_tool_calls = 0
+    total_cost = Decimal("0")
 
     for iteration in range(max_iterations):
         # Get LLM response
@@ -327,7 +358,13 @@ async def run_agent_loop(
                 total_tool_calls=total_tool_calls,
                 completed=False,
                 error=str(e),
+                total_cost_usd=total_cost,
             )
+
+        # The provider's own figure for this one call; unknown adds nothing.
+        step_cost = response_cost_usd(response)
+        if step_cost is not None:
+            total_cost += step_cost
 
         response_text = response.content or ""
 
@@ -344,6 +381,7 @@ async def run_agent_loop(
                 tool_calls=[],
                 tool_results=[],
                 response=final,
+                cost_usd=step_cost,
             )
             steps.append(step)
             if on_step:
@@ -356,6 +394,7 @@ async def run_agent_loop(
                 total_iterations=iteration + 1,
                 total_tool_calls=total_tool_calls,
                 completed=True,
+                total_cost_usd=total_cost,
             )
 
         # Execute tool calls
@@ -430,6 +469,7 @@ async def run_agent_loop(
             tool_calls=tool_calls,
             tool_results=tool_results,
             response=response_text,
+            cost_usd=step_cost,
         )
         steps.append(step)
         if on_step:
@@ -485,6 +525,7 @@ async def run_agent_loop(
         total_tool_calls=total_tool_calls,
         completed=False,
         error="Max iterations reached",
+        total_cost_usd=total_cost,
     )
 
 
@@ -497,5 +538,6 @@ __all__ = [
     "AgentResult",
     "AgentStep",
     "build_agent_system_prompt",
+    "response_cost_usd",
     "run_agent_loop",
 ]

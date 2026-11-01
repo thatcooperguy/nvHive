@@ -177,14 +177,28 @@ export interface CacheStats {
 
 // ─── Agents ──────────────────────────────────────────────────────────────────
 
+/** A council cabinet as the picker shows it; lib/cabinets.ts builds these from the wire dict. */
 export interface AgentPreset {
   name: string;
-  description: string;
   roles: string[];
+  /** Optional blurb. The server's dict carries none today; the picker falls back to the roles. */
+  description?: string;
 }
 
+/**
+ * One value of the GET /v1/agents/presets dict. The server sends the role list
+ * (nvh.core.agents.list_presets); presetsFromPayload also accepts an object
+ * form with an optional description.
+ */
+export type AgentPresetWire = string[] | { roles?: string[]; description?: string };
+
+/**
+ * Wire shape of GET /v1/agents/presets: `{ presets: { <name>: [role, ...] } }`,
+ * a dict keyed by preset name, not a list. Adapt it with
+ * presetsFromPayload (lib/cabinets.ts) before rendering.
+ */
 export interface AgentPresetsResult {
-  presets: AgentPreset[];
+  presets: Record<string, AgentPresetWire>;
 }
 
 // ─── Health ──────────────────────────────────────────────────────────────────

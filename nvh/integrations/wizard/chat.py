@@ -7,8 +7,9 @@ both the blocking and the streaming entry point):
   1. Collect live workspace state via ``wizard_context()`` (Wizard-2 context).
   2. Let the concierge pick a hidden specialist when nothing is pinned
      (``nvh.integrations.wizard.concierge``), resolve its ``AgentProfile``
-     into the overrides this turn enforces, and build the system prompt with
-     personality + state via ``build_system_prompt()``.
+     into the overrides this turn enforces, and gather what the system
+     prompt needs (live state, findings, the filtered tool catalogue, the
+     vault recall).
   3. Route the user message through the engine — uses local Ollama when
      healthy, falls back to any configured cloud provider, and finally
      drops back to the deterministic ``setup_assistant_reply`` if no LLM
@@ -16,7 +17,11 @@ both the blocking and the streaming entry point):
      *registered*, so a decision for a local daemon the probe says is down
      is re-routed to a registered cloud provider first
      (:func:`_route_around_dead_local_provider`). The deterministic flow
-     stays the safe net.
+     stays the safe net. With the provider known, the tool channel is
+     decided once per turn (:func:`_choose_tool_channel`) and the system
+     prompt is built for it via ``build_system_prompt()`` — personality +
+     state + the short native variant of the tool instructions when the
+     provider takes ``tools=``, the ``TOOL_CALL:`` text protocol otherwise.
   4. If the LLM called tools — natively, when the provider vouches for the
      model and took ``tools=`` (0.44 D3), or with ``TOOL_CALL:`` markers,
      the text protocol every model can emit — **run the auto-class tools
@@ -321,8 +326,10 @@ async def _native_tool_kwargs(turn: _TurnSetup, provider: Any, model: str | None
     model takes ``tools=`` (:func:`nvh.core.tools.provider_supports_native_tools`
     — never on Perplexity's Responses surface, never for a model the catalog
     or the daemon does not vouch for). Otherwise the ``TOOL_CALL:`` text
-    protocol the system prompt teaches is the only channel. The prompt teaches
-    it either way, and both channels are read every iteration.
+    protocol is the only channel. :func:`_choose_tool_channel` asks once per
+    turn and builds the system prompt for the answer (the native variant
+    does not teach the marker); both channels are still read every
+    iteration, so a stray marker is never lost.
     """
     from nvh.core.tools import provider_supports_native_tools
 
@@ -1184,6 +1191,12 @@ class _TurnSetup:
     # model can take them (:func:`_native_tool_kwargs`). ``None`` / empty
     # means the text protocol only.
     native_tools: list[dict[str, Any]] | None = None
+    # The auto-folded vault chunk (already sized by ``_auto_fold_vault_chunk``),
+    # kept so :func:`_choose_tool_channel` can build the prompt once the
+    # channel is known.
+    vault_recall: str | None = None
+    # True once the prompt was built for native function calling.
+    native: bool = False
 
     @property
     def profile_reason(self) -> str | None:
@@ -1233,20 +1246,24 @@ async def _prepare_turn(
     label: str,
     engine: Any | None = None,
 ) -> _TurnSetup:
-    """Live state → specialist → overrides → filtered catalog → system prompt.
+    """Live state → specialist → overrides → filtered catalog → prompt inputs.
 
     ``history`` is handed to the concierge unchanged (entries may carry
     ``used_profile`` for continuity) and stored for message building.
     ``engine`` (the turn's engine, ``None`` when there is none) lets a
     concierge-chosen ``local-only`` specialist be demoted to the general
-    Wizard *before* the system prompt is built when its local provider is
+    Wizard *before* the prompt inputs are fixed when its local provider is
     unavailable (unregistered or not running, :func:`_provider_available`);
     an explicit pin is never demoted here.
+
+    The system prompt itself is not built here: the turn's provider is not
+    known yet, and the tool instructions depend on whether it takes
+    ``tools=``. :func:`_choose_tool_channel` builds it once, after routing
+    (``system_prompt`` is ``""`` until then).
     """
     from nvh.integrations.wizard.concierge import SpecialistChoice, resolve_auto_profile
     from nvh.integrations.wizard.context import wizard_context
     from nvh.integrations.wizard.findings import derive_findings
-    from nvh.integrations.wizard.personality import build_system_prompt
 
     # ``wizard_context`` is blocking by design (httpx.get of Ollama's /api/tags,
     # nvidia-smi / pynvml, disk and provider probes — seconds in the worst
@@ -1335,9 +1352,6 @@ async def _prepare_turn(
     if enable_followup and _autofold_enabled():
         vault_recall = await _auto_fold_vault_chunk(question, home_dir=home_dir, admission=admission)
 
-    system_prompt = prof.apply_to_prompt(build_system_prompt(
-        snapshot, tools=tool_schemas, vault_recall=vault_recall, findings=findings,
-    ))
     return _TurnSetup(
         snapshot=snapshot,
         findings=findings,
@@ -1346,11 +1360,44 @@ async def _prepare_turn(
         profile=resolved,
         choice=choice,
         prof=prof,
-        system_prompt=system_prompt,
+        system_prompt="",
         user_message=_apply_prompt_template(question, resolved),
         history=list(history or []),
         native_tools=native_tools,
+        vault_recall=vault_recall,
     )
+
+
+def _build_system_prompt(turn: _TurnSetup, *, native: bool) -> None:
+    """Build the turn's system prompt for its tool channel — one build per turn.
+
+    ``native`` picks :func:`build_system_prompt`'s tool instructions: the
+    short native variant when the provider takes the catalogue as
+    ``tools=``, the ``TOOL_CALL:`` text protocol with the full catalogue
+    otherwise. The profile's persona addon is applied on top as before.
+    """
+    from nvh.integrations.wizard.personality import build_system_prompt
+
+    turn.native = native
+    turn.system_prompt = turn.prof.apply_to_prompt(build_system_prompt(
+        turn.snapshot, tools=turn.tool_schemas, vault_recall=turn.vault_recall,
+        findings=turn.findings, native=native,
+    ))
+
+
+async def _choose_tool_channel(turn: _TurnSetup, provider: Any, model: str | None) -> dict[str, Any]:
+    """Decide the turn's tool channel once and build the system prompt to match.
+
+    Asks the provider once (:func:`_native_tool_kwargs`) whether the picked
+    model takes ``tools=``; the answer holds for every iteration of the
+    follow-up loop, and the prompt is built for exactly that channel, so a
+    native turn is never also taught the text marker. Returns the completion
+    kwargs — ``{"tools": …, "tool_choice": "auto"}`` or ``{}`` — for every
+    completion of the turn.
+    """
+    native_kwargs = await _native_tool_kwargs(turn, provider, model)
+    _build_system_prompt(turn, native=bool(native_kwargs))
+    return native_kwargs
 
 
 def _get_engine(label: str) -> Any | None:
@@ -1616,8 +1663,6 @@ async def wizard_chat(
         try:
             from nvh.providers.base import Message
 
-            messages = _build_messages(turn)
-
             await engine.initialize()
             await engine._check_budget()
 
@@ -1663,9 +1708,11 @@ async def wizard_chat(
             # We honor that by short-circuiting the follow-up loop the same
             # way enable_followup=False would.
             effective_followup = enable_followup and iter_cap > 1
-            # Native function calling where the provider vouches for the
-            # model; the text protocol (always taught) everywhere else.
-            native_kwargs = await _native_tool_kwargs(turn, provider, decision.model or None)
+            # One channel per turn: native function calling where the
+            # provider vouches for the model, the text protocol everywhere
+            # else — and the system prompt is built for whichever it is.
+            native_kwargs = await _choose_tool_channel(turn, provider, decision.model or None)
+            messages = _build_messages(turn)
             while state.iterations < iter_cap:
                 state.iterations += 1
                 response = await provider.complete(
@@ -1988,8 +2035,6 @@ async def wizard_chat_stream(
     try:
         from nvh.providers.base import Message
 
-        messages = _build_messages(turn)
-
         await engine.initialize()
         await engine._check_budget()
 
@@ -2028,9 +2073,10 @@ async def wizard_chat_stream(
 
         iter_cap = _clamp_max_iterations(max_iterations)
         effective_followup = enable_followup and iter_cap > 1
-        # Same gate as the blocking path: native function calling only where
-        # the provider vouches for the model, the text protocol otherwise.
-        native_kwargs = await _native_tool_kwargs(turn, provider, decision.model or None)
+        # Same gate as the blocking path: one channel per turn, decided once,
+        # and the system prompt built for it.
+        native_kwargs = await _choose_tool_channel(turn, provider, decision.model or None)
+        messages = _build_messages(turn)
         while state.iterations < iter_cap:
             state.iterations += 1
             yield {"type": "iteration", "n": state.iterations}

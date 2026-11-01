@@ -342,17 +342,18 @@ def _ollama_complete(sample: dict, rows: dict) -> dict:
 
 def test_generator_derives_vision_and_retirement_and_drops_zero_cost_prices(generator, rows):
     bare_ollama = {k: v for k, v in rows["ollama/gemma3:1b"].items() if k in registry.CATALOG_OWN_FIELDS and k != "source"}
+    zero_cost = PROVIDER_SPECS["llm7"].default_model  # an active row of a zero_cost provider
     sample = _ollama_complete({
         "ollama/gemma3:4b": {**rows["ollama/gemma3:4b"], "supports_vision": False},
         # A derived-only row needs no source; a typed price on a zero-cost row is dropped, not kept.
         "ollama/gemma3:1b": bare_ollama,
-        "gpt-oss": {**rows["gpt-oss"], "input_cost_per_1m_tokens": 7, "output_cost_per_1m_tokens": 7},
+        zero_cost: {**rows[zero_cost], "input_cost_per_1m_tokens": 7, "output_cost_per_1m_tokens": 7},
         "gpt-4o": {k: v for k, v in rows["gpt-4o"].items() if k not in ("status", "successor")},
     }, rows)
     out = generator.normalise(sample)
     assert out["ollama/gemma3:4b"]["supports_vision"] is lm.pick_for_tag("gemma3:4b").vision is True
     assert out["ollama/gemma3:1b"]["supports_vision"] is False and "source" not in out["ollama/gemma3:1b"]
-    assert not set(generator.PRICE_FIELDS) & set(out["gpt-oss"]) and out["gpt-oss"]["source"]
+    assert not set(generator.PRICE_FIELDS) & set(out[zero_cost]) and out[zero_cost]["source"]
     assert out["gpt-4o"]["status"] == "retired"
     assert out["gpt-4o"]["successor"] == RETIRED_MODEL_RENAMES["openai"]["gpt-4o"]
     assert list(out["gpt-4o"])[:4] == ["provider", "display_name", "status", "successor"]
@@ -553,3 +554,21 @@ def test_function_calling_gate_follows_the_loaded_catalog():
     assert oc.model_supports_function_calling(PROVIDER_SPECS["groq"].default_model) is True
     assert oc.model_supports_function_calling(PROVIDER_SPECS["perplexity"].default_model) is False
     assert oc.model_supports_function_calling(PROVIDER_SPECS["llm7"].default_model) is True
+
+
+def test_generator_shares_the_check_or_write_contract(generator, tmp_path, catalog_text, capsys):
+    """scripts/_gendoc.check_or_write: a CRLF checkout of a current file passes ``--check``, the rewrite
+    prints ``wrote <path> (<rows> rows, ...)`` and lands LF-only against the installed LiteLLM."""
+    copy = tmp_path / "capabilities.yaml"
+    copy.write_bytes(catalog_text.replace("\n", "\r\n").encode("utf-8"))
+    assert generator.main(["--check"], catalog_path=copy) == 0
+    assert capsys.readouterr().out.strip() == f"{copy} is current"
+    assert generator.main([], catalog_path=copy) == 0
+    out = capsys.readouterr().out.rstrip()
+    assert out.startswith(f"wrote {copy} (") and out.endswith(" with explicit overrides)")
+    written = copy.read_bytes()
+    assert b"\r\n" not in written
+    assert written.decode("utf-8") == catalog_text.replace(
+        f"litellm {generator.recorded_litellm_version(catalog_text)} ",
+        f"litellm {generator.installed_litellm_version()} ",
+    )

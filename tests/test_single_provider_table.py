@@ -1,7 +1,8 @@
 """One provider table: display names, signup/docs URLs and key variables live in nvh/providers/specs.py only.
 
 The guard parses every Python file under ``nvh/`` and ``scripts/`` (the spec
-table itself excepted) plus the web setup page and ``web/lib``, and fails when
+table itself excepted) plus every page under ``web/app`` and ``web/lib``, and
+fails when
 
 * a *site* -- one top-level assignment, or one function and the assignment
   inside it -- types facts for two or more providers (a display name, a
@@ -34,7 +35,12 @@ from nvh.providers.specs import PROVIDER_FACTS
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_FILE = "nvh/providers/specs.py"
 PY_ROOTS = ("nvh", "scripts")
-WEB_FILES = ("web/app/setup/page.tsx", *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "web" / "lib").glob("*.ts")))
+# Every page and layout under web/app plus web/lib's modules (tests, .mjs, are not scanned).
+WEB_FILES = tuple(sorted(
+    p.relative_to(ROOT).as_posix()
+    for pattern in ("web/app/**/*.tsx", "web/lib/*.ts")
+    for p in ROOT.glob(pattern)
+))
 
 # (path, site, kind) -> the exact providers the site may name, or None for any.
 ALLOWED: dict[tuple[str, str, str], frozenset[str] | None] = {
@@ -171,15 +177,18 @@ def scan_python(path: Path) -> dict[tuple[str, str], set[str]]:
     return {key: names for key, names in findings.items() if key[1] != "facts" or len(names) >= 2}
 
 
-# --- TypeScript (the setup page and web/lib) ---------------------------------
+# --- TypeScript (web/app pages and web/lib) ----------------------------------
 
 TS_STRING_RE = re.compile(r"""(['"`])((?:\\.|(?!\1).){3,200}?)\1""")
+# The whitespace escapes a literal spells (``'A=1\nB=2'``): decoded before the
+# name match so ``\b`` sees a boundary where the page shows a line break.
+TS_WHITESPACE_ESCAPE_RE = re.compile(r"\\[ntr]")
 
 
 def scan_typescript(path: Path) -> dict[tuple[str, str], set[str]]:
     names: set[str] = set()
     for match in TS_STRING_RE.finditer(path.read_text(encoding="utf-8")):
-        names |= providers_named(match.group(2))
+        names |= providers_named(TS_WHITESPACE_ESCAPE_RE.sub(" ", match.group(2)))
     return {("<file>", "facts"): names} if len(names) >= 2 else {}
 
 
@@ -270,7 +279,19 @@ def test_scanner_flags_a_hand_typed_table_and_passes_feature_code(tmp_path: Path
     assert scan_python(good) == {}
 
 
-def test_scanner_covers_the_web_setup_page_and_lib():
-    assert "web/app/setup/page.tsx" in WEB_FILES
+def test_scanner_covers_every_web_page_and_lib():
+    assert "web/app/setup/page.tsx" in WEB_FILES and "web/app/providers/page.tsx" in WEB_FILES
     assert "web/lib/api.ts" in WEB_FILES and "web/lib/types.ts" in WEB_FILES
-    assert scan_typescript(ROOT / "web/app/setup/page.tsx") == {}
+    assert WEB_FILES == tuple(sorted(WEB_FILES)) and all(rel.startswith(("web/app/", "web/lib/")) for rel in WEB_FILES)
+    # No web file needs an exemption: the providers page's .env example used
+    # to type three key variables and now derives them from the fetched rows.
+    for rel in WEB_FILES:
+        assert scan_typescript(ROOT / rel) == {}, rel
+
+
+def test_typescript_scanner_sees_names_across_escaped_line_breaks(tmp_path: Path):
+    page = tmp_path / "page.tsx"
+    page.write_text("const hint = 'OPENAI_API_KEY=sk-...\\nGROQ_API_KEY=gsk_...';\n", encoding="utf-8")
+    assert scan_typescript(page) == {("<file>", "facts"): {"openai", "groq"}}
+    page.write_text("const hint = rows.map(p => `${p.env_key}=${p.placeholder ?? ''}`).join('\\n');\n", encoding="utf-8")
+    assert scan_typescript(page) == {}

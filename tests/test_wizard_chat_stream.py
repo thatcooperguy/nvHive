@@ -17,6 +17,7 @@ so we don't depend on any real engine or LLM.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -74,10 +75,10 @@ _EMPTY_SNAPSHOT = {
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_home(monkeypatch, tmp_path) -> None:
-    """The concierge's profile catalog and the plugin dir resolve to tmp_path,
-    never the developer's real $NVH_HOME; no vault recall."""
-    monkeypatch.setenv("NVH_HOME", str(tmp_path))
+def _no_vault_autofold(monkeypatch) -> None:
+    """No vault recall. The throwaway NVH_HOME comes from tests/conftest.py's
+    autouse ``_hermetic_home`` (a module fixture of that name would shadow it
+    and skip its Path.home / knob patching)."""
     monkeypatch.setenv("NVH_WIZARD_AUTOFOLD_VAULT", "0")
 
 
@@ -211,3 +212,109 @@ async def test_stream_falls_back_when_engine_missing() -> None:
     assert len(events) == 1
     assert events[0]["type"] == "error"
     assert "Offline fallback fired" in events[0]["fallback"]
+
+
+# ---------------------------------------------------------------------------
+# One tool channel per turn — decided once, the system prompt built for it
+# ---------------------------------------------------------------------------
+
+_REFRESH = 'TOOL_CALL: {"name": "refresh_models", "arguments": {}}'
+
+
+def _complete_engine(contents: list[str]) -> MagicMock:
+    """The blocking twin of ``_fake_engine``: ``provider.complete`` answers each content in turn."""
+    from nvh.providers.base import CompletionResponse, FinishReason, Usage
+
+    engine = _fake_engine([])
+    engine._log_query = AsyncMock()
+    provider = engine.registry.get.return_value
+    provider.complete = AsyncMock(side_effect=[
+        CompletionResponse(
+            content=c, model="ollama/gemma3:4b", provider="ollama",
+            usage=Usage(input_tokens=1, output_tokens=1, total_tokens=2),
+            cost_usd=Decimal("0"), latency_ms=1, finish_reason=FinishReason.STOP,
+        )
+        for c in contents
+    ])
+    return engine
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("native", [False, True])
+async def test_tool_channel_is_decided_once_per_turn_and_the_prompt_matches(stream: bool, native: bool) -> None:
+    """The provider is asked once whether the model takes ``tools=`` — not once
+    per iteration — and the one system prompt of the turn is built for that
+    answer: the short native variant (no ``TOOL_CALL:`` teaching, schemas as
+    ``tools=``) or the text protocol with the full catalogue. Both channels
+    are still read, so the text marker in iteration 1 drives iteration 2
+    either way."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    engine = (
+        _fake_engine([["Checking.\n", _REFRESH + "\n"], ["Done."]])
+        if stream else _complete_engine(["Checking.\n" + _REFRESH, "Done."])
+    )
+    provider = engine.registry.get.return_value
+    provider.supports_tools = AsyncMock(return_value=native)
+
+    with (
+        patch("nvh.api.server.get_engine", return_value=engine),
+        patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+        patch(
+            "nvh.integrations.wizard.chat._run_auto_tool",
+            new=AsyncMock(return_value={"ok": True, "result": {"count": 3}, "safety_class": "auto"}),
+        ),
+    ):
+        if stream:
+            events = [e async for e in chat_mod.wizard_chat_stream("refresh my models")]
+            done = events[-1]
+            assert done["type"] == "done" and done["iterations"] == 2
+            assert "Done." in done["answer"]
+        else:
+            result = await chat_mod.wizard_chat("refresh my models")
+            assert result["mode"] == "llm" and result["iterations"] == 2
+            assert result["answer"] == "Done."
+
+    calls = (provider.stream if stream else provider.complete).call_args_list
+    assert len(calls) == 2
+    # Decided once for the turn, for the routed model.
+    provider.supports_tools.assert_awaited_once_with("ollama/gemma3:4b")
+    prompts = {c.kwargs["system_prompt"] for c in calls}
+    assert len(prompts) == 1
+    prompt = prompts.pop()
+    assert "--- Available actions" in prompt and "needs a terminal:" in prompt and "TOOL_RESULT" in prompt
+    if native:
+        assert "TOOL_CALL" not in prompt
+        assert "auto: " in prompt and "refresh_models" in prompt
+        for c in calls:
+            assert c.kwargs["tool_choice"] == "auto"
+            assert "refresh_models" in {t["function"]["name"] for t in c.kwargs["tools"]}
+    else:
+        assert "TOOL_CALL: {" in prompt and "• refresh_models [auto]" in prompt
+        for c in calls:
+            assert "tools" not in c.kwargs and "tool_choice" not in c.kwargs
+
+
+@pytest.mark.asyncio
+async def test_prepare_turn_leaves_the_prompt_to_the_channel_decision(tmp_path) -> None:
+    """``_prepare_turn`` fixes the prompt inputs; the prompt itself is built
+    once the provider is known, so the two never disagree."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    with patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT):
+        turn = await chat_mod._prepare_turn(
+            "hi", history=None, home_dir=tmp_path, enable_followup=False,
+            profile="wizard", label="test", engine=None,
+        )
+    assert turn.system_prompt == "" and turn.native is False
+    assert turn.tool_schemas and turn.native_tools
+
+    class Yes:
+        async def supports_tools(self, model):
+            return True
+
+    assert await chat_mod._choose_tool_channel(turn, Yes(), "m") == {"tools": turn.native_tools, "tool_choice": "auto"}
+    assert turn.native is True and "TOOL_CALL" not in turn.system_prompt and "TOOL_RESULT" in turn.system_prompt
+    assert await chat_mod._choose_tool_channel(turn, MagicMock(), "m") == {}
+    assert turn.native is False and "TOOL_CALL: {" in turn.system_prompt

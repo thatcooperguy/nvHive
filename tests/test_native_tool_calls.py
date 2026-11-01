@@ -499,7 +499,7 @@ async def test_engine_forwards_tools_to_the_provider_only_when_offered() -> None
     engine.rate_manager = MagicMock()
     engine.config = MagicMock()
     engine.config.providers = {}
-    engine._get_fallback_chain = lambda name: [name]
+    engine._get_fallback_chain = lambda name, exclude=(): [name]
     decision = SimpleNamespace(provider="p", model="m")
 
     await engine._execute_with_fallback([Message(role="user", content="hi")], decision, 0.0, 10, None, False)

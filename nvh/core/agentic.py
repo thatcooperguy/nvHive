@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from nvh.core import local_models
-from nvh.core.agent_loop import AgentResult, run_agent_loop
+from nvh.core.agent_loop import AgentResult, response_cost_usd, run_agent_loop
 from nvh.core.tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -432,6 +432,11 @@ async def run_coding_agent(
     """
     start_time = time.monotonic()
     tools = ToolRegistry(workspace=str(working_dir))
+    # Every engine call's reported cost, summed as the phases run: the plan,
+    # each worker loop (its steps already summed), each review, the gate
+    # retry. A call that reports no cost adds nothing (a floor, never $0 by
+    # assumption).
+    total_cost = Decimal("0")
 
     # ── Phase 1: Plan ──────────────────────────────────────────────────
     logger.info("Agent Phase 1: Planning (orchestrator=%s/%s)",
@@ -465,6 +470,7 @@ async def run_coding_agent(
                 use_cache=False,
             )
         plan = plan_response.content
+        total_cost += response_cost_usd(plan_response) or Decimal("0")
     except Exception as e:
         logger.error("Planning phase failed: %s", e)
         return CodingResult(
@@ -525,6 +531,7 @@ async def run_coding_agent(
             confirm_unsafe=confirm_write,
             system_prompt=worker_prompt,
         )
+        total_cost += exec_result.total_cost_usd
 
         if not exec_result.completed and exec_result.error:
             logger.warning("Execution failed: %s", exec_result.error)
@@ -582,6 +589,7 @@ async def run_coding_agent(
                     use_cache=False,
                 )
             verification = verify_response.content
+            total_cost += response_cost_usd(verify_response) or Decimal("0")
         except Exception as e:
             logger.warning("Verification failed: %s", e)
             verification = f"Verification error: {e}"
@@ -628,6 +636,7 @@ async def run_coding_agent(
                 confirm_unsafe=confirm_write,
                 system_prompt=worker_prompt,
             )
+            total_cost += gate_result.total_cost_usd
             if gate_result.completed:
                 exec_result = gate_result
                 modified, created, read = _extract_file_operations(exec_result)
@@ -696,7 +705,7 @@ async def run_coding_agent(
         total_tool_calls=exec_result.total_tool_calls if exec_result else 0,
         completed=exec_result.completed if exec_result else False,
         verification=verification,
-        total_cost_usd=Decimal("0"),  # TODO: track across engine calls
+        total_cost_usd=total_cost,
         duration_ms=elapsed,
         tier=config.tier,
         mode=config.mode,

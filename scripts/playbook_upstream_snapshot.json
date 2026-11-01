@@ -1,0 +1,211 @@
+{
+  "assets": {
+    "https://raw.githubusercontent.com/NVIDIA/dgx-spark-playbooks/refs/heads/main/nvidia/playbook-comfyui/assets/launch.sh": {
+      "bytes": 99,
+      "http_status": 200,
+      "matches_pin": true,
+      "pinned_sha256": "7dc75b155a198a49537832c4a363d321080b130be0a6945a0bc0afe78da8badc",
+      "sha256": "7dc75b155a198a49537832c4a363d321080b130be0a6945a0bc0afe78da8badc"
+    },
+    "https://raw.githubusercontent.com/NVIDIA/dgx-spark-playbooks/refs/heads/main/nvidia/playbook-comfyui/assets/setup.sh": {
+      "bytes": 1085,
+      "http_status": 200,
+      "matches_pin": true,
+      "pinned_sha256": "d4d456d9d09901a53fdc33e12acab7387fdfb1b5050f00a93ed9c91a09cfd728",
+      "sha256": "d4d456d9d09901a53fdc33e12acab7387fdfb1b5050f00a93ed9c91a09cfd728"
+    },
+    "https://raw.githubusercontent.com/NVIDIA/dgx-spark-playbooks/refs/heads/main/nvidia/playbook-vllm/assets/sync-vllm-spark-128gb-qwen38-27b.sh": {
+      "bytes": 2604,
+      "http_status": 200,
+      "matches_pin": true,
+      "pinned_sha256": "802f0ed4c60f5569158528021163556e9616963a6cb8875d46a82341fc976b47",
+      "sha256": "802f0ed4c60f5569158528021163556e9616963a6cb8875d46a82341fc976b47"
+    }
+  },
+  "folders": {
+    "cli-coding-agent": {
+      "http_status": 200,
+      "last_updated": "08/03/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 18693,
+      "readme_sha256": "0a3826c3c557a5872b61d2e91b855253e59233ac8a0d1ca0192fdb537d5782a6",
+      "shipped": true,
+      "title": "Set Up CLI Coding Agents with Local Inference",
+      "upstream_folder": "playbook-cli-coding-agent"
+    },
+    "comfy-ui": {
+      "http_status": 200,
+      "last_updated": "10/13/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 24617,
+      "readme_sha256": "55eff35dbb286b5afa06af09cd007d73107f6fa71ba7dc13f2ca0a2f444ab2da",
+      "shipped": true,
+      "title": "Generate Images and Videos with ComfyUI",
+      "upstream_folder": "playbook-comfyui"
+    },
+    "connect-to-your-spark": {
+      "http_status": 200,
+      "last_updated": "09/24/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 13617,
+      "readme_sha256": "d0722efa8fde6b9cccd4f7ac1589b56f9c332e76c1c1ef1548c234eedc1f0d5e",
+      "shipped": false,
+      "title": "Use NVIDIA Sync to Connect Remotely to Your AI Compute",
+      "upstream_folder": "playbook-connect-to-your-spark"
+    },
+    "connect-two-sparks": {
+      "http_status": 200,
+      "last_updated": "08/12/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 12390,
+      "readme_sha256": "270d0b4a29d3a7f01e2888629d609f5428977a581ef70a37273c20654f1762bb",
+      "shipped": false,
+      "title": "Connect Two DGX Sparks for Distributed Workloads",
+      "upstream_folder": "playbook-connect-two-sparks"
+    },
+    "dgx-dashboard": {
+      "http_status": 200,
+      "last_updated": "07/31/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 10111,
+      "readme_sha256": "058ac52b052563e2c2a02e2a7e2a443cd7a820497a9533aa802cad2a0fa33402",
+      "shipped": true,
+      "title": "Monitor Your AI Compute with DGX Dashboard",
+      "upstream_folder": "playbook-dgx-dashboard"
+    },
+    "llama-cpp": {
+      "http_status": 200,
+      "last_updated": "10/09/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 17965,
+      "readme_sha256": "c8b0019e41d5097ca446576bd4b4c0258f41bcbe7ac5e818a9c277b76b19db1e",
+      "shipped": true,
+      "title": "Serve Models with llama.cpp",
+      "upstream_folder": "playbook-llama-cpp"
+    },
+    "lm-studio": {
+      "http_status": 200,
+      "last_updated": "10/21/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 13069,
+      "readme_sha256": "169076b399d75bc1b88c6b9e2a5395ed82a20f2f8996c46e93ce97ccf11bcc66",
+      "shipped": true,
+      "title": "Serve LLMs with LM Studio",
+      "upstream_folder": "playbook-lm-studio"
+    },
+    "nemoclaw": {
+      "http_status": 200,
+      "last_updated": "10/22/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 71195,
+      "readme_sha256": "9c6f0518f79fc4b5da58e0acfc1e382ac9eccbd38c8f942c95bb30cb8e9d4e29",
+      "shipped": true,
+      "title": "Run NemoClaw with a Local LLM",
+      "upstream_folder": "playbook-nemoclaw"
+    },
+    "nemotron": {
+      "http_status": 200,
+      "last_updated": "07/31/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 29939,
+      "readme_sha256": "c27c0fc4016e59e7e3cba184d4b67ebcbc534079da4d5cde64c2403eaf90c6f5",
+      "shipped": false,
+      "title": "Serve Nemotron Nano and Super Models",
+      "upstream_folder": "playbook-nemotron"
+    },
+    "nim-llm": {
+      "http_status": 200,
+      "last_updated": "09/30/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 12147,
+      "readme_sha256": "08edb8153d858d7db956071d79d2fb745e8edf497d58442e3257925e724e5d2d",
+      "shipped": false,
+      "title": "Deploy NVIDIA NIM for LLM Inference",
+      "upstream_folder": "playbook-nim-llm"
+    },
+    "ollama": {
+      "http_status": 200,
+      "last_updated": null,
+      "listed_in_root_readme": true,
+      "readme_bytes": 7508,
+      "readme_sha256": "8bfc746639a4f5d97ccd5de802ba8321913330bdc365a9fa8912fd3a1672f0f6",
+      "shipped": true,
+      "title": "Run Local LLMs",
+      "upstream_folder": "playbook-llms"
+    },
+    "open-webui": {
+      "http_status": 200,
+      "last_updated": "10/14/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 20666,
+      "readme_sha256": "cd8e0b05b1fa31c4714d785f9f208073126e3a7fab00458a25d519fd70d4ba3a",
+      "shipped": true,
+      "title": "Chat with LLMs Using Open WebUI and Ollama",
+      "upstream_folder": "playbook-open-webui"
+    },
+    "openclaw": {
+      "http_status": 200,
+      "last_updated": "10/22/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 15365,
+      "readme_sha256": "b7ae64fb87a5528065713e510c925d1ec65562a9cf22aecdd2cc816c1d538d81",
+      "shipped": true,
+      "title": "Run OpenClaw with a Local LLM",
+      "upstream_folder": "playbook-openclaw"
+    },
+    "sglang": {
+      "http_status": 200,
+      "last_updated": "07/31/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 24607,
+      "readme_sha256": "70e7d1280550686649123219adca96fae5743c8fbc62220619431773d4c473d1",
+      "shipped": false,
+      "title": "Serve LLMs with SGLang",
+      "upstream_folder": "playbook-sglang"
+    },
+    "tailscale": {
+      "http_status": 200,
+      "last_updated": "07/31/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 11501,
+      "readme_sha256": "baa9955831caaa63037761d1d87b6dd73268af9466d5a878103be44e33d1b842",
+      "shipped": true,
+      "title": "Set Up Tailscale for Remote Access",
+      "upstream_folder": "playbook-tailscale"
+    },
+    "unsloth": {
+      "http_status": 200,
+      "last_updated": "07/31/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 8644,
+      "readme_sha256": "377bcfdeefb192cdf3c09f5381afcc0d83bd2f5a0ebeace6af339bc2399a2bed",
+      "shipped": false,
+      "title": "Fine-Tune Faster with Unsloth",
+      "upstream_folder": "playbook-unsloth"
+    },
+    "vllm": {
+      "http_status": 200,
+      "last_updated": "10/19/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 41111,
+      "readme_sha256": "308db8a22183a7d5ce8be8689ed7e2a6fc6e1c0b61bdae44e746923fdeaf1a93",
+      "shipped": true,
+      "title": "Serve LLMs with vLLM on One Device",
+      "upstream_folder": "playbook-vllm"
+    },
+    "vscode": {
+      "http_status": 200,
+      "last_updated": "07/31/2026",
+      "listed_in_root_readme": true,
+      "readme_bytes": 9342,
+      "readme_sha256": "c76b229c91e3e21b6522d2ec928890644e13833ca2cf6e43207f2f28409e8f8a",
+      "shipped": true,
+      "title": "Set Up VS Code for Local and Remote Development",
+      "upstream_folder": "playbook-vscode"
+    }
+  },
+  "observed": "2026-11-01",
+  "root_readme_sha256": "2b69096ef937fe4b261dd091d970beb99794e3699123eb9a208de36b69a3e012",
+  "schema": 1,
+  "upstream": "https://github.com/NVIDIA/dgx-spark-playbooks"
+}

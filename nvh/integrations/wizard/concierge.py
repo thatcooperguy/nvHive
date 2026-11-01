@@ -1242,6 +1242,13 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
             r"(?:nvidia\s+|gpu\s+|graphics\s+)?drivers?\b",
             r"\bdrivers?\s+(?:update|upgrade)s?\b",
         ),
+        # ``device:rtx-spark`` stays on purpose: an RTX Spark runs Windows on
+        # Arm, where the privileged tier refuses an apply in plain words
+        # (system_settings.system_changes_unavailable: "System changes are
+        # not available on Windows yet"), but the desk's read-only advice —
+        # what a setting does, the exact commands a Linux box would run,
+        # the DGX OS driver trap — is still the right answer, and
+        # ``system_settings_plan`` still renders there.
         state=("device:dgx-spark|device:rtx-spark|has_root|can_sudo|privileged_allowed",),
         phrase_once=True,
         weight=1.4,
@@ -1300,6 +1307,10 @@ SPECIALIST_RULES: tuple[SpecialistRule, ...] = (
         exclude_patterns=_INSTALLER_MEDIC_VETO_PATTERNS + _HW_FAULT_VETO_PATTERNS
         + _CLAIM_VETO_PATTERNS + (_FETCH_IMPERATIVE, _DOCKER_DAEMON_SOCKET),
         patterns=(_APP_INSTALL_ON_DEVICE, _PLAYBOOK_ASK, _TWO_SPARKS, _SPARK_INTERCONNECT),
+        # ``device:rtx-spark`` is kept for the same reason as the settings
+        # desk's: on Windows on Arm the catalogue and a plan are read-only
+        # advice the installer can still give; ``playbook_install`` itself
+        # refuses off Linux.
         state=("device:dgx-spark|device:rtx-spark|privileged_allowed",),
         requires_tools=("playbook_list", "playbook_plan", "playbook_install"),
         phrase_once=True,

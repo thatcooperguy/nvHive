@@ -393,6 +393,58 @@ export function cardChrome(
   return chrome;
 }
 
+// ─── Host OS: the privileged tier is Linux only ──────────────────────────────
+//
+// System settings and the Spark playbooks are apt, systemd, ufw, gsettings
+// and sudo, so nvh/integrations/wizard/system_settings.py refuses an apply
+// off Linux with one sentence ("System changes are not available on Windows
+// yet") and runs nothing. The setup page reads the same OS from the Wizard
+// context's `platform` block (`/v1/wizard/context`, the PlatformFacts
+// snapshot) and, off Linux, shows that sentence where the playbook section
+// would be instead of Plan buttons whose Approve would refuse. No platform
+// block (an older API, a failed call) keeps today's behaviour: the section
+// renders and the server's refusal still rules.
+
+/** `PlatformFacts.os` as the API emits it. */
+export type HostOs = 'linux' | 'windows' | 'macos' | 'unknown';
+
+/** Mirrors system_settings.SYSTEM_CHANGES_UNAVAILABLE; `{os}` is the label below. */
+export const SYSTEM_CHANGES_UNAVAILABLE = 'System changes are not available on {os} yet';
+/** How the sentence names the host (system_settings._OS_LABELS); anything else is "this platform". */
+const HOST_OS_LABELS: Partial<Record<HostOs, string>> = { windows: 'Windows', macos: 'macOS' };
+
+/**
+ * The host OS the Wizard context reports, or `null` when the snapshot has no
+ * usable `platform.os` (a caller then keeps today's behaviour). An unknown
+ * string is `'unknown'`: the server classifies it the same way.
+ */
+export function hostOs(context: unknown): HostOs | null {
+  if (!context || typeof context !== 'object') return null;
+  const platform = (context as { platform?: unknown }).platform;
+  if (!platform || typeof platform !== 'object') return null;
+  const os = (platform as { os?: unknown }).os;
+  if (typeof os !== 'string' || os.trim() === '') return null;
+  const clean = os.trim().toLowerCase();
+  return clean === 'linux' || clean === 'windows' || clean === 'macos' ? clean : 'unknown';
+}
+
+/**
+ * Whether the privileged tier can run on this host: `true` on Linux, `false`
+ * everywhere the server would refuse (Windows, macOS, an unknown OS), `null`
+ * when the OS is not known — the same three answers as the server's facts dict
+ * (`system_changes.available`), with `null` for "the page could not ask".
+ */
+export function systemChangesAvailable(os: HostOs | null | undefined): boolean | null {
+  if (os === null || os === undefined) return null;
+  return os === 'linux';
+}
+
+/** The server's sentence for this host, word for word (system_settings.system_changes_unavailable). */
+export function systemChangesUnavailableNote(os: HostOs | null | undefined): string {
+  const label = (os && HOST_OS_LABELS[os]) || 'this platform';
+  return SYSTEM_CHANGES_UNAVAILABLE.replace('{os}', label);
+}
+
 // ─── Spark playbooks ─────────────────────────────────────────────────────────
 //
 // Playbooks (nvh/integrations/installs/playbooks.py) are the privileged

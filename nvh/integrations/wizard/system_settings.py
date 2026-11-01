@@ -54,6 +54,15 @@ Safety posture
     (:func:`~nvh.core.agent_guardrails.truncate_output`) here; the registry
     then fits the whole result to the model's 1500-char tool window and
     writes the audit note under the vault's ``Decisions/``.
+  - **Linux only, said plainly.** The catalogue is apt, systemd, ufw and
+    gsettings and the elevation is sudo, so off Linux (Windows, Windows on
+    Arm, macOS) an apply refuses before anything spawns with
+    :func:`system_changes_unavailable` ("System changes are not available on
+    Windows yet") and nothing is ever prefixed with ``sudo`` — Windows 11
+    ships a ``sudo`` of its own that would raise a UAC prompt. Plans still
+    render everywhere (the Wizard can explain what a setting would do on a
+    Spark), they just carry the same sentence as a note, and
+    ``system_settings_get`` stays read-only on every OS.
   - **Everything returns a dict.** Handlers never raise and never prompt.
 """
 
@@ -85,6 +94,26 @@ MAX_PACKAGES = 20
 
 NEEDS_TERMINAL_HINT = "run this in a terminal; nvHive never asks for your password"
 CANNOT_ELEVATE_ERROR = "this account cannot elevate"
+#: The off-Linux refusal, one sentence, ``{os}`` filled by :func:`system_changes_unavailable`.
+SYSTEM_CHANGES_UNAVAILABLE = "System changes are not available on {os} yet"
+#: How the refusal names the host OS (``PlatformFacts.os`` values; anything else is "this platform").
+_OS_LABELS: dict[str, str] = {"windows": "Windows", "macos": "macOS"}
+#: The note a plan carries off Linux, after the refusal sentence.
+PLAN_OFF_LINUX_NOTE = "this plan is shown for reference and will not run on this machine"
+
+
+def system_changes_unavailable(os_name: str) -> str | None:
+    """Why the privileged tier refuses on this host, or ``None`` on Linux.
+
+    ``os_name`` is :attr:`~nvh.utils.platform_facts.PlatformFacts.os`
+    (``linux`` / ``windows`` / ``macos`` / ``unknown``). The sentence is the
+    one the Wizard, the setup page and the CLI all show, so a Windows user
+    reads the same words everywhere: "System changes are not available on
+    Windows yet".
+    """
+    if os_name == "linux":
+        return None
+    return SYSTEM_CHANGES_UNAVAILABLE.format(os=_OS_LABELS.get(os_name, "this platform"))
 DGX_DRIVER_WARNING = (
     "DGX OS: a bare `apt upgrade` has repeatedly stranded the GPU driver (driver 595 "
     "unsupported, kernels shipped without nvidia.ko). Driver and kernel packages come "
@@ -313,8 +342,14 @@ def run_host_command(
     user's own terminal (``interactive=True``). Order of business:
 
     1. :func:`denied_reason` on the rendered command → ``{ok: False, denied: True, error}``.
-    2. ``sudo=True`` picks the prefix from the platform facts. Root runs the
-       command bare (``sudo -u USER`` still applies when ``sudo_user`` is set).
+    2. ``sudo=True`` picks the prefix from the platform facts. Off Linux there
+       is no prefix to pick: the call is refused with
+       :func:`system_changes_unavailable` (``{ok: False, unsupported_host:
+       True, applied: False, error, command}``) before anything spawns, and
+       ``sudo`` is never prepended — Windows 11 ships its own ``sudo`` that
+       would raise a UAC prompt. A ``sudo=False`` run (the read-only probes)
+       is unaffected. Root runs the command bare (``sudo -u USER`` still
+       applies when ``sudo_user`` is set).
 
        ``interactive=False``: ``sudo -n`` (plus ``-u USER``) only when the
        facts say ``can_sudo``; a sudo-group member without passwordless sudo
@@ -351,6 +386,9 @@ def run_host_command(
     full = words
     if sudo:
         facts = _facts()
+        unsupported = system_changes_unavailable(facts.os)
+        if unsupported:
+            return {"ok": False, "unsupported_host": True, "applied": False, "error": unsupported, "command": human}
         as_user = ["-u", sudo_user] if sudo_user else []
         if facts.has_root and not sudo_user:
             full = words
@@ -447,7 +485,18 @@ class Plan:
         return None
 
     def to_dict(self) -> dict[str, Any]:
+        """The plan as the card and the model read it.
+
+        Renders on every OS. Off Linux the dict additionally says so —
+        ``host_supported: False`` and the refusal sentence as the last note
+        — so a Windows user reading the card knows the apply will refuse
+        before they click; ``ok`` still reflects the deny list only.
+        """
         denied = self.denied()
+        notes = list(self.notes)
+        unsupported = system_changes_unavailable(_facts().os)
+        if unsupported:
+            notes.append(f"{unsupported}: {PLAN_OFF_LINUX_NOTE}")
         out: dict[str, Any] = {
             "ok": denied is None,
             "setting": self.name,
@@ -456,8 +505,10 @@ class Plan:
             "sudo": self.needs_sudo,
             "changes": self.changes,
             "undo": list(self.undo),
-            "notes": list(self.notes),
+            "notes": notes,
         }
+        if unsupported:
+            out["host_supported"] = False
         if self.warning:
             out["warning"] = self.warning
         if denied:
@@ -737,10 +788,27 @@ def apply_plan(plan: Plan) -> dict[str, Any]:
     (``systemctl enable --now`` enables the unit and then fails to start it;
     ``apt-get`` exits 100 after unpacking) — so the registry audits it;
     ``partial`` says later steps never ran.
+
+    Off Linux the whole plan is refused before its first step — even a step
+    that needs no sudo (the gsettings call for your own session) belongs to
+    a Linux desktop — with ``unsupported_host: True`` and ``applied: False``,
+    so the registry writes no vault note for something that never ran.
     """
     denied = plan.denied()
     if denied:
         return {"ok": False, "denied": True, "error": denied, "setting": plan.name, "commands": plan.commands()}
+    unsupported = system_changes_unavailable(_facts().os)
+    if unsupported:
+        return {
+            "ok": False,
+            "unsupported_host": True,
+            "applied": False,
+            "error": unsupported,
+            "setting": plan.name,
+            "summary": plan.title,
+            "commands": plan.commands(),
+            "steps": [],
+        }
     executed: list[dict[str, Any]] = []
     for index, step in enumerate(plan.steps):
         result = run_host_command(list(step.argv), sudo=step.sudo, sudo_user=step.sudo_user, timeout=step.timeout)
@@ -961,6 +1029,7 @@ def collect_system_settings() -> dict[str, Any]:
         sudo_mode = "password required — commands are handed to a terminal"
     else:
         sudo_mode = "none — this account cannot elevate"
+    unsupported = system_changes_unavailable(facts.os)
     return {
         "ok": True,
         "hostname": _safe("hostname", socket.gethostname),
@@ -971,6 +1040,7 @@ def collect_system_settings() -> dict[str, Any]:
             "is_dgx_os": facts.is_dgx_os,
         },
         "platform": {
+            "os": facts.os,
             "device_class": facts.device_class,
             "device_label": facts.device_label,
             "arch": facts.arch,
@@ -985,7 +1055,13 @@ def collect_system_settings() -> dict[str, Any]:
             "can_sudo": facts.can_sudo,
             "in_sudo_group": facts.in_sudo_group,
             "mode": sudo_mode,
+            # True while the privilege probe is still running on another
+            # thread: can_sudo / in_sudo_group above are placeholders, not
+            # answers, and a reader should ask again rather than conclude.
+            "host_probe_pending": facts.host_probe_pending,
         },
+        # Linux only: the one sentence every surface shows off Linux.
+        "system_changes": {"available": unsupported is None, "note": unsupported},
         "docker_group": _safe("docker-group", _docker_group_facts),
         "auto_suspend": _safe("auto-suspend", _auto_suspend_facts),
         "ufw": _safe("ufw", _ufw_facts),
@@ -1099,7 +1175,8 @@ def register_wizard_tools(reg: Any) -> None:
             "Apply a catalogue system setting on this machine (usually with sudo). The user "
             "approves the exact commands on a red card first; if sudo needs a password the "
             "result hands them the command to run in a terminal. Every apply is recorded in the "
-            "vault under Decisions."
+            "vault under Decisions. Linux only: on Windows or macOS the apply refuses in plain "
+            "words and runs nothing (plans still render)."
         ),
         safety_class="privileged",
         parameters={"setting": _SETTING_PARAM, "value": _VALUE_PARAM},

@@ -29,13 +29,17 @@ import yaml
 
 from nvh.config.settings import CouncilConfig
 from nvh.core.atohi import AdmissionBroker, AdmittedProvider, AtohiAdmission
+from nvh.data import bundled_path
 from nvh.providers.base import ModelInfo, Provider
 from nvh.providers.lazy_provider import LazyProvider
 from nvh.providers.specs import PROVIDER_FACTS, PROVIDER_SPECS
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+# The bundled config directory, resolved through importlib.resources
+# (nvh.data) rather than from this file's location; tests point the two
+# file constants at fixtures by monkeypatching them.
+CONFIG_DIR = bundled_path("config")
 CATALOG_PATH = CONFIG_DIR / "capabilities.yaml"
 MODEL_OVERRIDES_PATH = CONFIG_DIR / "model_overrides.json"
 

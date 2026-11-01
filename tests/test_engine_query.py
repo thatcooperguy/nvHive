@@ -28,6 +28,7 @@ from nvh.providers.base import (
     HealthStatus,
     ModelInfo,
     ProviderError,
+    ProviderUnavailableError,
     StreamChunk,
     Usage,
 )
@@ -82,7 +83,9 @@ class _MockProvider:
         return len(text) // 4
 
 
-def _build_engine(names: tuple[str, ...] = ("alpha",)) -> Engine:
+def _build_engine(
+    names: tuple[str, ...] = ("alpha",), fallback_order: list[str] | None = None,
+) -> Engine:
     config = CouncilConfig(
         defaults=DefaultsConfig(
             provider=names[0], model="test-model",
@@ -92,6 +95,7 @@ def _build_engine(names: tuple[str, ...] = ("alpha",)) -> Engine:
         council=CouncilModeConfig(
             quorum=1, strategy="majority_vote", timeout=30,
             default_weights={n: 1.0 for n in names}, synthesis_provider=names[0],
+            fallback_order=fallback_order or [],
         ),
         routing=RoutingConfig(),
         budget=BudgetConfig(),
@@ -520,3 +524,123 @@ async def test_fallback_sets_fallback_from():
     r = await e._execute_with_fallback(
         [Message(role="user", content="hi")], dec, 0.7, 100, None, False)
     assert r.fallback_from == "openai"
+
+
+# ---------------------------------------------------------------------------
+# exclude_providers — a call never falls back to what the caller ruled out
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_chain_exclude_drops_fallbacks_and_keeps_the_primary():
+    engine = _build_engine(("alpha", "search", "gamma"), fallback_order=["search", "gamma"])
+    assert engine._get_fallback_chain("alpha") == ["alpha", "search", "gamma"]
+    assert engine._get_fallback_chain("alpha", exclude={"search"}) == ["alpha", "gamma"]
+    assert engine._get_fallback_chain("alpha", exclude=frozenset({"search", "gamma"})) == ["alpha"]
+    # The primary is the caller's pick (an explicit pin or the router's
+    # decision under the same set): it stays even when named.
+    chain = engine._get_fallback_chain("search", exclude={"search"})
+    assert chain[0] == "search" and "search" not in chain[1:] and set(chain[1:]) == {"alpha", "gamma"}
+
+
+@pytest.mark.asyncio
+async def test_query_exclude_providers_never_falls_back_to_them(db):
+    """A grounded research prompt pinned to an advisor that fails must not
+    land on the search-native advisor the initial pick refused — it goes to
+    the next one instead."""
+    engine = _build_engine(("alpha", "search", "gamma"), fallback_order=["search", "gamma"])
+    engine.registry.get("alpha").complete = AsyncMock(side_effect=ProviderError("alpha boom", provider="alpha"))
+    search = engine.registry.get("search")
+    search.complete = AsyncMock(return_value=_resp(content="searched again", provider="search", model="s"))
+
+    with patch.object(engine, "_check_connectivity", return_value=True):
+        plain = await engine.query("grounded prompt", provider="alpha", use_cache=False)
+    assert (plain.provider, plain.fallback_from) == ("search", "alpha")
+    assert search.complete.await_count == 1
+
+    with patch.object(engine, "_check_connectivity", return_value=True):
+        kept_off = await engine.query(
+            "grounded prompt", provider="alpha", use_cache=False, exclude_providers=frozenset({"search"}),
+        )
+    assert (kept_off.provider, kept_off.fallback_from) == ("gamma", "alpha")
+    assert search.complete.await_count == 1  # never tried
+
+
+@pytest.mark.asyncio
+async def test_query_hands_the_exclusion_to_the_router(db):
+    """Without an explicit provider the router itself must honour the set."""
+    engine = _build_engine(("alpha", "search"))
+    seen: dict = {}
+    real_route = engine.router.route
+
+    def spy(**kwargs):
+        seen.update(kwargs)
+        return real_route(**kwargs)
+
+    engine.router.route = spy
+    with patch.object(engine, "_check_connectivity", return_value=True):
+        resp = await engine.query("hello there", use_cache=False, exclude_providers=frozenset({"search"}))
+    assert seen["exclude"] == frozenset({"search"})
+    assert resp.provider == "alpha"
+
+
+@pytest.mark.asyncio
+async def test_query_offline_local_pick_honours_the_exclusion(db):
+    """Offline, the auto-route to ollama/llm7 skips an excluded local provider."""
+    engine = _build_engine(("llm7", "ollama"))
+    with patch.object(engine, "_check_connectivity", return_value=False):
+        resp = await engine.query("hello there", use_cache=False, exclude_providers=frozenset({"ollama"}))
+    assert resp.provider == "llm7"
+    with patch.object(engine, "_check_connectivity", return_value=False):
+        with pytest.raises(ProviderUnavailableError):
+            await engine.query("hello there", use_cache=False, exclude_providers=frozenset({"ollama", "llm7"}))
+
+
+@pytest.mark.asyncio
+async def test_query_stream_exclude_providers_skips_them(db):
+    engine = _build_engine(("alpha", "search", "gamma"), fallback_order=["search", "gamma"])
+
+    def boom(**kwargs):
+        raise ProviderError("alpha boom", provider="alpha")
+
+    engine.registry.get("alpha").stream = boom
+    search = engine.registry.get("search")
+    search.stream = MagicMock(side_effect=lambda **kw: _MockProvider("search").stream(**kw))
+
+    resp = await engine.query_stream("grounded", provider="alpha", exclude_providers=frozenset({"search"}))
+    assert resp.provider == "gamma"
+    search.stream.assert_not_called()
+
+    resp = await engine.query_stream("grounded", provider="alpha")
+    assert resp.provider == "search"
+
+
+@pytest.mark.asyncio
+async def test_execute_with_fallback_always_hands_the_exclusion_to_the_chain():
+    """One call shape: the chain builder receives ``exclude=`` on every call,
+    the empty set included, so a double standing in for it takes the keyword
+    (``lambda name, exclude=(): ...``) and no caller keeps a second shape."""
+    from nvh.core.router import RoutingDecision
+    from nvh.providers.base import Message, TaskType
+
+    cfg = _build_config(providers={"openai": ProviderConfig(default_model="m")})
+    reg = ProviderRegistry()
+    mo = MagicMock()
+    mo.complete = AsyncMock(return_value=_resp(provider="openai"))
+    reg.register("openai", mo)
+    e = _bare_engine(config=cfg, registry=reg, rate_manager=MagicMock())
+    dec = RoutingDecision(provider="openai", model="m", task_type=TaskType.CONVERSATION,
+                          confidence=0.9, scores={}, reason="t")
+    seen: list = []
+
+    def chain(name, exclude=()):
+        seen.append(exclude)
+        return [name]
+
+    e._get_fallback_chain = chain
+    r = await e._execute_with_fallback([Message(role="user", content="hi")], dec, 0.7, 100, None, False)
+    assert r.provider == "openai"
+    await e._execute_with_fallback(
+        [Message(role="user", content="hi")], dec, 0.7, 100, None, False,
+        exclude_providers=frozenset({"search"}),
+    )
+    assert seen == [frozenset(), frozenset({"search"})]

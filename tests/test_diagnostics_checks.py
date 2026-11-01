@@ -11,6 +11,7 @@ import json
 import time
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -459,3 +460,136 @@ def test_default_models_check_tolerates_a_failing_probe():
 def test_default_models_check_needs_an_engine():
     ctx = _ctx(_config=None)
     assert asyncio.run(_rows("default_models_served", ctx)) == []
+
+
+# ---------------------------------------------------------------------------
+# legacy_homes (DEEP): the pre-0.44 import, read-only — it never runs the import
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def legacy_homes(tmp_path, monkeypatch):
+    """A fake OS home plus a throwaway layout; the migration is on but nothing has run."""
+    from nvh.integrations.workspace import migrate_legacy as ml
+    from nvh.integrations.workspace.storage import storage_layout
+
+    os_home = tmp_path / "home"
+    os_home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: os_home)
+    monkeypatch.setenv(ml.LEGACY_MIGRATION_ENV, "1")  # conftest turns it off for every suite
+    monkeypatch.delenv(ml.LEGACY_DATA_DIR_ENV, raising=False)
+    monkeypatch.setattr(ml, "_LAST_REPORTS", {})
+    nvh_home = tmp_path / "nvh"
+    return SimpleNamespace(
+        hive=os_home / ".hive", layout=storage_layout(nvh_home), ctx=_ctx(home_dir=str(nvh_home)), ml=ml,
+    )
+
+
+def _forbid_migration(monkeypatch, ml):
+    monkeypatch.setattr(
+        ml, "migrate_legacy_homes", lambda *a, **k: pytest.fail("the check must never run the migration"),
+    )
+
+
+def test_legacy_homes_is_deep_only_and_sits_beside_legacy_knowledge():
+    check = _check_by_id("legacy_homes")
+    assert check.tiers == {diag.DEEP} and check.title == "Legacy homes (pre-0.44)"
+    ids = [c.id for c in diag.REGISTRY]
+    assert ids.index("legacy_homes") == ids.index("legacy_knowledge") + 1
+
+
+def test_legacy_homes_is_silent_on_a_fresh_install(legacy_homes, monkeypatch):
+    _forbid_migration(monkeypatch, legacy_homes.ml)
+    assert asyncio.run(_rows("legacy_homes", legacy_homes.ctx)) == []
+    assert not legacy_homes.layout.home.exists()
+
+
+def test_legacy_homes_reports_pending_items_without_running_the_import(legacy_homes, monkeypatch):
+    _forbid_migration(monkeypatch, legacy_homes.ml)
+    legacy_homes.hive.mkdir()
+    (legacy_homes.hive / "user.json").write_bytes(b"{}")
+    row = asyncio.run(_rows("legacy_homes", legacy_homes.ctx))[0]
+    assert row.status == "warn"
+    assert row.detail == f"1 item(s) in {legacy_homes.hive} not yet imported into {legacy_homes.layout.home}"
+    assert "nvh config init" in row.fix and "NVH_LEGACY_MIGRATION=0" in row.fix
+    assert [e["label"] for e in row.data["pending"]] == ["user profile"]
+    assert row.data["attempted"] is False and row.data["failed"] == []
+    # Read-only: no marker, no layout directory, and the config was never loaded
+    # (load_config() is one of the paths that runs the import).
+    assert not legacy_homes.layout.home.exists()
+    assert legacy_homes.ctx._config is diag._UNSET
+    assert json.loads(json.dumps(diag.summarize([row])))["checks"][0]["id"] == "legacy_homes"
+
+
+def test_legacy_homes_reports_a_recorded_import(legacy_homes, monkeypatch):
+    _forbid_migration(monkeypatch, legacy_homes.ml)
+    marker = legacy_homes.layout.state_dir / legacy_homes.ml.MARKER_NAME
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({
+        "ran_at": "2026-10-31T09:00:00+00:00",
+        "moved": [{"label": "user profile"}, {"label": "plugins"}],
+        "merged": [{"label": "API keys (.env)", "added": ["GROQ_API_KEY"]}],
+        "skipped": [{"label": "knowledge store", "reason": "already imported"}],
+    }))
+    row = asyncio.run(_rows("legacy_homes", legacy_homes.ctx))[0]
+    assert row.status == "pass"
+    assert row.detail == "imported on 2026-10-31: 2 copied, 1 merged, 1 skipped"
+    assert row.data["already_done"] is True and row.data["legacy_roots"] == {}
+    legacy_homes.hive.mkdir()
+    (legacy_homes.hive / "user.json").write_bytes(b"{}")  # would be pending without the marker
+    row = asyncio.run(_rows("legacy_homes", legacy_homes.ctx))[0]
+    assert row.status == "pass" and f"old roots still present ({legacy_homes.hive})" in row.detail
+    assert row.data["pending"] == []  # a recorded run is never re-planned
+
+
+def test_legacy_homes_reports_the_kill_switch_without_reading_home(legacy_homes, monkeypatch):
+    _forbid_migration(monkeypatch, legacy_homes.ml)
+    legacy_homes.hive.mkdir()
+    monkeypatch.setenv(legacy_homes.ml.LEGACY_MIGRATION_ENV, "0")
+    monkeypatch.setattr(Path, "home", lambda: pytest.fail("disabled: nothing under $HOME may be read"))
+    row = asyncio.run(_rows("legacy_homes", legacy_homes.ctx))[0]
+    assert row.status == "skip" and row.detail == "import disabled (NVH_LEGACY_MIGRATION=0)"
+    assert row.data["disabled"] is True and row.data["legacy_roots"] == {} and row.data["pending"] == []
+
+
+def test_legacy_homes_reports_failures_of_this_process_then_the_retry(legacy_homes, monkeypatch):
+    ml = legacy_homes.ml
+    legacy_homes.hive.mkdir()
+    (legacy_homes.hive / "user.json").write_bytes(b"{}")
+    publish = ml._publish_no_replace
+
+    def unavailable(*args):
+        raise OSError("no exclusive rename here")
+
+    monkeypatch.setattr(ml, "_publish_no_replace", unavailable)
+    report = ml.migrate_legacy_homes(legacy_homes.layout)  # the one real run of this test
+    assert report.failed and not Path(report.marker).exists()
+    real_migrate = ml.migrate_legacy_homes
+    _forbid_migration(monkeypatch, ml)
+
+    row = asyncio.run(_rows("legacy_homes", legacy_homes.ctx))[0]
+    assert row.status == "warn"
+    assert row.detail == "1 item(s) could not be imported: user profile: copy failed: no exclusive rename here"
+    assert "retries" in row.fix and row.data["failed"] == report.failed and row.data["attempted"] is True
+
+    monkeypatch.setattr(ml, "_publish_no_replace", publish)
+    assert not real_migrate(legacy_homes.layout).failed
+    row = asyncio.run(_rows("legacy_homes", legacy_homes.ctx))[0]
+    assert row.status == "pass" and row.detail.startswith("imported on ")
+    assert "1 copied, 0 merged, 0 skipped" in row.detail and "old roots still present" in row.detail
+    assert row.data["failed"] == []
+
+
+def test_legacy_homes_warns_about_the_retired_data_dir_knob(legacy_homes, monkeypatch):
+    _forbid_migration(monkeypatch, legacy_homes.ml)
+    monkeypatch.setenv(legacy_homes.ml.LEGACY_DATA_DIR_ENV, "/srv/old-data")
+    row = asyncio.run(_rows("legacy_homes", legacy_homes.ctx))[0]
+    assert row.status == "warn" and "NVH_STATE=/srv/old-data/state" in row.detail
+    assert "NVH_STATE" in row.fix and row.data["legacy_roots"] == {}
+    # The warning rides along with a recorded import too.
+    marker = legacy_homes.layout.state_dir / legacy_homes.ml.MARKER_NAME
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({"ran_at": "2026-10-31T09:00:00+00:00", "moved": []}))
+    row = asyncio.run(_rows("legacy_homes", legacy_homes.ctx))[0]
+    assert row.status == "warn" and row.detail.startswith("imported on 2026-10-31: 0 copied")
+    assert "NVH_STATE=/srv/old-data/state" in row.detail

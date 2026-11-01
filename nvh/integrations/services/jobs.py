@@ -291,23 +291,38 @@ async def _consume_job_events(
         _write_job(job)
 
         saw_terminal = False
-        async for payload in source_factory():
-            current = load_job(job_id, reconcile=False, include_recent_events=False)
-            if current.get("cancel_requested"):
-                append_event(
-                    job_id,
-                    {
-                        "event": "canceled",
-                        "status": "canceled",
-                        "message": "Install job canceled by user.",
-                    },
-                )
-                saw_terminal = True
-                break
-            append_event(job_id, payload)
-            if payload.get("event") in {"complete", "error", "canceled"}:
-                saw_terminal = True
-                break
+        source = source_factory()
+        try:
+            async for payload in source:
+                current = load_job(job_id, reconcile=False, include_recent_events=False)
+                if current.get("cancel_requested"):
+                    if payload.get("event") == "canceled":
+                        # The source saw the flag itself and says where it stopped (the
+                        # playbook engine's stopped_after_step, receipt_path and audit):
+                        # keep its account rather than the generic line.
+                        append_event(job_id, {**payload, "status": "canceled"})
+                    else:
+                        append_event(
+                            job_id,
+                            {
+                                "event": "canceled",
+                                "status": "canceled",
+                                "message": "Install job canceled by user.",
+                            },
+                        )
+                    saw_terminal = True
+                    break
+                append_event(job_id, payload)
+                if payload.get("event") in {"complete", "error", "canceled"}:
+                    saw_terminal = True
+                    break
+        finally:
+            # Close the source here, not when the garbage collector gets to it:
+            # an async generator left at a yield runs its cleanup (the playbook
+            # engine writes its receipt there) before the job is marked finished.
+            aclose = getattr(source, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
         if not saw_terminal:
             append_event(

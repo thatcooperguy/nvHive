@@ -14,7 +14,7 @@ the free-tier ladder, the rate-limit messages and `nvh advisor info`.
 | Provider | `config.yaml` name | Key variable | Free tier | Default model |
 |---|---|---|---|---|
 | Ollama (local) | `ollama` | — | Unlimited, free, runs on your GPU | `ollama/gemma3:4b` (VRAM-tiered) |
-| LLM7 | `llm7` | `LLM7_API_KEY` (optional) | Anonymous access: 30 RPM, no signup. Token: 120 RPM | `gpt-oss` |
+| LLM7 | `llm7` | `LLM7_API_KEY` (optional) | Anonymous access: 30 RPM, no signup. Token: 120 RPM | `gpt-oss:20b` |
 | Groq | `groq` | `GROQ_API_KEY` | Free tier: 30 req/min, 14.4K tok/min | `groq/openai/gpt-oss-120b` |
 | Google Gemini | `google` | `GOOGLE_API_KEY` (`GEMINI_API_KEY`) | Free tier: 15 req/min, 1M tokens/day | `gemini/gemini-3.7-flash` |
 | Mistral | `mistral` | `MISTRAL_API_KEY` | Free Experiment plan: 2 RPM, 1B tokens/month | `mistral/mistral-large-latest` |

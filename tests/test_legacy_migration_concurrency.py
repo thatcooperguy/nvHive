@@ -23,6 +23,7 @@ def homes(tmp_path, monkeypatch):
     layout = storage.storage_layout(tmp_path / "layout")
     monkeypatch.setattr(Path, "home", lambda: home)
     monkeypatch.setenv(ml.LEGACY_MIGRATION_ENV, "1")
+    monkeypatch.setattr(ml, "_LAST_REPORTS", {})  # per-process memory of the last run
     return SimpleNamespace(home=home, layout=layout, root=tmp_path)
 
 
@@ -386,3 +387,78 @@ async def test_repository_does_not_create_empty_database_on_migration_lock_timeo
     finally:
         stop_worker(worker)
         await repository.close_db()
+
+
+# ---------------------------------------------------------------------------
+# legacy_migration_status: the read-only view `nvh status --deep` renders.
+# It never copies, locks or writes, so a diagnostic cannot start a second run.
+# ---------------------------------------------------------------------------
+
+
+def test_status_is_read_only_and_lists_what_a_run_would_copy(homes):
+    source, destination = seed(homes, "file")
+    status = ml.legacy_migration_status(homes.layout)
+    assert not status.disabled and not status.already_done and not status.attempted
+    assert status.legacy_roots == {"hive": str(homes.home / ".hive")}
+    assert status.pending == [
+        {"label": "user profile", "source": str(source), "destination": str(destination)},
+    ]
+    assert status.failed == [] and status.ran_at is None and status.moved == []
+    # Nothing was created, locked or copied: the layout root does not even exist.
+    assert not homes.layout.home.exists() and not Path(status.marker).exists()
+    assert not destination.exists() and source.read_bytes() == b"legacy profile"
+    assert json.loads(json.dumps(status.as_dict()))["pending"] == status.pending
+
+
+def test_status_after_a_run_mirrors_the_marker(homes):
+    _, destination = seed(homes, "file")
+    report = ml.migrate_legacy_homes(homes.layout)
+    status = ml.legacy_migration_status(homes.layout)
+    assert status.already_done and status.attempted and status.failed == []
+    assert status.ran_at == report.ran_at and status.moved == report.moved
+    assert status.pending == []  # a recorded run is never re-planned
+    assert status.legacy_roots == {"hive": str(homes.home / ".hive")}
+    assert destination.read_bytes() == b"legacy profile"
+    assert json.loads(Path(status.marker).read_text())["moved"] == status.moved
+
+
+def test_status_reports_this_process_failures_and_clears_on_retry(homes, monkeypatch):
+    _, destination = seed(homes, "file")
+    publish = ml._publish_no_replace
+
+    def unavailable(*args):
+        raise OSError("filesystem does not support exclusive rename")
+
+    monkeypatch.setattr(ml, "_publish_no_replace", unavailable)
+    report = ml.migrate_legacy_homes(homes.layout)
+    status = ml.legacy_migration_status(homes.layout)
+    assert report.failed and status.failed == report.failed and status.attempted
+    assert not status.already_done and [e["label"] for e in status.pending] == ["user profile"]
+    # Another layout's status knows nothing about this layout's run.
+    other = ml.legacy_migration_status(storage.storage_layout(homes.root / "other-layout"))
+    assert other.attempted is False and other.failed == []
+    monkeypatch.setattr(ml, "_publish_no_replace", publish)
+    assert not ml.migrate_legacy_homes(homes.layout).failed
+    status = ml.legacy_migration_status(homes.layout)
+    assert status.already_done and status.attempted and status.failed == [] and status.pending == []
+    assert destination.read_bytes() == b"legacy profile"
+
+
+def test_status_under_the_kill_switch_reads_nothing_under_home(homes, monkeypatch):
+    seed(homes, "file")
+    marker = homes.layout.state_dir / ml.MARKER_NAME
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({"ran_at": "2026-10-31T00:00:00+00:00", "moved": [{"label": "x"}]}))
+    monkeypatch.setenv(ml.LEGACY_MIGRATION_ENV, "0")
+    monkeypatch.setattr(Path, "home", lambda: pytest.fail("the kill switch must keep the status away from $HOME"))
+    status = ml.legacy_migration_status(homes.layout)
+    assert status.disabled and status.already_done
+    assert status.ran_at == "2026-10-31T00:00:00+00:00" and status.moved == [{"label": "x"}]
+    assert status.legacy_roots == {} and status.pending == [] and not status.attempted
+
+
+def test_status_carries_the_retired_env_warning(homes, monkeypatch):
+    monkeypatch.setenv(ml.LEGACY_DATA_DIR_ENV, str(homes.root / "old-data"))
+    status = ml.legacy_migration_status(homes.layout)
+    assert len(status.warnings) == 1
+    assert ml.LEGACY_DATA_DIR_ENV in status.warnings[0] and "NVH_STATE" in status.warnings[0]

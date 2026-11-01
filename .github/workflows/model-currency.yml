@@ -49,7 +49,7 @@ jobs:
       - name: Catalog overrides against today's LiteLLM (informational, never fails)
         if: always()
         continue-on-error: true
-        run: python -c "from tests.test_model_currency import print_override_drift; print_override_drift()"
+        run: python scripts/gen_capabilities.py --drift
       - name: Catalog generator is current (gen_capabilities --check)
         if: always()
         run: python scripts/gen_capabilities.py --check

@@ -376,6 +376,28 @@ class TestAskFlags:
         cli_main._ask("state of fusion power", focus="research", output="raw", quiet=True)
         assert seen["query"]["provider"] == "openai"
 
+    def test_research_focus_keeps_search_native_advisors_out_of_the_fallback_chain(self, monkeypatch):
+        """The grounded prompt is pinned to one advisor; when that advisor fails the engine's fallback chain must not
+        hand the prompt to Perplexity, which would search again. So the research turn passes the exclusion set the
+        initial pick used (``SEARCH_NATIVE_PROVIDERS``) into ``engine.query`` -- grounded or, in privacy mode, with
+        the bare question that must not reach a search engine -- and a plain turn excludes nothing."""
+        seen: dict = {}
+        self._council_engine(monkeypatch, ["openai", "perplexity"], seen)
+        calls = self._fake_web_search(monkeypatch, self._HITS)
+        cli_main._ask("state of fusion power", focus="research", output="raw", quiet=True)
+        assert seen["query"]["provider"] == "openai"
+        assert seen["query"]["exclude_providers"] == cli_main.SEARCH_NATIVE_PROVIDERS == frozenset({"perplexity"})
+        assert len(calls) == 1
+
+        seen.clear()
+        cli_main._ask("state of fusion power", focus="research", privacy=True, output="raw", quiet=True)
+        assert len(calls) == 1  # privacy mode: no search
+        assert seen["query"]["exclude_providers"] == frozenset({"perplexity"})
+
+        seen.clear()
+        cli_main._ask("state of fusion power", output="raw", quiet=True)
+        assert seen["query"]["exclude_providers"] == frozenset()
+
     def test_research_focus_pinned_perplexity_skips_grounding(self, monkeypatch, capsys):
         seen: dict = {}
         self._council_engine(monkeypatch, ["perplexity", "groq"], seen)

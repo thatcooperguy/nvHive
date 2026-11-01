@@ -533,7 +533,7 @@ export default function ProvidersPage() {
             <textarea
               value={envImportText}
               onChange={(e) => setEnvImportText(e.target.value)}
-              placeholder={'OPENAI_API_KEY=sk-…\nGROQ_API_KEY=gsk_…\nANTHROPIC_API_KEY=sk-ant-…'}
+              placeholder={freeProviders.filter(p => p.env_key).slice(0, 3).map(p => `${p.env_key}=${p.placeholder ?? ''}`).join('\n')}
               rows={8}
               className="mt-3 w-full resize-none rounded-md border border-[#d4d4d4] bg-[#fafafa] p-2 text-xs font-mono dark:bg-[#141414] dark:border-[#404040]"
               spellCheck={false}

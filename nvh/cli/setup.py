@@ -122,10 +122,16 @@ RETIRED_MODEL_RENAMES: dict[str, dict[str, str]] = {
         "meta/llama-3.1-8b-instruct": "nvidia_nim/meta/llama-3.1-8b-instruct",
     },
     "llm7": {
-        "gpt-4o": "gpt-oss",
-        "gpt-4o-mini": "gpt-oss",
-        "llama-3.3-70b": "minimax-m2.7",
-        "deepseek-r1-0528": "gpt-oss",
+        # 2026-11-01: the anonymous GET /models serves gpt-oss:20b and
+        # minimax-m3 and no longer the bare gpt-oss / minimax-m2.7, so the
+        # older entries point straight at the new ids (a target is never
+        # itself a source, so no rename chains).
+        "gpt-4o": "gpt-oss:20b",
+        "gpt-4o-mini": "gpt-oss:20b",
+        "llama-3.3-70b": "minimax-m3",
+        "deepseek-r1-0528": "gpt-oss:20b",
+        "gpt-oss": "gpt-oss:20b",
+        "minimax-m2.7": "minimax-m3",
     },
 }
 

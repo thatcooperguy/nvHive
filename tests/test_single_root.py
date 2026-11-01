@@ -10,6 +10,14 @@ string constants (docstrings and comments are prose, not paths the code
 uses), JSON values, YAML keys and values, and plain text files. Every
 exclusion names its reason and a second test asserts it still hits, so the
 tables cannot rot once a file is fixed.
+
+The second half pins the sibling invariant for the files the package ships
+*inside* itself: every bundled data file (the ``package-data`` globs in
+pyproject.toml) resolves through ``nvh.data`` (``importlib.resources``),
+the loaders that used to walk up from ``__file__`` read through it, and no
+module under nvh/ anchors a path on ``__file__`` except the ones that locate
+something beside the package, each with its reason in a table that must
+still hit.
 """
 
 from __future__ import annotations
@@ -202,3 +210,146 @@ def test_settings_default_paths_are_the_layout(tmp_path: Path, monkeypatch) -> N
         assert repository._default_db_path() == layout.state_dir / "nvhive.db"
     finally:
         settings.reset_default_paths()
+
+
+# ---------------------------------------------------------------------------
+# Bundled data resolves through nvh.data (importlib.resources), never through
+# ``Path(__file__)`` arithmetic.
+# ---------------------------------------------------------------------------
+
+PYPROJECT = ROOT / "pyproject.toml"
+
+# Modules allowed to spell ``__file__``, with the reason. Each locates
+# something *beside* the installed package (its dist-info, a ``web/`` checkout
+# next to a git clone), which importlib.resources cannot address because it is
+# not inside the package. ``test_file_anchor_allowances_are_still_needed``
+# evicts a row the moment the module stops using ``__file__``.
+FILE_ANCHORS_ALLOWED: dict[str, str] = {
+    "nvh/cli/main.py": (
+        "install-mode detection reads the nvhive-*.dist-info beside the package; "
+        "the web/ candidate list starts at the checkout root"
+    ),
+    "nvh/cli/services.py": "the cold-start probe looks for web/ at the checkout root",
+}
+
+
+def package_data_globs() -> dict[str, list[str]]:
+    """``[tool.setuptools.package-data]`` from pyproject.toml: ``{package: [glob, ...]}``."""
+    import tomllib
+
+    pyproject = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    return pyproject["tool"]["setuptools"]["package-data"]
+
+
+def shipped_data_files() -> dict[Path, str]:
+    """Every source file a package-data glob ships: ``{path relative to nvh/: "package: glob"}``."""
+    shipped: dict[Path, str] = {}
+    for package, globs in package_data_globs().items():
+        base = ROOT.joinpath(*package.split("."))
+        for pattern in globs:
+            for path in sorted(base.glob(pattern)):
+                if path.is_file():
+                    shipped[path.relative_to(PKG)] = f"{package}: {pattern}"
+    return shipped
+
+
+def modules_spelling_dunder_file() -> set[str]:
+    """Modules under nvh/ that use ``__file__``, bare or as ``module.__file__``."""
+    hits: set[str] = set()
+    for path in sorted(PKG.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Name) and node.id == "__file__") or (
+                isinstance(node, ast.Attribute) and node.attr == "__file__"
+            ):
+                hits.add(path.relative_to(ROOT).as_posix())
+                break
+    return hits
+
+
+def test_every_package_data_glob_ships_something() -> None:
+    """A glob that matches nothing is a renamed file the wheel silently dropped."""
+    for package, globs in package_data_globs().items():
+        base = ROOT.joinpath(*package.split("."))
+        for pattern in globs:
+            assert any(p.is_file() for p in base.glob(pattern)), (
+                f"{package}: {pattern!r} matches no file"
+            )
+
+
+def test_every_data_file_under_nvh_is_in_package_data() -> None:
+    """A source-tree data file no glob ships is a FileNotFoundError after ``pip install``."""
+    shipped = set(shipped_data_files())
+    present = {
+        p.relative_to(PKG)
+        for p in PKG.rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts and p.suffix not in {".py", ".pyc"}
+    }
+    missing = sorted(p.as_posix() for p in present - shipped)
+    assert not missing, f"not covered by [tool.setuptools.package-data]: {missing}"
+
+
+def test_helpers_resolve_every_shipped_data_file() -> None:
+    """``nvh.data`` finds, reads and (for JSON and YAML) parses each file the wheel ships."""
+    import nvh
+    from nvh import data
+
+    installed = Path(nvh.__file__).resolve().parent
+    shipped = shipped_data_files()
+    assert shipped
+    for rel in shipped:
+        node = data.bundled(*rel.parts)
+        assert node.is_file(), rel
+        assert node.read_bytes() == (installed / rel).read_bytes(), rel
+        resolved = data.bundled_path(*rel.parts)
+        assert isinstance(resolved, Path) and resolved.samefile(installed / rel), rel
+        if rel.suffix in {".yaml", ".yml"}:
+            assert isinstance(data.read_yaml(*rel.parts), dict), rel
+        elif rel.suffix == ".json":
+            assert isinstance(data.read_json(*rel.parts), dict), rel
+        else:
+            assert data.read_text(*rel.parts).strip(), rel
+
+
+def test_loaders_read_through_the_helpers() -> None:
+    """The former ``Path(__file__)`` loaders point at exactly the files the helpers resolve."""
+    from nvh import data
+    from nvh.core import quality_benchmark, workflows
+    from nvh.providers import registry
+
+    assert registry.CONFIG_DIR == data.bundled_path("config")
+    assert registry.CATALOG_PATH == data.bundled_path("config", "capabilities.yaml")
+    assert registry.MODEL_OVERRIDES_PATH == data.bundled_path("config", "model_overrides.json")
+
+    builtin = {
+        Path(entry.name).stem: data.bundled_path("workflows", entry.name)
+        for entry in data.bundled("workflows").iterdir()
+        if entry.name.endswith((".yaml", ".yml"))
+    }
+    assert builtin
+    assert workflows.discover_workflows(dirs=[]) == builtin
+
+    ids = [row["id"] for row in data.read_yaml("config", "quality_benchmarks.yaml")["prompts"]]
+    assert ids
+    assert [prompt.id for prompt in quality_benchmark._builtin_prompts()] == ids
+
+
+def test_no_module_under_nvh_anchors_data_on_dunder_file() -> None:
+    offenders = sorted(modules_spelling_dunder_file() - set(FILE_ANCHORS_ALLOWED))
+    assert not offenders, (
+        "bundled data is read through nvh.data (importlib.resources), not Path(__file__) "
+        "arithmetic; a module that must locate something beside the package joins "
+        "FILE_ANCHORS_ALLOWED with its reason:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_file_anchor_allowances_are_still_needed() -> None:
+    hits = modules_spelling_dunder_file()
+    stale = [
+        f"{rel} no longer spells __file__: remove it from FILE_ANCHORS_ALLOWED"
+        for rel in sorted(FILE_ANCHORS_ALLOWED)
+        if rel not in hits
+    ]
+    assert not stale, "\n".join(stale)

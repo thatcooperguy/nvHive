@@ -12,6 +12,8 @@ import {
   unwrapToolResult,
   type PlaybookRunState,
 } from './privileged';
+// Pure cabinet adapter: the server's `{ name: roles[] }` dict becomes the picker's list.
+import { presetsFromPayload } from './cabinets';
 import type {
   ApiEnvelope,
   PlaybookCatalogueEntry,
@@ -27,6 +29,7 @@ import type {
   ModelsListResult,
   BudgetStatus,
   CacheStats,
+  AgentPreset,
   AgentPresetsResult,
   ProviderHealth,
   HealthResult,
@@ -954,8 +957,14 @@ export async function clearCache(provider?: string): Promise<{ cleared: number; 
 
 // ─── Agents ──────────────────────────────────────────────────────────────────
 
-export async function getAgentPresets(): Promise<AgentPresetsResult> {
-  return apiGet<AgentPresetsResult>('/v1/agents/presets');
+/**
+ * Council cabinets for the picker. The server answers with a dict
+ * (`{ presets: { executive: [roles...], ... } }`, nvh.core.agents.list_presets),
+ * adapted here to a list in the server's order; see lib/cabinets.ts.
+ */
+export async function getAgentPresets(): Promise<AgentPreset[]> {
+  const result = await apiGet<AgentPresetsResult>('/v1/agents/presets');
+  return presetsFromPayload(result?.presets);
 }
 
 // ─── Conversations ────────────────────────────────────────────────────────────

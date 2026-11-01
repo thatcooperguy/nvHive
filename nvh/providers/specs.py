@@ -1056,8 +1056,8 @@ _SPECS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         "llm7",
-        "gpt-oss",
-        "minimax-m2.7",
+        "gpt-oss:20b",
+        "minimax-m3",
         litellm_prefix="openai/",
         base_url="https://api.llm7.io/v1",
         env_keys=("HIVE_LLM7_API_KEY",),
@@ -1077,14 +1077,14 @@ _SPECS: tuple[ProviderSpec, ...] = (
         reliability_weight=0.72,
         strengths=(
             "No signup required — anonymous API access works immediately",
-            "Supports DeepSeek-R1 and other capable models for free",
+            "Serves gpt-oss:20b and other open models on the anonymous tier",
             "30 RPM anonymous, 120 RPM with token",
             "Zero friction for first-time users",
         ),
         best_for=(
             "Zero-setup first use — no account needed",
             "Quick experiments without signing up anywhere",
-            "Accessing DeepSeek-R1 reasoning for free",
+            "Trying an open-weights model without any account",
             "Students who don't want to share email/payment info",
         ),
         weaknesses=(

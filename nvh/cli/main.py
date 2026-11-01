@@ -340,7 +340,7 @@ async def _smart_default(prompt: str, *, force_iterative: bool = False):
                         console.print(f"  [yellow]M[/yellow] {f}")
                     for f in result.files_created:
                         console.print(f"  [green]A[/green] {f}")
-            console.print(f"\n[dim]{result.total_iterations} step(s) | {result.total_tool_calls} tool(s) | {result.duration_ms}ms[/dim]")
+            console.print(f"\n[dim]{result.total_iterations} step(s) | {result.total_tool_calls} tool(s) | {result.duration_ms}ms | ${result.total_cost_usd:.4f}[/dim]")
         except Exception as e:
             console.print(_format_cli_error(e))
 
@@ -1179,6 +1179,11 @@ def _ask(
                         privacy=privacy,
                         escalate=escalate,
                         verify=verify,
+                        # A --focus research turn never falls back to an advisor that
+                        # searches again: the prompt is already grounded on nvHive's
+                        # web search, or (privacy / local mode) must not reach a
+                        # search engine at all. The pinned advisor itself is kept.
+                        exclude_providers=SEARCH_NATIVE_PROVIDERS if focus == "research" else frozenset(),
                     )
 
                 # Show escalation info before the response
@@ -10144,7 +10149,7 @@ def do_task(
         console.print(
             f"\n[dim]{result.total_iterations} step(s) | "
             f"{result.total_tool_calls} tool call(s) | "
-            f"{elapsed:.1f}s | {status}[/dim]"
+            f"{elapsed:.1f}s | ${result.total_cost_usd:.4f} | {status}[/dim]"
         )
         if result.error and not result.completed:
             console.print(f"[dim yellow]Note: {result.error}[/dim yellow]")
@@ -10456,7 +10461,7 @@ def agent(
             f"\n[dim]{result.total_iterations} step(s) | "
             f"{result.total_tool_calls} tool call(s) | "
             f"{result.files_read.__len__()} file(s) read | "
-            f"{elapsed:.1f}s | {status}[/dim]"
+            f"{elapsed:.1f}s | ${result.total_cost_usd:.4f} | {status}[/dim]"
         )
 
     _run(_run_agent())

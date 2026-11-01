@@ -29,6 +29,12 @@ Invariants pinned (docs/proposals/SPARK_CONCIERGE_2026-09.md §3.4, §5):
     group — nvHive still has no password parameter and no prompt of its own.
   - The deny list (``check_command`` + the module's own) fires before any
     subprocess; ``apt_install`` refuses driver packages with the DGX warning.
+  - Linux only (W15): off Linux an apply — and any ``sudo=True`` run — is
+    refused before a subprocess with the one sentence "System changes are
+    not available on Windows yet" (``unsupported_host``, ``applied: False``,
+    so no vault note), ``sudo`` is never prepended, plans still render and
+    carry the sentence as a note, and ``system_settings_get`` exports
+    ``platform.os``, ``sudo.host_probe_pending`` and ``system_changes``.
   - ``chat.py`` buckets a privileged call as needing confirmation (see also
     tests/test_wizard_profile_enforcement.py).
 """
@@ -86,6 +92,28 @@ def seed(
         memory_available_gb=100.0, device_class="dgx-spark", device_label=SPARK_LABEL,
         has_root=has_root, can_sudo=can_sudo, in_sudo_group=in_sudo_group or can_sudo or has_root,
         host_probe_pending=host_probe_pending,
+    ))
+
+
+RTX_SPARK_LABEL = "RTX Spark (Windows on Arm, 128 GB unified)"
+WINDOWS_REFUSAL = "System changes are not available on Windows yet"
+
+
+def seed_off_linux(os_name: str = "windows") -> None:
+    """Seed a non-Linux host whose *sudo matrix alone* would elevate.
+
+    Windows: an RTX Spark-class Windows on Arm box where the user is an
+    Administrator (``in_sudo_group`` and ``can_sudo`` are what the Windows
+    probe answers for an admin), so only the OS check can stop the apply.
+    macOS: an admin on a Mac, same idea, different wording.
+    """
+    windows = os_name == "windows"
+    pf.seed_platform_facts(pf.PlatformFacts(
+        os=os_name, arch="arm64", machine="ARM64", kernel="10.0.26200" if windows else "24.6.0",
+        gpu_name="NVIDIA N1X" if windows else "", unified_memory=True, memory_total_gb=128.0,
+        memory_available_gb=100.0, device_class="rtx-spark" if windows else "laptop",
+        device_label=RTX_SPARK_LABEL if windows else "MacBook Pro", has_root=False, can_sudo=True,
+        in_sudo_group=True, windows_on_arm=windows,
     ))
 
 
@@ -981,6 +1009,135 @@ def test_collect_system_settings_survives_a_broken_probe(fake_run: FakeSubproces
     monkeypatch.setattr(ss, "_auto_suspend_facts", boom)
     out = ss.collect_system_settings()
     assert out["ok"] is True and out["auto_suspend"] == {"error": "RuntimeError"}
+
+
+def test_collect_system_settings_exports_the_os_the_probe_state_and_the_tier_verdict(fake_run: FakeSubprocess) -> None:
+    """The facts dict says which OS it describes, whether the privilege answer
+    is final (``host_probe_pending``: the probe may still be running on
+    another thread, in which case ``can_sudo`` / ``in_sudo_group`` are
+    placeholders) and whether system changes are available here at all."""
+    out = ss.collect_system_settings()
+    assert out["platform"]["os"] == "linux"
+    assert out["sudo"]["host_probe_pending"] is False
+    assert out["system_changes"] == {"available": True, "note": None}
+
+    seed(host_probe_pending=True)
+    assert ss.collect_system_settings()["sudo"]["host_probe_pending"] is True
+
+    seed_off_linux()
+    out = ss.collect_system_settings()
+    assert out["ok"] is True
+    assert out["platform"]["os"] == "windows" and out["platform"]["device_label"] == RTX_SPARK_LABEL
+    assert out["system_changes"] == {"available": False, "note": WINDOWS_REFUSAL}
+    # Still read-only on Windows: the probes that exist ran, none with sudo.
+    assert fake_run.calls and all(call[0] != "sudo" for call in fake_run.calls)
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Off Linux (W15): the honest refusal — plans render, applies refuse, no sudo
+# ───────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(("os_name", "expected"), [
+    ("linux", None),
+    ("windows", WINDOWS_REFUSAL),
+    ("macos", "System changes are not available on macOS yet"),
+    ("unknown", "System changes are not available on this platform yet"),
+])
+def test_system_changes_unavailable_is_one_plain_sentence_per_os(os_name: str, expected: str | None) -> None:
+    assert ss.system_changes_unavailable(os_name) == expected
+
+
+def test_off_linux_sudo_run_is_refused_before_a_subprocess_and_never_prefixes_sudo(fake_run: FakeSubprocess) -> None:
+    """An Administrator on Windows passes the sudo matrix (``can_sudo``), so
+    without the OS check the runner would spawn ``sudo -n systemctl …`` —
+    and Windows 11 ships a ``sudo`` that raises a UAC prompt. The refusal
+    comes first, on the job path and the CLI's interactive path alike."""
+    seed_off_linux()
+    argv = ["systemctl", "enable", "--now", "ssh"]
+    for interactive in (False, True):
+        result = ss.run_host_command(argv, sudo=True, interactive=interactive)
+        assert result == {
+            "ok": False, "unsupported_host": True, "applied": False,
+            "error": WINDOWS_REFUSAL, "command": "sudo systemctl enable --now ssh",
+        }, interactive
+    assert fake_run.calls == []
+    # The deny list still speaks first: a refused command is refused for its own reason.
+    denied = ss.run_host_command(["systemctl", "reboot"], sudo=True)
+    assert denied["denied"] is True and "unsupported_host" not in denied
+    # Read-only probes (``sudo=False``) are untouched: nvidia-smi on Windows is a real answer.
+    probe = ss.run_host_command(["nvidia-smi"], sudo=False)
+    assert probe["ok"] is True and probe["exit_code"] == 0
+    assert fake_run.calls == [["nvidia-smi"]]
+
+
+def test_off_linux_plans_render_with_the_note_and_applies_refuse_before_the_first_step(fake_run: FakeSubprocess) -> None:
+    """The plan is read-only advice and keeps rendering (the Wizard can explain
+    what ``enable_ssh`` does on a Spark); the apply refuses as a whole —
+    including a plan whose first step needs no sudo — and runs nothing."""
+    seed_off_linux()
+    plan = ss.plan_setting({"setting": "enable_ssh"})
+    assert plan["ok"] is True and plan["commands"] == ["sudo systemctl enable --now ssh"]
+    assert plan["host_supported"] is False
+    assert plan["notes"][-1] == f"{WINDOWS_REFUSAL}: {ss.PLAN_OFF_LINUX_NOTE}"
+    # The deny list still decides ``ok``: a refused plan is refused for its own reason.
+    assert ss.plan_setting({"setting": "set_hostname", "value": "spark 01"})["ok"] is False
+
+    for setting in ("enable_ssh", "disable_headless_suspend", "add_user_to_docker_group"):
+        result = ss.apply_setting({"setting": setting})
+        assert result["ok"] is False and result["unsupported_host"] is True and result["applied"] is False, setting
+        assert result["error"] == WINDOWS_REFUSAL and result["setting"] == setting and result["steps"] == []
+        assert result["commands"] and all("sudo -n" not in c for c in result["commands"])
+    apt = ss._apply_prepared(ss._prepare_apt_install, {"packages": ["htop"]})
+    assert apt["error"] == WINDOWS_REFUSAL and apt["applied"] is False
+    assert fake_run.calls == []
+
+    # Back on Linux the same plan carries no such note and the dict is unchanged.
+    seed(can_sudo=True)
+    linux_plan = ss.plan_setting({"setting": "enable_ssh"})
+    assert "host_supported" not in linux_plan and WINDOWS_REFUSAL not in json.dumps(linux_plan)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("os_name", "sentence"), [
+    ("windows", WINDOWS_REFUSAL),
+    ("macos", "System changes are not available on macOS yet"),
+])
+async def test_off_linux_apply_through_the_registry_is_the_honest_refusal(
+    fake_run: FakeSubprocess, monkeypatch, tmp_path: Path, os_name: str, sentence: str,
+) -> None:
+    """The red-card contract is untouched — kill switch, card, token — and the
+    confirmed apply answers the refusal in band: ``ok: False``,
+    ``applied: False``, no subprocess, no vault note."""
+    seed_off_linux(os_name)
+    reg = WizardToolRegistry()
+    ss.register_wizard_tools(reg)
+
+    card = await reg.execute("system_settings_apply", arguments={"setting": "enable_ssh"})
+    assert card["needs_confirmation"] is True and card["privileged"] is True
+    assert card["plan"]["ok"] is True and card["plan"]["commands"] == ["sudo systemctl enable --now ssh"]
+    assert card["plan"]["host_supported"] is False and sentence in card["plan"]["notes"][-1]
+
+    out = await reg.execute(
+        "system_settings_apply", arguments={"setting": "enable_ssh"}, confirmed=True,
+        approval_token=card["approval_token"],
+    )
+    assert out["ok"] is True and out["tool"] == "system_settings_apply"  # the tool answered …
+    result = out["result"]
+    assert result["ok"] is False and result["unsupported_host"] is True and result["applied"] is False
+    assert result["error"] == sentence and result["setting"] == "enable_ssh"
+    assert "audit" not in out and _decisions(tmp_path) == []
+    assert fake_run.calls == []
+
+    # A confirmed call without its token is refused the usual way, and the kill
+    # switch still wins on both paths: the OS check sits behind the contract, not in front of it.
+    again = await reg.execute("system_settings_apply", arguments={"setting": "enable_ssh"}, confirmed=True)
+    assert again["approval_required"] is True
+    monkeypatch.setenv(PRIVILEGED_ENV, "0")
+    for confirmed in (False, True):
+        off = await reg.execute("system_settings_apply", arguments={"setting": "enable_ssh"}, confirmed=confirmed)
+        assert off["disabled"] is True and off["error"] == PRIVILEGED_DISABLED_ERROR
+    assert fake_run.calls == []
 
 
 # ───────────────────────────────────────────────────────────────────────────

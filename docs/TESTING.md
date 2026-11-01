@@ -32,8 +32,15 @@ run). Test processes use LiteLLM's bundled model-price map
 `tests/` is flat: one `test_<subject>.py` per module or feature, no
 subdirectories. `tests/conftest.py` holds the shared `db` fixture (a fresh
 SQLite database bound to the repository for one async test) and its
-synchronous twin `sync_db` for `TestClient`-driven tests; everything else
-lives in the file that needs it. When a module is deleted its test file goes
+synchronous twin `sync_db` for `TestClient`-driven tests, plus three autouse
+fixtures every test gets: a throwaway home (`NVH_HOME`, `Path.home()`,
+`HOME` / `USERPROFILE` and the storage knobs all point away from the
+developer's; a module that must see the real home sets `HERMETIC_HOME =
+False` at module level), seeded platform facts (no `sudo -n` / `nvidia-smi`
+probes) and a stubbed local-daemon probe (`HERMETIC_LOCAL_PROBE = False`
+opts a module out). A module fixture must not reuse the name
+`_hermetic_home`: it would shadow the conftest one and silently skip the
+patching. Everything else lives in the file that needs it. When a module is deleted its test file goes
 with it; when a module is renamed the test file is renamed too. A handful of
 files are guards rather than unit tests:
 
@@ -84,8 +91,8 @@ files are guards rather than unit tests:
   Its container-local Git redirect leaves the normal installer source URL
   unchanged. Windows persistence contracts run with
   `pwsh -File ci/test-windows-installer.ps1`; they execute extracted installer
-  logic against fake user settings and native commands, with no installation
-  or registry writes.
+  logic against fake user settings and native commands, including a mocked
+  ARM64 case, with no installation or registry writes.
 
   Linux shell-path contracts (`python3 ci/test-linux-installer-env.py`) source
   generated environment/profile code and command shims with inert services.
@@ -182,7 +189,7 @@ NVH_NETWORK_TESTS=1 python -m pytest tests/test_model_currency.py -q
 NVH_NETWORK_TESTS=1 GROQ_API_KEY=... NVIDIA_API_KEY=... python -m pytest tests/test_model_currency.py -q -k keyed
 
 # the override-drift report the weekly workflow prints (offline, never fails)
-python -c "from tests.test_model_currency import print_override_drift; print_override_drift()"
+python scripts/gen_capabilities.py --drift
 ```
 
 `tests/test_capabilities_catalog.py` passes on whatever LiteLLM `pip`

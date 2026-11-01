@@ -22,7 +22,10 @@ The persona is intentional:
 This module exports:
 
   WIZARD_PERSONA          — the stable persona block (never changes per turn)
-  build_system_prompt()   — combines persona + live context snapshot
+  build_system_prompt()   — combines persona + live context snapshot; its
+                            ``native`` flag picks the tool instructions for
+                            the channel the turn uses (the ``TOOL_CALL:``
+                            text protocol, or native function calling)
 """
 
 from __future__ import annotations
@@ -221,13 +224,85 @@ Decision guide — pick the smallest reliable answer:
 """.rstrip()
 
 
-def _format_tools_block(tools: list[dict[str, Any]]) -> str:
+# What happens after a privileged call, worded once for both tool channels:
+# the model never sees the outcome in the turn that proposed it, and the
+# only way it arrives is the TOOL_RESULT line on the next turn
+# (chat.py ``_history_tool_results_message``). A ``needs a terminal:``
+# summary is how the model learns which exact command to repeat.
+_PRIVILEGED_OUTCOME_LINES: tuple[str, ...] = (
+    "    The user approves it on a red card in the UI; nothing runs otherwise,",
+    "    and you will NOT see the outcome this turn. On the NEXT turn it",
+    "    arrives as a TOOL_RESULT line: `ok: true` means it ran; a summary",
+    "    starting `needs a terminal:` carries the exact command the user must",
+    "    run themselves — repeat that command verbatim and nothing else.",
+    "    Never ask for a password: nvHive never prompts for, sees or stores one.",
+)
+
+_SAFETY_CLASS_ORDER: tuple[str, ...] = ("auto", "confirm", "privileged")
+
+
+def _tool_rules(*, native: bool) -> list[str]:
+    """The one Rules list both tool channels teach; only *how* a call is made differs.
+
+    ``{how}`` is "call the tool" under native function calling and "END with
+    the TOOL_CALL line" in the text protocol; ``{auto_tail}`` adds the
+    TOOL_CALL line to the short ``auto`` reply in the text protocol. The
+    privileged-outcome lines are shared verbatim
+    (:data:`_PRIVILEGED_OUTCOME_LINES`). Rendering both variants from one
+    template is what keeps a wording fix from landing in one channel only.
+    """
+    how = "call the tool" if native else "END with the TOOL_CALL line"
+    auto_tail = "." if native else " plus the TOOL_CALL line."
+    return [
+        "  - Only call a tool the user clearly asked for. Don't surprise them.",
+        f"  - For `auto` tools, your reply can be short (\"Refreshing models now.\"){auto_tail}",
+        "    The system runs the tool immediately.",
+        f"  - For `confirm` tools, explain what you're about to do, then {how}.",
+        "    The UI shows a confirmation button — you do NOT need to ask",
+        "    \"OK?\" yourself, the button does that.",
+        "  - For `privileged` tools (they change this machine, usually with sudo),",
+        f"    explain what will change and why, then {how}.",
+        *_PRIVILEGED_OUTCOME_LINES,
+        "  - Never invent a tool. If nothing fits, answer in plain text.",
+    ]
+
+
+def _names_by_safety_class(tools: list[dict[str, Any]]) -> list[str]:
+    """``"auto: a, b"`` lines, one per safety class present, in class order.
+
+    The native function spec (``Tool.as_openai_tool()``) carries name,
+    description and parameters but not the safety class, so under native
+    calling this is the only place the model learns which of its functions
+    need a confirmation button or a red card.
+    """
+    by_class: dict[str, list[str]] = {}
+    for tool in tools:
+        by_class.setdefault(str(tool.get("safety_class") or "auto"), []).append(tool["name"])
+    ordered = [c for c in _SAFETY_CLASS_ORDER if c in by_class]
+    ordered += sorted(c for c in by_class if c not in _SAFETY_CLASS_ORDER)
+    return [f"  {cls}: {', '.join(by_class[cls])}" for cls in ordered]
+
+
+def _format_tools_block(tools: list[dict[str, Any]], native: bool = False) -> str:
     """Render the available Wizard tools as a compact instruction block.
 
-    Uses a structured ``TOOL_CALL:`` line format any LLM can emit — works on
-    local Ollama models that lack native function-calling, and on any cloud
-    provider that just streams text. The chat loop parses these markers back
-    out into a structured ``tool_calls`` field on the response.
+    ``native=False`` (the default) teaches the structured ``TOOL_CALL:``
+    line format any LLM can emit — works on local Ollama models that lack
+    native function-calling, and on any cloud provider that just streams
+    text. The chat loop parses these markers back out into a structured
+    ``tool_calls`` field on the response. Each tool is listed with its
+    safety class, description and parameters, because the prompt is the
+    only place the model sees them.
+
+    ``native=True`` is the short variant for a turn whose provider takes the
+    catalogue as ``tools=`` (chat.py decides that once per turn, before the
+    prompt is built). The schemas travel in the request, so the block does
+    not repeat them and does not teach the text marker at all — one set of
+    tool instructions per turn. What it keeps: the safety-class rules, the
+    names grouped by class (the function spec carries no class), the
+    TOOL_RESULT / privileged-outcome instructions
+    (:data:`_PRIVILEGED_OUTCOME_LINES`, shared with the text variant) and
+    the decision guide.
 
     The decision guide below the schema list is the part that actually
     moves accuracy on small local models — without it, 4B-class models
@@ -236,7 +311,26 @@ def _format_tools_block(tools: list[dict[str, Any]]) -> str:
     if not tools:
         return ""
 
-    lines: list[str] = [
+    if native:
+        lines: list[str] = [
+            "",
+            "--- Available actions (tools you can call) ---",
+            "Your tools are attached to this request as native functions; call",
+            "them through that channel, not by writing them into your reply.",
+            "Results come back as TOOL_RESULT lines in system messages — read",
+            "them before you answer.",
+            "",
+            "Rules:",
+            *_tool_rules(native=True),
+            "",
+            "Your tools by safety class:",
+            *_names_by_safety_class(tools),
+            _TOOL_DECISION_GUIDE,
+            "--- end tools ---",
+        ]
+        return "\n".join(lines)
+
+    lines = [
         "",
         "--- Available actions (tools you can request) ---",
         "When the user clearly asks you to DO something a tool covers, emit a",
@@ -245,21 +339,7 @@ def _format_tools_block(tools: list[dict[str, Any]]) -> str:
         "  TOOL_CALL: {\"name\": \"<tool_name>\", \"arguments\": {...}}",
         "",
         "Rules:",
-        "  - Only call a tool the user clearly asked for. Don't surprise them.",
-        "  - For `auto` tools, your reply can be short (\"Refreshing models now.\")",
-        "    plus the TOOL_CALL line. The system runs the tool immediately.",
-        "  - For `confirm` tools, explain what you're about to do and END with",
-        "    the TOOL_CALL line. The UI shows a confirmation button — you do",
-        "    NOT need to ask \"OK?\" yourself, the button does that.",
-        "  - For `privileged` tools (they change this machine, usually with sudo),",
-        "    explain what will change and why, then END with the TOOL_CALL line.",
-        "    The user approves it on a red card in the UI; nothing runs otherwise,",
-        "    and you will NOT see the outcome this turn. On the NEXT turn it",
-        "    arrives as a TOOL_RESULT line: `ok: true` means it ran; a summary",
-        "    starting `needs a terminal:` carries the exact command the user must",
-        "    run themselves — repeat that command verbatim and nothing else.",
-        "    Never ask for a password: nvHive never prompts for, sees or stores one.",
-        "  - Never invent a tool. If nothing fits, answer in plain text.",
+        *_tool_rules(native=False),
         "",
         "Tools:",
     ]
@@ -295,6 +375,7 @@ def build_system_prompt(
     tools: list[dict[str, Any]] | None = None,
     vault_recall: str | None = None,
     findings: list[Any] | None = None,
+    native: bool = False,
 ) -> str:
     """Combine persona + live state + optional vault recall + tool instructions.
 
@@ -303,11 +384,16 @@ def build_system_prompt(
     AFTER the structural context block so the model sees "here is what's
     happening" and immediately after "here is what's broken." The findings
     block is omitted when there are no findings — silence is the signal.
+
+    ``native`` selects the tool instructions for the channel this turn uses
+    (:func:`_format_tools_block`): ``False`` teaches the ``TOOL_CALL:`` text
+    protocol with the full catalogue, ``True`` the short variant for a
+    provider that takes the catalogue as ``tools=``.
     """
     from nvh.integrations.wizard.findings import render_findings_block
 
     block = _format_context_block(context)
-    tools_block = _format_tools_block(tools or [])
+    tools_block = _format_tools_block(tools or [], native=native)
     recall_block = _format_vault_recall_block(vault_recall)
     findings_block = render_findings_block(findings or [])
     findings_section = f"\n\n{findings_block}" if findings_block else ""

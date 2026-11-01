@@ -7,7 +7,8 @@ tiers inside: secret-free (llm7's anonymous ``GET /models``) and keyed
 skipping when its variable is absent. No secret is ever printed: model ids
 only.
 
-:func:`print_override_drift` is the workflow's informational step: every
+The workflow's informational step is ``python scripts/gen_capabilities.py
+--drift`` (``override_drift`` / ``print_override_drift`` live there): every
 explicit ``source:`` override in capabilities.yaml beside what the installed
 LiteLLM table says today, every model_overrides.json payload whose id LiteLLM
 now carries, and every active row that no source prices any more (the
@@ -20,8 +21,9 @@ network (the table is the one bundled with LiteLLM).
 
 from __future__ import annotations
 
-import logging
+import importlib.util
 import os
+from pathlib import Path
 
 import httpx
 import pytest
@@ -30,6 +32,8 @@ import yaml
 import nvh.providers.openai_compatible as oc
 from nvh.providers import registry as registry_mod
 from nvh.providers.specs import PROVIDER_FACTS, PROVIDER_SPECS
+
+ROOT = Path(__file__).resolve().parents[1]
 
 NETWORK = pytest.mark.skipif(
     os.environ.get("NVH_NETWORK_TESTS") != "1",
@@ -107,85 +111,30 @@ async def test_keyed_provider_serves_its_spec_and_catalog_ids(provider):
 
 
 # -- informational: the catalog's overrides against today's LiteLLM -----------
+# The report is scripts/gen_capabilities.py's ``--drift`` (the workflow's
+# step); it is loaded from the file the way tests/test_capabilities_catalog.py
+# loads the generator, and these tests pin its shape offline.
 
 
-def override_drift() -> list[str]:
-    """One line per explicit capabilities.yaml override and per model_overrides.json payload.
-
-    Each override is judged against the LiteLLM table this process imported:
-    ``redundant`` when LiteLLM now says the same, ``differs`` when it says
-    something else (the override still wins at load), ``no LiteLLM value``
-    when LiteLLM has nothing to compare. Then one ``cost unknown`` line per
-    active row that nothing prices any more (a ``metered_upstream``
-    provider's rows are unknown by design and not listed). The comparison
-    reuses the registry's own row composition, so no field mapping is typed
-    here. Informational: nothing in it fails.
-    """
-    rows = (yaml.safe_load(registry_mod.CATALOG_PATH.read_text(encoding="utf-8")) or {}).get("models") or {}
-    table = registry_mod._litellm_table() or {}
-    payloads = registry_mod.load_model_overrides() if registry_mod.MODEL_OVERRIDES_PATH.exists() else {}
-    # LiteLLM's own rows, before nvHive registers its payloads into the same table (as the loader does next).
-    carried_by_litellm = {model_id for model_id in payloads if model_id in table and model_id not in registry_mod._OVERRIDES_APPLIED}
-    if table and payloads:
-        registry_mod._apply_model_overrides(table, payloads)
-    # Composing a row without its overrides is a what-if, not a load: keep the
-    # loader's once-per-model "cost unknown" log and its memory out of it.
-    registry_logger = logging.getLogger(registry_mod.__name__)
-    previous_level, logged_before = registry_logger.level, set(registry_mod._UNPRICED_LOGGED)
-    registry_logger.setLevel(logging.ERROR)
-    try:
-        return _drift_lines(rows, table, payloads, carried_by_litellm)
-    finally:
-        registry_logger.setLevel(previous_level)
-        registry_mod._UNPRICED_LOGGED.clear()
-        registry_mod._UNPRICED_LOGGED.update(logged_before)
+def _generator():
+    spec = importlib.util.spec_from_file_location("gen_capabilities", ROOT / "scripts" / "gen_capabilities.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def _drift_lines(rows: dict, table: dict, payloads: dict, carried_by_litellm: set[str]) -> list[str]:
-    lines: list[str] = []
-    for model_id, row in rows.items():
-        row = row or {}
-        if row.get("status") != "retired":
-            info = registry_mod._row_to_model_info(model_id, row, table)
-            if not info.cost_known and not PROVIDER_FACTS[info.provider].metered_upstream:
-                lines.append(
-                    f"{model_id}: cost unknown -- no source prices this active row any more "
-                    f"(retire it or add a sourced override) [{row.get('source', 'no source')}]"
-                )
-        overrides = {k: row[k] for k in registry_mod.CATALOG_OVERRIDE_FIELDS if k in row}
-        if not overrides:
-            continue
-        stripped = {k: v for k, v in row.items() if k not in overrides}
-        ours = registry_mod._row_to_model_info(model_id, row, table)
-        theirs = registry_mod._row_to_model_info(model_id, stripped, table)
-        source = row.get("source", "no source")
-        for field in overrides:
-            ours_value, litellm_value = getattr(ours, field), getattr(theirs, field)
-            unpriced = field.endswith("_cost_per_1m_tokens") and not theirs.cost_known
-            if unpriced or litellm_value in (0, None):
-                verdict = "no LiteLLM value"
-            elif ours_value == litellm_value:
-                verdict = "redundant (LiteLLM agrees)"
-            else:
-                verdict = f"differs (LiteLLM says {litellm_value})"
-            lines.append(f"{model_id}.{field} = {ours_value}: {verdict} [{source}]")
-    for model_id, payload in payloads.items():
-        state = (
-            "LiteLLM now carries this id (payload redundant)"
-            if model_id in carried_by_litellm
-            else "LiteLLM still lacks this id"
-        )
-        lines.append(f"model_overrides.json {model_id}: {state} [{payload.get('source', 'no source')}]")
-    return lines
+_gen = _generator()
+override_drift, print_override_drift = _gen.override_drift, _gen.print_override_drift
 
 
-def print_override_drift() -> None:
-    """Print :func:`override_drift` under a header naming the installed LiteLLM (the workflow step)."""
-    from importlib.metadata import version
-
-    print(f"# capabilities.yaml overrides vs LiteLLM {version('litellm')} (informational)")
-    for line in override_drift():
-        print(line)
+def test_drift_flag_prints_the_report_and_leaves_the_file_alone(capsys):
+    """``python scripts/gen_capabilities.py --drift``: the header, then :func:`override_drift`'s lines, exit 0, no write."""
+    before = _gen.CATALOG_PATH.read_bytes()
+    assert _gen.main(["--drift"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].startswith("# capabilities.yaml overrides vs LiteLLM ") and out[0].endswith("(informational)")
+    assert out[1:] == override_drift()
+    assert _gen.CATALOG_PATH.read_bytes() == before
 
 
 def test_override_drift_report_runs_offline(capsys):

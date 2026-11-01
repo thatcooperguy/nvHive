@@ -103,6 +103,17 @@ def _spark_ollama_down_ctx():
     return _spark_ctx() | {"ollama_models": []}
 
 
+def _rtx_spark_ctx():
+    """An RTX Spark: Windows on Arm, unified memory, the user an Administrator
+    (what the Windows probe reports as ``in_sudo_group`` / ``can_sudo``)."""
+    return _ctx(
+        gpu={"detected": True, "unified_memory": True, "memory_total_gb": 128},
+        platform={"device_class": "rtx-spark", "unified_memory": True, "memory_total_gb": 128,
+                  "os": "windows", "arch": "arm64", "windows_on_arm": True, "is_dgx_os": False,
+                  "can_sudo": True, "in_sudo_group": True},
+    )
+
+
 def _pick(question: str, **kw) -> SpecialistChoice:
     kw.setdefault("profiles", ALL)
     kw.setdefault("context", _ctx())
@@ -1942,6 +1953,30 @@ def test_apt_upgrade_is_the_settings_desks_and_pip_the_medics(neutral_classifier
               "pip3 install -r requirements.txt fails"):
         for which in ("ws", "spark"):
             assert _pick_on(q, which).profile == "install-medic", (q, which)
+
+
+def test_rtx_spark_keeps_the_desks_for_read_only_advice(neutral_classifier) -> None:
+    """W15: on an RTX Spark (Windows on Arm) the settings desk and the app
+    installer still take their questions — the plan renders and the advice
+    holds — while the applies themselves refuse off Linux
+    (``system_settings.system_changes_unavailable``). Routing is a fact about
+    the question; the OS decides what may run, not who answers. The device
+    is the same one boost a DGX Spark gets, named in the reason."""
+    ctx = _rtx_spark_ctx()
+    for q in ("how do I enable ssh on the spark?", "change my hostname to spark-01",
+              "add me to the docker group", "is it safe to run apt upgrade on dgx os?"):
+        choice = _pick(q, context=ctx, history=[])
+        assert choice.profile == "device-settings", (q, choice.reason)
+    for q in ("install ollama on my spark", "which playbooks can I install?", "install vs code on my spark"):
+        choice = _pick(q, context=ctx, history=[])
+        assert choice.profile == "app-installer", (q, choice.reason)
+    plain = _pick("change my hostname to spark-01")
+    rtx = _pick("change my hostname to spark-01", context=ctx)
+    assert rtx.confidence == pytest.approx(plain.confidence + BOOST_CONF, abs=0.011)
+    assert "RTX Spark" in rtx.reason
+    # Both rules still carry the device in their one state group.
+    for profile in ("device-settings", "app-installer"):
+        assert "device:rtx-spark" in _rule(profile).state[0], profile
 
 
 def test_device_settings_state_is_one_group_and_one_boost(neutral_classifier) -> None:

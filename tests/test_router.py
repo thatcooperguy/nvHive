@@ -18,6 +18,7 @@ from nvh.config.settings import (
 from nvh.core.rate_limiter import ProviderRateManager
 from nvh.core.router import (
     ClassificationResult,
+    RoutingDecision,
     RoutingEngine,
     classify_task,
 )
@@ -520,3 +521,99 @@ def test_cost_unknown_is_neutral_not_free():
 def test_latency_score(ms, exp):
     assert _rtr()._latency_score(
         ModelInfo(model_id="x", provider="x", typical_latency_ms=ms)) == exp
+
+
+# ---------------------------------------------------------------------------
+# route(..., exclude=...) — providers the caller ruled out for this call
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingEngineExclude:
+    def test_exclude_removes_a_provider_from_scoring(self) -> None:
+        engine = _make_engine(
+            providers={
+                "openai": ProviderConfig(default_model="gpt-4o"),
+                "groq": ProviderConfig(default_model="llama"),
+            },
+            enabled=["openai", "groq"],
+            models=[_model()],
+        )
+        assert engine.route("hello").provider == "openai"
+        decision = engine.route("hello", exclude={"openai"})
+        assert decision.provider == "groq"
+        assert decision.reason.startswith("Best composite score")
+        # Any collection works, and an empty one changes nothing.
+        assert engine.route("hello", exclude=frozenset()).provider == "openai"
+        assert engine.route("hello", exclude=["openai"]).provider == "groq"
+
+    def test_exclude_does_not_filter_an_explicit_pin(self) -> None:
+        engine = _make_engine(enabled=["perplexity"])
+        decision = engine.route("hello", provider_override="perplexity", exclude={"perplexity"})
+        assert decision.provider == "perplexity"
+        assert decision.reason.startswith("User override")
+
+    def test_exclude_skips_a_routing_rule_for_that_provider(self) -> None:
+        router = _rtr([RoutingRule(match={"task_type": "code_generation"}, provider="groq", model="llama")])
+        assert router.route("Write a Python sort function").provider == "groq"
+        decision = router.route("Write a Python sort function", exclude={"groq"})
+        assert decision.provider != "groq"
+        assert "routing rule" not in decision.reason
+
+    def test_exclude_keeps_the_local_first_broker_off_ollama(self) -> None:
+        engine = _make_engine(
+            providers={
+                "ollama": ProviderConfig(default_model="x"),
+                "groq": ProviderConfig(default_model="llama"),
+            },
+            enabled=["ollama", "groq"],
+            models=[_model()],
+        )
+        local = RoutingDecision(
+            provider="ollama", model="x", task_type=TaskType.CONVERSATION,
+            confidence=1.0, scores={}, reason="local",
+        )
+        engine._try_local_first = MagicMock(return_value=local)
+        assert engine.route("hello").provider == "ollama"
+        decision = engine.route("hello", exclude={"ollama"})
+        assert decision.provider == "groq"
+        engine._try_local_first.assert_called_once()
+
+    def test_excluding_every_enabled_provider_falls_to_the_default_and_says_so(self) -> None:
+        engine = _make_engine(
+            providers={"perplexity": ProviderConfig(default_model="sonar")},
+            enabled=["perplexity"],
+            models=[_model(provider="perplexity")],
+        )
+        decision = engine.route("hello", exclude={"perplexity"})
+        assert decision.provider == "openai"  # defaults.provider, as with nothing enabled
+        assert "excluding perplexity" in decision.reason
+        # Nothing enabled at all keeps the old wording.
+        assert _make_engine().route("hello").reason == "No providers available, using default"
+
+    def test_exclusion_is_recorded_when_everything_else_is_filtered(self) -> None:
+        engine = _make_engine(
+            providers={
+                "perplexity": ProviderConfig(default_model="sonar"),
+                "groq": ProviderConfig(default_model=""),
+            },
+            enabled=["perplexity", "groq"],
+            models=[],
+        )
+        decision = engine.route("hello", exclude={"perplexity"})
+        assert decision.provider == "openai"  # the configured default, not excluded
+        assert "perplexity: excluded by the caller" in decision.reason
+        assert "groq: no models available" in decision.reason
+
+    def test_all_filtered_fallback_never_picks_an_excluded_default(self) -> None:
+        engine = _make_engine(
+            providers={
+                "openai": ProviderConfig(default_model=""),
+                "groq": ProviderConfig(default_model=""),
+            },
+            enabled=["openai", "groq"],
+            models=[],
+        )
+        # defaults.provider is openai; excluded, so the first remaining provider wins.
+        decision = engine.route("hello", exclude={"openai"})
+        assert decision.provider == "groq"
+        assert "using default: groq" in decision.reason

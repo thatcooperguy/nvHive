@@ -154,7 +154,7 @@ def test_template_has_no_retired_models_or_github() -> None:
 def test_llm7_default_is_a_served_free_tier_model() -> None:
     llm7 = _template_advisors()["llm7"]
     assert llm7["enabled"] is True
-    assert llm7["default_model"] == PROVIDER_SPECS["llm7"].default_model == "gpt-oss"
+    assert llm7["default_model"] == PROVIDER_SPECS["llm7"].default_model == "gpt-oss:20b"
 
 
 # --- the server's maps ------------------------------------------------------------

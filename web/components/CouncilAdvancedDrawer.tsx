@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { getAgentPresets } from '@/lib/api';
+import { presetSummary } from '@/lib/cabinets';
 import type { AgentPreset, CouncilRequest, ProviderHealth } from '@/lib/types';
 
 export interface CouncilOptions {
@@ -67,6 +68,46 @@ function Toggle({ value, onChange, disabled }: { value: boolean; onChange: (v: b
   );
 }
 
+interface CabinetPickerProps {
+  /** Cabinets in the server's order (lib/cabinets.ts presetsFromPayload). */
+  presets: AgentPreset[];
+  /** Selected preset name; '' = none. */
+  value: string;
+  onChange: (preset: string) => void;
+  disabled?: boolean;
+}
+
+/**
+ * The cabinet select: "None" plus one option per preset, and a one-line
+ * summary of the chosen cabinet (its description, or its roles when the server
+ * sent none). Pure in its props so lib/cabinets.test.mjs can render it.
+ */
+export function CabinetPicker({ presets, value, onChange, disabled = false }: CabinetPickerProps) {
+  const id = useId();
+  const selected = presets.find(p => p.name === value);
+  const summary = selected ? presetSummary(selected) : '';
+  return (
+    <div>
+      <label htmlFor={id} className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider dark:text-[#a3a3a3]">Preset</label>
+      <select
+        id={id}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        disabled={disabled}
+        className="input-base w-full px-3 py-2 text-sm"
+      >
+        <option value="">None</option>
+        {presets.map(p => (
+          <option key={p.name} value={p.name}>{p.name}</option>
+        ))}
+      </select>
+      {summary && (
+        <div className="mt-1.5 text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{summary}</div>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   options: CouncilOptions;
   onChange: (next: CouncilOptions) => void;
@@ -81,8 +122,9 @@ export default function CouncilAdvancedDrawer({ options, onChange, providerHealt
 
   useEffect(() => {
     let mounted = true;
+    // getAgentPresets already adapts the server's { name: roles[] } dict to a list.
     getAgentPresets()
-      .then(r => { if (mounted) setPresets(r.presets); })
+      .then(list => { if (mounted) setPresets(list); })
       .catch(() => {});
     return () => { mounted = false; };
   }, []);
@@ -145,25 +187,12 @@ export default function CouncilAdvancedDrawer({ options, onChange, providerHealt
           </div>
 
           {presets.length > 0 && (
-            <div>
-              <label className="block text-[10px] font-mono text-[#737373] mb-1.5 uppercase tracking-wider dark:text-[#a3a3a3]">Preset</label>
-              <select
-                value={options.preset}
-                onChange={e => set('preset', e.target.value)}
-                disabled={disabled}
-                className="input-base w-full px-3 py-2 text-sm"
-              >
-                <option value="">None</option>
-                {presets.map(p => (
-                  <option key={p.name} value={p.name}>{p.name}</option>
-                ))}
-              </select>
-              {options.preset && (
-                <div className="mt-1.5 text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
-                  {presets.find(p => p.name === options.preset)?.description}
-                </div>
-              )}
-            </div>
+            <CabinetPicker
+              presets={presets}
+              value={options.preset}
+              onChange={v => set('preset', v)}
+              disabled={disabled}
+            />
           )}
 
           <div className={options.autoAgents || options.preset ? '' : 'opacity-50'}>

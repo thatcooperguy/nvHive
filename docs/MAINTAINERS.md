@@ -69,10 +69,13 @@ minute for PyPI.
    `nvh/providers/specs.py`, and the generated blocks of `docs/MODELS.md`
    (`python scripts/gen_models_doc.py`, `tests/test_models_doc_parity.py`)
    after any change to `nvh/core/local_models.py` or the GB10 baselines in
-   `nvh/utils/gpu_emulation.py`, and `nvh/config/capabilities.yaml`
+   `nvh/utils/gpu_emulation.py`, `nvh/config/capabilities.yaml`
    (`python scripts/gen_capabilities.py`, `tests/test_capabilities_catalog.py`)
    after any change to a catalog row, `RETIRED_MODEL_RENAMES` or the VRAM
-   tier table. Each parity test runs its generator's `--check`.
+   tier table, and the generated blocks of `docs/CONFIGURATION.md`
+   (`python scripts/gen_config_doc.py`, `tests/test_config_doc_parity.py`)
+   after any change to the Wizard tool roster or to `COUNCIL_PRESETS` /
+   `PRESET_DESCRIPTIONS`. Each parity test runs its generator's `--check`.
 4. The latest `model-currency.yml` run (Actions tab; `gh run list
    --workflow=model-currency.yml -L 1`, or `gh workflow run
    model-currency.yml` for a fresh one) has been read: a provider that no
@@ -286,7 +289,9 @@ profile."
   tables (`python scripts/gen_providers_doc.py`,
   `tests/test_provider_docs_parity.py`) and the marker-delimited blocks of
   `docs/MODELS.md` (`python scripts/gen_models_doc.py`,
-  `tests/test_models_doc_parity.py`). `nvh/config/capabilities.yaml` is
+  `tests/test_models_doc_parity.py`) and of `docs/CONFIGURATION.md` — the
+  Wizard tool roster and the cabinet table (`python scripts/gen_config_doc.py`,
+  `tests/test_config_doc_parity.py`). `nvh/config/capabilities.yaml` is
   normalised the same way (`python scripts/gen_capabilities.py`,
   `tests/test_capabilities_catalog.py`): its retired/successor, Ollama vision
   and zero-cost fields are derived, and price, context and tool flags are

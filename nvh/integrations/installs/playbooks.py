@@ -1,15 +1,23 @@
 """Spark playbooks — NVIDIA's DGX Spark install guides as approved, audited runs.
 
-Each :class:`Playbook` mirrors one folder of github.com/NVIDIA/dgx-spark-playbooks
-(``nvidia/<id>``; the id *is* the upstream folder name, so every entry traces
-back to its README): title, one-line summary, prerequisites, the numbered
-steps, how to verify, how to undo, time and risk. Playbooks are **not** studio
-packs — they may need ``sudo`` — so they never go through ``/v1/studio/install``.
+Each :class:`Playbook` mirrors one folder of github.com/NVIDIA/dgx-spark-playbooks:
+title, one-line summary, prerequisites, the numbered steps, how to verify, how
+to undo, time and risk. Ids are nvHive's stable short names (``ollama``,
+``vscode`` …); ``upstream_folder`` names the folder under ``nvidia/`` the
+steps were extracted from. Upstream moved every guide to
+``nvidia/playbook-<name>/`` in 2026 and left the old folders behind unlisted,
+so ``ollama`` maps to ``playbook-llms`` (the generic "Run Local LLMs" guide,
+of which the DGX Spark tier is what ships here) and ``comfy-ui`` to
+``playbook-comfyui``. ``scripts/check_playbook_upstream.py --check`` compares
+today's READMEs and assets with the committed snapshot so a rewrite upstream
+is noticed rather than silently shipped. Playbooks are **not** studio packs —
+they may need ``sudo`` — so they never go through ``/v1/studio/install``.
 They run only through the Wizard's privileged tier
 (``WizardToolRegistry.execute()`` is the single enforcement point: red card,
 approval token, kill switch) or through the CLI in the user's own terminal
 (``nvh playbook install <id>``), where ``sudo`` may ask for a password nvHive
-never sees.
+never sees. Both refuse off-Linux in plain words: the commands are apt,
+systemd and docker, and the Spark runs DGX OS.
 
 Steps compile into :class:`nvh.integrations.wizard.system_settings.Step` /
 :class:`~nvh.integrations.wizard.system_settings.Plan` and both drivers run
@@ -29,11 +37,18 @@ Policies (design brief 2026-09-03 §9, from the upstream research):
   - **pipe-to-shell** (``curl … | sh``) is never executed as a pipe. The step
     downloads the script to ``NVH_HOME/playbooks/<id>/`` and runs that file;
     the upstream one-liner is shown verbatim on the card and the step carries
-    ``unpinned=True`` (rendered as a ``pipe-to-shell: unpinned`` note). Where
-    the README publishes a sha256 (comfy-ui) the download is verified first.
-    A vendor artifact with no version pin and no published checksum in the
-    README (vscode's ``stable`` .deb, installed as root) carries the same
-    flag, rendered as an ``unpinned download`` note.
+    ``unpinned=True`` (rendered as a ``pipe-to-shell: unpinned`` note).
+  - **Checksums.** A script nvHive runs from the upstream repository
+    (comfy-ui's ``setup.sh`` and ``launch.sh``, the vllm Sync launch script)
+    is verified against :data:`UPSTREAM_ASSETS` before it runs: upstream
+    stopped publishing checksums in its 2026 rewrite, so the pins are the
+    sha256 of each file as fetched on :data:`ASSET_PIN_DATE`, and the drift
+    check reports a changed file. The VS Code ``.deb`` is verified against
+    Microsoft's own manifest (``https://code.visualstudio.com/sha?build=stable``,
+    the ``linux-deb-arm64`` product's ``sha256hash``) and its
+    ``productVersion`` is recorded, so no playbook step installs an
+    unverified vendor artifact as root; the ``unpinned download`` note stays
+    for any future step that has to.
   - **Docker** playbooks start with a ``usermod -aG docker <user>`` step whose
     check is ``id -nG | grep -qw docker``; when that step actually runs the run
     halts with a MANUAL "log out and back in" note — never ``newgrp``.
@@ -44,21 +59,30 @@ Policies (design brief 2026-09-03 §9, from the upstream research):
   - The DGX Dashboard **Update Now** path (apt upgrade + firmware + reboot) is
     never automated; ``HF_TOKEN`` / ``NGC_API_KEY`` are declared prerequisites
     nvHive never prompts for or stores.
-  - **Model tags are never hand-typed.** The ollama playbook carries
-    ``@MODEL_CHAT@`` (title, pull, check and the laptop's curl), rendered at
-    compile time from the tier table (:mod:`nvh.core.local_models`) for this
-    host's platform facts -- a 128 GB unified Spark gets the top chat pick that
-    fits the pool after its OS reserve, a host the facts cannot size gets the
-    table's default -- so a tag the registry retires cannot outlive the table
-    (``tests/test_no_retired_model_tags.py``). LM Studio's catalogue ids are
-    not Ollama tags, so its model step is manual prose that names no tag.
+  - **Model tags are never hand-typed.** A step that pulls an Ollama model
+    carries ``@MODEL_CHAT@`` or ``@MODEL_CODE@`` (title, pull, check, the
+    manual prose), rendered at compile time from the tier table
+    (:mod:`nvh.core.local_models`) for this host's platform facts -- a 128 GB
+    unified Spark gets the top pick that fits the pool after its OS reserve, a
+    host the facts cannot size gets the table's default -- so a tag the
+    registry retires cannot outlive the table
+    (``tests/test_no_retired_model_tags.py``). Upstream's own recommendation
+    is recorded in the notes as prose. LM Studio's catalogue ids are not
+    Ollama tags: its model step quotes the README's id in manual prose.
 
 Every run that touched the host writes an install receipt (kind ``playbook``,
 honest ``no_root = not any sudo step ran``, repair plan
 ``nvh playbook install <id>``) and a vault ``Decisions/`` note through
 :func:`nvh.integrations.wizard.tools.audit_privileged_change` — including a
-job cancelled mid-step, which records the command that was in flight (the
-worker thread cannot be interrupted, so it may have finished on the host).
+cancelled job. Cancel semantics (W1-lite): the engine re-reads the job's
+``cancel_requested`` flag before every check probe and host command and after
+every step, so a cancel that arrives between steps stops the run before the
+next command starts and the receipt says ``stopped after step N``; a cancel
+that lands while a host command is running records that command as in
+flight (the worker thread cannot be interrupted, so it may have finished on
+the host); a job consumer that closes the stream early still gets the
+receipt written from the engine's close handler. Process-group kill is not
+attempted.
 """
 
 from __future__ import annotations
@@ -80,11 +104,15 @@ from nvh.integrations.wizard.system_settings import Plan, Step, run_host_command
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ASSET_PIN_DATE",
     "DEFERRED",
     "HANDOFF_COMMAND",
     "JOB_KIND",
     "PLAYBOOKS",
     "RECEIPT_KIND",
+    "UPSTREAM_ASSETS",
+    "UPSTREAM_RAW",
+    "UPSTREAM_TREE",
     "DeferredPlaybook",
     "Playbook",
     "PlaybookError",
@@ -99,6 +127,7 @@ __all__ = [
     "run_in_terminal",
     "run_playbook_events",
     "start_run",
+    "upstream_folders",
 ]
 
 UPSTREAM_TREE = "https://github.com/NVIDIA/dgx-spark-playbooks/tree/main/nvidia/"
@@ -121,11 +150,17 @@ LOG_TAIL_LINES = 20
 PLAYBOOK_DIR_TOKEN = "@PLAYBOOK_DIR@"
 USER_TOKEN = "@USER@"
 HOME_TOKEN = "@HOME@"
-#: This host's ``chat`` pick from the tier table (:mod:`nvh.core.local_models`) and its size on
-#: disk in GB. The catalogue is static data and the machine is only known at compile time, and a
-#: hand-typed tag is exactly what the registry retires -- see :func:`_chat_model_pick`.
+#: This host's ``chat`` / ``code`` pick from the tier table (:mod:`nvh.core.local_models`) and
+#: its size on disk in GB. The catalogue is static data and the machine is only known at compile
+#: time, and a hand-typed tag is exactly what the registry retires -- see :func:`_model_pick`.
 MODEL_CHAT_TOKEN = "@MODEL_CHAT@"
 MODEL_CHAT_GB_TOKEN = "@MODEL_CHAT_GB@"
+MODEL_CODE_TOKEN = "@MODEL_CODE@"
+MODEL_CODE_GB_TOKEN = "@MODEL_CODE_GB@"
+_MODEL_TOKENS: dict[str, tuple[str, str]] = {
+    "chat": (MODEL_CHAT_TOKEN, MODEL_CHAT_GB_TOKEN),
+    "code": (MODEL_CODE_TOKEN, MODEL_CODE_GB_TOKEN),
+}
 
 UNPINNED_NOTE = "pipe-to-shell: unpinned"
 #: An ``unpinned`` step whose upstream is not a pipe: a vendor artifact with no version pin or checksum.
@@ -135,6 +170,56 @@ RELOGIN_NOTE = (
     "playbook again — finished steps are skipped."
 )
 DOCKER_GROUP_CHECK: tuple[str, ...] = ("bash", "-c", "id -nG | grep -qw docker")
+
+#: Upstream scripts a step downloads and runs (or hands to the user to run), pinned by sha256.
+#: Upstream publishes no checksums since its 2026 rewrite; these are the digests of the files
+#: as fetched on :data:`ASSET_PIN_DATE`. The verify step fails -- and the run stops before the
+#: script runs -- when the file changes; ``scripts/check_playbook_upstream.py --check`` reports
+#: the same drift from CI. Re-pin by hand after reading the new file.
+ASSET_PIN_DATE = "2026-11-01"
+COMFYUI_SETUP_SH = f"{UPSTREAM_RAW}playbook-comfyui/assets/setup.sh"
+COMFYUI_LAUNCH_SH = f"{UPSTREAM_RAW}playbook-comfyui/assets/launch.sh"
+VLLM_SYNC_SCRIPT_NAME = "sync-vllm-spark-128gb-qwen38-27b.sh"
+VLLM_SYNC_SCRIPT = f"{UPSTREAM_RAW}playbook-vllm/assets/{VLLM_SYNC_SCRIPT_NAME}"
+UPSTREAM_ASSETS: dict[str, str] = {
+    COMFYUI_SETUP_SH: "d4d456d9d09901a53fdc33e12acab7387fdfb1b5050f00a93ed9c91a09cfd728",
+    COMFYUI_LAUNCH_SH: "7dc75b155a198a49537832c4a363d321080b130be0a6945a0bc0afe78da8badc",
+    VLLM_SYNC_SCRIPT: "802f0ed4c60f5569158528021163556e9616963a6cb8875d46a82341fc976b47",
+}
+
+#: Microsoft's manifest of the current stable VS Code builds (one product per platform, each
+#: with ``sha256hash`` and ``productVersion``); the ``.deb`` URL below redirects to that build.
+VSCODE_SHA_MANIFEST_URL = "https://code.visualstudio.com/sha?build=stable"
+VSCODE_PLATFORM = "linux-deb-arm64"
+_VSCODE_DEB_URL = "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-arm64"
+_VSCODE_INSTALLED: tuple[str, ...] = ("bash", "-c", "dpkg -s code | grep -q 'Status: install ok installed'")
+#: Verbatim upstream (README Desktop Use steps 2-3): the current stable .deb installed as root, unverified.
+_VSCODE_UPSTREAM = f"wget '{_VSCODE_DEB_URL}' -O ~/vscode-arm64.deb && sudo apt install ~/vscode-arm64.deb"
+#: ``python3 -I -c`` body: ``argv[1]`` the manifest, ``argv[2]`` the .deb, ``argv[3]`` where to record
+#: ``productVersion``. Paths travel as arguments (never spliced into the code), the manifest's
+#: ``linux-deb-arm64`` product must be unique and carry a 64-hex sha256, and a mismatch exits 1
+#: before ``apt-get`` ever sees the file. Every gate is an explicit ``sys.exit`` (never ``assert``,
+#: which ``-O`` / ``PYTHONOPTIMIZE`` strips), and ``-I`` ignores the user's ``PYTHON*`` environment
+#: and site directories so the inherited shell cannot change what the check does. Runs as the user
+#: under PLAYBOOK_DIR, no sudo.
+_VSCODE_VERIFY_ARGV: tuple[str, ...] = ("python3", "-I", "-c")
+_VSCODE_VERIFY_PY = (
+    "import hashlib,json,sys;m,d,r=sys.argv[1:4];"
+    "p=[x for x in json.load(open(m)).get('products',[]) if (x.get('platform') or {}).get('os')=='linux-deb-arm64'];"
+    "len(p)==1 or sys.exit('manifest lists %d linux-deb-arm64 products'%len(p));"
+    "w=str(p[0].get('sha256hash') or '').lower();len(w)==64 or sys.exit('manifest carries no sha256 for linux-deb-arm64');"
+    "h=hashlib.sha256(open(d,'rb').read()).hexdigest();"
+    "h==w or sys.exit('sha256 mismatch: manifest %s, download %s'%(w,h));"
+    "v=str(p[0].get('productVersion') or 'unknown');open(r,'w').write(v+'\\n');"
+    "print('VS Code %s: sha256 %s verified against the stable manifest'%(v,h))"
+)
+
+#: Plain-words refusal for a host that is not Linux (the Spark runs DGX OS; the steps are apt,
+#: systemd and docker). ``{what}`` is the OS as the platform facts report it.
+UNSUPPORTED_HOST_ERROR = (
+    "Spark playbooks run on Linux (DGX OS). This machine reports {what}, so nvHive will not plan "
+    "or run the {id} playbook here and nothing was changed. Run it on the Spark itself."
+)
 
 
 class PlaybookError(ValueError):
@@ -155,12 +240,11 @@ class PlaybookStep:
     never executed). ``check`` is an argv whose exit 0 means "already done" —
     the step is skipped. ``cwd`` / ``env`` compile into an ``env -C DIR K=V``
     prefix so nothing needs a shell. ``unpinned`` marks a step that installs
-    an artifact the README neither pins nor checksums — a download-then-run
-    of an upstream ``curl … | sh`` or a vendor ``.deb`` fetched from a
-    "latest stable" URL (``upstream`` keeps the verbatim upstream command;
-    a pipe in it tells the two apart). ``halt_after`` stops the run once
-    this step *ran* (not skipped) with that MANUAL note — the docker-group
-    re-login.
+    an artifact nvHive could not verify — a download-then-run of an upstream
+    ``curl … | sh`` or a vendor package with no checksum anywhere (``upstream``
+    keeps the verbatim upstream command; a pipe in it tells the two apart).
+    ``halt_after`` stops the run once this step *ran* (not skipped) with that
+    MANUAL note — the docker-group re-login.
     """
 
     title: str
@@ -184,9 +268,14 @@ class PlaybookStep:
 
 @dataclass(frozen=True)
 class Playbook:
-    """One upstream playbook, in the README's own skeleton."""
+    """One upstream playbook, in the README's own skeleton.
+
+    ``id`` is nvHive's stable name; ``upstream_folder`` the folder under
+    ``nvidia/`` in github.com/NVIDIA/dgx-spark-playbooks the steps come from.
+    """
 
     id: str
+    upstream_folder: str
     title: str
     category: str
     summary: str
@@ -226,15 +315,20 @@ class Playbook:
 @dataclass(frozen=True)
 class DeferredPlaybook:
     id: str
+    upstream_folder: str
     title: str
     reason: str
+    last_updated: str = ""
 
     @property
     def source_url(self) -> str:
-        return UPSTREAM_TREE + self.id
+        return UPSTREAM_TREE + self.upstream_folder
 
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "title": self.title, "reason": self.reason, "source_url": self.source_url}
+        return {
+            "id": self.id, "upstream_folder": self.upstream_folder, "title": self.title, "reason": self.reason,
+            "source_url": self.source_url, "last_updated": self.last_updated,
+        }
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -242,22 +336,27 @@ class DeferredPlaybook:
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def _src(playbook_id: str) -> str:
-    return UPSTREAM_TREE + playbook_id
+def _src(upstream_folder: str) -> str:
+    return UPSTREAM_TREE + upstream_folder
 
 
 def _cmd_exists(name: str) -> tuple[str, ...]:
     return ("bash", "-c", f"command -v {shlex.quote(name)}")
 
 
-def _sha256_check(sha256: str, path: str) -> tuple[str, ...]:
+def _sha256_check(sha256: str, path: str, into: str | None = None) -> tuple[str, ...]:
     """``sha256sum -c`` of one file whose path may hold a placeholder.
 
     The path travels as a positional parameter (``$1``), never spliced into
     the script text, so an apostrophe, a space or ``$`` in ``NVH_HOME`` can
-    neither break the command nor inject into it.
+    neither break the command nor inject into it. With ``into`` the verified
+    file is then moved to that path (``$2``) — the shape
+    :func:`_pinned_download` uses so a file only ever reaches the name the
+    later steps run once its digest matched.
     """
-    return ("bash", "-c", f"echo \"{sha256}  $1\" | sha256sum -c -", "sha256sum", path)
+    if into is None:
+        return ("bash", "-c", f"echo \"{sha256}  $1\" | sha256sum -c -", "sha256sum", path)
+    return ("bash", "-c", f"echo \"{sha256}  $1\" | sha256sum -c - && mv -f \"$1\" \"$2\"", "sha256sum", path, into)
 
 
 def _dpkg(*packages: str) -> tuple[str, ...]:
@@ -334,8 +433,46 @@ def _download_then_run(
     )
 
 
+#: Suffix of the name a pinned download is saved under until its sha256 matched (``_pinned_download``).
+UNVERIFIED_SUFFIX = ".download"
+
+
+def _pinned_download(
+    title: str, url: str, filename: str, *, check: tuple[str, ...] | None, upstream: str = "",
+) -> tuple[PlaybookStep, PlaybookStep]:
+    """An upstream script pinned in :data:`UPSTREAM_ASSETS`: download it, then verify the sha256 before anything runs it.
+
+    The download lands under ``<filename>.download`` and the verify step
+    moves it to ``<filename>`` only after ``sha256sum -c`` passed, so the
+    name the later steps (and the user) run never holds an unverified copy.
+    Both steps share ``check``: when it is ``test -f <filename>`` the file
+    only exists once verified, so neither step is skipped before the digest
+    matched (the download alone cannot satisfy it); when it is a
+    post-install marker both are skipped on a finished install.
+    """
+    target = f"{PLAYBOOK_DIR_TOKEN}/{filename}"
+    unverified = f"{target}{UNVERIFIED_SUFFIX}"
+    return (
+        _step(
+            f"Download {title}",
+            "curl", "-fsSL", url, "-o", unverified,
+            check=check, upstream=upstream,
+            description=(
+                f"Saved under NVH_HOME as {filename}{UNVERIFIED_SUFFIX} and checked against the sha256 nvHive pinned on "
+                f"{ASSET_PIN_DATE} (upstream publishes no checksum); only a matching file is moved to {filename}, so a "
+                "changed upstream file stops the run at the next step."
+            ),
+        ),
+        _step(
+            f"Verify {title} against the pinned sha256",
+            *_sha256_check(UPSTREAM_ASSETS[url], unverified, into=target),
+            check=check,
+        ),
+    )
+
+
 # ────────────────────────────────────────────────────────────────────────────
-# The catalogue — first tier, ids = upstream folder names
+# The catalogue — first tier; folders are today's nvidia/playbook-<name>/
 # ────────────────────────────────────────────────────────────────────────────
 
 _OLLAMA_INSTALL = _download_then_run(
@@ -344,6 +481,7 @@ _OLLAMA_INSTALL = _download_then_run(
     description="The script writes /usr/local/bin/ollama, creates the `ollama` system user and installs the systemd unit, so it runs with sudo.",
 )
 
+#: Ollama's own Linux uninstall sequence (docs.ollama.com/linux); the upstream guide gives none.
 _OLLAMA_UNDO = (
     "sudo systemctl stop ollama",
     "sudo systemctl disable ollama",
@@ -352,22 +490,25 @@ _OLLAMA_UNDO = (
     "sudo userdel ollama",
 )
 
-_VSCODE_DEB_URL = "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-arm64"
-_VSCODE_INSTALLED: tuple[str, ...] = ("bash", "-c", "dpkg -s code | grep -q 'Status: install ok installed'")
-#: Verbatim upstream (README steps 1-3): an unpinned "latest stable" .deb installed as root, no checksum.
-_VSCODE_UPSTREAM = f"wget '{_VSCODE_DEB_URL}' -O vscode-arm64.deb && sudo dpkg -i vscode-arm64.deb && sudo apt-get install -f"
+_COMFYUI_DONE: tuple[str, ...] = ("test", "-f", f"{PLAYBOOK_DIR_TOKEN}/ComfyUI/models/vae/ae.safetensors")
+_VLLM_CONTAINER = "vllm-spark-128gb-qwen38-27b"
+_VLLM_IMAGE = "nvcr.io/nvidia/vllm:26.10.pre1-py3"
+_VLLM_MODEL = "nvidia/Qwen3.8-27B-NVFP4"
+_VLLM_DRAFT = "z-lab/Qwen3.8-27B-DFlash2"
+_HF_HUB = f"{HOME_TOKEN}/.cache/huggingface/hub"
 
 PLAYBOOKS: tuple[Playbook, ...] = (
     Playbook(
         id="ollama",
-        title="Ollama",
+        upstream_folder="playbook-llms",
+        title="Run Local LLMs (Ollama)",
         category="runtime",
-        summary="Install and use Ollama",
-        source_urls=(_src("ollama"),),
+        summary="Chat, agents and coding with a local model served by Ollama on your Spark",
+        source_urls=(_src("playbook-llms"),),
         prerequisites=(
-            "DGX Spark device set up and connected to your network",
-            "NVIDIA Sync installed and connected to your Spark",
-            "Terminal access to your local machine for testing API calls",
+            "A DGX Spark (128 GB unified memory) — the upstream guide's 'DGX Spark' tier; smaller RTX tiers are in the notes",
+            "Internet access to download Ollama and the model weights",
+            f"Room for this host's chat pick, {MODEL_CHAT_TOKEN} (about {MODEL_CHAT_GB_TOKEN} GB)",
         ),
         steps=(
             *_OLLAMA_INSTALL,
@@ -377,23 +518,30 @@ PLAYBOOKS: tuple[Playbook, ...] = (
                 sudo=True, check=("systemctl", "is-enabled", "ollama"),
             ),
             _step(
-                f"Download and verify a language model ({MODEL_CHAT_TOKEN}, about {MODEL_CHAT_GB_TOKEN} GB)",
+                f"Download a model that fits this Spark ({MODEL_CHAT_TOKEN}, about {MODEL_CHAT_GB_TOKEN} GB)",
                 "ollama", "pull", MODEL_CHAT_TOKEN,
                 check=("ollama", "show", MODEL_CHAT_TOKEN), timeout=LONG_TIMEOUT_S,
                 description=(
                     "The tag is this host's chat pick from nvHive's tier table (nvh.core.local_models), sized from "
-                    "the memory the platform facts report, rather than the README's fixed example model."
+                    "the memory the platform facts report; the guide's own picks per GPU are in the notes."
                 ),
             ),
             _manual(
-                "Configure the Ollama custom app in NVIDIA Sync (laptop)",
-                "In NVIDIA Sync on your laptop: tray icon → gear → Custom → Add New; Name `Ollama Server`, "
-                "Port `11434`, leave Start Script empty → Add, then click `Ollama Server` under Custom to start the SSH tunnel.",
+                "Chat, with a large context window",
+                f"ollama run {MODEL_CHAT_TOKEN}   # then `/set parameter num_ctx 32768`: the guide asks for 32k or more for "
+                "agents and coding; /bye or Ctrl+D exits",
             ),
             _manual(
-                "Validate API connectivity from the laptop",
-                f"curl http://localhost:11434/api/chat -d '{{\"model\": \"{MODEL_CHAT_TOKEN}\", \"messages\": "
-                "[{\"role\": \"user\", \"content\": \"Write me a haiku about GPUs and AI.\"}], \"stream\": false}'",
+                "Note the server's URL and port, then test it",
+                "Ollama listens on http://localhost:11434 (OpenAI-compatible under /v1). "
+                "curl http://localhost:11434/v1/chat/completions -H 'Content-Type: application/json' -d "
+                f"'{{\"model\": \"{MODEL_CHAT_TOKEN}\", \"messages\": "
+                "[{\"role\": \"user\", \"content\": \"Write me a haiku about GPUs and AI.\"}]}'",
+            ),
+            _manual(
+                "Point an agent or coding tool at it",
+                "OpenClaw, Hermes Agent or OpenCode: enter http://localhost:11434/v1 as the model provider during their "
+                "onboarding, or use `ollama launch <agent>` (the cli-coding-agent playbook).",
             ),
         ),
         verify=(
@@ -403,34 +551,48 @@ PLAYBOOKS: tuple[Playbook, ...] = (
         ),
         undo=_OLLAMA_UNDO,
         notes=(
-            "The README says 'no system-level changes', but install.sh installs a system service and a user; the undo above is the README's own Step 9.",
-            f"The model step pulls {MODEL_CHAT_TOKEN} — this host's chat pick from nvHive's tier table — where the README pulls one fixed 32B example.",
+            "Upstream's starting picks by GPU: 6-8 GB RTX — Qwen 3.5 4B; 12-16 GB RTX — Qwen 3.5 9B or Gemma 4 12B; "
+            "24 GB+ RTX — Qwen 3.6 27B; DGX Spark — Qwen 3.6 35B (NVIDIA's Qwen3.6-35B-A3B-NVFP4 checkpoint under vLLM "
+            "for the best performance). Between ranges, take the next lower pick or a lower-bit quantisation.",
+            f"The model step pulls {MODEL_CHAT_TOKEN} — this host's chat pick from nvHive's tier table — rather than a "
+            "hand-typed tag; pull an upstream pick yourself with `ollama pull <tag>` from https://ollama.com/library if you prefer.",
+            "The guide links ollama.com for the install; Ollama's Linux installer is the `install.sh` this run downloads "
+            "first, and the undo above is Ollama's own uninstall sequence (the guide gives none).",
             "Rootless instead: the `rootless-ollama` studio pack installs Ollama under NVH_HOME with no sudo.",
         ),
-        estimated_minutes=15,
-        estimated_disk_gb=20.0,
+        estimated_minutes=20,
+        estimated_disk_gb=40.0,
         rootless_alternative="rootless-ollama",
-        risk="Low (upstream); nvHive: installs a system service and a system user",
-        last_updated="10/12/2025",
+        risk="Low (upstream gives none); nvHive: installs a system service and a system user",
     ),
     Playbook(
         id="cli-coding-agent",
-        title="CLI Coding Agent",
+        upstream_folder="playbook-cli-coding-agent",
+        title="Set Up CLI Coding Agents with Local Inference",
         category="dev",
-        summary="Build local CLI coding agents with Ollama",
-        source_urls=(_src("cli-coding-agent"),),
+        summary="Your chosen agent (Claude Code, OpenCode or Codex CLI) connected to a local model in one command",
+        source_urls=(_src("playbook-cli-coding-agent"),),
         prerequisites=(
-            "DGX Spark access with NVIDIA DGX OS 7.3.1 (Ubuntu 24.04.3 LTS base)",
-            "Internet access to download model weights",
-            "Ollama v0.15 or newer (required for `ollama launch`)",
-            "GPU memory for the Qwen3.6 variant you choose: qwen3.6:latest ~24 GB, 35b-a3b-nvfp4 ~22 GB, q8_0 ~39 GB, bf16 ~71 GB",
+            "DGX Spark (64 GB or 128 GB unified memory), powered on and reachable for a local or SSH terminal",
+            "A current Ollama release (`ollama launch` needs it): `ollama --version`",
+            f"Memory and disk for the coding model: this host's code pick {MODEL_CODE_TOKEN} (about {MODEL_CODE_GB_TOKEN} GB); "
+            "upstream's default Qwen3.6 MTP Q4_K_M needs about 23 GB (q8_0 about 39 GB, bf16 about 71 GB)",
+            "Codex CLI only: Node.js and npm; the optional coding task needs Python 3 with venv",
         ),
         steps=(
+            _step(
+                "Confirm the environment (OS release and a visible GPU)",
+                "bash", "-c", "head -n 2 /etc/os-release && nvidia-smi",
+            ),
             *_OLLAMA_INSTALL,
             _step(
-                "Pull Qwen3.6 (about 24 GB)",
-                "ollama", "pull", "qwen3.6",
-                check=("ollama", "show", "qwen3.6"), timeout=LONG_TIMEOUT_S,
+                f"Pull the coding model ({MODEL_CODE_TOKEN}, about {MODEL_CODE_GB_TOKEN} GB)",
+                "ollama", "pull", MODEL_CODE_TOKEN,
+                check=("ollama", "show", MODEL_CODE_TOKEN), timeout=LONG_TIMEOUT_S,
+                description=(
+                    "This host's code pick from nvHive's tier table (nvh.core.local_models); upstream's Qwen3.6 "
+                    "recommendation is in the notes."
+                ),
             ),
             *_download_then_run(
                 "Claude Code", "https://claude.ai/install.sh", "claude-install.sh",
@@ -439,42 +601,58 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             ),
             _manual(
                 "Test local inference (optional)",
-                "ollama run qwen3.6   # interactive; type /bye or press Ctrl+D to exit",
+                f"ollama run {MODEL_CODE_TOKEN}   # interactive; type /bye or press Ctrl+D to exit",
             ),
             _manual(
-                "Launch the agent",
-                "ollama launch claude --model qwen3.6   # OpenCode: `ollama launch opencode --model qwen3.6`; "
-                "Codex: `npm install -g @openai/codex` (use a user npm prefix) then `ollama launch codex --model qwen3.6`",
+                "Launch your agent against the local model",
+                f"ollama launch claude --model {MODEL_CODE_TOKEN}   # OpenCode: `curl -fsSL https://opencode.ai/install | bash`, "
+                f"`export PATH=\"$HOME/.opencode/bin:$PATH\"`, then `ollama launch opencode --model {MODEL_CODE_TOKEN}`; "
+                f"Codex: `npm install -g @openai/codex` (use a user npm prefix) then `ollama launch codex --model {MODEL_CODE_TOKEN}`",
+            ),
+            _manual(
+                "Complete a small coding task",
+                "mkdir -p ~/cli-agent-demo && cd ~/cli-agent-demo; write math_utils.py (an `add(a, b)` stub) and "
+                "test_math_utils.py (`assert math_utils.add(1, 2) == 3`); ask the agent to implement add() and make the "
+                "test pass; `python3 -m venv .venv && source .venv/bin/activate && python3 -m pip install -U pytest && "
+                "python3 -m pytest -q`.",
             ),
         ),
         verify=(
             ("ollama", "--version"),
-            ("ollama", "show", "qwen3.6"),
+            ("ollama", "show", MODEL_CODE_TOKEN),
             _cmd_exists("claude"),
         ),
         undo=(
             "sudo systemctl stop ollama",
-            "ollama rm qwen3.6   # deletes the model files",
+            f"ollama rm {MODEL_CODE_TOKEN}   # deletes the model files",
         ),
         notes=(
-            "`ollama launch` needs Ollama 0.15+; re-run the installer if it reports an unknown command.",
+            "Upstream pulls Qwen3.6 35B-A3B (the MTP Q4_K_M build, about 23 GB; q8_0 and bf16 variants for more memory) "
+            "from https://ollama.com/library/qwen3.6 and launches every agent against it. nvHive pulls "
+            f"{MODEL_CODE_TOKEN} — this host's code pick from its tier table — because a playbook never hand-types a tag; "
+            "`ollama launch <agent> --model <tag>` works the same with any tag you pull yourself.",
+            "`ollama launch` needs a current Ollama; re-run the installer if it reports an unknown command "
+            "(the install step is skipped while `ollama` is on PATH).",
             "Rootless instead: the `rootless-ollama` studio pack (verify `ollama launch` is available in that build).",
         ),
-        estimated_minutes=25,
-        estimated_disk_gb=24.0,
+        estimated_minutes=20,
+        estimated_disk_gb=25.0,
         rootless_alternative="rootless-ollama",
         risk="Low",
+        last_updated="08/03/2026",
     ),
     Playbook(
         id="open-webui",
-        title="Open WebUI with Ollama",
+        upstream_folder="playbook-open-webui",
+        title="Chat with LLMs Using Open WebUI and Ollama",
         category="chat-ui",
-        summary="Install Open WebUI and use Ollama to chat with models on your Spark",
-        source_urls=(_src("open-webui"),),
+        summary="A self-hosted browser interface with models running locally on your GPU",
+        source_urls=(_src("playbook-open-webui"),),
         prerequisites=(
-            "DGX Spark device is set up and accessible",
-            "Enough disk space for the container image and models (7 GB image; 25 GB qwen3.6:latest or 15 GB gpt-oss:latest)",
-            "Docker (DGX OS ships it) — the first step puts you in the docker group",
+            "DGX Spark (64 GB or 128 GB unified memory), powered on and networked; Docker available (`docker ps`)",
+            "Disk for the container image (about 7 GB) and a model (about 15 GB for gpt-oss:20b; about 25 GB for the "
+            "agent-ready Qwen3.6 pick)",
+            "A browser that can reach port 8080 on the Spark (the remote path publishes 12000 through NVIDIA Sync instead)",
         ),
         steps=(
             _docker_group_step(),
@@ -499,7 +677,9 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             _manual("Create the administrator account", "Open http://localhost:8080 → Get Started → fill in the admin form."),
             _manual(
                 "Download and configure a model",
-                "In Open WebUI: Select a model → type `gpt-oss:20b` → 'Pull gpt-oss:20b from Ollama.com'.",
+                "In Open WebUI: Select a model → type `gpt-oss:20b` → click Download \"gpt-oss:20b\" (Ollama tag) → wait, "
+                "then select it. Agent-ready alternative for the Spark: the README's Qwen3.6-35B-A3B from "
+                "https://ollama.com/library/qwen3.6 with a context window of at least 32K.",
             ),
             _manual("Test the model", "Prompt: 'Write me a haiku about GPUs'."),
         ),
@@ -516,8 +696,10 @@ PLAYBOOKS: tuple[Playbook, ...] = (
         ),
         notes=(
             "The :ollama image bundles a second Ollama with its own model store (volume open-webui-ollama), separate from any host or nvHive Ollama.",
-            "The upstream remote path publishes 12000 behind an NVIDIA Sync tunnel instead; for a local-only bind swap "
-            "`-p 8080:8080` for `-p 127.0.0.1:8080:8080` when you create the container.",
+            "Upstream's remote path runs the same container from an NVIDIA Sync custom app on port 12000 (its launch "
+            "script starts or creates the container); for a local-only bind swap `-p 8080:8080` for "
+            "`-p 127.0.0.1:8080:8080` when you create the container.",
+            "Agent-ready models (upstream tab): prefer a context window of at least 32K tokens, 64K or more with headroom.",
         ),
         warning=(
             "Publishes port 8080 on every interface (LAN), unauthenticated until an administrator exists: the first "
@@ -527,16 +709,18 @@ PLAYBOOKS: tuple[Playbook, ...] = (
         estimated_minutes=20,
         estimated_disk_gb=32.0,
         risk="Low (upstream); nvHive: LAN-reachable admin signup until you claim it",
+        last_updated="10/14/2026",
     ),
     Playbook(
         id="comfy-ui",
-        title="Comfy UI",
+        upstream_folder="playbook-comfyui",
+        title="Generate Images and Videos with ComfyUI",
         category="image",
-        summary="Install and use Comfy UI to generate images",
-        source_urls=(_src("comfy-ui"),),
+        summary="Node-based diffusion workflows; the Image Gen Quick Start (Z-Image-Turbo) on the host, no container",
+        source_urls=(_src("playbook-comfyui"),),
         prerequisites=(
-            "NVIDIA Grace Blackwell GB10 Superchip System; at least 20 GB free storage",
-            "python3, pip3 and git installed; network access to Hugging Face",
+            "DGX Spark (64 GB or 128 GB unified memory) on DGX OS; about 30 GB free disk and about 24 GB GPU memory for Z-Image-Turbo",
+            "python3, pip3 and git; a CUDA toolkit; network access to Hugging Face (public weights, no token)",
             "A browser that can reach <SPARK_IP>:8188",
         ),
         steps=(
@@ -544,42 +728,31 @@ PLAYBOOKS: tuple[Playbook, ...] = (
                 "Verify system prerequisites",
                 "bash", "-c", "python3 --version && pip3 --version && git --version",
             ),
-            _step(
-                "Download the upstream setup script",
-                "curl", "-fsSL", f"{UPSTREAM_RAW}comfy-ui/assets/setup.sh", "-o", f"{PLAYBOOK_DIR_TOKEN}/setup.sh",
-                check=("test", "-f", f"{PLAYBOOK_DIR_TOKEN}/ComfyUI/models/checkpoints/DreamShaper_8_pruned.safetensors"),
-                upstream=f"curl -fsSL {UPSTREAM_RAW}comfy-ui/assets/setup.sh | bash",
-                description="Downloaded, checksummed and then run — the README publishes the sha256, so the pipe is not needed.",
+            *_pinned_download(
+                "the upstream setup script (setup.sh)", COMFYUI_SETUP_SH, "setup.sh",
+                check=_COMFYUI_DONE, upstream=f'curl -fsSL "{COMFYUI_SETUP_SH}" | bash',
             ),
             _step(
-                "Verify setup.sh against the README's sha256",
-                *_sha256_check("97b03fb341b40bd8524549b234883427dda2e8bca4ceb1662a074dcc9a7cf3f8", f"{PLAYBOOK_DIR_TOKEN}/setup.sh"),
-                check=("test", "-f", f"{PLAYBOOK_DIR_TOKEN}/ComfyUI/models/checkpoints/DreamShaper_8_pruned.safetensors"),
-            ),
-            _step(
-                "Run setup.sh: venv, PyTorch cu130, ComfyUI v0.28.2, DreamShaper 8 checkpoint (about 2 GB)",
+                "Run setup.sh: venv, PyTorch cu130, ComfyUI v0.33.2, Z-Image-Turbo weights (about 20 GB)",
                 "bash", "setup.sh",
                 cwd=PLAYBOOK_DIR_TOKEN,
-                check=("test", "-f", f"{PLAYBOOK_DIR_TOKEN}/ComfyUI/models/checkpoints/DreamShaper_8_pruned.safetensors"),
+                check=_COMFYUI_DONE,
                 timeout=LONG_TIMEOUT_S,
+                description="README steps 1-6 in one script: prerequisite check, comfyui-env, torch/torchvision, the ComfyUI clone, its requirements and the three model files.",
             ),
-            _step(
-                "Download the upstream launch script",
-                "curl", "-fsSL", f"{UPSTREAM_RAW}comfy-ui/assets/launch.sh", "-o", f"{PLAYBOOK_DIR_TOKEN}/launch.sh",
-                check=("test", "-f", f"{PLAYBOOK_DIR_TOKEN}/launch.sh"),
-            ),
-            _step(
-                "Verify launch.sh against the README's sha256",
-                *_sha256_check("7dc75b155a198a49537832c4a363d321080b130be0a6945a0bc0afe78da8badc", f"{PLAYBOOK_DIR_TOKEN}/launch.sh"),
+            *_pinned_download(
+                "the upstream launch script (launch.sh)", COMFYUI_LAUNCH_SH, "launch.sh",
+                check=("test", "-f", f"{PLAYBOOK_DIR_TOKEN}/launch.sh"), upstream=f'curl -fsSL "{COMFYUI_LAUNCH_SH}" | bash',
             ),
             _manual(
                 "Launch the ComfyUI server (foreground)",
                 f"cd {PLAYBOOK_DIR_TOKEN} && bash launch.sh   # listens on 0.0.0.0:8188 (LAN). Local only: "
                 "`source comfyui-env/bin/activate && cd ComfyUI && python main.py --listen 127.0.0.1`",
             ),
+            _manual("Validate the installation", "In a second terminal: `curl -I http://localhost:8188` → HTTP 200; then open http://<SPARK_IP>:8188."),
             _manual(
                 "Run a template flow",
-                "Open http://localhost:8188 → Templates → Getting Started → '1.1 Starter-Text to Image' → Run (about 30 s).",
+                "Templates → Image → 'Z-Image-Turbo: Text to Image' → Run (about 30 s); watch `nvidia-smi` in another terminal.",
             ),
         ),
         verify=(
@@ -589,39 +762,55 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             ("curl", "-sI", "http://localhost:8188"),
         ),
         undo=(
-            f"rm -rf {PLAYBOOK_DIR_TOKEN}   # comfyui-env, ComfyUI and the checkpoint (all under NVH_HOME)",
+            f"rm -rf {PLAYBOOK_DIR_TOKEN}   # comfyui-env, ComfyUI and the downloaded weights (all under NVH_HOME)",
         ),
         notes=(
             "Everything lives under NVH_HOME/playbooks/comfy-ui; no sudo anywhere.",
+            f"Upstream publishes no checksum for setup.sh and launch.sh; nvHive verifies each against the sha256 it pinned on "
+            f"{ASSET_PIN_DATE} before running it (scripts/check_playbook_upstream.py --check reports a changed file).",
+            "The README's Video Gen Workflow tab (a Docker image, FLUX / Wan / HunyuanVideo tiers of 70-230 GB, an HF token and "
+            "accepted model licences) is not shipped here; follow it by hand from the source link.",
             "nvHive's own rootless ComfyUI (`nvh workstation --with-comfyui`) installs under NVH_HOME and listens on localhost; the `comfyui-power-nodes` pack adds node packs to it.",
         ),
-        estimated_minutes=40,
-        estimated_disk_gb=20.0,
+        warning=(
+            "launch.sh binds 0.0.0.0:8188 — every interface (LAN), unauthenticated — while it runs; the manual step shows "
+            "the 127.0.0.1 variant."
+        ),
+        estimated_minutes=60,
+        estimated_disk_gb=30.0,
         risk="Medium (upstream)",
+        last_updated="10/13/2026",
     ),
     Playbook(
         id="dgx-dashboard",
-        title="DGX Dashboard",
+        upstream_folder="playbook-dgx-dashboard",
+        title="Monitor Your AI Compute with DGX Dashboard",
         category="system",
-        summary="Monitor your DGX system and launch JupyterLab",
-        source_urls=(_src("dgx-dashboard"),),
+        summary="Notebook access, GPU status and update controls in one place",
+        source_urls=(_src("playbook-dgx-dashboard"),),
         prerequisites=(
-            "NVIDIA Grace Blackwell GB10 Superchip System running NVIDIA DGX OS",
-            "NVIDIA Sync installed (remote access) or an SSH client",
+            "DGX Spark (64 GB or 128 GB unified memory) running NVIDIA DGX OS, powered on and reachable",
+            "A browser that can reach port 11000 (local or tunnelled); NVIDIA Sync (recommended) or an SSH client",
         ),
         steps=(
             _manual(
                 "Access the DGX Dashboard",
-                "Open http://localhost:11000 (desktop shortcut). Remotely: NVIDIA Sync, or "
-                "`ssh -L 11000:localhost:11000 -L <ASSIGNED_PORT>:localhost:<ASSIGNED_PORT> <USERNAME>@<SPARK_DEVICE_IP>` "
-                "with the port from /opt/nvidia/dgx-dashboard-service/jupyterlab_ports.yaml.",
+                "Open http://localhost:11000 (desktop shortcut) or NVIDIA Sync → DGX Dashboard. Manual tunnel: "
+                "`ssh -L 11000:localhost:11000 -L <ASSIGNED_PORT>:localhost:<ASSIGNED_PORT> <USERNAME>@<SPARK_IP>` "
+                "with your port from /opt/nvidia/dgx-dashboard-service/jupyterlab_ports.yaml.",
             ),
             _manual("Log into the DGX Dashboard", "Use your system username and password."),
             _manual(
                 "Launch a JupyterLab instance",
-                "Start → Starting → Preparing → Running (creates ~/jupyterlab with its own venv; a new working directory is a new environment).",
+                "Start → Starting → Preparing → Running (creates ~/jupyterlab with its own venv and requirements.txt; "
+                "a new working directory is a new environment).",
             ),
-            _manual("Monitor GPU utilization; stop JupyterLab", "Both from the dashboard."),
+            _manual(
+                "Test with a sample AI workload",
+                "New notebook → Python 3 → paste the README's Stable Diffusion XL cell (assets/jupyter-cell.py) → run; "
+                "the first run downloads the model.",
+            ),
+            _manual("Monitor GPU utilization; stop JupyterLab", "Both from the dashboard (Stop in the JupyterLab panel)."),
         ),
         verify=(
             ("curl", "-sf", "-o", "/dev/null", "http://localhost:11000"),
@@ -636,75 +825,116 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             "Settings → Updates → 'Update Now' upgrades packages and firmware and reboots the machine; nvHive never "
             "automates it and its only rollback is a system backup or recovery media."
         ),
-        estimated_minutes=15,
+        estimated_minutes=30,
         estimated_disk_gb=0.0,
         risk="Low (normal use)",
+        last_updated="07/31/2026",
     ),
     Playbook(
         id="vscode",
-        title="VS Code",
+        upstream_folder="playbook-vscode",
+        title="Set Up VS Code for Local and Remote Development",
         category="dev",
-        summary="Install and use VS Code locally or remotely",
-        source_urls=(_src("vscode"),),
+        summary="Editing, debugging and terminal access in one development workspace",
+        source_urls=(_src("playbook-vscode"),),
         prerequisites=(
-            "A DGX Spark set up with an active internet connection",
-            "sudo privileges to the Spark",
-            "At least 200 MB of disk space",
-            "(Remote use only) VS Code on your laptop",
+            "A DGX Spark (DGX OS, ARM64) with an internet connection; keyboard, monitor and mouse for local desktop use",
+            "sudo privileges for the local install; at least 200 MB of disk",
+            "(Remote use only) VS Code on your computer and NVIDIA Sync connected to the Spark",
         ),
         steps=(
             _step(
-                "Download the VS Code ARM64 installer",
+                "Verify the system architecture is arm64",
+                "bash", "-c", 'test "$(dpkg --print-architecture)" = arm64',
+                check=_VSCODE_INSTALLED,
+            ),
+            _step(
+                "Fetch Microsoft's stable-build manifest",
+                "curl", "-fsSL", VSCODE_SHA_MANIFEST_URL, "-o", f"{PLAYBOOK_DIR_TOKEN}/vscode-stable.json",
+                check=_VSCODE_INSTALLED,
+                description="The manifest lists every current stable build with its sha256 and productVersion; the download below redirects to the same build.",
+            ),
+            _step(
+                "Download the VS Code ARM64 .deb",
                 "wget", _VSCODE_DEB_URL, "-O", f"{PLAYBOOK_DIR_TOKEN}/vscode-arm64.deb",
-                check=_VSCODE_INSTALLED, timeout=INSTALL_TIMEOUT_S,
-                unpinned=True, upstream=_VSCODE_UPSTREAM,
-                description="The `stable` channel's current build: no version pin and no checksum in the README.",
+                check=_VSCODE_INSTALLED, timeout=INSTALL_TIMEOUT_S, upstream=_VSCODE_UPSTREAM,
+            ),
+            _step(
+                "Verify the .deb against the manifest's sha256 and record its version",
+                *_VSCODE_VERIFY_ARGV, _VSCODE_VERIFY_PY,
+                f"{PLAYBOOK_DIR_TOKEN}/vscode-stable.json", f"{PLAYBOOK_DIR_TOKEN}/vscode-arm64.deb",
+                f"{PLAYBOOK_DIR_TOKEN}/vscode-version.txt",
+                check=_VSCODE_INSTALLED,
+                description=(
+                    "Compares the download's sha256 with the linux-deb-arm64 product in the manifest and writes its "
+                    "productVersion to vscode-version.txt; a mismatch (or a manifest without a sha256) stops the run before apt."
+                ),
             ),
             _step(
                 "Install VS Code (apt resolves the .deb's dependencies)",
                 "apt-get", "install", "-y", f"{PLAYBOOK_DIR_TOKEN}/vscode-arm64.deb",
-                sudo=True, check=_VSCODE_INSTALLED, timeout=INSTALL_TIMEOUT_S,
-                unpinned=True, upstream=_VSCODE_UPSTREAM,
-                description=(
-                    "Upstream runs `dpkg -i` and then `apt-get install -f` to repair missing dependencies; the runner "
-                    "stops at the first failing step, so that repair could never run — apt-get on the .deb does both "
-                    "in one command (`-y`: nothing can answer a prompt, stdin is closed)."
-                ),
+                sudo=True, check=_VSCODE_INSTALLED, timeout=INSTALL_TIMEOUT_S, upstream=_VSCODE_UPSTREAM,
+                description="Upstream runs `sudo apt install ~/vscode-arm64.deb`; `-y` because nothing can answer a prompt (stdin is closed).",
             ),
             _manual(
-                "Open VS Code",
-                "code   # needs a desktop session. A project: `mkdir ~/spark-dev-workspace && cd ~/spark-dev-workspace && code .`",
+                "Open a workspace",
+                "mkdir -p ~/vscode-workspace && cd ~/vscode-workspace && code .   # needs a desktop session; Terminal > New Terminal",
             ),
-            _manual("Remote use", "On your laptop, NVIDIA Sync → VS Code opens a Remote-SSH session; check `hostnamectl` in its terminal."),
+            _manual(
+                "Validate the setup",
+                "In the integrated terminal: `printf 'print(\"Hello from VS Code!\")\\n' > test.py && python3 test.py`; "
+                "install extensions that support Linux ARM64.",
+            ),
+            _manual(
+                "Remote use",
+                "On your computer, NVIDIA Sync → VS Code opens a Remote-SSH session; check `hostnamectl` and `whoami` in its "
+                "terminal. Without Sync: the Remote - SSH extension and `ssh <USER>@<SPARK_HOST>`.",
+            ),
         ),
         verify=(
             _dpkg("code"),
             ("code", "--version"),
         ),
         undo=(
-            "sudo apt-get remove code",
-            "rm -rf ~/.config/Code ~/.vscode   # settings and extensions",
+            "sudo apt remove code",
+            f"rm -f {PLAYBOOK_DIR_TOKEN}/vscode-arm64.deb {PLAYBOOK_DIR_TOKEN}/vscode-stable.json",
+            "rm -rf ~/.config/Code ~/.vscode   # settings, cached data and extensions",
         ),
         notes=(
-            "Microsoft publishes the current stable build's sha256 at https://code.visualstudio.com/sha?build=stable "
-            "(platform linux-deb-arm64) if you want to check the downloaded .deb by hand before approving the install.",
+            "Upstream installs the current stable .deb as downloaded. nvHive fetches Microsoft's manifest "
+            f"({VSCODE_SHA_MANIFEST_URL}), verifies the download's sha256 against its {VSCODE_PLATFORM} entry and records "
+            f"the productVersion under {PLAYBOOK_DIR_TOKEN}/vscode-version.txt before apt installs it.",
+            "Unmet dependencies at install time: `sudo apt update`, then run the playbook again (finished steps are skipped).",
         ),
-        estimated_minutes=5,
+        estimated_minutes=10,
         estimated_disk_gb=0.2,
-        risk="Low (upstream); nvHive: installs an unpinned, unverified vendor .deb as root",
+        risk="Low (upstream); nvHive: installs the vendor .deb as root after verifying Microsoft's published sha256",
+        last_updated="07/31/2026",
     ),
     Playbook(
         id="tailscale",
-        title="Set up Tailscale on Your Spark",
+        upstream_folder="playbook-tailscale",
+        title="Set Up Tailscale for Remote Access",
         category="network",
-        summary="Use Tailscale to connect to your Spark on your home network no matter where you are",
-        source_urls=(_src("tailscale"),),
+        summary="Encrypted SSH from any network without port forwarding or firewall changes",
+        source_urls=(_src("playbook-tailscale"),),
         prerequisites=(
-            "NVIDIA DGX OS with a working package manager (`sudo apt update`) and a user with sudo privileges",
-            "Internet connectivity; a valid account for Tailscale authentication (Google, GitHub, Microsoft)",
-            "A client device (Mac, Windows or Linux) for remote access",
+            "DGX Spark on DGX OS (Ubuntu noble) with a working package manager (`sudo apt update`) and a user with sudo privileges",
+            "Internet connectivity; a Tailscale login (Google, GitHub, Microsoft or another supported identity provider)",
+            "A client device (macOS, Windows or Linux), ideally on a different network for the remote test",
         ),
         steps=(
+            _step("Update the package list", "apt", "update", sudo=True, check=("systemctl", "is-active", "ssh"), timeout=INSTALL_TIMEOUT_S),
+            _step(
+                "Install the OpenSSH server (if needed)",
+                "apt", "install", "-y", "openssh-server",
+                sudo=True, check=("systemctl", "is-active", "ssh"), timeout=INSTALL_TIMEOUT_S,
+            ),
+            _step(
+                "Enable and start SSH",
+                "systemctl", "enable", "ssh", "--now", "--no-pager",
+                sudo=True, check=("systemctl", "is-active", "ssh"),
+            ),
             _step("Update the package list", "apt", "update", sudo=True, check=_dpkg("tailscale"), timeout=INSTALL_TIMEOUT_S),
             _step(
                 "Install curl and gnupg",
@@ -745,28 +975,27 @@ PLAYBOOKS: tuple[Playbook, ...] = (
                 "apt", "install", "-y", "tailscale",
                 sudo=True, check=_dpkg("tailscale"), timeout=INSTALL_TIMEOUT_S,
             ),
-            _step(
-                "Install the OpenSSH server (if needed)",
-                "apt", "install", "-y", "openssh-server",
-                sudo=True, check=("systemctl", "is-active", "ssh"), timeout=INSTALL_TIMEOUT_S,
-            ),
-            _step(
-                "Enable and start SSH",
-                "systemctl", "enable", "ssh", "--now", "--no-pager",
-                sudo=True, check=("systemctl", "is-active", "ssh"),
-            ),
             _manual(
                 "Connect your Spark to the tailnet",
-                "sudo tailscale up   # in a terminal; open the URL it prints and log in (Google, GitHub or Microsoft)",
+                "sudo tailscale up   # in a terminal; open the URL it prints and log in (Google, GitHub, Microsoft or another provider)",
             ),
             _manual(
                 "Install Tailscale on your client devices and log in to the same tailnet",
-                "Then `tailscale status` and `tailscale ping <SPARK_HOSTNAME>` from the client.",
+                "macOS: App Store or the .pkg; Windows: the .msi; Linux: the same apt steps as above. Log in with the same account.",
+            ),
+            _manual(
+                "Verify network connectivity",
+                "On any device: `tailscale status`, then `tailscale ping <SPARK_HOSTNAME>`.",
             ),
             _manual(
                 "Configure SSH authentication",
-                "Client: `ssh-keygen -t ed25519 -f ~/.ssh/tailscale_spark`; Spark: append the public key to ~/.ssh/authorized_keys "
-                "(`chmod 600 ~/.ssh/authorized_keys; chmod 700 ~/.ssh`); test `ssh -i ~/.ssh/tailscale_spark <USERNAME>@<SPARK_HOSTNAME>`.",
+                "Client: `ssh-keygen -t ed25519 -f ~/.ssh/tailscale_remote`; Spark: append the public key to ~/.ssh/authorized_keys "
+                "(`chmod 600 ~/.ssh/authorized_keys; chmod 700 ~/.ssh`).",
+            ),
+            _manual(
+                "Test the connection",
+                "ssh -i ~/.ssh/tailscale_remote <USERNAME>@<SPARK_HOSTNAME>; then `scp -i ~/.ssh/tailscale_remote test.txt "
+                "<USERNAME>@<SPARK_HOSTNAME>:~/` and `ssh -i ~/.ssh/tailscale_remote <USERNAME>@<SPARK_HOSTNAME> 'nvidia-smi'`.",
             ),
         ),
         verify=(
@@ -781,96 +1010,124 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             "sudo rm /etc/apt/sources.list.d/tailscale.list",
             "sudo rm /usr/share/keyrings/tailscale-archive-keyring.gpg",
             "sudo apt update",
-            "sudo systemctl disable ssh --now   # only if this playbook enabled SSH (its step 10 ran)",
-            "sudo apt remove openssh-server   # only if this playbook installed it (its step 9 ran)",
+            "sudo systemctl disable ssh --now   # only if this playbook enabled SSH (its step 3 ran)",
+            "sudo apt remove openssh-server   # only if this playbook installed it (its step 2 ran)",
         ),
         notes=(
             "The key and the repository list are downloaded to NVH_HOME first and installed with `install -m 0644` (upstream pipes them through `sudo tee`).",
-            "`noble` is Ubuntu 24.04 — the DGX OS base.",
+            "`noble` is Ubuntu 24.04 — the DGX OS base. Steps 1-3 are the README's 'Install SSH server (if needed)'; they are skipped while sshd is active.",
         ),
         warning=(
             "Adds the tailscaled service and a tailscale0 interface (100.x address). `tailscale up --accept-dns` / MagicDNS "
-            "can change system DNS resolution. When sshd is not already active, steps 9-10 install openssh-server and "
+            "can change system DNS resolution. When sshd is not already active, steps 1-3 install openssh-server and "
             "enable it at boot on every interface (LAN, not just the tailnet) with DGX OS's default password "
             "authentication; the undo lists how to turn that back off."
         ),
-        estimated_minutes=25,
+        estimated_minutes=30,
         estimated_disk_gb=0.1,
         risk="Medium (upstream: potential SSH service configuration conflicts)",
+        last_updated="07/31/2026",
     ),
     Playbook(
         id="vllm",
-        title="vLLM for Inference",
+        upstream_folder="playbook-vllm",
+        title="Serve LLMs with vLLM on One Device",
         category="inference",
-        summary="Install and use vLLM on DGX Spark",
-        source_urls=(_src("vllm"),),
+        summary="A locally accessible model API from one DGX Spark (the README's 128 GB Qwen3.8 27B NVFP4 row)",
+        source_urls=(_src("playbook-vllm"),),
         prerequisites=(
-            "DGX Spark with CUDA 13.0 toolkit (`nvcc --version`), Docker and the NVIDIA Container Toolkit",
-            "Python 3.12 and git available; network access for packages and container images",
-            "HF_TOKEN in your shell for gated Hugging Face models (declared only — nvHive never asks for or stores it)",
+            "One DGX Spark with 128 GB unified memory (the 64 GB rows and the DGX Station rows are in the notes)",
+            "Docker available to your user (the first step joins the docker group); the Hugging Face CLI installed "
+            "(`hf --help`; https://huggingface.co/docs/huggingface_hub/main/en/guides/cli)",
+            "Disk for the container image and the model plus its draft model; HF_TOKEN only for gated models (declared only — nvHive never asks for or stores it)",
+            "(Intermediate path) NVIDIA Sync on your laptop, connected to the Spark",
         ),
         steps=(
             _docker_group_step(),
             _step(
-                "Pull the vLLM container image (NGC, pinned to the README's example tag)",
-                "docker", "pull", "nvcr.io/nvidia/vllm:26.05.post1-py3",
-                check=("docker", "image", "inspect", "nvcr.io/nvidia/vllm:26.05.post1-py3"), timeout=LONG_TIMEOUT_S,
+                "Check the Hugging Face CLI is installed",
+                *_cmd_exists("hf"),
+                description="The README's prerequisite; the run stops here when `hf` is missing (install it from the standalone installer first).",
             ),
             _step(
-                "Create the vLLM server container (serves openai/gpt-oss-20b on port 8000)",
-                "docker", "run", "-d", "--gpus", "all", "-p", "8000:8000", "--name", "vllm-server",
-                "nvcr.io/nvidia/vllm:26.05.post1-py3", "vllm", "serve", "openai/gpt-oss-20b",
-                check=("docker", "container", "inspect", "vllm-server"), idempotent=False, timeout=INSTALL_TIMEOUT_S,
-                description="The README's detached variant with its example model; the model downloads inside the container on first start.",
+                f"Pull the vLLM container image ({_VLLM_IMAGE})",
+                "docker", "pull", _VLLM_IMAGE,
+                check=("docker", "image", "inspect", _VLLM_IMAGE), timeout=LONG_TIMEOUT_S,
+                description="The README's pinned NGC image for the 128 GB Qwen3.8 27B row.",
             ),
-            _step("Start the vLLM server container", "docker", "start", "vllm-server", check=_docker_running("vllm-server")),
+            _step(
+                f"Download the model ({_VLLM_MODEL})",
+                "hf", "download", _VLLM_MODEL,
+                check=("test", "-d", f"{_HF_HUB}/models--nvidia--Qwen3.8-27B-NVFP4"), timeout=LONG_TIMEOUT_S,
+                description="Into ~/.cache/huggingface; `HF_HUB_DISABLE_XET=1 hf download …` is faster on some links.",
+            ),
+            _step(
+                f"Download the draft model for speculative decoding ({_VLLM_DRAFT})",
+                "hf", "download", _VLLM_DRAFT,
+                check=("test", "-d", f"{_HF_HUB}/models--z-lab--Qwen3.8-27B-DFlash2"), timeout=LONG_TIMEOUT_S,
+            ),
+            *_pinned_download(
+                f"the README's launch script ({VLLM_SYNC_SCRIPT_NAME})", VLLM_SYNC_SCRIPT, VLLM_SYNC_SCRIPT_NAME,
+                check=("test", "-f", f"{PLAYBOOK_DIR_TOKEN}/{VLLM_SYNC_SCRIPT_NAME}"),
+            ),
             _manual(
-                "Wait for the model download and server start",
-                "docker logs -f vllm-server   # until 'Application startup complete'; then `curl http://localhost:8000/health`",
+                "Start the server (foreground script, or an NVIDIA Sync custom app)",
+                f"bash {PLAYBOOK_DIR_TOKEN}/{VLLM_SYNC_SCRIPT_NAME}   # runs `docker run --network host … {_VLLM_IMAGE} vllm serve "
+                f"{_VLLM_MODEL} --host 127.0.0.1 --port 8000 …` and stops the container when you Ctrl+C. Remote: paste the "
+                "script into NVIDIA Sync → Custom → Add New (Name vLLM-Qwen3.8-27B-128GB, Port 8000) and click it.",
+            ),
+            _manual(
+                "Wait for the model to load, then test the API",
+                "docker logs --tail 50 --follow vllm-spark-128gb-qwen38-27b; then `curl --fail-with-body -i http://localhost:8000/health` "
+                "and `curl --fail-with-body -sS http://localhost:8000/v1/models` (copy the model id for chat requests).",
             ),
             _manual(
                 "Serve a different model",
-                "docker rm -f vllm-server, then re-run the docker run line with `vllm serve <HF_MODEL_HANDLE>`; gated models need "
-                "`-e HF_TOKEN=\"$HF_TOKEN\"`. The agent-ready Qwen3.6 35B recipe (OpenClaw / NemoClaw) is the README's second tab: "
-                "`docker run -it --gpus all -p 8000:8000 -e HF_TOKEN=\"$HF_TOKEN\" -v ~/.cache/huggingface:/root/.cache/huggingface "
-                "vllm/vllm-openai:<tag> nvidia/Qwen3.6-35B-A3B-NVFP4 --host 0.0.0.0 --port 8000 …`.",
+                "Pick another row of the README's table (64 GB: Qwen3.8 27B NVFP4 on vllm/vllm-openai:v0.28.0, or Nemotron 3.5 "
+                "Bolt 74B A9B) or a recipe from https://nvidia.github.io/local-ai-inference-recipes/ (Advanced tab).",
             ),
         ),
         verify=(
-            _docker_running("vllm-server"),
+            ("docker", "image", "inspect", _VLLM_IMAGE),
+            ("test", "-d", f"{_HF_HUB}/models--nvidia--Qwen3.8-27B-NVFP4"),
             ("curl", "-sf", "http://localhost:8000/health"),
-            ("curl", "-sf", "http://localhost:8000/v1/models"),
         ),
         undo=(
-            "docker stop vllm-server",
-            "docker rm vllm-server",
-            "docker rmi nvcr.io/nvidia/vllm:26.05.post1-py3",
+            f"docker rm -f {_VLLM_CONTAINER}   # the script removes it on exit; this covers a crash",
+            f"docker rmi {_VLLM_IMAGE}",
+            "rm -rf ~/.cache/huggingface/hub/models--nvidia--Qwen3.8-27B-NVFP4 ~/.cache/huggingface/hub/models--z-lab--Qwen3.8-27B-DFlash2",
+            f"rm -rf {PLAYBOOK_DIR_TOKEN}",
             f"sudo gpasswd -d {USER_TOKEN} docker",
         ),
         notes=(
-            "Image pinned to 26.05.post1-py3, the README's own example (upstream leaves ${LATEST_VLLM_VERSION} for you to fill in).",
-            "The upstream command mounts no Hugging Face cache: the model is downloaded again whenever the container is recreated.",
-            "For a local-only bind swap `-p 8000:8000` for `-p 127.0.0.1:8000:8000` when you create the container.",
+            f"The launch script is the README's own ({VLLM_SYNC_SCRIPT}), verified against the sha256 nvHive pinned on "
+            f"{ASSET_PIN_DATE}; it binds 127.0.0.1:8000 with Docker host networking (NVIDIA Sync forwards the port to your laptop).",
+            "The README's other rows: 64 GB Spark — Qwen3.8 27B NVFP4 (vllm/vllm-openai:v0.28.0) or Nemotron 3.5 Bolt 74B A9B "
+            "(eugr/spark-vllm:nightly-20261016); 128 GB — Qwen3.8 Flash-Next (eugr/spark-vllm-b12x:nightly-20261015); nvHive "
+            "ships the 128 GB row with the pinned NGC image.",
+            "The model is cached under ~/.cache/huggingface, so recreating the container does not download it again.",
         ),
         warning=(
-            "Publishes port 8000 on every interface (LAN) with no API key: anyone on the network can use the GPU "
-            "through http://<spark>:8000/v1 while the container runs. Bind to 127.0.0.1 or firewall the port if the "
-            "Spark shares a network."
+            "The Advanced recipes' `--host 0.0.0.0` (or a `-p` mapping) publishes an unauthenticated API on every interface "
+            "(LAN): anyone on the network can use the GPU through http://<spark>:8000/v1 while the container runs. The shipped "
+            "script binds 127.0.0.1; keep it that way or firewall the port if the Spark shares a network."
         ),
         estimated_minutes=30,
-        estimated_disk_gb=30.0,
-        risk="Low (upstream); nvHive: LAN-reachable, unauthenticated API",
+        estimated_disk_gb=40.0,
+        risk="Low (upstream); nvHive: a recipe that binds 0.0.0.0 is a LAN-reachable, unauthenticated API",
+        last_updated="10/19/2026",
     ),
     Playbook(
         id="llama-cpp",
-        title="Run models with llama.cpp on DGX Spark",
+        upstream_folder="playbook-llama-cpp",
+        title="Serve Models with llama.cpp",
         category="inference",
-        summary="Build llama.cpp with CUDA and serve models via an OpenAI-compatible API",
-        source_urls=(_src("llama-cpp"),),
+        summary="Efficient inference for any GGUF model with minimal dependencies, behind an OpenAI-compatible API",
+        source_urls=(_src("playbook-llama-cpp"),),
         prerequisites=(
-            "NVIDIA DGX Spark with GB10 GPU; about 30 GB free unified memory for the example model",
-            "At least ~40 GB free disk for the example download plus build artifacts",
-            "Git, CMake 3.14+ and the CUDA Toolkit (`nvcc --version`); network access to GitHub and Hugging Face",
+            "DGX Spark (64 GB or 128 GB unified memory); about 30 GB free memory for the example model and its KV cache",
+            "At least ~40 GB free disk for the example download (about 21 GB) plus build artifacts",
+            "Git, CMake 3.18+ and the CUDA Toolkit (`nvcc --version`); network access to GitHub and Hugging Face",
         ),
         steps=(
             _step(
@@ -902,15 +1159,17 @@ PLAYBOOKS: tuple[Playbook, ...] = (
                 check=("test", "-x", f"{PLAYBOOK_DIR_TOKEN}/llama.cpp/build/bin/llama-server"), timeout=LONG_TIMEOUT_S,
             ),
             _manual(
-                "Start llama-server with a model (foreground; about 35 GB download on first run)",
-                f"cd {PLAYBOOK_DIR_TOKEN}/llama.cpp/build && ./bin/llama-server -hf unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL "
-                "--host 0.0.0.0 --port 30000   # `--host 127.0.0.1` keeps it local",
+                "Start llama-server with a model (foreground; about 21 GB download on first run)",
+                f"cd {PLAYBOOK_DIR_TOKEN}/llama.cpp && ./build/bin/llama-server -hf unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL "
+                "--host 0.0.0.0 --port 30000   # `--host 127.0.0.1` keeps it local; agent-ready: add "
+                "`--chat-template-kwargs '{\"preserve_thinking\": true}' --spec-type draft-mtp --spec-draft-n-max 3`",
             ),
             _manual(
                 "Test the API",
+                "timeout 900 bash -c 'until curl -sf http://127.0.0.1:30000/health > /dev/null 2>&1; do sleep 5; done'; then "
                 "curl -X POST http://127.0.0.1:30000/v1/chat/completions -H 'Content-Type: application/json' -d "
                 "'{\"model\": \"unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL\", \"messages\": [{\"role\": \"user\", "
-                "\"content\": \"New York is a great city because...\"}], \"max_tokens\": 100}'",
+                "\"content\": \"New York is a great city because...\"}], \"max_tokens\": 2048}'   # a small max_tokens is spent on reasoning",
             ),
         ),
         verify=(
@@ -924,20 +1183,24 @@ PLAYBOOKS: tuple[Playbook, ...] = (
         notes=(
             "The clone lives under NVH_HOME/playbooks/llama-cpp instead of ~/llama.cpp.",
             "If cmake cannot find CUDA: `export PATH=/usr/local/cuda/bin:$PATH`, delete build/ and run the two cmake steps again.",
+            "Context: llama.cpp allocates the model's maximum by default; for agentic or coding work the README wants at least "
+            "32768 tokens (preferably 100000+), set with `--ctx-size`.",
         ),
         estimated_minutes=30,
         estimated_disk_gb=40.0,
         risk="Low",
+        last_updated="10/09/2026",
     ),
     Playbook(
         id="lm-studio",
-        title="LM Studio on DGX Spark",
+        upstream_folder="playbook-lm-studio",
+        title="Serve LLMs with LM Studio",
         category="inference",
-        summary="Deploy LM Studio and serve LLMs on a Spark device; use LM Link to access models remotely.",
-        source_urls=(_src("lm-studio"),),
+        summary="Local models reachable from your own machine's tools over an encrypted link (llmster, the headless LM Studio)",
+        source_urls=(_src("playbook-lm-studio"),),
         prerequisites=(
-            "DGX Spark (ARM64, Blackwell); 65 GB memory and 65 GB storage minimum for the example model (70 GB recommended)",
-            "A client device on the same local network; network access to download packages and models",
+            "DGX Spark (128 GB unified memory); at least 65 GB memory and 65 GB storage for the example model (70 GB or more recommended)",
+            "A client device (Mac, Windows or Linux) to call the API or join LM Link; network access to download packages and models",
         ),
         steps=(
             *_download_then_run(
@@ -949,14 +1212,23 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             _manual("Add lms to your PATH", "Follow the installer's instructions (usually `source ~/.bashrc`)."),
             _manual(
                 "Start the LM Studio API server",
-                "lms server start --port 1234   # upstream binds the LAN with `--bind 0.0.0.0`; add it only if you need remote access",
+                "lms server start --port 1234   # upstream adds `--bind 0.0.0.0` for LAN clients; with LM Link you can leave it off",
+            ),
+            _manual(
+                "(Optional) Connect with LM Link",
+                "Create a Link at https://lmstudio.ai/link, sign in on the Spark (llmster) and on your laptop; remote models then "
+                "appear at localhost:1234 on the laptop (end-to-end encrypted, preview: 2 users, 5 devices each).",
             ),
             _manual(
                 "Download and load a model (about 65 GB)",
-                "lms get <publisher/model> && lms load <model>   # choose a current Nemotron Nano build from LM Studio's "
-                "model catalogue (the upstream guide used NVIDIA's Nemotron 3 Nano Omni); `lms ls` lists what you have",
+                "lms get nvidia/nemotron-3.5-super-vl && lms ls && lms load nvidia/nemotron-3.5-super-vl   # the README's "
+                "recommended Nemotron 3.5 Super VL; an LM Studio catalogue path, not an Ollama tag (GPT-OSS-120B is its other example)",
             ),
-            _manual("(Optional) Connect with LM Link", "Sign in at https://lmstudio.ai/link on the Spark and on your laptop."),
+            _manual(
+                "Use the LM Studio SDK from your laptop",
+                "Download run.js / run.py / run.sh from the README's Ancillary files, replace <SPARK_LOCAL_IP> (or use localhost with "
+                "LM Link) and the model name, then `npm install @lmstudio/sdk && node run.js`, `uv run --script run.py` or `bash run.sh`.",
+            ),
         ),
         verify=(
             ("test", "-d", f"{HOME_TOKEN}/.lmstudio"),
@@ -967,45 +1239,50 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             "rm -rf ~/.lmstudio/models   # downloaded models",
         ),
         notes=("Fully user-space; the only automated step is the installer.",),
-        estimated_minutes=20,
+        estimated_minutes=30,
         estimated_disk_gb=65.0,
         risk="Low",
+        last_updated="10/21/2026",
     ),
     Playbook(
         id="openclaw",
-        title="OpenClaw",
+        upstream_folder="playbook-openclaw",
+        title="Run OpenClaw with a Local LLM",
         category="agent",
-        summary="Run OpenClaw locally on DGX Spark with a vLLM-served local model",
-        source_urls=(_src("openclaw"),),
+        summary="Install a local-first AI agent and connect it to a private OpenAI-compatible model endpoint",
+        source_urls=(_src("playbook-openclaw"),),
         prerequisites=(
-            "DGX Spark running Linux, connected to your network; terminal (SSH or local) access",
-            "Enough GPU memory for the model (the README's recipe: nvidia/Qwen3.6-35B-A3B-NVFP4 via vLLM)",
-            "HF_TOKEN in your shell for the model download (declared only — nvHive never asks for or stores it)",
+            "DGX Spark (64 GB or 128 GB unified memory) running Linux; terminal (SSH or local) access",
+            "A local OpenAI-compatible inference backend — the vllm playbook (Option A, recommended) or Ollama (Option B) — or the "
+            "willingness to install one; memory for the model it serves",
+            "Network access to download OpenClaw and the model checkpoint",
         ),
         steps=(
             _docker_group_step(),
             _manual(
                 "Install OpenClaw (interactive)",
-                "curl -fsSL https://openclaw.ai/install.sh | bash   # in a terminal: the installer shows a security warning you answer with the arrow keys → Yes",
+                "curl -fsSL https://openclaw.ai/install.sh | bash   # in a terminal: read the security disclaimer and accept it to proceed",
             ),
             _manual(
                 "Complete the OpenClaw onboarding (TUI)",
-                "Quickstart; Model provider → Skip for now; All Providers → Keep Current; channel → Skip for Now; Skills → No; "
-                "Homebrew → No; Hooks → all three; save the dashboard URL and token; Finish → Yes.",
+                "Quick start (recommended) → One agent → Model/auth provider → Skip for now (configure the model after the server is up); "
+                "channels, skills and hooks can be added later.",
             ),
             _manual(
-                "Serve the model with vLLM (separate terminal)",
-                "The vllm playbook's agent-ready Qwen3.6 recipe: `docker run -it --gpus all -p 8000:8000 -e HF_TOKEN=\"$HF_TOKEN\" "
-                "-v ~/.cache/huggingface:/root/.cache/huggingface vllm/vllm-openai:<tag> nvidia/Qwen3.6-35B-A3B-NVFP4 --host 0.0.0.0 "
-                "--port 8000 …`; wait for 'Application startup complete', then `curl http://localhost:8000/v1/models`.",
+                "Serve a local model (separate terminal)",
+                f"Option A — vLLM: the vllm playbook (its server answers http://localhost:8000/v1/models). Option B — Ollama: "
+                f"`ollama pull {MODEL_CHAT_TOKEN}` and `ollama run {MODEL_CHAT_TOKEN}`, then `/set parameter num_ctx 65536` "
+                "(at least 32K; 64K+ with headroom). Upstream's Option B pulls Qwen3.6 27B.",
             ),
             _manual(
-                "Point OpenClaw at the vLLM server",
-                "Edit ~/.openclaw/openclaw.json: add `models.providers.vllm` with baseUrl http://localhost:8000/v1, apiKey `vllm`, "
-                "api `openai-responses`, and the model id/name nvidia/Qwen3.6-35B-A3B-NVFP4 (reasoning true, contextWindow 262144, "
-                "maxTokens 8192); then restart the OpenClaw gateway.",
+                "Point OpenClaw at the local server",
+                "Edit ~/.openclaw/openclaw.json: `models.providers.vllm` with baseUrl http://localhost:8000/v1, apiKey `vllm`, "
+                "api `openai-responses` (or the chat-completions variant), and the served model id/name — the README's example is "
+                "nvidia/Qwen3.6-35B-A3B-NVFP4 (reasoning true, contextWindow 262144, maxTokens 8192); for Ollama use "
+                f"http://localhost:11434/v1 and the exact tag ({MODEL_CHAT_TOKEN}). Restart the gateway so it reloads the file.",
             ),
-            _manual("Verify the setup", "Open the dashboard URL with its token; new conversation; `/model nvidia/Qwen3.6-35B-A3B-NVFP4`."),
+            _manual("Verify the setup", "Open the dashboard URL (with its access token); new conversation; `/model MODEL_NAME` switches models."),
+            _manual("Optional: skills", "Enable only skills you trust (sidebar, or Clawhub at https://docs.openclaw.ai/clawhub)."),
         ),
         verify=(
             _cmd_exists("openclaw"),
@@ -1013,57 +1290,68 @@ PLAYBOOKS: tuple[Playbook, ...] = (
             ("curl", "-sf", "http://localhost:8000/v1/models"),
         ),
         undo=(
-            "Stop the OpenClaw gateway and remove ~/.openclaw (the README gives no command)",
-            "docker rm $(docker ps -aq --filter ancestor=vllm/vllm-openai:latest)",
-            "docker rmi vllm/vllm-openai:latest",
+            "Stop the OpenClaw gateway; uninstall via the same install script or remove ~/.openclaw (the README's rollback)",
+            "Stop the inference server separately (the vllm playbook's undo, or `ollama rm <tag>`)",
             f"sudo gpasswd -d {USER_TOKEN} docker",
         ),
         notes=(
-            "Guided: the installer and onboarding are interactive TUIs, so nvHive automates only the docker-group step.",
+            "Guided: the installer and onboarding are interactive TUIs, so nvHive automates only the docker-group step (needed by "
+            "the vLLM backend).",
             "Rootless instead: the `openclaw-agent` studio pack installs OpenClaw under NVH_HOME via npm (config path differs from ~/.openclaw).",
         ),
         warning=(
-            "Upstream rates the risk Medium to High: run OpenClaw on a dedicated, isolated system with a dedicated account, install "
-            "only trusted skills, never expose the web UI or messaging channels publicly without strong authentication (SSH tunnel "
-            "or VPN), limit its internet access with firewall rules and monitor its logs."
+            "Upstream rates the risk Medium to High: run OpenClaw on a dedicated or isolated system with dedicated accounts, enable "
+            "only skills you trust, never expose the web UI or messaging channels publicly without strong authentication (SSH "
+            "tunnel or VPN), limit its internet access with firewall rules and monitor its logs."
         ),
         estimated_minutes=30,
         estimated_disk_gb=30.0,
         rootless_alternative="openclaw-agent",
         risk="Medium to High",
+        last_updated="10/22/2026",
     ),
     Playbook(
         id="nemoclaw",
+        upstream_folder="playbook-nemoclaw",
         title="Run NemoClaw with a Local LLM",
         category="agent",
-        summary="Build your first local AI assistant on DGX Spark using NemoClaw and vLLM in a secure sandbox, with optional Telegram.",
-        source_urls=(_src("nemoclaw"),),
+        summary="Build a local AI assistant in an OpenShell sandbox with vLLM inference and optional Telegram",
+        source_urls=(_src("playbook-nemoclaw"),),
         prerequisites=(
-            "A DGX Spark (GB10) with keyboard and monitor, or SSH access",
-            "Fresh install of DGX OS with the latest updates; Docker 28.x+ (`docker info --format '{{.ServerVersion}}'`)",
-            "Optional: a Telegram bot token (@BotFather) and a Brave Search API key (declared only — nvHive never asks for or stores them)",
+            "A DGX Spark (64 GB or 128 GB unified memory) with keyboard and monitor, or SSH access; sudo access (passwordless or interactive)",
+            "Fresh install of DGX OS with the latest updates; Docker installed and running, 28.x+ (`docker info --format '{{.ServerVersion}}'`)",
+            "Storage for the model download, the vLLM container and temporary download space (large Express models need hundreds of GB)",
+            "Optional: a Telegram bot token (@BotFather), a Brave Search API key, an HF read token for the Express download "
+            "(declared only — nvHive never asks for or stores them)",
         ),
         steps=(
             _docker_group_step(),
             _manual(
                 "Install NemoClaw (interactive; sudo prompts inside)",
-                "curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash   # in a terminal: accept the third-party notice; "
-                "`Run express install with these settings? [Y/n]` → Y (managed local vLLM, qwen3.6-35b-a3b-nvfp4, sandbox my-assistant)",
+                "curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash   # accept the third-party notice; on the Spark "
+                "`Choose 1 or 2 [1]:` → 1 (managed vLLM, automatic serving profile) or 2 (Qwen3.6 35B-A3B NVFP4 fixed profile); "
+                "`Run express install with these settings? [Y/n]` → Y (managed local vLLM, the maintained Express model, sandbox "
+                "my-assistant, Balanced policy)",
             ),
             _manual(
                 "Custom onboarding (only if you declined Express Install)",
-                "nemoclaw onboard --gpu --name <name>   # agent 1 (OpenClaw), inference, model, sandbox name, policy Balanced",
+                "nemoclaw onboard --gpu --name <name>   # agent 1 (OpenClaw), inference, model, sandbox name, Brave (optional), "
+                "messaging (prefer No at first), resource profile, policy Balanced",
             ),
             _manual(
-                "Open the dashboard",
-                "nemoclaw my-assistant dashboard-url --quiet; from a laptop `ssh -L <port>:127.0.0.1:<port> <user>@<spark-ip>` "
-                "and browse http://127.0.0.1:<port>/… (127.0.0.1, not localhost — origin check).",
+                "Open the Web UI",
+                "nemoclaw my-assistant dashboard-url --quiet; remote: `ssh -L <port>:127.0.0.1:<port> <user>@<spark-ip>` and open "
+                "the URL exactly as printed (127.0.0.1 with its token). Stale forward: `nemoclaw my-assistant recover`.",
             ),
-            _manual("Terminal UI", "nemoclaw my-assistant connect, then `openclaw tui`; `exit` to leave."),
+            _manual("Terminal UI", "nemoclaw my-assistant connect, then `openclaw tui` (Ctrl+C to leave; `exit` to leave the sandbox)."),
             _manual(
                 "Optional: Brave Search and Telegram",
                 "BRAVE_API_KEY=<key> nemoclaw onboard --name <sandbox> --recreate-sandbox --non-interactive; "
-                "nemoclaw <sandbox> channels add telegram; nemoclaw <sandbox> policy-add telegram",
+                "nemoclaw <sandbox> channels add telegram (the README's Optional — Messaging section).",
+            ),
+            _manual(
+                "Keep it current",
+                "nemoclaw update --check, then `nemoclaw update --yes` (host CLI only) and `nemoclaw upgrade-sandboxes --check`.",
             ),
         ),
         verify=(
@@ -1073,38 +1361,67 @@ PLAYBOOKS: tuple[Playbook, ...] = (
         ),
         undo=(
             "nemoclaw tunnel stop",
-            "nemoclaw uninstall --yes   # add --delete-models to drop the model; removes the Docker containers and volumes",
+            "nemoclaw my-assistant stop   # keeps the sandbox state; `nemoclaw my-assistant recover` brings it back",
+            "nemoclaw uninstall --yes   # add --delete-models to drop the weights; preserves Docker, Node.js and the vLLM image",
             f"sudo gpasswd -d {USER_TOKEN} docker",
         ),
         notes=(
             "Guided: the installer is an interactive Express Install that makes its own sudo host changes (Docker settings, "
-            "Node.js 22.16+) after prompting for your password in your terminal; nvHive automates only the docker-group step.",
-            "'No GPU detected' during onboarding is expected on GB10 (unified memory reporting).",
+            "Node.js 22.16+, OpenShell) after prompting for your password in your terminal; nvHive automates only the docker-group step.",
+            "'No GPU detected' during onboarding is expected on some unified-memory platforms; the wizard still uses vLLM.",
+            "In QA the managed profile served nvidia/Qwen3.6-35B-A3B-NVFP4 on a 128 GB Spark; `nemoclaw <sandbox> status` shows yours.",
             "Rootless instead: the `nemoclaw-sandbox` studio pack (needs Docker without sudo).",
         ),
-        warning="Upstream wants a clean device with no personal data and calls NemoClaw a demo provided AS IS.",
-        estimated_minutes=45,
-        estimated_disk_gb=40.0,
+        warning=(
+            "Upstream wants a clean device with no personal data and calls NemoClaw a demo provided AS IS: the OpenShell "
+            "sandbox reduces the agent's risks (data leakage, code execution, unintended actions, prompt injection) but does "
+            "not eliminate them."
+        ),
+        estimated_minutes=60,
+        estimated_disk_gb=60.0,
         rootless_alternative="nemoclaw-sandbox",
         risk="Medium",
+        last_updated="10/22/2026",
     ),
 )
 
-#: Upstream playbooks not shipped in this tier, with the reason (design brief §9).
+#: Upstream playbooks not shipped in this tier, with the reason (design brief §9), re-read 2026-11-01.
 DEFERRED: tuple[DeferredPlaybook, ...] = (
-    DeferredPlaybook("sglang", "SGLang for Inference",
-                     "unpinned lmsysorg/sglang:latest-cu130 image and `docker container prune -f` in the cleanup; pin first"),
-    DeferredPlaybook("nim-llm", "NIM on Spark",
-                     "needs an NGC_API_KEY `docker login nvcr.io` and `chmod -R a+w` on $HOME directories; key handling design pending"),
-    DeferredPlaybook("nemotron", "Nemotron Model Family on DGX Spark",
-                     "nightly cu130 vLLM image; how to obtain the Nano weights is not stated upstream"),
-    DeferredPlaybook("unsloth", "Unsloth on DGX Spark",
-                     "ephemeral `--rm` container with no volume (everything installed is lost on exit); thin README"),
-    DeferredPlaybook("connect-two-sparks", "Connect Two Sparks",
-                     "changes host networking (netplan / ip on the ConnectX-7 link) and ships a passphrase-less shared SSH private "
-                     "key to every node; needs a warning and undo design"),
-    DeferredPlaybook("connect-to-your-spark", "Set Up Local Network Access",
-                     "laptop-side only (NVIDIA Sync / ssh); nothing runs on the Spark"),
+    DeferredPlaybook(
+        "sglang", "playbook-sglang", "Serve LLMs with SGLang",
+        "the only image the README names is the floating `lmsysorg/sglang:latest-cu130`; pin a tag first",
+        last_updated="07/31/2026",
+    ),
+    DeferredPlaybook(
+        "nim-llm", "playbook-nim-llm", "Deploy NVIDIA NIM for LLM Inference",
+        "needs an NGC_API_KEY `docker login nvcr.io`, pulls a floating `:latest` NIM image and runs `chmod -R a+w` on "
+        "~/.cache/nim and ~/.local/share/nim/workspace; key handling design pending",
+        last_updated="09/30/2026",
+    ),
+    DeferredPlaybook(
+        "nemotron", "playbook-nemotron", "Serve Nemotron Nano and Super Models",
+        "Nano points `WEIGHTS` at local Nano Omni weights the README never says how to obtain; Super needs the floating "
+        "`vllm/vllm-openai:cu130-nightly` image and a gated Hugging Face checkpoint",
+        last_updated="07/31/2026",
+    ),
+    DeferredPlaybook(
+        "unsloth", "playbook-unsloth", "Fine-Tune Faster with Unsloth",
+        "runs inside an ephemeral `--rm` nvcr.io/nvidia/pytorch:25.11-py3 container and pip-installs Unsloth into it, so "
+        "everything is lost on exit; nothing to receipt",
+        last_updated="07/31/2026",
+    ),
+    DeferredPlaybook(
+        "connect-two-sparks", "playbook-connect-two-sparks", "Connect Two DGX Sparks for Distributed Workloads",
+        "changes host networking (netplan or `ip addr` on the ConnectX-7 link), may create a shared `nvidia` login with "
+        "`useradd`/`passwd` (deny-listed) and its discover-sparks script installs a shared SSH key (id_ed25519_shared) on every "
+        "node; needs a warning and undo design",
+        last_updated="08/12/2026",
+    ),
+    DeferredPlaybook(
+        "connect-to-your-spark", "playbook-connect-to-your-spark", "Use NVIDIA Sync to Connect Remotely to Your AI Compute",
+        "laptop-side only (NVIDIA Sync install, its Tailscale toggle, manual ssh); nothing runs on the Spark",
+        last_updated="09/24/2026",
+    ),
 )
 
 _PLAYBOOKS_BY_ID: dict[str, Playbook] = {playbook.id: playbook for playbook in PLAYBOOKS}
@@ -1118,6 +1435,13 @@ def get_playbook(playbook_id: str) -> Playbook | None:
 
 def deferred() -> list[dict[str, Any]]:
     return [entry.to_dict() for entry in DEFERRED]
+
+
+def upstream_folders() -> dict[str, str]:
+    """``{id: upstream folder}`` for every shipped and deferred playbook (what the drift check snapshots)."""
+    out = {playbook.id: playbook.upstream_folder for playbook in PLAYBOOKS}
+    out.update({entry.id: entry.upstream_folder for entry in DEFERRED})
+    return out
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1136,9 +1460,17 @@ def _user_home() -> str:
     return Path.home().as_posix()
 
 
+def _host_os() -> str:
+    """The platform facts' ``os`` (``linux`` / ``windows`` / ``macos`` / ``unknown``); never raises."""
+    try:
+        return str(getattr(ss._facts(), "os", "") or "unknown").strip().lower() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _texts(playbook: Playbook) -> list[str]:
-    """Every string a playbook renders: titles, argv, checks, manual text, halt notes, descriptions, verify, undo, notes."""
-    texts: list[str] = [*playbook.undo, *playbook.notes]
+    """Every string a playbook renders: prerequisites, titles, argv, checks, manual text, halt notes, descriptions, verify, undo, notes."""
+    texts: list[str] = [*playbook.prerequisites, *playbook.undo, *playbook.notes]
     for step in playbook.steps:
         texts += [step.title, *step.argv, step.manual or "", step.halt_after, step.description]
         if step.check:
@@ -1152,38 +1484,38 @@ def _uses(playbook: Playbook, *tokens: str) -> bool:
     return any(token in text for text in _texts(playbook) for token in tokens)
 
 
-def _default_chat_pick() -> lm.LocalModelPick:
-    """The table's default chat pick -- the one ``hive config init`` names before any hardware is known."""
+def _default_pick(use_case: str) -> lm.LocalModelPick:
+    """The table's default pick for ``use_case`` -- the budget ``hive config init`` names before any hardware is known."""
     from nvh.config.settings import _DEFAULT_LOCAL_BUDGET_GB
 
-    return lm.pick(_DEFAULT_LOCAL_BUDGET_GB, "chat") or lm.LOCAL_MODEL_TIERS[0].picks["chat"]
+    return lm.pick(_DEFAULT_LOCAL_BUDGET_GB, use_case) or lm.LOCAL_MODEL_TIERS[0].picks[use_case]
 
 
-def _chat_model_pick() -> lm.LocalModelPick:
-    """This host's ``chat`` pick from the tier table, sized from the platform facts.
+def _model_pick(use_case: str) -> lm.LocalModelPick:
+    """This host's ``use_case`` pick from the tier table, sized from the platform facts.
 
     A unified pool (GB10 / DGX Spark, Apple Silicon) is planned through
     :func:`nvh.core.local_models.tier_budget` -- the pool minus its OS reserve,
-    the same maths ``nvh.utils.gpu`` uses -- so a 128 GB Spark gets the top chat
+    the same maths ``nvh.utils.gpu`` uses -- so a 128 GB Spark gets the top
     pick that fits. Facts that size no pool (a discrete card the facts do not
     measure, no GPU, a pool of 0 GB, a probe that failed) fall back to
-    :func:`_default_chat_pick`. Never raises: the catalogue must render on any box.
+    :func:`_default_pick`. Never raises: the catalogue must render on any box.
     """
     try:
         facts = ss._facts()
         total_gb = float(getattr(facts, "memory_total_gb", 0.0) or 0.0)
         if getattr(facts, "unified_memory", False) and total_gb > 0:
             pool = SimpleNamespace(vram_mb=total_gb * 1024, unified_memory=True)
-            chosen = lm.pick(lm.tier_budget([pool]), "chat")
+            chosen = lm.pick(lm.tier_budget([pool]), use_case)
             if chosen is not None:
                 return chosen
     except Exception:  # the facts are a sizing hint here, not a requirement
-        logger.debug("platform facts unavailable; rendering the default chat pick", exc_info=True)
-    return _default_chat_pick()
+        logger.debug("platform facts unavailable; rendering the default %s pick", use_case, exc_info=True)
+    return _default_pick(use_case)
 
 
 def _base_context(playbook: Playbook, home_dir: str | Path | None = None) -> dict[str, str]:
-    """The placeholders that always render: paths, home and -- where the playbook names one -- the model."""
+    """The placeholders that always render: paths, home and -- where the playbook names one -- the model picks."""
     ctx = {
         # POSIX form: argv never sees a shell, and the Spark is Linux; on a
         # Windows dev box this keeps the rendered commands quoting-free.
@@ -1191,10 +1523,11 @@ def _base_context(playbook: Playbook, home_dir: str | Path | None = None) -> dic
         HOME_TOKEN: _user_home(),
         USER_TOKEN: "",
     }
-    if _uses(playbook, MODEL_CHAT_TOKEN, MODEL_CHAT_GB_TOKEN):
-        chosen = _chat_model_pick()
-        ctx[MODEL_CHAT_TOKEN] = chosen.tag
-        ctx[MODEL_CHAT_GB_TOKEN] = f"{chosen.weights_gb:g}"
+    for use_case, (tag_token, gb_token) in _MODEL_TOKENS.items():
+        if _uses(playbook, tag_token, gb_token):
+            chosen = _model_pick(use_case)
+            ctx[tag_token] = chosen.tag
+            ctx[gb_token] = f"{chosen.weights_gb:g}"
     return ctx
 
 
@@ -1324,15 +1657,34 @@ def _refusal(error: str, **extra: Any) -> dict[str, Any]:
     return {"ok": False, "applied": False, "error": error, "commands": [], **extra}
 
 
+def _platform_refusal(playbook: Playbook) -> dict[str, Any] | None:
+    """The plain-words refusal for a host that is not Linux, else ``None``.
+
+    The steps are apt, systemd and docker and the Spark runs DGX OS; planning
+    them on Windows or macOS would show commands that cannot run there, and
+    running them would fail one spawn at a time. The catalogue (``list``)
+    still renders everywhere -- it is read-only.
+    """
+    os_name = _host_os()
+    if ss.system_changes_unavailable(os_name) is None:
+        return None
+    # The same labels the privileged tier's sentence uses, so one card never names the host two ways.
+    what = ss._OS_LABELS.get(os_name) or ("an OS it could not determine" if os_name == "unknown" else f"'{os_name}'")
+    return _refusal(
+        UNSUPPORTED_HOST_ERROR.format(what=what, id=playbook.id),
+        id=playbook.id, playbook=playbook.id, unsupported_host=True, host_os=os_name,
+    )
+
+
 def _resolve(playbook_id: str, home_dir: str | Path | None) -> Resolved | dict[str, Any]:
-    """Look the id up, render its context and compile its plan — or the refusal dict that explains why not.
+    """Look the id up, refuse off-Linux, render the context and compile the plan — or the refusal dict that explains why not.
 
     Shared by :func:`plan_dict`, :func:`start_run` and :func:`run_in_terminal`
-    so an unknown id or an unplannable host is answered the same way
-    everywhere and the plan is compiled once per call. The deny list is *not*
-    applied here: ``plan_dict`` shows a denied plan with its reason
-    (``Plan.to_dict`` carries it), while the runners refuse through
-    :func:`_denied`.
+    so an unknown id, a non-Linux host or an unplannable login name is
+    answered the same way everywhere and the plan is compiled once per call.
+    The deny list is *not* applied here: ``plan_dict`` shows a denied plan
+    with its reason (``Plan.to_dict`` carries it), while the runners refuse
+    through :func:`_denied`.
     """
     playbook = get_playbook(playbook_id)
     if playbook is None:
@@ -1340,6 +1692,9 @@ def _resolve(playbook_id: str, home_dir: str | Path | None) -> Resolved | dict[s
             f"unknown playbook '{str(playbook_id)[:60]}'. Catalogue: {', '.join(_PLAYBOOKS_BY_ID)}",
             playbooks=list(_PLAYBOOKS_BY_ID),
         )
+    refused = _platform_refusal(playbook)
+    if refused is not None:
+        return refused
     try:
         ctx = _context(playbook, home_dir)
         plan = compile_plan(playbook, ctx=ctx)
@@ -1366,9 +1721,10 @@ def plan_dict(playbook_id: str, *, home_dir: str | Path | None = None) -> dict[s
     out = plan.to_dict()
     out.update({
         "id": playbook.id,
+        "upstream_folder": playbook.upstream_folder,
         "category": playbook.category,
         "summary": playbook.summary,
-        "prerequisites": list(playbook.prerequisites),
+        "prerequisites": [_render(item, ctx) for item in playbook.prerequisites],
         "source_urls": list(playbook.source_urls),
         "steps": _step_dicts(playbook, plan, ctx),
         "steps_total": len(plan.steps),
@@ -1409,6 +1765,7 @@ def catalogue(home_dir: str | Path | None = None) -> list[dict[str, Any]]:
         manual = _manual_lines(playbook, ctx)
         rows.append({
             "id": playbook.id,
+            "upstream_folder": playbook.upstream_folder,
             "title": playbook.title,
             "category": playbook.category,
             "summary": playbook.summary,
@@ -1420,7 +1777,7 @@ def catalogue(home_dir: str | Path | None = None) -> list[dict[str, Any]]:
             "manual_steps": len(manual),
             "manual": manual,
             "unpinned": playbook.unpinned,
-            "prerequisites": list(playbook.prerequisites),
+            "prerequisites": [_render(item, ctx) for item in playbook.prerequisites],
             "estimated_minutes": playbook.estimated_minutes,
             "estimated_disk_gb": playbook.estimated_disk_gb,
             "rootless_alternative": playbook.rootless_alternative,
@@ -1440,6 +1797,7 @@ def catalogue(home_dir: str | Path | None = None) -> list[dict[str, Any]]:
 
 RunCommand = Callable[[Step], Awaitable[dict[str, Any]]]
 CheckCommand = Callable[[Sequence[str]], Awaitable[dict[str, Any]]]
+CancelRequested = Callable[[], bool]
 
 
 async def _host_run(step: Step) -> dict[str, Any]:
@@ -1466,7 +1824,10 @@ def _write_playbook_receipt(
     """The ``playbook`` receipt; ``no_root`` is honest (False once any sudo step ran). Never raises.
 
     Sticky across runs: a second run that skipped the sudo steps (already
-    done) must not turn an earlier ``no_root: False`` back into True.
+    done) must not turn an earlier ``no_root: False`` back into True. A
+    cancelled run records ``stopped_after_step`` (how many steps had
+    finished) and ``in_flight`` (the command that was running, or ``None``
+    when the cancel landed between steps).
     """
     try:
         try:
@@ -1474,6 +1835,30 @@ def _write_playbook_receipt(
         except Exception:
             previous = {}
         no_root = no_root and bool(previous.get("no_root", True))
+        metadata: dict[str, Any] = {
+            "outcome": result.get("outcome"),
+            # What the playbook *needs*, as opposed to ``no_root`` (what ran): a partial run
+            # that stopped before its first sudo step is still not repairable without root.
+            "requires_sudo": bool(result.get("requires_sudo")),
+            "steps": [
+                {
+                    "title": s.get("title"), "command": s.get("command"), "exit_code": s.get("exit_code"),
+                    **({"canceled": True} if s.get("canceled") else {}),
+                }
+                for s in result.get("steps", [])
+            ],
+            "steps_total": result.get("steps_total"),
+            "manual_steps": result.get("manual_steps", []),
+            "verify": result.get("verify", []),
+            "undo": result.get("undo", []),
+            "repair_command": HANDOFF_COMMAND.format(id=playbook.id),
+            "job_kind": JOB_KIND,
+            "mode": result.get("mode"),
+            "upstream_folder": playbook.upstream_folder,
+        }
+        if result.get("outcome") == "canceled":
+            metadata["stopped_after_step"] = result.get("stopped_after_step")
+            metadata["in_flight"] = result.get("in_flight")
         _receipts.write_receipt(
             kind=RECEIPT_KIND,
             item_id=playbook.id,
@@ -1482,26 +1867,7 @@ def _write_playbook_receipt(
             status=status,
             source_urls=list(playbook.source_urls),
             no_root=no_root,
-            metadata={
-                "outcome": result.get("outcome"),
-                # What the playbook *needs*, as opposed to ``no_root`` (what ran): a partial run
-                # that stopped before its first sudo step is still not repairable without root.
-                "requires_sudo": bool(result.get("requires_sudo")),
-                "steps": [
-                    {
-                        "title": s.get("title"), "command": s.get("command"), "exit_code": s.get("exit_code"),
-                        **({"canceled": True} if s.get("canceled") else {}),
-                    }
-                    for s in result.get("steps", [])
-                ],
-                "steps_total": result.get("steps_total"),
-                "manual_steps": result.get("manual_steps", []),
-                "verify": result.get("verify", []),
-                "undo": result.get("undo", []),
-                "repair_command": HANDOFF_COMMAND.format(id=playbook.id),
-                "job_kind": JOB_KIND,
-                "mode": result.get("mode"),
-            },
+            metadata=metadata,
             home_dir=home_dir,
         )
         return str(_receipts.receipt_path(RECEIPT_KIND, playbook.id, home_dir=home_dir))
@@ -1524,13 +1890,15 @@ def _record_run(
     manual: list[str],
     mode: str,
     home_dir: str | Path | None,
+    stopped_after: int | None = None,
+    in_flight: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str | None, dict[str, Any] | None]:
     """Build the apply-shaped result and write the receipt and the vault note. Synchronous, never raises.
 
-    Called on every way a run ends — complete, halted, failed, hand-off and a
-    job cancelled mid-step — so a run that touched the host always leaves a
-    receipt (kind ``playbook``) and a ``Decisions/`` note behind, whatever
-    path it took out of the engine.
+    Called on every way a run ends — complete, halted, failed, hand-off, a
+    job cancelled between steps and a job cancelled mid-step — so a run that
+    touched the host always leaves a receipt (kind ``playbook``) and a
+    ``Decisions/`` note behind, whatever path it took out of the engine.
     """
     applied = bool(executed)
     summary = f"Install the {playbook.id} playbook"
@@ -1559,6 +1927,8 @@ def _record_run(
         result["hint"] = ss.NEEDS_TERMINAL_HINT
     if outcome == "canceled":
         result["canceled"] = True
+        result["stopped_after_step"] = stopped_after
+        result["in_flight"] = dict(in_flight) if in_flight is not None else None
 
     receipt_path = None
     if applied or outcome == "complete":
@@ -1574,6 +1944,13 @@ def _record_run(
     return result, receipt_path, audit
 
 
+def _stopped_message(stopped_after: int, total: int) -> str:
+    """The between-steps cancel wording: what finished, and that nothing was running."""
+    if stopped_after <= 0:
+        return f"canceled by the user — stopped before the first of {total} step(s); no command was in flight"
+    return f"canceled by the user — stopped after step {stopped_after} of {total}; no command was in flight"
+
+
 async def _engine(
     playbook: Playbook,
     ctx: Mapping[str, str],
@@ -1583,21 +1960,33 @@ async def _engine(
     check_cmd: CheckCommand,
     home_dir: str | Path | None,
     mode: str,
+    cancel_requested: CancelRequested | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run the steps in order; skip on ``check``; stop at the first refusal, hand-off, halt or failure.
+    """Run the steps in order; skip on ``check``; stop at the first refusal, hand-off, halt, failure or cancel.
 
     Events (each with ``playbook``): ``plan`` → per step ``step`` (running) →
     optional ``log`` → ``step`` (complete / failed, ``skipped`` when the check
     passed) → ``needs_terminal`` when sudo needs a password → finally
-    ``complete`` (``applied``, ``partial``, ``halted``) or ``error``
-    (``needs_terminal`` / ``denied`` / the exit code). The receipt and the
-    vault audit are written before the final event — and also when the job
-    is cancelled mid-run (:func:`jobs.cancel_job` cancels the consumer task,
-    so ``CancelledError`` lands on whatever this is awaiting): the step whose
-    host command was in flight is recorded as such, because the worker thread
-    running it cannot be interrupted and the command may finish on the host.
-    The cancellation is then re-raised for the job to mark itself canceled.
-    ``ctx`` and ``plan`` come from :func:`_resolve` — what the card showed.
+    ``complete`` (``applied``, ``partial``, ``halted``), ``error``
+    (``needs_terminal`` / ``denied`` / the exit code) or ``canceled``. The
+    receipt and the vault audit are written before the final event.
+
+    Cancel (W1-lite, decision 16): ``cancel_requested`` -- the job's flag,
+    re-read from disk -- is consulted before each check probe, after it (so
+    a flag raised while the probe ran never starts the command) and after
+    each step, whether it passed or failed; when it is up the run stops
+    there and the receipt says ``stopped after step N`` with ``in_flight:
+    None``. A cancel that lands while the engine awaits a host command
+    arrives as ``CancelledError`` (:func:`jobs.cancel_job` cancels the
+    consumer task): the command is recorded as in flight, because the
+    worker thread running it cannot be interrupted and it may finish on the
+    host; the cancellation is then re-raised for the job to mark itself
+    canceled. A consumer that closes the stream at a yield instead (the job
+    consumer saw the flag before this engine's next read of it) lands here
+    as ``GeneratorExit``: the receipt and the note are written from that
+    handler too, so a run that touched the host always leaves them, whatever
+    path it took out. ``ctx`` and ``plan`` come from :func:`_resolve` — what
+    the card showed.
     """
     base = {"playbook": playbook.id}
     handoff = HANDOFF_COMMAND.format(id=playbook.id)
@@ -1622,6 +2011,15 @@ async def _engine(
         yield {**base, "event": "error", "status": "failed", "message": message, "error": message, "applied": False, "partial": False}
         return
 
+    def stop_requested() -> bool:
+        if cancel_requested is None:
+            return False
+        try:
+            return bool(cancel_requested())
+        except Exception:  # a flag that cannot be read is not a cancel
+            logger.debug("cancel flag unreadable for playbook '%s'", playbook.id, exc_info=True)
+            return False
+
     executed: list[dict[str, Any]] = []
     verify_results: list[dict[str, Any]] = []
     any_sudo_ran = False
@@ -1630,19 +2028,31 @@ async def _engine(
     remaining = 0
     position = 0  # the step being worked on (for the cancel record)
     title = ""
+    settled = 0  # steps finished or skipped so far: where a stream closed at a yield stopped the run
+    stopped_after: int | None = None  # steps finished when a cancel stopped the run between steps
     in_flight: dict[str, Any] | None = None  # set while a host command runs; the one thing a cancel cannot stop
     try:
         for index, (pstep, step) in enumerate(zip(executable, plan.steps, strict=True)):
             position, title = index, _render(pstep.title, ctx)
+            settled = index
+            if stop_requested():
+                outcome, stopped_after, remaining = "canceled", index, total - index
+                error_msg = _stopped_message(index, total)
+                break
             command = step.render()
             head = {**base, "step": index, "steps_total": total, "title": title, "command": command, "sudo": step.sudo}
             yield {**head, "event": "step", "status": "running", "message": f"Step {index + 1}/{total}: {title}"}
             if pstep.check:
                 probe = await check_cmd(_render_argv(pstep.check, ctx))
                 if probe.get("ok"):
+                    settled = index + 1
                     yield {**head, "event": "log", "status": "running", "message": f"already done — skipped: {title}", "skipped": True}
                     yield {**head, "event": "step", "status": "complete", "skipped": True, "message": f"Step {index + 1}/{total} skipped (already done)"}
                     continue
+                if stop_requested():  # raised while the probe ran: never start the command
+                    outcome, stopped_after, remaining = "canceled", index, total - index
+                    error_msg = _stopped_message(index, total)
+                    break
             in_flight = {"step": index, "title": title, "command": command, "sudo": step.sudo}
             result = await run_cmd(step)
             in_flight = None
@@ -1665,8 +2075,19 @@ async def _engine(
                 "step": index, "title": title, "command": result["command"], "exit_code": result["exit_code"],
                 "stdout": result.get("stdout", ""), "stderr": result.get("stderr", ""),
             })
+            settled = index + 1
             if step.sudo:
                 any_sudo_ran = True
+            if stop_requested():
+                # The step finished (or failed) while the flag went up: record it (output included)
+                # before the next yield, because the job consumer ends the stream at the first event
+                # it sees after a cancel; nothing else starts. A failed step is still a cancel — the
+                # user asked for one — and its exit code is in the record and the message.
+                outcome, stopped_after, remaining = "canceled", index + 1, total - index - 1
+                error_msg = _stopped_message(index + 1, total)
+                if not result["ok"]:
+                    error_msg += f"; step {index + 1} ({title}) had exited {result['exit_code']}"
+                break
             tail = _tail(result)
             if tail:
                 yield {**head, "event": "log", "status": "running", "message": tail, "exit_code": result["exit_code"]}
@@ -1697,27 +2118,61 @@ async def _engine(
                     "command": shlex.join(rendered), "exit_code": probe.get("exit_code"),
                 }
     except asyncio.CancelledError:
-        # The job was cancelled. Nothing after this point may await: record
-        # what ran (and what was running) so the receipt and the vault note
-        # exist, then let the cancellation continue to the job consumer.
+        # The job was cancelled while this was awaiting a host command or a
+        # probe. Nothing after this point may await: record what ran (and
+        # what was running) so the receipt and the vault note exist, then let
+        # the cancellation continue to the job consumer.
         outcome = "canceled"
         remaining = max(0, total - position)
-        where = f"step {position + 1} ({title})" if position < total else "verification"
-        error_msg = f"canceled by the user during {where}"
-        if in_flight is not None:
+        stopped_after = position
+        if position >= total:
+            error_msg = f"canceled by the user during verification; all {total} step(s) had finished"
+        elif in_flight is not None:
+            error_msg = (
+                f"canceled by the user during step {position + 1} ({title}) — `{in_flight['command']}` was already "
+                "running and may have completed on the host"
+            )
             executed.append({**in_flight, "exit_code": None, "stdout": "", "stderr": "", "canceled": True})
             if in_flight["sudo"]:
                 any_sudo_ran = True  # a sudo command was spawned; assume it ran
-            error_msg += f" — `{in_flight['command']}` was already running and may have completed on the host"
+        else:
+            error_msg = (
+                f"canceled by the user during step {position + 1} ({title}) while its check probe ran; "
+                "no host command was in flight"
+            )
         _record_run(
             playbook, ctx, plan, outcome=outcome, error_msg=error_msg, remaining=remaining, executed=executed,
             any_sudo_ran=any_sudo_ran, verify_results=verify_results, manual=manual, mode=mode, home_dir=home_dir,
+            stopped_after=stopped_after, in_flight=in_flight,
+        )
+        raise
+    except GeneratorExit:
+        # The consumer closed the stream at one of the yields above (the job
+        # consumer saw ``cancel_requested`` before this engine's next read of
+        # it, or stopped reading). No command is in flight at a yield and
+        # nothing may await here: record what ran -- a failed, halted or
+        # hand-off step keeps its own outcome, an unfinished run is a cancel
+        # stopped after the steps settled so far -- so the receipt and the
+        # vault note exist, then let the close continue.
+        if outcome == "complete":
+            outcome = "canceled"
+            if position >= total:
+                stopped_after, remaining = total, 0
+                error_msg = f"canceled by the user during verification; all {total} step(s) had finished"
+            else:
+                stopped_after, remaining = settled, total - settled
+                error_msg = _stopped_message(settled, total)
+        _record_run(
+            playbook, ctx, plan, outcome=outcome, error_msg=error_msg, remaining=remaining, executed=executed,
+            any_sudo_ran=any_sudo_ran, verify_results=verify_results, manual=manual, mode=mode, home_dir=home_dir,
+            stopped_after=stopped_after, in_flight=None,
         )
         raise
 
     result, receipt_path, audit = _record_run(
         playbook, ctx, plan, outcome=outcome, error_msg=error_msg, remaining=remaining, executed=executed,
         any_sudo_ran=any_sudo_ran, verify_results=verify_results, manual=manual, mode=mode, home_dir=home_dir,
+        stopped_after=stopped_after, in_flight=None,
     )
     applied = result["applied"]
     final = {
@@ -1738,18 +2193,25 @@ async def _engine(
             **final, "event": "error", "status": "failed", "needs_terminal": True, "command": handoff,
             "hint": ss.NEEDS_TERMINAL_HINT, "message": error_msg, "error": error_msg,
         }
+    elif outcome == "canceled":
+        yield {
+            **final, "event": "canceled", "status": "canceled", "canceled": True, "stopped_after_step": stopped_after,
+            "in_flight": None, "message": error_msg, "error": error_msg,
+        }
     else:
         yield {**final, "event": "error", "status": "failed", "message": error_msg, "error": error_msg}
 
 
 async def run_playbook_events(
     playbook: Playbook, *, home_dir: str | Path | None = None, resolved: Resolved | None = None,
+    cancel_requested: CancelRequested | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """The job runner's event source: host commands via :func:`run_host_command` (``sudo -n`` or ``needs_terminal``).
 
     ``resolved`` is the ``(playbook, ctx, plan)`` :func:`start_run` already
     compiled and showed on the card; without it the playbook is resolved here
-    and a refusal becomes the one ``error`` event.
+    and a refusal becomes the one ``error`` event. ``cancel_requested`` reads
+    the job's flag so the engine can stop between steps.
     """
     if resolved is None:
         found = _resolve(playbook.id, home_dir)
@@ -1759,7 +2221,10 @@ async def run_playbook_events(
             return
         resolved = found
     _, ctx, plan = resolved
-    async for event in _engine(playbook, ctx, plan, run_cmd=_host_run, check_cmd=_host_check, home_dir=home_dir, mode="job"):
+    async for event in _engine(
+        playbook, ctx, plan, run_cmd=_host_run, check_cmd=_host_check, home_dir=home_dir, mode="job",
+        cancel_requested=cancel_requested,
+    ):
         yield event
 
 
@@ -1769,12 +2234,25 @@ def _jobs_module() -> Any:
     return jobs
 
 
+def _job_cancel_requested(job_id: str | None) -> bool:
+    """The job record's ``cancel_requested`` flag, re-read from disk; ``False`` when unknown or unreadable."""
+    if not job_id:
+        return False
+    try:
+        job = _jobs_module().load_job(job_id, reconcile=False, include_recent_events=False)
+    except Exception:
+        return False
+    return bool(job.get("cancel_requested"))
+
+
 def start_run(playbook_id: str, *, home_dir: str | Path | None = None) -> dict[str, Any]:
     """Start a ``playbook-run`` job (needs a running event loop). ``{ok, job_id, playbook, steps_total}``.
 
     ``applied`` is ``False`` on purpose: the registry must not audit the
     *start*; the runner writes the receipt and the vault note when the run
-    finishes, having seen what actually ran.
+    finishes, having seen what actually ran. The engine reads the job's own
+    ``cancel_requested`` flag between steps (the id is known once the job
+    exists; the task only starts on the next loop iteration).
     """
     resolved = _resolve(playbook_id, home_dir)
     if isinstance(resolved, dict):
@@ -1783,12 +2261,17 @@ def start_run(playbook_id: str, *, home_dir: str | Path | None = None) -> dict[s
     refused = _denied(playbook, plan)
     if refused:
         return refused
+    pending: dict[str, str] = {}
     job = _jobs_module().start_job(
         kind=JOB_KIND,
         title=f"Install the {playbook.id} playbook",
         request={"playbook": playbook.id, "commands": plan.commands(), "sudo": plan.needs_sudo},
-        source_factory=lambda: run_playbook_events(playbook, home_dir=home_dir, resolved=resolved),
+        source_factory=lambda: run_playbook_events(
+            playbook, home_dir=home_dir, resolved=resolved,
+            cancel_requested=lambda: _job_cancel_requested(pending.get("id")),
+        ),
     )
+    pending["id"] = job["id"]
     needs_terminal_expected, _can = _elevation()
     return {
         "ok": True,
@@ -1849,9 +2332,9 @@ def run_in_terminal(
     ``assume_yes=False`` the ``confirm`` callback (default: ``input()`` y/N)
     is asked :func:`_confirm_question` once before the first host command
     runs; a declined question returns ``{ok: False, canceled: True}`` and
-    nothing runs. Writes the same receipt and vault note as the job path.
-    Returns the final ``complete`` / ``error`` event plus ``events`` (all of
-    them) and ``ok``.
+    nothing runs. Refuses off-Linux like every entry point. Writes the same
+    receipt and vault note as the job path. Returns the final ``complete`` /
+    ``error`` event plus ``events`` (all of them) and ``ok``.
     """
     resolved = _resolve(playbook_id, home_dir)
     if isinstance(resolved, dict):
@@ -1903,6 +2386,7 @@ def _playbook_id(args: Mapping[str, Any]) -> str:
 
 
 def _list_payload(args: Mapping[str, Any]) -> dict[str, Any]:
+    host_os = _host_os()
     out: dict[str, Any] = {
         "ok": True,
         "playbooks": catalogue(),
@@ -1910,6 +2394,11 @@ def _list_payload(args: Mapping[str, Any]) -> dict[str, Any]:
         "deferred": deferred(),
         "privileged_tool": PRIVILEGED_TOOL,
         "handoff_command": HANDOFF_COMMAND.format(id="<id>"),
+        "upstream_tree": UPSTREAM_TREE,
+        # Off-Linux the catalogue still lists, but plan and install refuse (see ``_platform_refusal``);
+        # the predicate is the privileged tier's own, not a second spelling of it.
+        "host_os": host_os,
+        "supported_host": ss.system_changes_unavailable(host_os) is None,
     }
     job_id = args.get("job_id")
     if isinstance(job_id, str) and job_id.strip():
@@ -1937,7 +2426,7 @@ async def _tool_playbook_install(args: dict[str, Any]) -> dict[str, Any]:
 
 _ID_PARAM = {
     "type": "string", "required": True,
-    "description": "Playbook id (the upstream folder name): " + ", ".join(_PLAYBOOKS_BY_ID) + ".",
+    "description": "Playbook id: " + ", ".join(_PLAYBOOKS_BY_ID) + ".",
 }
 
 
@@ -1964,8 +2453,8 @@ def register_wizard_tools(reg: Any) -> None:
         name="playbook_plan",
         description=(
             "Dry run of one Spark playbook: the exact commands in order, which run with sudo, the manual steps (browser "
-            "logins, TUIs, foreground servers), how to verify, how to undo, estimates and warnings. Runs nothing. Show it "
-            "to the user before playbook_install."
+            "logins, TUIs, foreground servers), how to verify, how to undo, estimates and warnings. Runs nothing; refuses "
+            "in plain words on a host that is not Linux. Show it to the user before playbook_install."
         ),
         safety_class="auto",
         parameters={"id": _ID_PARAM},
@@ -1975,11 +2464,11 @@ def register_wizard_tools(reg: Any) -> None:
     reg.register(WizardTool(
         name="playbook_install",
         description=(
-            "Install a Spark playbook on this machine (steps may use sudo). The user approves the exact commands on a "
-            "red card first; the run then starts as a background job (kind playbook-run) whose events stream from "
+            "Install a Spark playbook on this machine (steps may use sudo; Linux only). The user approves the exact commands "
+            "on a red card first; the run then starts as a background job (kind playbook-run) whose events stream from "
             "/v1/jobs/<job_id>. Steps already done are skipped; if sudo needs a password the job stops and hands the "
-            "user one command to run in a terminal: nvh playbook install <id>. Every run that touches the host writes "
-            "an install receipt and a vault Decisions note."
+            "user one command to run in a terminal: nvh playbook install <id>. A cancel stops the run after the current "
+            "step. Every run that touches the host writes an install receipt and a vault Decisions note."
         ),
         safety_class="privileged",
         parameters={"id": _ID_PARAM},

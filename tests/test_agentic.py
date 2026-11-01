@@ -9,6 +9,7 @@ from __future__ import annotations
 import subprocess
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -354,6 +355,114 @@ class TestCodingAgentLoop:
         assert result.orchestrator_model == "gpt-4o-mini"
         assert result.worker_model == worker
         assert result.duration_ms >= 0
+
+    # -- cost: derived from the engine calls, never a hardcoded $0 ----------
+
+    @pytest.mark.asyncio
+    async def test_total_cost_is_the_sum_of_every_engine_call(self, tmp_path: Path):
+        """Plan, one worker turn and one review each cost $0.001 on the mock: the result reports their sum."""
+        engine = _MockEngine()
+        config = AgentConfig(tier=AgentTier.TIER_0)
+
+        result = await run_coding_agent(
+            task="Fix the bug in main.py",
+            engine=engine,
+            config=config,
+            working_dir=tmp_path,
+        )
+
+        assert len(engine.query_calls) == 3  # plan, worker (no tool calls), review
+        assert isinstance(result.total_cost_usd, Decimal)
+        assert result.total_cost_usd == Decimal("0.001") * len(engine.query_calls)
+        assert result.total_cost_usd == Decimal("0.003")
+
+    @pytest.mark.asyncio
+    async def test_total_cost_counts_every_review_round(self, tmp_path: Path):
+        """NEEDS_FIX re-runs the worker: every extra loop and every review is in the total."""
+        engine = _MockEngine()
+        engine._verify_response = "NEEDS_FIX: the new test is missing."
+        config = AgentConfig(tier=AgentTier.TIER_0)
+
+        result = await run_coding_agent(
+            task="Fix the bug in main.py",
+            engine=engine,
+            config=config,
+            working_dir=tmp_path,
+        )
+
+        # plan + 3 x (worker turn + review): the loop allows two retries
+        assert len(engine.query_calls) == 7
+        assert result.total_cost_usd == Decimal("0.001") * len(engine.query_calls)
+        assert result.total_cost_usd == Decimal("0.007")
+
+    @pytest.mark.asyncio
+    async def test_total_cost_tolerates_a_response_without_a_cost(self, tmp_path: Path):
+        """A planner reply that carries no cost (None) adds nothing; the worker's cost still counts."""
+
+        class _NoPlanCostEngine(_MockEngine):
+            async def query(self, prompt="", **kwargs):
+                response = await super().query(prompt, **kwargs)
+                if self._call_count == 1:
+                    return SimpleNamespace(content=response.content, cost_usd=None)
+                return response
+
+        engine = _NoPlanCostEngine()
+        config = AgentConfig(tier=AgentTier.TIER_0, verify_results=False)
+
+        result = await run_coding_agent(
+            task="Add a comment to main.py",
+            engine=engine,
+            config=config,
+            working_dir=tmp_path,
+        )
+
+        assert len(engine.query_calls) == 2  # plan (uncosted), worker
+        assert "Read the file" in result.plan
+        assert result.total_cost_usd == Decimal("0.001")
+
+    @pytest.mark.asyncio
+    async def test_total_cost_reads_the_streamed_plan_and_review_too(self, tmp_path: Path):
+        """With on_token the plan and the review go through query_stream; their costs are read the same way."""
+
+        class _StreamingEngine(_MockEngine):
+            def __init__(self):
+                super().__init__()
+                self.stream_calls = 0
+
+            async def query_stream(self, prompt="", on_token=None, **kwargs):
+                self.stream_calls += 1
+                return await self.query(prompt, **kwargs)
+
+        engine = _StreamingEngine()
+        config = AgentConfig(tier=AgentTier.TIER_0)
+
+        result = await run_coding_agent(
+            task="Fix the bug in main.py",
+            engine=engine,
+            config=config,
+            working_dir=tmp_path,
+            on_token=lambda _delta: None,
+        )
+
+        assert engine.stream_calls == 2  # plan + review
+        assert len(engine.query_calls) == 3
+        assert result.total_cost_usd == Decimal("0.003")
+
+    @pytest.mark.asyncio
+    async def test_planning_failure_reports_no_cost(self, tmp_path: Path):
+        """Nothing was billed when the first call raised: the error result says $0."""
+        engine = _MockEngine()
+        engine.query = AsyncMock(side_effect=Exception("network error"))
+
+        result = await run_coding_agent(
+            task="Fix the bug",
+            engine=engine,
+            config=AgentConfig(tier=AgentTier.TIER_0),
+            working_dir=tmp_path,
+        )
+
+        assert "Planning failed" in result.error
+        assert result.total_cost_usd == Decimal("0")
 
 
 # ---------------------------------------------------------------------------
