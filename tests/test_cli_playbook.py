@@ -569,8 +569,8 @@ def test_docs_describe_the_approval_model_without_hand_typed_counts():
     assert "## Spark playbooks" in getting_started
     for phrase in (
         "nvh playbook list", "nvh playbook plan", "nvh playbook install", "never executes", "Decisions/", "never `newgrp`",
-        "nvidia/playbook-<name>/", "check_playbook_upstream.py", "after the current step", "Microsoft's published manifest",
-        "Linux only",
+        "nvidia/playbook-<name>/", "check_playbook_upstream.py", "command that is running", "`kill_failed`",
+        "Microsoft's published manifest", "Linux only",
     ):
         assert phrase in getting_started, phrase
     assert "unpinned download" not in getting_started  # no shipped step installs an unverified vendor package any more
