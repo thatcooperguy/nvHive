@@ -57,8 +57,9 @@ Models without native function calling emit one line per call::
 
 :func:`parse_tool_calls` reads it back. The pre-0.44 fenced ```` ```tool_call ````
 block and the bare ``{"tool": ..., "args": {...}}`` object are still parsed
-for one release on the agent-loop path only (``legacy=True``; never emitted,
-never taught, never read by the Wizard) and go away in 0.45.
+on the agent-loop path only (``legacy=True``; never emitted, never taught,
+never read by the Wizard) and go away in 0.46 (0.44 said one release; 0.45
+still accepts them).
 
 Native function calling (D3) degrades: ``Provider.complete/stream`` accept
 ``tools=`` / ``tool_choice=`` and answer ``tool_calls`` in the OpenAI wire
@@ -377,7 +378,7 @@ def _pinned_arguments(plan: Any) -> dict[str, Any]:
 
 _MARKER_RE = re.compile(r"TOOL_CALL\s*:\s*", re.IGNORECASE)
 # Deprecated (parsed through 0.44 by the agent loop only — ``legacy=True`` —
-# dropped in 0.45): the pre-0.44 agent-loop fenced block and its bare inline
+# dropped in 0.46): the pre-0.44 agent-loop fenced block and its bare inline
 # object. Never emitted, never taught, never read on the Wizard path.
 _FENCED_RE = re.compile(r"```tool_call\s*\n(.*?)\n\s*```", re.DOTALL | re.IGNORECASE)
 _INLINE_LEGACY_RE = re.compile(r'\{\s*"tool"\s*:\s*"[^"]+"\s*,\s*"args"\s*:\s*\{')

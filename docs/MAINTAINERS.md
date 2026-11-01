@@ -20,10 +20,14 @@ python -m pytest tests/ -q
 #   test_webui_version_matches_package fail CI if any of them differ)
 # add the CHANGELOG.md section, then stage every file by name: `git commit -a`
 #   skips untracked files such as a new issue template, and a pushed commit
-#   that links to a file it does not carry fails tests/test_docs_links.py in CI
+#   that links to a file it does not carry fails tests/test_docs_links.py in CI.
+#   Whatever "Before tagging" (below) made you change — a re-extracted playbook
+#   with its --update'd scripts/playbook_upstream_snapshot.json, SECURITY.md,
+#   specs.py, local_models.py, capabilities.yaml — lands in its own commit
+#   before this one; the list below is the release commit alone
 git add CHANGELOG.md pyproject.toml nvh/__init__.py web/lib/version.ts README.md docs/ .github/ISSUE_TEMPLATE/
-git commit -s -m "Release 0.44.0: <one-line theme>" && git push
-git tag v0.44.0 && git push origin v0.44.0
+git commit -s -m "Release 0.45.0: <one-line theme>" && git push
+git tag v0.45.0 && git push origin v0.45.0
 ```
 
 `web/package.json` and `vscode-nvhive/package.json` stay at `0.1.0` by
@@ -42,7 +46,7 @@ workflow file `publish.yml`, repository `thatcooperguy/nvHive`). It also
 accepts `workflow_dispatch` as a recovery path:
 
 ```bash
-gh workflow run publish.yml --ref v0.44.0 -f target=pypi
+gh workflow run publish.yml --ref v0.45.0 -f target=pypi
 ```
 
 Expect 6–10 minutes for the GitHub Release (binary builds dominate) plus a
@@ -57,8 +61,13 @@ minute for PyPI.
    blocker. `migration.yml` (Windows and macOS migration contracts) fires on
    any `main` push that touches `pyproject.toml`, so the version bump runs it
    and it must be green too. `installer.yml` (installer contracts) runs on
-   pull requests that touch the installers and on `workflow_dispatch`; dispatch
-   it before a release that changed `install.sh`.
+   pushes to `main` and on pull requests that touch an installer or its
+   harness (`install.sh`, `install.ps1`, `install-mac.sh`, `ci/*install*`,
+   the workflow itself and `docs/TESTING.md`;
+   `tests/test_release_hardening.py` pins that the two path filters match)
+   and on `workflow_dispatch`, so the last `main` push that touched an
+   installer already ran it; dispatch it before a release only when nothing
+   in that filter changed since the last green run.
 2. `cd web && npx tsc --noEmit && npm run build` passes; a broken WebUI
    breaks first run for every user.
 3. `CHANGELOG.md` has the section and the generated docs are current:
@@ -83,18 +92,39 @@ minute for PyPI.
    `source:` override LiteLLM now contradicts is fixed in `specs.py`,
    `local_models.py` or `capabilities.yaml` before the tag. The job is
    non-blocking by design, so nothing else surfaces it.
-5. README install URLs, PyPI metadata, release asset names, `NOTICE.md`,
+5. `python scripts/check_playbook_upstream.py --check` exits 0 (network: it
+   diffs today's `nvidia/dgx-spark-playbooks` folder READMEs and the pinned
+   assets against the committed `scripts/playbook_upstream_snapshot.json`).
+   Exit 1 is drift: re-extract the playbook or re-pin the asset, then
+   `--update` the snapshot in the same commit, ahead of the release commit
+   (the `git add` list above does not carry it). Exit 2 means the upstream
+   did not answer (a connection error, or any HTTP status other than 200 and
+   404) and is not drift; retry later rather than tag on it. The weekly
+   `model-currency.yml` run above runs the same check.
+6. Security: `SECURITY.md` has been re-read against the release (it names
+   the module behind every rule, so a moved or renamed module, a new tool
+   class or a changed default must be reflected before the tag, in its own
+   commit: the release `git add` list does not carry `SECURITY.md`). The
+   `security` job of the last `ci.yml` run on `main` (`pip-audit --strict`
+   over the installed dependency set; non-blocking by design, so nothing
+   else surfaces it) has been read and every finding is either pinned away
+   or knowingly accepted; locally, `pip install pip-audit && pip-audit
+   --desc --strict --skip-editable` in the project venv gives the same
+   answer. No open Dependabot pull request is red: `.github/dependabot.yml`
+   covers pip, `web/` npm and GitHub Actions weekly, with security updates
+   daily, so merge or close each one before tagging.
+7. README install URLs, PyPI metadata, release asset names, `NOTICE.md`,
    `TRADEMARKS.md` and the trusted-publisher settings all point at
    `thatcooperguy/nvHive` and the `nvhive` package.
-6. If `nvh/api/server.py::ALLOWED_ORIGINS` changed, `http://nvhive`,
+8. If `nvh/api/server.py::ALLOWED_ORIGINS` changed, `http://nvhive`,
    `http://localhost:3000` and port 80 are still present.
-7. The readiness rule below: do not call a release production-ready unless
+9. The readiness rule below: do not call a release production-ready unless
    the target-VM checklist passed.
 
 ### Verifying, yanking, rolling back
 
 ```bash
-python -m venv /tmp/verify && /tmp/verify/bin/pip install nvhive==0.44.0
+python -m venv /tmp/verify && /tmp/verify/bin/pip install nvhive==0.45.0
 /tmp/verify/bin/nvh version && /tmp/verify/bin/nvh --help
 ```
 
@@ -102,7 +132,7 @@ A wrong version or an import failure means **yank** the release on PyPI
 (`Options > Yank release` — hides it from new installs, keeps it for pinned
 users) and fix forward with a patch release. Never delete or force-push a
 released tag. Users on a broken release pin the previous one
-(`pip install 'nvhive==0.42.0'`); WebUI-versus-backend drift is fixed by
+(`pip install 'nvhive==0.44.1'`); WebUI-versus-backend drift is fixed by
 `nvh webui --clean`.
 
 ### Workflow-scoped pushes

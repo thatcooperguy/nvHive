@@ -2,12 +2,40 @@
 
 ## [Unreleased]
 
-Waves 3 and 4 of the 2026-10-31 plan: the model catalog reads its facts
-from LiteLLM, the last hand-typed provider copies derive from `ProviderSpec`,
-model lists are live, and the Spark hygiene that needs no hardware lands:
-playbook currency with a drift check, verified downloads, cancel between
-steps, honest refusals off Linux and an arch-aware `install.ps1`. 0.45.0
-material.
+## [0.45.0] - 2026-11-01
+
+Refresh completion and Spark hygiene. The model catalog reads price, context
+window and the tool / vision / JSON flags from LiteLLM at load (a row nothing
+prices says "cost unknown" instead of a known $0), every LiteLLM-backed
+provider's model list is live and `GET /v1/models` returns only what the
+provider still serves where its live list can be read (a provider whose list
+cannot be read, for want of a key or URL or on any probe error, passes its
+catalog rows through unfiltered), the cloud catalog is regenerated with a
+`source:` line on every override, and a weekly model-currency job in CI
+covers the cloud defaults and the Ollama tags: the three refresh items
+re-scoped from 0.44 are done, and the last hand-typed provider copies derive
+from `ProviderSpec` behind a single-table guard. The Spark playbooks are
+re-extracted from NVIDIA's current upstream READMEs and a drift check follows
+them, every script taken from the upstream repositories is sha256-verified
+(the ollama, Claude Code and LM Studio installers are downloaded, flagged
+`unpinned` and run from disk, never piped), a run can be cancelled between
+steps, the privileged tier refuses in plain words on Windows and macOS
+before anything spawns, and `install.ps1` is ARM64-aware. `nvh agent`
+reports a derived cost instead of a hardcoded `$0`, every test runs under a
+throwaway home, and the installers write nvh's own config template so a
+fresh install never ships a retired model id.
+
+Not in this release: the web cost pill's "cost unknown" state, a
+process-group kill of an in-flight playbook command (cancel takes effect
+between steps; a running command is recorded, not stopped), the `--verify`
+cross-check honouring `exclude_providers`, `setup_catalog`, the profiles and
+`setup_agent` reading their bundled data through `nvh.data`, the removal of
+the pre-0.44 fenced `tool_call` block and bare `{"tool": ..., "args": ...}`
+object from the agent loop's parser (0.44 said one release; the loop still
+accepts them under `legacy=True`), and the eight #133 add items; all of
+these move to 0.46. A `LOCAL_MODEL_TIERS` review for qwen3.6 is an owner
+decision still open, not 0.46 scope, and Phase 4 (the Spark binary and the
+unified-memory probe) waits on hardware facts.
 
 ### Added
 - **LiteLLM-derived model facts.** LiteLLM's model table is now the one
@@ -77,13 +105,15 @@ material.
   `scripts/playbook_upstream_snapshot.json`; the weekly model-currency job
   runs the check, and any HTTP answer other than 200 or 404 is "unreachable"
   (exit 2, snapshot untouched), never false drift.
-- **Verified downloads.** Every upstream script a playbook step runs is
-  sha256-pinned in `UPSTREAM_ASSETS`, downloaded to `<file>.download` and
-  moved into place only by the verify step, so the gate runs on every run;
-  the VS Code `.deb` is verified against Microsoft's stable manifest with
-  explicit exits under `python3 -I -c` (`PYTHONOPTIMIZE` cannot strip it)
-  and its product version recorded. No step is `unpinned` except the
-  documented pipe-to-shell installers.
+- **Verified downloads.** Every script a playbook step takes from the
+  upstream repositories (ComfyUI's `setup.sh` and `launch.sh`, the vLLM
+  launch script) is sha256-pinned in `UPSTREAM_ASSETS`, downloaded to
+  `<file>.download` and moved into place only by the verify step, so the
+  gate runs on every run; the VS Code `.deb` is verified against Microsoft's
+  stable manifest with explicit exits under `python3 -I -c`
+  (`PYTHONOPTIMIZE` cannot strip it) and its product version recorded. No
+  step is `unpinned` except the documented pipe-to-shell installers (ollama,
+  Claude Code, LM Studio), which are downloaded and run from disk.
 - **Cancel between playbook steps.** The engine re-reads the job's cancel
   flag before each check probe, after it and after every step, passed or
   failed; the receipt says `stopped after step N` (an in-flight command is
@@ -211,9 +241,17 @@ material.
   regression. The platform-detector tests assert real detection against
   config files in the fake home with no `claude mcp list` subprocess.
 - `docs/GETTING_STARTED.md` Spark playbooks section (upstream folders and
-  the drift check, checksums, cancelling, Linux only); `docs/MAINTAINERS.md`
-  pre-tag steps name `gen_config_doc.py`; `docs/TESTING.md` documents the
-  three autouse fixtures, the opt-outs and `gen_capabilities.py --drift`.
+  the drift check, checksums, cancelling, Linux only) and its "Windows on
+  Arm" paragraph (the arch-aware `install.ps1`, Ollama only when an NVIDIA
+  GPU is detected, device settings refusing off Linux); `docs/MAINTAINERS.md`
+  pre-tag steps name `gen_config_doc.py`, gain a
+  `check_playbook_upstream.py --check` step (exit 2 is unreachable, not
+  drift) and a security step (`SECURITY.md` re-read against the release, the
+  `security` job's `pip-audit` findings read, no red Dependabot pull
+  request), describe `installer.yml`'s push-to-`main` trigger and say that
+  pre-tag fixes land in their own commits before the release commit;
+  `docs/TESTING.md` documents the three autouse fixtures, the opt-outs and
+  `gen_capabilities.py --drift`.
 
 ### Fixed
 - `install.ps1` writes `config.yaml` as UTF-8 without a byte-order mark

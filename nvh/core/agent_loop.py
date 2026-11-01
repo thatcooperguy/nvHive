@@ -223,7 +223,7 @@ def _as_step_calls(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _extract_tool_calls(response_text: str) -> list[dict]:
     """The tool calls in a model's text — ``TOOL_CALL: {json}`` lines (the deprecated
-    fenced block and bare object too, for one release: ``legacy=True`` is this
+    fenced block and bare object too, until 0.46: ``legacy=True`` is this
     loop's alone) — as ``[{tool, args}]``."""
     _stripped, calls = parse_tool_calls(response_text or "", legacy=True)
     return _as_step_calls(calls)

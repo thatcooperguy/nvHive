@@ -344,10 +344,17 @@ notes:
 
 ### Windows on Arm (RTX Spark)
 
-nvHive is untested on Windows on Arm. There is no windows-arm64 binary; x64
-Python under emulation is the only path we expect to work, and local models
-and device settings are unverified there. If you own an RTX Spark machine,
-please report what it shows through the
+nvHive is untested on Windows on Arm. There is no windows-arm64 binary.
+`install.ps1` detects the architecture, prefers a native arm64 Python (falling
+back to an x64 Python under emulation when a dependency has no win_arm64
+wheel), installs Ollama's arm64 build instead of the x64 installer when
+`nvidia-smi` reports an NVIDIA GPU (without NVIDIA's Windows on Arm driver it
+installs no Ollama, sets up the cloud providers and says to re-run it once the
+driver is in), and says plainly that GPU acceleration is unverified there;
+local models are unverified as well, and device settings refuse on Windows as
+on any non-Linux host (the rule and the sentence the Wizard prints are in
+[CONFIGURATION.md](CONFIGURATION.md#code-and-images-from-the-wizard-chat)).
+If you own an RTX Spark machine, please report what it shows through the
 [RTX Spark hardware facts](../.github/ISSUE_TEMPLATE/rtx-spark-facts.md) issue
 template (open a new issue on GitHub and pick it from the list).
 
