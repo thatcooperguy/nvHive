@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -42,6 +43,69 @@ NEUTRAL_PLATFORM_FACTS = _platform_facts.PlatformFacts(
     in_sudo_group=False,
     is_cloud=False,
 )
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_home(request, tmp_path_factory):
+    """Every test runs against a throwaway home, never the developer's.
+
+    ``NVH_HOME`` points at a fresh, not-yet-created directory (a first run,
+    which is what CI sees) and ``Path.home()`` — with ``HOME`` and
+    ``USERPROFILE``, for ``expanduser`` and for the subprocesses a test
+    spawns — at a fresh empty one. Both live under pytest's basetemp beside
+    the test's own ``tmp_path``, never inside it. The per-directory knobs
+    ``storage_layout()`` honours (``NVH_STATE``, ``NVH_CONFIG``,
+    ``NVHIVE_HOME``, ``HIVE_CONFIG_HOME``, ...) are cleared so an operator's
+    shell cannot point a test at a real directory, and
+    ``nvh.config.settings.reset_default_paths()`` re-derives
+    ``DEFAULT_CONFIG_DIR`` / ``DEFAULT_CONFIG_PATH`` on the way in and again
+    on the way out.
+
+    Without this the API's ``require_auth`` opened ``~/.nvh/state/nvhive.db``
+    on every ``TestClient`` request, ``Engine()`` read ``~/.nvh/config``, and
+    the platform detector read ``~/.cursor`` and friends, so a suite passed
+    or failed with whatever happened to be installed on the box.
+
+    A test that wants its own layout still sets ``NVH_HOME`` or patches
+    ``Path.home`` itself: module and function fixtures run after this one,
+    so theirs win and are undone first. A module that must see the real home
+    on every test opts out with ``HERMETIC_HOME = False`` at module level
+    and gets exactly the pre-fixture behaviour (nothing patched, nothing
+    reset).
+    """
+    module = getattr(request.node, "module", None)
+    if not getattr(module, "HERMETIC_HOME", True):
+        yield
+        return
+
+    from nvh.config import settings as _settings
+    from nvh.integrations.workspace.storage import storage_layout as _storage_layout
+
+    base = tmp_path_factory.mktemp("hermetic-home")
+    user_home = base / "home"
+    user_home.mkdir()
+    nvh_home = base / "nvh"
+
+    mp = pytest.MonkeyPatch()
+    # The nvHive knobs storage_layout() reads, taken from the layout's own
+    # env() so the list cannot drift; the third-party cache knobs it also
+    # exports (TMPDIR, HF_HOME, PIP_CACHE_DIR, ...) are not nvHive's to clear.
+    # setenv-then-delenv rather than a bare delenv, so a variable the code
+    # under test exports during the test is removed again at teardown.
+    for name in _storage_layout(nvh_home).env():
+        if name.startswith(("NVH_", "NVHIVE_", "HIVE_", "COMFYUI_")):
+            mp.setenv(name, os.environ.get(name, ""))
+            mp.delenv(name)
+    mp.setenv("NVH_HOME", str(nvh_home))
+    mp.setenv("HOME", str(user_home))
+    mp.setenv("USERPROFILE", str(user_home))
+    mp.setattr(Path, "home", classmethod(lambda cls: user_home))
+    _settings.reset_default_paths()
+    try:
+        yield
+    finally:
+        mp.undo()
+        _settings.reset_default_paths()
 
 
 @pytest.fixture(autouse=True)

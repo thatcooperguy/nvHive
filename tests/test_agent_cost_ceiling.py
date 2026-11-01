@@ -55,11 +55,10 @@ _EMPTY = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _hermetic_home(monkeypatch, tmp_path) -> None:
-    """The profile store and plugin dir resolve to tmp_path, never the
-    developer's real $NVH_HOME."""
-    monkeypatch.setenv("NVH_HOME", str(tmp_path))
+# The profile store and plugin dir resolve to a throwaway NVH_HOME, never the
+# developer's: tests/conftest.py's autouse ``_hermetic_home`` provides it (a
+# module fixture of the same name would shadow it and skip its Path.home / knob
+# patching, so none is defined here).
 
 
 @pytest.mark.asyncio

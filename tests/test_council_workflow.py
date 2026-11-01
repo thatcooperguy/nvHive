@@ -180,11 +180,14 @@ async def test_mcp_throwdown_runs_actual_critique(monkeypatch):
     ("/v1/proxy/chat/completions", True),
     ("/v1/anthropic/messages", False),
 ])
-def test_compatible_apis_execute_same_two_pass_workflow(monkeypatch, endpoint, stream):
+def test_compatible_apis_execute_same_two_pass_workflow(monkeypatch, endpoint, stream, sync_db):
     import nvh.api.server as server
 
     engine, tape, _ = make_engine(monkeypatch)
     monkeypatch.setattr(server, "_engine", engine)
+    # require_auth opens the state database on every request: sync_db
+    # (tests/conftest.py) gives it clean repository state — the database
+    # lands under this test's fake NVH_HOME — and disposes the engine after.
     client = TestClient(server.app, raise_server_exceptions=True)
     response = client.post(endpoint, json={
         "model": "throwdown", "messages": [{"role": "user", "content": "Which design?"}],

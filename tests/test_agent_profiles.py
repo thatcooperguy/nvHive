@@ -16,11 +16,9 @@ from pathlib import Path
 
 import pytest
 
-
-@pytest.fixture(autouse=True)
-def _hermetic_home(monkeypatch, tmp_path: Path) -> None:
-    """Default-resolved lookups read tmp_path, never the developer's $NVH_HOME."""
-    monkeypatch.setenv("NVH_HOME", str(tmp_path))
+# Default-resolved lookups read a throwaway NVH_HOME: tests/conftest.py's autouse
+# ``_hermetic_home`` provides it (a module fixture of the same name would shadow
+# that one and skip its Path.home / knob patching, so none is defined here).
 
 
 def test_built_in_profiles_always_present(tmp_path: Path) -> None:

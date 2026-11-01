@@ -17,7 +17,11 @@ from nvh.api.server import app
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(sync_db) -> TestClient:
+    """``require_auth`` opens the state database on every request. ``sync_db``
+    (tests/conftest.py) starts from clean repository state and disposes the
+    engine the request leaves behind; the database itself lands under the
+    fake ``NVH_HOME`` every test gets, never under the real ``~/.nvh``."""
     return TestClient(app)
 
 

@@ -2,12 +2,86 @@
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from nvh.integrations.diagnostics.detector import Platform, detect_platforms
+from nvh.integrations.diagnostics import detector
+from nvh.integrations.diagnostics.detector import Platform, detect_platforms, register_cursor
+
+
+@pytest.fixture(autouse=True)
+def _detect_under_the_fake_home(monkeypatch, tmp_path):
+    """Detection sees only the fake, empty home tests/conftest.py gives every
+    test: no ``claude`` / ``cursor`` / ``openshell`` on PATH (so no
+    ``claude mcp list`` subprocess either) and a cwd without ``openclaw.json``.
+    The results below are then the same on the dev box and on CI."""
+    monkeypatch.setattr(detector, "_cmd_exists", lambda cmd: None)
+    monkeypatch.chdir(tmp_path)
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_detection_runs_under_the_fake_home():
+    """The tests/conftest.py contract this module relies on: ``Path.home()``,
+    ``HOME`` and ``USERPROFILE`` agree on an empty directory, ``NVH_HOME`` is a
+    fresh sibling of it (not under the real home), and the settings module's
+    default config path was re-derived from it."""
+    from nvh.config import settings
+
+    home = Path.home()
+    assert home.is_dir() and not any(home.iterdir())
+    assert Path(os.environ["HOME"]) == home == Path(os.environ["USERPROFILE"])
+    nvh_home = Path(os.environ["NVH_HOME"])
+    assert nvh_home.parent == home.parent and not nvh_home.exists()
+    assert settings.DEFAULT_CONFIG_DIR == nvh_home / "config"
+    assert settings.DEFAULT_CONFIG_PATH == nvh_home / "config" / "config.yaml"
+
+
+def test_nothing_detected_under_an_empty_home():
+    platforms = detect_platforms()
+    assert {p.name for p in platforms} == {
+        "nemoclaw", "openclaw", "claude_code", "cursor", "claude_desktop",
+    }
+    assert not any(p.detected for p in platforms)
+    assert not any(p.already_configured for p in platforms)
+
+
+def test_cursor_detected_and_configured_from_its_home_config():
+    cfg = Path.home() / ".cursor" / "mcp.json"
+    _write_json(cfg, {"mcpServers": {"nvhive": {"command": "nvhive-mcp"}}})
+    cursor = next(p for p in detect_platforms() if p.name == "cursor")
+    assert cursor.detected and cursor.already_configured
+    assert cursor.config_path == str(cfg)
+    assert cursor.detection_method == f"Config: {cfg}"
+
+
+def test_openclaw_detected_but_unconfigured_from_its_home_config():
+    cfg = Path.home() / ".openclaw" / "config.json"
+    _write_json(cfg, {"mcpServers": {}})
+    openclaw = next(p for p in detect_platforms() if p.name == "openclaw")
+    assert openclaw.detected and not openclaw.already_configured
+    assert openclaw.config_path == str(cfg)
+
+
+def test_register_cursor_writes_the_fake_home_and_is_then_detected():
+    """``register_cursor()`` with no path writes ``~/.cursor/mcp.json`` — the
+    fake home's, which this test then round-trips through detection."""
+    ok, message = register_cursor()
+    assert ok, message
+    cfg = Path.home() / ".cursor" / "mcp.json"
+    assert cfg.is_file() and str(cfg) in message
+    assert json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["nvhive"] == {
+        "command": "nvhive-mcp",
+    }
+    cursor = next(p for p in detect_platforms() if p.name == "cursor")
+    assert cursor.detected and cursor.already_configured
 
 
 def test_detect_platforms_returns_all():
