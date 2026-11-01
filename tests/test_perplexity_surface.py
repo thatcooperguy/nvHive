@@ -399,8 +399,18 @@ def _fake_http(status_code: int):
         async def __aexit__(self, *exc):
             return False
 
-        async def get(self, url, headers=None):
-            return SimpleNamespace(status_code=status_code, json=lambda: {"data": []})
+        def stream(self, method, url, headers=None, params=None):
+            # The adapter streams the /models body (MODELS_PROBE_MAX_BYTES).
+            class _Stream:
+                async def __aenter__(self):
+                    async def aiter_bytes():
+                        yield b'{"data": []}'
+                    return SimpleNamespace(status_code=status_code, headers={}, aiter_bytes=aiter_bytes)
+
+                async def __aexit__(self, *exc):
+                    return False
+
+            return _Stream()
 
     return Client
 

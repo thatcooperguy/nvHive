@@ -18,6 +18,7 @@ from typer.testing import CliRunner
 
 import nvh.cli.main as cli_main
 from nvh.integrations.diagnostics import checks as diag
+from nvh.providers.specs import PROVIDER_FACTS
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -83,7 +84,10 @@ class TestRegistryShape:
             "smoke": "--smoke", "debug": "--report", "selfcheck": "--report",
         }
         assert table["selfcheck"] == "status --report --live --imports"
-        assert {n for n, t in table.items() if t.startswith("ask -p ")} == set(cli_main.KNOWN_ADVISORS) - {"mock", "nvidia"}
+        # One `nvh <provider>` alias per spec row: Triton has no login flow,
+        # mock is the test double and `nvh nvidia` is the dashboard.
+        assert {n for n, t in table.items() if t.startswith("ask -p ")} == set(PROVIDER_FACTS) - {"triton", "mock", "nvidia"}
+        assert set(cli_main.KNOWN_ADVISORS) == set(PROVIDER_FACTS) - {"triton"}
         assert {"knowledge": "rag", "learn": "rag add"}.items() <= table.items()
 
     def test_hidden_for_other_reasons_is_not_deprecated(self):

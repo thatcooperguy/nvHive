@@ -2,6 +2,16 @@
 
 __version__ = "0.44.1"
 
+import os as _os
+
+# LiteLLM's model table is the one bundled with the installed wheel: no
+# import-time fetch of the live price map (an offline or firewalled box
+# waited on the GitHub timeout before the first command ran), and the
+# catalog, the bill and the weekly model-currency report describe the same
+# table. Export the variable as "False" before importing nvh to opt back
+# into the live map.
+_os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 
 # Silence LiteLLM's chatter as early as possible. Real-rig retest
 # 2026-05-22: users saw "common_utils.py:24 No module named botocore"

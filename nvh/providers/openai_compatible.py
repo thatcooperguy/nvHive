@@ -12,16 +12,20 @@ A spec's ``api_surface`` picks the LiteLLM call: ``"chat"`` goes through
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import json
+import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Collection, Iterable
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
 import httpx
 import litellm
 
+from nvh.core.atohi import AdmittedProvider, ResourcePaused
 from nvh.core.tools import normalize_tool_calls, wire_tool_calls
 from nvh.providers.base import (
     AuthenticationError,
@@ -40,12 +44,47 @@ from nvh.providers.base import (
     TokenLimitError,
     Usage,
 )
+from nvh.providers.lazy_provider import LazyProvider
 from nvh.providers.registry import ProviderRegistry, resolve_provider_key
 from nvh.providers.specs import PROVIDER_SPECS, ProviderSpec
 
-__all__ = ["PROVIDER_SPECS", "OpenAICompatibleProvider", "ProviderSpec"]
+__all__ = [
+    "LIVE_MODELS_NEGATIVE_TTL",
+    "LIVE_MODELS_TTL",
+    "MODELS_PROBE_MAX_BYTES",
+    "MODELS_PROBE_MAX_IDS",
+    "MODELS_PROBE_TIMEOUT",
+    "PROVIDER_SPECS",
+    "OpenAICompatibleProvider",
+    "ProviderSpec",
+    "concrete_provider",
+    "live_model_ids_for",
+    "live_model_keys",
+    "model_id_tail",
+    "model_ids_from_payload",
+    "model_served",
+    "models_probe_request",
+]
+
+logger = logging.getLogger(__name__)
 
 _HEALTH_TIMEOUT = 15
+#: Seconds the free ``GET /models`` probe may take. The ``/v1/models``
+#: intersect and ``nvh status --deep`` wait no longer than this per provider.
+MODELS_PROBE_TIMEOUT = 5.0
+#: How long one live model list stays good -- per adapter instance here and
+#: per provider in the server's ``/v1/models`` cache -- so a health check and
+#: a model list inside one interval share a single request.
+LIVE_MODELS_TTL = 300.0
+#: How long a failed probe is remembered before the next attempt: short, so a
+#: provider that comes back is seen again quickly.
+LIVE_MODELS_NEGATIVE_TTL = 30.0
+#: Caps on one ``GET /models`` answer. The body is read in chunks and dropped
+#: once it passes this many bytes (a real listing is a few hundred KB at most),
+#: and at most this many ids are kept, so a huge or hostile answer from a
+#: configured proxy can neither hold the event loop nor fill memory.
+MODELS_PROBE_MAX_BYTES = 8 * 1024 * 1024
+MODELS_PROBE_MAX_IDS = 10_000
 
 _FINISH_REASONS = {
     "stop": FinishReason.STOP,
@@ -350,12 +389,29 @@ def _catalog_cost(model: str, usage: Usage) -> Decimal:
     return cost.quantize(Decimal("0.000001"))
 
 
+# Models whose bill did not come from LiteLLM's price (the catalog rate, or
+# $0) and were logged once; tests clear it alongside ``_catalog``.
+_COST_FALLBACK_LOGGED: set[str] = set()
+
+
+def _log_cost_fallback_once(model: str, level: int, message: str, *args: Any) -> None:
+    """Log ``message`` the first time ``model`` is billed off LiteLLM's price in this process."""
+    if model in _COST_FALLBACK_LOGGED:
+        return
+    _COST_FALLBACK_LOGGED.add(model)
+    logger.log(level, message, *args)
+
+
 def _calc_cost(model: str, usage: Usage) -> Decimal:
     """Cost of ``usage``: LiteLLM's price table, else the capabilities.yaml rates, else $0.
 
     LiteLLM raises for a model it has not mapped (Perplexity's Agent API
     presets, for one); the catalog row nvHive ships for that model then
-    prices the request instead of it being recorded as free.
+    prices the request instead of it being recorded as free. Each model is
+    logged once per process when its bill is not LiteLLM's price: INFO when
+    the catalog rate takes over, WARNING when nothing prices it and $0 is
+    recorded (``ModelInfo.cost_known`` is false and the model list says
+    "cost unknown"), INFO when LiteLLM itself bills $0 for tokens used.
     """
     try:
         prompt_cost, completion_cost = litellm.cost_per_token(
@@ -363,9 +419,27 @@ def _calc_cost(model: str, usage: Usage) -> Decimal:
             prompt_tokens=usage.input_tokens,
             completion_tokens=usage.output_tokens,
         )
-        return Decimal(str(round(prompt_cost + completion_cost, 6)))
     except Exception:
-        return _catalog_cost(model, usage)
+        cost = _catalog_cost(model, usage)
+        info = _catalog().get_model_info(model)
+        if info is not None and info.cost_known:
+            _log_cost_fallback_once(
+                model, logging.INFO,
+                "model %s: LiteLLM has no price; billed at the capabilities.yaml rate", model,
+            )
+        else:
+            _log_cost_fallback_once(
+                model, logging.WARNING,
+                "model %s: no price in LiteLLM's table or the catalog; recorded as $0 (cost unknown)",
+                model,
+            )
+        return cost
+    cost = Decimal(str(round(prompt_cost + completion_cost, 6)))
+    if cost == 0 and (usage.input_tokens or usage.output_tokens):
+        _log_cost_fallback_once(
+            model, logging.INFO, "model %s: LiteLLM prices this request at $0; recorded as $0", model,
+        )
+    return cost
 
 
 def _resolve_api_key(spec: ProviderSpec, api_key: str, provider_name: str) -> str:
@@ -383,14 +457,164 @@ def _litellm_api_base(model: str) -> str | None:
         return None
 
 
-def _model_count(resp: httpx.Response) -> int:
+def model_ids_from_payload(payload: Any) -> list[str]:
+    """Model ids in a ``GET /models`` body, in the provider's own spelling.
+
+    OpenAI's shape (``{"data": [{"id": ...}]}``: also Anthropic, Mistral,
+    Groq and every OpenAI-compatible host), the ``{"models": [{"name":
+    ...}]}`` shape (Google, Cohere) and a bare list of ids or objects all
+    parse; anything else yields ``[]``. Order kept, blanks and repeats
+    dropped, and at most ``MODELS_PROBE_MAX_IDS`` kept.
+    """
+    items: Any = payload
+    if isinstance(payload, dict):
+        items = next((payload[k] for k in ("data", "models") if isinstance(payload.get(k), list)), [])
+    if not isinstance(items, list):
+        return []
+    ids: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        value = (item.get("id") or item.get("name")) if isinstance(item, dict) else item
+        if isinstance(value, str) and value and value not in seen:
+            seen.add(value)
+            ids.append(value)
+            if len(ids) >= MODELS_PROBE_MAX_IDS:
+                break
+    return ids
+
+
+def model_id_tail(model_id: str) -> str:
+    """The segment after the last ``/``: what a provider's spelling and nvHive's share."""
+    return model_id.rsplit("/", 1)[-1]
+
+
+def live_model_keys(model_ids: Iterable[str]) -> frozenset[str]:
+    """``model_ids`` plus their tails: the set :func:`model_served` matches against."""
+    ids = {m for m in model_ids if m}
+    return frozenset(ids | {model_id_tail(m) for m in ids})
+
+
+def model_served(model_id: str, live_keys: Collection[str]) -> bool:
+    """Does a live list (keyed by :func:`live_model_keys`) carry ``model_id``?
+
+    An exact match first, else the id's tail, so a provider that lists
+    ``models/gemini-x`` or ``meta/llama-x`` still vouches for the catalog's
+    ``gemini/gemini-x`` or ``nvidia_nim/meta/llama-x``. Looser than exact on
+    purpose: an intersect may keep a model, never hide a served one.
+    """
+    return model_id in live_keys or model_id_tail(model_id) in live_keys
+
+
+def models_probe_request(probe: tuple[str, str], key: str) -> tuple[str, dict[str, str], dict[str, str]]:
+    """``(url, headers, params)`` for a spec's ``models_probe`` sent with ``key``.
+
+    ``bearer`` puts the key in ``Authorization``; ``x-api-key`` in that header
+    beside the API-version header Anthropic requires; ``query-key`` in a
+    ``key`` query parameter, returned as ``params`` so the URL nvHive keeps
+    (``_ModelsProbe.url``, the ``HTTP <status> from <url>`` health error)
+    never carries it. httpx still merges ``params`` into the request URL it
+    logs at INFO, which is why nvHive's entry points keep the ``httpx``
+    logger at WARNING and :func:`_redact` scrubs every error text.
+    """
+    url, auth = probe
+    if auth == "x-api-key":
+        return url, {"x-api-key": key, "anthropic-version": "2023-06-01"}, {}
+    if auth == "query-key":
+        return url, {}, {"key": key}
+    return url, {"Authorization": f"Bearer {key}"}, {}
+
+
+def concrete_provider(provider: Any) -> Any:
+    """The adapter behind the registry's wrappers.
+
+    ``ProviderRegistry.get`` hands out a :class:`LazyProvider` (constructed on
+    first use) and, under Atohi admission, an :class:`AdmittedProvider` around
+    it; neither forwards :meth:`OpenAICompatibleProvider.live_model_ids`. A
+    model list is metadata, not an admitted operation, so reading it on the
+    adapter is the same call ``AdmittedProvider.list_models`` passes through.
+    """
+    for _ in range(4):
+        if isinstance(provider, AdmittedProvider):
+            provider = provider.provider
+        elif isinstance(provider, LazyProvider):
+            provider = provider._load()
+        else:
+            break
+    return provider
+
+
+async def live_model_ids_for(
+    provider: Any, *, timeout: float, list_models_fallback: bool = True,
+) -> frozenset[str] | None:
+    """The model ids an adapter serves right now (nvHive's spelling), or ``None`` when unknown.
+
+    The one unwrap-and-probe sequence behind ``/v1/models`` and the DEEP
+    ``default_models_served`` check; callers match against
+    :func:`live_model_keys` of the result. ``provider`` is whatever the
+    registry handed out (:func:`concrete_provider` unwraps it); an
+    :class:`OpenAICompatibleProvider` answers through :meth:`live_model_ids`
+    and any other adapter through ``list_models`` when ``list_models_fallback``
+    is set (the DEEP check passes ``False``: Ollama has its own check). A
+    missing probe, a timeout, an error, ``ResourcePaused`` (a
+    ``BaseException``: admission pausing the call) or an empty list is
+    ``None``, so a caller intersecting a catalog against it filters nothing.
+    """
     try:
-        data = resp.json()
-    except ValueError:
-        return 0
-    if isinstance(data, dict):
-        data = data.get("data", [])
-    return len(data) if isinstance(data, list) else 0
+        provider = concrete_provider(provider)
+        live_ids = getattr(provider, "live_model_ids", None)
+        if live_ids is not None:
+            ids = await asyncio.wait_for(live_ids(), timeout=timeout)
+        elif list_models_fallback:
+            live = await asyncio.wait_for(provider.list_models(), timeout=timeout)
+            ids = {m.model_id for m in live if getattr(m, "model_id", None)}
+        else:
+            return None
+    except ResourcePaused:
+        return None
+    except Exception:
+        return None
+    return frozenset(ids) if ids else None
+
+
+def _redact(text: str, secret: str) -> str:
+    """``text`` with ``secret`` blanked; applied before any truncation."""
+    if secret and len(secret) >= 4 and secret in text:
+        return text.replace(secret, "***")
+    return text
+
+
+async def _read_capped(resp: Any, limit: int) -> bytes | None:
+    """The streamed body of ``resp``, or ``None`` once it is known to exceed ``limit`` bytes.
+
+    A ``Content-Length`` over the limit ends it before any read; otherwise
+    the (decoded) chunks are summed as they arrive and the read stops the
+    moment the total passes the limit, so a gzip bomb is bounded too.
+    """
+    declared = str(resp.headers.get("content-length") or "")
+    if declared.isdigit() and int(declared) > limit:
+        return None
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in resp.aiter_bytes():
+        size += len(chunk)
+        if size > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+@dataclass
+class _ModelsProbe:
+    """One ``GET /models`` outcome, cached per adapter instance."""
+
+    url: str
+    status_code: int | None = None  # None: the request itself failed
+    ids: list[str] | None = None  # the body's ids on a 2xx/3xx; None when the body was over the cap
+    error: str = ""  # redacted request error
+
+    @property
+    def ok(self) -> bool:
+        return self.status_code is not None and self.status_code < 400
 
 
 class OpenAICompatibleProvider:
@@ -419,6 +643,7 @@ class OpenAICompatibleProvider:
         self._health_model = spec.health_model or self._default_model
         self._base_url = base_url or spec.base_url
         self._timeout = timeout or spec.timeout
+        self._models_probe_cache: tuple[float, _ModelsProbe] | None = None
 
     @property
     def name(self) -> str:
@@ -760,20 +985,129 @@ class OpenAICompatibleProvider:
                 tool_calls=_wire_partial_calls(partial_calls),
             )
 
-    async def list_models(self) -> list[ModelInfo]:
-        model_ids = dict.fromkeys((self._default_model, self._fallback_model))
-        return [
-            ModelInfo(model_id=model_id, provider=self._provider_name)
-            for model_id in model_ids
-            if model_id
-        ]
+    def _models_probe(self) -> tuple[str, str] | None:
+        """``(url, auth)`` of the free ``GET /models``, or ``None`` when none is known.
+
+        A configured ``base_url`` that overrides the spec's (a proxy, a
+        self-hosted server) first, else the spec row's ``models_probe``, else
+        the base LiteLLM publishes for the default model.
+        """
+        if self._base_url and self._base_url != self._spec.base_url:
+            return f"{self._base_url.rstrip('/')}/models", "bearer"
+        if self._spec.models_probe is not None:
+            return self._spec.models_probe
+        base = _litellm_api_base(self._get_model(None))
+        if base:
+            return f"{base.rstrip('/')}/models", "bearer"
+        return None
 
     def _models_url(self) -> str | None:
-        """The free ``GET /models`` endpoint, when one is known and we hold a key."""
-        base = self._base_url or _litellm_api_base(self._get_model(None))
-        if not base or not self._api_key:
+        """The free ``GET /models`` URL, when one is known and we hold a key."""
+        probe = self._models_probe()
+        if probe is None or not self._api_key:
             return None
-        return f"{base.rstrip('/')}/models"
+        return probe[0]
+
+    async def _fetch_models(self) -> _ModelsProbe | None:
+        """The one ``GET /models`` both :meth:`health_check` and :meth:`list_models` read.
+
+        ``None`` when there is no URL or no key (callers keep the static list,
+        or ping). Otherwise the outcome, cached on this instance for
+        ``LIVE_MODELS_TTL`` after a success and ``LIVE_MODELS_NEGATIVE_TTL``
+        after a failure, so a health check followed by a model list is one
+        request. ``MODELS_PROBE_TIMEOUT`` bounds the call, the body is
+        streamed and dropped past ``MODELS_PROBE_MAX_BYTES`` (``ids`` then
+        stays ``None``: unknown, never a guess), a body that is not JSON or
+        nests too deep yields no ids, and the key is redacted from any error
+        before it is kept.
+        """
+        now = time.monotonic()
+        if self._models_probe_cache is not None:
+            fetched_at, cached = self._models_probe_cache
+            ttl = LIVE_MODELS_TTL if cached.ok else LIVE_MODELS_NEGATIVE_TTL
+            if now - fetched_at < ttl:
+                return cached
+        probe = self._models_probe()
+        if probe is None or not self._api_key:
+            return None
+        url, headers, params = models_probe_request(probe, self._api_key)
+        result = _ModelsProbe(url=url)
+        body: bytes | None = b""
+        try:
+            async with httpx.AsyncClient(timeout=MODELS_PROBE_TIMEOUT) as client:
+                async with client.stream(
+                    "GET", url, headers=headers, **({"params": params} if params else {}),
+                ) as resp:
+                    result.status_code = int(resp.status_code)
+                    if result.ok:
+                        body = await _read_capped(resp, MODELS_PROBE_MAX_BYTES)
+        except Exception as e:
+            result.status_code = None
+            result.error = _redact(str(e) or type(e).__name__, self._api_key)
+        else:
+            if result.ok:
+                if body is None:
+                    result.error = f"models body over {MODELS_PROBE_MAX_BYTES} bytes; list unknown"
+                else:
+                    try:
+                        payload = json.loads(body) if body else None
+                    except (ValueError, RecursionError):
+                        payload = None
+                    result.ids = model_ids_from_payload(payload)
+        self._models_probe_cache = (now, result)
+        return result
+
+    async def live_model_ids(self) -> set[str] | None:
+        """Model ids the provider serves right now, in nvHive's spelling; ``None`` when unknown.
+
+        Unknown (no probe URL, no key, a failed or rejected request, an
+        empty body) is ``None`` rather than an empty set, so a caller
+        intersecting a catalog against it filters nothing: fail open.
+        """
+        probe = await self._fetch_models()
+        if probe is None or not probe.ok or not probe.ids:
+            return None
+        return {self._nvh_model_id(model_id) for model_id in probe.ids}
+
+    def _nvh_model_id(self, live_id: str) -> str:
+        """A provider-spelled id as nvHive writes it for this spec.
+
+        With the LiteLLM route when the spec's own ids carry it
+        (``groq/openai/...``); bare when they do not (llm7, SiliconFlow: the
+        route is applied at call time).
+        """
+        prefix = self._spec.litellm_prefix
+        if prefix and self._spec.default_model.startswith(prefix):
+            return self._spec.route(live_id)
+        return live_id
+
+    def _model_info(self, model_id: str, by_tail: dict[str, ModelInfo] | None = None) -> ModelInfo:
+        """The catalog row for ``model_id`` (exact; by tail when ``by_tail`` is given) under this instance's name, else a bare row."""
+        info = _catalog().get_model_info(model_id)
+        if info is None and by_tail is not None:
+            info = by_tail.get(model_id_tail(model_id))
+        if info is None:
+            return ModelInfo(model_id=model_id, provider=self._provider_name)
+        return info.model_copy(update={"provider": self._provider_name})
+
+    async def list_models(self) -> list[ModelInfo]:
+        """The models the provider serves: the live ``GET /models`` list when one can
+        be fetched, else the static ``[default, fallback]`` pair.
+
+        Live ids are written in nvHive's spelling and matched to their catalog
+        rows (exactly, else by tail: Google lists ``models/gemini-x``); a model
+        the catalog does not know is a bare row.
+        """
+        live = await self.live_model_ids()
+        if live is None:
+            static = [m for m in dict.fromkeys((self._default_model, self._fallback_model)) if m]
+            return [self._model_info(model_id) for model_id in static]
+        by_tail = {model_id_tail(m.model_id): m for m in _catalog().list_models(provider=self._spec.name)}
+        rows: dict[str, ModelInfo] = {}
+        for model_id in sorted(live):
+            info = self._model_info(model_id, by_tail)
+            rows.setdefault(info.model_id, info)
+        return list(rows.values())
 
     def _health(
         self, start: float, healthy: bool, error: str = "", models: int = 0
@@ -782,27 +1116,26 @@ class OpenAICompatibleProvider:
             provider=self._provider_name,
             healthy=healthy,
             latency_ms=int((time.monotonic() - start) * 1000),
-            error=error[:200] or None,
+            # Redaction first, then the 200-character cut.
+            error=_redact(error, self._api_key)[:200] or None,
             models_available=models,
         )
 
     async def health_check(self) -> HealthStatus:
-        """Free ``GET /models`` when the endpoint is known; otherwise a one-token ping."""
+        """Free ``GET /models`` when the endpoint is known; otherwise a one-token ping.
+
+        The probe is :meth:`_fetch_models`, shared with :meth:`list_models`; a
+        host without ``/models`` (404/405) falls through to the billed ping.
+        """
         start = time.monotonic()
-        models_url = self._models_url()
-        if models_url:
-            try:
-                async with httpx.AsyncClient(timeout=_HEALTH_TIMEOUT) as client:
-                    resp = await client.get(
-                        models_url,
-                        headers={"Authorization": f"Bearer {self._api_key}"},
-                    )
-            except Exception as e:
-                return self._health(start, False, str(e))
-            if resp.status_code < 400:
-                return self._health(start, True, models=_model_count(resp))
-            if resp.status_code not in (404, 405):
-                return self._health(start, False, f"HTTP {resp.status_code} from {models_url}")
+        probe = await self._fetch_models()
+        if probe is not None:
+            if probe.status_code is None:
+                return self._health(start, False, probe.error or "models probe failed")
+            if probe.ok:
+                return self._health(start, True, models=len(probe.ids or []))
+            if probe.status_code not in (404, 405):
+                return self._health(start, False, f"HTTP {probe.status_code} from {probe.url}")
             # No /models on this host: fall through to the billed ping.
         try:
             if self._responses:

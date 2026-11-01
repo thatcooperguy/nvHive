@@ -1,25 +1,26 @@
-# Model Capability Catalog
-# Scores are 0.0-1.0 per task type. Pricing per 1M tokens in USD.
-# Last updated: 2026-09-02
+# Model capability catalog -- the hand-maintained half; LiteLLM holds the rest.
 #
-# Rows for superseded default IDs (gpt-4o, groq/llama-3.3-70b-versatile, ...)
-# are kept on purpose until the 0.43 catalog regeneration so users who
-# explicitly configured them keep resolving. Retirement source of truth:
-# RETIRED_MODEL_RENAMES in nvh/cli/setup.py.
+# Hand-maintained per row: display_name, capability_scores (0-1 per task type),
+# typical_latency_ms, and explicit overrides of a LiteLLM-read fact, each row
+# of which carries a `source:` saying where the numbers come from.
+# Derived by scripts/gen_capabilities.py on every run: status/successor from
+# RETIRED_MODEL_RENAMES (nvh/cli/setup.py), ollama supports_vision from
+# nvh/core/local_models.py. A ProviderSpec.zero_cost provider's rows are $0
+# by that flag alone and carry no price here.
+# Read live when the catalog loads, never written here: price, context window,
+# max output and the tool/vision/JSON flags, from LiteLLM's model table plus
+# nvh/config/model_overrides.json (nvh/providers/registry.py). A row no source
+# prices loads as 'cost unknown', never as $0.
+# Regenerate: python scripts/gen_capabilities.py   (--check in CI compares only the fields above)
+# Generated against litellm 1.99.0 (informational; --check ignores this line)
 
 models:
   # --- OpenAI ---
   gpt-4o:
     provider: openai
     display_name: GPT-4o
-    context_window: 128000
-    max_output_tokens: 16384
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 2.50
-    output_cost_per_1m_tokens: 10.00
+    status: retired
+    successor: gpt-5.6-terra
     typical_latency_ms: 900
     capability_scores:
       code_generation: 0.88
@@ -28,34 +29,28 @@ models:
       reasoning: 0.85
       math: 0.85
       creative_writing: 0.82
-      summarization: 0.80
+      summarization: 0.8
       translation: 0.82
       conversation: 0.85
       question_answering: 0.84
       structured_extraction: 0.88
-      multimodal: 0.90
+      multimodal: 0.9
       long_context_analysis: 0.75
       instruction_following: 0.88
 
   gpt-4o-mini:
     provider: openai
     display_name: GPT-4o Mini
-    context_window: 128000
-    max_output_tokens: 16384
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.15
-    output_cost_per_1m_tokens: 0.60
+    status: retired
+    successor: gpt-5.6-luna
     typical_latency_ms: 500
     capability_scores:
       code_generation: 0.75
       code_review: 0.72
-      code_debug: 0.70
-      reasoning: 0.70
+      code_debug: 0.7
+      reasoning: 0.7
       math: 0.68
-      creative_writing: 0.70
+      creative_writing: 0.7
       summarization: 0.72
       translation: 0.74
       conversation: 0.78
@@ -68,18 +63,10 @@ models:
   gpt-4.1:
     provider: openai
     display_name: GPT-4.1
-    context_window: 1047576
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 2.00
-    output_cost_per_1m_tokens: 8.00
     typical_latency_ms: 800
     capability_scores:
       code_generation: 0.92
-      code_review: 0.90
+      code_review: 0.9
       code_debug: 0.91
       reasoning: 0.88
       math: 0.87
@@ -90,20 +77,12 @@ models:
       question_answering: 0.87
       structured_extraction: 0.91
       multimodal: 0.88
-      long_context_analysis: 0.90
+      long_context_analysis: 0.9
       instruction_following: 0.92
 
   gpt-5.6-terra:
     provider: openai
     display_name: GPT-5.6 Terra
-    context_window: 1050000
-    max_output_tokens: 128000
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 2.00
-    output_cost_per_1m_tokens: 12.00
     typical_latency_ms: 900
     capability_scores:
       code_generation: 0.88
@@ -124,14 +103,6 @@ models:
   gpt-5.6-luna:
     provider: openai
     display_name: GPT-5.6 Luna
-    context_window: 1050000
-    max_output_tokens: 128000
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.20
-    output_cost_per_1m_tokens: 1.20
     typical_latency_ms: 500
     capability_scores:
       code_generation: 0.75
@@ -153,27 +124,19 @@ models:
   claude-sonnet-4-6:
     provider: anthropic
     display_name: Claude Sonnet 4.6
-    context_window: 200000
-    max_output_tokens: 64000
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 3.00
-    output_cost_per_1m_tokens: 15.00
     typical_latency_ms: 1200
     capability_scores:
       code_generation: 0.91
       code_review: 0.93
-      code_debug: 0.90
+      code_debug: 0.9
       reasoning: 0.92
       math: 0.82
       creative_writing: 0.95
       summarization: 0.89
       translation: 0.83
-      conversation: 0.90
+      conversation: 0.9
       question_answering: 0.88
-      structured_extraction: 0.90
+      structured_extraction: 0.9
       multimodal: 0.82
       long_context_analysis: 0.88
       instruction_following: 0.93
@@ -181,42 +144,26 @@ models:
   claude-haiku-4-5-20251001:
     provider: anthropic
     display_name: Claude Haiku 4.5
-    context_window: 200000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 1.00
-    output_cost_per_1m_tokens: 5.00
     typical_latency_ms: 600
     capability_scores:
       code_generation: 0.78
       code_review: 0.76
       code_debug: 0.74
       reasoning: 0.75
-      math: 0.70
+      math: 0.7
       creative_writing: 0.74
       summarization: 0.76
       translation: 0.72
-      conversation: 0.80
+      conversation: 0.8
       question_answering: 0.75
       structured_extraction: 0.77
-      multimodal: 0.70
+      multimodal: 0.7
       long_context_analysis: 0.72
       instruction_following: 0.78
 
   claude-opus-4-6:
     provider: anthropic
     display_name: Claude Opus 4.6
-    context_window: 200000
-    max_output_tokens: 32000
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 15.00
-    output_cost_per_1m_tokens: 75.00
     typical_latency_ms: 2000
     capability_scores:
       code_generation: 0.94
@@ -237,14 +184,6 @@ models:
   claude-sonnet-5:
     provider: anthropic
     display_name: Claude Sonnet 5
-    context_window: 1000000
-    max_output_tokens: 128000
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 2.00
-    output_cost_per_1m_tokens: 10.00
     typical_latency_ms: 1200
     capability_scores:
       code_generation: 0.91
@@ -262,29 +201,23 @@ models:
       long_context_analysis: 0.88
       instruction_following: 0.93
 
-  # --- Google ---
+  # --- Google Gemini ---
   gemini/gemini-2.0-pro:
     provider: google
     display_name: Gemini 2.0 Pro
-    context_window: 1000000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 1.25
-    output_cost_per_1m_tokens: 5.00
+    status: retired
+    successor: gemini/gemini-3.7-flash
     typical_latency_ms: 1500
     capability_scores:
       code_generation: 0.82
-      code_review: 0.80
+      code_review: 0.8
       code_debug: 0.78
       reasoning: 0.83
       math: 0.82
       creative_writing: 0.76
       summarization: 0.82
-      translation: 0.80
-      conversation: 0.80
+      translation: 0.8
+      conversation: 0.8
       question_answering: 0.84
       structured_extraction: 0.82
       multimodal: 0.92
@@ -294,27 +227,21 @@ models:
   gemini/gemini-2.0-flash:
     provider: google
     display_name: Gemini 2.0 Flash
-    context_window: 1000000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.10
-    output_cost_per_1m_tokens: 0.40
+    status: retired
+    successor: gemini/gemini-3.7-flash
     typical_latency_ms: 400
     capability_scores:
       code_generation: 0.72
-      code_review: 0.70
+      code_review: 0.7
       code_debug: 0.68
-      reasoning: 0.70
+      reasoning: 0.7
       math: 0.68
       creative_writing: 0.65
       summarization: 0.72
-      translation: 0.70
+      translation: 0.7
       conversation: 0.72
       question_answering: 0.73
-      structured_extraction: 0.70
+      structured_extraction: 0.7
       multimodal: 0.78
       long_context_analysis: 0.85
       instruction_following: 0.72
@@ -322,14 +249,6 @@ models:
   gemini/gemini-3.7-flash:
     provider: google
     display_name: Gemini 3.7 Flash
-    context_window: 1048576
-    max_output_tokens: 65536
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.75
-    output_cost_per_1m_tokens: 3.75
     typical_latency_ms: 400
     capability_scores:
       code_generation: 0.72
@@ -350,14 +269,6 @@ models:
   gemini/gemini-3.5-flash-lite:
     provider: google
     display_name: Gemini 3.5 Flash-Lite
-    context_window: 1048576
-    max_output_tokens: 65536
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.30
-    output_cost_per_1m_tokens: 2.50
     typical_latency_ms: 400
     capability_scores:
       code_generation: 0.72
@@ -379,50 +290,38 @@ models:
   groq/llama-3.3-70b-versatile:
     provider: groq
     display_name: Llama 3.3 70B Versatile (Groq)
-    context_window: 128000
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.59
-    output_cost_per_1m_tokens: 0.79
+    status: retired
+    successor: groq/openai/gpt-oss-120b
     typical_latency_ms: 200
     capability_scores:
-      code_generation: 0.80
+      code_generation: 0.8
       code_review: 0.78
       code_debug: 0.76
-      reasoning: 0.80
+      reasoning: 0.8
       math: 0.76
       creative_writing: 0.72
       summarization: 0.76
       translation: 0.74
-      conversation: 0.80
+      conversation: 0.8
       question_answering: 0.78
       structured_extraction: 0.78
       multimodal: 0.0
-      long_context_analysis: 0.70
-      instruction_following: 0.80
+      long_context_analysis: 0.7
+      instruction_following: 0.8
 
   groq/llama-3.1-8b-instant:
     provider: groq
     display_name: Llama 3.1 8B Instant (Groq)
-    context_window: 128000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.05
-    output_cost_per_1m_tokens: 0.08
+    status: retired
+    successor: groq/openai/gpt-oss-20b
     typical_latency_ms: 100
     capability_scores:
       code_generation: 0.65
       code_review: 0.62
-      code_debug: 0.60
+      code_debug: 0.6
       reasoning: 0.62
       math: 0.58
-      creative_writing: 0.60
+      creative_writing: 0.6
       summarization: 0.65
       translation: 0.64
       conversation: 0.68
@@ -435,27 +334,21 @@ models:
   groq/mixtral-8x7b-32768:
     provider: groq
     display_name: Mixtral 8x7B (Groq)
-    context_window: 32768
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.24
-    output_cost_per_1m_tokens: 0.24
+    status: retired
+    successor: groq/openai/gpt-oss-120b
     typical_latency_ms: 150
     capability_scores:
       code_generation: 0.73
-      code_review: 0.70
+      code_review: 0.7
       code_debug: 0.68
       reasoning: 0.72
       math: 0.68
       creative_writing: 0.68
-      summarization: 0.70
+      summarization: 0.7
       translation: 0.72
       conversation: 0.72
-      question_answering: 0.70
-      structured_extraction: 0.70
+      question_answering: 0.7
+      structured_extraction: 0.7
       multimodal: 0.0
       long_context_analysis: 0.55
       instruction_following: 0.72
@@ -463,14 +356,6 @@ models:
   groq/openai/gpt-oss-120b:
     provider: groq
     display_name: GPT-OSS 120B (Groq)
-    context_window: 131072
-    max_output_tokens: 65536
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.15
-    output_cost_per_1m_tokens: 0.60
     typical_latency_ms: 200
     capability_scores:
       code_generation: 0.8
@@ -491,14 +376,6 @@ models:
   groq/openai/gpt-oss-20b:
     provider: groq
     display_name: GPT-OSS 20B (Groq)
-    context_window: 131072
-    max_output_tokens: 65536
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.075
-    output_cost_per_1m_tokens: 0.30
     typical_latency_ms: 100
     capability_scores:
       code_generation: 0.65
@@ -520,27 +397,21 @@ models:
   xai/grok-2:
     provider: grok
     display_name: Grok 2
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 2.00
-    output_cost_per_1m_tokens: 10.00
+    status: retired
+    successor: xai/grok-4.6
     typical_latency_ms: 900
     capability_scores:
       code_generation: 0.82
-      code_review: 0.80
+      code_review: 0.8
       code_debug: 0.79
       reasoning: 0.84
-      math: 0.80
+      math: 0.8
       creative_writing: 0.82
       summarization: 0.79
       translation: 0.76
       conversation: 0.84
       question_answering: 0.82
-      structured_extraction: 0.80
+      structured_extraction: 0.8
       multimodal: 0.0
       long_context_analysis: 0.72
       instruction_following: 0.82
@@ -548,24 +419,18 @@ models:
   xai/grok-3:
     provider: grok
     display_name: Grok 3
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 3.00
-    output_cost_per_1m_tokens: 15.00
+    status: retired
+    successor: xai/grok-4.6
     typical_latency_ms: 1100
     capability_scores:
       code_generation: 0.88
       code_review: 0.86
       code_debug: 0.85
-      reasoning: 0.90
+      reasoning: 0.9
       math: 0.87
       creative_writing: 0.86
       summarization: 0.84
-      translation: 0.80
+      translation: 0.8
       conversation: 0.88
       question_answering: 0.87
       structured_extraction: 0.86
@@ -576,14 +441,6 @@ models:
   xai/grok-4.6:
     provider: grok
     display_name: Grok 4.6
-    context_window: 500000
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 2.00
-    output_cost_per_1m_tokens: 6.00
     typical_latency_ms: 1100
     capability_scores:
       code_generation: 0.88
@@ -604,14 +461,6 @@ models:
   xai/grok-4.3:
     provider: grok
     display_name: Grok 4.3
-    context_window: 1000000
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 1.25
-    output_cost_per_1m_tokens: 2.50
     typical_latency_ms: 900
     capability_scores:
       code_generation: 0.82
@@ -633,42 +482,26 @@ models:
   mistral/mistral-large-latest:
     provider: mistral
     display_name: Mistral Large
-    context_window: 262144
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.50
-    output_cost_per_1m_tokens: 1.50
     typical_latency_ms: 800
     capability_scores:
       code_generation: 0.82
-      code_review: 0.80
+      code_review: 0.8
       code_debug: 0.78
-      reasoning: 0.80
+      reasoning: 0.8
       math: 0.78
       creative_writing: 0.75
       summarization: 0.78
       translation: 0.82
-      conversation: 0.80
+      conversation: 0.8
       question_answering: 0.79
-      structured_extraction: 0.80
+      structured_extraction: 0.8
       multimodal: 0.0
-      long_context_analysis: 0.70
+      long_context_analysis: 0.7
       instruction_following: 0.82
 
   mistral/mistral-small-latest:
     provider: mistral
     display_name: Mistral Small
-    context_window: 262144
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.15
-    output_cost_per_1m_tokens: 0.60
     typical_latency_ms: 400
     capability_scores:
       code_generation: 0.68
@@ -678,36 +511,30 @@ models:
       math: 0.62
       creative_writing: 0.62
       summarization: 0.66
-      translation: 0.70
+      translation: 0.7
       conversation: 0.68
       question_answering: 0.65
       structured_extraction: 0.66
       multimodal: 0.0
-      long_context_analysis: 0.60
+      long_context_analysis: 0.6
       instruction_following: 0.68
 
   # --- Cohere ---
   command-r-plus:
     provider: cohere
     display_name: Command R+
-    context_window: 128000
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 2.50
-    output_cost_per_1m_tokens: 10.00
+    status: retired
+    successor: command-a-03-2025
     typical_latency_ms: 1000
     capability_scores:
       code_generation: 0.76
       code_review: 0.74
       code_debug: 0.72
       reasoning: 0.76
-      math: 0.70
+      math: 0.7
       creative_writing: 0.74
-      summarization: 0.80
-      translation: 0.80
+      summarization: 0.8
+      translation: 0.8
       conversation: 0.82
       question_answering: 0.78
       structured_extraction: 0.76
@@ -718,14 +545,8 @@ models:
   command-r:
     provider: cohere
     display_name: Command R
-    context_window: 128000
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0.15
-    output_cost_per_1m_tokens: 0.60
+    status: retired
+    successor: command-r-08-2024
     typical_latency_ms: 700
     capability_scores:
       code_generation: 0.65
@@ -734,7 +555,7 @@ models:
       reasoning: 0.64
       math: 0.58
       creative_writing: 0.65
-      summarization: 0.70
+      summarization: 0.7
       translation: 0.72
       conversation: 0.72
       question_answering: 0.66
@@ -746,14 +567,6 @@ models:
   command-a-03-2025:
     provider: cohere
     display_name: Command A (03-2025)
-    context_window: 256000
-    max_output_tokens: 8000
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 2.50
-    output_cost_per_1m_tokens: 10.00
     typical_latency_ms: 1000
     capability_scores:
       code_generation: 0.76
@@ -774,14 +587,6 @@ models:
   command-r-08-2024:
     provider: cohere
     display_name: Command R (08-2024)
-    context_window: 128000
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0.15
-    output_cost_per_1m_tokens: 0.60
     typical_latency_ms: 700
     capability_scores:
       code_generation: 0.65
@@ -803,14 +608,8 @@ models:
   deepseek/deepseek-chat:
     provider: deepseek
     display_name: DeepSeek Chat
-    context_window: 64000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.07
-    output_cost_per_1m_tokens: 1.10
+    status: retired
+    successor: deepseek/deepseek-v4-flash
     typical_latency_ms: 900
     capability_scores:
       code_generation: 0.86
@@ -831,14 +630,8 @@ models:
   deepseek/deepseek-reasoner:
     provider: deepseek
     display_name: DeepSeek Reasoner (R1)
-    context_window: 64000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0.55
-    output_cost_per_1m_tokens: 2.19
+    status: retired
+    successor: deepseek/deepseek-v4-pro
     typical_latency_ms: 2500
     capability_scores:
       code_generation: 0.88
@@ -848,25 +641,17 @@ models:
       math: 0.96
       creative_writing: 0.65
       summarization: 0.74
-      translation: 0.70
-      conversation: 0.70
+      translation: 0.7
+      conversation: 0.7
       question_answering: 0.88
       structured_extraction: 0.78
       multimodal: 0.0
       long_context_analysis: 0.65
-      instruction_following: 0.80
+      instruction_following: 0.8
 
   deepseek/deepseek-v4-pro:
     provider: deepseek
     display_name: DeepSeek V4 Pro
-    context_window: 1000000
-    max_output_tokens: 393216
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 1.32
-    output_cost_per_1m_tokens: 3.96
     typical_latency_ms: 900
     capability_scores:
       code_generation: 0.86
@@ -887,14 +672,6 @@ models:
   deepseek/deepseek-v4-flash:
     provider: deepseek
     display_name: DeepSeek V4 Flash
-    context_window: 1000000
-    max_output_tokens: 393216
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.44
-    output_cost_per_1m_tokens: 1.32
     typical_latency_ms: 900
     capability_scores:
       code_generation: 0.86
@@ -912,563 +689,19 @@ models:
       long_context_analysis: 0.68
       instruction_following: 0.82
 
-  # --- Ollama (Local) ---
-  # Exactly the tier table's picks (nvh/core/local_models.py, `nvh models
-  # tiers`): one row per tag in local_models.all_tags(), keyed ollama/<tag>.
-  # tests/test_no_retired_model_tags.py pins the set both ways, so a tag the
-  # table drops leaves here too and a tag it adds needs a row.
-  ollama/gemma3:1b:
-    provider: ollama
-    display_name: Gemma 3 1B (Local, CPU fallback)
-    context_window: 32768
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 120
-    capability_scores:
-      code_generation: 0.48
-      code_review: 0.44
-      code_debug: 0.44
-      reasoning: 0.50
-      math: 0.46
-      creative_writing: 0.54
-      summarization: 0.56
-      translation: 0.56
-      conversation: 0.62
-      question_answering: 0.56
-      structured_extraction: 0.50
-      multimodal: 0.00
-      long_context_analysis: 0.30
-      instruction_following: 0.58
-
-  ollama/qwen3:1.7b:
-    provider: ollama
-    display_name: Qwen 3 1.7B (Local, CPU coder)
-    context_window: 40960
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 140
-    capability_scores:
-      code_generation: 0.58
-      code_review: 0.54
-      code_debug: 0.54
-      reasoning: 0.62
-      math: 0.62
-      creative_writing: 0.50
-      summarization: 0.58
-      translation: 0.60
-      conversation: 0.60
-      question_answering: 0.60
-      structured_extraction: 0.58
-      multimodal: 0.00
-      long_context_analysis: 0.40
-      instruction_following: 0.62
-
-  ollama/moondream:
-    provider: ollama
-    display_name: Moondream Vision (Local)
-    context_window: 4096
-    max_output_tokens: 2048
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: true
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 350
-    capability_scores:
-      code_generation: 0.40
-      code_review: 0.38
-      code_debug: 0.38
-      reasoning: 0.58
-      math: 0.48
-      creative_writing: 0.52
-      summarization: 0.60
-      translation: 0.50
-      conversation: 0.62
-      question_answering: 0.70
-      structured_extraction: 0.58
-      multimodal: 0.72
-      long_context_analysis: 0.32
-      instruction_following: 0.62
-
-  ollama/nomic-embed-text:
-    provider: ollama
-    display_name: Nomic Embed Text (Local embeddings, not a chat model)
-    context_window: 8192
-    max_output_tokens: 0
-    supports_streaming: false
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 60
-    capability_scores:
-      code_generation: 0.00
-      code_review: 0.00
-      code_debug: 0.00
-      reasoning: 0.00
-      math: 0.00
-      creative_writing: 0.00
-      summarization: 0.00
-      translation: 0.00
-      conversation: 0.00
-      question_answering: 0.00
-      structured_extraction: 0.00
-      multimodal: 0.00
-      long_context_analysis: 0.00
-      instruction_following: 0.00
-
-  ollama/gemma3:4b:
-    provider: ollama
-    display_name: Gemma 3 4B (Local)
-    context_window: 131072
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 220
-    capability_scores:
-      code_generation: 0.66
-      code_review: 0.62
-      code_debug: 0.62
-      reasoning: 0.68
-      math: 0.64
-      creative_writing: 0.66
-      summarization: 0.68
-      translation: 0.68
-      conversation: 0.74
-      question_answering: 0.70
-      structured_extraction: 0.66
-      multimodal: 0.0
-      long_context_analysis: 0.42
-      instruction_following: 0.72
-
-  ollama/qwen3:4b:
-    provider: ollama
-    display_name: Qwen 3 4B (Local)
-    context_window: 40960
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 200
-    capability_scores:
-      code_generation: 0.70
-      code_review: 0.66
-      code_debug: 0.66
-      reasoning: 0.74
-      math: 0.74
-      creative_writing: 0.60
-      summarization: 0.68
-      translation: 0.72
-      conversation: 0.70
-      question_answering: 0.72
-      structured_extraction: 0.68
-      multimodal: 0.00
-      long_context_analysis: 0.56
-      instruction_following: 0.72
-
-  ollama/qwen3:8b:
-    provider: ollama
-    display_name: Qwen 3 8B (Local)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 450
-    capability_scores:
-      code_generation: 0.80
-      code_review: 0.78
-      code_debug: 0.78
-      reasoning: 0.84
-      math: 0.84
-      creative_writing: 0.70
-      summarization: 0.78
-      translation: 0.82
-      conversation: 0.80
-      question_answering: 0.82
-      structured_extraction: 0.78
-      multimodal: 0.0
-      long_context_analysis: 0.76
-      instruction_following: 0.82
-
-  ollama/qwen3-vl:8b:
-    provider: ollama
-    display_name: Qwen 3 VL 8B (Local vision)
-    context_window: 262144
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 600
-    capability_scores:
-      code_generation: 0.72
-      code_review: 0.70
-      code_debug: 0.68
-      reasoning: 0.78
-      math: 0.76
-      creative_writing: 0.70
-      summarization: 0.76
-      translation: 0.78
-      conversation: 0.78
-      question_answering: 0.82
-      structured_extraction: 0.76
-      multimodal: 0.88
-      long_context_analysis: 0.74
-      instruction_following: 0.80
-
-  ollama/qwen3:14b:
-    provider: ollama
-    display_name: Qwen 3 14B (Local)
-    context_window: 40960
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 700
-    capability_scores:
-      code_generation: 0.84
-      code_review: 0.82
-      code_debug: 0.82
-      reasoning: 0.87
-      math: 0.87
-      creative_writing: 0.74
-      summarization: 0.82
-      translation: 0.85
-      conversation: 0.83
-      question_answering: 0.85
-      structured_extraction: 0.82
-      multimodal: 0.00
-      long_context_analysis: 0.80
-      instruction_following: 0.85
-
-  ollama/llama3.2-vision:
-    provider: ollama
-    display_name: Llama 3.2 Vision (Local)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 900
-    capability_scores:
-      code_generation: 0.70
-      code_review: 0.68
-      code_debug: 0.66
-      reasoning: 0.76
-      math: 0.72
-      creative_writing: 0.72
-      summarization: 0.76
-      translation: 0.72
-      conversation: 0.78
-      question_answering: 0.82
-      structured_extraction: 0.74
-      multimodal: 0.86
-      long_context_analysis: 0.72
-      instruction_following: 0.80
-
-  ollama/gpt-oss:20b:
-    provider: ollama
-    display_name: gpt-oss 20B (Local MoE, reasoning)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 600
-    capability_scores:
-      code_generation: 0.82
-      code_review: 0.80
-      code_debug: 0.80
-      reasoning: 0.89
-      math: 0.90
-      creative_writing: 0.72
-      summarization: 0.80
-      translation: 0.76
-      conversation: 0.80
-      question_answering: 0.84
-      structured_extraction: 0.82
-      multimodal: 0.00
-      long_context_analysis: 0.80
-      instruction_following: 0.86
-
-  ollama/qwen3:30b-a3b:
-    provider: ollama
-    display_name: Qwen 3 30B-A3B (Local MoE)
-    context_window: 40960
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 500
-    capability_scores:
-      code_generation: 0.85
-      code_review: 0.83
-      code_debug: 0.83
-      reasoning: 0.88
-      math: 0.88
-      creative_writing: 0.76
-      summarization: 0.84
-      translation: 0.86
-      conversation: 0.85
-      question_answering: 0.86
-      structured_extraction: 0.84
-      multimodal: 0.00
-      long_context_analysis: 0.80
-      instruction_following: 0.86
-
-  ollama/qwen3-coder:30b:
-    provider: ollama
-    display_name: Qwen 3 Coder 30B (Local MoE)
-    context_window: 262144
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 500
-    capability_scores:
-      code_generation: 0.90
-      code_review: 0.88
-      code_debug: 0.88
-      reasoning: 0.84
-      math: 0.82
-      creative_writing: 0.60
-      summarization: 0.74
-      translation: 0.72
-      conversation: 0.74
-      question_answering: 0.80
-      structured_extraction: 0.86
-      multimodal: 0.00
-      long_context_analysis: 0.84
-      instruction_following: 0.86
-
-  ollama/nemotron3:33b:
-    provider: ollama
-    display_name: NVIDIA Nemotron 3 Nano Omni 30B (Local MoE, multimodal)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 900
-    capability_scores:
-      code_generation: 0.83
-      code_review: 0.82
-      code_debug: 0.82
-      reasoning: 0.90
-      math: 0.86
-      creative_writing: 0.82
-      summarization: 0.86
-      translation: 0.80
-      conversation: 0.88
-      question_answering: 0.88
-      structured_extraction: 0.86
-      multimodal: 0.94
-      long_context_analysis: 0.84
-      instruction_following: 0.90
-
-  ollama/nemotron3:33b-q8:
-    provider: ollama
-    display_name: NVIDIA Nemotron 3 Nano Omni 30B Q8_0 (Local MoE, multimodal)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: true
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 1100
-    capability_scores:
-      code_generation: 0.84
-      code_review: 0.83
-      code_debug: 0.83
-      reasoning: 0.91
-      math: 0.87
-      creative_writing: 0.82
-      summarization: 0.86
-      translation: 0.80
-      conversation: 0.88
-      question_answering: 0.88
-      structured_extraction: 0.87
-      multimodal: 0.94
-      long_context_analysis: 0.85
-      instruction_following: 0.90
-
-  ollama/gpt-oss:120b:
-    provider: ollama
-    display_name: gpt-oss 120B (Local MoE, reasoning)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 1200
-    capability_scores:
-      code_generation: 0.88
-      code_review: 0.86
-      code_debug: 0.86
-      reasoning: 0.93
-      math: 0.94
-      creative_writing: 0.78
-      summarization: 0.86
-      translation: 0.80
-      conversation: 0.85
-      question_answering: 0.89
-      structured_extraction: 0.87
-      multimodal: 0.00
-      long_context_analysis: 0.86
-      instruction_following: 0.90
-
-  # --- Mock (testing) ---
-  mock/default:
-    provider: mock
-    display_name: Mock Provider (Testing)
-    context_window: 128000
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 500
-    capability_scores:
-      code_generation: 0.5
-      code_review: 0.5
-      code_debug: 0.5
-      reasoning: 0.5
-      math: 0.5
-      creative_writing: 0.5
-      summarization: 0.5
-      translation: 0.5
-      conversation: 0.5
-      question_answering: 0.5
-      structured_extraction: 0.5
-      multimodal: 0.5
-      long_context_analysis: 0.5
-      instruction_following: 0.5
-
-  mock/fast:
-    provider: mock
-    display_name: Mock Provider Fast (Testing)
-    context_window: 128000
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 100
-    capability_scores:
-      code_generation: 0.5
-      code_review: 0.5
-      code_debug: 0.5
-      reasoning: 0.5
-      math: 0.5
-      creative_writing: 0.5
-      summarization: 0.5
-      translation: 0.5
-      conversation: 0.5
-      question_answering: 0.5
-      structured_extraction: 0.5
-      multimodal: 0.5
-      long_context_analysis: 0.5
-      instruction_following: 0.5
-
-  mock/slow:
-    provider: mock
-    display_name: Mock Provider Slow (Testing)
-    context_window: 128000
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0
-    output_cost_per_1m_tokens: 0
-    typical_latency_ms: 2000
-    capability_scores:
-      code_generation: 0.5
-      code_review: 0.5
-      code_debug: 0.5
-      reasoning: 0.5
-      math: 0.5
-      creative_writing: 0.5
-      summarization: 0.5
-      translation: 0.5
-      conversation: 0.5
-      question_answering: 0.5
-      structured_extraction: 0.5
-      multimodal: 0.5
-      long_context_analysis: 0.5
-      instruction_following: 0.68
-
   # --- Perplexity ---
   # Agent API presets (Responses shape) -- the only Perplexity rows. The Sonar
   # Chat Completions ids (retired 2026-09-27) are renamed to these by `nvh
-  # config migrate` (nvh/cli/setup.py). Perplexity bills presets per request
-  # plus tokens and reports the exact figure in usage.cost, which the adapter
-  # uses when present; the per-token rates below are the Sonar Pro / Sonar
-  # analogues each preset replaces -- they steer the router's cost heuristic
-  # and price a response that carries no usage.cost.
+  # config migrate` (nvh/cli/setup.py).
   perplexity/preset/low:
     provider: perplexity
     display_name: Perplexity Agent API (low - everyday research)
     context_window: 200000
     max_output_tokens: 8000
-    supports_streaming: true
     supports_tools: false
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 3.00
-    output_cost_per_1m_tokens: 15.00
+    input_cost_per_1m_tokens: 3.0
+    output_cost_per_1m_tokens: 15.0
+    source: 'Perplexity Agent API presets are billed per request plus tokens and report the exact figure in usage.cost, which the adapter uses when present; these per-token rates are the Sonar Pro / Sonar analogues each preset replaced (docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview) and steer the router''s cost heuristic and price a response without usage.cost. LiteLLM has no preset rows and nvHive does not register them: litellm.cost_per_token must keep raising so usage.cost stays first (tests/test_perplexity_surface.py). supports_tools is false because the Responses surface takes no tools=.'
     typical_latency_ms: 1500
     capability_scores:
       code_generation: 0.72
@@ -1491,12 +724,10 @@ models:
     display_name: Perplexity Agent API (fast - quick lookup)
     context_window: 128000
     max_output_tokens: 8192
-    supports_streaming: true
     supports_tools: false
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 1.00
-    output_cost_per_1m_tokens: 1.00
+    input_cost_per_1m_tokens: 1.0
+    output_cost_per_1m_tokens: 1.0
+    source: 'Perplexity Agent API presets are billed per request plus tokens and report the exact figure in usage.cost, which the adapter uses when present; these per-token rates are the Sonar Pro / Sonar analogues each preset replaced (docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview) and steer the router''s cost heuristic and price a response without usage.cost. LiteLLM has no preset rows and nvHive does not register them: litellm.cost_per_token must keep raising so usage.cost stays first (tests/test_perplexity_surface.py). supports_tools is false because the Responses surface takes no tools=.'
     typical_latency_ms: 800
     capability_scores:
       code_generation: 0.6
@@ -1518,14 +749,8 @@ models:
   together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo:
     provider: together
     display_name: Llama 3.1 70B Instruct Turbo (Together)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.88
-    output_cost_per_1m_tokens: 0.88
+    status: retired
+    successor: together_ai/openai/gpt-oss-120b
     typical_latency_ms: 500
     capability_scores:
       code_generation: 0.78
@@ -1546,22 +771,16 @@ models:
   together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo:
     provider: together
     display_name: Llama 3.1 8B Instruct Turbo (Together)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.18
-    output_cost_per_1m_tokens: 0.18
+    status: retired
+    successor: together_ai/openai/gpt-oss-20b
     typical_latency_ms: 200
     capability_scores:
       code_generation: 0.62
-      code_review: 0.60
+      code_review: 0.6
       code_debug: 0.58
       reasoning: 0.62
       math: 0.58
-      creative_writing: 0.60
+      creative_writing: 0.6
       summarization: 0.64
       translation: 0.64
       conversation: 0.66
@@ -1574,14 +793,6 @@ models:
   together_ai/openai/gpt-oss-120b:
     provider: together
     display_name: GPT-OSS 120B (Together)
-    context_window: 131072
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.15
-    output_cost_per_1m_tokens: 0.60
     typical_latency_ms: 500
     capability_scores:
       code_generation: 0.78
@@ -1602,14 +813,6 @@ models:
   together_ai/openai/gpt-oss-20b:
     provider: together
     display_name: GPT-OSS 20B (Together)
-    context_window: 131072
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.05
-    output_cost_per_1m_tokens: 0.20
     typical_latency_ms: 200
     capability_scores:
       code_generation: 0.62
@@ -1631,14 +834,8 @@ models:
   fireworks_ai/accounts/fireworks/models/llama-v3p1-70b-instruct:
     provider: fireworks
     display_name: Llama 3.1 70B Instruct (Fireworks)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.90
-    output_cost_per_1m_tokens: 0.90
+    status: retired
+    successor: fireworks_ai/accounts/fireworks/models/gpt-oss-120b
     typical_latency_ms: 450
     capability_scores:
       code_generation: 0.78
@@ -1659,14 +856,6 @@ models:
   fireworks_ai/accounts/fireworks/models/gpt-oss-120b:
     provider: fireworks
     display_name: GPT-OSS 120B (Fireworks)
-    context_window: 131072
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.15
-    output_cost_per_1m_tokens: 0.60
     typical_latency_ms: 450
     capability_scores:
       code_generation: 0.78
@@ -1687,14 +876,6 @@ models:
   fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b:
     provider: fireworks
     display_name: Nemotron 3.5 Lightning 30B-A3B (Fireworks)
-    context_window: 262144
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.05
-    output_cost_per_1m_tokens: 0.20
     typical_latency_ms: 200
     capability_scores:
       code_generation: 0.62
@@ -1716,14 +897,8 @@ models:
   openrouter/meta-llama/llama-3.1-70b-instruct:
     provider: openrouter
     display_name: Llama 3.1 70B Instruct (OpenRouter)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.88
-    output_cost_per_1m_tokens: 0.88
+    status: retired
+    successor: openrouter/openai/gpt-oss-120b
     typical_latency_ms: 600
     capability_scores:
       code_generation: 0.78
@@ -1744,14 +919,6 @@ models:
   openrouter/openai/gpt-oss-120b:
     provider: openrouter
     display_name: GPT-OSS 120B (OpenRouter)
-    context_window: 131072
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.18
-    output_cost_per_1m_tokens: 0.80
     typical_latency_ms: 600
     capability_scores:
       code_generation: 0.78
@@ -1772,14 +939,6 @@ models:
   openrouter/openai/gpt-oss-20b:
     provider: openrouter
     display_name: GPT-OSS 20B (OpenRouter)
-    context_window: 131072
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.02
-    output_cost_per_1m_tokens: 0.10
     typical_latency_ms: 300
     capability_scores:
       code_generation: 0.62
@@ -1801,14 +960,8 @@ models:
   cerebras/llama3.1-70b:
     provider: cerebras
     display_name: Llama 3.1 70B (Cerebras)
-    context_window: 128000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.60
-    output_cost_per_1m_tokens: 0.60
+    status: retired
+    successor: cerebras/gpt-oss-120b
     typical_latency_ms: 80
     capability_scores:
       code_generation: 0.78
@@ -1829,22 +982,16 @@ models:
   cerebras/llama3.1-8b:
     provider: cerebras
     display_name: Llama 3.1 8B (Cerebras)
-    context_window: 128000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.10
-    output_cost_per_1m_tokens: 0.10
+    status: retired
+    successor: cerebras/gpt-oss-120b
     typical_latency_ms: 40
     capability_scores:
       code_generation: 0.62
-      code_review: 0.60
+      code_review: 0.6
       code_debug: 0.58
       reasoning: 0.62
       math: 0.58
-      creative_writing: 0.60
+      creative_writing: 0.6
       summarization: 0.64
       translation: 0.64
       conversation: 0.66
@@ -1857,14 +1004,6 @@ models:
   cerebras/gpt-oss-120b:
     provider: cerebras
     display_name: GPT-OSS 120B (Cerebras)
-    context_window: 131072
-    max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.35
-    output_cost_per_1m_tokens: 0.75
     typical_latency_ms: 80
     capability_scores:
       code_generation: 0.78
@@ -1886,14 +1025,8 @@ models:
   sambanova/Meta-Llama-3.1-70B-Instruct:
     provider: sambanova
     display_name: Llama 3.1 70B Instruct (SambaNova)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.60
-    output_cost_per_1m_tokens: 1.20
+    status: retired
+    successor: sambanova/Meta-Llama-3.3-70B-Instruct
     typical_latency_ms: 350
     capability_scores:
       code_generation: 0.78
@@ -1914,14 +1047,6 @@ models:
   sambanova/Meta-Llama-3.3-70B-Instruct:
     provider: sambanova
     display_name: Llama 3.3 70B Instruct (SambaNova)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.60
-    output_cost_per_1m_tokens: 1.20
     typical_latency_ms: 350
     capability_scores:
       code_generation: 0.78
@@ -1942,14 +1067,6 @@ models:
   sambanova/gpt-oss-120b:
     provider: sambanova
     display_name: GPT-OSS 120B (SambaNova)
-    context_window: 131072
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.22
-    output_cost_per_1m_tokens: 0.59
     typical_latency_ms: 250
     capability_scores:
       code_generation: 0.62
@@ -1971,29 +1088,23 @@ models:
   huggingface/meta-llama/Meta-Llama-3-8B-Instruct:
     provider: huggingface
     display_name: Llama 3 8B Instruct (Hugging Face)
-    context_window: 8192
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: false
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0.10
-    output_cost_per_1m_tokens: 0.10
+    status: retired
+    successor: huggingface/openai/gpt-oss-120b
     typical_latency_ms: 1500
     capability_scores:
-      code_generation: 0.60
+      code_generation: 0.6
       code_review: 0.58
       code_debug: 0.56
-      reasoning: 0.60
+      reasoning: 0.6
       math: 0.56
       creative_writing: 0.58
       summarization: 0.62
       translation: 0.62
       conversation: 0.64
       question_answering: 0.61
-      structured_extraction: 0.60
+      structured_extraction: 0.6
       multimodal: 0.0
-      long_context_analysis: 0.50
+      long_context_analysis: 0.5
       instruction_following: 0.61
 
   huggingface/openai/gpt-oss-120b:
@@ -2001,12 +1112,8 @@ models:
     display_name: GPT-OSS 120B (Hugging Face)
     context_window: 131072
     max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0.15
-    output_cost_per_1m_tokens: 0.60
+    supports_function_calling: true
+    source: openai/gpt-oss-120b model card (context, max output) and the Hugging Face Inference Providers chat-completion docs (tool calling); LiteLLM's table has no huggingface/ rows and bills the provider at $0 whatever is registered, so no model_overrides.json payload exists and the row loads as 'cost unknown' (ProviderSpec.metered_upstream)
     typical_latency_ms: 1500
     capability_scores:
       code_generation: 0.6
@@ -2029,12 +1136,8 @@ models:
     display_name: GPT-OSS 20B (Hugging Face)
     context_window: 131072
     max_output_tokens: 32768
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0.05
-    output_cost_per_1m_tokens: 0.20
+    supports_function_calling: true
+    source: openai/gpt-oss-20b model card (context, max output) and the Hugging Face Inference Providers chat-completion docs (tool calling); LiteLLM's table has no huggingface/ rows and bills the provider at $0 whatever is registered, so no model_overrides.json payload exists and the row loads as 'cost unknown' (ProviderSpec.metered_upstream)
     typical_latency_ms: 1500
     capability_scores:
       code_generation: 0.6
@@ -2052,18 +1155,12 @@ models:
       long_context_analysis: 0.5
       instruction_following: 0.61
 
-  # --- AI21 ---
+  # --- AI21 Labs ---
   jamba-1.5-large:
     provider: ai21
     display_name: Jamba 1.5 Large (AI21)
-    context_window: 256000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 2.00
-    output_cost_per_1m_tokens: 8.00
+    status: retired
+    successor: ai21_chat/jamba-large-1.7
     typical_latency_ms: 1100
     capability_scores:
       code_generation: 0.76
@@ -2084,18 +1181,12 @@ models:
   jamba-1.5-mini:
     provider: ai21
     display_name: Jamba 1.5 Mini (AI21)
-    context_window: 256000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.20
-    output_cost_per_1m_tokens: 0.40
+    status: retired
+    successor: ai21_chat/jamba-mini-2
     typical_latency_ms: 600
     capability_scores:
       code_generation: 0.62
-      code_review: 0.60
+      code_review: 0.6
       code_debug: 0.58
       reasoning: 0.62
       math: 0.58
@@ -2112,14 +1203,6 @@ models:
   ai21_chat/jamba-large-1.7:
     provider: ai21
     display_name: Jamba Large 1.7 (AI21)
-    context_window: 256000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 2.00
-    output_cost_per_1m_tokens: 8.00
     typical_latency_ms: 1100
     capability_scores:
       code_generation: 0.76
@@ -2140,14 +1223,6 @@ models:
   ai21_chat/jamba-mini-2:
     provider: ai21
     display_name: Jamba Mini 2 (AI21)
-    context_window: 256000
-    max_output_tokens: 8192
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.20
-    output_cost_per_1m_tokens: 0.40
     typical_latency_ms: 600
     capability_scores:
       code_generation: 0.62
@@ -2169,14 +1244,6 @@ models:
   nvidia_nim/meta/llama-3.3-70b-instruct:
     provider: nvidia
     display_name: Llama 3.3 70B (NVIDIA NIM)
-    context_window: 131072
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.0
-    output_cost_per_1m_tokens: 0.0
     typical_latency_ms: 700
     capability_scores:
       code_generation: 0.78
@@ -2197,14 +1264,6 @@ models:
   nvidia_nim/meta/llama-3.1-8b-instruct:
     provider: nvidia
     display_name: Llama 3.1 8B (NVIDIA NIM)
-    context_window: 131072
-    max_output_tokens: 4096
-    supports_streaming: true
-    supports_tools: true
-    supports_vision: false
-    supports_json_mode: true
-    input_cost_per_1m_tokens: 0.0
-    output_cost_per_1m_tokens: 0.0
     typical_latency_ms: 400
     capability_scores:
       code_generation: 0.65
@@ -2228,55 +1287,49 @@ models:
     display_name: Qwen 2.5 7B (SiliconFlow)
     context_window: 131072
     max_output_tokens: 4096
-    supports_streaming: true
     supports_tools: true
-    supports_vision: false
     supports_json_mode: true
-    input_cost_per_1m_tokens: 0.0
-    output_cost_per_1m_tokens: 0.0
+    source: SiliconFlow model docs, cloud.siliconflow.cn (context, max output, tools, JSON); not a LiteLLM provider (openai/ route with api_base), bare ids not registered with LiteLLM
     typical_latency_ms: 500
     capability_scores:
-      code_generation: 0.70
+      code_generation: 0.7
       code_review: 0.68
       code_debug: 0.68
-      reasoning: 0.70
+      reasoning: 0.7
       math: 0.68
       creative_writing: 0.66
-      summarization: 0.70
+      summarization: 0.7
       translation: 0.72
       conversation: 0.72
-      question_answering: 0.70
+      question_answering: 0.7
       structured_extraction: 0.68
       multimodal: 0.0
       long_context_analysis: 0.65
-      instruction_following: 0.70
+      instruction_following: 0.7
 
   Qwen/Qwen2.5-72B-Instruct:
     provider: siliconflow
     display_name: Qwen 2.5 72B (SiliconFlow)
     context_window: 131072
     max_output_tokens: 4096
-    supports_streaming: true
     supports_tools: true
-    supports_vision: false
     supports_json_mode: true
-    input_cost_per_1m_tokens: 0.0
-    output_cost_per_1m_tokens: 0.0
+    source: SiliconFlow model docs, cloud.siliconflow.cn (context, max output, tools, JSON); not a LiteLLM provider (openai/ route with api_base), bare ids not registered with LiteLLM
     typical_latency_ms: 800
     capability_scores:
       code_generation: 0.82
-      code_review: 0.80
-      code_debug: 0.80
+      code_review: 0.8
+      code_debug: 0.8
       reasoning: 0.82
-      math: 0.80
+      math: 0.8
       creative_writing: 0.76
-      summarization: 0.80
+      summarization: 0.8
       translation: 0.82
       conversation: 0.82
       question_answering: 0.82
-      structured_extraction: 0.80
+      structured_extraction: 0.8
       multimodal: 0.0
-      long_context_analysis: 0.70
+      long_context_analysis: 0.7
       instruction_following: 0.82
 
   deepseek-ai/DeepSeek-V2.5:
@@ -2284,12 +1337,9 @@ models:
     display_name: DeepSeek V2.5 (SiliconFlow)
     context_window: 131072
     max_output_tokens: 4096
-    supports_streaming: true
     supports_tools: true
-    supports_vision: false
     supports_json_mode: true
-    input_cost_per_1m_tokens: 0.0
-    output_cost_per_1m_tokens: 0.0
+    source: SiliconFlow model docs, cloud.siliconflow.cn (context, max output, tools, JSON); not a LiteLLM provider (openai/ route with api_base), bare ids not registered with LiteLLM
     typical_latency_ms: 700
     capability_scores:
       code_generation: 0.84
@@ -2300,11 +1350,11 @@ models:
       creative_writing: 0.74
       summarization: 0.78
       translation: 0.76
-      conversation: 0.80
+      conversation: 0.8
       question_answering: 0.82
-      structured_extraction: 0.80
+      structured_extraction: 0.8
       multimodal: 0.0
-      long_context_analysis: 0.70
+      long_context_analysis: 0.7
       instruction_following: 0.82
 
   # --- LLM7 ---
@@ -2313,12 +1363,8 @@ models:
     display_name: GPT-OSS (LLM7)
     context_window: 131072
     max_output_tokens: 8192
-    supports_streaming: true
     supports_tools: true
-    supports_vision: false
-    supports_json_mode: false
-    input_cost_per_1m_tokens: 0.0
-    output_cost_per_1m_tokens: 0.0
+    source: llm7.io model list (context, max output, tools, JSON); not a LiteLLM provider (openai/ route with api_base) and its bare ids are deliberately not registered with LiteLLM -- a registered bare `gpt-oss` would make litellm.get_llm_provider route it to OpenAI
     typical_latency_ms: 1500
     capability_scores:
       code_generation: 0.82
@@ -2341,12 +1387,9 @@ models:
     display_name: MiniMax M2.7 (LLM7)
     context_window: 180000
     max_output_tokens: 4096
-    supports_streaming: true
     supports_tools: true
-    supports_vision: false
     supports_json_mode: true
-    input_cost_per_1m_tokens: 0.0
-    output_cost_per_1m_tokens: 0.0
+    source: llm7.io model list (context, max output, tools, JSON); not a LiteLLM provider (openai/ route with api_base) and its bare ids are deliberately not registered with LiteLLM -- a registered bare `gpt-oss` would make litellm.get_llm_provider route it to OpenAI
     typical_latency_ms: 700
     capability_scores:
       code_generation: 0.8
@@ -2363,3 +1406,487 @@ models:
       multimodal: 0.0
       long_context_analysis: 0.72
       instruction_following: 0.8
+
+  # --- Ollama (local) ---
+  # Exactly the tier table's picks (nvh/core/local_models.py, `nvh models
+  # tiers`): one row per tag in local_models.all_tags(), keyed ollama/<tag>;
+  # supports_vision is rewritten from the table on every run.
+  ollama/gemma3:1b:
+    provider: ollama
+    display_name: Gemma 3 1B (Local, CPU fallback)
+    context_window: 32768
+    max_output_tokens: 4096
+    supports_vision: false
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 120
+    capability_scores:
+      code_generation: 0.48
+      code_review: 0.44
+      code_debug: 0.44
+      reasoning: 0.5
+      math: 0.46
+      creative_writing: 0.54
+      summarization: 0.56
+      translation: 0.56
+      conversation: 0.62
+      question_answering: 0.56
+      structured_extraction: 0.5
+      multimodal: 0.0
+      long_context_analysis: 0.3
+      instruction_following: 0.58
+
+  ollama/qwen3:1.7b:
+    provider: ollama
+    display_name: Qwen 3 1.7B (Local, CPU coder)
+    context_window: 40960
+    max_output_tokens: 4096
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 140
+    capability_scores:
+      code_generation: 0.58
+      code_review: 0.54
+      code_debug: 0.54
+      reasoning: 0.62
+      math: 0.62
+      creative_writing: 0.5
+      summarization: 0.58
+      translation: 0.6
+      conversation: 0.6
+      question_answering: 0.6
+      structured_extraction: 0.58
+      multimodal: 0.0
+      long_context_analysis: 0.4
+      instruction_following: 0.62
+
+  ollama/moondream:
+    provider: ollama
+    display_name: Moondream Vision (Local)
+    context_window: 4096
+    max_output_tokens: 2048
+    supports_vision: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 350
+    capability_scores:
+      code_generation: 0.4
+      code_review: 0.38
+      code_debug: 0.38
+      reasoning: 0.58
+      math: 0.48
+      creative_writing: 0.52
+      summarization: 0.6
+      translation: 0.5
+      conversation: 0.62
+      question_answering: 0.7
+      structured_extraction: 0.58
+      multimodal: 0.72
+      long_context_analysis: 0.32
+      instruction_following: 0.62
+
+  ollama/nomic-embed-text:
+    provider: ollama
+    display_name: Nomic Embed Text (Local embeddings, not a chat model)
+    context_window: 8192
+    max_output_tokens: 0
+    supports_streaming: false
+    supports_vision: false
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 60
+    capability_scores:
+      code_generation: 0.0
+      code_review: 0.0
+      code_debug: 0.0
+      reasoning: 0.0
+      math: 0.0
+      creative_writing: 0.0
+      summarization: 0.0
+      translation: 0.0
+      conversation: 0.0
+      question_answering: 0.0
+      structured_extraction: 0.0
+      multimodal: 0.0
+      long_context_analysis: 0.0
+      instruction_following: 0.0
+
+  ollama/gemma3:4b:
+    provider: ollama
+    display_name: Gemma 3 4B (Local)
+    context_window: 131072
+    max_output_tokens: 4096
+    supports_vision: true
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 220
+    capability_scores:
+      code_generation: 0.66
+      code_review: 0.62
+      code_debug: 0.62
+      reasoning: 0.68
+      math: 0.64
+      creative_writing: 0.66
+      summarization: 0.68
+      translation: 0.68
+      conversation: 0.74
+      question_answering: 0.7
+      structured_extraction: 0.66
+      multimodal: 0.0
+      long_context_analysis: 0.42
+      instruction_following: 0.72
+
+  ollama/qwen3:4b:
+    provider: ollama
+    display_name: Qwen 3 4B (Local)
+    context_window: 40960
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 200
+    capability_scores:
+      code_generation: 0.7
+      code_review: 0.66
+      code_debug: 0.66
+      reasoning: 0.74
+      math: 0.74
+      creative_writing: 0.6
+      summarization: 0.68
+      translation: 0.72
+      conversation: 0.7
+      question_answering: 0.72
+      structured_extraction: 0.68
+      multimodal: 0.0
+      long_context_analysis: 0.56
+      instruction_following: 0.72
+
+  ollama/qwen3:8b:
+    provider: ollama
+    display_name: Qwen 3 8B (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 450
+    capability_scores:
+      code_generation: 0.8
+      code_review: 0.78
+      code_debug: 0.78
+      reasoning: 0.84
+      math: 0.84
+      creative_writing: 0.7
+      summarization: 0.78
+      translation: 0.82
+      conversation: 0.8
+      question_answering: 0.82
+      structured_extraction: 0.78
+      multimodal: 0.0
+      long_context_analysis: 0.76
+      instruction_following: 0.82
+
+  ollama/qwen3-vl:8b:
+    provider: ollama
+    display_name: Qwen 3 VL 8B (Local vision)
+    context_window: 262144
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 600
+    capability_scores:
+      code_generation: 0.72
+      code_review: 0.7
+      code_debug: 0.68
+      reasoning: 0.78
+      math: 0.76
+      creative_writing: 0.7
+      summarization: 0.76
+      translation: 0.78
+      conversation: 0.78
+      question_answering: 0.82
+      structured_extraction: 0.76
+      multimodal: 0.88
+      long_context_analysis: 0.74
+      instruction_following: 0.8
+
+  ollama/qwen3:14b:
+    provider: ollama
+    display_name: Qwen 3 14B (Local)
+    context_window: 40960
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 700
+    capability_scores:
+      code_generation: 0.84
+      code_review: 0.82
+      code_debug: 0.82
+      reasoning: 0.87
+      math: 0.87
+      creative_writing: 0.74
+      summarization: 0.82
+      translation: 0.85
+      conversation: 0.83
+      question_answering: 0.85
+      structured_extraction: 0.82
+      multimodal: 0.0
+      long_context_analysis: 0.8
+      instruction_following: 0.85
+
+  ollama/llama3.2-vision:
+    provider: ollama
+    display_name: Llama 3.2 Vision (Local)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_vision: true
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 900
+    capability_scores:
+      code_generation: 0.7
+      code_review: 0.68
+      code_debug: 0.66
+      reasoning: 0.76
+      math: 0.72
+      creative_writing: 0.72
+      summarization: 0.76
+      translation: 0.72
+      conversation: 0.78
+      question_answering: 0.82
+      structured_extraction: 0.74
+      multimodal: 0.86
+      long_context_analysis: 0.72
+      instruction_following: 0.8
+
+  ollama/gpt-oss:20b:
+    provider: ollama
+    display_name: gpt-oss 20B (Local MoE, reasoning)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 600
+    capability_scores:
+      code_generation: 0.82
+      code_review: 0.8
+      code_debug: 0.8
+      reasoning: 0.89
+      math: 0.9
+      creative_writing: 0.72
+      summarization: 0.8
+      translation: 0.76
+      conversation: 0.8
+      question_answering: 0.84
+      structured_extraction: 0.82
+      multimodal: 0.0
+      long_context_analysis: 0.8
+      instruction_following: 0.86
+
+  ollama/qwen3:30b-a3b:
+    provider: ollama
+    display_name: Qwen 3 30B-A3B (Local MoE)
+    context_window: 40960
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.85
+      code_review: 0.83
+      code_debug: 0.83
+      reasoning: 0.88
+      math: 0.88
+      creative_writing: 0.76
+      summarization: 0.84
+      translation: 0.86
+      conversation: 0.85
+      question_answering: 0.86
+      structured_extraction: 0.84
+      multimodal: 0.0
+      long_context_analysis: 0.8
+      instruction_following: 0.86
+
+  ollama/qwen3-coder:30b:
+    provider: ollama
+    display_name: Qwen 3 Coder 30B (Local MoE)
+    context_window: 262144
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.9
+      code_review: 0.88
+      code_debug: 0.88
+      reasoning: 0.84
+      math: 0.82
+      creative_writing: 0.6
+      summarization: 0.74
+      translation: 0.72
+      conversation: 0.74
+      question_answering: 0.8
+      structured_extraction: 0.86
+      multimodal: 0.0
+      long_context_analysis: 0.84
+      instruction_following: 0.86
+
+  ollama/nemotron3:33b:
+    provider: ollama
+    display_name: NVIDIA Nemotron 3 Nano Omni 30B (Local MoE, multimodal)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 900
+    capability_scores:
+      code_generation: 0.83
+      code_review: 0.82
+      code_debug: 0.82
+      reasoning: 0.9
+      math: 0.86
+      creative_writing: 0.82
+      summarization: 0.86
+      translation: 0.8
+      conversation: 0.88
+      question_answering: 0.88
+      structured_extraction: 0.86
+      multimodal: 0.94
+      long_context_analysis: 0.84
+      instruction_following: 0.9
+
+  ollama/nemotron3:33b-q8:
+    provider: ollama
+    display_name: NVIDIA Nemotron 3 Nano Omni 30B Q8_0 (Local MoE, multimodal)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: true
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 1100
+    capability_scores:
+      code_generation: 0.84
+      code_review: 0.83
+      code_debug: 0.83
+      reasoning: 0.91
+      math: 0.87
+      creative_writing: 0.82
+      summarization: 0.86
+      translation: 0.8
+      conversation: 0.88
+      question_answering: 0.88
+      structured_extraction: 0.87
+      multimodal: 0.94
+      long_context_analysis: 0.85
+      instruction_following: 0.9
+
+  ollama/gpt-oss:120b:
+    provider: ollama
+    display_name: gpt-oss 120B (Local MoE, reasoning)
+    context_window: 131072
+    max_output_tokens: 8192
+    supports_tools: true
+    supports_vision: false
+    supports_json_mode: true
+    source: ollama.com library model cards (context, max output, tools, JSON); supports_vision is rewritten from nvh/core/local_models.py by scripts/gen_capabilities.py
+    typical_latency_ms: 1200
+    capability_scores:
+      code_generation: 0.88
+      code_review: 0.86
+      code_debug: 0.86
+      reasoning: 0.93
+      math: 0.94
+      creative_writing: 0.78
+      summarization: 0.86
+      translation: 0.8
+      conversation: 0.85
+      question_answering: 0.89
+      structured_extraction: 0.87
+      multimodal: 0.0
+      long_context_analysis: 0.86
+      instruction_following: 0.9
+
+  # --- Mock ---
+  mock/default:
+    provider: mock
+    display_name: Mock Provider (Testing)
+    context_window: 128000
+    max_output_tokens: 4096
+    source: nvh/providers/mock_provider.py (tests only)
+    typical_latency_ms: 500
+    capability_scores:
+      code_generation: 0.5
+      code_review: 0.5
+      code_debug: 0.5
+      reasoning: 0.5
+      math: 0.5
+      creative_writing: 0.5
+      summarization: 0.5
+      translation: 0.5
+      conversation: 0.5
+      question_answering: 0.5
+      structured_extraction: 0.5
+      multimodal: 0.5
+      long_context_analysis: 0.5
+      instruction_following: 0.5
+
+  mock/fast:
+    provider: mock
+    display_name: Mock Provider Fast (Testing)
+    context_window: 128000
+    max_output_tokens: 4096
+    source: nvh/providers/mock_provider.py (tests only)
+    typical_latency_ms: 100
+    capability_scores:
+      code_generation: 0.5
+      code_review: 0.5
+      code_debug: 0.5
+      reasoning: 0.5
+      math: 0.5
+      creative_writing: 0.5
+      summarization: 0.5
+      translation: 0.5
+      conversation: 0.5
+      question_answering: 0.5
+      structured_extraction: 0.5
+      multimodal: 0.5
+      long_context_analysis: 0.5
+      instruction_following: 0.5
+
+  mock/slow:
+    provider: mock
+    display_name: Mock Provider Slow (Testing)
+    context_window: 128000
+    max_output_tokens: 4096
+    source: nvh/providers/mock_provider.py (tests only)
+    typical_latency_ms: 2000
+    capability_scores:
+      code_generation: 0.5
+      code_review: 0.5
+      code_debug: 0.5
+      reasoning: 0.5
+      math: 0.5
+      creative_writing: 0.5
+      summarization: 0.5
+      translation: 0.5
+      conversation: 0.5
+      question_answering: 0.5
+      structured_extraction: 0.5
+      multimodal: 0.5
+      long_context_analysis: 0.5
+      instruction_following: 0.68

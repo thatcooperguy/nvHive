@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+import nvh.providers.openai_compatible as oc
 from nvh.config.settings import CouncilConfig, ProviderConfig
 from nvh.providers.base import (
     AuthenticationError,
@@ -41,9 +45,33 @@ def _spec_provider(name: str) -> OpenAICompatibleProvider:
     return OpenAICompatibleProvider(PROVIDER_SPECS[name])
 
 
-def _fake_http(status_code: int = 200, payload=None):
-    """A stand-in for ``httpx.AsyncClient`` recording every GET."""
-    calls: list[tuple[str, dict]] = []
+def _fake_http(status_code: int = 200, payload=None, *, body: bytes | None = None, content_length: int | None = None,
+               chunk_size: int | None = None):
+    """A stand-in for ``httpx.AsyncClient`` recording every streamed GET.
+
+    The body is ``payload`` as JSON (``body`` overrides it with raw bytes),
+    served in ``chunk_size`` pieces, with a ``Content-Length`` header when
+    ``content_length`` is given.
+    """
+    calls: list[tuple] = []
+    raw = body if body is not None else (json.dumps(payload).encode() if payload is not None else b"")
+
+    class Response:
+        def __init__(self):
+            self.status_code = status_code
+            self.headers = {"content-length": str(content_length)} if content_length is not None else {}
+
+        async def aiter_bytes(self):
+            step = chunk_size or max(len(raw), 1)
+            for i in range(0, len(raw), step):
+                yield raw[i:i + step]
+
+    class Stream:
+        async def __aenter__(self):
+            return Response()
+
+        async def __aexit__(self, *exc):
+            return False
 
     class Client:
         def __init__(self, **kwargs):
@@ -55,11 +83,31 @@ def _fake_http(status_code: int = 200, payload=None):
         async def __aexit__(self, *exc):
             return False
 
-        async def get(self, url, headers=None):
-            calls.append((url, headers or {}))
-            return SimpleNamespace(status_code=status_code, json=lambda: payload)
+        def stream(self, method, url, headers=None, params=None):
+            assert method == "GET"
+            calls.append((url, headers or {}) if params is None else (url, headers or {}, params))
+            return Stream()
 
     return Client, calls
+
+
+def _offline_http(message: str = "offline"):
+    """A stand-in for ``httpx.AsyncClient`` whose every GET fails like a dead network."""
+
+    class Client:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def stream(self, method, url, headers=None, params=None):
+            raise httpx.ConnectError(message)
+
+    return Client
 
 
 def _response(model: str = "served-model"):
@@ -268,12 +316,15 @@ class TestHealthCheck:
         ac.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_uses_litellm_known_base_when_spec_has_none(self):
-        p = OpenAICompatibleProvider(PROVIDER_SPECS["groq"], api_key="k")
+    async def test_uses_the_spec_probe_when_the_row_has_no_base_url(self):
+        # groq has no base_url; the row's models_probe names the free GET.
+        spec = PROVIDER_SPECS["groq"]
+        assert spec.base_url is None and spec.models_probe is not None
+        p = OpenAICompatibleProvider(spec, api_key="k")
         client, calls = _fake_http(200, {"data": []})
         with patch(_ASYNC_CLIENT, client):
             assert (await p.health_check()).healthy is True
-        assert calls[0][0] == "https://api.groq.com/openai/v1/models"
+        assert calls[0][0] == spec.models_probe[0]
 
     @pytest.mark.asyncio
     async def test_falls_back_to_ping_with_health_model_when_models_is_missing(self):
@@ -294,14 +345,17 @@ class TestHealthCheck:
 
     @pytest.mark.asyncio
     async def test_pings_when_no_models_endpoint_is_known(self):
-        # litellm publishes no base for openai; the ping is the only probe left.
-        p = OpenAICompatibleProvider(PROVIDER_SPECS["openai"], api_key="k")
+        # A row without a probe and no LiteLLM-published base: the ping is the only probe left.
+        spec = PROVIDER_SPECS["ai21"]
+        assert spec.models_probe is None
+        p = OpenAICompatibleProvider(spec, api_key="k")
         client, calls = _fake_http(200)
         with patch(_ASYNC_CLIENT, client), \
+                patch("nvh.providers.openai_compatible._litellm_api_base", return_value=None), \
                 patch(_ACOMPLETION, new=AsyncMock(return_value=_response())) as ac:
             assert (await p.health_check()).healthy is True
         assert calls == []
-        assert ac.await_args.kwargs["model"] == "gpt-5.6-terra"
+        assert ac.await_args.kwargs["model"] == spec.default_model
 
     @pytest.mark.asyncio
     async def test_auth_failure_on_models_is_unhealthy_without_a_ping(self):
@@ -328,10 +382,14 @@ class TestRequestShaping:
 
     @pytest.mark.asyncio
     async def test_list_models_dedupes_default_and_fallback(self):
-        cerebras = await OpenAICompatibleProvider(PROVIDER_SPECS["cerebras"]).list_models()
-        assert [m.model_id for m in cerebras] == ["cerebras/gpt-oss-120b"]
-        groq = await OpenAICompatibleProvider(PROVIDER_SPECS["groq"]).list_models()
-        assert [m.model_id for m in groq] == ["groq/openai/gpt-oss-120b", "groq/openai/gpt-oss-20b"]
+        # Offline: the static pair, de-duplicated, default first.
+        cerebras_spec, groq_spec = PROVIDER_SPECS["cerebras"], PROVIDER_SPECS["groq"]
+        assert cerebras_spec.default_model == cerebras_spec.fallback_model
+        with patch(_ASYNC_CLIENT, _offline_http()):
+            cerebras = await OpenAICompatibleProvider(cerebras_spec).list_models()
+            groq = await OpenAICompatibleProvider(groq_spec).list_models()
+        assert [m.model_id for m in cerebras] == [cerebras_spec.default_model]
+        assert [m.model_id for m in groq] == [groq_spec.default_model, groq_spec.fallback_model]
 
     @pytest.mark.asyncio
     async def test_stream_maps_tool_calls_finish_reason(self):
@@ -340,6 +398,311 @@ class TestRequestShaping:
             chunks = [c async for c in p.stream([Message(role="user", content="hi")])]
         assert chunks[-1].finish_reason == FinishReason.TOOL_CALLS
         assert chunks[-1].accumulated_content == "hi"
+
+
+class TestListModels:
+    """``list_models`` is the live ``GET /models`` (one probe shared with ``health_check``) or the static pair."""
+
+    @pytest.fixture(autouse=True)
+    def _no_env_keys(self, monkeypatch):
+        for spec in PROVIDER_SPECS.values():
+            for var in (f"COUNCIL_{spec.name.upper()}_API_KEY", spec.key_env or "", *spec.env_keys):
+                if var:
+                    monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv("NVH_USE_KEYRING", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_no_key_means_the_static_pair_and_no_request(self):
+        spec = PROVIDER_SPECS["nvidia"]
+        p = OpenAICompatibleProvider(spec)
+        assert p._api_key == ""
+        client, calls = _fake_http(200, {"data": [{"id": "x"}]})
+        with patch(_ASYNC_CLIENT, client):
+            models = await p.list_models()
+            assert await p.live_model_ids() is None
+        assert calls == []
+        assert [m.model_id for m in models] == [spec.default_model, spec.fallback_model]
+        assert all(m.provider == "nvidia" for m in models)
+
+    @pytest.mark.asyncio
+    async def test_live_ids_are_routed_and_mapped_to_catalog_rows(self):
+        spec = PROVIDER_SPECS["nvidia"]
+        bare_default = spec.default_model[len(spec.litellm_prefix):]
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        payload = {"data": [{"id": bare_default}, {"id": "acme/brand-new-model"}, {"id": bare_default}]}
+        client, calls = _fake_http(200, payload)
+        with patch(_ASYNC_CLIENT, client):
+            live = await p.live_model_ids()
+            models = await p.list_models()
+        assert live == {spec.default_model, spec.route("acme/brand-new-model")}
+        assert len(calls) == 1  # live_model_ids and list_models shared one request
+        by_id = {m.model_id: m for m in models}
+        assert set(by_id) == live
+        assert by_id[spec.default_model].display_name  # the catalog row, not a bare one
+        assert by_id[spec.route("acme/brand-new-model")].display_name == ""  # unknown to the catalog
+        assert all(m.provider == "nvidia" for m in models)
+
+    @pytest.mark.asyncio
+    async def test_bare_id_providers_keep_the_bare_spelling(self):
+        # llm7's own ids carry no route ("gpt-oss"); the route is applied at call time.
+        spec = PROVIDER_SPECS["llm7"]
+        assert spec.litellm_prefix and not spec.default_model.startswith(spec.litellm_prefix)
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        client, _ = _fake_http(200, {"data": [{"id": spec.default_model}, {"id": "other"}]})
+        with patch(_ASYNC_CLIENT, client):
+            assert await p.live_model_ids() == {spec.default_model, "other"}
+
+    @pytest.mark.asyncio
+    async def test_google_query_key_and_models_prefix(self):
+        spec = PROVIDER_SPECS["google"]
+        assert spec.models_probe[1] == "query-key"
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        bare = spec.default_model[len(spec.litellm_prefix):]
+        client, calls = _fake_http(200, {"models": [{"name": f"models/{bare}"}]})
+        with patch(_ASYNC_CLIENT, client):
+            live = await p.live_model_ids()
+            models = await p.list_models()
+        # The key travels as a query parameter: the URL the adapter keeps for
+        # its health error (``HTTP <status> from <url>``) never carries it.
+        assert calls == [(spec.models_probe[0], {}, {"key": "k"})]
+        assert live == {spec.route(f"models/{bare}")}
+        assert oc.model_served(spec.default_model, oc.live_model_keys(live))
+        assert [m.model_id for m in models] == [spec.default_model]  # tail-matched to the catalog row
+
+    @pytest.mark.asyncio
+    async def test_anthropic_sends_x_api_key(self):
+        spec = PROVIDER_SPECS["anthropic"]
+        assert spec.models_probe[1] == "x-api-key"
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        client, calls = _fake_http(200, {"data": [{"id": spec.default_model}]})
+        with patch(_ASYNC_CLIENT, client):
+            assert await p.live_model_ids() == {spec.default_model}
+        url, headers = calls[0]
+        assert url == spec.models_probe[0]
+        assert headers["x-api-key"] == "k" and "anthropic-version" in headers
+        assert "Authorization" not in headers
+
+    @pytest.mark.asyncio
+    async def test_configured_base_url_overrides_the_spec_probe(self):
+        p = OpenAICompatibleProvider(PROVIDER_SPECS["openai"], api_key="k", base_url="http://proxy:8000/v1/")
+        client, calls = _fake_http(200, {"data": [{"id": "local-model"}]})
+        with patch(_ASYNC_CLIENT, client):
+            assert await p.live_model_ids() == {"local-model"}
+        assert calls[0][0] == "http://proxy:8000/v1/models"
+
+    @pytest.mark.asyncio
+    async def test_litellm_base_when_the_row_has_no_probe(self):
+        spec = PROVIDER_SPECS["ai21"]
+        assert spec.models_probe is None
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        client, calls = _fake_http(200, {"data": []})
+        with patch(_ASYNC_CLIENT, client), \
+                patch("nvh.providers.openai_compatible._litellm_api_base", return_value="https://example.invalid/v1/"):
+            assert await p.live_model_ids() is None  # an empty body is unknown, not "serves nothing"
+            assert (await p.health_check()).healthy is True
+        assert calls == [("https://example.invalid/v1/models", {"Authorization": "Bearer k"})]
+
+    @pytest.mark.asyncio
+    async def test_request_error_falls_back_to_the_static_pair(self):
+        spec = PROVIDER_SPECS["groq"]
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        with patch(_ASYNC_CLIENT, _offline_http()):
+            models = await p.list_models()
+            assert await p.live_model_ids() is None
+        assert [m.model_id for m in models] == [spec.default_model, spec.fallback_model]
+
+    @pytest.mark.asyncio
+    async def test_rejected_key_falls_back_and_health_shares_the_probe(self):
+        spec = PROVIDER_SPECS["groq"]
+        p = OpenAICompatibleProvider(spec, api_key="bad")
+        client, calls = _fake_http(401)
+        with patch(_ASYNC_CLIENT, client), patch(_ACOMPLETION, new=AsyncMock()) as ac:
+            models = await p.list_models()
+            status = await p.health_check()
+        assert [m.model_id for m in models] == [spec.default_model, spec.fallback_model]
+        assert status.healthy is False and "HTTP 401" in status.error
+        assert len(calls) == 1  # one probe served both; no ping either
+        ac.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_health_then_list_is_one_request(self):
+        spec = PROVIDER_SPECS["nvidia"]
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        client, calls = _fake_http(200, {"data": [{"id": "a"}, {"id": "b"}]})
+        with patch(_ASYNC_CLIENT, client):
+            status = await p.health_check()
+            live = await p.live_model_ids()
+            await p.list_models()
+        assert status.healthy is True and status.models_available == 2
+        assert live == {spec.route("a"), spec.route("b")}
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_probe_cache_expires_per_ttl(self, monkeypatch):
+        spec = PROVIDER_SPECS["nvidia"]
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        clock = [1000.0]
+        monkeypatch.setattr(oc.time, "monotonic", lambda: clock[0])
+        # A failure is remembered for the negative TTL only.
+        with patch(_ASYNC_CLIENT, _offline_http()):
+            assert await p.live_model_ids() is None
+        client, calls = _fake_http(200, {"data": [{"id": "a"}]})
+        with patch(_ASYNC_CLIENT, client):
+            clock[0] += oc.LIVE_MODELS_NEGATIVE_TTL - 1
+            assert await p.live_model_ids() is None and calls == []
+            clock[0] += 2
+            assert await p.live_model_ids() == {spec.route("a")} and len(calls) == 1
+            # A success is good for the full TTL, then re-probed.
+            clock[0] += oc.LIVE_MODELS_TTL - 1
+            await p.live_model_ids()
+            assert len(calls) == 1
+            clock[0] += 2
+            await p.live_model_ids()
+            assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_probe_errors_are_redacted_before_truncation(self):
+        secret = "sk-very-secret-key-value"
+        p = OpenAICompatibleProvider(PROVIDER_SPECS["groq"], api_key=secret)
+        with patch(_ASYNC_CLIENT, _offline_http(f"refused for {secret} " + "x" * 300)):
+            status = await p.health_check()
+        assert status.healthy is False
+        assert secret not in status.error and "***" in status.error and len(status.error) <= 200
+
+    @pytest.mark.asyncio
+    async def test_anonymous_tier_probes_with_its_anonymous_key(self):
+        spec = PROVIDER_SPECS["llm7"]
+        p = OpenAICompatibleProvider(spec)
+        assert spec.anonymous_key and p._api_key == spec.anonymous_key
+        client, calls = _fake_http(200, {"data": [{"id": spec.default_model}]})
+        with patch(_ASYNC_CLIENT, client):
+            assert await p.live_model_ids() == {spec.default_model}
+        assert calls[0][1] == {"Authorization": f"Bearer {spec.anonymous_key}"}
+
+    def test_setup_key_probe_sends_what_the_adapter_sends(self, monkeypatch):
+        """``nvh setup``'s key check reuses ``models_probe_request``: one auth mapping, the Google key as a param."""
+        from nvh.cli.setup import probe_models_endpoint
+
+        sent = []
+
+        def fake_get(url, headers=None, params=None, timeout=None):
+            sent.append((url, headers, params))
+            return SimpleNamespace(status_code=200)
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+        for name in ("google", "anthropic", "groq"):
+            spec = PROVIDER_SPECS[name]
+            assert probe_models_endpoint(name, "k") == 200
+            url, headers, params = oc.models_probe_request(spec.models_probe, "k")
+            assert sent[-1] == (url, headers, params or None), name
+            assert "k" not in sent[-1][0]  # never inside the URL
+        assert probe_models_endpoint("ai21", "k") is None  # no probe on the row
+
+    def test_payload_shapes(self):
+        assert oc.model_ids_from_payload({"data": [{"id": "a"}, {"id": "a"}, {"id": ""}, 7]}) == ["a"]
+        assert oc.model_ids_from_payload({"models": [{"name": "models/g"}, "h"]}) == ["models/g", "h"]
+        assert oc.model_ids_from_payload(["x", {"id": "y"}]) == ["x", "y"]
+        assert oc.model_ids_from_payload(None) == [] and oc.model_ids_from_payload({"error": "no"}) == []
+
+    def test_payload_ids_are_capped_and_deduped_in_linear_time(self):
+        huge = [{"id": f"m{i % 50_000}"} for i in range(200_000)]  # every id repeated four times
+        ids = oc.model_ids_from_payload({"data": huge})
+        assert len(ids) == oc.MODELS_PROBE_MAX_IDS == len(set(ids))
+        assert ids[:3] == ["m0", "m1", "m2"]  # order kept, first occurrence wins
+
+    @pytest.mark.asyncio
+    async def test_oversize_body_is_dropped_and_the_list_stays_unknown(self):
+        spec = PROVIDER_SPECS["groq"]
+        # Declared over the cap: nothing is read; the live list is unknown (fail open) and health stays up.
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        client, _ = _fake_http(200, {"data": [{"id": "a"}]}, content_length=oc.MODELS_PROBE_MAX_BYTES + 1)
+        with patch(_ASYNC_CLIENT, client):
+            assert await p.live_model_ids() is None
+            status = await p.health_check()
+        assert status.healthy is True and status.models_available == 0
+        assert p._models_probe_cache[1].ids is None and "over" in p._models_probe_cache[1].error
+        # Undeclared but streamed past the cap: the read stops at the limit.
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        body = b"[" + b",".join(b'{"id":"m%d"}' % i for i in range(5000)) + b"]"
+        client, _ = _fake_http(200, body=body, chunk_size=1024)
+        with patch(_ASYNC_CLIENT, client), patch.object(oc, "MODELS_PROBE_MAX_BYTES", 4096):
+            assert await p.live_model_ids() is None
+        assert p._models_probe_cache[1].ids is None
+        # Under the cap: the same body parses.
+        p = OpenAICompatibleProvider(spec, api_key="k")
+        client, _ = _fake_http(200, body=body, chunk_size=1024)
+        with patch(_ASYNC_CLIENT, client):
+            assert len(await p.live_model_ids()) == 5000
+
+    @pytest.mark.asyncio
+    async def test_unparseable_and_too_deep_bodies_yield_no_ids_and_are_cached(self):
+        spec = PROVIDER_SPECS["groq"]
+        for body in (b"not json at all", b"[" * 200_000):
+            p = OpenAICompatibleProvider(spec, api_key="k")
+            client, calls = _fake_http(200, body=body)
+            with patch(_ASYNC_CLIENT, client):
+                assert await p.live_model_ids() is None  # no RecursionError escapes
+                status = await p.health_check()
+            assert status.healthy is True and status.models_available == 0
+            assert len(calls) == 1  # the outcome was cached, not re-fetched
+            assert p._models_probe_cache[1].ids == []
+
+    @pytest.mark.asyncio
+    async def test_a_failure_while_streaming_is_a_failed_probe(self):
+        spec = PROVIDER_SPECS["groq"]
+        secret = "gsk_streaming_secret"
+
+        class Response:
+            status_code = 200
+            headers = {}
+
+            async def aiter_bytes(self):
+                raise httpx.ReadTimeout(f"timed out reading for {secret}")
+                yield b""  # pragma: no cover - makes this an async generator
+
+        class Stream:
+            async def __aenter__(self):
+                return Response()
+
+            async def __aexit__(self, *exc):
+                return False
+
+        class Client:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            def stream(self, *args, **kwargs):
+                return Stream()
+
+        p = OpenAICompatibleProvider(spec, api_key=secret)
+        with patch(_ASYNC_CLIENT, Client):
+            status = await p.health_check()
+        assert status.healthy is False and secret not in status.error and "***" in status.error
+        assert p._models_probe_cache[1].status_code is None
+
+    def test_model_served_matches_exactly_or_by_tail(self):
+        keys = oc.live_model_keys({"groq/openai/gpt-oss-120b", "models/gemini-x", "meta/llama-x"})
+        assert oc.model_served("groq/openai/gpt-oss-120b", keys)
+        assert oc.model_served("gemini/gemini-x", keys)
+        assert oc.model_served("nvidia_nim/meta/llama-x", keys)
+        assert not oc.model_served("groq/gemma2-9b-it", keys)
+
+    def test_concrete_provider_unwraps_lazy_and_admitted(self):
+        from nvh.config.settings import AtohiConfig
+        from nvh.core.atohi import AdmittedProvider, AtohiAdmission
+
+        lazy = lazy_adapter("groq", api_key="k")
+        inner = oc.concrete_provider(lazy)
+        assert isinstance(inner, OpenAICompatibleProvider) and inner is lazy._load()
+        admitted = AdmittedProvider(lazy, AtohiAdmission(AtohiConfig()), "groq")
+        assert oc.concrete_provider(admitted) is inner
+        assert oc.concrete_provider(inner) is inner
 
 
 class TestRegistryWiring:
@@ -426,6 +789,47 @@ class TestBuildMessages:
 
 
 class TestCalcCost:
+    @pytest.fixture(autouse=True)
+    def _fresh_cost_log(self):
+        oc._COST_FALLBACK_LOGGED.clear()
+        yield
+        oc._COST_FALLBACK_LOGGED.clear()
+
+    def test_catalog_fallback_is_logged_once_per_model(self, caplog):
+        usage = Usage(input_tokens=10, output_tokens=5, total_tokens=15)
+        with caplog.at_level(logging.INFO, logger="nvh.providers.openai_compatible"), \
+                patch("litellm.cost_per_token", side_effect=Exception("unmapped")):
+            _calc_cost("gpt-4o", usage)
+            _calc_cost("gpt-4o", usage)
+        records = [r for r in caplog.records if "gpt-4o" in r.getMessage()]
+        assert len(records) == 1 and records[0].levelno == logging.INFO
+        assert "capabilities.yaml rate" in records[0].getMessage()
+
+    def test_unknown_price_is_a_warning_once(self, caplog):
+        usage = Usage(input_tokens=10, output_tokens=5, total_tokens=15)
+        with caplog.at_level(logging.INFO, logger="nvh.providers.openai_compatible"), \
+                patch("litellm.cost_per_token", side_effect=Exception("nope")):
+            assert _calc_cost("nowhere/unmapped-model", usage) == Decimal("0")
+            _calc_cost("nowhere/unmapped-model", usage)
+        records = [r for r in caplog.records if "nowhere/unmapped-model" in r.getMessage()]
+        assert [r.levelno for r in records] == [logging.WARNING]
+        assert "cost unknown" in records[0].getMessage()
+
+    def test_litellm_zero_bill_for_tokens_is_logged_once(self, caplog):
+        usage = Usage(input_tokens=10, output_tokens=5, total_tokens=15)
+        with caplog.at_level(logging.INFO, logger="nvh.providers.openai_compatible"), \
+                patch("litellm.cost_per_token", return_value=(0.0, 0.0)):
+            assert _calc_cost("free/model", usage) == Decimal("0")
+            _calc_cost("free/model", usage)
+        assert sum("free/model" in r.getMessage() for r in caplog.records) == 1
+
+    def test_priced_bill_is_not_logged(self, caplog):
+        usage = Usage(input_tokens=10, output_tokens=5, total_tokens=15)
+        with caplog.at_level(logging.INFO, logger="nvh.providers.openai_compatible"), \
+                patch("litellm.cost_per_token", return_value=(0.001, 0.001)):
+            assert _calc_cost("paid/model", usage) == Decimal("0.002")
+        assert not [r for r in caplog.records if "paid/model" in r.getMessage()]
+
     def test_sums_prompt_and_completion_cost(self) -> None:
         usage = Usage(input_tokens=100, output_tokens=50, total_tokens=150)
         with patch("litellm.cost_per_token", return_value=(0.001, 0.000234)) as cpt:
@@ -534,7 +938,8 @@ class TestNvidiaProvider:
     @pytest.mark.asyncio
     async def test_list_models(self):
         p = _spec_provider("nvidia")
-        models = await p.list_models()
+        with patch(_ASYNC_CLIENT, _offline_http()):
+            models = await p.list_models()
         assert isinstance(models, list)
         assert len(models) >= 1
 
@@ -564,7 +969,8 @@ class TestLLM7Provider:
     @pytest.mark.asyncio
     async def test_list_models(self):
         p = _spec_provider("llm7")
-        models = await p.list_models()
+        with patch(_ASYNC_CLIENT, _offline_http()):
+            models = await p.list_models()
         assert isinstance(models, list)
         assert len(models) >= 1
 
@@ -574,6 +980,10 @@ class TestLLM7Provider:
 
 
 class TestOpenAISpecProvider:
+    """The billed ping path. The spec row has a models probe and a developer's
+    OPENAI_API_KEY may be in the environment, so the probe is answered 404
+    (no /models on this host) and the ping decides, offline."""
+
     @pytest.mark.asyncio
     async def test_health_check_success_mock(self):
         fake = SimpleNamespace(
@@ -581,7 +991,8 @@ class TestOpenAISpecProvider:
             usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1, total_tokens=2),
             model="gpt-4o",
         )
-        with patch(_ACOMPLETION, new=AsyncMock(return_value=fake)):
+        client, _ = _fake_http(404)
+        with patch(_ASYNC_CLIENT, client), patch(_ACOMPLETION, new=AsyncMock(return_value=fake)):
             p = _spec_provider("openai")
             status = await p.health_check()
             assert status.healthy is True
@@ -589,7 +1000,8 @@ class TestOpenAISpecProvider:
 
     @pytest.mark.asyncio
     async def test_health_check_failure_mock(self):
-        with patch(_ACOMPLETION, new=AsyncMock(side_effect=Exception("down"))):
+        client, _ = _fake_http(404)
+        with patch(_ASYNC_CLIENT, client), patch(_ACOMPLETION, new=AsyncMock(side_effect=Exception("down"))):
             p = _spec_provider("openai")
             status = await p.health_check()
             assert status.healthy is False

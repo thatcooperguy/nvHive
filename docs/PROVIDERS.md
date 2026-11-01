@@ -33,7 +33,7 @@ the free-tier ladder, the rate-limit messages and `nvh advisor info`.
 | Perplexity | `perplexity` | `PERPLEXITY_API_KEY` (`PERPLEXITYAI_API_KEY`) | paid — Search-augmented responses with citations | `perplexity/preset/low` |
 | Together AI | `together` | `TOGETHER_API_KEY` (`TOGETHERAI_API_KEY`) | paid — Requires $5 minimum purchase | `together_ai/openai/gpt-oss-120b` |
 | OpenRouter | `openrouter` | `OPENROUTER_API_KEY` | paid — Routes to best available provider | `openrouter/openai/gpt-oss-120b` |
-| Triton | `triton` | `TRITON_URL` | your own inference server | — |
+| Triton | `triton` | `TRITON_URL` (`TRITON_ENDPOINT`) | your own inference server | — |
 | Mock | `mock` | — | tests only, no network | `mock/default` |
 <!-- END GENERATED: providers -->
 

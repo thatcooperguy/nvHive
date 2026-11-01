@@ -113,6 +113,10 @@ def setup_logging(level: str = "INFO", json_format: bool = False) -> logging.Log
     root = logging.getLogger("nvh")
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
     root.propagate = False
+    # httpx logs each request URL at INFO, query string included (Google's
+    # ``?key=``). The CLI and run_server quiet it as well; this covers hosts
+    # that embed nvh without those entry points.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     handlers = [_make_handler(json_format, stream=True)]
     try:

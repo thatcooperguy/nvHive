@@ -2,6 +2,100 @@
 
 ## [Unreleased]
 
+Wave 3 of the 2026-10-31 plan: the model catalog reads its facts from
+LiteLLM, the last hand-typed provider copies derive from `ProviderSpec`, and
+model lists are live. 0.45.0 material.
+
+### Added
+- **LiteLLM-derived model facts.** LiteLLM's model table is now the one
+  source for price, context window, max output and the tool / vision / JSON
+  flags of every catalog row; `nvh/config/capabilities.yaml` shrinks to the
+  hand-maintained fields (display name, capability scores, latency,
+  `status: retired` plus `successor`) and explicit overrides, each carrying a
+  `source:`. New `nvh/config/model_overrides.json` holds sourced
+  `litellm.register_model` payloads for the six spec defaults and fallbacks
+  LiteLLM does not carry (AI21, NVIDIA NIM, OpenRouter gpt-oss), applied only
+  while LiteLLM lacks the id. New `scripts/gen_capabilities.py` (`--check` in
+  CI) normalises the catalog, derives retirement from `RETIRED_MODEL_RENAMES`
+  and Ollama vision flags from the tier table, and refuses an override
+  without a source; `tests/test_capabilities_catalog.py` pins that every spec
+  default and fallback prices on LiteLLM 1.99.0 and 1.106.6. `ModelInfo`
+  gains `supports_function_calling`, `deprecation_date` and `cost_known`: a
+  row nothing prices loads as "cost unknown" (logged once per model), the
+  router scores it neutrally rather than as free, and `nvh model list` shows
+  "cost unknown" and a Status column.
+- **Live model lists.** `list_models` on every LiteLLM-backed provider makes
+  one `GET /models` (the spec's `models_probe`, 5 s timeout, cached for the
+  health interval) shared with `health_check`; without a URL or key, or on
+  any error, the static default/fallback pair is returned and the list is
+  reported as unknown. `GET /v1/models` intersects the catalog with each
+  provider's live list (exact or tail match), fails open on an unknown list
+  and on `ResourcePaused`, hides retired rows and adds `warnings` for a
+  configured default the provider no longer serves plus the
+  `supports_function_calling`, `cost_known`, `deprecation_date` and
+  `successor` fields; `GET /v1/proxy/models` lists the registry catalog. The
+  probe streams and caps the body (8 MiB, 10k ids) and parses defensively.
+  `nvh status --deep` gains a "Default models" finding, one network call per
+  configured cloud provider shared with the advisor health probe.
+- **Weekly model currency.** `.github/workflows/model-currency.yml` (Mondays
+  and on dispatch, non-blocking): LLM7's anonymous model list, every Ollama
+  tier tag, the catalog's overrides against today's LiteLLM and
+  `gen_capabilities --check`; a keyed Groq/NVIDIA tier runs only when the
+  `GROQ_API_KEY` and `NVIDIA_API_KEY` secrets exist and exposes them to the
+  test step alone. `tests/test_model_currency.py` opts in with
+  `NVH_NETWORK_TESTS=1`.
+- **One provider table.** `ProviderSpec` is the only place a provider's
+  display name, signup/docs URL, key variable and prefix, `GET /models` probe
+  or signup friction is written (new fields `docs_url`, `logo_slug`,
+  `key_prefixes`, `key_placeholder`, `models_probe`, `signup_tier`,
+  `task_strengths`, `metered_upstream`), and the last hand-typed copies
+  derive from it: the `nvh config init` advisors template, the API's
+  key/URL/logo/default maps and `/v1/setup/free-providers` (every keyable
+  provider including Grok and the optional LLM7 token, grouped by signup
+  tier, with `free_info`, `default_model` and `fallback_model`), the
+  `nvh setup` / `nvh keys` / `nvh advisor login` ladders, the key-format and
+  `/models` probes (one `probe_models_endpoint` reusing the adapter's
+  request), the agent matcher's static strengths and the web setup page's
+  cloud list. New guard `tests/test_single_provider_table.py` fails when a
+  provider fact is typed for two or more providers outside
+  `nvh/providers/specs.py`.
+- `docs/CONFIGURATION.md` "Model catalog" section; `docs/TESTING.md`
+  "Catalog and model currency" recipe; `docs/MAINTAINERS.md` pre-tag steps
+  for `gen_capabilities.py --check` and the latest model-currency run.
+
+### Changed
+- Importing `nvh` exports `LITELLM_LOCAL_MODEL_COST_MAP=True` unless the
+  variable is already set: LiteLLM's table is the one bundled with the
+  installed release, no price map is fetched from GitHub at import (an
+  offline or firewalled box waited on that timeout), and the catalog, the
+  bill and the weekly report describe the same table. Export `False` before
+  importing `nvh` for the live map.
+- Hugging Face rows load as "cost unknown" (`ProviderSpec.metered_upstream`)
+  instead of a known $0 and are no longer registered with LiteLLM, so a
+  catalog load makes no network request.
+- `gemini/gemini-2.0-pro`, `groq/mixtral-8x7b-32768` and `xai/grok-3` (no
+  LiteLLM price on 1.99.0 or 1.106.6) are retired with successors;
+  `nvh config migrate` rewrites them and `nvh status --deep` flags them. The
+  catalog keeps its 80 non-mock rows.
+- Generated config: the Google, Cohere, Perplexity and Fireworks key
+  references carry their alternate variables as nested `${PRIMARY:-${ALT}}`
+  defaults, which env interpolation now resolves with brace matching (a set
+  primary no longer yields a key with a trailing brace); Ollama's `base_url`
+  is `http://127.0.0.1:11434`; Triton's row reads `TRITON_URL` then
+  `TRITON_ENDPOINT` with the one default the adapter uses.
+- `nvh/config/model_overrides.json` ships in the wheel (`config/*.json`
+  package data).
+
+### Fixed
+- The `GET /models` probe body is streamed and capped, a deeply nested body
+  no longer escapes `health_check` as a RecursionError, and the key never
+  lands in the probe URL or the health error text; the `httpx` logger stays
+  at WARNING in the CLI, the API server and `setup_logging` so request URLs
+  with query strings are not logged.
+- Dead `_PROVIDER_KEY_URLS` / `_PROVIDER_DOC_URLS` / `_PROVIDER_LOGO_SLUGS`
+  maps removed from the API server; a bare `deprecation_date:` YAML override
+  now loads; `docs/COMMANDS.md` regenerated (`Ollama (local)`).
+
 ## [0.44.1] - 2026-11-01
 
 Currency and loopback defaults; no feature changes.

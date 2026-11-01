@@ -193,7 +193,23 @@ class TestProviderContract:
 
     @pytest.mark.asyncio
     async def test_list_models(self, name):
-        models = await _provider(name).list_models()
+        # Offline: the live GET /models fails, so every spec answers with the
+        # static [default, fallback] pair, keys in the environment or not.
+        class Offline:
+            def __init__(self, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            def stream(self, *args, **kwargs):
+                raise OSError("offline")
+
+        with patch("nvh.providers.openai_compatible.httpx.AsyncClient", Offline):
+            models = await _provider(name).list_models()
         assert isinstance(models, list)
         assert len(models) >= 1, f"{name}.list_models() returned empty"
         assert all(m.provider == name for m in models)

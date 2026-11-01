@@ -348,3 +348,114 @@ def test_api_auth_failure_is_a_fail_with_a_fix(monkeypatch):
     with patch("httpx.AsyncClient", _fake_async_client(401, {"detail": "nope"}, [])):
         row = asyncio.run(_rows("api_proxy_chat", ctx))[0]
     assert row.status == "fail" and "HTTP 401" in row.detail and "HIVE_API_KEY" in row.fix
+
+
+# ---------------------------------------------------------------------------
+# default_models_served (DEEP): the configured default against the live list
+# ---------------------------------------------------------------------------
+
+
+class _LiveRegistry:
+    """A registry whose adapters answer ``live_model_ids`` with a fixed set (``None`` = unknown)."""
+
+    def __init__(self, live_by_name):
+        self.live_by_name = live_by_name
+        self.probes = 0
+
+    def has(self, name):
+        return name in self.live_by_name
+
+    def get(self, name):
+        registry = self
+        live = self.live_by_name[name]
+
+        class Adapter:
+            async def live_model_ids(self):
+                registry.probes += 1
+                return live
+
+        return Adapter()
+
+
+def _default_models_ctx(live_by_name, defaults):
+    registry = _LiveRegistry(live_by_name)
+    providers = {
+        name: SimpleNamespace(enabled=True, type="", default_model=default, fallback_model="")
+        for name, default in defaults.items()
+    }
+    ctx = _ctx(_engine=SimpleNamespace(registry=registry), _config=SimpleNamespace(providers=providers))
+    return ctx, registry
+
+
+def test_default_models_served_is_deep_only():
+    check = _check_by_id("default_models_served")
+    assert check.tiers == {diag.DEEP}
+    assert check.title == "Default models"
+
+
+def test_default_model_not_in_the_live_list_warns():
+    ctx, registry = _default_models_ctx(
+        {"groq": {"groq/openai/gpt-oss-120b", "groq/served-too"}, "nvidia": {"nvidia_nim/meta/llama-x"}},
+        {"groq": "groq/gone-model", "nvidia": "nvidia_nim/meta/llama-x"},
+    )
+    rows = asyncio.run(_rows("default_models_served", ctx))
+    assert [(r.title, r.status) for r in rows] == [("Advisor groq: default model", "warn")]
+    assert rows[0].detail == "'groq/gone-model' not served by groq (2 live model(s))"
+    assert rows[0].data == {"provider": "groq", "model": "groq/gone-model", "live_models": 2}
+    assert "nvh model list" in rows[0].fix
+    assert registry.probes == 2  # one probe per configured provider
+
+
+def test_default_model_matches_by_tail_and_spec_default_fills_a_blank_config():
+    from nvh.providers.specs import PROVIDER_SPECS
+
+    spec = PROVIDER_SPECS["google"]
+    bare = spec.default_model[len(spec.litellm_prefix):]
+    ctx, _ = _default_models_ctx({"google": {f"gemini/models/{bare}"}}, {"google": ""})
+    assert asyncio.run(_rows("default_models_served", ctx)) == []
+
+
+def test_unknown_live_list_and_bespoke_adapters_say_nothing():
+    ctx, _ = _default_models_ctx(
+        {"groq": None, "ollama": {"llama3.1:8b"}}, {"groq": "groq/x", "ollama": "other"},
+    )
+    assert asyncio.run(_rows("default_models_served", ctx)) == []
+
+
+def test_default_models_check_shares_the_server_probe_helper(monkeypatch):
+    """The check and ``/v1/models`` run the same ``live_model_ids_for`` (no list_models fallback here)."""
+    import nvh.providers.openai_compatible as oc
+
+    seen = []
+
+    async def fake_live_model_ids_for(provider, *, timeout, list_models_fallback=True):
+        seen.append((timeout, list_models_fallback))
+        return frozenset({"groq/served"})
+
+    monkeypatch.setattr(oc, "live_model_ids_for", fake_live_model_ids_for)
+    ctx, _ = _default_models_ctx({"groq": {"groq/served"}}, {"groq": "groq/gone"})
+    rows = asyncio.run(_rows("default_models_served", ctx))
+    assert [r.status for r in rows] == ["warn"] and "'groq/gone' not served by groq (1 live model(s))" == rows[0].detail
+    assert seen == [(ctx.health_timeout, False)]
+
+
+def test_default_models_check_tolerates_a_failing_probe():
+    class Broken:
+        def has(self, name):
+            return True
+
+        def get(self, name):
+            class Adapter:
+                async def live_model_ids(self):
+                    raise RuntimeError("boom")
+
+            return Adapter()
+
+    providers = {"groq": SimpleNamespace(enabled=True, type="", default_model="groq/x", fallback_model="")}
+    ctx = _ctx(_engine=SimpleNamespace(registry=Broken()), _config=SimpleNamespace(providers=providers))
+    assert asyncio.run(_rows("default_models_served", ctx)) == []
+
+
+def test_default_models_check_needs_an_engine():
+    ctx = _ctx(_config=None)
+    assert asyncio.run(_rows("default_models_served", ctx)) == []

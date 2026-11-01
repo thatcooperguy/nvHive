@@ -55,6 +55,12 @@ from rich.table import Table
 
 from nvh import __version__
 from nvh.config.settings import DEFAULT_CONFIG_PATH
+from nvh.providers.specs import (
+    CORE_PROVIDER_NAMES,
+    PROVIDER_FACTS,
+    PROVIDER_SPECS,
+    free_tier_ladder,
+)
 from nvh.utils.ollama import DEFAULT_OLLAMA_URL, ollama_base_url
 
 # Fix Windows legacy console (cp1252) Unicode crashes on symbols like ✓/✗.
@@ -631,126 +637,18 @@ async def _launch_default_repl():
 # Advisor-as-command: nvh openai "question" or nvh openai (setup)
 # ---------------------------------------------------------------------------
 
-KNOWN_ADVISORS = {
-    "openai": {"name": "OpenAI", "url": "https://platform.openai.com/api-keys", "free_tier": False},
-    "anthropic": {
-        "name": "Anthropic",
-        "url": "https://console.anthropic.com/settings/keys",
-        "free_tier": False,
-    },
-    "google": {
-        "name": "Google Gemini",
-        "url": "https://aistudio.google.com/apikey",
-        "free_tier": True, "free_info": "15 req/min free",
-    },
-    "groq": {
-        "name": "Groq",
-        "url": "https://console.groq.com/keys",
-        "free_tier": True,
-        "free_info": "Free tier: 30 req/min, 14.4K tok/min",
-    },
-    "grok": {"name": "Grok (xAI)", "url": "https://console.x.ai", "free_tier": False},
-    "mistral": {
-        "name": "Mistral",
-        "url": "https://console.mistral.ai/api-keys",
-        "free_tier": True,
-        "free_info": "Free Experiment plan: 2 RPM",
-    },
-    "cohere": {
-        "name": "Cohere",
-        "url": "https://dashboard.cohere.com/api-keys",
-        "free_tier": True,
-        "free_info": "Trial API key included on signup",
-    },
-    "deepseek": {
-        "name": "DeepSeek",
-        "url": "https://platform.deepseek.com",
-        "free_tier": False,
-        "free_info": "Very cheap: $0.07/M tokens",
-    },
-    "ollama": {
-        "name": "Ollama (Local)",
-        "url": "https://ollama.com/download",
-        "free_tier": True,
-        "free_info": "Unlimited, free, runs on your GPU",
-    },
-    "mock": {
-        "name": "Mock (Testing)", "url": "",
-        "free_tier": True,
-        "free_info": "Testing only, no real API calls",
-    },
-    "perplexity": {
-        "name": "Perplexity",
-        "url": "https://www.perplexity.ai/settings/api",
-        "free_tier": False,
-        "free_info": "Search-augmented responses with citations",
-    },
-    "together": {
-        "name": "Together AI",
-        "url": "https://api.together.xyz/settings/api-keys",
-        "free_tier": False,
-        "free_info": "Requires $5 minimum purchase",
-    },
-    "fireworks": {
-        "name": "Fireworks AI",
-        "url": "https://fireworks.ai/account/api-keys",
-        "free_tier": True,
-        "free_info": "Free tier available",
-    },
-    "openrouter": {
-        "name": "OpenRouter",
-        "url": "https://openrouter.ai/keys",
-        "free_tier": False,
-        "free_info": "Routes to best available provider",
-    },
-    "cerebras": {
-        "name": "Cerebras",
-        "url": "https://cloud.cerebras.ai",
-        "free_tier": True,
-        "free_info": "Free tier: 30 req/min",
-    },
-    "sambanova": {
-        "name": "SambaNova",
-        "url": "https://cloud.sambanova.ai",
-        "free_tier": True,
-        "free_info": "Free tier available",
-    },
-    "huggingface": {
-        "name": "Hugging Face",
-        "url": "https://huggingface.co/settings/tokens",
-        "free_tier": True,
-        "free_info": "Free Inference API",
-    },
-    "ai21": {
-        "name": "AI21 Labs",
-        "url": "https://studio.ai21.com/account/api-key",
-        "free_tier": True,
-        "free_info": "Free tier available",
-    },
-    "nvidia": {
-        "name": "NVIDIA NIM",
-        "url": "https://build.nvidia.com",
-        "free_tier": True,
-        "free_info": (
-            "1000+ free API credits, 40 RPM,"
-            " NVIDIA Developer Program"
-        ),
-    },
-    "siliconflow": {
-        "name": "SiliconFlow",
-        "url": "https://cloud.siliconflow.cn",
-        "free_tier": True,
-        "free_info": "Permanently free models at 1000 RPM",
-    },
-    "llm7": {
-        "name": "LLM7",
-        "url": "https://llm7.io",
-        "free_tier": True,
-        "free_info": (
-            "Anonymous access: 30 RPM,"
-            " no signup required"
-        ),
-    },
+# Every provider `nvh <name>` and `nvh advisor login <name>` know, keyed by
+# config name: display name, signup URL and free-tier note from the spec
+# table. Triton has no login flow (it is configured by endpoint URL).
+KNOWN_ADVISORS: dict[str, dict[str, Any]] = {
+    name: {
+        "name": spec.display_name,
+        "url": spec.signup_url,
+        "free_tier": spec.free_tier,
+        "free_info": spec.free_info,
+    }
+    for name, spec in PROVIDER_FACTS.items()
+    if name != "triton"
 }
 
 
@@ -3520,31 +3418,23 @@ Privacy: https://github.com/thatcooperguy/nvHive/blob/main/PRIVACY.md
 """.strip()
 
 
-# Free providers grouped by signup friction
+# Free providers grouped by signup friction: the free-tier ladder from the
+# spec table (rank order), split by each row's ``signup_tier``.
+# (name, display name, free-tier note)
 ZERO_SIGNUP = [
-    ("ollama", "Ollama (Local AI)", "Runs on your GPU — no signup needed"),
-    ("llm7", "LLM7", "Anonymous access — no signup needed"),
+    (spec.name, spec.display_name, spec.free_info)
+    for spec in free_tier_ladder() if spec.signup_tier == "none"
 ]
 
+# (name, display name, signup URL, free-tier note)
 EMAIL_SIGNUP = [
-    ("groq", "Groq", "https://console.groq.com/keys", "Ultra-fast, 30 RPM free"),
-    ("cerebras", "Cerebras", "https://cloud.cerebras.ai/", "Fastest inference, 30 RPM free"),
-    ("fireworks", "Fireworks AI", "https://fireworks.ai/", "10 RPM free"),
-    ("siliconflow", "SiliconFlow", "https://cloud.siliconflow.cn/", "1000 RPM free — best limits"),
-    ("cohere", "Cohere", "https://dashboard.cohere.com/api-keys", "Trial key, RAG specialist"),
-    ("ai21", "AI21 Labs", "https://studio.ai21.com/", "$10 free credit, 256K context"),
-    ("sambanova", "SambaNova", "https://cloud.sambanova.ai/", "200K tokens/day free"),
-    ("huggingface", "Hugging Face", "https://huggingface.co/settings/tokens", "Free Inference API"),
+    (spec.name, spec.display_name, spec.signup_url, spec.free_info)
+    for spec in free_tier_ladder() if spec.signup_tier == "email"
 ]
 
 ACCOUNT_SIGNUP = [
-    (
-        "google", "Google Gemini",
-        "https://aistudio.google.com/apikey",
-        "Google account, 15 RPM free",
-    ),
-    ("nvidia", "NVIDIA NIM", "https://build.nvidia.com/", "NVIDIA Dev account, 1000 credits"),
-    ("mistral", "Mistral", "https://console.mistral.ai/api-keys", "Phone verify, 2 RPM free"),
+    (spec.name, spec.display_name, spec.signup_url, spec.free_info)
+    for spec in free_tier_ladder() if spec.signup_tier == "account"
 ]
 
 
@@ -3710,46 +3600,22 @@ def setup(
                 skipped += 1
                 continue
 
-            # Quick connectivity test
-            _key_valid = False
+            # Quick connectivity test against the provider's free GET /models
+            # (spec.models_probe). A 2xx verifies the key; 401/403 rejects it;
+            # no probe, a network error or any other status stores it untested.
             with console.status(f"  Testing {display} key..."):
-                try:
-                    import httpx
-                    _test_urls = {
-                        "groq": "https://api.groq.com/openai/v1/models",
-                        "cerebras": "https://api.cerebras.ai/v1/models",
-                        "fireworks": "https://api.fireworks.ai/inference/v1/models",
-                        "cohere": "https://api.cohere.ai/v1/models",
-                        "google": "https://generativelanguage.googleapis.com/v1/models",
-                        "mistral": "https://api.mistral.ai/v1/models",
-                    }
-                    _test_url = _test_urls.get(name)
-                    if _test_url:
-                        _headers = {"Authorization": f"Bearer {key}"}
-                        if name == "google":
-                            # Google uses query param
-                            _test_url += f"?key={key}"
-                            _headers = {}
-                        _resp = httpx.get(_test_url, headers=_headers, timeout=8)
-                        if _resp.status_code in (200, 201):
-                            _key_valid = True
-                        elif _resp.status_code in (401, 403):
-                            console.print(
-                                f"  [red]✗ Key rejected by {display}"
-                                f" (HTTP {_resp.status_code})."
-                                " Check the key and try again.[/red]"
-                            )
-                            skipped += 1
-                            continue
-                        else:
-                            # Non-auth error — key might still be fine, store it
-                            _key_valid = True
-                    else:
-                        # No test URL for this provider — trust the key
-                        _key_valid = True
-                except Exception:
-                    # Network error — can't validate, store anyway
-                    _key_valid = True
+                from nvh.cli.setup import probe_models_endpoint
+
+                _status = probe_models_endpoint(name, key)
+                if _status in (401, 403):
+                    console.print(
+                        f"  [red]✗ Key rejected by {display}"
+                        f" (HTTP {_status})."
+                        " Check the key and try again.[/red]"
+                    )
+                    skipped += 1
+                    continue
+                _key_valid = _status in (200, 201)
 
             # Store the key
             try:
@@ -3966,18 +3832,12 @@ def setup(
     # depend on that file existing; silently skipping it meant the user
     # had to manually run `nvh config init` afterwards to recover.
     try:
-        from nvh.cli.setup import _ollama_running, _write_config
+        from nvh.cli.setup import CORE_PROVIDERS, _ollama_running, _write_config
 
         # Build the configured_providers dict from env vars (what setup
         # collected via env/keyring into OS environment during this run).
-        env_map = {
-            "groq": "GROQ_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "google": "GOOGLE_API_KEY",
-        }
         configured_keys: dict[str, str] = {}
-        for provider, env_var in env_map.items():
+        for provider, _display, env_var, _url in CORE_PROVIDERS:
             v = os.environ.get(env_var, "").strip()
             if v:
                 configured_keys[provider] = v
@@ -4065,11 +3925,9 @@ def config_init(
 
     providers_to_enable = []
 
-    for name, url in [
-        ("openai", "https://platform.openai.com/api-keys"),
-        ("anthropic", "https://console.anthropic.com/settings/keys"),
-        ("google", "https://aistudio.google.com/apikey"),
-    ]:
+    # The three the council defaults weight; their key pages from the spec table.
+    for name in ("openai", "anthropic", "google"):
+        url = PROVIDER_FACTS[name].signup_url
         if typer.confirm(f"Configure {name}?", default=False):
             console.print(f"  Get your API key at: [link={url}]{url}[/link]")
             open_browser = typer.confirm("  Open in browser?", default=True)
@@ -5541,17 +5399,24 @@ def model_list(
     table.add_column("Latency", justify="right")
     table.add_column("Vision")
     table.add_column("Tools")
+    table.add_column("Status")
 
     for m in sorted(models, key=lambda x: x.provider):
+        # Price and context come from LiteLLM's table at load; a row no source
+        # priced says so instead of showing $0, and 0 context means unknown.
+        cost_in = f"${m.input_cost_per_1m_tokens}" if m.cost_known else "cost unknown"
+        cost_out = f"${m.output_cost_per_1m_tokens}" if m.cost_known else "cost unknown"
+        status = f"retired → {m.successor}" if m.status == "retired" and m.successor else m.status
         table.add_row(
             m.model_id,
             m.provider,
-            f"{m.context_window:,}",
-            f"${m.input_cost_per_1m_tokens}",
-            f"${m.output_cost_per_1m_tokens}",
+            f"{m.context_window:,}" if m.context_window > 0 else "—",
+            cost_in,
+            cost_out,
             f"{m.typical_latency_ms}ms",
             "✓" if m.supports_vision else "—",
             "✓" if m.supports_tools else "—",
+            status,
         )
 
     console.print(table)
@@ -6090,18 +5955,8 @@ def migrate(
 
     # --- Detect environment variables from other tools ---
     env_keys: dict[str, str] = {}
-    _key_map = {
-        "OPENAI_API_KEY": "openai",
-        "ANTHROPIC_API_KEY": "anthropic",
-        "GROQ_API_KEY": "groq",
-        "GOOGLE_API_KEY": "google",
-        "MISTRAL_API_KEY": "mistral",
-        "COHERE_API_KEY": "cohere",
-        "XAI_API_KEY": "grok",
-        "DEEPSEEK_API_KEY": "deepseek",
-        "FIREWORKS_API_KEY": "fireworks",
-        "TOGETHER_API_KEY": "together",
-    }
+    # Every cloud provider's primary key variable, from the spec table.
+    _key_map = {spec.key_env: name for name, spec in PROVIDER_SPECS.items()}
     for env_var, provider_name in _key_map.items():
         val = os.environ.get(env_var, "")
         if val:
@@ -7029,7 +6884,7 @@ def nvidia():
                 "Local inference on your GPU",
             ),
             "nvidia": (
-                "NVIDIA NIM",
+                PROVIDER_FACTS["nvidia"].display_name,
                 "Cloud API (1000 free credits)",
             ),
             "triton": (
@@ -7648,39 +7503,12 @@ def keys(
         nvh keys              # show all links
         nvh keys --open       # open all signup pages in browser
     """
+    # The keyed free tiers in ladder order:
+    # (display name, signup URL, free-tier note, config name).
     free_providers = [
-        ("Groq", "https://console.groq.com/keys", "30 req/min free — FASTEST inference", "groq"),
-        (
-            "Google Gemini", "https://aistudio.google.com/apikey",
-            "15 req/min free — 1M token context", "google",
-        ),
-        (
-            "Cerebras", "https://cloud.cerebras.ai/",
-            "30 req/min free — wafer-scale speed", "cerebras",
-        ),
-        ("NVIDIA NIM", "https://build.nvidia.com/", "1000 free credits — 100+ models", "nvidia"),
-        (
-            "SiliconFlow", "https://cloud.siliconflow.cn/",
-            "1000 req/min free — best rate limits", "siliconflow",
-        ),
-        ("Fireworks AI", "https://fireworks.ai/", "10 req/min free", "fireworks"),
-        (
-            "Mistral", "https://console.mistral.ai/api-keys",
-            "2 req/min free — multilingual", "mistral",
-        ),
-        (
-            "SambaNova", "https://cloud.sambanova.ai/",
-            "200K tokens/day free — Llama 405B", "sambanova",
-        ),
-        (
-            "Hugging Face", "https://huggingface.co/settings/tokens",
-            "Free inference API", "huggingface",
-        ),
-        ("AI21 Labs", "https://studio.ai21.com/", "$10 free credit — 256K context", "ai21"),
-        (
-            "Cohere", "https://dashboard.cohere.com/api-keys",
-            "1K calls/month free — RAG specialist", "cohere",
-        ),
+        (spec.display_name, spec.signup_url, spec.free_info, spec.name)
+        for spec in free_tier_ladder()
+        if spec.signup_tier != "none"
     ]
 
     console.print("\n[bold]Free AI Provider Signup Links[/bold]")
@@ -7712,8 +7540,8 @@ def keys(
     console.print(table)
 
     console.print("\n[dim]No-signup providers (already working):[/dim]")
-    console.print("  [green]✓[/green] LLM7 — anonymous, 30 req/min, no key needed")
-    console.print("  [green]✓[/green] Ollama — local GPU, no key needed (install separately)")
+    for _name, display, desc in ZERO_SIGNUP:
+        console.print(f"  [green]✓[/green] {display} — {desc}")
 
     if open_all:
         console.print("\n[green]All signup pages opened in your browser.[/green]")
@@ -12493,12 +12321,9 @@ def tour(
 # Entry point — catches unknown commands and treats them as prompts
 # ---------------------------------------------------------------------------
 
-_FIRST_RUN_ENV_KEYS = (
-    "GROQ_API_KEY",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "GOOGLE_API_KEY",
-)
+# The guided setup's providers (nvh.cli.setup.CORE_PROVIDERS): a key for any
+# of them means setup already ran somewhere, so the first-run gate stays shut.
+_FIRST_RUN_ENV_KEYS = tuple(PROVIDER_FACTS[name].key_env for name in CORE_PROVIDER_NAMES)
 
 
 # Set to any non-empty value to promise "nobody is at the keyboard": the
@@ -12617,6 +12442,10 @@ def main():
         logging.getLogger("LiteLLM").setLevel(logging.WARNING)
         logging.getLogger("LiteLLM Router").setLevel(logging.WARNING)
         logging.getLogger("LiteLLM Proxy").setLevel(logging.WARNING)
+        # httpx logs every request URL at INFO, query string included; the
+        # Google models probe carries its key there (``?key=``), so the
+        # logger stays at WARNING whatever the root logger is set to.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
     except Exception:
         pass
 

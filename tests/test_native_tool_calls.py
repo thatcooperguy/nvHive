@@ -86,7 +86,9 @@ def _model_response(content: str | None, tool_calls: list[dict[str, Any]] | None
 
 def test_catalog_decides_function_calling_support() -> None:
     assert oc.model_supports_function_calling("gpt-4o") is True
-    assert oc.model_supports_function_calling("groq/llama-3.3-70b-versatile") is True
+    # A current spec default (the retired groq/llama-3.3-70b-versatile row no
+    # longer has a LiteLLM flag on 1.106.6, so it reads as "unknown").
+    assert oc.model_supports_function_calling("groq/openai/gpt-oss-120b") is True
     # The Perplexity presets are catalogued without tools.
     assert oc.model_supports_function_calling("perplexity/preset/low") is False
     assert oc.model_supports_function_calling("") is False

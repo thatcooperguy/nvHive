@@ -1554,6 +1554,10 @@ export interface FreeProvider {
   signup_url?: string;
   key_url?: string;
   docs_url?: string;
+  /** The provider's canonical free-tier or access note (nvh/providers/specs.py free_info). */
+  free_info?: string;
+  default_model?: string;
+  fallback_model?: string;
   /** Logo slug for the @lobehub/icons CDN. Null when no brand mark is available. */
   logo_slug?: string | null;
 }

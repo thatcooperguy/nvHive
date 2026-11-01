@@ -15,7 +15,12 @@ hand-type per provider is a field here: :mod:`nvh.core.free_tier`,
 proxy's model->provider map derive their tables from these rows, and
 ``scripts/gen_providers_doc.py`` renders the table in docs/PROVIDERS.md.
 Change a fact here and every copy follows; ``tests/test_provider_docs_parity.py``
-fails when the committed doc lags.
+fails when the committed doc lags. Since 0.45 the last hand-typed copies
+derive too: the ``advisors:`` stanzas of ``nvh config init``, the API's
+``/v1/setup/free-providers`` rows and key maps, ``nvh setup`` / ``nvh keys``
+ladders, the key-format and ``GET /models`` probes, and the agent matcher's
+static strengths — ``tests/test_single_provider_table.py`` fails when a
+display name, signup URL or key variable is typed anywhere else.
 
 This module imports nothing heavy so config, CLI and API code can read the
 table at startup.
@@ -30,6 +35,11 @@ lists the IDs the model DB does not carry); the prefixes against
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+#: How a ``models_probe`` sends the key: a ``Authorization: Bearer`` header,
+#: Anthropic's ``x-api-key`` header, or Google's ``?key=`` query parameter.
+ProbeAuth = Literal["bearer", "x-api-key", "query-key"]
 
 
 @dataclass(frozen=True)
@@ -49,6 +59,12 @@ class ProviderSpec:
     # spelling where it differs, then the historical HIVE_{NAME}_API_KEY.
     env_keys: tuple[str, ...] = ()
     zero_cost: bool = False
+    # Usage is metered on the provider's own account at a rate nvHive cannot
+    # see (Hugging Face Inference Providers bill the upstream provider's rate
+    # to the HF account): LiteLLM bills $0, the catalog loads the rows as
+    # 'cost unknown' rather than $0, and the spec-default price gate in
+    # tests/test_capabilities_catalog.py exempts them.
+    metered_upstream: bool = False
     # Key sent when none is configured (providers with an anonymous tier).
     anonymous_key: str = ""
     # ISO date the provider, or the API surface this adapter uses, stops serving.
@@ -110,11 +126,58 @@ class ProviderSpec:
     # ("gpt-4o-2024-11-20" -> openai) before asking LiteLLM.
     model_prefixes: tuple[str, ...] = ()
 
+    # --- Setup and probing facts (0.45, refresh wave 2) -------------------
+    # The provider's API documentation, linked from the setup cards.
+    docs_url: str = ""
+    # @lobehub/icons slug the dashboard renders a brand mark from
+    # (cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/{slug}.png);
+    # empty means no mark there and the card shows a text initial.
+    logo_slug: str = ""
+    # Prefixes this provider's keys start with (clipboard detection in
+    # ``nvh setup``); empty means any long ASCII string may be a key.
+    key_prefixes: tuple[str, ...] = ()
+    # Placeholder for the key field; ``""`` derives ``"<prefix>..."`` from
+    # ``key_prefixes``, or ``"your-key..."`` when the provider takes a key.
+    key_placeholder: str = ""
+    # Free ``GET`` that lists the models a key can see, and how the key is
+    # sent. ``None`` derives ``<base_url>/models`` with a bearer header when
+    # the row has a ``base_url``; a row with neither has no probe and callers
+    # (``nvh setup``, ``nvh status --deep``, ``/v1/models``) keep the static
+    # ``[default, fallback]`` list.
+    models_probe: tuple[str, ProbeAuth] | None = None
+    # Signup friction, the group the setup wizards show the provider under:
+    # "none" (no key, or an anonymous tier), "email" (a free key against an
+    # email address) or "account" (an existing account, phone verification or
+    # a paid plan). ``""`` derives it from key_env, anonymous_key, free_tier.
+    signup_tier: str = ""
+    # Task types the provider is strong at, strongest first: the static
+    # fallback :mod:`nvh.core.agent_matching` scores before it has learning
+    # data. A row without any scores the baseline.
+    task_strengths: tuple[str, ...] = ()
+
     def __post_init__(self) -> None:
         if self.key_env is None:
             object.__setattr__(self, "key_env", f"{self.name.upper()}_API_KEY")
         if not self.display_name:
             object.__setattr__(self, "display_name", self.name)
+        if self.models_probe is None and self.base_url:
+            object.__setattr__(self, "models_probe", (f"{self.base_url.rstrip('/')}/models", "bearer"))
+        if not self.key_placeholder and self.takes_api_key:
+            placeholder = f"{self.key_prefixes[0]}..." if self.key_prefixes else "your-key..."
+            object.__setattr__(self, "key_placeholder", placeholder)
+        if not self.signup_tier:
+            if not self.takes_api_key or self.anonymous_key:
+                tier = "none"
+            elif self.free_tier:
+                tier = "email"
+            else:
+                tier = "account"
+            object.__setattr__(self, "signup_tier", tier)
+
+    @property
+    def takes_api_key(self) -> bool:
+        """Whether a ``<NAME>_API_KEY`` is read at all (Triton's ``key_env`` is its endpoint URL)."""
+        return bool(self.key_env) and self.key_env.endswith("_API_KEY")
 
     def route(self, model: str) -> str:
         """``model`` with :attr:`litellm_prefix` applied exactly once."""
@@ -203,6 +266,11 @@ _SPECS: tuple[ProviderSpec, ...] = (
         # The families the proxy table carried, collapsed to the shortest
         # prefixes with the same startswith() matches.
         model_prefixes=("gpt-5", "gpt-4", "gpt-3.5-turbo", "o1", "o3"),
+        docs_url="https://platform.openai.com/docs/overview",
+        logo_slug="openai",
+        key_prefixes=("sk-",),
+        models_probe=("https://api.openai.com/v1/models", "bearer"),
+        task_strengths=("reasoning", "analysis", "creative", "code_generation"),
     ),
     ProviderSpec(
         "anthropic",
@@ -245,6 +313,11 @@ _SPECS: tuple[ProviderSpec, ...] = (
         ),
         long_context=True,
         model_prefixes=("claude-3", "claude-sonnet-5", "claude-sonnet-4", "claude-opus-4", "claude-haiku-4"),
+        docs_url="https://docs.anthropic.com/",
+        logo_slug="anthropic",
+        key_prefixes=("sk-ant-",),
+        models_probe=("https://api.anthropic.com/v1/models", "x-api-key"),
+        task_strengths=("reasoning", "analysis", "code_review", "security"),
     ),
     # Bare "gemini-*" IDs route to vertex_ai without the prefix.
     ProviderSpec(
@@ -292,6 +365,13 @@ _SPECS: tuple[ProviderSpec, ...] = (
         ),
         long_context=True,
         model_prefixes=("gemini-3", "gemini-2.5", "gemini-2.0", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-pro"),
+        docs_url="https://ai.google.dev/gemini-api/docs",
+        logo_slug="gemini",
+        key_prefixes=("AIza",),
+        models_probe=("https://generativelanguage.googleapis.com/v1/models", "query-key"),
+        # A Google account, not just an email address.
+        signup_tier="account",
+        task_strengths=("reasoning", "analysis", "creative", "math"),
     ),
     ProviderSpec(
         "groq",
@@ -338,6 +418,11 @@ _SPECS: tuple[ProviderSpec, ...] = (
         ),
         is_fast=True,
         model_prefixes=("llama-3", "mixtral-8x7b", "mixtral-8x22b"),
+        docs_url="https://console.groq.com/docs/quickstart",
+        logo_slug="groq",
+        key_prefixes=("gsk_",),
+        models_probe=("https://api.groq.com/openai/v1/models", "bearer"),
+        task_strengths=("code_generation", "debugging", "general"),
     ),
     ProviderSpec(
         "grok",
@@ -378,6 +463,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Enterprise use requiring long track record",
         ),
         model_prefixes=("grok-4", "grok-3"),
+        docs_url="https://docs.x.ai/docs",
+        logo_slug="grok",
+        key_prefixes=("xai-",),
     ),
     ProviderSpec(
         "mistral",
@@ -424,6 +512,12 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "High-volume tasks on free tier",
         ),
         model_prefixes=("mistral-large", "mistral-medium", "mistral-small"),
+        docs_url="https://docs.mistral.ai/",
+        logo_slug="mistral",
+        models_probe=("https://api.mistral.ai/v1/models", "bearer"),
+        # Phone verification on signup.
+        signup_tier="account",
+        task_strengths=("code_generation", "reasoning", "creative"),
     ),
     ProviderSpec(
         "cohere",
@@ -465,6 +559,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Multimodal analysis",
             "High-precision structured data extraction",
         ),
+        docs_url="https://docs.cohere.com/",
+        logo_slug="cohere",
+        models_probe=("https://api.cohere.ai/v1/models", "bearer"),
     ),
     ProviderSpec(
         "deepseek",
@@ -508,6 +605,10 @@ _SPECS: tuple[ProviderSpec, ...] = (
         ),
         is_reasoning=True,
         model_prefixes=("deepseek-v4", "deepseek-chat", "deepseek-coder"),
+        docs_url="https://api-docs.deepseek.com/",
+        logo_slug="deepseek",
+        key_prefixes=("sk-",),
+        task_strengths=("code_generation", "math", "reasoning"),
     ),
     # Sonar Chat Completions retires 2026-09-27; the Agent API (Responses
     # shape, POST /v1/responses) replaces it. LiteLLM sends "preset/<name>" as
@@ -554,6 +655,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Simple questions that don't need web search",
         ),
         has_search=True,
+        docs_url="https://docs.perplexity.ai/",
+        logo_slug="perplexity",
+        key_prefixes=("pplx-",),
     ),
     ProviderSpec(
         "together",
@@ -592,6 +696,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Multimodal tasks",
             "Budget-constrained users (no free tier)",
         ),
+        docs_url="https://docs.together.ai/",
+        logo_slug="together",
+        models_probe=("https://api.together.xyz/v1/models", "bearer"),
     ),
     ProviderSpec(
         "fireworks",
@@ -631,6 +738,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Frontier model quality tasks",
         ),
         is_fast=True,
+        docs_url="https://docs.fireworks.ai/",
+        logo_slug="fireworks",
+        models_probe=("https://api.fireworks.ai/inference/v1/models", "bearer"),
     ),
     ProviderSpec(
         "openrouter",
@@ -668,6 +778,10 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Ultra-low-latency requirements",
             "When data must not pass through third parties",
         ),
+        docs_url="https://openrouter.ai/docs/quickstart",
+        logo_slug="openrouter",
+        key_prefixes=("sk-or-",),
+        models_probe=("https://openrouter.ai/api/v1/models", "bearer"),
     ),
     ProviderSpec(
         "cerebras",
@@ -708,6 +822,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Multimodal tasks",
         ),
         is_fast=True,
+        docs_url="https://inference-docs.cerebras.ai/",
+        logo_slug="cerebras",
+        models_probe=("https://api.cerebras.ai/v1/models", "bearer"),
     ),
     ProviderSpec(
         "sambanova",
@@ -746,6 +863,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Multimodal or vision tasks",
         ),
         is_fast=True,
+        docs_url="https://docs.sambanova.ai/",
+        logo_slug="sambanova",
+        models_probe=("https://api.sambanova.ai/v1/models", "bearer"),
     ),
     ProviderSpec(
         "huggingface",
@@ -787,6 +907,11 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Tasks requiring consistent high quality",
             "When uptime matters",
         ),
+        docs_url="https://huggingface.co/docs/api-inference/index",
+        logo_slug="huggingface",
+        key_prefixes=("hf_",),
+        models_probe=("https://router.huggingface.co/v1/models", "bearer"),
+        metered_upstream=True,
     ),
     ProviderSpec(
         "ai21",
@@ -827,6 +952,8 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Tasks where the Jamba architecture doesn't help",
         ),
         long_context=True,
+        docs_url="https://docs.ai21.com/",
+        logo_slug="ai21",
     ),
     # Without the prefix LiteLLM parses "meta/..." as its own Llama-API provider.
     # NIM cold starts take minutes, and the 8B fallback answers the health ping
@@ -872,6 +999,12 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "When you need guaranteed low latency",
             "High-volume production without paid tier",
         ),
+        docs_url="https://docs.nvidia.com/nim/",
+        logo_slug="nvidia",
+        key_prefixes=("nvapi-",),
+        # NVIDIA Developer Program account with SMS verification.
+        signup_tier="account",
+        task_strengths=("code_generation", "ml", "optimization"),
     ),
     # LiteLLM has no siliconflow/llm7 route; "openai/" selects its generic
     # OpenAI-compatible client and api_base points it at the host.
@@ -917,6 +1050,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "Tasks requiring frontier model quality",
             "When uptime SLA is critical",
         ),
+        docs_url="https://docs.siliconflow.cn/",
+        logo_slug="siliconflow",
+        key_prefixes=("sk-",),
     ),
     ProviderSpec(
         "llm7",
@@ -961,6 +1097,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             "High-volume usage on anonymous tier",
             "When you need frontier model quality (GPT-4o level)",
         ),
+        docs_url="https://llm7.io/",
+        # No brand mark on the icons CDN.
+        task_strengths=("general", "code_generation", "debugging"),
     ),
 )
 
@@ -1015,6 +1154,9 @@ _BESPOKE: tuple[ProviderSpec, ...] = (
             "When you need 1M+ token context (use Gemini)",
         ),
         is_local=True,
+        docs_url="https://ollama.com/library",
+        logo_slug="ollama",
+        task_strengths=("code_generation", "debugging", "general"),
     ),
     ProviderSpec(
         "triton",
@@ -1022,8 +1164,10 @@ _BESPOKE: tuple[ProviderSpec, ...] = (
         "",
         zero_cost=True,
         display_name="Triton",
-        # The endpoint variable; Triton takes no key.
+        # The endpoint variable; Triton takes no key. TRITON_ENDPOINT is the
+        # legacy spelling the adapter and the config template still honour.
         key_env="TRITON_URL",
+        env_keys=("TRITON_ENDPOINT",),
         free_tier=True,
         free_info="your own inference server",
         upgrade_hint="Load more models on the Triton server (model repository)",
@@ -1048,6 +1192,12 @@ BESPOKE_SPECS: dict[str, ProviderSpec] = {spec.name: spec for spec in _BESPOKE}
 # Every provider nvHive knows, cloud adapters first: the one table the
 # derived docs, ladders and cards iterate.
 PROVIDER_FACTS: dict[str, ProviderSpec] = {**PROVIDER_SPECS, **BESPOKE_SPECS}
+
+
+# The providers the guided setup (``nvh setup`` / first run) walks for a key,
+# in the order it asks: the free fast tier first, then the three the council
+# defaults weight. A selection, not a fact; the facts come from their rows.
+CORE_PROVIDER_NAMES: tuple[str, ...] = ("groq", "openai", "anthropic", "google")
 
 
 def free_tier_ladder() -> list[ProviderSpec]:

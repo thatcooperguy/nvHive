@@ -24,8 +24,8 @@ warnings. Tests run from any directory; paths are resolved from
 `NVH_NETWORK_TESTS=1`) and `slow` (subprocess-heavy CLI, live-uvicorn and stdio
 MCP server tests; `python -m pytest tests/ -m "not slow" -q` is the quick local
 run). Test processes use LiteLLM's bundled model-price map
-(`LITELLM_LOCAL_MODEL_COST_MAP`, set in `tests/conftest.py`) so no run depends
-on a GitHub fetch at import time.
+(`LITELLM_LOCAL_MODEL_COST_MAP`, set by `nvh/__init__.py` and again in
+`tests/conftest.py`) so no run depends on a GitHub fetch at import time.
 
 ## Layout
 
@@ -45,6 +45,9 @@ files are guards rather than unit tests:
 | `test_docs_links.py` | every relative link and image in README and `docs/` resolves; every doc has an inbound link |
 | `test_mcp_cabinet_sync.py` | the MCP server's cabinet set is `COUNCIL_PRESETS` |
 | `test_provider_defaults.py` | the settings template and the API server's copy of the provider defaults carry the same, current model IDs |
+| `test_single_provider_table.py` | no file under `nvh/`, `scripts/` or the WebUI setup page types a provider fact (display name, key variable, URL, model id) that `nvh/providers/specs.py` already holds |
+| `test_capabilities_catalog.py` | `nvh/config/capabilities.yaml` is canonical (`scripts/gen_capabilities.py --check`), every hand-typed override row has a `source:`, every provider default and fallback has a price source on whatever LiteLLM is installed (Hugging Face excepted: metered upstream, loads as cost unknown), retired rows equal the rename table, and loading the shipped catalog opens no socket and attempts no HTTP request |
+| `test_model_currency.py` | `network` tier: the providers still serve the catalog's and the specs' model ids; its offline drift report (each override beside today's LiteLLM value, each active row nothing prices any more) is pinned without the network |
 | `test_release_hardening.py` | `install.sh`, `nvh services` and the docs keep the bring-up contract |
 | `test_cli_mcp_group.py` | no name is both a command and a command group (the bug that hid `nvh mcp` and `nvh agent`) |
 
@@ -126,6 +129,14 @@ excluded from the coverage metric and covered by the subprocess tests instead.
   and mock host tools such as Docker in endpoint shape tests.
 - Regenerate `docs/COMMANDS.md` when you add, rename or hide a command, and
   keep counts out of prose: the parity tests will tell you if you forgot.
+  The same goes for the other generators: `scripts/gen_providers_doc.py`,
+  `scripts/gen_models_doc.py` and `scripts/gen_capabilities.py` each take
+  `--check` (exit 1 when the committed file is stale) and their parity tests
+  run exactly that.
+- A test that touches the model catalog resets every singleton it used:
+  `nvh.providers.registry.reset_registry()` and `reset_catalog_state()`,
+  `nvh.providers.openai_compatible._catalog.cache_clear()` and
+  `_COST_FALLBACK_LOGGED.clear()`, and `nvh.api.server._LIVE_MODELS_CACHE.clear()`.
 - A test that reads a doc (`test_release_hardening.py`,
   `test_docs_links.py`) is a contract: update the doc and the test together.
 
@@ -154,6 +165,35 @@ configuration rewriting. Council and agent fixtures use real registries with
 fake providers so policy binding follows the application path. No live model,
 native broker, Spark allocation or physical GPU release is established by this
 suite; paused-council partial-usage accounting remains a separate milestone.
+
+## Catalog and model currency
+
+The model catalog ([CONFIGURATION.md](CONFIGURATION.md#model-catalog)) has an
+offline guard and an opt-in live tier. Both run one pytest process per file:
+
+```bash
+# capabilities.yaml is canonical and every default model has a price source
+python -m pytest tests/test_capabilities_catalog.py -q
+python scripts/gen_capabilities.py --check          # what the test runs; exit 1 when stale
+python scripts/gen_capabilities.py                  # rewrite the file in canonical form
+
+# the live tier: skipped unless opted in; keyed tests also skip per missing key
+NVH_NETWORK_TESTS=1 python -m pytest tests/test_model_currency.py -q
+NVH_NETWORK_TESTS=1 GROQ_API_KEY=... NVIDIA_API_KEY=... python -m pytest tests/test_model_currency.py -q -k keyed
+
+# the override-drift report the weekly workflow prints (offline, never fails)
+python -c "from tests.test_model_currency import print_override_drift; print_override_drift()"
+```
+
+`tests/test_capabilities_catalog.py` passes on whatever LiteLLM `pip`
+resolved, because the file holds no LiteLLM-read numbers; a LiteLLM release
+can only move the informational drift report. `tests/test_model_currency.py`
+without `NVH_NETWORK_TESTS=1` runs only its offline drift-report test. The
+secret-free live tests need no key (LLM7's anonymous models endpoint); the
+keyed tests read `GROQ_API_KEY` and `NVIDIA_API_KEY` only and print model
+ids, never keys. `.github/workflows/model-currency.yml` runs all of this
+weekly against the latest LiteLLM, plus every VRAM-tier Ollama tag against
+the registry; it is non-blocking.
 
 ## Manual smoke before a release
 

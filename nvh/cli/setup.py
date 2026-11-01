@@ -23,19 +23,18 @@ from rich.text import Text
 from nvh.config.settings import DEFAULT_CONFIG_DIR
 from nvh.core import local_models
 from nvh.providers.registry import RETIRED_PROVIDERS, resolve_provider_key
-from nvh.providers.specs import PROVIDER_SPECS
-from nvh.utils.ollama import ollama_base_url
+from nvh.providers.specs import CORE_PROVIDER_NAMES, PROVIDER_FACTS, PROVIDER_SPECS
+from nvh.utils.ollama import DEFAULT_OLLAMA_URL, ollama_base_url
 
 # ---------------------------------------------------------------------------
-# Provider definitions — the four core providers plus Ollama
+# Provider definitions — the four core providers (spec rows) plus Ollama
 # ---------------------------------------------------------------------------
 
-# (name, display_name, env_var, signup_url)
-CORE_PROVIDERS = [
-    ("groq", "Groq", "GROQ_API_KEY", "https://console.groq.com/keys"),
-    ("openai", "OpenAI", "OPENAI_API_KEY", "https://platform.openai.com/api-keys"),
-    ("anthropic", "Anthropic", "ANTHROPIC_API_KEY", "https://console.anthropic.com/settings/keys"),
-    ("google", "Google Gemini", "GOOGLE_API_KEY", "https://aistudio.google.com/apikey"),
+# (name, display_name, env_var, signup_url), from the spec table in the order
+# the guided setup asks (nvh.providers.specs.CORE_PROVIDER_NAMES).
+CORE_PROVIDERS: list[tuple[str, str, str, str]] = [
+    (spec.name, spec.display_name, spec.key_env, spec.signup_url)
+    for spec in (PROVIDER_FACTS[name] for name in CORE_PROVIDER_NAMES)
 ]
 
 # ---------------------------------------------------------------------------
@@ -43,7 +42,12 @@ CORE_PROVIDERS = [
 # provider catalogs 2026-09-01 (0.41.1). A bare ID only means the retired
 # model inside its own provider's block (llm7 also served "gpt-4o-mini").
 # `nvh config migrate` rewrites these in the user's config.yaml; `nvh status
-# --deep` suggests it when a configured model is in this table.
+# --deep` suggests it when a configured model is in this table, and the
+# catalog rows named here load as ``status: retired`` (scripts/gen_capabilities.py).
+# 2026-11-01 (0.45): gemini-2.0-pro, groq/mixtral-8x7b-32768 and xai/grok-3
+# added because no LiteLLM table (1.99.0 or 1.106.6) prices them any more
+# (LiteLLM's azure_ai/grok-3 row carries deprecation_date 2026-05-01); each
+# points at its provider's current default.
 # ---------------------------------------------------------------------------
 
 RETIRED_MODEL_RENAMES: dict[str, dict[str, str]] = {
@@ -52,15 +56,18 @@ RETIRED_MODEL_RENAMES: dict[str, dict[str, str]] = {
         "gpt-4o-mini": "gpt-5.6-luna",
     },
     "google": {
+        "gemini/gemini-2.0-pro": "gemini/gemini-3.7-flash",
         "gemini/gemini-2.0-flash": "gemini/gemini-3.7-flash",
         "gemini/gemini-2.0-flash-lite": "gemini/gemini-3.5-flash-lite",
     },
     "groq": {
         "groq/llama-3.3-70b-versatile": "groq/openai/gpt-oss-120b",
         "groq/llama-3.1-8b-instant": "groq/openai/gpt-oss-20b",
+        "groq/mixtral-8x7b-32768": "groq/openai/gpt-oss-120b",
     },
     "grok": {
         "xai/grok-2": "xai/grok-4.6",
+        "xai/grok-3": "xai/grok-4.6",
     },
     "cohere": {
         "command-r-plus": "command-a-03-2025",
@@ -206,17 +213,11 @@ def load_env_keys(use_keyring: bool = True) -> None:
     them without warnings. ``use_keyring=False`` skips the four synchronous
     keyring round-trips (the API lifespan keeps keyring opt-in).
     """
-    # --- Keyring: load all known provider keys into os.environ -----------
-    _KEYRING_KEYS = [
-        ("groq", "GROQ_API_KEY"),
-        ("openai", "OPENAI_API_KEY"),
-        ("anthropic", "ANTHROPIC_API_KEY"),
-        ("google", "GOOGLE_API_KEY"),
-    ]
+    # --- Keyring: load the core providers' keys into os.environ ----------
     if use_keyring:
         try:
             import keyring
-            for name, env_var in _KEYRING_KEYS:
+            for name, _display, env_var, _url in CORE_PROVIDERS:
                 if not os.environ.get(env_var):
                     val = keyring.get_password("nvhive", f"{name}_api_key")
                     if val:
@@ -1089,19 +1090,19 @@ def _get_clipboard() -> str:
     return ""
 
 
-# API key patterns — prefix → min length
-_KEY_PATTERNS = {
-    "groq": (["gsk_"], 20),
-    "openai": (["sk-"], 20),
-    "anthropic": (["sk-ant-"], 20),
-    "google": (["AIza"], 20),
+# API key patterns — prefixes → min length, from each spec row's key_prefixes.
+_KEY_MIN_LENGTH = 20
+_KEY_PATTERNS: dict[str, tuple[list[str], int]] = {
+    name: (list(spec.key_prefixes), _KEY_MIN_LENGTH)
+    for name, spec in PROVIDER_FACTS.items()
+    if spec.key_prefixes
 }
 
 
 def _looks_like_api_key(text: str, provider: str) -> bool:
     """Check if text looks like an API key for the given provider."""
     text = text.strip()
-    prefixes, min_len = _KEY_PATTERNS.get(provider, ([], 20))
+    prefixes, min_len = _KEY_PATTERNS.get(provider, ([], _KEY_MIN_LENGTH))
     if len(text) < min_len:
         return False
     if prefixes:
@@ -1192,37 +1193,24 @@ def _write_config(
         "advisors:",
     ]
 
-    # Provider configs — enable those we have keys for
-    advisor_defs = {
-        "groq": {
-            "env": "GROQ_API_KEY",
-            "model": "groq/openai/gpt-oss-120b",
-            "fallback": "groq/openai/gpt-oss-20b",
-        },
-        "openai": {
-            "env": "OPENAI_API_KEY",
-            "model": "gpt-5.6-terra",
-            "fallback": "gpt-5.6-luna",
-        },
-        "anthropic": {
-            "env": "ANTHROPIC_API_KEY",
-            "model": "claude-sonnet-5",
-            "fallback": "claude-haiku-4-5-20251001",
-        },
-        "google": {
-            "env": "GOOGLE_API_KEY",
-            "model": "gemini/gemini-3.7-flash",
-            "fallback": "gemini/gemini-3.5-flash-lite",
-        },
-        "ollama": {
-            "env": None,
-            # Populated per-machine below based on detected VRAM tier so the
-            # config points at a model that actually exists on the Ollama
-            # registry AND fits the user's hardware.
-            "model": None,
-            "fallback": None,
-            "base_url": "http://localhost:11434",
-        },
+    # Provider configs — the core providers' routing facts from their spec
+    # rows (enabled for those we have keys for), then Ollama.
+    advisor_defs: dict[str, dict[str, Any]] = {
+        name: {
+            "env": env_var,
+            "model": PROVIDER_FACTS[name].default_model,
+            "fallback": PROVIDER_FACTS[name].fallback_model,
+        }
+        for name, _display, env_var, _url in CORE_PROVIDERS
+    }
+    advisor_defs["ollama"] = {
+        "env": None,
+        # Populated per-machine below based on detected VRAM tier so the
+        # config points at a model that actually exists on the Ollama
+        # registry AND fits the user's hardware.
+        "model": None,
+        "fallback": None,
+        "base_url": DEFAULT_OLLAMA_URL,
     }
 
     # Pick the Ollama default/fallback for THIS machine from the one VRAM-tier
@@ -1469,13 +1457,13 @@ def guided_setup(console: Console | None = None) -> None:
     # Ollama status (now should be running from Step 1)
     if ollama_up:
         provider_table.add_row(
-            "Ollama (local)",
+            PROVIDER_FACTS["ollama"].display_name,
             f"[green]running[/green] ({len(ollama_models)} models)",
             "",
         )
     else:
         provider_table.add_row(
-            "Ollama (local)",
+            PROVIDER_FACTS["ollama"].display_name,
             "[dim]not running[/dim]",
             "[dim]https://ollama.com[/dim]",
         )
@@ -1790,40 +1778,41 @@ def _check_nvh_on_path() -> dict[str, str] | None:
     }
 
 
-def _validate_key(name: str, key: str, console: Console) -> bool | None:
-    """Quick-validate an API key. Returns True/None (ok/unknown) or False (rejected)."""
-    test_urls = {
-        "groq": ("https://api.groq.com/openai/v1/models", "bearer"),
-        "openai": ("https://api.openai.com/v1/models", "bearer"),
-        "anthropic": ("https://api.anthropic.com/v1/models", "x-api-key"),
-        "google": ("https://generativelanguage.googleapis.com/v1/models", "query"),
-    }
-    spec = test_urls.get(name)
-    if not spec:
-        return None
+def probe_models_endpoint(name: str, key: str, *, timeout: float = 8.0) -> int | None:
+    """HTTP status of the provider's free ``GET /models`` sent with ``key``.
 
-    url, auth_type = spec
+    The URL and how the key travels come from the spec row's ``models_probe``
+    (bearer header, Anthropic's ``x-api-key`` header, or Google's ``?key=``
+    query parameter). ``None`` when the row has no probe or the request
+    itself fails — the caller then stores the key untested.
+    """
+    spec = PROVIDER_FACTS.get(name)
+    if spec is None or spec.models_probe is None:
+        return None
+    # The same (url, headers, params) the adapter's health probe sends, so the
+    # auth mapping lives once (nvh.providers.openai_compatible).
+    from nvh.providers.openai_compatible import models_probe_request
+
+    url, headers, params = models_probe_request(spec.models_probe, key)
     try:
         import httpx
-        if auth_type == "bearer":
-            headers = {"Authorization": f"Bearer {key}"}
-            resp = httpx.get(url, headers=headers, timeout=8)
-        elif auth_type == "x-api-key":
-            headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
-            resp = httpx.get(url, headers=headers, timeout=8)
-        elif auth_type == "query":
-            resp = httpx.get(f"{url}?key={key}", timeout=8)
-        else:
-            return None
 
-        if resp.status_code in (200, 201):
-            return True
-        if resp.status_code in (401, 403):
-            console.print(
-                f"  [red]Key rejected by {name} (HTTP {resp.status_code}). Skipping.[/red]"
-            )
-            return False
-        # Other status — probably fine, don't block
-        return None
+        return int(httpx.get(url, headers=headers, params=params or None, timeout=timeout).status_code)
     except Exception:
         return None
+
+
+def _validate_key(name: str, key: str, console: Console) -> bool | None:
+    """Quick-validate an API key. Returns True/None (ok/unknown) or False (rejected)."""
+    status = probe_models_endpoint(name, key)
+    if status is None:
+        return None
+    if status in (200, 201):
+        return True
+    if status in (401, 403):
+        console.print(
+            f"  [red]Key rejected by {name} (HTTP {status}). Skipping.[/red]"
+        )
+        return False
+    # Other status — probably fine, don't block
+    return None

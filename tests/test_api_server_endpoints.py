@@ -1611,3 +1611,118 @@ class TestOpenModeIsClosedByTheKeyNotByUsers:
         monkeypatch.delenv("HIVE_API_KEY", raising=False)
         monkeypatch.setenv("NVH_API_BIND_HOST", "127.0.0.1")
         assert asyncio.run(server_module._privileged_network_refusal(local)) is None
+
+
+# ---------------------------------------------------------------------------
+# /v1/models: the live intersect and its cache
+# ---------------------------------------------------------------------------
+
+
+class _FakeRegistry:
+    def __init__(self, provider):
+        self._provider = provider
+
+    def get(self, name):
+        if self._provider is None:
+            raise KeyError(name)
+        return self._provider
+
+
+def _engine_with(provider):
+    return types.SimpleNamespace(registry=_FakeRegistry(provider), config=None)
+
+
+class TestLiveModelCache:
+    @pytest.fixture(autouse=True)
+    def _fresh_cache(self):
+        server_module._LIVE_MODELS_CACHE.clear()
+        yield
+        server_module._LIVE_MODELS_CACHE.clear()
+
+    def test_ttls_are_the_adapter_module_constants(self):
+        from nvh.providers import openai_compatible as oc
+
+        assert server_module._LIVE_MODELS_TTL == oc.LIVE_MODELS_TTL == 300.0
+        assert server_module.LIVE_MODELS_NEGATIVE_TTL == oc.LIVE_MODELS_NEGATIVE_TTL == 30.0
+
+    def test_live_model_ids_is_preferred_and_keyed_by_tail(self):
+        class Adapter:
+            calls = 0
+
+            async def live_model_ids(self):
+                Adapter.calls += 1
+                return {"nvidia_nim/meta/llama-x"}
+
+            async def list_models(self):
+                raise AssertionError("list_models must not be used when live_model_ids exists")
+
+        keys = asyncio.run(server_module._get_live_model_ids(_engine_with(Adapter()), "nvidia"))
+        assert keys == frozenset({"nvidia_nim/meta/llama-x", "llama-x"})
+        # Served from the cache within the TTL: no second probe.
+        asyncio.run(server_module._get_live_model_ids(_engine_with(Adapter()), "nvidia"))
+        assert Adapter.calls == 1
+
+    def test_unknown_live_list_is_negative_cached_for_the_short_ttl(self, monkeypatch):
+        class Unknown:
+            async def live_model_ids(self):
+                return None
+
+        class Back:
+            async def live_model_ids(self):
+                return {"m"}
+
+        clock = [5000.0]
+        monkeypatch.setattr(server_module.time, "monotonic", lambda: clock[0])
+        assert asyncio.run(server_module._get_live_model_ids(_engine_with(Unknown()), "p")) is None
+        cached_at, cached = server_module._LIVE_MODELS_CACHE["p"]
+        assert cached is None
+        assert clock[0] - cached_at == server_module._LIVE_MODELS_TTL - server_module.LIVE_MODELS_NEGATIVE_TTL
+        # Still "unknown" just before the short TTL ends, re-probed just after.
+        clock[0] += server_module.LIVE_MODELS_NEGATIVE_TTL - 1
+        assert asyncio.run(server_module._get_live_model_ids(_engine_with(Back()), "p")) is None
+        clock[0] += 2
+        assert asyncio.run(server_module._get_live_model_ids(_engine_with(Back()), "p")) == frozenset({"m"})
+
+    def test_resource_paused_is_unknown_not_an_error(self):
+        from nvh.core.atohi import ResourcePaused
+
+        class Adapter:
+            async def list_models(self):
+                raise ResourcePaused("broker_unavailable")
+
+        assert asyncio.run(server_module._get_live_model_ids(_engine_with(Adapter()), "p")) is None
+        assert server_module._LIVE_MODELS_CACHE["p"][1] is None
+
+    def test_empty_and_missing_adapters_are_unknown(self):
+        class Empty:
+            async def list_models(self):
+                return []
+
+        assert asyncio.run(server_module._get_live_model_ids(_engine_with(Empty()), "p")) is None
+        assert server_module._LIVE_MODELS_CACHE["p"][1] is None
+        assert asyncio.run(server_module._get_live_model_ids(_engine_with(None), "q")) is None
+        assert "q" not in server_module._LIVE_MODELS_CACHE  # no adapter at all: nothing to remember
+
+    def test_list_models_adapters_feed_the_cache(self):
+        class Legacy:
+            async def list_models(self):
+                return [ModelInfo(model_id="groq/openai/gpt-oss-120b", provider="groq")]
+
+        keys = asyncio.run(server_module._get_live_model_ids(_engine_with(Legacy()), "groq"))
+        assert keys == frozenset({"groq/openai/gpt-oss-120b", "gpt-oss-120b"})
+
+
+class TestModelsEndpoint:
+    def test_envelope_carries_the_litellm_derived_fields_and_warnings(self, client):
+        server_module._LIVE_MODELS_CACHE.clear()
+        server_module._engine.registry.load_capabilities()
+        try:
+            r = client.get("/v1/models")
+            assert r.status_code == 200
+            data = r.json()["data"]
+            assert data["warnings"] == [] and data["count"] == len(data["models"]) > 0
+            assert all(m["status"] != "retired" for m in data["models"])
+            row = data["models"][0]
+            assert {"supports_function_calling", "cost_known", "deprecation_date", "successor"} <= set(row)
+        finally:
+            server_module._LIVE_MODELS_CACHE.clear()

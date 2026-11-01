@@ -681,24 +681,24 @@ def build_models_list(registry: Any) -> dict[str, Any]:
             "description": description,
         })
 
-    # Add real provider models from the registry
+    # The real models: the registry's catalog rows for each enabled provider
+    # (capabilities.yaml merged with LiteLLM's table), retired rows hidden.
+    # The adapters themselves carry no model attributes, and a live probe
+    # has no place in this synchronous list.
     for provider_name in (registry.list_enabled() if hasattr(registry, "list_enabled") else []):
         try:
-            provider = registry.get(provider_name)
-            models = getattr(provider, "available_models", None)
-            if callable(models):
-                models = models()
-            if not models and hasattr(provider, "default_model"):
-                models = [provider.default_model]
-            for model_id in (models or []):
-                model_objects.append({
-                    "id": model_id,
-                    "object": "model",
-                    "created": now,
-                    "owned_by": provider_name,
-                })
+            rows = registry.list_models(provider=provider_name) if hasattr(registry, "list_models") else []
         except Exception:
             continue
+        for row in rows:
+            if getattr(row, "status", "active") == "retired":
+                continue
+            model_objects.append({
+                "id": row.model_id,
+                "object": "model",
+                "created": now,
+                "owned_by": provider_name,
+            })
 
     return {
         "object": "list",

@@ -612,6 +612,50 @@ def _retired_models(ctx: CheckContext) -> list[CheckResult]:
     return rows
 
 
+@check("default_models_served", "Default models", DEEP)
+async def _default_models_served(ctx: CheckContext) -> list[CheckResult]:
+    """Warn for every configured advisor whose default model its live ``GET /models`` list lacks.
+
+    DEEP only: one network call per configured provider, and the same probe
+    ``provider_health`` just made (the adapter caches it for the health
+    interval), so the tier makes no second request. A provider whose live
+    list is unknown (no key, no probe, an error) gets no row rather than a
+    guess; bespoke adapters (Ollama has ``ollama_required_models``) are
+    skipped.
+    """
+    engine = await ctx.engine()
+    if engine is None:
+        return []
+    from nvh.providers.openai_compatible import live_model_ids_for, live_model_keys, model_served
+    from nvh.providers.registry import configured_default_model
+    from nvh.providers.specs import PROVIDER_SPECS
+
+    async def one(name: str, pconfig: Any) -> CheckResult | None:
+        # Spec rows only: the bespoke adapters have no models probe to share.
+        if (pconfig.type or name) not in PROVIDER_SPECS or not engine.registry.has(name):
+            return None
+        default = configured_default_model(name, pconfig)
+        try:
+            provider = engine.registry.get(name)
+        except Exception:
+            return None
+        # The same probe and timeout handling as /v1/models (no list_models
+        # fallback: a bespoke adapter registered under a spec name says nothing).
+        live = await live_model_ids_for(provider, timeout=ctx.health_timeout, list_models_fallback=False)
+        if not default or live is None or model_served(default, live_model_keys(live)):
+            return None
+        return CheckResult(
+            title=f"Advisor {name}: default model",
+            status="warn",
+            detail=f"'{default}' not served by {name} ({len(live)} live model(s))",
+            fix=f"Pick a served model with `nvh model list` and set default_model for {name} in config.yaml.",
+            data={"provider": name, "model": default, "live_models": len(live)},
+        )
+
+    rows = await asyncio.gather(*(one(name, pconfig) for name, pconfig in _configured_providers(ctx)))
+    return [row for row in rows if row is not None]
+
+
 @check("ollama", "Ollama", GLANCE, DEEP)
 def _ollama(ctx: CheckContext) -> CheckResult:
     models = ctx.ollama_models

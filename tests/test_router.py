@@ -509,6 +509,13 @@ def test_cost_expensive():
     assert _rtr()._cost_score(m) == 0.0
 
 
+def test_cost_unknown_is_neutral_not_free():
+    # A row no source priced carries $0 with cost_known=False; it must not
+    # out-score every priced model the way a genuinely free one does.
+    assert _rtr()._cost_score(ModelInfo(model_id="x", provider="x", cost_known=False)) == 0.5
+    assert _rtr()._cost_score(ModelInfo(model_id="x", provider="x")) == 1.0
+
+
 @pytest.mark.parametrize("ms,exp", [(6000, 0.0), (0, 1.0)])
 def test_latency_score(ms, exp):
     assert _rtr()._latency_score(

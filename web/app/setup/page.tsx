@@ -172,14 +172,9 @@ const ADVANCED_GROUPS: { id: string; label: string; steps: Step[] }[] = [
   { id: 'verify', label: 'Verify', steps: ['test', 'done'] },
 ];
 
-const CLOUD_PROVIDERS = [
-  { id: 'openai', name: 'OpenAI', description: 'GPT-5.6 Terra, GPT-5.6 Luna', envKey: 'OPENAI_API_KEY', placeholder: 'sk-...', signupUrl: 'https://platform.openai.com/api-keys' },
-  { id: 'anthropic', name: 'Anthropic', description: 'Claude Sonnet 5, Haiku 4.5', envKey: 'ANTHROPIC_API_KEY', placeholder: 'sk-ant-...', signupUrl: 'https://console.anthropic.com/settings/keys' },
-  { id: 'google', name: 'Google Gemini', description: 'Gemini 3.7 Flash, 3.5 Flash-Lite', envKey: 'GOOGLE_API_KEY', placeholder: 'AIza...', signupUrl: 'https://aistudio.google.com/apikey' },
-  { id: 'groq', name: 'Groq', description: 'gpt-oss-120b (ultra-fast)', envKey: 'GROQ_API_KEY', placeholder: 'gsk_...', signupUrl: 'https://console.groq.com/keys' },
-  { id: 'grok', name: 'xAI Grok', description: 'Grok 4.6, Grok 4.3', envKey: 'XAI_API_KEY', placeholder: 'xai-...', signupUrl: 'https://console.x.ai' },
-  { id: 'mistral', name: 'Mistral', description: 'Mistral Large, Small', envKey: 'MISTRAL_API_KEY', placeholder: 'your-key...', signupUrl: 'https://console.mistral.ai/api-keys' },
-];
+// Cloud provider names, key pages, env vars and free tiers are never typed
+// here: the Cloud step renders what GET /v1/setup/free-providers returns
+// (one row per nvh/providers/specs.py entry), so a fact changes in one place.
 
 type BrandLogoId = 'openclaw' | 'nvidia' | 'comfyui' | 'blender' | 'godot' | 'github' | 'unity' | 'unreal' | 'ollama' | 'audacity' | 'lmms';
 
@@ -229,7 +224,10 @@ interface ProviderCardProps {
 function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, setKeyInputs, savingKey, savedKeys, keyErrors, handleSaveKey }: ProviderCardProps) {
   const isConfigured = p.configured || savedKeys.has(p.id);
   const isExpanded = expandedProvider === p.id;
-  const keyUrl = p.key_url || p.signup_url;
+  // A provider that takes no key at all (local Ollama) gets no key affordances;
+  // an optional token (LLM7) still exposes its env var and key page.
+  const takesKey = p.requires_key !== false || Boolean(p.env_key);
+  const keyUrl = takesKey ? (p.key_url || p.signup_url) : '';
   const docsUrl = p.docs_url;
 
   return (
@@ -266,7 +264,7 @@ function ProviderCard({ p, expandedProvider, setExpandedProvider, keyInputs, set
         </div>
 
         {/* Add Key / collapse button */}
-        {!isConfigured && (
+        {!isConfigured && takesKey && (
           <div className="flex items-center gap-2 flex-shrink-0">
             {keyUrl && (
               <a
@@ -5951,69 +5949,15 @@ export default function SetupPage() {
                 })()}
               </div>
             ) : (
-              /* Fallback: static list when API endpoint not available */
-              <div className="space-y-3">
-                {CLOUD_PROVIDERS.map(provider => (
-                  <div key={provider.id} className="border border-[#e5e5e5] bg-[#ffffff] p-4 dark:bg-[#0a0a0a] dark:border-[#262626]">
-                    <div className="flex items-center justify-between mb-2">
-                      <div>
-                        <div className="text-sm font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">{provider.name}</div>
-                        <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">{provider.description}</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {savedKeys.has(provider.id) && (
-                          <span className="text-[10px] font-mono text-[#76B900] bg-[#76B900]/10 px-1.5 py-0.5">CONFIGURED</span>
-                        )}
-                        {provider.signupUrl && (
-                          <a
-                            href={provider.signupUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[10px] font-mono text-[#76B900] hover:underline"
-                          >
-                            Get Key &rarr;
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={keyInputs[provider.id] || ''}
-                        onChange={e => setKeyInputs(prev => ({ ...prev, [provider.id]: e.target.value }))}
-                        onPaste={e => {
-                          const pasted = e.clipboardData.getData('text').trim();
-                          if (pasted) {
-                            setKeyInputs(prev => ({ ...prev, [provider.id]: pasted }));
-                          }
-                        }}
-                        placeholder={`Paste ${provider.envKey} here...`}
-                        className="input-base flex-1 px-3 py-2 text-xs font-mono"
-                        spellCheck={false}
-                        autoComplete="off"
-                      />
-                    </div>
-                    <div className="mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                      <div className="text-[10px] font-mono text-[#333333]">
-                        Or set as env var: <span className="text-[#a3a3a3] dark:text-[#737373]">{provider.envKey}=your-key</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSaveKey(provider.id)}
-                        disabled={savingKey === provider.id || !(keyInputs[provider.id] || '').trim()}
-                        className="btn-primary px-3 py-2 text-[10px] font-mono uppercase tracking-wider disabled:opacity-40"
-                      >
-                        {savingKey === provider.id ? 'Saving' : 'Save Key'}
-                      </button>
-                    </div>
-                    {keyErrors[provider.id] && (
-                      <div className="text-[10px] font-mono text-[#dc2626] mt-1">{keyErrors[provider.id]}</div>
-                    )}
-                    {savedKeys.has(provider.id) && (
-                      <div className="text-[10px] font-mono text-[#76B900] mt-1">Saved through the local Hive API.</div>
-                    )}
-                  </div>
-                ))}
+              /* The list comes from the Hive API; without it there is no hand-typed copy to show. */
+              <div className="border border-[#e5e5e5] bg-[#ffffff] p-4 dark:bg-[#0a0a0a] dark:border-[#262626]">
+                <div className="text-sm font-mono font-bold text-[#0a0a0a] dark:text-[#fafafa]">Cloud provider list unavailable</div>
+                <div className="text-[10px] font-mono text-[#a3a3a3] mt-1 leading-relaxed dark:text-[#737373]">
+                  Provider names, key pages and free tiers are served by the Hive API
+                  (<span className="text-[#76B900]">/v1/setup/free-providers</span>). Start{' '}
+                  <span className="text-[#76B900]">nvh serve</span> and reload this page, or add keys from a
+                  terminal with <span className="text-[#76B900]">nvh setup</span>.
+                </div>
               </div>
             )}
 

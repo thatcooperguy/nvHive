@@ -1,0 +1,82 @@
+{
+  "_comment": [
+    "litellm.register_model payloads for ProviderSpec default/fallback ids that LiteLLM's model table should",
+    "price but does not carry (nvh/providers/registry.py registers them at catalog load, only while the id is",
+    "absent from litellm.model_cost, so LiteLLM wins the moment a release adds the row). Every payload carries",
+    "a `source`; the loader strips it before registering. tests/test_capabilities_catalog.py checks that every",
+    "spec default and fallback prices on whatever LiteLLM is installed and that every key here is a current",
+    "spec id.",
+    "Deliberately absent: perplexity/preset/* (billed from usage.cost; litellm.cost_per_token must keep raising",
+    "so the catalog rates stay the fallback -- tests/test_perplexity_surface.py), the llm7 / siliconflow bare",
+    "ids (zero-cost providers on the openai/ route; registering a bare `gpt-oss` makes litellm.get_llm_provider",
+    "route it to OpenAI), and the huggingface/* ids (ProviderSpec.metered_upstream: LiteLLM bills Hugging Face",
+    "Inference Providers at $0 whatever is registered, the real rate lands on the HF account, so the rows load as",
+    "'cost unknown' rather than a known $0 -- and litellm.register_model fetches huggingface.co/<id>/config.json",
+    "for a huggingface/ id, which the catalog load must never do). Their facts are `source:`-annotated rows in",
+    "capabilities.yaml."
+  ],
+  "models": {
+    "ai21_chat/jamba-large-1.7": {
+      "source": "litellm model_cost['jamba-large-1.7'] (ai21 key; identical in 1.99.0 and 1.106.6) re-keyed for the ai21_chat/ route the spec uses; tool calling per docs.ai21.com (Jamba 1.7 supports function calling)",
+      "litellm_provider": "ai21_chat",
+      "mode": "chat",
+      "max_input_tokens": 256000,
+      "max_output_tokens": 256000,
+      "input_cost_per_token": 2e-06,
+      "output_cost_per_token": 8e-06,
+      "supports_function_calling": true
+    },
+    "ai21_chat/jamba-mini-2": {
+      "source": "AI21 pricing (Jamba Mini: $0.20 / $0.40 per 1M tokens, 256K context) as carried by capabilities.yaml since 0.41.1; LiteLLM has no jamba-mini-2 row (its table stops at jamba-mini-1.7); tool calling per docs.ai21.com",
+      "litellm_provider": "ai21_chat",
+      "mode": "chat",
+      "max_input_tokens": 256000,
+      "max_output_tokens": 8192,
+      "input_cost_per_token": 2e-07,
+      "output_cost_per_token": 4e-07,
+      "supports_function_calling": true
+    },
+    "nvidia_nim/meta/llama-3.3-70b-instruct": {
+      "source": "build.nvidia.com model card meta/llama-3.3-70b-instruct (128K context, tool calling); $0 because the NIM API serves NVIDIA Developer Program credits, not per-token billing (ProviderSpec nvidia free_info); LiteLLM's only nvidia_nim/ rows are rerankers",
+      "litellm_provider": "nvidia_nim",
+      "mode": "chat",
+      "max_input_tokens": 131072,
+      "max_output_tokens": 4096,
+      "input_cost_per_token": 0.0,
+      "output_cost_per_token": 0.0,
+      "supports_function_calling": true
+    },
+    "nvidia_nim/meta/llama-3.1-8b-instruct": {
+      "source": "build.nvidia.com model card meta/llama-3.1-8b-instruct (128K context, tool calling); $0 because the NIM API serves NVIDIA Developer Program credits (see nvidia_nim/meta/llama-3.3-70b-instruct)",
+      "litellm_provider": "nvidia_nim",
+      "mode": "chat",
+      "max_input_tokens": 131072,
+      "max_output_tokens": 4096,
+      "input_cost_per_token": 0.0,
+      "output_cost_per_token": 0.0,
+      "supports_function_calling": true
+    },
+    "openrouter/openai/gpt-oss-120b": {
+      "source": "litellm 1.99.0 bundled model_cost row openrouter/openai/gpt-oss-120b, verbatim; the row is absent from 1.106.6's bundled map and the live map (2026-10-31), so this payload prices it until LiteLLM carries it again",
+      "litellm_provider": "openrouter",
+      "mode": "chat",
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768,
+      "input_cost_per_token": 1.8e-07,
+      "output_cost_per_token": 8e-07,
+      "supports_function_calling": true,
+      "supports_response_schema": true
+    },
+    "openrouter/openai/gpt-oss-20b": {
+      "source": "litellm 1.99.0 bundled model_cost row openrouter/openai/gpt-oss-20b, verbatim (see openrouter/openai/gpt-oss-120b)",
+      "litellm_provider": "openrouter",
+      "mode": "chat",
+      "max_input_tokens": 131072,
+      "max_output_tokens": 32768,
+      "input_cost_per_token": 2e-08,
+      "output_cost_per_token": 1e-07,
+      "supports_function_calling": true,
+      "supports_response_schema": true
+    }
+  }
+}

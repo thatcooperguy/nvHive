@@ -6,6 +6,7 @@ No real API calls are made.
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
 from pathlib import Path
@@ -242,6 +243,7 @@ class TestAPIEndpoints:
 
     def test_models_list(self, test_client: TestClient) -> None:
         """GET /v1/models returns model catalog (may be empty for mock registry)."""
+        server_module._LIVE_MODELS_CACHE.clear()
         resp = test_client.get("/v1/models")
         assert resp.status_code == 200
         body = resp.json()
@@ -249,13 +251,77 @@ class TestAPIEndpoints:
         assert "models" in body["data"]
         assert "count" in body["data"]
         assert isinstance(body["data"]["models"], list)
+        assert body["data"]["warnings"] == []
 
     def test_models_list_with_provider_filter(self, test_client: TestClient) -> None:
         """GET /v1/models?provider=alpha returns filtered list."""
+        server_module._LIVE_MODELS_CACHE.clear()
         resp = test_client.get("/v1/models?provider=alpha")
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "success"
+
+    def test_models_list_hides_retired_rows_and_keeps_unknown_providers(self, test_client: TestClient) -> None:
+        """Retired catalog rows never appear; providers without an adapter pass through unfiltered."""
+        engine = server_module._engine
+        engine.registry.load_capabilities()  # the shipped catalog, offline
+        server_module._LIVE_MODELS_CACHE.clear()
+        catalog = engine.registry.list_models()
+        retired = {m.model_id for m in catalog if m.status == "retired"}
+        active = {m.model_id for m in catalog if m.status != "retired"}
+        assert retired and active
+        resp = test_client.get("/v1/models")
+        data = resp.json()["data"]
+        ids = {m["model_id"] for m in data["models"]}
+        assert ids == active  # nothing registered for these providers: unknown, so unfiltered
+        assert not ids & retired
+        assert data["count"] == len(active) and data["warnings"] == []
+        row = data["models"][0]
+        assert {"cost_known", "deprecation_date", "supports_function_calling", "successor", "status"} <= set(row)
+
+    def test_models_list_intersects_against_the_live_list(self, test_client: TestClient) -> None:
+        """A registered provider's live list filters its rows and vets the configured default."""
+        engine = server_module._engine
+        engine.registry.load_capabilities()
+        server_module._LIVE_MODELS_CACHE.clear()
+        groq_rows = [m for m in engine.registry.list_models(provider="groq") if m.status != "retired"]
+        assert len(groq_rows) >= 2
+        served, unserved = groq_rows[0].model_id, groq_rows[1].model_id
+
+        class LiveProvider(SimpleTestProvider):
+            async def list_models(self) -> list[ModelInfo]:
+                return [ModelInfo(model_id=served, provider="groq")]
+
+        engine.registry.register("groq", LiveProvider("groq"))
+        engine.config.providers["groq"] = ProviderConfig(enabled=True, default_model=unserved)
+        resp = test_client.get("/v1/models?provider=groq")
+        data = resp.json()["data"]
+        assert [m["model_id"] for m in data["models"]] == [served]
+        assert data["count"] == 1
+        assert data["warnings"] == [f"default model {unserved} not served by provider groq"]
+
+    def test_models_list_treats_resource_paused_as_unknown(self, test_client: TestClient) -> None:
+        """Admission pausing the probe (a BaseException) leaves the provider unfiltered, negative-cached."""
+        from nvh.core.atohi import ResourcePaused
+
+        engine = server_module._engine
+        engine.registry.load_capabilities()
+        server_module._LIVE_MODELS_CACHE.clear()
+        groq_active = {m.model_id for m in engine.registry.list_models(provider="groq") if m.status != "retired"}
+
+        class Paused(SimpleTestProvider):
+            async def list_models(self) -> list[ModelInfo]:
+                raise ResourcePaused("admission_denied")
+
+        engine.registry.register("groq", Paused("groq"))
+        resp = test_client.get("/v1/models?provider=groq")
+        data = resp.json()["data"]
+        assert {m["model_id"] for m in data["models"]} == groq_active
+        assert data["warnings"] == []
+        cached_at, cached = server_module._LIVE_MODELS_CACHE["groq"]
+        assert cached is None
+        remaining = server_module._LIVE_MODELS_TTL - (time.monotonic() - cached_at)
+        assert 0 < remaining <= server_module.LIVE_MODELS_NEGATIVE_TTL
 
     def test_agent_presets(self, test_client: TestClient) -> None:
         """GET /v1/agents/presets returns preset names and role lists."""

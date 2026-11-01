@@ -59,6 +59,17 @@ from nvh.providers.base import (
     Message,
     ProviderError,
 )
+from nvh.providers.openai_compatible import (
+    LIVE_MODELS_NEGATIVE_TTL,
+    LIVE_MODELS_TTL,
+    MODELS_PROBE_TIMEOUT,
+    live_model_ids_for,
+    live_model_keys,
+    model_served,
+)
+from nvh.providers.quota_info import PROVIDER_QUOTAS
+from nvh.providers.registry import configured_default_model
+from nvh.providers.specs import PROVIDER_FACTS, PROVIDER_SPECS, ProviderSpec
 
 # Service-layer singletons. Stateless; safe to share across requests.
 _query_service = QueryService()
@@ -3451,23 +3462,34 @@ async def provider_health(
 
 # -- /v1/models ---------------------------------------------------------------
 
-# TTL cache of live model IDs per provider. The static capability catalog
-# in capabilities.yaml drifts out of sync with what providers actually
-# serve (e.g. Groq deprecated gemma2-9b-it but it still sits in the
-# catalog), so we intersect against the provider's current list_models()
-# result. Cached because hitting every provider on every dropdown open
-# is both slow and rude.
-_LIVE_MODELS_CACHE: dict[str, tuple[float, set[str] | None]] = {}
-_LIVE_MODELS_TTL = 300.0  # 5 minutes
+# TTL cache of live model ids per provider. The shipped catalog
+# (capabilities.yaml) drifts from what a provider serves today (Groq
+# deprecated gemma2-9b-it while it still sat in the catalog), so the
+# catalog is intersected against the provider's live ``GET /models`` list.
+# Cached because hitting every provider on every dropdown open is both slow
+# and rude: ``LIVE_MODELS_TTL`` (5 min) after a fetch, the shorter
+# ``LIVE_MODELS_NEGATIVE_TTL`` (30 s) after a failure so a provider that
+# comes back is seen quickly. The cached value is ``live_model_keys`` of the
+# live ids (ids plus their tails), or ``None`` for "unknown".
+_LIVE_MODELS_CACHE: dict[str, tuple[float, frozenset[str] | None]] = {}
+_LIVE_MODELS_TTL = LIVE_MODELS_TTL
 
 
-async def _get_live_model_ids(engine, provider_name: str) -> set[str] | None:
-    """Return the set of live model IDs for a provider, or None if unknown.
+def _remember_unknown_live_models(provider_name: str, now: float) -> None:
+    """Negative-cache a provider whose live list could not be read."""
+    _LIVE_MODELS_CACHE[provider_name] = (now - _LIVE_MODELS_TTL + LIVE_MODELS_NEGATIVE_TTL, None)
 
-    None means "we couldn't determine the live list" (timeout, error, no
-    implementation) — callers should treat that as "don't filter this
-    provider's catalog entries" so we never hide models because of a
-    transient fetch failure.
+
+async def _get_live_model_ids(engine, provider_name: str) -> frozenset[str] | None:
+    """The live model keys for a provider (see ``live_model_keys``), or ``None`` when unknown.
+
+    The probe itself is ``live_model_ids_for`` (shared with the DEEP
+    ``default_models_served`` check); ``None`` means the live list could not
+    be determined: no adapter, no probe URL or key, a timeout, an error, an
+    empty body, or admission pausing the call (``ResourcePaused``, a
+    ``BaseException``). Callers treat it as "do not filter this provider's
+    catalog rows", so a transient failure never hides models, and a ``None``
+    is remembered for ``LIVE_MODELS_NEGATIVE_TTL`` only.
     """
     now = time.monotonic()
     cached = _LIVE_MODELS_CACHE.get(provider_name)
@@ -3479,47 +3501,63 @@ async def _get_live_model_ids(engine, provider_name: str) -> set[str] | None:
     except Exception:
         return None
 
-    try:
-        live = await asyncio.wait_for(provider.list_models(), timeout=5.0)
-    except Exception:
-        # Negative cache so we don't keep retrying a broken provider —
-        # shorter TTL (30s) so it recovers quickly once the provider
-        # comes back.
-        _LIVE_MODELS_CACHE[provider_name] = (now - _LIVE_MODELS_TTL + 30.0, None)
+    ids = await live_model_ids_for(provider, timeout=MODELS_PROBE_TIMEOUT)
+    if ids is None:
+        _remember_unknown_live_models(provider_name, now)
         return None
+    keys = live_model_keys(ids)
+    _LIVE_MODELS_CACHE[provider_name] = (now, keys)
+    return keys
 
-    ids = {m.model_id for m in live if getattr(m, "model_id", None)}
-    _LIVE_MODELS_CACHE[provider_name] = (now, ids)
-    return ids
+
+def _configured_default_model(engine, provider_name: str) -> str | None:
+    """The default model the config (else the spec) names for a configured provider; ``None`` when neither does."""
+    providers = getattr(getattr(engine, "config", None), "providers", None) or {}
+    pconfig = providers.get(provider_name)
+    if pconfig is None:
+        return None
+    return configured_default_model(provider_name, pconfig)
 
 
 @app.get("/v1/models", summary="List available models from the capability catalog")
 async def list_models(provider: str | None = None, _auth: None = Depends(require_auth)) -> dict[str, Any]:
-    engine = get_engine()
-    models = engine.registry.list_models(provider=provider)
+    """The catalog's active rows, intersected against each provider's live model list.
 
-    # Group catalog entries by provider, then fetch live model IDs for
-    # each provider in parallel (cached). Filter the catalog to only
-    # include models the provider still serves; providers whose live
-    # list we couldn't fetch pass through unfiltered so we never
-    # blank out the dropdown on a transient error.
+    Retired rows (``status: retired``) are hidden. Providers whose live list
+    is unknown pass through unfiltered. ``warnings`` names every configured
+    default model its provider's live list does not carry.
+    """
+    engine = get_engine()
+    models = [m for m in engine.registry.list_models(provider=provider) if m.status != "retired"]
+
+    # Group catalog entries by provider, then fetch live model ids for each
+    # provider in parallel (cached). Only models the provider still serves
+    # stay; providers whose live list could not be read pass through
+    # unfiltered so a transient error never blanks the dropdown.
     catalog_providers: set[str] = {m.provider for m in models}
-    live_sets: dict[str, set[str] | None] = {}
+    live_sets: dict[str, frozenset[str] | None] = {}
     if catalog_providers:
         results = await asyncio.gather(
             *[_get_live_model_ids(engine, p) for p in catalog_providers],
             return_exceptions=True,
         )
         for p, r in zip(catalog_providers, results):
-            live_sets[p] = r if isinstance(r, set) else None
+            live_sets[p] = r if isinstance(r, frozenset) else None
 
     def _is_available(m) -> bool:
         live = live_sets.get(m.provider)
         if live is None:
-            return True  # unknown — keep it
-        return m.model_id in live
+            return True  # unknown: keep it
+        return model_served(m.model_id, live)
 
     filtered = [m for m in models if _is_available(m)]
+
+    warnings: list[str] = []
+    for p in sorted(catalog_providers):
+        live = live_sets.get(p)
+        default = _configured_default_model(engine, p)
+        if live is not None and default and not model_served(default, live):
+            warnings.append(f"default model {default} not served by provider {p}")
 
     model_data = [
         {
@@ -3530,18 +3568,22 @@ async def list_models(provider: str | None = None, _auth: None = Depends(require
             "max_output_tokens": m.max_output_tokens,
             "supports_streaming": m.supports_streaming,
             "supports_tools": m.supports_tools,
+            "supports_function_calling": m.supports_function_calling,
             "supports_vision": m.supports_vision,
             "supports_json_mode": m.supports_json_mode,
             "input_cost_per_1m_tokens": _decimal_to_str(m.input_cost_per_1m_tokens),
             "output_cost_per_1m_tokens": _decimal_to_str(m.output_cost_per_1m_tokens),
+            "cost_known": m.cost_known,
+            "deprecation_date": m.deprecation_date,
             "typical_latency_ms": m.typical_latency_ms,
             "capability_scores": m.capability_scores,
             "status": m.status,
+            "successor": m.successor,
         }
         for m in filtered
     ]
 
-    return _response_envelope({"models": model_data, "count": len(model_data)})
+    return _response_envelope({"models": model_data, "count": len(model_data), "warnings": warnings})
 
 
 # -- /v1/budget/status --------------------------------------------------------
@@ -5402,6 +5444,10 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) 
     # uvicorn's reload subprocess, where ``app.state`` does not.
     app.state.bind_host = host
     os.environ["NVH_API_BIND_HOST"] = host
+    # httpx logs every request URL at INFO, query string included; the Google
+    # models probe carries its key there (``?key=``), so the logger stays at
+    # WARNING whatever uvicorn's log level is.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     uvicorn.run(
         "nvh.api.server:app",
@@ -5449,186 +5495,42 @@ async def reload_context(_auth: None = Depends(require_auth)):
 # Free Tier Setup API (for web UI setup wizard)
 # ---------------------------------------------------------------------------
 
-_PROVIDER_ENV_VAR_MAP = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "google": "GOOGLE_API_KEY",
-    "groq": "GROQ_API_KEY",
-    "mistral": "MISTRAL_API_KEY",
-    "cohere": "COHERE_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-    "nvidia": "NVIDIA_API_KEY",
-    "fireworks": "FIREWORKS_API_KEY",
-    "cerebras": "CEREBRAS_API_KEY",
-    "sambanova": "SAMBANOVA_API_KEY",
-    "huggingface": "HUGGINGFACE_API_KEY",
-    "ai21": "AI21_API_KEY",
-    "siliconflow": "SILICONFLOW_API_KEY",
-    "grok": "XAI_API_KEY",
-    "perplexity": "PERPLEXITY_API_KEY",
-    "together": "TOGETHER_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-    "llm7": "LLM7_API_KEY",
+# Every per-provider value below derives from nvh.providers.specs, one row per
+# provider: the setup rows read the spec fields directly
+# (``_setup_provider_row``), tests/test_provider_defaults.py pins the
+# derivations and tests/test_single_provider_table.py fails when a provider
+# fact is typed here.
+
+_PROVIDER_ENV_VAR_MAP: dict[str, str] = {name: spec.key_env for name, spec in PROVIDER_SPECS.items()}
+
+
+def _default_config_for(spec: ProviderSpec) -> dict[str, str]:
+    """The stanza fields ``save-key`` writes when it enables a provider."""
+    entry = {"default_model": spec.default_model}
+    if spec.fallback_model:
+        entry["fallback_model"] = spec.fallback_model
+    if spec.base_url:
+        entry["base_url"] = spec.base_url
+    return entry
+
+
+# The same routing facts nvh.config.settings.generate_default_config renders.
+_PROVIDER_DEFAULT_CONFIG: dict[str, dict[str, str]] = {
+    name: _default_config_for(spec) for name, spec in PROVIDER_SPECS.items()
 }
 
-_PROVIDER_KEY_URLS = {
-    "openai": "https://platform.openai.com/api-keys",
-    "anthropic": "https://console.anthropic.com/settings/keys",
-    "google": "https://aistudio.google.com/apikey",
-    "groq": "https://console.groq.com/keys",
-    "mistral": "https://console.mistral.ai/api-keys",
-    "cohere": "https://dashboard.cohere.com/api-keys",
-    "deepseek": "https://platform.deepseek.com/api_keys",
-    "nvidia": "https://build.nvidia.com/explore/discover",
-    "fireworks": "https://fireworks.ai/account/api-keys",
-    "cerebras": "https://cloud.cerebras.ai/",
-    "sambanova": "https://cloud.sambanova.ai/",
-    "huggingface": "https://huggingface.co/settings/tokens",
-    "ai21": "https://studio.ai21.com/",
-    "siliconflow": "https://cloud.siliconflow.cn/",
-    "grok": "https://console.x.ai/",
-    "perplexity": "https://www.perplexity.ai/settings/api",
-    "together": "https://api.together.ai/settings/api-keys",
-    "openrouter": "https://openrouter.ai/settings/keys",
-    "llm7": "https://token.llm7.io/",
-}
+# Providers a key can be saved for: every spec row except the test double and
+# Triton, which is configured by endpoint URL, not a key.
+_ALLOWED_PROVIDERS: frozenset[str] = frozenset(
+    name for name in PROVIDER_FACTS if name not in ("mock", "triton")
+)
 
-_PROVIDER_DOC_URLS = {
-    "openai": "https://platform.openai.com/docs/overview",
-    "anthropic": "https://docs.anthropic.com/",
-    "google": "https://ai.google.dev/gemini-api/docs",
-    "groq": "https://console.groq.com/docs/quickstart",
-    "mistral": "https://docs.mistral.ai/",
-    "cohere": "https://docs.cohere.com/",
-    "deepseek": "https://api-docs.deepseek.com/",
-    "nvidia": "https://docs.nvidia.com/nim/",
-    "fireworks": "https://docs.fireworks.ai/",
-    "cerebras": "https://inference-docs.cerebras.ai/",
-    "sambanova": "https://docs.sambanova.ai/",
-    "huggingface": "https://huggingface.co/docs/api-inference/index",
-    "ai21": "https://docs.ai21.com/",
-    "siliconflow": "https://docs.siliconflow.cn/",
-    "grok": "https://docs.x.ai/docs",
-    "perplexity": "https://docs.perplexity.ai/",
-    "together": "https://docs.together.ai/",
-    "openrouter": "https://openrouter.ai/docs/quickstart",
-    "llm7": "https://llm7.io/",
-}
-
-# Provider logo slugs for the @lobehub/icons CDN. Slug names match the
-# lobehub icon ids; the frontend renders them from
-# https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/{slug}.png
-# Returns None for providers without a brand mark there.
-_PROVIDER_LOGO_SLUGS = {
-    "openai": "openai",
-    "anthropic": "anthropic",
-    "google": "gemini",
-    "groq": "groq",
-    "mistral": "mistral",
-    "cohere": "cohere",
-    "deepseek": "deepseek",
-    "nvidia": "nvidia",
-    "fireworks": "fireworks",
-    "cerebras": "cerebras",
-    "sambanova": "sambanova",
-    "huggingface": "huggingface",
-    "ai21": "ai21",
-    "siliconflow": "siliconflow",
-    "grok": "grok",
-    "perplexity": "perplexity",
-    "together": "together",
-    "openrouter": "openrouter",
-    "ollama": "ollama",
-    "llm7": None,
-}
-
-# Must stay in lockstep with the template in nvh.config.settings.generate_default_config;
-# tests/test_provider_defaults.py cross-checks the two.
-_PROVIDER_DEFAULT_CONFIG = {
-    "openai": {
-        "default_model": "gpt-5.6-terra",
-        "fallback_model": "gpt-5.6-luna",
-    },
-    "anthropic": {
-        "default_model": "claude-sonnet-5",
-        "fallback_model": "claude-haiku-4-5-20251001",
-    },
-    "google": {
-        "default_model": "gemini/gemini-3.7-flash",
-        "fallback_model": "gemini/gemini-3.5-flash-lite",
-    },
-    "groq": {
-        "default_model": "groq/openai/gpt-oss-120b",
-        "fallback_model": "groq/openai/gpt-oss-20b",
-    },
-    "mistral": {
-        "default_model": "mistral/mistral-large-latest",
-        "fallback_model": "mistral/mistral-small-latest",
-    },
-    "cohere": {
-        "default_model": "command-a-03-2025",
-        "fallback_model": "command-r-08-2024",
-    },
-    "deepseek": {
-        "default_model": "deepseek/deepseek-v4-pro",
-        "fallback_model": "deepseek/deepseek-v4-flash",
-        "base_url": "https://api.deepseek.com",
-    },
-    "nvidia": {
-        "default_model": "nvidia_nim/meta/llama-3.3-70b-instruct",
-        "fallback_model": "nvidia_nim/meta/llama-3.1-8b-instruct",
-        "base_url": "https://integrate.api.nvidia.com/v1",
-    },
-    "fireworks": {
-        "default_model": "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
-        "fallback_model": "fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
-    },
-    "cerebras": {
-        "default_model": "cerebras/gpt-oss-120b",
-        "fallback_model": "cerebras/gpt-oss-120b",
-    },
-    "sambanova": {
-        "default_model": "sambanova/Meta-Llama-3.3-70B-Instruct",
-        "fallback_model": "sambanova/gpt-oss-120b",
-    },
-    "huggingface": {
-        "default_model": "huggingface/openai/gpt-oss-120b",
-        "fallback_model": "huggingface/openai/gpt-oss-20b",
-    },
-    "ai21": {
-        "default_model": "ai21_chat/jamba-large-1.7",
-        "fallback_model": "ai21_chat/jamba-mini-2",
-    },
-    "siliconflow": {
-        "default_model": "Qwen/Qwen2.5-7B-Instruct",
-        "base_url": "https://api.siliconflow.cn/v1",
-    },
-    "grok": {
-        "default_model": "xai/grok-4.6",
-        "fallback_model": "xai/grok-4.3",
-        "base_url": "https://api.x.ai/v1",
-    },
-    "perplexity": {
-        "default_model": "perplexity/preset/low",
-        "fallback_model": "perplexity/preset/fast",
-    },
-    "together": {
-        "default_model": "together_ai/openai/gpt-oss-120b",
-        "fallback_model": "together_ai/openai/gpt-oss-20b",
-    },
-    "openrouter": {
-        "default_model": "openrouter/openai/gpt-oss-120b",
-        "fallback_model": "openrouter/openai/gpt-oss-20b",
-    },
-}
+# Paid providers sort after the free-tier ladder (ranks 1-13), in spec order.
+_PAID_PRIORITY_BASE = 100
 
 
 def _provider_env_var(provider_name: str) -> str:
     return _PROVIDER_ENV_VAR_MAP.get(provider_name, f"{provider_name.upper()}_API_KEY")
-
-
-def _provider_docs_url(provider_name: str) -> str:
-    return _PROVIDER_DOC_URLS.get(provider_name, "")
 
 
 def _provider_key_is_configured(provider_name: str, env_var: str | None = None) -> bool:
@@ -5636,205 +5538,62 @@ def _provider_key_is_configured(provider_name: str, env_var: str | None = None) 
     return bool(env_key and os.environ.get(env_key))
 
 
-@app.get("/v1/setup/free-providers")
-async def get_free_providers(_auth: None = Depends(require_auth)):
-    """List all free-tier providers and their setup status."""
-    from nvh.core.advisor_profiles import ADVISOR_PROFILES
-    from nvh.core.free_tier import FREE_TIER_ADVISORS, detect_available_free_advisors
-
-    available = detect_available_free_advisors()
-    available_names = {a.name for a in available}
-
-    # Placeholder hints per provider
-    key_placeholders = {
-        "openai": "sk-...",
-        "anthropic": "sk-ant-...",
-        "google": "AIza...",
-        "groq": "gsk_...",
-        "mistral": "your-key...",
-        "cohere": "your-key...",
-        "grok": "xai-...",
+def _setup_provider_row(spec: ProviderSpec, available_names: set[str]) -> dict[str, Any]:
+    """One ``/v1/setup/free-providers`` row: every field is a spec fact or derives from one."""
+    requires_key = spec.takes_api_key and not spec.anonymous_key
+    env_var = spec.key_env if spec.takes_api_key else ""
+    if spec.free_tier:
+        priority = spec.free_tier_rank
+    else:
+        priority = _PAID_PRIORITY_BASE + list(PROVIDER_FACTS).index(spec.name)
+    return {
+        "id": spec.name,
+        "name": spec.display_name,
+        "display_name": spec.display_name,
+        "daily_limit": PROVIDER_QUOTAS[spec.name].limit_description,
+        "priority": priority,
+        "configured": spec.name in available_names or _provider_key_is_configured(spec.name, env_var),
+        "requires_signup": requires_key,
+        "requires_key": requires_key,
+        "signup_tier": spec.signup_tier,
+        "signup_url": spec.signup_url,
+        # The key page: also for the anonymous tier, whose token is optional.
+        "key_url": spec.signup_url if spec.takes_api_key else "",
+        "docs_url": spec.docs_url,
+        "env_var": env_var,
+        "env_key": env_var,
+        "placeholder": spec.key_placeholder,
+        "strengths": list(spec.strengths[:3]),
+        "free_tier_limits": spec.free_info,
+        "free_info": spec.free_info,
+        "default_model": spec.default_model,
+        "fallback_model": spec.fallback_model,
+        "logo_slug": spec.logo_slug or None,
     }
 
-    providers = []
-    for advisor in FREE_TIER_ADVISORS:
-        profile = ADVISOR_PROFILES.get(advisor.name, None)
-        requires_key = advisor.check_fn == "env"
-        signup_tier = (
-            "none" if not requires_key
-            else "email" if advisor.priority <= 8
-            else "account"
-        )
-        providers.append({
-            "id": advisor.name,
-            "name": profile.display_name if profile else advisor.name,
-            "display_name": profile.display_name if profile else advisor.name,
-            "daily_limit": advisor.daily_limit,
-            "priority": advisor.priority,
-            "configured": advisor.name in available_names or _provider_key_is_configured(advisor.name, advisor.env_var),
-            "requires_signup": requires_key,
-            "requires_key": requires_key,
-            "signup_tier": signup_tier,
-            "signup_url": _get_signup_url(advisor.name),
-            "key_url": _get_signup_url(advisor.name),
-            "docs_url": _provider_docs_url(advisor.name),
-            "env_var": advisor.env_var,
-            "env_key": advisor.env_var,
-            "placeholder": key_placeholders.get(advisor.name, "your-key..."),
-            "strengths": profile.strengths[:3] if profile else [],
-            "free_tier_limits": profile.free_tier_limits if profile else "",
-        })
 
-    # Add zero-signup providers
-    zero_signup = [
-        {
-            "id": "ollama",
-            "name": "Ollama (Local AI)",
-            "display_name": "Ollama (Local AI)",
-            "daily_limit": "Unlimited (local GPU)",
-            "priority": 1,
-            "configured": "ollama" in available_names,
-            "requires_signup": False,
-            "requires_key": False,
-            "signup_tier": "none",
-            "signup_url": "",
-            "key_url": "",
-            "docs_url": "https://ollama.com/library",
-            "env_var": "",
-            "env_key": "",
-            "placeholder": "",
-            "strengths": ["Free", "Private", "Runs on your GPU"],
-            "free_tier_limits": "Unlimited",
-        },
-        {
-            "id": "llm7",
-            "name": "LLM7 (Anonymous)",
-            "display_name": "LLM7 (Anonymous)",
-            "daily_limit": "30 RPM, no signup",
-            "priority": 9,
-            "configured": True,  # always available
-            "requires_signup": False,
-            "requires_key": False,
-            "signup_tier": "none",
-            "signup_url": "https://token.llm7.io/",
-            "key_url": "https://token.llm7.io/",
-            "docs_url": "https://llm7.io/",
-            "env_var": "",
-            "env_key": "",
-            "placeholder": "",
-            "strengths": ["No signup needed", "Anonymous access", "gpt-oss free"],
-            "free_tier_limits": "30 RPM anonymous, 120 RPM with token (optional)",
-        },
-    ]
+@app.get("/v1/setup/free-providers")
+async def get_free_providers(_auth: None = Depends(require_auth)):
+    """Every provider a key can be saved for, with its setup facts; free tiers first."""
+    from nvh.core.free_tier import detect_available_free_advisors
 
-    # Add paid providers (not free-tier but users want to configure them)
-    paid_providers = [
-        {
-            "id": "openai", "name": "OpenAI", "display_name": "OpenAI",
-            "daily_limit": "Pay-as-you-go", "priority": 0,
-            "configured": bool(os.environ.get("OPENAI_API_KEY")),
-            "requires_signup": True, "requires_key": True,
-            "signup_tier": "account", "signup_url": "https://platform.openai.com/api-keys",
-            "key_url": "https://platform.openai.com/api-keys", "docs_url": "https://platform.openai.com/docs/overview",
-            "env_var": "OPENAI_API_KEY", "env_key": "OPENAI_API_KEY",
-            "placeholder": "sk-...",
-            "strengths": ["GPT-5.6", "Best all-around", "Function calling"],
-            "free_tier_limits": "",
-        },
-        {
-            "id": "anthropic", "name": "Anthropic", "display_name": "Anthropic",
-            "daily_limit": "Pay-as-you-go", "priority": 0,
-            "configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
-            "requires_signup": True, "requires_key": True,
-            "signup_tier": "account", "signup_url": "https://console.anthropic.com/settings/keys",
-            "key_url": "https://console.anthropic.com/settings/keys", "docs_url": "https://docs.anthropic.com/",
-            "env_var": "ANTHROPIC_API_KEY", "env_key": "ANTHROPIC_API_KEY",
-            "placeholder": "sk-ant-...",
-            "strengths": ["Claude Sonnet", "Best for code", "1M context"],
-            "free_tier_limits": "",
-        },
-        {
-            "id": "deepseek", "name": "DeepSeek", "display_name": "DeepSeek",
-            "daily_limit": "Pay-as-you-go (very cheap)", "priority": 0,
-            "configured": bool(os.environ.get("DEEPSEEK_API_KEY")),
-            "requires_signup": True, "requires_key": True,
-            "signup_tier": "account", "signup_url": "https://platform.deepseek.com/api_keys",
-            "key_url": "https://platform.deepseek.com/api_keys", "docs_url": "https://api-docs.deepseek.com/",
-            "env_var": "DEEPSEEK_API_KEY", "env_key": "DEEPSEEK_API_KEY",
-            "placeholder": "sk-...",
-            "strengths": ["DeepSeek V4", "From $0.44/M tokens", "Top reasoning"],
-            "free_tier_limits": "",
-        },
-        {
-            "id": "openrouter", "name": "OpenRouter", "display_name": "OpenRouter",
-            "daily_limit": "Account required", "priority": 15,
-            "configured": bool(os.environ.get("OPENROUTER_API_KEY")),
-            "requires_signup": True, "requires_key": True,
-            "signup_tier": "account", "signup_url": _get_signup_url("openrouter"),
-            "key_url": _get_signup_url("openrouter"), "docs_url": _provider_docs_url("openrouter"),
-            "env_var": "OPENROUTER_API_KEY", "env_key": "OPENROUTER_API_KEY",
-            "placeholder": "sk-or-...",
-            "strengths": ["Many models", "Fallback", "BYO credits"],
-            "free_tier_limits": "",
-        },
-        {
-            "id": "together", "name": "Together AI", "display_name": "Together AI",
-            "daily_limit": "Account required", "priority": 16,
-            "configured": bool(os.environ.get("TOGETHER_API_KEY")),
-            "requires_signup": True, "requires_key": True,
-            "signup_tier": "account", "signup_url": _get_signup_url("together"),
-            "key_url": _get_signup_url("together"), "docs_url": _provider_docs_url("together"),
-            "env_var": "TOGETHER_API_KEY", "env_key": "TOGETHER_API_KEY",
-            "placeholder": "your-key...",
-            "strengths": ["Open models", "Fast APIs", "Research friendly"],
-            "free_tier_limits": "",
-        },
-        {
-            "id": "perplexity", "name": "Perplexity", "display_name": "Perplexity",
-            "daily_limit": "Account required", "priority": 17,
-            "configured": bool(os.environ.get("PERPLEXITY_API_KEY")),
-            "requires_signup": True, "requires_key": True,
-            "signup_tier": "account", "signup_url": _get_signup_url("perplexity"),
-            "key_url": _get_signup_url("perplexity"), "docs_url": _provider_docs_url("perplexity"),
-            "env_var": "PERPLEXITY_API_KEY", "env_key": "PERPLEXITY_API_KEY",
-            "placeholder": "pplx-...",
-            "strengths": ["Search answers", "Citations", "Research"],
-            "free_tier_limits": "",
-        },
-    ]
-
-    # Merge, dedup by id, and sort
-    seen = set()
-    all_providers = []
-    for p in zero_signup + providers + paid_providers:
-        if p["id"] not in seen:
-            seen.add(p["id"])
-            all_providers.append(p)
-    all_providers.sort(key=lambda p: p["priority"])
-
-    # Attach a logo slug for the @lobehub/icons CDN. The frontend renders it
-    # from https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest/light/{slug}.png
-    # Falls back to a text initial when slug is null.
-    for p in all_providers:
-        p["logo_slug"] = _PROVIDER_LOGO_SLUGS.get(p["id"])
-
+    available_names = {advisor.name for advisor in detect_available_free_advisors()}
+    providers = sorted(
+        (
+            _setup_provider_row(spec, available_names)
+            for name, spec in PROVIDER_FACTS.items()
+            if name in _ALLOWED_PROVIDERS
+        ),
+        key=lambda row: row["priority"],
+    )
     return {
         "status": "success",
         "data": {
-            "providers": all_providers,
-            "configured_count": sum(1 for p in all_providers if p["configured"]),
-            "total_count": len(all_providers),
+            "providers": providers,
+            "configured_count": sum(1 for row in providers if row["configured"]),
+            "total_count": len(providers),
         },
     }
-
-
-_ALLOWED_PROVIDERS = {
-    "openai", "anthropic", "google", "groq", "mistral",
-    "cohere", "deepseek", "nvidia", "fireworks",
-    "cerebras", "sambanova", "huggingface", "ai21",
-    "siliconflow", "grok", "perplexity", "together",
-    "openrouter", "ollama",
-}
 
 
 class SaveKeyRequest(BaseModel):
@@ -6078,11 +5837,6 @@ async def get_setup_status(_auth: None = Depends(require_auth)):
             "has_local": "ollama" in enabled or any(a.name == "ollama" for a in available),
         },
     }
-
-
-def _get_signup_url(provider_name: str) -> str:
-    """Get the signup URL for a provider."""
-    return _PROVIDER_KEY_URLS.get(provider_name, "")
 
 
 # ---------------------------------------------------------------------------

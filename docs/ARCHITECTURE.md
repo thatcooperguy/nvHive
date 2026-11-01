@@ -61,7 +61,7 @@ nvh CLI · Web UI · Python SDK · MCP clients · OpenAI/Anthropic clients
 | Sandbox | `nvh/sandbox/executor.py` | Docker isolation with an audited subprocess fallback |
 | Compute admission | `nvh/core/atohi.py` | `AdmissionBroker` protocol, `ResourcePaused`; a shared-compute admission boundary, disabled by default; no broker ships (the `atohi:` stanza, [CONFIGURATION.md](CONFIGURATION.md#atohi-admission-disabled)) |
 | Providers | `nvh/providers/specs.py`, `openai_compatible.py`, `registry.py`, `ollama_provider.py`, `triton_provider.py` | the `ProviderSpec` table, the one cloud adapter, lazy registration |
-| Config | `nvh/config/settings.py`, `nvh/config/capabilities.yaml` | Pydantic schema, env interpolation, model catalog |
+| Config | `nvh/config/settings.py`, `nvh/config/capabilities.yaml`, `nvh/config/model_overrides.json` | Pydantic schema, env interpolation, the hand-maintained half of the model catalog (LiteLLM supplies price, context and flags; see [CONFIGURATION.md](CONFIGURATION.md#model-catalog)) |
 | Storage | `nvh/storage/` | SQLAlchemy + aiosqlite: conversations, routing outcomes, costs |
 | API | `nvh/api/server.py`, `nvh/api/proxy.py`, `nvh/api/services/query_service.py` | FastAPI app, compatible proxies, shared query service |
 | Wizard | `nvh/integrations/wizard/` (`chat.py`, `tools.py`, `profiles.py`, `concierge.py`, `system_settings.py`, `sandbox_tools.py`, `vision_bridge.py`) | chat loop, tools, profiles, the concierge that picks a hidden specialist per turn, privileged system-settings tools, the sandbox and vision bridges, troubleshooter, reconnect, mission builder |

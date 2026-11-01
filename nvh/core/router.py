@@ -566,7 +566,8 @@ class RoutingEngine:
                         best_cap = cap
                         best_model = m
 
-                # Filter by context window
+                # Filter by context window (0 means the window is unknown,
+                # not that there is none, so such a model is not filtered)
                 if input_tokens > 0 and best_model.context_window > 0:
                     if input_tokens > best_model.context_window * 0.9:
                         skipped_reasons[pname] = (
@@ -832,7 +833,14 @@ class RoutingEngine:
         return True
 
     def _cost_score(self, model: ModelInfo) -> float:
-        """Inverse cost score: cheaper = higher score. Normalized 0-1."""
+        """Inverse cost score: cheaper = higher score. Normalized 0-1.
+
+        A model no source priced (``cost_known`` false) scores a neutral 0.5:
+        its $0 means "unknown", not "free", so it neither wins nor loses on
+        price.
+        """
+        if not model.cost_known:
+            return 0.5
         cost = float(model.input_cost_per_1m_tokens + model.output_cost_per_1m_tokens)
         if cost <= 0:
             return 1.0  # Free models get max score

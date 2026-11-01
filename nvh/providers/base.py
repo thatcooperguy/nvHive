@@ -86,20 +86,44 @@ class CompletionResponse(BaseModel):
 
 
 class ModelInfo(BaseModel):
+    """One catalog row as ``ProviderRegistry.load_capabilities`` assembles it.
+
+    Price, context and tool flags come from LiteLLM's model table at load
+    (``litellm.model_cost``, plus the ``nvh/config/model_overrides.json``
+    rows registered into it); ``nvh/config/capabilities.yaml`` carries the
+    hand-maintained fields (``display_name``, ``capability_scores``,
+    ``typical_latency_ms``, ``status`` / ``successor``) and explicit,
+    sourced overrides. A ``0`` context window or ``max_output_tokens`` means
+    "unknown", never "none"; a ``0`` price with ``cost_known`` false means the
+    same, and callers show "cost unknown" instead of $0.
+    """
+
     model_id: str
     provider: str
     display_name: str = ""
     context_window: int = 0
     max_output_tokens: int = 0
     supports_streaming: bool = True
+    # The catalog's answer to "can this model take ``tools=``": LiteLLM's
+    # flag when it has one, else the YAML row's explicit value, else False.
     supports_tools: bool = False
+    # LiteLLM's ``supports_function_calling`` verbatim; ``None`` when LiteLLM
+    # has no row or no flag for the model (``supports_tools`` then decides).
+    supports_function_calling: bool | None = None
     supports_vision: bool = False
     supports_json_mode: bool = False
     supports_system_prompt: bool = True
     input_cost_per_1m_tokens: Decimal = Decimal("0")
     output_cost_per_1m_tokens: Decimal = Decimal("0")
+    # False when no source (LiteLLM, an override, a zero-cost provider)
+    # priced the model: the $0 above is "unknown", not "free".
+    cost_known: bool = True
+    # LiteLLM's ``deprecation_date`` (ISO date) when it records one.
+    deprecation_date: str | None = None
     typical_latency_ms: int = 1000
     capability_scores: dict[str, float] = Field(default_factory=dict)
+    # "active", or "retired" with ``successor`` naming the row that replaced
+    # it (``RETIRED_MODEL_RENAMES`` in nvh/cli/setup.py is the source).
     status: str = "active"
     successor: str | None = None
 

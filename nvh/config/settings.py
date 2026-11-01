@@ -20,29 +20,66 @@ _log = logging.getLogger(__name__)
 # Env var interpolation
 # ---------------------------------------------------------------------------
 
-_ENV_PATTERN = re.compile(r"\$\{([^}:]+)(?::-(.*?))?\}")
+def _matching_brace(text: str, open_at: int) -> int:
+    """Index of the ``}`` that closes the ``{`` at ``open_at``, or ``-1`` when it never closes."""
+    depth = 0
+    for j in range(open_at, len(text)):
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+    return -1
+
+
+def _expand_env_refs(text: str) -> str:
+    """``text`` with every ``${VAR}`` / ``${VAR:-default}`` resolved, nested defaults included.
+
+    Braces are matched, so ``${A:-${B:-x}}`` reads ``A``, else ``B``, else
+    ``x`` (the generated config's key references nest a provider's alternate
+    variables this way, and Triton's ``base_url`` chains its two endpoint
+    variables). A default is expanded only when it is needed, so an unset
+    alternate warns only when the primary is unset too. An unset variable
+    with no default becomes the empty string, with a warning; text that is
+    not a variable reference (``${}``, an unterminated ``${``) is kept.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        start = text.find("${", i)
+        if start < 0:
+            out.append(text[i:])
+            break
+        out.append(text[i:start])
+        end = _matching_brace(text, start + 1)
+        if end < 0:
+            out.append(text[start:])
+            break
+        name, sep, default = text[start + 2:end].partition(":-")
+        if not name or any(ch in name for ch in "${}:"):
+            out.append(text[start:end + 1])
+        else:
+            env_val = os.environ.get(name)
+            if env_val is not None:
+                out.append(env_val)
+            elif sep:
+                out.append(_expand_env_refs(default))
+            else:
+                _log.warning(
+                    "Config: env var $%s is not set and has no default"
+                    " — value will be empty string",
+                    name,
+                )
+                out.append("")  # empty string, not raw ${VAR}
+        i = end + 1
+    return "".join(out)
 
 
 def _interpolate_env(value: Any) -> Any:
-    """Recursively resolve ${VAR} and ${VAR:-default} in strings."""
+    """Recursively resolve ``${VAR}`` and ``${VAR:-default}`` in strings (see :func:`_expand_env_refs`)."""
     if isinstance(value, str):
-        def _replacer(m: re.Match[str]) -> str:
-            var_name = m.group(1)
-            default = m.group(2)
-            env_val = os.environ.get(var_name)
-            if env_val is not None:
-                return env_val
-            if default is not None:
-                # Resolve nested ${INNER} in default values
-                return _interpolate_env(default)
-            _log.warning(
-                "Config: env var $%s is not set and has no default"
-                " — value will be empty string",
-                var_name,
-            )
-            return ""  # empty string, not raw ${VAR}
-
-        return _ENV_PATTERN.sub(_replacer, value)
+        return _expand_env_refs(value)
     if isinstance(value, dict):
         return {k: _interpolate_env(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -438,11 +475,64 @@ def _default_local_model() -> str:
     return f"ollama/{chosen.tag}"
 
 
+def _key_reference(spec: Any, default: str = "") -> str:
+    """``${PRIMARY:-${ALT:-default}}``: a spec row's key variables as nested shell-style defaults.
+
+    The primary variable first, then the provider's own alternates
+    (:attr:`~nvh.providers.specs.ProviderSpec.alt_key_envs`), then
+    ``default`` — the anonymous key for a provider that has one.
+    """
+    reference = default
+    for name in reversed([spec.key_env, *spec.alt_key_envs]):
+        reference = f"${{{name}:-{reference}}}" if reference else f"${{{name}}}"
+    return reference
+
+
+def _advisor_stanzas() -> str:
+    """The ``advisors:`` body of the default config: one stanza per spec row.
+
+    Cloud rows carry their key reference, default and fallback model and base
+    URL; Ollama's ``default_model`` is the ``@OLLAMA_DEFAULT_MODEL@``
+    placeholder :func:`generate_default_config` fills from the tier table;
+    Triton's ``base_url`` reads its endpoint variables; the bespoke adapters
+    name their ``type``. Only the anonymous tier (LLM7) starts enabled.
+    Imported lazily so loading settings never pulls the spec table in.
+    """
+    from nvh.providers.specs import BESPOKE_SPECS, PROVIDER_FACTS
+    from nvh.providers.triton_provider import DEFAULT_TRITON_URL
+    from nvh.utils.ollama import DEFAULT_OLLAMA_URL
+
+    stanzas = []
+    for name, spec in PROVIDER_FACTS.items():
+        lines = [f"  {name}:"]
+        if name == "ollama":
+            lines.append(f"    base_url: {DEFAULT_OLLAMA_URL}")
+            lines.append("    default_model: @OLLAMA_DEFAULT_MODEL@")
+        elif name == "triton":
+            lines.append(f"    base_url: {_key_reference(spec, default=DEFAULT_TRITON_URL)}")
+            lines.append('    default_model: ""')
+        else:
+            if spec.takes_api_key:
+                lines.append(f"    api_key: {_key_reference(spec, default=spec.anonymous_key)}")
+            lines.append(f"    default_model: {spec.default_model}")
+            if spec.fallback_model:
+                lines.append(f"    fallback_model: {spec.fallback_model}")
+            if spec.base_url:
+                lines.append(f"    base_url: {spec.base_url}")
+        if name in BESPOKE_SPECS:
+            lines.append(f"    type: {name}")
+        lines.append(f"    enabled: {'true' if spec.anonymous_key else 'false'}")
+        stanzas.append("\n".join(lines))
+    return "\n\n".join(stanzas)
+
+
 def generate_default_config() -> str:
     """Generate a default config YAML string for `hive config init`.
 
-    The Ollama ``default_model`` is filled from the tier table at call time
-    (:func:`_default_local_model`); everything else is the literal template.
+    The ``advisors:`` stanzas are rendered from the provider spec table
+    (:func:`_advisor_stanzas`) and the Ollama ``default_model`` is filled
+    from the tier table at call time (:func:`_default_local_model`);
+    everything else is the literal template.
     """
     template = """\
 version: "1"
@@ -457,141 +547,7 @@ defaults:
   show_metadata: true
 
 advisors:
-  openai:
-    api_key: ${OPENAI_API_KEY}
-    default_model: gpt-5.6-terra
-    fallback_model: gpt-5.6-luna
-    enabled: false
-
-  anthropic:
-    api_key: ${ANTHROPIC_API_KEY}
-    default_model: claude-sonnet-5
-    fallback_model: claude-haiku-4-5-20251001
-    enabled: false
-
-  google:
-    api_key: ${GOOGLE_API_KEY}
-    default_model: gemini/gemini-3.7-flash
-    fallback_model: gemini/gemini-3.5-flash-lite
-    enabled: false
-
-  ollama:
-    base_url: http://localhost:11434
-    default_model: @OLLAMA_DEFAULT_MODEL@
-    type: ollama
-    enabled: false
-
-  groq:
-    api_key: ${GROQ_API_KEY}
-    default_model: groq/openai/gpt-oss-120b
-    fallback_model: groq/openai/gpt-oss-20b
-    enabled: false
-
-  grok:
-    api_key: ${XAI_API_KEY}
-    default_model: xai/grok-4.6
-    fallback_model: xai/grok-4.3
-    base_url: https://api.x.ai/v1
-    enabled: false
-
-  mistral:
-    api_key: ${MISTRAL_API_KEY}
-    default_model: mistral/mistral-large-latest
-    fallback_model: mistral/mistral-small-latest
-    enabled: false
-
-  cohere:
-    api_key: ${COHERE_API_KEY}
-    default_model: command-a-03-2025
-    fallback_model: command-r-08-2024
-    enabled: false
-
-  deepseek:
-    api_key: ${DEEPSEEK_API_KEY}
-    default_model: deepseek/deepseek-v4-pro
-    fallback_model: deepseek/deepseek-v4-flash
-    base_url: https://api.deepseek.com
-    enabled: false
-
-  mock:
-    default_model: mock/default
-    fallback_model: mock/fast
-    type: mock
-    enabled: false
-
-  perplexity:
-    api_key: ${PERPLEXITY_API_KEY}
-    default_model: perplexity/preset/low
-    fallback_model: perplexity/preset/fast
-    enabled: false
-
-  together:
-    api_key: ${TOGETHER_API_KEY:-${TOGETHERAI_API_KEY}}
-    default_model: together_ai/openai/gpt-oss-120b
-    fallback_model: together_ai/openai/gpt-oss-20b
-    enabled: false
-
-  fireworks:
-    api_key: ${FIREWORKS_API_KEY}
-    default_model: fireworks_ai/accounts/fireworks/models/gpt-oss-120b
-    fallback_model: fireworks_ai/accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b
-    enabled: false
-
-  openrouter:
-    api_key: ${OPENROUTER_API_KEY}
-    default_model: openrouter/openai/gpt-oss-120b
-    fallback_model: openrouter/openai/gpt-oss-20b
-    enabled: false
-
-  cerebras:
-    api_key: ${CEREBRAS_API_KEY}
-    default_model: cerebras/gpt-oss-120b
-    fallback_model: cerebras/gpt-oss-120b
-    enabled: false
-
-  sambanova:
-    api_key: ${SAMBANOVA_API_KEY}
-    default_model: sambanova/Meta-Llama-3.3-70B-Instruct
-    fallback_model: sambanova/gpt-oss-120b
-    enabled: false
-
-  huggingface:
-    api_key: ${HUGGINGFACE_API_KEY:-${HF_TOKEN}}
-    default_model: huggingface/openai/gpt-oss-120b
-    fallback_model: huggingface/openai/gpt-oss-20b
-    enabled: false
-
-  ai21:
-    api_key: ${AI21_API_KEY}
-    default_model: ai21_chat/jamba-large-1.7
-    fallback_model: ai21_chat/jamba-mini-2
-    enabled: false
-
-  nvidia:
-    api_key: ${NVIDIA_API_KEY:-${NIM_API_KEY}}
-    default_model: nvidia_nim/meta/llama-3.3-70b-instruct
-    fallback_model: nvidia_nim/meta/llama-3.1-8b-instruct
-    base_url: https://integrate.api.nvidia.com/v1
-    enabled: false
-
-  triton:
-    base_url: ${TRITON_URL:-${TRITON_ENDPOINT:-http://localhost:8001}}
-    default_model: ""
-    type: triton
-    enabled: false
-
-  siliconflow:
-    api_key: ${SILICONFLOW_API_KEY}
-    default_model: Qwen/Qwen2.5-7B-Instruct
-    base_url: https://api.siliconflow.cn/v1
-    enabled: false
-
-  llm7:
-    api_key: ${LLM7_API_KEY:-anonymous}
-    default_model: gpt-oss
-    fallback_model: minimax-m2.7
-    base_url: https://api.llm7.io/v1
-    enabled: true
+@ADVISOR_STANZAS@
 
 council:
   default_weights:
@@ -626,4 +582,7 @@ cache:
 logging:
   level: INFO
 """
-    return template.replace("@OLLAMA_DEFAULT_MODEL@", _default_local_model())
+    return (
+        template.replace("@ADVISOR_STANZAS@", _advisor_stanzas())
+        .replace("@OLLAMA_DEFAULT_MODEL@", _default_local_model())
+    )

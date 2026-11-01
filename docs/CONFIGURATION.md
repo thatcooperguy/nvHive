@@ -50,7 +50,11 @@ require admission. Add the exact registered names of other self-hosted GPU
 endpoints (for example an OpenAI-compatible NIM endpoint) to `managed_providers`.
 Local RAG embeddings also require admission. Hosted cloud providers are not
 automatically treated as members of the home compute pool. This is top-level
-configuration; profile overrides cannot replace it.
+configuration; profile overrides cannot replace it. Listing a provider's
+models (`list_models`, the metadata probe behind `/v1/models` and
+`nvh status --deep`) is not a model call: it passes through the admission
+boundary un-admitted and is never paused, so a live model list is available
+with or without a lease.
 
 **No production native broker is installed. Leave this disabled.** Enabling it
 currently stops engine initialization and council dispatch before any provider
@@ -244,6 +248,91 @@ Task types for `routing.rules` are the `TaskType` values in
 `conversation`, `question_answering`, `structured_extraction`, `multimodal`
 and `long_context_analysis`. `nvh status --routing` shows how the last query
 was classified and why it went where it went.
+
+## Model catalog
+
+The model catalog the router, `nvh model list` and `/v1/models` read is
+assembled when the registry loads, from three sources in this precedence:
+
+1. **An explicit override in `nvh/config/capabilities.yaml`.** A row may pin
+   any LiteLLM-read fact (context window, max output, the tool / vision /
+   JSON / system-prompt flags, prices, deprecation date) and must then carry
+   a `source:` string saying where the numbers come from. Rows without
+   overrides carry no numbers at all.
+2. **LiteLLM's model table** (`litellm.model_cost`), with
+   `nvh/config/model_overrides.json` registered into it at load for the
+   provider default and fallback ids LiteLLM does not carry. Each payload has
+   its own `source`; it is registered only while the id is absent from
+   LiteLLM's table, so LiteLLM wins the moment a release adds the row.
+   The table is the one bundled with the installed LiteLLM: importing `nvh`
+   exports `LITELLM_LOCAL_MODEL_COST_MAP=True` unless the variable is already
+   set, so no price map is fetched from GitHub at import and the catalog,
+   the bill and the weekly model-currency report describe the same table
+   (prices move with a LiteLLM release; the weekly job reports the drift).
+   Export the variable as `False` before importing `nvh` to use the live map.
+3. `ModelInfo` defaults.
+
+`capabilities.yaml` owns the hand-maintained half: `provider`,
+`display_name`, `capability_scores` (0–1 per task type),
+`typical_latency_ms` and, for a model its provider has renamed,
+`status: retired` plus `successor`. Price, context and tool flags are read
+from LiteLLM every time the catalog loads and are never written into the
+file, so a LiteLLM release cannot change what is committed. Two things are
+derived rather than typed and need no `source:`: retirement
+(`RETIRED_MODEL_RENAMES` in `nvh/cli/setup.py`) and `supports_vision` on
+the `ollama/<tag>` rows (the VRAM tier table in `nvh/core/local_models.py`,
+whose tags the rows must match one-for-one). A zero-cost provider's rows
+(Ollama, LLM7, SiliconFlow) are `$0` by the spec flag alone and carry no
+price in the file. `python scripts/gen_capabilities.py` rewrites the file in
+canonical form and `--check` (run by `tests/test_capabilities_catalog.py`)
+fails when the committed file is not canonical; the `# Generated against
+litellm <version>` header line is informational and not compared. A row
+that no source prices loads with `cost_known: false`: `nvh model list`
+prints `cost unknown` instead of `$0`, the router scores it as neutral
+rather than free, and the first request billed at the catalog rate or at
+`$0` logs once per model per process. Hugging Face's rows are `cost unknown`
+by design (`ProviderSpec.metered_upstream`): LiteLLM bills Inference
+Providers at `$0` and the upstream provider's rate lands on the HF account.
+A context window of `0` means unknown and is shown as `—`.
+
+Retired rows stay in the file (the router and `nvh model list` still see
+them, with `retired → <successor>` in the Status column) but are hidden
+from `GET /v1/models` and the OpenAI-compatible model listing. `/v1/models`
+also intersects each provider's catalog rows with the provider's live
+`GET /models` list when a key is configured; a provider whose live list is
+unknown (no key, no models endpoint, a probe error, an empty body, or a paused
+Atohi lease) is passed through unfiltered, never hidden, and the response's
+`warnings` names every configured default model the provider's live list
+lacks. The live list is cached for five minutes per provider (thirty seconds
+after a failure) and shared with the provider health probe, so health plus
+listing is one request.
+
+`nvh status --deep` (alias `nvh doctor`) makes **one network call per
+configured cloud provider**: the `Default models` check reuses the
+`GET /models` probe the health check just made and warns when a configured
+(or spec) default model is not in the live list, with the fix text pointing
+at `nvh model list` and the stanza's `default_model`. The `Advisors` health
+check (`nvh status`, `--providers`, `--deep`) already made that call before;
+`--deep` adds no second request per provider.
+
+A weekly GitHub Actions workflow, `.github/workflows/model-currency.yml`
+(Mondays, also `workflow_dispatch`), checks that the providers still serve
+the catalog's and the specs' model ids and how far LiteLLM's table has moved
+from the explicit overrides. It installs the latest LiteLLM, runs the
+`network`-marked `tests/test_model_currency.py` with `NVH_NETWORK_TESTS=1`,
+checks every VRAM-tier Ollama tag against the registry, prints an
+informational drift report (each `source:` override beside today's LiteLLM
+value, each `model_overrides.json` payload LiteLLM now carries, and each
+active row that no source prices any more, which is how a LiteLLM release
+that drops a row is seen without failing CI), and runs
+`scripts/gen_capabilities.py --check`. The secret-free job needs no keys
+(LLM7's anonymous models endpoint); the keyed job reads only `GROQ_API_KEY`
+and `NVIDIA_API_KEY` (free, revocable keys), set on its test step alone so
+the install steps never see them, and skips every step silently when either
+repository secret is missing. Both jobs are
+`continue-on-error`: the workflow informs, it never blocks a merge. See
+[TESTING.md](TESTING.md#catalog-and-model-currency) for running the same
+checks locally.
 
 ## Secrets
 

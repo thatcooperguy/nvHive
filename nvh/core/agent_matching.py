@@ -22,6 +22,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from nvh.providers.specs import PROVIDER_FACTS
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,19 +73,12 @@ _ROLE_TO_TASK_TYPES: dict[str, list[str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Static fallback strengths (used when no learning data exists)
+# Static fallback strengths (used when no learning data exists): each spec
+# row's ``task_strengths``, strongest first. Rows without any score baseline.
 # ---------------------------------------------------------------------------
 
 _STATIC_PROVIDER_STRENGTHS: dict[str, list[str]] = {
-    "openai": ["reasoning", "analysis", "creative", "code_generation"],
-    "anthropic": ["reasoning", "analysis", "code_review", "security"],
-    "groq": ["code_generation", "debugging", "general"],
-    "google": ["reasoning", "analysis", "creative", "math"],
-    "ollama": ["code_generation", "debugging", "general"],
-    "deepseek": ["code_generation", "math", "reasoning"],
-    "mistral": ["code_generation", "reasoning", "creative"],
-    "nvidia": ["code_generation", "ml", "optimization"],
-    "llm7": ["general", "code_generation", "debugging"],
+    name: list(spec.task_strengths) for name, spec in PROVIDER_FACTS.items() if spec.task_strengths
 }
 
 

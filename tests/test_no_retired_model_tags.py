@@ -195,7 +195,9 @@ def test_capabilities_ollama_rows_are_exactly_the_table_picks() -> None:
         pick = lm.pick_for_tag(key.removeprefix("ollama/"))
         assert pick is not None, key
         assert info["provider"] == "ollama", key
-        assert info["input_cost_per_1m_tokens"] == 0 and info["output_cost_per_1m_tokens"] == 0, key
+        # Zero-cost providers price $0 at load (ProviderSpec.zero_cost); the
+        # YAML carries no price lines for them (scripts/gen_capabilities.py).
+        assert "input_cost_per_1m_tokens" not in info and "output_cost_per_1m_tokens" not in info, key
         assert info["supports_vision"] is pick.vision, key
         assert info["display_name"].strip() and info["context_window"] > 0, key
         assert set(info["capability_scores"]) >= {"code_generation", "reasoning", "conversation"}, key

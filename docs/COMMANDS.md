@@ -349,7 +349,7 @@ description. They do not appear in `nvh --help` and will be removed in 0.43.
 | `nvh llm7` | (alias) nvh ask -p llm7 — LLM7 |
 | `nvh math` | (alias) nvh ask --focus math |
 | `nvh mistral` | (alias) nvh ask -p mistral — Mistral |
-| `nvh ollama` | (alias) nvh ask -p ollama — Ollama (Local) |
+| `nvh ollama` | (alias) nvh ask -p ollama — Ollama (local) |
 | `nvh openai` | (alias) nvh ask -p openai — OpenAI |
 | `nvh openrouter` | (alias) nvh ask -p openrouter — OpenRouter |
 | `nvh perplexity` | (alias) nvh ask -p perplexity — Perplexity |

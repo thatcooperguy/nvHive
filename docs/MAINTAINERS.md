@@ -69,14 +69,23 @@ minute for PyPI.
    `nvh/providers/specs.py`, and the generated blocks of `docs/MODELS.md`
    (`python scripts/gen_models_doc.py`, `tests/test_models_doc_parity.py`)
    after any change to `nvh/core/local_models.py` or the GB10 baselines in
-   `nvh/utils/gpu_emulation.py`. Each parity test runs its generator's
-   `--check`.
-4. README install URLs, PyPI metadata, release asset names, `NOTICE.md`,
+   `nvh/utils/gpu_emulation.py`, and `nvh/config/capabilities.yaml`
+   (`python scripts/gen_capabilities.py`, `tests/test_capabilities_catalog.py`)
+   after any change to a catalog row, `RETIRED_MODEL_RENAMES` or the VRAM
+   tier table. Each parity test runs its generator's `--check`.
+4. The latest `model-currency.yml` run (Actions tab; `gh run list
+   --workflow=model-currency.yml -L 1`, or `gh workflow run
+   model-currency.yml` for a fresh one) has been read: a provider that no
+   longer serves a default model, an Ollama tag the registry dropped, or a
+   `source:` override LiteLLM now contradicts is fixed in `specs.py`,
+   `local_models.py` or `capabilities.yaml` before the tag. The job is
+   non-blocking by design, so nothing else surfaces it.
+5. README install URLs, PyPI metadata, release asset names, `NOTICE.md`,
    `TRADEMARKS.md` and the trusted-publisher settings all point at
    `thatcooperguy/nvHive` and the `nvhive` package.
-5. If `nvh/api/server.py::ALLOWED_ORIGINS` changed, `http://nvhive`,
+6. If `nvh/api/server.py::ALLOWED_ORIGINS` changed, `http://nvhive`,
    `http://localhost:3000` and port 80 are still present.
-6. The readiness rule below: do not call a release production-ready unless
+7. The readiness rule below: do not call a release production-ready unless
    the target-VM checklist passed.
 
 ### Verifying, yanking, rolling back
@@ -277,7 +286,12 @@ profile."
   tables (`python scripts/gen_providers_doc.py`,
   `tests/test_provider_docs_parity.py`) and the marker-delimited blocks of
   `docs/MODELS.md` (`python scripts/gen_models_doc.py`,
-  `tests/test_models_doc_parity.py`). Never hand-edit a generated block.
+  `tests/test_models_doc_parity.py`). `nvh/config/capabilities.yaml` is
+  normalised the same way (`python scripts/gen_capabilities.py`,
+  `tests/test_capabilities_catalog.py`): its retired/successor, Ollama vision
+  and zero-cost fields are derived, and price, context and tool flags are
+  read from LiteLLM at load rather than written. Never hand-edit a generated
+  block.
 - No hand-typed inventory counts (providers, models, free tiers, cabinets,
   tools, personas, agents) in README, docs or CLI strings —
   `tests/test_marketing_parity.py` fails on any that disagree with the code.

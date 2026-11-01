@@ -1,0 +1,89 @@
+name: Model currency
+
+# Weekly: do the cloud providers still serve the catalog's and the specs'
+# model ids, is every Ollama tier tag still published, and how far has
+# LiteLLM's table moved from the catalog's explicit overrides? Informational
+# and non-blocking: nothing here gates a merge (both jobs continue-on-error).
+#
+# Decision 19: the keyed tier uses GROQ_API_KEY and NVIDIA_API_KEY only (free,
+# revocable keys) and its steps are skipped silently when either secret is
+# absent. Secrets are never echoed: the tests print model ids, never keys.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'  # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  NVH_NETWORK_TESTS: '1'
+  # The installed package's table, not a live map fetch: it is what a pip
+  # install bills with, and what the drift report should describe.
+  LITELLM_LOCAL_MODEL_COST_MAP: 'True'
+  PYTHONUTF8: '1'
+
+jobs:
+  secret-free:
+    name: Secret-free tier (llm7, Ollama tags, LiteLLM drift)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install with the latest LiteLLM
+        run: |
+          pip install -e ".[dev]"
+          pip install --upgrade litellm
+          python -c "from importlib.metadata import version; print('litellm', version('litellm'))"
+      - name: Live model lists (anonymous tier)
+        run: python -m pytest tests/test_model_currency.py -v --tb=short -p no:cacheprovider --timeout=180
+      - name: Ollama registry tags (every LOCAL_MODEL_TIERS tag)
+        if: always()
+        run: python -m pytest "tests/test_local_models.py::test_every_table_tag_is_published_on_the_registry" -v --tb=short -p no:cacheprovider --timeout=600
+      - name: Catalog overrides against today's LiteLLM (informational, never fails)
+        if: always()
+        continue-on-error: true
+        run: python -c "from tests.test_model_currency import print_override_drift; print_override_drift()"
+      - name: Catalog generator is current (gen_capabilities --check)
+        if: always()
+        run: python scripts/gen_capabilities.py --check
+      - name: Playbook upstream drift (when the checker exists)
+        if: always() && hashFiles('scripts/check_playbook_upstream.py') != ''
+        run: python scripts/check_playbook_upstream.py --check
+
+  keyed:
+    name: Keyed tier (Groq, NVIDIA)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      # The secrets context is not readable from a job-level `if`; every
+      # step keys on this flag instead, so the job skips silently without
+      # both secrets. The keys themselves are set on the test step alone
+      # (below), so checkout, setup-python and the pip installs -- which run
+      # whatever PyPI serves that morning -- never see them.
+      HAS_KEYS: ${{ secrets.GROQ_API_KEY != '' && secrets.NVIDIA_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        if: env.HAS_KEYS == 'true'
+      - name: Set up Python
+        if: env.HAS_KEYS == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install with the latest LiteLLM
+        if: env.HAS_KEYS == 'true'
+        run: |
+          pip install -e ".[dev]"
+          pip install --upgrade litellm
+      - name: Live model lists (keyed tier)
+        if: env.HAS_KEYS == 'true'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: python -m pytest tests/test_model_currency.py -v --tb=short -p no:cacheprovider --timeout=180 -k keyed

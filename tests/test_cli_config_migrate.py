@@ -37,6 +37,7 @@ from nvh.cli.setup import (
     stale_default_models,
 )
 from nvh.config.settings import ProviderConfig
+from nvh.providers.specs import CORE_PROVIDER_NAMES, PROVIDER_FACTS, free_tier_ladder
 
 SHIPPED_CONFIG = """\
 version: "1"
@@ -523,9 +524,41 @@ class TestShippedDefaults:
                 assert rename_retired_model(name, model) is None, (
                     f"{name}.{field}={model} is retired"
                 )
-        assert data["advisors"]["groq"]["default_model"] == "groq/openai/gpt-oss-120b"
-        assert data["advisors"]["anthropic"]["default_model"] == "claude-sonnet-5"
-        assert data["advisors"]["google"]["fallback_model"] == "gemini/gemini-3.5-flash-lite"
+        # The core stanzas are the spec rows, not a second copy of the IDs.
+        for name, _display, env_var, _url in cli_setup.CORE_PROVIDERS:
+            spec = PROVIDER_FACTS[name]
+            block = data["advisors"][name]
+            assert block["default_model"] == spec.default_model, name
+            assert block["fallback_model"] == spec.fallback_model, name
+            assert block["api_key"] == f"${{{env_var}}}" == f"${{{spec.key_env}}}", name
+        assert [row[0] for row in cli_setup.CORE_PROVIDERS] == list(CORE_PROVIDER_NAMES)
+
+    def test_known_advisors_are_the_spec_rows(self):
+        assert set(cli_main.KNOWN_ADVISORS) == set(PROVIDER_FACTS) - {"triton"}
+        for name, info in cli_main.KNOWN_ADVISORS.items():
+            spec = PROVIDER_FACTS[name]
+            assert info == {
+                "name": spec.display_name,
+                "url": spec.signup_url,
+                "free_tier": spec.free_tier,
+                "free_info": spec.free_info,
+            }, name
+
+    def test_signup_ladders_split_the_free_tier_ladder_by_signup_tier(self):
+        ladder = free_tier_ladder()
+        assert cli_main.ZERO_SIGNUP == [(s.name, s.display_name, s.free_info) for s in ladder if s.signup_tier == "none"]
+        assert cli_main.EMAIL_SIGNUP == [
+            (s.name, s.display_name, s.signup_url, s.free_info) for s in ladder if s.signup_tier == "email"
+        ]
+        assert cli_main.ACCOUNT_SIGNUP == [
+            (s.name, s.display_name, s.signup_url, s.free_info) for s in ladder if s.signup_tier == "account"
+        ]
+        names = [row[0] for row in cli_main.ZERO_SIGNUP + cli_main.EMAIL_SIGNUP + cli_main.ACCOUNT_SIGNUP]
+        assert sorted(names) == sorted(s.name for s in ladder)
+        assert cli_main.ZERO_SIGNUP[0][0] == "ollama"
+        assert {row[0] for row in cli_main.ACCOUNT_SIGNUP} == {
+            s.name for s in ladder if s.signup_tier == "account"
+        } >= {"google", "nvidia", "mistral"}
 
     def test_github_no_longer_a_known_advisor(self, runner: CliRunner):
         assert "github" not in cli_main.KNOWN_ADVISORS
@@ -533,3 +566,7 @@ class TestShippedDefaults:
         result = runner.invoke(cli_main.app, ["keys"])
         assert result.exit_code == 0, result.output
         assert "GitHub Models" not in result.output
+        # `nvh keys` lists every keyed free tier under its spec display name.
+        for spec in free_tier_ladder():
+            if spec.signup_tier != "none":
+                assert spec.display_name in result.output, spec.name

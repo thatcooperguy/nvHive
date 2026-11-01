@@ -33,13 +33,17 @@ from nvh.providers.base import (
 )
 from nvh.providers.openai_compatible import _build_messages, _calc_cost, _map_error
 
+# Triton's endpoint when neither TRITON_URL nor TRITON_ENDPOINT is set; the
+# generated config (nvh.config.settings) names the same default.
+DEFAULT_TRITON_URL = "http://localhost:8001"
+
 
 def _get_base_url() -> str:
     """Resolve Triton endpoint from env vars or return the default."""
     return (
         os.environ.get("TRITON_URL")
         or os.environ.get("TRITON_ENDPOINT")
-        or "http://localhost:8001"
+        or DEFAULT_TRITON_URL
     )
 
 
