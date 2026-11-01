@@ -108,3 +108,5 @@ Full reference: [docs/COMMANDS.md](docs/COMMANDS.md)
 **PolyForm Noncommercial 1.0.0** — use, modify, and share nvHive freely for any noncommercial purpose. **Selling this code or using it commercially is not permitted.** See [LICENSE](LICENSE) and [NOTICE](NOTICE.md). Versions 0.40.0 and earlier were released under MIT and remain MIT.
 
 The license does not grant rights to the nvHive name or logos; forks should use distinct names. See [TRADEMARKS](TRADEMARKS.md).
+
+Trust boundary, loopback defaults, the privileged tier and how to report a vulnerability: [SECURITY](SECURITY.md).

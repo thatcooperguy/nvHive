@@ -20,6 +20,11 @@ os.environ.setdefault("NVH_PLATFORM_WARMUP", "0")
 # Path.home). setdefault so an operator's explicit choice still wins.
 os.environ.setdefault("NVH_LEGACY_MIGRATION", "0")
 
+# LiteLLM fetches its live model-price map from GitHub at import when the
+# network is up; tests (and every nvh subprocess they spawn) use the bundled
+# map instead so a run never depends on raw.githubusercontent.com.
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 import nvh.storage.repository as repo  # noqa: E402
 from nvh.utils import platform_facts as _platform_facts  # noqa: E402
 

@@ -9,6 +9,7 @@ the tool-server verbs live under ``nvh mcp servers``.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import sys
 import types
@@ -133,7 +134,7 @@ class TestMcpGroup:
 
         result = runner.invoke(cli_main.app, ["mcp", "-t", "streamable-http", "--port", "9001"])
         assert result.exit_code == 0, result.output
-        assert runs[-1] == {"transport": "streamable-http", "host": "0.0.0.0", "port": 9001}
+        assert runs[-1] == {"transport": "streamable-http", "host": "127.0.0.1", "port": 9001}
         assert result.stdout == ""
 
     @pytest.mark.parametrize("argv", [["mcp", "servers", "list"], ["mcp", "list"]])
@@ -151,3 +152,182 @@ class TestMcpGroup:
         assert result.exit_code == 0, result.output
         assert "No MCP servers configured" in result.output
         assert "nvh mcp servers refresh" in result.output
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# HTTP transport bind (0.44.1): loopback by default, both MCP SDK majors
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class _KwargsServer:
+    """mcp 2.x shape: ``MCPServer.run(transport, **kwargs)`` forwards host/port."""
+
+    def __init__(self, runs: list) -> None:
+        self.runs = runs
+
+    def run(self, transport: str = "stdio", **kwargs) -> None:
+        self.runs.append({"transport": transport, **kwargs})
+
+
+class _V1Server:
+    """mcp 1.x shape: ``FastMCP.run(transport, mount_path)`` reads ``settings.host/port``
+    and raises ``TypeError`` on a ``host=`` keyword."""
+
+    def __init__(self, runs: list) -> None:
+        self.runs = runs
+        self.settings = types.SimpleNamespace(host="127.0.0.1", port=8000)
+
+    def run(self, transport: str = "stdio", mount_path: str | None = None) -> None:
+        self.runs.append({"transport": transport, "mount_path": mount_path})
+
+
+def _install_fake_server(monkeypatch, server) -> None:
+    fake = types.ModuleType("nvh.mcp_server")
+    fake.create_server = lambda: server  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nvh.mcp_server", fake)
+
+
+def _installed_sdk_server():
+    """A real server object from whichever MCP SDK major is installed."""
+    try:
+        from mcp.server.mcpserver import MCPServer as _Server  # mcp 2.x
+    except ImportError:
+        try:
+            from mcp.server.fastmcp import FastMCP as _Server  # mcp 1.x
+        except ImportError:
+            pytest.skip("MCP SDK not installed")
+    return _Server("nvhive-bind-test")
+
+
+class TestMcpHttpBind:
+    """The HTTP transport binds loopback unless ``--host`` says otherwise, and
+    starts on both SDK majors (mcp 1.x ``run()`` rejected host/port before)."""
+
+    def test_default_host_is_loopback(self):
+        assert cli_main.MCP_HTTP_DEFAULT_HOST == "127.0.0.1"
+        for command in ("mcp", "openclaw"):
+            params = {p.name: p for p in get_command(cli_main.app).commands[command].params}
+            assert params["host"].default == "127.0.0.1", command
+
+    def test_help_advertises_host(self, runner: CliRunner):
+        result = runner.invoke(cli_main.app, ["mcp", "--help"])
+        assert result.exit_code == 0, result.output
+        assert "--host" in _plain(result.output)
+
+    def test_mcp_2x_gets_loopback_through_run_kwargs(self, runner: CliRunner, monkeypatch):
+        runs: list[dict] = []
+        _install_fake_server(monkeypatch, _KwargsServer(runs))
+        result = runner.invoke(cli_main.app, ["mcp", "-t", "streamable-http", "--port", "9001"])
+        assert result.exit_code == 0, result.output
+        assert runs == [{"transport": "streamable-http", "host": "127.0.0.1", "port": 9001}]
+        assert "127.0.0.1:9001" in result.stderr
+        assert result.stdout == ""
+
+    def test_mcp_2x_forwards_an_explicit_host(self, runner: CliRunner, monkeypatch):
+        runs: list[dict] = []
+        _install_fake_server(monkeypatch, _KwargsServer(runs))
+        result = runner.invoke(
+            cli_main.app, ["mcp", "-t", "streamable-http", "--host", "0.0.0.0", "--port", "9001"],
+        )
+        assert result.exit_code == 0, result.output
+        assert runs == [{"transport": "streamable-http", "host": "0.0.0.0", "port": 9001}]
+        assert "0.0.0.0:9001" in result.stderr
+
+    @pytest.mark.parametrize(
+        "argv, expected_host", [([], "127.0.0.1"), (["--host", "0.0.0.0"], "0.0.0.0")],
+    )
+    def test_mcp_1x_gets_the_bind_through_settings(
+        self, runner: CliRunner, monkeypatch, argv, expected_host,
+    ):
+        runs: list[dict] = []
+        server = _V1Server(runs)
+        _install_fake_server(monkeypatch, server)
+        result = runner.invoke(
+            cli_main.app, ["mcp", "-t", "streamable-http", "--port", "9002", *argv],
+        )
+        assert result.exit_code == 0, result.output
+        # No host/port keywords: FastMCP.run() would raise TypeError on them.
+        assert runs == [{"transport": "streamable-http", "mount_path": None}]
+        assert (server.settings.host, server.settings.port) == (expected_host, 9002)
+
+    def test_stdio_ignores_the_host_option(self, runner: CliRunner, monkeypatch):
+        runs: list[dict] = []
+        _install_fake_server(monkeypatch, _V1Server(runs))
+        result = runner.invoke(cli_main.app, ["mcp", "--host", "0.0.0.0"])
+        assert result.exit_code == 0, result.output
+        assert runs == [{"transport": "stdio", "mount_path": None}]
+
+    def test_server_with_neither_bind_path_fails_loudly(self):
+        class _Bare:
+            def run(self, transport: str = "stdio", mount_path: str | None = None) -> None:
+                pytest.fail("run() must not start a server whose bind cannot be applied")
+
+        with pytest.raises(TypeError, match="settings.host/port"):
+            cli_main._run_mcp_streamable_http(_Bare(), "127.0.0.1", 9003)
+
+    @pytest.mark.parametrize("server_cls", [_KwargsServer, _V1Server])
+    def test_openclaw_start_http_binds_loopback_by_default(
+        self, runner: CliRunner, monkeypatch, server_cls,
+    ):
+        runs: list[dict] = []
+        server = server_cls(runs)
+        _install_fake_server(monkeypatch, server)
+        result = runner.invoke(cli_main.app, ["openclaw", "--start", "--http", "--port", "9004"])
+        assert result.exit_code == 0, result.output
+        assert "127.0.0.1:9004" in _plain(result.output)
+        if server_cls is _KwargsServer:
+            assert runs == [{"transport": "streamable-http", "host": "127.0.0.1", "port": 9004}]
+        else:
+            assert runs == [{"transport": "streamable-http", "mount_path": None}]
+            assert (server.settings.host, server.settings.port) == ("127.0.0.1", 9004)
+
+    def test_openclaw_start_http_forwards_an_explicit_host(self, runner: CliRunner, monkeypatch):
+        runs: list[dict] = []
+        _install_fake_server(monkeypatch, _KwargsServer(runs))
+        result = runner.invoke(
+            cli_main.app, ["openclaw", "--start", "--http", "--host", "0.0.0.0", "--port", "9004"],
+        )
+        assert result.exit_code == 0, result.output
+        assert runs == [{"transport": "streamable-http", "host": "0.0.0.0", "port": 9004}]
+
+    def test_installed_sdk_server_takes_the_bind_without_a_type_error(self, monkeypatch):
+        """Against the installed SDK (either major): ``run()`` is reached with a
+        bind it accepts. The transport coroutine is replaced and ``anyio.run``
+        intercepted, so nothing listens on a socket; on 2.x the *real*
+        coroutine's signature is checked for the keywords the helper forwards,
+        since the fake would swallow a renamed ``host``/``port`` silently."""
+        import inspect
+
+        import anyio
+
+        server = _installed_sdk_server()
+        seen: dict = {}
+        # Read from the class before the instance attribute is replaced.
+        real_params = inspect.signature(type(server).run_streamable_http_async).parameters
+
+        async def fake_transport(**kwargs):
+            seen.update(kwargs)
+
+        monkeypatch.setattr(server, "run_streamable_http_async", fake_transport)
+        monkeypatch.setattr(anyio, "run", lambda fn, *args, **_kw: asyncio.run(fn(*args)))
+        v1 = hasattr(getattr(server, "settings", None), "host")
+        if v1:
+            server.settings.host = "0.0.0.0"  # the helper must overwrite, not inherit, it
+
+        cli_main._run_mcp_streamable_http(server, "127.0.0.1", 9005)
+
+        if v1:
+            assert (server.settings.host, server.settings.port) == ("127.0.0.1", 9005)
+            assert seen == {}
+        else:
+            assert seen == {"host": "127.0.0.1", "port": 9005}
+            # ``MCPServer.run(transport, **kwargs)`` hands these straight to the
+            # transport coroutine, so the keywords must exist there by name or
+            # `nvh mcp -t streamable-http` raises TypeError at startup.
+            keyword_kinds = {inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+            for name in ("host", "port"):
+                assert name in real_params, (
+                    f"run_streamable_http_async() has no {name!r} keyword any more: "
+                    f"{list(real_params)}"
+                )
+                assert real_params[name].kind in keyword_kinds

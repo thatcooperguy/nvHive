@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 import nvh.core.local_models as lm
 from nvh.storage import repository
@@ -62,7 +63,7 @@ def test_all_extra_contains_runtime_extras() -> None:
     # Self-referential extras must not list any package twice.
     assert len(all_extra) == len(set(all_extra))
     assert len(_resolve_extra(extras, "dev")) == len(set(_resolve_extra(extras, "dev")))
-    assert "mcp[cli]>=1.0,<2" in _resolve_extra(extras, "dev")
+    assert "mcp>=1.0,<3" in _resolve_extra(extras, "dev")
 
 
 def test_runtime_dependencies_match_imports() -> None:
@@ -81,6 +82,74 @@ def test_release_workflow_has_tag_version_parity_gate() -> None:
     assert "RELEASE_TAG" in workflow
     assert "pyproject.toml" in workflow
     assert "nvh/__init__.py" in workflow
+
+
+def _workflow(name: str) -> dict:
+    return yaml.safe_load((ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8"))
+
+
+def _triggers(workflow: dict) -> dict:
+    # PyYAML reads a bare `on:` key as the boolean True.
+    return workflow.get(True, workflow.get("on"))
+
+
+def test_ci_workflow_is_dispatchable_and_exercises_both_mcp_sdk_majors() -> None:
+    """0.44.1: a red matrix can be re-run from the Actions tab, the test step
+    prints the slowest tests, and the `mcp-v1` job keeps the mcp 1.x branch of
+    the dual-SDK shim green now that the dev extra resolves the 2.x SDK."""
+    ci = _workflow("ci.yml")
+    assert "workflow_dispatch" in _triggers(ci)
+    test_steps = {s.get("name"): s.get("run", "") for s in ci["jobs"]["test"]["steps"]}
+    assert "--durations=25" in test_steps["Test"]
+    v1 = " ".join(s.get("run", "") for s in ci["jobs"]["mcp-v1"]["steps"])
+    assert '"mcp<2"' in v1
+    for name in ("test_mcp_server.py", "test_mcp_client.py", "test_mcp_cabinet_sync.py", "test_cli_mcp_group.py"):
+        assert f"tests/{name}" in v1
+
+
+def test_ci_security_job_audits_the_project_dependency_set() -> None:
+    """SECURITY.md says the `security` job runs pip-audit over nvHive's resolved
+    dependency set. A bare `pip-audit` audits only the current interpreter, so
+    the project must be installed before the audit step, and the editable
+    checkout (no PyPI entry) must be skipped or `--strict` always trips."""
+    runs = [s.get("run", "") for s in _workflow("ci.yml")["jobs"]["security"]["steps"]]
+    install = next(i for i, run in enumerate(runs) if 'pip install -e ".[dev]"' in run)
+    audit = next(i for i, run in enumerate(runs) if run.startswith("pip-audit"))
+    assert install < audit
+    assert "--skip-editable" in runs[audit]
+
+
+def test_installer_workflow_runs_on_main_pushes_with_the_pr_path_filter() -> None:
+    """0.44.1: the installer contracts run when a change to an installer or its
+    harness lands on main, with the same path filter the PR trigger uses, so a
+    green PR is never the last time they ran."""
+    on = _triggers(_workflow("installer.yml"))
+    assert on["push"]["branches"] == ["main"]
+    assert on["push"]["paths"] == on["pull_request"]["paths"]
+    assert "workflow_dispatch" in on
+
+
+# Marks pytest itself (or a required plugin) provides; everything else used in
+# tests/ must be declared in pyproject's `markers`.
+_PYTEST_BUILTIN_MARKS = frozenset({
+    "asyncio", "filterwarnings", "parametrize", "skip", "skipif", "timeout", "usefixtures", "xfail",
+})
+
+
+def test_every_custom_pytest_marker_is_registered() -> None:
+    """`network` (opt-in live probes) and `slow` (subprocess-heavy suites, the
+    `-m "not slow"` quick run) are registered in pyproject.toml, and no test
+    uses a mark that is not: an unregistered mark prints
+    PytestUnknownMarkWarning on every run and fails `--strict-markers`."""
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    registered = {m.split(":", 1)[0].strip() for m in data["tool"]["pytest"]["ini_options"]["markers"]}
+    assert {"network", "slow"} <= registered
+
+    used: set[str] = set()
+    for path in (ROOT / "tests").glob("*.py"):
+        used.update(re.findall(r"pytest\.mark\.([A-Za-z_]\w*)", path.read_text(encoding="utf-8")))
+    unregistered = used - _PYTEST_BUILTIN_MARKS - registered
+    assert not unregistered, f"marks used in tests/ but not registered in pyproject.toml: {sorted(unregistered)}"
 
 
 def test_repository_default_db_path_prefers_rootless_state(monkeypatch, tmp_path) -> None:

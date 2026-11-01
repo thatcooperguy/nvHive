@@ -2,6 +2,65 @@
 
 ## [Unreleased]
 
+### Added
+- **SECURITY.md**: the trust boundary as the code enforces it (open mode and
+  `HIVE_API_KEY`, loopback defaults, `HIVE_CORS_ORIGINS` /
+  `HIVE_CORS_ORIGIN_REGEX`, the privileged tier with approval tokens and
+  Host/Origin refusals, both deny lists, Docker-only `run_code` from chat,
+  the vault audit) and how to report a vulnerability; linked from the README.
+  PRIVACY.md and SECURITY.md record that the `nvhive[mcp]` extra's
+  `opentelemetry-api` (mcp 2.x line only) is API-only with no exporter and
+  no telemetry egress.
+- `nvh status` prints the installed `mcp` SDK version on one line when the
+  package imports (`nvh.integrations.mcp_client.sdk_version()`).
+- `tests/test_litellm_surface.py` pins the LiteLLM surface the provider
+  layer relies on (`aresponses`, `get_llm_provider`'s 4-tuple, `model_cost`,
+  `register_model`, `supports_function_calling`, `supports_vision`) without
+  network, on both 1.99.0 and 1.106.6, and documents the default/fallback
+  ids LiteLLM's model DB does not price (they bill from the
+  `capabilities.yaml` rates). LiteLLM is verified at 1.106.6; the floor
+  stays `>=1.99`.
+
+### Changed
+- **The `mcp` extra spans both SDK majors**: `mcp>=1.0,<3` (the `[cli]` extra
+  is dropped; nvHive never shells out to `mcp dev`). `nvh/mcp_server.py`
+  binds `mcp.server.mcpserver.MCPServer` (2.x) before
+  `mcp.server.fastmcp.FastMCP` (1.x), probes constructor keywords and
+  advertises `version=nvh.__version__` where accepted;
+  `nvh/integrations/mcp_client.py` reads `input_schema` / `is_error` before
+  `inputSchema` / `isError` and extracts text from `.content` blocks.
+  Pinned by fake-SDK tests plus the stdio round trip on mcp 1.30.0 and 2.3.0.
+  Dependabot #140 is superseded.
+- CI: `workflow_dispatch` for manual re-runs, `--durations=25` on the test
+  matrix, an `mcp-v1` job that runs the MCP test files on the 1.x SDK so both
+  branches of the shim stay exercised, the `security` job installs the
+  project before `pip-audit` so the audit covers nvHive's resolved
+  dependency set, and the installer contracts also run on pushes to main
+  that touch an installer; the workflow shapes are pinned by
+  `tests/test_release_hardening.py`.
+- Tests: a registered `slow` marker (`-m "not slow"` is the quick local run)
+  on the subprocess-heavy CLI, live-uvicorn and stdio MCP tests; the
+  LiteLLM live-map check is `network`-gated; test processes use LiteLLM's
+  bundled model DB (`LITELLM_LOCAL_MODEL_COST_MAP`) instead of fetching it.
+- docs/INTEGRATIONS.md and the CLI hint now say `pip install "nvhive[mcp]"`
+  and show the loopback default for `nvh mcp -t streamable-http`.
+
+### Fixed
+- `nvh mcp -t streamable-http` no longer fails with `TypeError` on the mcp
+  1.x SDK: the bind is applied through `settings.host` / `settings.port` on
+  1.x and forwarded as `run(host=, port=)` on 2.x, pinned for both shapes.
+- The streaming Wizard cost ceiling is pinned across two iterations.
+
+### Security
+- `run_server` and the MCP HTTP transport (`nvh mcp -t streamable-http`,
+  `nvh openclaw --start --http`) bind `127.0.0.1` by default; both MCP
+  commands gain `--host`, and exposing any of them on the LAN takes an
+  explicit `--host 0.0.0.0`. The WebUI (Next.js) still binds every
+  interface; SECURITY.md says so.
+- The privileged tier's bind-host refusal treats "no `HIVE_API_KEY`" as open
+  mode regardless of registered users (`_auth_open_mode` mirrors
+  `require_auth`).
+
 ## [0.44.0] - 2026-10-31
 
 The first release published since 0.42.0. It ships everything merged to main

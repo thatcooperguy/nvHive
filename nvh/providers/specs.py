@@ -21,7 +21,9 @@ This module imports nothing heavy so config, CLI and API code can read the
 table at startup.
 
 Default and fallback IDs were verified against LiteLLM 1.99.0's model DB and
-each provider's model docs for 0.41.1; the prefixes against
+each provider's model docs for 0.41.1, and re-verified against LiteLLM
+1.106.6 for 0.44.1 (``tests/test_litellm_surface.py`` pins the surface and
+lists the IDs the model DB does not carry); the prefixes against
 ``litellm.get_llm_provider`` on the bare IDs for 0.42.1.
 """
 

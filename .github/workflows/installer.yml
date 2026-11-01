@@ -1,6 +1,19 @@
 name: Installer contracts
 
 on:
+  # Same path filter for pushes to main and for pull requests: a change to an
+  # installer or its harness that lands on main runs the contracts there too,
+  # so a green PR cannot be the last time they ran.
+  push:
+    branches: [main]
+    paths:
+      - 'install.sh'
+      - 'install.ps1'
+      - 'install-mac.sh'
+      - 'install-macos.command'
+      - 'ci/*install*'
+      - '.github/workflows/installer.yml'
+      - 'docs/TESTING.md'
   pull_request:
     branches: [main]
     paths:

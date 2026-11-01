@@ -4,16 +4,24 @@ Covers the three layers separately so failures localize:
   1. Config + cache plumbing (pure JSON, no SDK needed).
   2. Registry integration — cached tools become namespaced WizardTools
      with the right safety classes.
-  3. One end-to-end stdio call against a real subprocess MCP server
-     (FastMCP script), skipped when the `mcp` extra isn't installed.
+  3. The mcp SDK 1.x / 2.x attribute shim and a fake-SDK round trip through
+     ``refresh_all_tools`` / ``call_mcp_tool`` (hermetic, no SDK needed).
+  4. One end-to-end stdio call against a real subprocess MCP server
+     (MCPServer on mcp 2.x, FastMCP on 1.x), skipped when the `mcp` extra
+     isn't installed.
+  5. ``sdk_version()`` and the one `mcp <version>` line `nvh status` prints.
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import textwrap
+import types
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -186,12 +194,160 @@ def test_default_registry_includes_mcp_tools(tmp_path, monkeypatch) -> None:
     assert "mcp_fs_read_file" in names
 
 
-# ── 3. End-to-end stdio call (needs the mcp extra) ──────────────────────────
+# ── 3. SDK 1.x / 2.x attribute shim + fake-SDK round trip ───────────────────
+
+
+class TestSdkAttributeShim:
+    """mcp 2.x models are snake_case only (``input_schema``, ``is_error``);
+    1.x models are camelCase (``inputSchema``, ``isError``). The client reads
+    the 2.x name first and falls back, with no SDK version sniffing."""
+
+    def test_input_schema_reads_v2_then_v1(self) -> None:
+        schema = {"type": "object", "properties": {"p": {"type": "string"}}}
+        assert mcp_client._tool_input_schema(SimpleNamespace(input_schema=schema)) == schema
+        assert mcp_client._tool_input_schema(SimpleNamespace(inputSchema=schema)) == schema
+        # Both present (a shimmed model): the 2.x name wins.
+        both = SimpleNamespace(input_schema=schema, inputSchema={"stale": True})
+        assert mcp_client._tool_input_schema(both) == schema
+        assert mcp_client._tool_input_schema(SimpleNamespace(input_schema=None)) == {}
+        assert mcp_client._tool_input_schema(SimpleNamespace()) == {}
+
+    def test_is_error_reads_v2_then_v1(self) -> None:
+        assert mcp_client._result_is_error(SimpleNamespace(is_error=True)) is True
+        assert mcp_client._result_is_error(SimpleNamespace(isError=True)) is True
+        # An explicit 2.x False is authoritative beside a stale camelCase flag.
+        assert mcp_client._result_is_error(SimpleNamespace(is_error=False, isError=True)) is False
+        assert mcp_client._result_is_error(SimpleNamespace()) is False
+
+    def test_content_text_joins_text_blocks_and_labels_the_rest(self) -> None:
+        result = SimpleNamespace(content=[
+            SimpleNamespace(type="text", text="one"),
+            SimpleNamespace(type="image", data="...", mimeType="image/png"),
+            SimpleNamespace(type="text", text="two"),
+        ])
+        assert mcp_client._content_text(result) == "one\n[image]\ntwo"
+        assert mcp_client._content_text(SimpleNamespace(content=[])) == ""
+        assert mcp_client._content_text(SimpleNamespace()) == ""
+
+
+def _install_fake_sdk(monkeypatch, *, tools: list, result) -> list:
+    """Bind ``mcp`` / ``mcp.client.stdio`` to in-process fakes so the client's
+    stdio path runs without a subprocess or the real SDK. Returns the list
+    the fake session appends ``(tool, arguments)`` to on every call."""
+    calls: list = []
+
+    class FakeSession:
+        def __init__(self, read, write) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc) -> bool:
+            return False
+
+        async def initialize(self) -> None:
+            pass
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=tools)
+
+        async def call_tool(self, name, arguments):
+            calls.append((name, arguments))
+            return result
+
+    @contextlib.asynccontextmanager
+    async def stdio_client(params):
+        yield (None, None)
+
+    mcp_mod = types.ModuleType("mcp")
+    mcp_mod.ClientSession = FakeSession  # type: ignore[attr-defined]
+    client_mod = types.ModuleType("mcp.client")
+    stdio_mod = types.ModuleType("mcp.client.stdio")
+    stdio_mod.stdio_client = stdio_client  # type: ignore[attr-defined]
+    stdio_mod.StdioServerParameters = lambda **kw: kw  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "mcp", mcp_mod)
+    monkeypatch.setitem(sys.modules, "mcp.client", client_mod)
+    monkeypatch.setitem(sys.modules, "mcp.client.stdio", stdio_mod)
+    return calls
+
+
+class TestFakeSdkRoundTrip:
+    """The refresh and call paths read whichever attribute shape the SDK hands
+    back; one fake per major, no version branches in the code under test."""
+
+    def test_refresh_reads_v2_tool_shape(self, tmp_path, monkeypatch) -> None:
+        import asyncio
+
+        schema = {"type": "object", "properties": {"message": {"type": "string"}}}
+        _install_fake_sdk(
+            monkeypatch,
+            tools=[SimpleNamespace(name="ping", description="Echo", input_schema=schema)],
+            result=None,
+        )
+        _write_config(tmp_path, {"fake": {"command": "echo"}})
+        cache = asyncio.run(mcp_client.refresh_all_tools(home_dir=tmp_path))
+        assert cache["fake"]["ok"] is True
+        assert cache["fake"]["tools"] == [
+            {"name": "ping", "description": "Echo", "input_schema": schema}
+        ]
+
+    def test_refresh_reads_v1_tool_shape(self, tmp_path, monkeypatch) -> None:
+        import asyncio
+
+        schema = {"type": "object", "properties": {"message": {"type": "string"}}}
+        _install_fake_sdk(
+            monkeypatch,
+            tools=[SimpleNamespace(name="ping", description=None, inputSchema=schema)],
+            result=None,
+        )
+        _write_config(tmp_path, {"fake": {"command": "echo"}})
+        cache = asyncio.run(mcp_client.refresh_all_tools(home_dir=tmp_path))
+        assert cache["fake"]["tools"] == [{"name": "ping", "description": "", "input_schema": schema}]
+
+    def test_call_reads_v2_result_shape(self, tmp_path, monkeypatch) -> None:
+        import asyncio
+
+        calls = _install_fake_sdk(
+            monkeypatch,
+            tools=[],
+            result=SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="pong: hi")], is_error=False
+            ),
+        )
+        _write_config(tmp_path, {"fake": {"command": "echo"}})
+        out = asyncio.run(mcp_client.call_mcp_tool("fake", "ping", {"message": "hi"}, home_dir=tmp_path))
+        assert calls == [("ping", {"message": "hi"})]
+        assert out == {
+            "ok": True, "content": "pong: hi", "is_error": False, "server": "fake", "tool": "ping",
+        }
+
+    def test_call_reads_v1_error_flag(self, tmp_path, monkeypatch) -> None:
+        import asyncio
+
+        _install_fake_sdk(
+            monkeypatch,
+            tools=[],
+            result=SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="boom")], isError=True
+            ),
+        )
+        _write_config(tmp_path, {"fake": {"command": "echo"}})
+        out = asyncio.run(mcp_client.call_mcp_tool("fake", "ping", {}, home_dir=tmp_path))
+        assert out["ok"] is False
+        assert out["is_error"] is True
+        assert out["content"] == "boom"
+
+
+# ── 4. End-to-end stdio call (needs the mcp extra) ──────────────────────────
 
 
 SERVER_SCRIPT = textwrap.dedent(
     '''
-    from mcp.server.fastmcp import FastMCP
+    try:
+        from mcp.server.mcpserver import MCPServer as FastMCP  # mcp 2.x
+    except ImportError:
+        from mcp.server.fastmcp import FastMCP  # mcp 1.x
 
     mcp = FastMCP("pingpong")
 
@@ -206,6 +362,7 @@ SERVER_SCRIPT = textwrap.dedent(
 )
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(90)
 def test_end_to_end_stdio_call(tmp_path) -> None:
     pytest.importorskip("mcp")
@@ -227,3 +384,51 @@ def test_end_to_end_stdio_call(tmp_path) -> None:
     )
     assert result["ok"], result
     assert "pong: hi" in result["content"]
+
+
+# ── 5. SDK version reporting (decision 21b) ─────────────────────────────────
+
+
+class TestSdkVersion:
+    def test_reports_the_installed_distribution(self) -> None:
+        pytest.importorskip("mcp")
+        from importlib.metadata import version
+
+        assert mcp_client.sdk_version() == version("mcp")
+
+    def test_none_when_the_extra_is_absent(self, monkeypatch) -> None:
+        monkeypatch.setitem(sys.modules, "mcp", None)
+        assert mcp_client.sdk_version() is None
+
+
+class TestStatusReportsSdk:
+    """`nvh status` (glance tier) prints one `mcp <version>` line when the SDK
+    imports and nothing about mcp when it does not."""
+
+    @staticmethod
+    def _glance(monkeypatch) -> str:
+        from rich.console import Console
+
+        import nvh.cli.main as cli_main
+        from nvh.integrations.diagnostics import checks as diag
+
+        async def _no_checks(*_args, **_kwargs):
+            return []
+
+        monkeypatch.setattr(diag, "run_checks", _no_checks)
+        buf = io.StringIO()
+        monkeypatch.setattr(cli_main, "console", Console(file=buf, force_terminal=False, width=200))
+        cli_main._status_glance(SimpleNamespace(config=None))
+        return buf.getvalue()
+
+    def test_prints_the_sdk_version_when_installed(self, monkeypatch) -> None:
+        monkeypatch.setattr(mcp_client, "sdk_version", lambda: "9.9.9")
+        out = self._glance(monkeypatch)
+        assert "NVHive v" in out
+        assert "mcp 9.9.9" in out
+
+    def test_prints_nothing_about_mcp_when_absent(self, monkeypatch) -> None:
+        monkeypatch.setattr(mcp_client, "sdk_version", lambda: None)
+        out = self._glance(monkeypatch)
+        assert "NVHive v" in out
+        assert "mcp" not in out.lower()

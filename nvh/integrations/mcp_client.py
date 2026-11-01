@@ -74,6 +74,58 @@ MISSING_SDK_HINT = (
 )
 
 
+def sdk_version() -> str | None:
+    """Installed ``mcp`` SDK version, or ``None`` when the extra is absent.
+
+    ``nvh status`` prints it so a support thread can tell the 1.x and 2.x
+    surfaces apart; both majors are supported (see the pin in pyproject.toml).
+    """
+    try:
+        import mcp  # noqa: F401
+    except ImportError:
+        return None
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("mcp")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# mcp SDK 1.x / 2.x attribute shim
+# ────────────────────────────────────────────────────────────────────────────
+# 2.x models expose snake_case fields only (``input_schema``, ``is_error``);
+# 1.x models expose camelCase (``inputSchema``, ``isError``). Read the 2.x
+# name first, then the 1.x one — never sniff the SDK version.
+
+
+def _tool_input_schema(tool: Any) -> dict[str, Any]:
+    """A listed tool's JSON Schema (``{}`` when the server sent none)."""
+    schema = getattr(tool, "input_schema", None) or getattr(tool, "inputSchema", None)
+    return schema if isinstance(schema, dict) else {}
+
+
+def _result_is_error(result: Any) -> bool:
+    """The tool-level error flag of a ``CallToolResult``."""
+    flag = getattr(result, "is_error", None)
+    if flag is None:
+        flag = getattr(result, "isError", False)
+    return bool(flag)
+
+
+def _content_text(result: Any) -> str:
+    """Join the text blocks of a ``CallToolResult``; other blocks become ``[type]``."""
+    parts: list[str] = []
+    for item in getattr(result, "content", None) or []:
+        text = getattr(item, "text", None)
+        if text is not None:
+            parts.append(text)
+        else:
+            parts.append(f"[{getattr(item, 'type', 'content')}]")
+    return "\n".join(parts)
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Paths + config
 # ────────────────────────────────────────────────────────────────────────────
@@ -196,7 +248,7 @@ async def list_server_tools(spec: dict[str, Any]) -> list[dict[str, Any]]:
         {
             "name": t.name,
             "description": t.description or "",
-            "input_schema": t.inputSchema or {},
+            "input_schema": _tool_input_schema(t),
         }
         for t in listed.tools
     ]
@@ -241,17 +293,11 @@ async def call_mcp_tool(
         return {"ok": False, "error": f"MCP call {server}/{tool} failed: {exc}"}
 
     # Flatten content items: text joined; anything else summarized by type.
-    parts: list[str] = []
-    for item in result.content:
-        text = getattr(item, "text", None)
-        if text is not None:
-            parts.append(text)
-        else:
-            parts.append(f"[{getattr(item, 'type', 'content')}]")
+    is_error = _result_is_error(result)
     return {
-        "ok": not bool(getattr(result, "isError", False)),
-        "content": "\n".join(parts),
-        "is_error": bool(getattr(result, "isError", False)),
+        "ok": not is_error,
+        "content": _content_text(result),
+        "is_error": is_error,
         "server": server,
         "tool": tool,
     }

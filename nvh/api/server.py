@@ -137,7 +137,10 @@ async def require_auth(
     1. User-based auth (when users table has entries): validates API tokens
        created via the /v1/auth/* endpoints.
     2. Simple HIVE_API_KEY env var (single-user, legacy).
-    3. Open/local mode — when neither users nor HIVE_API_KEY are configured.
+    3. Open/local mode — whenever HIVE_API_KEY is unset: a request without a
+       valid user token is admitted even when users exist (users add a
+       credential; only the key closes the API). SECURITY.md documents this
+       and ``_auth_open_mode`` must keep mirroring it.
 
     Accepts credentials via:
     - ``Authorization: Bearer <token>`` header
@@ -2482,15 +2485,14 @@ def _origin_allowed(origin: str) -> bool:
 
 
 async def _auth_open_mode() -> bool:
-    """True when ``require_auth`` would let an unauthenticated request through."""
-    if _get_council_api_key():
-        return False
-    try:
-        from nvh.auth.auth import get_user_count
+    """True when ``require_auth`` would let an unauthenticated request through.
 
-        return await get_user_count() == 0
-    except Exception:
-        return True
+    That is exactly "no ``HIVE_API_KEY``": ``require_auth`` admits a request
+    with no (or an unknown) token whenever the key is unset, however many rows
+    the users table has, so counting users here would skip the bind-host
+    refusal in the one configuration where the API really is open.
+    """
+    return _get_council_api_key() is None
 
 
 async def _privileged_network_refusal(http_request: Request) -> dict[str, Any] | None:
@@ -2499,9 +2501,9 @@ async def _privileged_network_refusal(http_request: Request) -> dict[str, Any] |
     The approval token proves the click matched the card; this proves the
     click came from the owner's own browser on this machine:
 
-    - open mode (no ``HIVE_API_KEY``, no users) on a non-loopback bind means
-      anything on the network could click for the owner — refused, naming
-      the fix;
+    - open mode (no ``HIVE_API_KEY``; registered users do not close the API)
+      on a non-loopback bind means anything on the network could click for
+      the owner — refused, naming the fix;
     - a ``Host`` header that is neither loopback nor a host CORS already
       trusts (``ALLOWED_ORIGINS`` / ``HIVE_CORS_ORIGINS``) is a DNS-rebound
       page talking to 127.0.0.1 under its own name — refused;
@@ -5384,10 +5386,12 @@ async def conversation_query(
 # Entry point - `nvh serve`
 # ---------------------------------------------------------------------------
 
-def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) -> None:
+def run_server(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> None:
     """Start the Council API server with uvicorn.
 
-    Called by the CLI via `nvh serve --host HOST --port PORT`.
+    Called by the CLI via `nvh serve --host HOST --port PORT`. Binds loopback
+    by default: exposing the API on the LAN requires an explicit
+    ``--host 0.0.0.0`` (every CLI caller passes its ``--host`` value through).
     """
     import uvicorn
 

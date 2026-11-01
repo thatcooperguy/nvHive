@@ -20,7 +20,12 @@ no marker), a 120 s per-test timeout enforced by `pytest-timeout` (declared in
 `required_plugins`, so a missing plugin is a startup error rather than a
 silent no-timeout run), and `filterwarnings` for three known-benign upstream
 warnings. Tests run from any directory; paths are resolved from
-`Path(__file__)`.
+`Path(__file__)`. Two markers are registered: `network` (opt-in live probes,
+`NVH_NETWORK_TESTS=1`) and `slow` (subprocess-heavy CLI, live-uvicorn and stdio
+MCP server tests; `python -m pytest tests/ -m "not slow" -q` is the quick local
+run). Test processes use LiteLLM's bundled model-price map
+(`LITELLM_LOCAL_MODEL_COST_MAP`, set in `tests/conftest.py`) so no run depends
+on a GitHub fetch at import time.
 
 ## Layout
 

@@ -14,6 +14,13 @@ PYTHON = sys.executable
 NVH = [PYTHON, "-m", "nvh.cli.main"]
 TIMEOUT = 60
 
+# `slow` marks the tests whose `nvh` subprocess does real work — provider and
+# diagnostic probes (`status`, `--deep`, `--smoke`, `doctor`, `test`), the
+# completion-tree walks and the opt-in live queries. The `--help`, `version`,
+# guide and dispatcher checks only pay the interpreter start-up and stay
+# unmarked, so `-m "not slow"` keeps a cheap CLI smoke.
+slow = pytest.mark.slow
+
 
 def run_nvh(*args: str, timeout: int = TIMEOUT) -> subprocess.CompletedProcess:
     """Run an nvh command and return the result.
@@ -56,6 +63,7 @@ class TestCLIBasic:
         assert r.returncode == 0
         assert "nvh" in r.stdout.lower() or "nvhive" in r.stdout.lower()
 
+    @slow
     def test_status(self):
         try:
             r = run_nvh("status", timeout=60)
@@ -117,6 +125,7 @@ class TestCLIGuides:
 # Doctor
 # ---------------------------------------------------------------------------
 
+@slow
 class TestCLIDoctor:
     def test_status_deep(self):
         r = run_nvh("status", "--deep", timeout=60)
@@ -148,6 +157,7 @@ class TestCLIDispatch:
 # Query commands (require a running provider)
 # ---------------------------------------------------------------------------
 
+@slow
 @pytest.mark.network
 @pytest.mark.skipif(
     os.environ.get("NVH_NETWORK_TESTS") != "1",
@@ -204,6 +214,7 @@ class TestCLIQuery:
 # Completions
 # ---------------------------------------------------------------------------
 
+@slow
 class TestCLICompletions:
     def test_bash_completions(self):
         r = run_nvh("completions", "bash")
@@ -218,6 +229,7 @@ class TestCLICompletions:
 # Test command itself
 # ---------------------------------------------------------------------------
 
+@slow
 class TestCLITest:
     def test_smoke_tier_runs_offline(self):
         """nvh status --smoke should run without crashing (exit 1 = a check failed)."""

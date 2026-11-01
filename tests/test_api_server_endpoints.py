@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import re
 import sys
 import threading
@@ -1489,3 +1490,120 @@ class TestWizardChatAttachments:
         assert r.status_code == 200, r.text
         assert seen["question"] == "hi"
         assert not (self.home / "rag").exists()
+
+
+class TestRunServerDefaults:
+    """``run_server`` binds loopback unless the caller passes a host (0.44.1);
+    LAN exposure is an explicit ``--host 0.0.0.0`` from the CLI."""
+
+    @staticmethod
+    def _capture_uvicorn(monkeypatch) -> list:
+        calls: list = []
+        fake_uvicorn = types.ModuleType("uvicorn")
+        fake_uvicorn.run = lambda *a, **kw: calls.append((a, kw))  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+        for var in ("NVH_API_PORT", "NVH_API_SERVER_PROCESS", "NVH_API_BIND_HOST"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setattr(app.state, "bind_host", None, raising=False)
+        return calls
+
+    def test_signature_default_is_loopback(self):
+        import inspect
+
+        assert inspect.signature(server_module.run_server).parameters["host"].default == "127.0.0.1"
+
+    def test_uvicorn_gets_loopback_and_the_bind_host_is_recorded(self, monkeypatch):
+        calls = self._capture_uvicorn(monkeypatch)
+        server_module.run_server(port=8123)
+        assert calls == [(
+            ("nvh.api.server:app",),
+            {"host": "127.0.0.1", "port": 8123, "reload": False, "log_level": "info"},
+        )]
+        # The open-mode privileged-tool refusal reads the bind from both places.
+        assert os.environ["NVH_API_BIND_HOST"] == "127.0.0.1"
+        assert app.state.bind_host == "127.0.0.1"
+        assert os.environ["NVH_API_PORT"] == "8123"
+
+    def test_an_explicit_host_is_forwarded_unchanged(self, monkeypatch):
+        calls = self._capture_uvicorn(monkeypatch)
+        server_module.run_server(host="0.0.0.0", port=8124)
+        assert len(calls) == 1 and calls[0][1]["host"] == "0.0.0.0"
+        assert os.environ["NVH_API_BIND_HOST"] == "0.0.0.0"
+        assert app.state.bind_host == "0.0.0.0"
+
+
+class TestOpenModeIsClosedByTheKeyNotByUsers:
+    """SECURITY.md "Open mode": whenever ``HIVE_API_KEY`` is unset, a request with
+    no (or an unknown) token is admitted even when the users table has rows;
+    registering users adds a credential, it does not close the API. The
+    privileged tier's bind-host refusal (``_auth_open_mode``) follows the same
+    rule, so the one network guard fires in exactly the configuration where
+    ``require_auth`` is open. Whoever makes users close the API must update
+    SECURITY.md and these pins together."""
+
+    @staticmethod
+    def _users(monkeypatch, count: int) -> None:
+        import nvh.auth.auth as auth_mod
+
+        async def _count() -> int:
+            return count
+
+        async def _by_token(_token: str):
+            return None  # whatever was presented is not a user token
+
+        monkeypatch.setattr(auth_mod, "get_user_count", _count)
+        monkeypatch.setattr(auth_mod, "get_user_by_token", _by_token)
+
+    @staticmethod
+    def _bare_request(headers: dict[str, str] | None = None):
+        from starlette.requests import Request
+
+        raw = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
+        return Request({"type": "http", "method": "GET", "path": "/", "headers": raw, "query_string": b""})
+
+    def test_require_auth_admits_a_token_less_request_when_users_exist_but_no_key(self, monkeypatch):
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        self._users(monkeypatch, 1)
+        assert asyncio.run(server_module.require_auth(self._bare_request(), credentials=None)) is None
+        # An unknown token is admitted the same way: the key is what closes the API.
+        req = self._bare_request({"X-Hive-API-Key": "not-a-user-token"})
+        assert asyncio.run(server_module.require_auth(req, credentials=None)) is None
+
+    def test_require_auth_rejects_the_same_requests_once_the_key_is_set(self, monkeypatch):
+        from fastapi import HTTPException
+
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        self._users(monkeypatch, 1)
+        for req in (self._bare_request(), self._bare_request({"X-Hive-API-Key": "not-a-user-token"})):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(server_module.require_auth(req, credentials=None))
+            assert exc.value.status_code == 401
+        # The key itself still passes.
+        ok = self._bare_request({"X-Hive-API-Key": "k-for-test"})
+        assert asyncio.run(server_module.require_auth(ok, credentials=None)) is None
+
+    def test_auth_open_mode_mirrors_require_auth(self, monkeypatch):
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        self._users(monkeypatch, 1)
+        assert asyncio.run(server_module._auth_open_mode()) is True
+        self._users(monkeypatch, 0)
+        assert asyncio.run(server_module._auth_open_mode()) is True
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        assert asyncio.run(server_module._auth_open_mode()) is False
+
+    def test_non_loopback_bind_with_users_and_no_key_is_refused(self, monkeypatch):
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        monkeypatch.setenv("NVH_API_BIND_HOST", "0.0.0.0")
+        monkeypatch.setattr(app.state, "bind_host", None, raising=False)
+        self._users(monkeypatch, 1)
+        local = self._bare_request({"Host": "localhost:8000"})
+        refusal = asyncio.run(server_module._privileged_network_refusal(local))
+        assert refusal is not None and refusal["ok"] is False and refusal["refused"] is True
+        assert "0.0.0.0" in refusal["error"] and "HIVE_API_KEY" in refusal["error"]
+        # With the key set the same bind is fine (auth gates the endpoint) ...
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        assert asyncio.run(server_module._privileged_network_refusal(local)) is None
+        # ... and a loopback bind never trips the check, users or not.
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        monkeypatch.setenv("NVH_API_BIND_HOST", "127.0.0.1")
+        assert asyncio.run(server_module._privileged_network_refusal(local)) is None

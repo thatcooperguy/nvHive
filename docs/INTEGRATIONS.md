@@ -97,7 +97,8 @@ Coding tools attach nvHive's router and council as tools:
 pip install "nvhive[mcp]"
 claude mcp add nvhive -- nvhive-mcp          # Claude Code (console script)
 claude mcp add nvhive -- nvh mcp             # the same server via the CLI
-nvh mcp -t streamable-http --port 8080       # HTTP transport for remote clients
+nvh mcp -t streamable-http --port 8080       # HTTP transport on 127.0.0.1 (this machine)
+nvh mcp -t streamable-http --host 0.0.0.0 --port 8080   # HTTP transport for remote clients
 ```
 
 Tools exposed: `ask`, `ask_safe`, `council`, `throwdown`, `status`,
@@ -118,9 +119,13 @@ Typical prompts once registered: "use the nvhive council tool with cabinet
 credentials file locally". Simple questions route to free providers or the
 local GPU and only hard ones hit premium models.
 
-Troubleshooting: `pip install "mcp[cli]"` if the SDK is missing; `nvh setup`
-if the server reports no advisors; `nvh mcp` by hand to see the banner. The
-`mcp` dependency is pinned `>=1.0,<2` — see [ROADMAP.md](ROADMAP.md).
+Troubleshooting: `pip install "nvhive[mcp]"` if the SDK is missing; `nvh setup`
+if the server reports no advisors; `nvh mcp` by hand to see the banner;
+`nvh status` prints the installed `mcp` version. The `mcp` dependency is
+pinned `>=1.0,<3` and both SDK majors are supported — see [ROADMAP.md](ROADMAP.md).
+The HTTP transport binds `127.0.0.1` unless you pass `--host`, so a remote
+client needs `--host 0.0.0.0` and something that authenticates in front of it
+([SECURITY.md](../SECURITY.md#loopback-defaults)).
 
 ## nvHive as an MCP client
 

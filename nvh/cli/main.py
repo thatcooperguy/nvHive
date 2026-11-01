@@ -2968,6 +2968,7 @@ def _status_glance(ctx, *, json_output: bool = False) -> None:
     from rich.rule import Rule
 
     from nvh.integrations.diagnostics import checks as diag
+    from nvh.integrations.mcp_client import sdk_version as _mcp_sdk_version
 
     results = _run(diag.run_checks(diag.GLANCE, ctx))
     if json_output:
@@ -2982,6 +2983,8 @@ def _status_glance(ctx, *, json_output: bool = False) -> None:
         return rows[0] if rows else None
 
     console.print(f"[bold]NVHive v{__version__}[/bold]")
+    if (mcp_sdk := _mcp_sdk_version()) is not None:
+        console.print(f"[dim]mcp {mcp_sdk}[/dim]")
     console.print(Rule(style="dim"))
 
     gpu = first("gpu")
@@ -6376,6 +6379,50 @@ def integrate(
 
 
 # ---------------------------------------------------------------------------
+# MCP HTTP transport bind — shared by `nvh mcp -t streamable-http` and
+# `nvh openclaw --start --http`. Loopback unless the operator asks for the LAN;
+# `0.0.0.0` is never a default (0.44.1).
+# ---------------------------------------------------------------------------
+
+MCP_HTTP_DEFAULT_HOST = "127.0.0.1"
+_MCP_HOST_HELP = (
+    "Bind address for the HTTP transport (LAN exposure needs an explicit --host 0.0.0.0)"
+)
+
+
+def _run_mcp_streamable_http(server: Any, host: str, port: int) -> None:
+    """Serve ``server`` over streamable-http on ``host:port`` under either MCP SDK major.
+
+    mcp 2.x ``MCPServer.run()`` forwards ``host``/``port`` keywords to the
+    transport. mcp 1.x ``FastMCP.run()`` takes only ``transport`` and
+    ``mount_path`` and reads the bind address from ``server.settings``; handing
+    it the keywords raised ``TypeError`` before 0.44.1.
+    """
+    import inspect
+
+    run = server.run
+    try:
+        params = inspect.signature(run).parameters
+    except (TypeError, ValueError):
+        params = None
+    forwards_bind = params is None or "host" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+    if forwards_bind:
+        run(transport="streamable-http", host=host, port=port)
+        return
+    settings = getattr(server, "settings", None)
+    if settings is None or not (hasattr(settings, "host") and hasattr(settings, "port")):
+        raise TypeError(
+            "MCP server exposes neither run(host=, port=) nor settings.host/port; "
+            "cannot bind the HTTP transport"
+        )
+    settings.host = host
+    settings.port = port
+    run(transport="streamable-http")
+
+
+# ---------------------------------------------------------------------------
 # hive openclaw — OpenClaw integration setup
 # ---------------------------------------------------------------------------
 
@@ -6390,6 +6437,7 @@ def openclaw(
     ),
     output: str | None = typer.Option(None, "-o", "--output", help="Output path for openclaw.json"),
     http: bool = typer.Option(False, "--http", help="Use HTTP transport instead of stdio"),
+    host: str = typer.Option(MCP_HTTP_DEFAULT_HOST, "--host", help=_MCP_HOST_HELP),
     port: int = typer.Option(8080, "--port", help="Port for HTTP transport"),
 ):
     """OpenClaw / NemoClaw integration — multi-LLM routing for agents.
@@ -6544,10 +6592,10 @@ def openclaw(
 
         server = create_server()
         if http:
-            console.print(f"  Transport: HTTP on port {port}")
+            console.print(f"  Transport: HTTP on {host}:{port}")
             console.print(f"  Connect clients to: http://localhost:{port}/mcp")
             console.print()
-            server.run(transport="streamable-http", host="0.0.0.0", port=port)
+            _run_mcp_streamable_http(server, host, port)
         else:
             console.print("  Transport: stdio")
             console.print("  OpenClaw will spawn this server automatically via config.")
@@ -6687,6 +6735,7 @@ def mcp(
         "stdio", "--transport", "-t",
         help="Transport: stdio or streamable-http",
     ),
+    host: str = typer.Option(MCP_HTTP_DEFAULT_HOST, "--host", help=_MCP_HOST_HELP),
     port: int = typer.Option(8080, "--port", help="Port for HTTP transport"),
 ):
     """Start the MCP (Model Context Protocol) server.
@@ -6704,7 +6753,8 @@ def mcp(
 
     Examples:
         nvh mcp                           Start via stdio (default)
-        nvh mcp -t streamable-http        Start as HTTP server
+        nvh mcp -t streamable-http        Start as HTTP server on 127.0.0.1
+        nvh mcp -t streamable-http --host 0.0.0.0   Expose it on the LAN
         claude mcp add nvhive nvh mcp     Register with Claude Code
         nvh mcp servers list              External tool servers for the Wizard
     """
@@ -6718,7 +6768,7 @@ def mcp(
     except ImportError:
         err.print("[red]MCP SDK not installed.[/red]")
         err.print('Install with: [bold]pip install "nvhive[mcp]"[/bold]')
-        err.print('  or: [bold]pip install "mcp[cli]"[/bold]')
+        err.print('  or: [bold]pip install mcp[/bold]')
         raise typer.Exit(1)
 
     server = create_server()
@@ -6730,10 +6780,10 @@ def mcp(
         err.print()
         server.run(transport="stdio")
     elif transport in ("streamable-http", "http", "sse"):
-        err.print(f"[bold]NVHive MCP Server[/bold] starting on port {port} (HTTP transport)")
+        err.print(f"[bold]NVHive MCP Server[/bold] starting on {host}:{port} (HTTP transport)")
         err.print(f"Connect clients to: http://localhost:{port}/mcp")
         err.print()
-        server.run(transport="streamable-http", host="0.0.0.0", port=port)
+        _run_mcp_streamable_http(server, host, port)
     else:
         err.print(f"[red]Unknown transport: {transport}[/red]")
         err.print("Use: stdio, streamable-http")

@@ -31,6 +31,11 @@ from pathlib import Path
 import httpx
 import pytest
 
+# Every test here waits on a real uvicorn subprocess (the fixture allows it
+# 45 s to come up and runs the real Engine init), so the whole module is
+# `slow`; `-m "not slow"` leaves it out of a quick local run.
+pytestmark = pytest.mark.slow
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

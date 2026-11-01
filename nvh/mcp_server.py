@@ -7,11 +7,11 @@ Model Context Protocol server that gives any MCP client access to:
 - Provider status and GPU info
 
 Install:
-    pip install "mcp[cli]"
+    pip install "nvhive[mcp]"      # the mcp SDK, 1.x or 2.x
 
 Run standalone:
     python -m nvh.mcp_server
-    # or
+    # or, with the SDK's own dev tooling (needs: pip install "mcp[cli]"):
     mcp dev nvh/mcp_server.py
 
 Register with Claude Code:
@@ -138,29 +138,45 @@ def _valid_cabinets() -> set[str]:
 
 
 def create_server():
-    """Create and configure the MCP server with nvHive tools."""
+    """Create and configure the MCP server with nvHive tools.
+
+    Runs on both mcp SDK majors: 2.x ships the server class as
+    ``mcp.server.mcpserver.MCPServer`` (``mcp.server.fastmcp`` is gone),
+    1.x as ``mcp.server.fastmcp.FastMCP``. The surface nvHive uses — the
+    ``name``/``instructions`` constructor keywords and ``@tool()`` — is the
+    same on both, so the class is bound under one local name and nothing
+    below branches on the SDK version.
+    """
     try:
-        from mcp.server.fastmcp import FastMCP
+        try:
+            from mcp.server.mcpserver import MCPServer as FastMCP  # mcp 2.x
+        except ImportError:
+            from mcp.server.fastmcp import FastMCP  # mcp 1.x
     except ImportError:
         raise ImportError(
-            'MCP SDK not installed. Install with: pip install "mcp[cli]"\n'
+            'MCP SDK not installed. Install with: pip install "nvhive[mcp]"\n'
             "Then run: python -m nvh.mcp_server"
         )
 
-    # The FastMCP metadata kwarg differs across mcp SDK versions: current
-    # SDKs (e.g. 1.27+) take ``instructions=`` and raise TypeError on the
-    # removed ``description=``; older ones only know ``description=``.
-    # Try the modern form first, falling back so both work (2026-06-10
-    # audit: the hardcoded description= crashed `python -m nvh.mcp_server`
-    # on every fresh `pip install nvhive[mcp]`).
+    from nvh import __version__
+
+    # Constructor keywords are probed, never version-sniffed: mcp 2.x takes
+    # ``version=`` (advertised to clients in the initialize handshake) next
+    # to ``instructions=``; 1.27+ takes ``instructions=`` only and raises
+    # TypeError on anything it does not know; older 1.x only knew
+    # ``description=`` (2026-06-10 audit: a hardcoded description= crashed
+    # `python -m nvh.mcp_server` on every fresh `pip install nvhive[mcp]`).
     server_blurb = (
         "NVHive — Multi-LLM orchestration with smart routing, "
         "council consensus, and throwdown analysis across cloud and local LLM providers."
     )
     try:
-        mcp = FastMCP("nvhive", instructions=server_blurb)
+        mcp = FastMCP("nvhive", instructions=server_blurb, version=__version__)
     except TypeError:
-        mcp = FastMCP("nvhive", description=server_blurb)
+        try:
+            mcp = FastMCP("nvhive", instructions=server_blurb)
+        except TypeError:
+            mcp = FastMCP("nvhive", description=server_blurb)
 
     # ------------------------------------------------------------------
     # Input validation helpers

@@ -125,6 +125,12 @@ The bundle produced by `nvh status --report --live` includes a *summary* of the
 telemetry log (event counts only — no individual records). You choose
 whether to share the bundle.
 
+With the MCP SDK 2.x line that the optional `nvhive[mcp]` extra resolves today
+(mcp 1.x does not require it), and with recent FastAPI releases in the `serve`
+extra, `opentelemetry-api` arrives as an API-only package: nvHive installs no
+OpenTelemetry SDK and no exporter, configures none, and the package on its own
+records nothing and sends nothing, so there is no telemetry egress.
+
 ## Changes
 
 This policy may be updated. Check the repository for the latest version.

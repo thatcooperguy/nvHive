@@ -1119,6 +1119,57 @@ async def test_stream_done_reports_cost_from_final_chunk_and_enforces_ceiling(
 
 
 @pytest.mark.asyncio
+async def test_stream_cost_ceiling_accumulates_across_iterations_and_stops_the_loop(
+    tmp_path: Path, fake_registry,
+) -> None:
+    """ER-6 pin: the stream path checks the ceiling per iteration against the
+    running total. A turn under the ceiling on iteration 1 runs its auto tool;
+    iteration 2 pushes the total over, so its call is deferred with the ceiling
+    reason and iteration 3 is never requested."""
+    from nvh.integrations.wizard import chat as chat_mod
+    from nvh.providers.base import StreamChunk, Usage
+
+    _reg, counters = fake_registry
+    name = _save_profile(tmp_path, "capped", max_cost_usd_per_turn=0.05)
+
+    def _final(cost: str) -> StreamChunk:
+        return StreamChunk(
+            delta="", is_final=True,
+            usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15),
+            cost_usd=Decimal(cost),
+        )
+
+    engine = _stream_engine([
+        ["Refreshing.\n", _REFRESH + "\n", _final("0.03")],
+        ["Now diagnosing.\n", _DIAGNOSE + "\n", _final("0.03")],
+        ["never reached", _final("0.03")],
+    ])
+
+    with _patched(engine):
+        events = [e async for e in chat_mod.wizard_chat_stream("go", profile=name, home_dir=tmp_path)]
+
+    done = events[-1]
+    assert done["type"] == "done"
+    assert done["iterations"] == 2
+    assert [e["n"] for e in events if e["type"] == "iteration"] == [1, 2]
+    assert engine.registry.get.return_value.stream.call_count == 2
+    assert done["cost_ceiling_usd"] == 0.05
+    assert done["cost_ceiling_hit"] is True
+    assert done["cost_usd"] == pytest.approx(0.06)
+    assert done["input_tokens"] == 20 and done["output_tokens"] == 10
+    # Iteration 1 stayed under the ceiling: its auto call ran and was reported.
+    assert counters["refresh_models"].calls == [{}]
+    assert [e["name"] for e in events if e["type"] == "tool_result"] == ["refresh_models"]
+    # Iteration 2 crossed it: its call is deferred with the ceiling reason, never run.
+    assert counters["diagnose"].calls == []
+    assert done["deferred_tool_calls"] == [
+        {"name": "diagnose", "arguments": {}, "reason": chat_mod.DEFER_COST_CEILING},
+    ]
+    assert done["tool_calls"] == []
+    assert not [e for e in events if e["type"] == "confirm_required"]
+
+
+@pytest.mark.asyncio
 async def test_stream_done_cost_zero_when_provider_reports_no_meter(tmp_path: Path, fake_registry) -> None:
     """Chunks without usage/cost (or with non-numeric doubles) leave the meter
     at 0 and never trip a ceiling."""
