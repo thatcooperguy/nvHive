@@ -14,6 +14,7 @@ for a stub, so nothing records, transcribes for real or reaches a provider.
 
 from __future__ import annotations
 
+import re
 import sys
 import types
 from pathlib import Path
@@ -82,13 +83,24 @@ def _fake_faster_whisper(
 # ---------------------------------------------------------------------------
 
 
+_ANSI = re.compile(r"\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Typer forces colour whenever ``GITHUB_ACTIONS`` (or ``FORCE_COLOR``) is set and its
+    highlighter styles the first dash of an option on its own, so on CI ``--duration``
+    arrives as two ANSI spans and a raw substring check misses it. Strip the codes."""
+    return _ANSI.sub("", text)
+
+
 def test_help_lists_the_new_flags_and_the_four_stt_paths(runner: CliRunner) -> None:
     result = runner.invoke(cli_main.app, ["voice", "--help"])
     assert result.exit_code == 0
+    output = _plain(result.output)
     for flag in ("--duration", "--stt", "--stt-model", "--tts", "--no-speak", "--download", "--status"):
-        assert flag in result.output
+        assert flag in output, flag
     for provider in voice.STT_PROVIDERS:
-        assert provider in result.output
+        assert provider in output, provider
 
 
 def test_unknown_stt_value_exits_2_before_anything_records(runner: CliRunner, monkeypatch) -> None:
