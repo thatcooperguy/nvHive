@@ -28,7 +28,9 @@ Please do not open a public issue with exploit details.
 ## Open mode and `HIVE_API_KEY`
 
 The REST and WebSocket API (`nvh serve`, `nvh/api/server.py`) recognises two
-credentials, checked in this order (`require_auth`, `_authenticate_websocket`):
+credentials, checked in this order (`require_auth` in `nvh/api/deps.py`, which
+`nvh/api/server.py` re-exports and every route depends on;
+`_authenticate_websocket` in `nvh/api/server.py`):
 
 1. per-user tokens created through `/v1/auth/*` when the users table has
    entries (`nvh/auth/auth.py`: passwords are stored as bcrypt hashes, API
@@ -50,6 +52,38 @@ every process on the machine, and every page open in your browser, can call
 the non-privileged endpoints (CORS hides responses from pages outside the
 allow-list; it does not stop the request). The privileged tier adds its own
 network checks, described below, but the key is what closes the rest.
+
+Two routes that answered without the key until 0.46 now go through
+`require_auth` like the rest: `POST /v1/anthropic/messages` (and its SDK alias
+`/v1/anthropic/v1/messages`) and `GET /v1/integrations/scan`, which returns
+the config paths of the tools it detects. A keyed deployment that points an
+Anthropic-compatible client at nvHive must now send the key as a bearer token
+(`ANTHROPIC_AUTH_TOKEN=<key>`; the SDKs' `x-api-key` header is not a
+credential nvHive reads). The OpenAI standard paths added in 0.46
+(`/v1/chat/completions`, `/v1/completions`) are the same handler objects as
+`/v1/proxy/...` and inherit its `require_auth`.
+
+`GET /v1/health` stays open — monitors poll it — and since 0.46 reports
+`bind_host` (the interface `run_server` bound, or `null` when the app was not
+started by `run_server` — a bare `uvicorn nvh.api.server:app`, an embedding —
+because the process then cannot vouch for the interface it listens on; a
+client treats unknown as not-loopback), `auth_mode` (`open`, `key` or
+`users`: the first tier `require_auth` applies) and `key_required` (whether
+a token-less request is refused, i.e. `HIVE_API_KEY` is set). All three are
+disclosed on purpose: anyone who can reach the port learns them from the
+connection and from the 401 anyway, and `nvh launch` needs them to refuse an
+off-loopback open-mode API, or to ask for a user token, before it points a
+coding tool at the server. `users` without the key is still open mode, as
+above — which is why `key_required` is there: `auth_mode` alone cannot tell
+a keyed users deployment from an open one.
+
+Streamed proxy completions (`/v1/proxy/chat/completions`,
+`/v1/chat/completions` and the Anthropic Messages paths) check
+`budget.hard_stop` before the first provider call and write their spend to
+the query ledger when the stream ends (`mode: proxy`), as the non-streamed
+calls always did (those go through `Engine.query` and carry `mode: simple`,
+the mode `nvh ask` writes; the totals the budget reads sum both); until 0.46
+a streaming client could spend past the budget unrecorded.
 
 Provider API keys live in `$NVH_HOME/config/.env`, or in the OS keyring when
 `NVH_USE_KEYRING=1` (`nvh/providers/registry.py`). They are sent only to the
