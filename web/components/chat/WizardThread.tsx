@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * WizardChat — the conversational AI Wizard surface.
+ * WizardThread — the conversational AI Wizard surface: the thread that
+ * owns the messages, the stream, the cards' handlers and the mascot feed.
  *
  * Wires together the three wizard backends shipped earlier:
  *  - /v1/wizard/chat       — live-state-grounded LLM answer
@@ -21,6 +22,11 @@
  *      are listed as "not run: <reason>"; whitelist refusals arrive as
  *      `tool_result` with `not_allowed` and are listed as "not allowed for
  *      <specialist>: <tool>" — neither is executed or counted as used.
+ *      A question card (`ask_user`, 0.46) is answered here, never run:
+ *      Answer sends the text as the next user message with a `tool_results`
+ *      entry closing the card ({name, ok: true, summary: <answer ≤300>});
+ *      Skip records "skipped by the user; not answered". Calls the server
+ *      held behind the question arrive deferred as `question_pending`.
  *   4. After execution, append a small system message showing what ran.
  *
  * Stream `error` events always carry the deterministic text that saved the
@@ -43,11 +49,18 @@
  * the persisted wizard-meta tail so it survives a reload. While an auto turn
  * streams, `agentProfile` is only the general-Wizard placeholder
  * (`attributionPending`), so nothing in the bubble may pin a refusal on it.
+ *
+ * The view components live beside this file in components/chat/:
+ * MessageBlock (one bubble: header, trace, sources, footer, status dot and
+ * the tool cards), ToolCard (one proposed tool — Run / Skip / hand-off),
+ * ServerToolTrace, SourcesFooter, DeferredToolNotes and EmptyState. The
+ * `Message` model is in chat/types.ts so both sides import it without a
+ * cycle. `/wizard` mounts this with `conversationParam="conversation"`;
+ * the merged chat surface passes `c`.
  */
 
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import AgentAvatar from '@/components/AgentAvatar';
 import AgentProfilePicker from '@/components/AgentProfilePicker';
 import CreateAgentModal from '@/components/CreateAgentModal';
 import {
@@ -59,7 +72,6 @@ import {
   createConversation,
   executeWizardTool,
   getConversation,
-  isRefusedToolResult,
   listAgentProfiles,
   listWizardTools,
   pinConversation,
@@ -80,21 +92,22 @@ import {
   type WizardToolSchema,
 } from '@/lib/api';
 import {
-  NEEDS_TERMINAL_HINT,
   PRIVILEGED_DISABLED_NOTE,
-  PRIVILEGED_SUDO_NOTE,
-  cardChrome,
+  applyHistoryPatch,
   historyToolOutcome,
   isPendingStatus,
   isPrivilegedCall,
   isPrivilegedDisabled,
+  isQuestionCall,
+  isToolOutcomeFailure,
   needsTerminal,
-  planLines,
   playbookCardStatus,
   playbookOutcomeLabel,
   playbookRunStart,
-  terminalCommand,
+  questionAnswerDetail,
+  toolKey,
   unwrapToolResult,
+  type HistoryPatch,
   type PlaybookRunState,
   type ToolCardStatus,
 } from '@/lib/privileged';
@@ -113,13 +126,11 @@ import {
   toAttachment,
   validateAttachment,
   withAttachedImagePaths,
-  type AttachmentPreview,
   type PendingAttachment,
 } from '@/lib/attachments';
-import PlanDetails from '@/components/PlanDetails';
-import PlaybookRunLog from '@/components/PlaybookRunLog';
 import type { PlaybookRunStart } from '@/lib/types';
 import {
+  MASCOT_ASKING_QUESTION_LABEL,
   applyMascotEvent,
   markMascotTipProbed,
   mascotAskingLabel,
@@ -128,89 +139,32 @@ import {
   sayMascotTip,
   setMascotState,
 } from '@/lib/mascot';
-import { costKnownFlag, costNumber, costPill, formatWizardCost } from '@/lib/cost';
+import { costKnownFlag, costNumber } from '@/lib/cost';
 import { metaNumber, parseWizardMeta } from '@/lib/wizardMeta';
+import EmptyState from './EmptyState';
+import MessageBlock from './MessageBlock';
+import { QuestionAnswerContext, formatToolResultSummary } from './ToolCard';
+import type { Message } from './types';
 
-interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  // User turns only: the images that rode on this turn's request, kept as
-  // thumbnails for the bubble. Display only — the base64 payload went out
-  // once and is not stored on the message or re-sent in history.
-  attachments?: AttachmentPreview[];
-  // User turns only: what the server actually ran for this turn when images
-  // were attached — the typed text plus the `Attached images (…): <paths>`
-  // line, rebuilt from `done.attachment_paths`. The bubble shows `content`;
-  // the next request's history sends this, so the model can name the paths
-  // again on a follow-up ("now read the second one").
-  historyContent?: string;
-  toolCalls?: WizardChatToolCall[];
-  toolStatus?: Record<string, ToolCardStatus>;
-  toolResults?: Record<string, string>;
-  // The raw execute response per tool, kept alongside the summary string so
-  // the card can render what only the structured result carries: the sudo
-  // `plan`, the `needs_terminal` hand-off command and its hint, and the
-  // `disabled` refusal. Display only — nothing here is re-executed.
-  toolDetails?: Record<string, WizardToolExecuteResult>;
-  // A confirmed `playbook_install` does not finish inside the execute call: the
-  // handler starts a `playbook-run` job and the card streams it. Per tool,
-  // the folded job state (steps, log lines, outcome) the live step log draws.
-  playbookRuns?: Record<string, PlaybookRunState>;
-  // Auto-class calls the server skipped this turn (depth 1 / cost ceiling),
-  // with its reason. Rendered as muted "not run" lines; never executed here.
-  deferredToolCalls?: WizardDeferredToolCall[];
-  // Auto-class tool results that ran server-side inside the follow-up loop.
-  // Surfaced as a compact "Wizard's reasoning" trace below the answer so the
-  // user can see exactly what fired and what came back. Builds trust in the
-  // model's grounding (RAG, web search, etc.) without dumping raw JSON.
-  // Whitelist refusals (`result.not_allowed`) ride along in the same list
-  // (that is how the stream delivers them) but ServerToolTrace / Sources
-  // split them out: they never ran, so they are neither counted nor cited.
-  serverToolTrace?: WizardChatToolResult[];
-  iterations?: number;
-  mode?: 'llm' | 'deterministic';
-  usedProvider?: string | null;
-  usedModel?: string | null;
-  // Cost + latency + fallback signal for the meter footer. All optional —
-  // the streaming path only fills these on `done`, the non-streaming path
-  // fills them at result time. Footer hides values that are zero/missing,
-  // except the cost: a priced $0 shows as "$0.0000" and `costKnown === false`
-  // (no catalog price for the model) shows as "cost unknown" — lib/cost.ts.
-  costUsd?: number;
-  costKnown?: boolean;
-  latencyMs?: number;
-  fallbackFrom?: string | null;
-  // Why no LLM answered a deterministic turn — the stream `error` event's
-  // `fallback_reason`, or `fallback_reason` from the persisted wizard-meta
-  // tail on reload. Its VALUE, not its presence, tells a specialist's
-  // deliberate refusal from the offline helper standing in for a failed
-  // model path (`isDeliberateRefusalMessage`); the footer and the status
-  // dot must never decide that from `mode` alone.
-  fallbackReason?: string | null;
-  // Profile cost-ceiling diagnostics. costCeilingHit=true triggers an inline
-  // banner so the user understands why the follow-up loop stopped early.
-  costCeilingHit?: boolean;
-  costCeilingUsd?: number | null;
-  // Router's one-line explanation for why this provider/model was chosen.
-  // Surfaces as a tooltip on the provider chip in the message footer.
-  routingReason?: string | null;
-  // Name of the agent profile that produced this reply ("wizard", "coder",
-  // …). Seeded at send time (an auto turn shows the general Wizard while
-  // streaming) and replaced by `used_profile` on `done`, so the bubble keeps
-  // showing the right avatar even after the user swaps profiles later.
-  agentProfile?: string;
-  // Why the concierge routed this turn to that specialist (tooltip text).
-  profileReason?: string | null;
-  // Raw `used_profile` from the server: null = the general Wizard answered,
-  // undefined = unknown (older API / row persisted before attribution). Echoed back in the next
-  // turn's history so the concierge can stay with the same specialist.
-  usedProfile?: string | null;
-  // True while an auto turn streams: `agentProfile` is the general-Wizard
-  // placeholder, not who is answering, so per-specialist text (the whitelist
-  // refusal line) must stay generic. Cleared when `done` or an attributed
-  // `error` names the specialist. Never set on pinned turns or hydrated rows.
-  attributionPending?: boolean;
+/**
+ * A card outcome to fold into the next request's history. `send` builds the
+ * history from the `messages` closure, so a status a caller sets in the same
+ * tick (a question card's answer, say) would not be in it yet: the patch is
+ * applied to that message first — the same keys `runTool` patches — and
+ * committed to state as well, so the card agrees with what was sent. The
+ * fold itself is `applyHistoryPatch` in lib/privileged.ts (pure, Node-tested).
+ */
+export type SendHistoryPatch = HistoryPatch;
+
+/**
+ * What a caller may hand `send` instead of the composer's contents. With no
+ * options `send` reads the draft and the pending images and clears both;
+ * with `text` it sends that text and leaves the composer alone — the
+ * `?starter=` deep link uses it, and so does a question card's answer.
+ */
+export interface SendOptions {
+  text?: string;
+  historyPatch?: SendHistoryPatch;
 }
 
 function makeId(): string {
@@ -298,41 +252,7 @@ function wizardErrorBanner(event: Extract<WizardStreamEvent, { type: 'error' }>)
   return event.error;
 }
 
-/**
- * True when a rendered deterministic message is a specialist's deliberate
- * refusal (a pinned local-only profile declining because no local provider
- * was up) rather than the offline helper covering a failed model path.
- *
- * Same predicate as the banner and the mascot (`isWizardDeliberateRefusal`),
- * fed the reason the message carries — from the live `error` event or the
- * persisted wizard-meta tail — so the footer and the avatar's status dot
- * cannot drift from what the header already credits to the specialist.
- */
-function isDeliberateRefusalMessage(message: Message): boolean {
-  return (
-    message.mode === 'deterministic'
-    && isWizardDeliberateRefusal({ fallback_reason: message.fallbackReason })
-  );
-}
-
 /** `fallback_reason` from a persisted wizard-meta tail (deterministic rows only). */
-/** The footer's cost pill: "$x" when priced, "$0.0000" when a priced model
- * cost nothing (never hidden), "cost unknown" with a hover explanation when
- * the catalog has no price for the model (`cost_known: false`) — lib/cost.ts. */
-function CostPillSpan({ costUsd, costKnown }: { costUsd?: number; costKnown?: boolean }) {
-  const pill = costPill(costUsd, costKnown, formatWizardCost);
-  if (!pill) return null;
-  return (
-    <span
-      title={pill.title}
-      style={pill.title ? { cursor: 'help' } : undefined}
-      data-cost-state={pill.state}
-    >
-      · {pill.text}
-    </span>
-  );
-}
-
 function metaFallbackReason(meta: Record<string, unknown> | null): string | null | undefined {
   if (!meta || !('fallback_reason' in meta)) return undefined;
   return typeof meta.fallback_reason === 'string' && meta.fallback_reason ? meta.fallback_reason : null;
@@ -355,7 +275,17 @@ function metaDeferredToolCalls(meta: Record<string, unknown> | null): WizardDefe
   return out.length > 0 ? out : undefined;
 }
 
-export default function WizardChat() {
+export default function WizardThread({
+  conversationParam = 'conversation',
+}: {
+  /**
+   * The query parameter a freshly created thread is stamped into the URL
+   * under (and that `/clear` drops). `/wizard` uses `conversation`; the
+   * merged chat surface passes `c`. Resume reads both spellings regardless,
+   * so a link in either form opens the thread.
+   */
+  conversationParam?: 'conversation' | 'c';
+}) {
   const [messages, setMessages] = useState<Message[]>([]);
   // Latest committed messages, for handlers that inspect state after an
   // await (e.g. "are confirm cards still pending?") without a stale closure.
@@ -418,13 +348,13 @@ export default function WizardChat() {
   }, []);
   // Setup-page bridge: when the user clicks a System Check item we navigate
   // here with ?issue=<finding_id>. We fetch the matching finding from
-  // /v1/wizard/diagnostics, seed the draft with "Help me with: <title>", and
-  // auto-send so the conversation lands directly on the issue.
+  // /v1/wizard/diagnostics and send "Help me with: <title>" as the first
+  // turn (`send({ text })`), so the conversation lands directly on the issue.
   const searchParams = useSearchParams();
   const issueHandledRef = useRef(false);
   // Ref so the URL-param effect can invoke send() without a temporal-dead-zone
   // reference to a function declared further down the component body.
-  const sendRef = useRef<(() => Promise<void>) | null>(null);
+  const sendRef = useRef<((opts?: SendOptions) => Promise<void>) | null>(null);
   // /v1/wizard/diagnostics is a full workspace probe (~360 ms). Two things on
   // this page may want it — the ?issue= deep link and the mascot tip — so it
   // is fetched at most once per mount and only when something asks for it.
@@ -472,7 +402,10 @@ export default function WizardChat() {
         resumeHandledRef.current = null;
         if (typeof window !== 'undefined') {
           const url = new URL(window.location.href);
+          // Both spellings: resume reads `?conversation=` and `?c=` alike,
+          // so a thread opened as `/wizard?c=<id>` must not come back.
           url.searchParams.delete('conversation');
+          url.searchParams.delete('c');
           window.history.replaceState(null, '', url.toString());
         }
         return true;
@@ -495,7 +428,9 @@ export default function WizardChat() {
       }
       case 'save': {
         // Roll the conversation into a Markdown vault note. Doesn't require
-        // a conversation_id since we have the in-memory thread already.
+        // a conversation_id since we have the in-memory thread already. It
+        // lands in the vault's `Wizard Memory` folder as a web-sourced note
+        // (the same record shape the Wizard's `remember` tool writes).
         const title = arg || `Wizard chat ${new Date().toISOString().slice(0, 16)}`;
         const body = messages
           .filter(m => m.role !== 'system')
@@ -506,7 +441,13 @@ export default function WizardChat() {
           return true;
         }
         try {
-          await saveVaultMemory({ title, body, category: 'wizard-chats', tags: ['wizard'] });
+          await saveVaultMemory({
+            title,
+            body,
+            category: 'Wizard Memory',
+            tags: ['wizard', 'chat'],
+            source: 'web',
+          });
           announce(`✓ Saved to your vault: ${title}`);
         } catch (err) {
           announce(`✗ Save failed: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -670,14 +611,14 @@ export default function WizardChat() {
   // Deep-link from the setup page: either ?issue=<finding_id> (we look up the
   // matching finding from /v1/wizard/diagnostics so the starter cites the real
   // title) or ?starter=<text> (free-form starter, no lookup). Whichever lands,
-  // we auto-send so the conversation opens on the issue. Best-effort: any
-  // failure leaves the chat empty.
+  // we send it as the first turn (`send({ text })` — the composer is left
+  // alone) so the conversation opens on the issue. Best-effort: any failure
+  // leaves the chat empty.
   useEffect(() => {
     const issueId = searchParams?.get('issue');
     const rawStarter = searchParams?.get('starter');
     if (!issueId && !rawStarter) return;
     if (issueHandledRef.current) return;
-    issueHandledRef.current = true;
     let cancelled = false;
     void (async () => {
       let starter = rawStarter ?? '';
@@ -691,11 +632,15 @@ export default function WizardChat() {
           : `Help me with issue: ${issueId}`;
       }
       if (!starter || cancelled) return;
-      setDraft(starter);
-      // One tick so React commits the draft state before send() reads it.
-      setTimeout(() => {
-        if (!cancelled && sendRef.current) void sendRef.current();
-      }, 0);
+      // Yield once so the first commit's effects have all run: this effect is
+      // declared before the one that points `sendRef` at `send`, and a bare
+      // ?starter= reaches here with no await above. The handled-guard is set
+      // only now, so a run that StrictMode cancels before this point leaves
+      // it for the re-run — which is the one that sends.
+      await Promise.resolve();
+      if (cancelled || issueHandledRef.current) return;
+      issueHandledRef.current = true;
+      void sendRef.current?.({ text: starter });
     })();
     return () => {
       cancelled = true;
@@ -704,7 +649,8 @@ export default function WizardChat() {
   }, [searchParams]);
 
   // Resume a persisted conversation: /wizard?conversation=<id> (the shared
-  // sidebar routes wizard-mode chats here). Hydrates the visible thread from
+  // sidebar routes wizard-mode chats here) or ?c=<id> on the merged chat
+  // surface — both spellings are read. Hydrates the visible thread from
   // the server and re-arms conversationId so new turns append to the same
   // conversation.
   //
@@ -714,7 +660,7 @@ export default function WizardChat() {
   // second run skipping and the chat permanently empty in dev.
   const resumeHandledRef = useRef<string | null>(null);
   useEffect(() => {
-    const resumeId = searchParams?.get('conversation');
+    const resumeId = searchParams?.get('conversation') ?? searchParams?.get('c');
     if (!resumeId || resumeHandledRef.current === resumeId) return;
     let cancelled = false;
     void (async () => {
@@ -776,6 +722,8 @@ export default function WizardChat() {
 
   // "Skip": leave a confirm-class call un-run. The card stays as a record of
   // what the Wizard proposed; the mascot stops asking once nothing is pending.
+  // A skipped question lands in the next turn's history as "skipped by the
+  // user; not answered" (`historyToolOutcome` picks the words by name).
   const dismissTool = (messageId: string, call: WizardChatToolCall) => {
     setMessages(prev => prev.map(m =>
       m.id === messageId
@@ -788,11 +736,33 @@ export default function WizardChat() {
     settleMascot(messageId, call.name, 'idle');
   };
 
+  // "Answer" on a question card (`ask_user`, 0.46). The answer becomes the
+  // next user message, and — through `send`'s `historyPatch` — the card
+  // settles `answered` with the answer as its detail BEFORE the history is
+  // built, so the request carries `tool_results: [{name: 'ask_user', ok:
+  // true, summary: <answer ≤300>}]` beside the message: the server renders
+  // `TOOL_RESULT ask_user` and the model knows which question was answered.
+  // Nothing is POSTed to /v1/wizard/tools/execute. While a turn is streaming
+  // the card's Answer is disabled (`busy` on the provider below), as the
+  // composer's Send is; the `sending` check here is the backstop.
+  const answerQuestion = (messageId: string, call: WizardChatToolCall, answer: string) => {
+    const text = answer.trim();
+    if (!text || sending) return;
+    const key = toolKey(call);
+    void send({
+      text,
+      historyPatch: { messageId, key, status: 'answered', summary: text, detail: questionAnswerDetail(text) },
+    });
+  };
+
   const runTool = async (
     messageId: string,
     call: WizardChatToolCall,
     confirmed: boolean,
   ): Promise<void> => {
+    // A question is answered in the chat (`answerQuestion`), never executed:
+    // the server would only answer `answered_in_chat`. Nothing to run.
+    if (isQuestionCall(call)) return;
     // The one updater every branch below uses: the card's status, its
     // one-line summary and (when there is one) the raw execute response the
     // card reads `plan` / `command` / `hint` / `disabled` from.
@@ -820,6 +790,10 @@ export default function WizardChat() {
 
     try {
       const envelope = await executeWizardTool(call.name, {
+        // Exactly the object the card arrived with — never trimmed, renamed
+        // or re-derived. A confirm-class planner card (`generate_image`)
+        // carries the server-pinned `profile` and `profile_home` in here;
+        // the server refuses a run whose pin is missing or altered.
         arguments: call.arguments,
         confirmed,
         // The token the server issued with this card; a confirmed privileged
@@ -884,7 +858,9 @@ export default function WizardChat() {
 
       // A nested ok=false is an in-band refusal (deny list, validation, a
       // failed apply) and renders as a failure with its error, never as Done.
-      const ok = envelope.ok && outcome.ok !== false;
+      // `remember` has no `ok` key at all and says `saved: false` instead;
+      // `isToolOutcomeFailure` reads both.
+      const ok = envelope.ok && !isToolOutcomeFailure(outcome);
 
       // A confirmed `playbook_install` answers {job_id, playbook, steps_total}:
       // the run continues as a job. The card stays `running` and streams it;
@@ -1027,27 +1003,40 @@ export default function WizardChat() {
     // words rather than leaving the user to read the chrome. The `asking`
     // state itself comes from the stream event; this only sharpens the
     // wording, once per tool per browser session (`sayMascotTip`), and is a
-    // no-op while the mascot is hidden.
+    // no-op while the mascot is hidden. A question card (every pending card
+    // an `ask_user`) gets its own words — "the Wizard has a question for
+    // you" — once per question rather than once per session, because each
+    // one is new; the privileged wording still wins when both are present.
     const classes = calls.map(c => tools.get(c.name)?.safety_class);
+    const label = mascotAskingLabel(classes, calls.map(c => c.name));
     if (classes.some(cls => cls === 'privileged')) {
       const named = calls
         .filter(c => isPrivilegedCall(tools.get(c.name)))
         .map(c => c.name)
         .sort()
         .join(',');
-      sayMascotTip(mascotAskingLabel(classes), { id: `privileged-approval:${named}` });
+      sayMascotTip(label, { id: `privileged-approval:${named}` });
+    } else if (label === MASCOT_ASKING_QUESTION_LABEL) {
+      sayMascotTip(label, { id: `question:${messageId}` });
     }
   };
 
-  const send = async () => {
-    const typed = draft.trim();
+  const send = async (opts: SendOptions = {}) => {
+    // No `text`: the composer is the source — the draft is the message, the
+    // pending images ride along, and both are cleared once the turn is
+    // seeded. With `text` the composer is left exactly as it is.
+    const fromComposer = opts.text === undefined;
+    const typed = (opts.text ?? draft).trim();
     // The images waiting in the composer ride on this turn; a slash command
     // leaves them pending for the next real message.
-    const pending = attachments;
+    const pending = fromComposer ? attachments : [];
     if ((!typed && pending.length === 0) || sending) return;
 
-    // Slash commands are handled locally and never sent to the LLM.
-    if (typed.startsWith('/')) {
+    // Slash commands are handled locally and never sent to the LLM. Only
+    // the composer issues them: a question card's answer or a `?starter=`
+    // deep link that begins with '/' (a path such as `/mnt/nvme0`) is text
+    // and goes to the model like any other.
+    if (fromComposer && typed.startsWith('/')) {
       setDraft('');
       const consumed = await handleSlashCommand(typed);
       if (consumed) return;
@@ -1086,7 +1075,7 @@ export default function WizardChat() {
         resumeHandledRef.current = conv.id;
         if (typeof window !== 'undefined') {
           const url = new URL(window.location.href);
-          url.searchParams.set('conversation', conv.id);
+          url.searchParams.set(conversationParam, conv.id);
           window.history.replaceState(null, '', url.toString());
         }
         // Refresh mounted sidebars so the new thread appears without a
@@ -1116,12 +1105,20 @@ export default function WizardChat() {
       agentProfile: isAutoProfile(profile) ? GENERAL_PROFILE : profile,
       attributionPending: isAutoProfile(profile),
     };
+    // A card outcome settled in this same tick is not in the `messages`
+    // closure yet: fold it into the list the history is built from, and
+    // commit the same patch so the card agrees with what was sent.
+    const patch = opts.historyPatch;
+    const source = patch ? applyHistoryPatch(messages, patch) : messages;
+    if (patch) setMessages(prev => applyHistoryPatch(prev, patch));
     setMessages(prev => [...prev, userMsg, assistantSeed]);
-    setDraft('');
-    setAttachments([]);
-    setAttachNote(null);
+    if (fromComposer) {
+      setDraft('');
+      setAttachments([]);
+      setAttachNote(null);
+    }
 
-    const history: WizardChatTurn[] = messages
+    const history: WizardChatTurn[] = source
       .filter(m => m.role !== 'system')
       .slice(-12)
       .map(m => ({
@@ -1177,7 +1174,15 @@ export default function WizardChat() {
             updateAssistant(m => ({ ...m, content: m.content + event.text }));
             break;
           case 'tool_call':
-            setIterationStatus(`calling ${event.name}…`);
+            // `publishMascot` above already handed the event — `safety_class`
+            // included — to `deriveMascotState`, which moves the sprite only
+            // for an auto call. The status line follows the same split: a
+            // confirm / privileged call is about to become a card, not run.
+            setIterationStatus(
+              event.safety_class && event.safety_class !== 'auto'
+                ? `proposing ${event.name}…`
+                : `calling ${event.name}…`,
+            );
             break;
           case 'tool_result':
             // Ran server-side OR refused by the whitelist (result.not_allowed).
@@ -1361,18 +1366,29 @@ export default function WizardChat() {
           />
         )}
         {messages.map(message => (
-          <MessageBlock
+          // The question card's Answer reaches `answerQuestion` through a
+          // per-message provider (chat/ToolCard.tsx `QuestionAnswerContext`):
+          // the message id is bound here, so the bubble passes nothing new
+          // and the card needs only the call and the text. `busy` disables
+          // the card's Answer while a turn streams, as the composer's Send is.
+          <QuestionAnswerContext.Provider
             key={message.id}
-            message={message}
-            tools={tools}
-            profileMap={profileMap}
-            privilegedEnabled={privilegedEnabled}
-            onConfirmTool={(call) => {
-              setMascotState('working');
-              void runTool(message.id, call, true);
-            }}
-            onDismissTool={(call) => dismissTool(message.id, call)}
-          />
+            value={{ answer: (call, answer) => answerQuestion(message.id, call, answer), busy: sending }}
+          >
+            <MessageBlock
+              message={message}
+              tools={tools}
+              profileMap={profileMap}
+              privilegedEnabled={privilegedEnabled}
+              onConfirmTool={(call) => {
+                // A question card never reaches here (its Answer is the
+                // provider above); `runTool` refuses one anyway.
+                setMascotState('working');
+                void runTool(message.id, call, true);
+              }}
+              onDismissTool={(call) => dismissTool(message.id, call)}
+            />
+          </QuestionAnswerContext.Provider>
         ))}
         {iterationStatus && (
           <div
@@ -1596,920 +1612,4 @@ export default function WizardChat() {
       </div>
     </div>
   );
-}
-
-// Per-agent starter prompts shown on the empty Wizard state. Picking a card
-// both swaps the active profile AND seeds the composer with an on-persona
-// question, so first-time users get a "click → ready to send" experience.
-const AGENT_STARTERS: Record<string, string> = {
-  wizard: 'What can my GPU run right now, and what should I fix first?',
-  coder: 'Review the diff in my current branch — call out the riskiest change.',
-  researcher: 'Summarize the latest on Llama 4 release vs Llama 3, with sources.',
-  writer: 'Help me draft a launch announcement for an internal tool.',
-  ops: 'Run a safe repair pass and tell me what changed.',
-  'vault-rag': 'What did I write about my mount-autopilot setup last week?',
-};
-
-function EmptyState({
-  onPickPrompt,
-  profileMap,
-  activeProfile,
-  onPickAgent,
-}: {
-  onPickPrompt: (prompt: string) => void;
-  profileMap: Map<string, AgentProfileSchema>;
-  activeProfile: string;
-  onPickAgent: (name: string) => void;
-}) {
-  // Adaptive starters — seeded from the reconnect payload so the Wizard's
-  // suggestions match the user's actual workspace state. Falls back to the
-  // generic set when reconnect is unavailable (cold first boot, offline, etc.).
-  const [starters, setStarters] = useState<string[]>([
-    'What can my GPU run right now?',
-    "Why isn't Ollama responding?",
-    'Help me pick a mission for image gen.',
-    'Refresh the local model list.',
-  ]);
-  // Proactive repair nudge — when reconnect surfaces unhealthy receipts or
-  // attention items we render a single-line banner above the agent grid so
-  // the user sees the problem before they pick an agent. One-click = fire
-  // off the repair-workspace tool via a "Fix this" prompt.
-  const [proactiveNudge, setProactiveNudge] = useState<{ text: string; prompt: string } | null>(null);
-  const agentList = Array.from(profileMap.values()).slice(0, 6);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const { wizardReconnect } = await import('@/lib/api');
-        const r = await wizardReconnect();
-        if (cancelled) return;
-        const adaptive: string[] = [];
-        // First-run user → walk them through setup directly.
-        if (r.first_run) {
-          adaptive.push('Walk me through setting up this workspace from scratch.');
-        }
-        // Concrete attention items → surface the top one as a starter.
-        for (const item of r.needs_attention.slice(0, 2)) {
-          const title = (item as { title?: string }).title;
-          if (typeof title === 'string' && title.length > 0) {
-            adaptive.push(`Help me with: ${title}`);
-          }
-        }
-        // Auto-repair already ran? Offer to summarize what just happened.
-        if (r.auto_repaired.length > 0) {
-          adaptive.push('What did you just auto-repair, and what should I check?');
-        }
-        // Vault present → invite recall-style questions.
-        const vaultNotes = (r as unknown as { vault?: { memory_files?: number } })?.vault?.memory_files ?? 0;
-        if (vaultNotes > 0) {
-          adaptive.push('What did I write about in my vault recently?');
-        }
-        if (adaptive.length > 0) {
-          // Always keep one generic fallback so the grid never looks empty.
-          adaptive.push('What can my GPU run right now?');
-          setStarters(adaptive.slice(0, 4));
-        }
-
-        // Proactive nudge: build a one-line "I noticed X looks broken — want
-        // me to fix it?" message from the most important attention item. This
-        // is the "self-healing" promise made visible.
-        if (r.needs_attention.length > 0) {
-          const top = r.needs_attention[0] as { title?: string; summary?: string };
-          const summary = top.summary || top.title;
-          if (summary) {
-            setProactiveNudge({
-              text: `Heads up — ${summary}.`,
-              prompt: `Run a safe repair on the issue: ${top.title ?? summary}`,
-            });
-          }
-        } else if ((r.auto_repaired ?? []).length > 0) {
-          setProactiveNudge({
-            text: `I auto-repaired ${r.auto_repaired.length} item(s) on reconnect.`,
-            prompt: 'What did you just auto-repair, and is anything still broken?',
-          });
-        }
-      } catch {
-        // Reconnect unavailable — keep the static starters.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  return (
-    <div className="mx-auto max-w-2xl pt-6">
-      <div className="text-center">
-        <div className="text-[10px] font-mono uppercase tracking-[0.18em]" style={{ color: '#76B900' }}>
-          AI Wizard
-        </div>
-        <div className="mt-2 text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-          Ask anything — the Wizard picks the specialist.
-        </div>
-        <div className="mt-1 text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          The Wizard reads your live GPU, storage, providers, and vault before
-          it answers, and routes each question to a hidden specialist that can
-          run repairs, refresh models, and validate keys. Pick a card below to
-          pin one persona instead.
-        </div>
-      </div>
-
-      {proactiveNudge && (
-        <button
-          type="button"
-          onClick={() => onPickPrompt(proactiveNudge.prompt)}
-          className="mt-4 flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-xs transition-colors hover:border-[#d97706]"
-          style={{
-            borderColor: '#d97706',
-            background: 'rgba(217,119,6,0.08)',
-            color: '#92400e',
-          }}
-          title="Click to seed a repair request"
-        >
-          <span>{proactiveNudge.text}</span>
-          <span className="font-mono text-[10px] uppercase tracking-[0.18em]" style={{ color: '#92400e' }}>
-            Fix it →
-          </span>
-        </button>
-      )}
-
-      {agentList.length > 0 && (
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {agentList.map(p => {
-            const isActive = p.name === activeProfile;
-            return (
-              <button
-                key={p.name}
-                type="button"
-                onClick={() => {
-                  onPickAgent(p.name);
-                  const starter = AGENT_STARTERS[p.name];
-                  if (starter) onPickPrompt(starter);
-                }}
-                className="flex items-start gap-2 rounded-md border p-2 text-left transition-colors hover:border-[#76B900]/40"
-                style={{
-                  borderColor: isActive ? '#76B900' : 'var(--border)',
-                  background: isActive ? 'rgba(118,185,0,0.05)' : 'var(--bg-card)',
-                }}
-                title={p.description}
-              >
-                <AgentAvatar profile={p} size="md" />
-                <div className="min-w-0 flex-1">
-                  <div
-                    className="truncate text-xs font-mono font-bold"
-                    style={{ color: 'var(--text-primary)' }}
-                  >
-                    {p.title}
-                  </div>
-                  <div
-                    className="mt-0.5 line-clamp-2 text-[10px]"
-                    style={{ color: 'var(--text-secondary)' }}
-                  >
-                    {p.description}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="mt-6 text-center">
-        <div className="text-[10px] font-mono uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>
-          Or jump straight in
-        </div>
-      </div>
-      <div className="mt-4 grid grid-cols-1 gap-2 text-left sm:grid-cols-2">
-        {starters.map(s => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => onPickPrompt(s)}
-            className="rounded-md border px-3 py-2 text-xs transition-colors hover:border-[#76B900]/40"
-            style={{
-              borderColor: 'var(--border)',
-              background: 'var(--bg-card)',
-              color: 'var(--text-secondary)',
-            }}
-          >
-            {s}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Accent colors per built-in profile — keep in sync with the SVG spec in
-// nvh/integrations/wizard/avatars.py so the bubble border matches the
-// avatar background a user sees in the picker.
-const PROFILE_ACCENTS: Record<string, string> = {
-  wizard: '#76B900',
-  coder: '#0ea5e9',
-  researcher: '#a855f7',
-  writer: '#f59e0b',
-  ops: '#dc2626',
-  'vault-rag': '#10b981',
-};
-
-function statusForMessage(message: Message): { color: string; label: string } | null {
-  if (message.mode === 'deterministic') {
-    // A pinned local-only specialist declining is ITS answer, not the offline
-    // helper's: keep the local green the specialist would normally wear
-    // (nothing left the box) and say so on hover. Only a genuine fallback —
-    // the helper standing in for a failed model path — is grey "offline".
-    if (isDeliberateRefusalMessage(message)) {
-      return { color: '#76B900', label: 'declined' };
-    }
-    return { color: '#737373', label: 'offline' };
-  }
-  if (message.fallbackFrom) {
-    return { color: '#d97706', label: 'fallback' };
-  }
-  if ((message.usedProvider ?? '').toLowerCase() === 'ollama') {
-    return { color: '#76B900', label: 'local' };
-  }
-  if (message.usedProvider) {
-    return { color: '#0ea5e9', label: 'cloud' };
-  }
-  return null;
-}
-
-function MessageBlock({
-  message,
-  tools,
-  profileMap,
-  privilegedEnabled,
-  onConfirmTool,
-  onDismissTool,
-}: {
-  message: Message;
-  tools: Map<string, WizardToolSchema>;
-  profileMap: Map<string, AgentProfileSchema>;
-  /** `privileged_enabled` from the tool list; undefined = the API never said. */
-  privilegedEnabled?: boolean;
-  onConfirmTool: (call: WizardChatToolCall) => void;
-  onDismissTool: (call: WizardChatToolCall) => void;
-}) {
-  if (message.role === 'system') {
-    return (
-      <div className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
-        {message.content}
-      </div>
-    );
-  }
-  const isUser = message.role === 'user';
-  const profile = !isUser && message.agentProfile
-    ? profileMap.get(message.agentProfile) ?? null
-    : null;
-  const accent = profile ? PROFILE_ACCENTS[profile.name] ?? '#76B900' : null;
-  const status = !isUser ? statusForMessage(message) : null;
-  return (
-    <div className={`flex items-end gap-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
-      {!isUser && (
-        <div className="relative flex-shrink-0">
-          <AgentAvatar profile={profile} size="md" />
-          {status && (
-            <span
-              className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border"
-              style={{ background: status.color, borderColor: 'var(--bg-card)' }}
-              title={status.label}
-            />
-          )}
-        </div>
-      )}
-      <div
-        className={`max-w-[80%] rounded-lg border px-3 py-2 text-sm whitespace-pre-wrap ${
-          isUser ? '' : 'shadow-sm'
-        }`}
-        style={{
-          background: isUser ? '#f7fdf0' : 'var(--bg-card)',
-          borderColor: isUser
-            ? 'var(--border-green)'
-            : (accent ? `${accent}55` : 'var(--border)'),
-          borderLeftWidth: !isUser && accent ? '3px' : undefined,
-          borderLeftColor: !isUser && accent ? accent : undefined,
-          color: 'var(--text-primary)',
-        }}
-      >
-        {!isUser && profile && (
-          <div
-            className="mb-1 text-[10px] font-mono font-bold uppercase tracking-[0.14em]"
-            style={{ color: accent ?? '#76B900' }}
-            title={message.profileReason ?? undefined}
-          >
-            {profile.title}
-          </div>
-        )}
-        <div>{message.content}</div>
-
-        {isUser && message.attachments && message.attachments.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Attached images">
-            {message.attachments.map(a => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={a.id}
-                src={a.previewUrl}
-                alt={a.name}
-                title={`${a.name} · ${formatSize(a.size)}`}
-                className="h-16 max-w-[8rem] rounded-sm border object-cover"
-                style={{ borderColor: 'var(--border-green)' }}
-              />
-            ))}
-          </div>
-        )}
-
-        {!isUser && message.serverToolTrace && message.serverToolTrace.length > 0 && (
-          <ServerToolTrace
-            trace={message.serverToolTrace}
-            // An auto turn streams under the general-Wizard placeholder until
-            // `done` names who answered; a refusal seen before then belongs to
-            // "this specialist", not to "AI Wizard".
-            specialist={
-              message.attributionPending
-                ? 'this specialist'
-                : (profile?.title ?? message.agentProfile ?? 'this specialist')
-            }
-          />
-        )}
-
-        {!isUser && message.deferredToolCalls && message.deferredToolCalls.length > 0 && (
-          <DeferredToolNotes calls={message.deferredToolCalls} />
-        )}
-
-        {!isUser && message.serverToolTrace && message.serverToolTrace.length > 0 && (
-          <SourcesFooter trace={message.serverToolTrace} />
-        )}
-
-        {!isUser && message.fallbackFrom && (
-          <div
-            className="mt-1 rounded-sm border px-2 py-1 text-[10px] font-mono"
-            style={{
-              borderColor: '#d97706',
-              background: 'rgba(217,119,6,0.08)',
-              color: '#92400e',
-            }}
-          >
-            Routed via {message.usedProvider ?? 'fallback'} — original target
-            {' '}({message.fallbackFrom}) was unavailable.
-          </div>
-        )}
-
-        {!isUser && message.costCeilingHit && (
-          <div
-            className="mt-1 rounded-sm border px-2 py-1 text-[10px] font-mono"
-            style={{
-              borderColor: '#d97706',
-              background: 'rgba(217,119,6,0.08)',
-              color: '#92400e',
-            }}
-          >
-            Stopped at the profile&apos;s budget
-            {typeof message.costCeilingUsd === 'number' && (
-              <> (${message.costCeilingUsd.toFixed(2)}/turn)</>
-            )}
-            . Follow-up tool calls were skipped to stay under cost.
-          </div>
-        )}
-
-        {message.mode === 'deterministic' && !isDeliberateRefusalMessage(message) && (
-          <div className="mt-1 text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-faint)' }}>
-            offline helper
-          </div>
-        )}
-        {message.mode === 'llm' && message.usedProvider && (
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: 'var(--text-faint)' }}>
-            <span
-              title={message.routingReason ?? 'Why this provider was picked is unavailable for this turn.'}
-              style={{ cursor: message.routingReason ? 'help' : undefined }}
-            >
-              {message.usedProvider}{message.usedModel ? ` · ${message.usedModel.replace(/^.*\//, '')}` : ''}
-            </span>
-            {message.iterations && message.iterations > 1 && (
-              <span>· {message.iterations} round-trips</span>
-            )}
-            {typeof message.latencyMs === 'number' && message.latencyMs > 0 && (
-              <span>· {(message.latencyMs / 1000).toFixed(1)}s</span>
-            )}
-            <CostPillSpan costUsd={message.costUsd} costKnown={message.costKnown} />
-          </div>
-        )}
-
-        {message.toolCalls?.map(call => (
-          <ToolCard
-            key={call.name}
-            call={call}
-            schema={tools.get(call.name)}
-            status={message.toolStatus?.[call.name] ?? 'idle'}
-            result={message.toolResults?.[call.name]}
-            detail={message.toolDetails?.[call.name]}
-            run={message.playbookRuns?.[call.name]}
-            privilegedEnabled={privilegedEnabled}
-            onConfirm={() => onConfirmTool(call)}
-            onDismiss={() => onDismissTool(call)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
- * One tool the Wizard proposed, as a card the user must act on.
- *
- * Three chromes, all of which still need a click (or are already settled):
- *  - ordinary confirm — themed border, "Run" / "Skip". Every safety class
- *    that is not exactly `privileged` lands here, including one this build
- *    has never heard of;
- *  - privileged (sudo) — red border, a PRIVILEGED pill, the one-line note
- *    that it runs with sudo on this machine, the server's exact commands in a
- *    <pre> (with what changes, the undo and any warning) above the buttons,
- *    and a destructive "Approve and run". The plan and the approval token
- *    arrive on the surfaced call; nothing is read from the model's arguments;
- *  - disabled — `NVH_ALLOW_PRIVILEGED=0`: a muted line naming the variable
- *    and NO run button at all (Skip stays while the card is still pending).
- *
- * The `needs-terminal` outcome is a hand-off, not a failure: sudo wanted a
- * password, so nvHive did not run the command and shows it copyable instead.
- * nvHive never prompts for, sees or stores a password.
- */
-function ToolCard({
-  call,
-  schema,
-  status,
-  result,
-  detail,
-  run,
-  privilegedEnabled,
-  onConfirm,
-  onDismiss,
-}: {
-  call: WizardChatToolCall;
-  schema: WizardToolSchema | undefined;
-  status: ToolCardStatus;
-  result?: string;
-  /** Raw execute response: plan / command / hint / disabled live here. */
-  detail?: WizardToolExecuteResult;
-  /** The folded `playbook-run` job, once a confirmed `playbook_install` started one. */
-  run?: PlaybookRunState;
-  privilegedEnabled?: boolean;
-  onConfirm: () => void;
-  onDismiss: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  // Every call that reaches a card needs a click, whatever the catalog says
-  // its safety class is — the server already ran what it was willing to.
-  const description = schema?.description ?? call.name;
-
-  // The server marks a surfaced privileged call (`call.privileged`) as well as
-  // its execute answers, so the red chrome never depends on the local catalog.
-  const privileged = isPrivilegedCall(schema, detail) || isPrivilegedCall(undefined, call);
-  const disabled = call.disabled === true || isPrivilegedDisabled(schema, detail, privilegedEnabled);
-  // A card the kill switch has turned off reads as disabled before it is ever
-  // clicked, even though nothing has run. It keeps its Skip button while the
-  // underlying status is still pending, so the user can settle it and the
-  // mascot stops asking.
-  const effectiveStatus: ToolCardStatus = disabled && isPendingStatus(status) ? 'disabled' : status;
-  const chrome = cardChrome(privileged ? 'privileged' : schema?.safety_class, effectiveStatus);
-  const skippable = chrome.clickable || isPendingStatus(status);
-  // The exact commands: the server's dry run, delivered on the surfaced call
-  // (or on an unconfirmed execute answer). Displayed for approval only —
-  // never re-derived here, never fetched, and never the model's `arguments`.
-  const planSource = planLines(call).length > 0 ? call : detail;
-  const handoff = needsTerminal(detail);
-  const command = terminalCommand(detail);
-
-  const copyCommand = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // Clipboard blocked (insecure origin / denied permission) — the command
-      // is on screen in a selectable block, so there is nothing to recover.
-    }
-  };
-
-  return (
-    <div
-      className="mt-2 rounded-md border p-2 text-xs"
-      style={{
-        background: chrome.background ?? 'var(--bg-subtle)',
-        borderColor: chrome.borderColor ?? 'var(--border)',
-      }}
-      aria-label={privileged ? `${call.name} — ${PRIVILEGED_SUDO_NOTE}` : undefined}
-    >
-      <div className="flex flex-wrap items-baseline gap-2">
-        <span className="font-mono font-semibold" style={{ color: 'var(--text-primary)' }}>
-          {call.name}
-        </span>
-        {chrome.classBadge && (
-          <span
-            className="rounded-sm border px-1 py-px text-[9px] font-mono font-semibold uppercase tracking-[0.14em]"
-            style={{ borderColor: chrome.borderColor ?? undefined, color: chrome.borderColor ?? undefined }}
-          >
-            {chrome.classBadge}
-          </span>
-        )}
-        <span
-          className="text-[9px] font-mono uppercase tracking-[0.14em]"
-          style={{ color: chrome.badgeColor }}
-        >
-          {chrome.badge}
-        </span>
-      </div>
-      <div className="mt-1" style={{ color: 'var(--text-secondary)' }}>
-        {description}
-      </div>
-      {chrome.privileged && (
-        <div className="mt-1 font-mono text-[10px]" style={{ color: chrome.borderColor ?? undefined }}>
-          {PRIVILEGED_SUDO_NOTE}
-        </div>
-      )}
-      {/* The plan and its notes come BEFORE the buttons in DOM order, so a
-          screen reader (and the tab order) reaches what is being approved
-          before the control that approves it. */}
-      <PlanDetails source={planSource} borderColor={chrome.borderColor} />
-      {run && <PlaybookRunLog run={run} borderColor={chrome.borderColor} />}
-      {Object.keys(call.arguments).length > 0 && (
-        <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
-          args: {JSON.stringify(call.arguments)}
-        </div>
-      )}
-      {skippable && (
-        <div className="mt-2 flex items-center justify-end gap-1">
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="rounded-sm border px-2 py-1 text-[10px] font-mono transition-colors hover:bg-[var(--bg-hover)]"
-            style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
-            title="Leave this tool un-run"
-          >
-            Skip
-          </button>
-          {chrome.clickable && (
-            <button
-              type="button"
-              onClick={onConfirm}
-              className={
-                chrome.privileged
-                  ? 'rounded-md px-2 py-1 text-[10px] font-mono font-semibold text-white transition-opacity hover:opacity-90'
-                  : 'btn-primary px-2 py-1 text-[10px] font-mono'
-              }
-              style={chrome.privileged ? { background: chrome.borderColor ?? undefined } : undefined}
-              title={chrome.privileged ? PRIVILEGED_SUDO_NOTE : undefined}
-            >
-              {chrome.runLabel}
-            </button>
-          )}
-        </div>
-      )}
-      {disabled && (
-        <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
-          {PRIVILEGED_DISABLED_NOTE}
-        </div>
-      )}
-      {handoff && (
-        <div className="mt-1">
-          <div className="flex items-center justify-between gap-2">
-            <code
-              className="min-w-0 flex-1 overflow-x-auto rounded-sm border px-1.5 py-1 font-mono text-[10px] whitespace-pre"
-              style={{
-                background: 'var(--bg-card)',
-                borderColor: 'var(--border)',
-                color: 'var(--text-primary)',
-              }}
-            >
-              {command || '(no command was returned)'}
-            </code>
-            {command && (
-              <button
-                type="button"
-                onClick={() => void copyCommand()}
-                className="shrink-0 rounded-sm border px-2 py-1 text-[10px] font-mono transition-colors hover:bg-[var(--bg-hover)]"
-                style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
-              >
-                {copied ? 'Copied' : 'Copy command'}
-              </button>
-            )}
-          </div>
-          <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-muted)' }}>
-            {detail?.hint ?? NEEDS_TERMINAL_HINT}
-          </div>
-        </div>
-      )}
-      {result && !disabled && (
-        <div className="mt-1 font-mono text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-          {result}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function formatToolResultSummary(name: string, result: Record<string, unknown> | undefined): string {
-  if (!result) return 'completed.';
-  if (typeof result.summary === 'string') return result.summary;
-  // Specific shapes we recognize for prettier surface text:
-  if (name === 'validate_provider_key' && typeof result.valid === 'boolean') {
-    if (result.valid) {
-      const count = typeof result.model_count === 'number' ? `, ${result.model_count} model(s)` : '';
-      const latency = typeof result.latency_ms === 'number' ? ` in ${result.latency_ms} ms` : '';
-      return `valid${latency}${count}`;
-    }
-    return `invalid: ${result.error ?? 'unknown'}`;
-  }
-  if (name === 'save_provider_key' && result.ok === true) {
-    return `saved under ${result.config_file ?? 'workspace config'}`;
-  }
-  // Fall through: stringify a short version.
-  try {
-    return JSON.stringify(result).slice(0, 120);
-  } catch {
-    return 'completed.';
-  }
-}
-
-/**
- * DeferredToolNotes lists auto-class calls the server chose NOT to run this
- * turn (Depth 1 or the profile's cost ceiling) with the reason it gave.
- * Informational only — these never execute client-side; the user can raise
- * Depth or ask again. Kept out of ServerToolTrace so "used N tools" stays an
- * honest count of what actually ran.
- */
-function DeferredToolNotes({ calls }: { calls: WizardDeferredToolCall[] }) {
-  return (
-    <div
-      className="mt-1 space-y-0.5 text-[10px] font-mono"
-      style={{ color: 'var(--text-faint)' }}
-      aria-label="Tools not run this turn"
-    >
-      {calls.map((c, i) => (
-        <div key={`${c.name}-${i}`}>
-          not run: <span style={{ color: 'var(--text-muted)' }}>{c.name}</span>
-          {c.reason ? ` — ${c.reason}` : ''}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** Split a trace into what actually ran and what the whitelist refused. */
-function splitToolTrace(trace: WizardChatToolResult[]): {
-  ran: WizardChatToolResult[];
-  refused: WizardChatToolResult[];
-} {
-  const ran: WizardChatToolResult[] = [];
-  const refused: WizardChatToolResult[] = [];
-  for (const entry of trace) (isRefusedToolResult(entry) ? refused : ran).push(entry);
-  return { ran, refused };
-}
-
-/**
- * ServerToolTrace renders auto-class tool calls that ran server-side
- * inside the Wizard's follow-up loop, so the user can see "Wizard
- * called rag_ask → got 4 chunks from notes.md, ideas.md" rather than
- * just an answer that appears out of nowhere.
- *
- * Whitelist refusals travel in the same list (`result.not_allowed`) but
- * never ran, so they are split out here: the "used N tools" header counts
- * only what executed, and each refusal is a muted one-liner instead.
- *
- * Collapsed by default to keep the chat feeling like chat. Click to
- * expand the details (args + raw result excerpt) for the curious.
- */
-function ServerToolTrace({ trace, specialist }: { trace: WizardChatToolResult[]; specialist: string }) {
-  const [open, setOpen] = useState(false);
-  const { ran, refused } = splitToolTrace(trace);
-  if (ran.length === 0 && refused.length === 0) return null;
-  return (
-    <>
-      {ran.length > 0 && (
-        <div className="mt-2 rounded-md border" style={{ background: 'var(--bg-subtle)', borderColor: 'var(--border)' }}>
-          <button
-            type="button"
-            onClick={() => setOpen(o => !o)}
-            className="flex w-full items-center justify-between px-2 py-1 text-[10px] font-mono"
-            style={{ color: 'var(--text-muted)' }}
-          >
-            <span>
-              {open ? '▾' : '▸'} Wizard used {ran.length} tool{ran.length === 1 ? '' : 's'} to answer
-              <span style={{ color: 'var(--text-faint)' }}>
-                {' '}
-                ({ran.map(t => t.name).join(' → ')})
-              </span>
-            </span>
-          </button>
-          {open && (
-            <div className="border-t px-2 py-2 space-y-2" style={{ borderColor: 'var(--border)' }}>
-              {ran.map((entry, i) => (
-                <ServerToolTraceItem key={`${entry.name}-${i}`} entry={entry} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-      {refused.length > 0 && (
-        <div
-          className="mt-1 space-y-0.5 text-[10px] font-mono"
-          style={{ color: 'var(--text-faint)' }}
-          aria-label="Tools this specialist may not use"
-        >
-          {refused.map((entry, i) => (
-            <div key={`${entry.name}-refused-${i}`}>
-              not allowed for {specialist}:{' '}
-              <span style={{ color: 'var(--text-muted)' }}>{entry.name}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-function ServerToolTraceItem({ entry }: { entry: WizardChatToolResult }) {
-  const ok = entry.result?.ok !== false;
-  const innerResult = (entry.result?.result as Record<string, unknown> | undefined) ?? undefined;
-  const summary = formatServerTraceSummary(entry.name, innerResult, entry.result?.error);
-  return (
-    <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-      <div className="flex items-baseline gap-2">
-        <span
-          className="font-mono font-semibold"
-          style={{ color: ok ? 'var(--text-primary)' : '#dc2626' }}
-        >
-          {entry.name}
-        </span>
-        <span className="text-[9px] font-mono uppercase tracking-[0.14em]" style={{ color: ok ? '#16a34a' : '#dc2626' }}>
-          {ok ? '✓' : '✗'}
-        </span>
-      </div>
-      <div className="mt-0.5" style={{ color: 'var(--text-secondary)' }}>{summary}</div>
-      {Object.keys(entry.arguments).length > 0 && (
-        <div className="mt-0.5 font-mono text-[9px]" style={{ color: 'var(--text-muted)' }}>
-          args: {JSON.stringify(entry.arguments).slice(0, 200)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function formatServerTraceSummary(
-  name: string,
-  inner: Record<string, unknown> | undefined,
-  error: string | undefined,
-): string {
-  if (error) return error;
-  if (!inner) return 'completed.';
-  // Shape-aware renderings — only the tools we ship today. Unknown shapes
-  // fall through to a stringified excerpt.
-  if (name === 'rag_ask' || name === 'rag_ask_vault') {
-    const chunks = Array.isArray(inner.chunks) ? inner.chunks : [];
-    const sources = new Set<string>();
-    for (const c of chunks) {
-      const src = (c as Record<string, unknown>)?.source;
-      if (typeof src === 'string') {
-        const tail = src.split('/').pop() ?? src;
-        sources.add(tail);
-      }
-    }
-    const srcList = Array.from(sources).slice(0, 4).join(', ');
-    const auto = inner.auto_indexed ? ' (auto-indexed vault)' : '';
-    return `${chunks.length} chunk(s) from ${srcList || 'index'}${auto}`;
-  }
-  if (name === 'web_search') {
-    const results = Array.isArray(inner.results) ? inner.results : [];
-    const backend = typeof inner.backend === 'string' ? inner.backend : 'web';
-    return `${results.length} result(s) via ${backend}`;
-  }
-  if (name === 'rag_ingest') {
-    const ingested = typeof inner.files_ingested === 'number' ? inner.files_ingested : 0;
-    const chunks = typeof inner.chunks === 'number' ? inner.chunks : 0;
-    return `indexed ${ingested} file(s), ${chunks} chunk(s)`;
-  }
-  if (name === 'refresh_models' && typeof inner.summary === 'string') {
-    return inner.summary;
-  }
-  try {
-    return JSON.stringify(inner).slice(0, 140);
-  } catch {
-    return 'completed.';
-  }
-}
-
-/**
- * SourcesFooter renders inline-numbered citations beneath an answer when the
- * Wizard pulled chunks from rag_ask, rag_ask_vault, or web_search. Each hit
- * gets a [1], [2], … number with the source filename / URL and a click-to-
- * expand snippet, so users can see exactly where the answer is grounded.
- *
- * Beats a separate sources panel (the 2023 pattern). Stitching [N] back into
- * the answer text is a follow-up — for now numbering matches order of arrival.
- */
-function SourcesFooter({ trace }: { trace: WizardChatToolResult[] }) {
-  const sources = collectSources(trace);
-  const [openIdx, setOpenIdx] = useState<number | null>(null);
-  if (sources.length === 0) return null;
-  return (
-    <div className="mt-2 border-t pt-2 text-[10px] font-mono" style={{ borderColor: 'var(--border)' }}>
-      <div className="mb-1 uppercase tracking-[0.14em]" style={{ color: 'var(--text-muted)' }}>
-        Sources
-      </div>
-      <div className="space-y-1">
-        {sources.map((src, i) => {
-          const isOpen = openIdx === i;
-          return (
-            <div key={`${src.label}-${i}`}>
-              <button
-                type="button"
-                onClick={() => setOpenIdx(isOpen ? null : i)}
-                className="text-left transition-colors hover:text-[#76B900]"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                <span className="mr-1" style={{ color: '#76B900' }}>[{i + 1}]</span>
-                {src.label}
-                {src.kind === 'web' && src.url && (
-                  <span style={{ color: 'var(--text-faint)' }}> · {new URL(src.url).hostname}</span>
-                )}
-              </button>
-              {isOpen && src.snippet && (
-                <div
-                  className="mt-1 ml-5 rounded-sm border-l-2 px-2 py-1 text-[10px]"
-                  style={{
-                    borderColor: '#76B900',
-                    background: 'var(--bg-subtle)',
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  {src.snippet}
-                  {src.url && (
-                    <div className="mt-1">
-                      <a
-                        href={src.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[#76B900] underline"
-                      >
-                        Open source ↗
-                      </a>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-interface SourceEntry {
-  label: string;
-  kind: 'rag' | 'web';
-  snippet?: string;
-  url?: string;
-}
-
-function collectSources(trace: WizardChatToolResult[]): SourceEntry[] {
-  const out: SourceEntry[] = [];
-  const seen = new Set<string>();
-  for (const entry of trace) {
-    // A refused call never ran, so it has nothing to cite — skip it even if
-    // a future payload happened to carry a `result` body.
-    if (isRefusedToolResult(entry)) continue;
-    const inner = (entry.result?.result as Record<string, unknown> | undefined) ?? undefined;
-    if (!inner) continue;
-    if (entry.name === 'rag_ask' || entry.name === 'rag_ask_vault') {
-      const chunks = Array.isArray(inner.chunks) ? inner.chunks : [];
-      for (const chunk of chunks) {
-        const c = chunk as Record<string, unknown>;
-        const src = typeof c.source === 'string' ? c.source : '';
-        if (!src) continue;
-        const dedupe = `rag:${src}:${c.chunk_index ?? ''}`;
-        if (seen.has(dedupe)) continue;
-        seen.add(dedupe);
-        const label = src.split('/').pop() ?? src;
-        const text = typeof c.text === 'string' ? c.text : '';
-        out.push({ label, kind: 'rag', snippet: text.slice(0, 240) });
-      }
-    } else if (entry.name === 'web_search') {
-      const results = Array.isArray(inner.results) ? inner.results : [];
-      for (const r of results) {
-        const w = r as Record<string, unknown>;
-        const url = typeof w.url === 'string' ? w.url : '';
-        if (!url) continue;
-        const dedupe = `web:${url}`;
-        if (seen.has(dedupe)) continue;
-        seen.add(dedupe);
-        out.push({
-          label: typeof w.title === 'string' ? w.title : url,
-          kind: 'web',
-          snippet: typeof w.snippet === 'string' ? w.snippet : undefined,
-          url,
-        });
-      }
-    }
-  }
-  return out;
 }

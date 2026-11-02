@@ -2,7 +2,7 @@
 
 A local-only specialist declining an explicit pin arrives on the Wizard stream
 as an ``error`` event whose ``fallback_reason`` is
-:data:`nvh.integrations.wizard.chat.LOCAL_ONLY_FALLBACK_REASON`. WizardChat
+:data:`nvh.integrations.wizard.chat.LOCAL_ONLY_FALLBACK_REASON`. WizardThread
 already treats that as the turn's answer (attributed bubble, no red banner —
 ``wizardErrorBanner``), but the mascot mapping used to key off the event
 *type* alone, so the same event drove the sprite into the error strip and the
@@ -125,12 +125,12 @@ def test_error_label_is_reserved_for_genuine_failures() -> None:
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# WizardChat.tsx: the whole error event reaches the mapping
+# chat/WizardThread.tsx: the whole error event reaches the mapping
 # ───────────────────────────────────────────────────────────────────────────
 
 
 def test_wizard_chat_hands_the_whole_error_event_to_the_mascot() -> None:
-    chat = _read("components/WizardChat.tsx")
+    chat = _read("components/chat/WizardThread.tsx")
     publish = _block(chat, "const publishMascot = (", "\n    };\n")
     # Spread, not rebuilt: fallback_reason must survive the tool_calls attach.
     assert "{ ...event, tool_calls: pendingConfirm }" in publish

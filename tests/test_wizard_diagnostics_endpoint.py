@@ -1,7 +1,7 @@
 """Tests for the /v1/wizard/diagnostics endpoint and the `diagnose` tool.
 
 These pin the consolidated-findings contract that the setup-page System Check
-and the WizardChat deep-link both depend on: same data, same shape, same
+and the WizardThread deep-link both depend on: same data, same shape, same
 finding ids.
 """
 

@@ -3,10 +3,11 @@
 import { useState, useEffect } from 'react';
 import PageHeader from '@/components/PageHeader';
 import ThemeToggle from '@/components/ThemeToggle';
-import { getCacheStats, clearCache } from '@/lib/api';
+import { getCacheStats, clearCache, getBudgetStatus } from '@/lib/api';
 import { LEGACY_CHATS_KEY } from '@/lib/importLocalChats';
+import { SESSION_COST_RATE_COMMAND, formatHourlyRate } from '@/lib/sessionCost';
 import { NVHIVE_VERSION } from '@/lib/version';
-import type { CacheStats } from '@/lib/types';
+import type { BudgetStatus, CacheStats } from '@/lib/types';
 
 // Browser-only keys this page is allowed to clear. Chat history lives on the
 // API server and is managed from the sidebar; model defaults and budget
@@ -55,9 +56,13 @@ export default function SettingsPage() {
   const [cacheClearing, setCacheClearing] = useState(false);
   const [cacheCleared, setCacheCleared] = useState<number | null>(null);
   const [browserCleared, setBrowserCleared] = useState(false);
+  // 0.46 §7: the configured hourly desktop rate and the platform verdict,
+  // read-only (there is no write route; the CLI command is shown below).
+  const [budget, setBudget] = useState<BudgetStatus | null>(null);
 
   useEffect(() => {
     getCacheStats().then(setCacheStats).catch(() => {});
+    getBudgetStatus().then(setBudget).catch(() => {});
   }, []);
 
   const handleClearCache = async (provider?: string) => {
@@ -90,7 +95,7 @@ export default function SettingsPage() {
       <PageHeader
         eyebrow="Workspace"
         title="Preferences"
-        subtitle="Theme, response cache, and browser data. Model defaults and budget limits live in config.yaml (nvh config)."
+        subtitle="Theme, response cache, hourly desktop rate, and browser data. Model defaults and budget limits live in config.yaml (nvh config)."
       />
       <div className="p-6 space-y-6 max-w-3xl mx-auto">
 
@@ -143,6 +148,31 @@ export default function SettingsPage() {
             Clear All Cache
           </button>
         </div>
+      </SectionCard>
+
+      <SectionCard title="Costs">
+        <SettingRow
+          label="Hourly desktop rate"
+          description="What this machine costs you per hour (a rented GPU desktop's price). The session pill in the top bar multiplies it by the time since the tab opened; nvHive never guesses it."
+        >
+          <span className="text-sm font-mono text-[#0a0a0a] dark:text-[#fafafa]">
+            {budget ? formatHourlyRate(budget.hourly_rate_usd) : '…'}
+          </span>
+        </SettingRow>
+        <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
+          Set or change it from a terminal:{' '}
+          <code className="px-1 py-0.5 bg-[#fafafa] border border-[#e5e5e5] text-[#525252] dark:bg-[#141414] dark:border-[#262626] dark:text-[#a3a3a3]">
+            {SESSION_COST_RATE_COMMAND}
+          </code>
+          {' '}— this page is read-only.
+        </div>
+        {budget?.platform?.is_owned && (
+          <div className="text-[10px] font-mono text-[#a3a3a3] dark:text-[#737373]">
+            This machine looks like owned hardware{budget.platform.device_label ? ` (${budget.platform.device_label})` : ''},
+            so the rate is only used for the pill&apos;s desktop term. Nothing here bills you; without a rate the pill
+            shows cloud-model spend on its own.
+          </div>
+        )}
       </SectionCard>
 
       <SectionCard title="Data">

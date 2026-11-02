@@ -168,6 +168,56 @@ export interface BudgetStatus {
   daily_queries: number;
   monthly_queries: number;
   by_provider: Record<string, string>;
+  /** True when the ledger could not be read and the figures above are the
+   * zero fallback (the server's, or `getBudgetStatus` standing in for a
+   * failed fetch). Absent on servers that predate the field. */
+  unavailable?: boolean;
+  // ── 0.46 Wave C (design §7). All optional so an older server type-checks. ──
+  /** `budget.hourly_rate_usd` as a decimal string; `null` when the owner has
+   * not set one — the API never guesses a rate (`nvh config set
+   * budget.hourly_rate_usd 2.10`). Absent (undefined) = not known, e.g. the
+   * offline fallback. */
+  hourly_rate_usd?: string | null;
+  /** The catalog's verdict over every (model, provider) pair that answered
+   * today: false = part of `daily_spend` is a placeholder $0. */
+  daily_cost_known?: boolean;
+  /** Only when the request carried `?since=<epoch ms>`; `null` otherwise. */
+  session?: BudgetSession | null;
+  /** Warmed platform facts; `null` when detection itself failed. */
+  platform?: BudgetPlatform | null;
+}
+
+/**
+ * `GET /v1/budget/status?since=<epoch ms>` → `session`: the machine-wide
+ * ledger since one instant. CLI, every browser tab, proxy clients and
+ * scheduled runs all land in the one ledger, so a pill must not present it
+ * as "what this tab sent". `since` is epoch MILLISECONDS (`Date.now()`
+ * scale); a value small enough to read as seconds is a 422.
+ */
+export interface BudgetSession {
+  since: number;
+  /** Decimal string: the sum of successful rows since `since`. */
+  spend_usd: string;
+  /** False = at least one (model, provider) pair since `since` has no
+   * catalog price, so `spend_usd` is a floor (render it as `≥`). */
+  cost_known: boolean;
+  /** True only when EVERY pair since `since` is a local provider — a catalog
+   * verdict, never inferred from a zero sum. */
+  local_only: boolean;
+  by_provider: Record<string, string>;
+  /** The ledger could not be read: the figures above are the zero fallback. */
+  unavailable: boolean;
+}
+
+/** The platform block the session cost pill reads (warmed platform facts). */
+export interface BudgetPlatform {
+  device_class: string;
+  device_label: string;
+  is_cloud: boolean;
+  cloud_provider: string | null;
+  /** An owned device class that is not cloud: no desktop-rate term unless
+   * `hourly_rate_usd` is set (the rate always wins). */
+  is_owned: boolean;
 }
 
 // ─── Cache ───────────────────────────────────────────────────────────────────
@@ -1229,11 +1279,12 @@ export type InstallJobStatus =
 
 export interface InstallJob {
   id: string;
-  kind: 'wizard-mission' | 'comfyui-install' | 'studio-pack-install' | 'studio-model-install' | string;
+  kind: 'wizard-mission' | 'comfyui-install' | 'studio-pack-install' | 'studio-model-install' | 'schedule-run' | string;
   title: string;
   status: InstallJobStatus;
   message: string;
   progress: number;
+  /** Free-form per kind; a `schedule-run` job's is a `ScheduleRunJobRequest`. */
   request: Record<string, unknown>;
   storage_home: string;
   created_at: string;
@@ -1485,6 +1536,8 @@ export interface VaultStatus {
   vault_dir: string;
   home_dir: string;
   markdown_files: number;
+  /** Notes under `Wizard Memory/` (a directory count, 0.46); absent on older servers. */
+  memory_files?: number;
   directories?: Record<string, string>;
   seeded_files?: Record<string, string>;
   conflicts: VaultConflict[];
@@ -1496,6 +1549,9 @@ export interface VaultMemoryRequest {
   body: string;
   category?: string;
   tags?: string[];
+  /** The writer stamped as `Source:` (`web` from this UI; the server defaults
+   * to `api`). At most sixteen characters. */
+  source?: string;
   home_dir?: string;
 }
 
@@ -1505,6 +1561,17 @@ export interface VaultMemoryResult {
   category: string;
   title: string;
   vault_dir: string;
+  // ── 0.46 record fields (`nvh-memory/1`); absent on older servers. ──
+  /** Stable record id (32 hex chars) — the `/vault?id=<id>` deep link. */
+  id?: string;
+  schema?: string;
+  created?: string;
+  tags?: string[];
+  source?: string;
+  /** How many secret-looking spans were redacted before the write. */
+  redacted?: number;
+  /** Whether the note's RAG chunks are indexed yet (best effort, never fails the save). */
+  indexed?: boolean;
 }
 
 // ─── Chat UI types ────────────────────────────────────────────────────────────
@@ -1664,4 +1731,338 @@ export interface PlaybookRunEvent {
   hint?: string;
   error?: string;
   [key: string]: unknown;
+}
+
+// ─── 0.46 Wave C — vault notes, schedules, Wizard card results ───────────────
+// Append-only block (design §1–§3, §6). The routes are on main since Waves A/B;
+// every shape here mirrors the Python record it names, nothing is re-derived.
+
+/**
+ * `schema` of a vault record: `nvh-memory/1` for a record written from 0.46
+ * on, `legacy` for a pre-0.46 note (derived id), `doc` for a seeded or
+ * frontmatter note that is documentation rather than a record — the
+ * `memory_only` filter drops `doc` notes.
+ */
+export type VaultNoteSchema = 'nvh-memory/1' | 'legacy' | 'doc' | string;
+
+/**
+ * One vault note as `GET /v1/vault/notes` lists it — headers only: `body` is
+ * present only on `GET /v1/vault/notes/{id}`. Mirrors `MemoryRecord`
+ * (nvh/integrations/workspace/vault.py).
+ */
+export interface VaultNote {
+  /** 32 hex chars: uuid4, or sha1(path relative to vault/)[:32] for a note without an `Id:` line. */
+  id: string;
+  schema: VaultNoteSchema;
+  title: string;
+  /** ISO-8601 UTC with seconds; '' for a `doc` note. */
+  created: string;
+  /** The vault folder (a `VaultStatus.directories` key); '' for a note at the vault root. */
+  category: string;
+  /** Lower-case slugs. */
+  tags: string[];
+  /** The writer: `wizard`, `repl`, `web`, `api`, `import` or `audit`; '' for a `doc` note. */
+  source: string;
+  /** Absolute path of the Markdown file. */
+  path: string;
+  /** Everything after the header paragraphs — single-note GET only. */
+  body?: string;
+}
+
+/** Query string of `GET /v1/vault/notes`; every filter is optional. */
+export interface VaultNotesQuery {
+  /** A vault folder name, e.g. `Wizard Memory`. */
+  category?: string;
+  /** One tag slug (a leading `#` is tolerated). */
+  tag?: string;
+  /** Case-insensitive match over title, tags and opening lines. */
+  q?: string;
+  /** Records only (`nvh-memory/1` and `legacy`); drop seeded `doc` notes. */
+  memory_only?: boolean;
+  /** 1..500; the server defaults to 200. */
+  limit?: number;
+}
+
+export interface VaultNotesResult {
+  /** Newest first, headers only. */
+  notes: VaultNote[];
+  count: number;
+  memory_only: boolean;
+  limit: number;
+}
+
+/** `DELETE /v1/vault/notes/{id}`: the file is gone; `forgotten` says whether
+ * the RAG chunk drop succeeded too (`chunks_removed` may be 0 for a note
+ * that was never indexed). 404 for an unknown id, 403 outside the vault. */
+export interface VaultNoteDeleteResult {
+  deleted: boolean;
+  id: string;
+  path: string;
+  forgotten: boolean;
+  chunks_removed: number;
+}
+
+// ── Schedules (design §6) ──
+
+/** The modes the API runner executes. `do` runs tools unattended and is
+ * CLI-only: `POST /v1/schedules` answers 422 for it, so the web never sends it. */
+export type ScheduleMode = 'ask' | 'convene';
+
+/** `Schedule.last_status`: '' before the first run. */
+export type ScheduleRunStatus = 'ok' | 'deferred' | 'skipped' | 'error' | '';
+
+/** One schedule record — `ScheduledTask.to_dict()` (nvh/core/scheduler.py), every key. */
+export interface Schedule {
+  /** `uuid4().hex` for records from 0.46 on; legacy eight-character ids are kept. */
+  id: string;
+  prompt: string;
+  interval_seconds: number;
+  /** Provider override for the run; '' routes normally. Free text in the web — never a hand-typed provider list. */
+  advisor: string;
+  /** `do` appears only on a record the CLI wrote; the web creates `ask` or `convene`. */
+  mode: ScheduleMode | 'do' | string;
+  /** ISO-8601 UTC; '' before the first run. */
+  last_run: string;
+  /** Epoch SECONDS at which the schedule is next due (not ms — unlike `BudgetSession.since`). */
+  next_run: number;
+  enabled: boolean;
+  /** ISO-8601 UTC. */
+  created_at: string;
+  /** Display label beside the prompt; '' when unnamed. */
+  name: string;
+  /** Agent profile name; '' lets the concierge choose. */
+  profile: string;
+  /** The one conversation every run appends to; '' until the first run creates it. */
+  conversation_id: string;
+  /** ISO-8601 UTC of the last field change or recorded run; '' for pre-0.46 records. */
+  updated_at: string;
+  last_status: ScheduleRunStatus;
+  /** Error text of the last run (≤300 chars); '' when it did not fail. */
+  last_error: string;
+  /** Id of the last run's job under `$NVH_HOME/jobs/`; '' before the first run. */
+  last_job_id: string;
+  /** Cost of the last run; `null` = never run or no figure — the UI shows
+   * nothing for it (not "cost unknown"). */
+  last_cost_usd: number | null;
+  /** Whether `last_cost_usd` is a trusted figure; `null` beside a `null` cost. */
+  last_cost_known: boolean | null;
+  run_count: number;
+  /** Unknown keys, round-tripped by the store. */
+  extra: Record<string, unknown>;
+}
+
+/** `GET /v1/schedules` → `runner`: what the heartbeat lock says plus the
+ * unattended tool roster. `runner: ''` with `active: false` means no runner
+ * holds the lock (schedules will not fire until the API or `nvh schedule
+ * start` runs them). */
+export interface ScheduleRunner {
+  /** A lock exists and its heartbeat is fresh. */
+  active: boolean;
+  pid: number | null;
+  lock_path: string;
+  /** ISO-8601 UTC of the last heartbeat; `null` without a lock. */
+  heartbeat: string | null;
+  started_at: string | null;
+  /** A lock exists but its heartbeat is older than the staleness window. */
+  stale: boolean;
+  /** A lock exists but could not be read (counted as active, nothing to show). */
+  unreadable?: boolean;
+  /** Who holds the lock; '' when no live lock is held. */
+  runner: 'api' | 'cli' | '';
+  poll_s: number | null;
+  /** `SCHEDULE_AUTO_TOOLS`, sorted: the read-only roster an unattended `ask` run may call. */
+  tools: string[];
+  /** How many runs per schedule the store keeps (older job files are pruned). */
+  history: number;
+}
+
+export interface SchedulesResult {
+  schedules: Schedule[];
+  count: number;
+  runner: ScheduleRunner;
+}
+
+/** `POST /v1/schedules` body. `every` uses `parse_interval` syntax (`30m`,
+ * `1h`, `1d`); an unparseable value, an unknown `profile` or `mode: do` is a
+ * 422 whose `detail` is the reason in plain words. */
+export interface ScheduleCreateRequest {
+  /** 1..4000 characters. */
+  prompt: string;
+  every: string;
+  /** ≤120 characters, whitespace-collapsed by the server. */
+  name?: string;
+  /** Provider override; ≤64 characters. */
+  advisor?: string;
+  /** Agent profile name; '' or `auto` → '' (concierge). */
+  profile?: string;
+  /** Defaults to `ask`. */
+  mode?: ScheduleMode;
+  /** Defaults to true. */
+  enabled?: boolean;
+}
+
+/** `PATCH /v1/schedules/{id}` body: any subset. A wrong type is a 422. */
+export interface SchedulePatchRequest {
+  enabled?: boolean;
+  every?: string;
+  prompt?: string;
+  name?: string;
+  advisor?: string;
+  profile?: string;
+}
+
+/** `DELETE /v1/schedules/{id}`. */
+export interface ScheduleDeleteResult {
+  deleted: boolean;
+  id: string;
+}
+
+/** `POST /v1/schedules/{id}/run` → 202: the `schedule-run` job to watch
+ * through `watchInstallJob<ScheduleRunEvent>(job_id, …)`. */
+export interface ScheduleRunStarted {
+  job_id: string;
+  schedule_id: string;
+}
+
+/** The same route's 409 `detail` while a run of this schedule is still in
+ * flight (the poll's or an earlier "Run now"): `job_id` names that run. */
+export interface ScheduleRunConflict {
+  message: string;
+  job_id: string;
+  schedule_id: string;
+}
+
+/** What `runSchedule` resolves to: exactly one of the two keys is set. */
+export type ScheduleRunOutcome =
+  | { started: ScheduleRunStarted; conflict?: undefined }
+  | { conflict: ScheduleRunConflict; started?: undefined };
+
+/** `GET /v1/schedules/{id}/runs?limit` — the schedule's `schedule-run` jobs,
+ * newest first, each with `recent_events`. */
+export interface ScheduleRunsResult {
+  runs: InstallJob[];
+  count: number;
+  schedule_id: string;
+}
+
+/** `InstallJob.request` of a `schedule-run` job. */
+export interface ScheduleRunJobRequest {
+  schedule_id: string;
+  mode: string;
+  advisor: string;
+  profile: string;
+  conversation_id: string;
+}
+
+/** A confirm/privileged call an unattended run recorded and never ran
+ * (no plan, no token), or an auto-class call the turn deferred. */
+export interface ScheduleRunDeferredCall {
+  name: string;
+  arguments: Record<string, unknown>;
+  privileged?: boolean;
+  unattended?: boolean;
+  reason?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * One `schedule-run` job event as the UI reads it (`InstallJobEvent.payload`
+ * flattened over `event` / `status` / `message`, the shape `watchInstallJob`
+ * hands out). The final `complete` event carries `outcome` — `ok`,
+ * `deferred` (a request awaits approval in the thread) or `skipped` (budget
+ * exceeded: no `conversation_id`, `cost_usd`/`cost_known` null) — plus the
+ * turn's answer, attribution and cost; an `error` event (`status: failed`)
+ * carries only `message` (and `schedule_id`). `mode: do` is refused by the
+ * API runner with exactly such an `error` event.
+ */
+export interface ScheduleRunEvent {
+  event: 'step' | 'complete' | 'error' | string;
+  status: string;
+  message: string;
+  outcome?: 'ok' | 'deferred' | 'skipped';
+  schedule_id?: string;
+  /** Absent on a `skipped` outcome and on `error`. The thread link is `/wizard?conversation=<id>`. */
+  conversation_id?: string;
+  answer?: string;
+  provider?: string;
+  model?: string;
+  cost_usd?: number | null;
+  /** `null` on `skipped`; false = no catalog price for the model that answered. */
+  cost_known?: boolean | null;
+  latency_ms?: number;
+  iterations?: number;
+  used_profile?: string | null;
+  mode?: string;
+  deferred?: ScheduleRunDeferredCall[];
+  [key: string]: unknown;
+}
+
+// ── Wizard card payloads (design §1–§3) ──
+
+/** `arguments` of an `ask_user` confirm card. The question is answered in the
+ * chat (your answer is the next user message plus a `tool_results` entry
+ * `{name: 'ask_user', ok, summary}`), never through `/v1/wizard/tools/execute`. */
+export interface WizardAskUserArguments {
+  /** 1..500 characters. */
+  question: string;
+  /** Up to six chips, each ≤80 characters. */
+  choices?: string[];
+  /** Defaults to true: show a free-text box beside the chips. */
+  allow_free_text?: boolean;
+}
+
+/** What a stale client gets for POSTing `ask_user` to execute — harmless. */
+export interface WizardAskUserResult {
+  answered_in_chat: true;
+  question: string;
+  note: string;
+}
+
+/** A confirmed `generate_image` run: the file is under
+ * `$NVH_HOME/outputs/images/<scope>/` and nothing prunes it (the `note`
+ * says so). `url` needs the API key headers — fetch it with `fetchApiBlob`
+ * and render an object URL, never a bare `<img src>`. */
+export interface WizardImageResult {
+  ok: true;
+  /** `/v1/outputs/images/<scope>/<file>` (auth-gated). */
+  url: string;
+  path: string;
+  backend: 'nvidia' | 'comfyui' | string;
+  model: string;
+  width: number;
+  height: number;
+  /** `null` with `cost_known: false` for the NVIDIA-hosted backend (no catalog
+   * price); `0` with `cost_known: true` for local ComfyUI. */
+  cost_usd: number | null;
+  cost_known: boolean;
+  latency_ms: number;
+  note: string;
+}
+
+/** `generate_image` refused or failed (profile pin missing, no backend, ComfyUI down). */
+export interface WizardImageFailure {
+  ok: false;
+  error: string;
+}
+
+/** A confirmed `remember` run. There is no `ok` key: check `saved`. The
+ * card links to `/vault?id=<id>`. */
+export interface WizardRememberResult {
+  saved: true;
+  /** 32 hex chars. */
+  id: string;
+  path: string;
+  title: string;
+  category: string;
+  tags: string[];
+  /** Whether the note's RAG chunks are indexed yet (best effort). */
+  indexed: boolean;
+  /** How many secret-looking spans were redacted before the write. */
+  redacted: number;
+}
+
+/** `remember` refused (missing title/body, a forbidden literal, a secret-only body). */
+export interface WizardRememberFailure {
+  saved: false;
+  error: string;
 }

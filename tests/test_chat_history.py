@@ -250,7 +250,7 @@ class TestColumnMigration:
 
 class TestFrontendWiring:
     def test_wizard_resume_and_layoutshell_sidebar(self):
-        wizard = (ROOT / "web" / "components" / "WizardChat.tsx").read_text(encoding="utf-8")
+        wizard = (ROOT / "web" / "components" / "chat" / "WizardThread.tsx").read_text(encoding="utf-8")
         # Resume path + meta-tail stripping + mode-tagged creation.
         assert "searchParams?.get('conversation')" in wizard
         assert "parseWizardMeta" in wizard

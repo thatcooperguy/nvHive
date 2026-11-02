@@ -506,6 +506,21 @@ openshell inference set --provider nvhive --model auto`}
 
           <div className="p-4 bg-[#111] border border-[--border]">
             <h3 className="font-mono text-xs text-[#76B900] uppercase tracking-wider mb-3">
+              Any OpenAI-compatible client (standard paths)
+            </h3>
+            <pre className="text-xs font-mono text-[#d4d4d4] whitespace-pre-wrap leading-relaxed">
+{`# The same handlers as /v1/proxy, at the paths the SDKs expect
+OPENAI_BASE_URL=http://127.0.0.1:8000/v1
+OPENAI_API_KEY=<your HIVE_API_KEY, or any non-empty string in open mode>
+
+# Anthropic-SDK clients (the SDK appends /v1/messages itself)
+ANTHROPIC_BASE_URL=http://127.0.0.1:8000/v1/anthropic
+ANTHROPIC_AUTH_TOKEN=<your HIVE_API_KEY>`}
+            </pre>
+          </div>
+
+          <div className="p-4 bg-[#111] border border-[--border]">
+            <h3 className="font-mono text-xs text-[#76B900] uppercase tracking-wider mb-3">
               Claude Code (MCP Tools)
             </h3>
             <pre className="text-xs font-mono text-[#d4d4d4] whitespace-pre-wrap leading-relaxed">

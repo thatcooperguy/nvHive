@@ -1,5 +1,5 @@
 // Regression tests for lib/cost.ts — the three-state cost pill the Wizard
-// footer (components/WizardChat.tsx) and the chat cards
+// footer (components/chat/MessageBlock.tsx) and the chat cards
 // (components/ChatMessage.tsx) render from the API's cost_usd + cost_known.
 //
 // Runs on Node's built-in runner with native type stripping (Node >= 22.6 with

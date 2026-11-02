@@ -3,7 +3,7 @@
 /**
  * The body of a privileged approval card — the server's dry run, rendered the
  * same way wherever a plan is approved: the Wizard chat's tool card
- * (components/WizardChat.tsx) and the Setup page's "Spark playbooks" cards
+ * (components/chat/ToolCard.tsx) and the Setup page's "Spark playbooks" cards
  * (app/setup/page.tsx).
  *
  * In DOM order: the exact commands, a deny-list refusal, what changes, the

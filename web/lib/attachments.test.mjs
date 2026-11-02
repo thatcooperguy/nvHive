@@ -1,6 +1,6 @@
 // Regression tests for lib/attachments.ts — the pure rules behind the Wizard
 // composer's image attachments (drop / paste / attach button in
-// components/WizardChat.tsx) and the wire shape they produce for
+// components/chat/WizardThread.tsx) and the wire shape they produce for
 // `WizardChatRequest.attachments`.
 //
 // Runs on Node's built-in runner with native type stripping, like

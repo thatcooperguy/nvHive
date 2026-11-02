@@ -12,6 +12,7 @@ import CouncilAdvancedDrawer, {
   type CouncilOptions,
 } from '@/components/CouncilAdvancedDrawer';
 import { HardwareWidgetCompact, HardwareWidgetHero } from '@/components/HardwareWidget';
+import SessionCostPill from '@/components/SessionCostPill';
 import WelcomeBackPanel from '@/components/WelcomeBackPanel';
 import { useUIShell } from '@/components/UIShellProvider';
 import {
@@ -20,7 +21,6 @@ import {
   compare,
   createConversation,
   deleteConversation,
-  getBudgetStatus,
   getConversation,
   getConversations,
   getModels,
@@ -63,30 +63,11 @@ function isChatMode(value: string | null): value is ChatMode {
   return value === 'single' || value === 'council' || value === 'compare';
 }
 
-// ─── Budget pill ──────────────────────────────────────────────────────────────
+// ─── Top-bar pills ────────────────────────────────────────────────────────────
 // GPU pill is <HardwareWidgetCompact /> from components/HardwareWidget.tsx,
 // which also renders persistent-mount status — useful on cloud sessions.
-
-function BudgetPill() {
-  const [spend, setSpend] = useState<string | null>(null);
-
-  useEffect(() => {
-    getBudgetStatus()
-      .then(b => setSpend(b.daily_spend))
-      .catch(() => {});
-  }, []);
-
-  if (!spend) return null;
-  const n = parseFloat(spend);
-  if (isNaN(n)) return null;
-
-  return (
-    <div className="flex items-center gap-1 px-2 py-0.5 bg-[#ffffff] border border-[#e5e5e5] text-[10px] font-mono text-[#d97706] dark:bg-[#0a0a0a] dark:border-[#262626]">
-      <span>USD</span>
-      <span>${n.toFixed(2)} today</span>
-    </div>
-  );
-}
+// The session cost pill is <SessionCostPill /> from components/SessionCostPill.tsx
+// (0.46 §7): tab age, the hourly desktop-rate term and cloud spend since the tab opened.
 
 // ─── Streaming council right panel ────────────────────────────────────────────
 
@@ -605,7 +586,7 @@ export default function ChatPage() {
   // Deep links, read once on mount. window.location instead of
   // useSearchParams so the static prerender doesn't need a Suspense boundary.
   //   /?c=<id>                 open a conversation (shared sidebar on other pages)
-  //   /?mode=council&prompt=…  WizardChat's "Convene council" hand-off
+  //   /?mode=council&prompt=…  WizardThread's "Convene council" hand-off
   const deepLinkHandledRef = useRef(false);
   useEffect(() => {
     if (deepLinkHandledRef.current || typeof window === 'undefined') return;
@@ -1118,7 +1099,7 @@ export default function ChatPage() {
           </div>
           <div className="flex items-center gap-2">
             <HardwareWidgetCompact />
-            <BudgetPill />
+            <SessionCostPill className="rounded-md border border-[#e5e5e5] bg-[#ffffff] px-2 py-0.5 dark:border-[#262626] dark:bg-[#0a0a0a]" />
             {/* Share button */}
             {messages.length > 0 && (
               <button

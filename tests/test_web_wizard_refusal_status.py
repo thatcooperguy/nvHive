@@ -17,6 +17,10 @@ these pin the source contract ``npx tsc --noEmit`` cannot express: the
 persisted tail, one predicate (``isDeliberateRefusalMessage``) decides the
 footer and the dot through ``isWizardDeliberateRefusal``, a refusal gets no
 offline footer and a 'declined' dot, and a genuine fallback still gets both.
+
+Since the 0.46 extraction the thread (``web/components/chat/WizardThread.tsx``),
+the bubble (``chat/MessageBlock.tsx``) and the message model (``chat/types.ts``)
+are separate files; each test reads the one that holds its contract.
 """
 
 from __future__ import annotations
@@ -50,7 +54,7 @@ def _block(source: str, start: str, end: str) -> str:
 
 
 def test_message_type_carries_fallback_reason() -> None:
-    chat = _read("components/WizardChat.tsx")
+    chat = _read("components/chat/types.ts")
     shape = _block(chat, "interface Message {", "\n}\n")
     assert re.search(r"fallbackReason\?: string \| null;", shape), (
         "Message must carry the error event's / wizard-meta's fallback_reason so "
@@ -59,7 +63,7 @@ def test_message_type_carries_fallback_reason() -> None:
 
 
 def test_error_event_copies_fallback_reason_onto_the_message() -> None:
-    chat = _read("components/WizardChat.tsx")
+    chat = _read("components/chat/WizardThread.tsx")
     arm = _block(chat, "case 'error': {", "\n          }\n")
     fallback_spread = _block(arm, "...(event.fallback", "\n                : {}),")
     # The reason lands in the SAME spread that flips mode to deterministic:
@@ -69,7 +73,7 @@ def test_error_event_copies_fallback_reason_onto_the_message() -> None:
 
 
 def test_hydrate_restores_fallback_reason_from_the_wizard_meta_tail() -> None:
-    chat = _read("components/WizardChat.tsx")
+    chat = _read("components/chat/WizardThread.tsx")
     hydrated = _block(chat, "const hydrated: Message[] =", "setMessages(hydrated);")
     assert "fallbackReason: metaFallbackReason(meta)" in hydrated
 
@@ -92,10 +96,15 @@ def test_hydrate_key_is_the_key_the_server_persists() -> None:
 
 
 def test_refusal_predicate_reuses_the_shared_one() -> None:
-    chat = _read("components/WizardChat.tsx")
-    assert LOCAL_ONLY_FALLBACK_REASON not in chat, (
-        "WizardChat.tsx must not re-spell the reason literal; go through isWizardDeliberateRefusal"
-    )
+    # Every file of the extracted chat surface: HEAD's single WizardChat.tsx
+    # held them all, so the pin keeps that coverage after the split.
+    chat_files = sorted((WEB / "components" / "chat").glob("*.ts*"))
+    assert len(chat_files) >= 3, chat_files
+    for path in chat_files:
+        assert LOCAL_ONLY_FALLBACK_REASON not in path.read_text(encoding="utf-8"), (
+            f"{path.name} must not re-spell the reason literal; go through isWizardDeliberateRefusal"
+        )
+    chat = _read("components/chat/MessageBlock.tsx")
     fn = _block(chat, "function isDeliberateRefusalMessage(", "\n}\n")
     assert "message.mode === 'deterministic'" in fn
     assert "isWizardDeliberateRefusal({ fallback_reason: message.fallbackReason })" in fn
@@ -107,7 +116,7 @@ def test_refusal_predicate_reuses_the_shared_one() -> None:
 
 
 def test_status_dot_says_declined_for_a_refusal_and_offline_for_a_fallback() -> None:
-    chat = _read("components/WizardChat.tsx")
+    chat = _read("components/chat/MessageBlock.tsx")
     fn = _block(chat, "function statusForMessage(", "\n}\n")
     det = _block(fn, "if (message.mode === 'deterministic') {", "\n  }\n")
 
@@ -128,7 +137,7 @@ def test_status_dot_says_declined_for_a_refusal_and_offline_for_a_fallback() -> 
 
 
 def test_offline_helper_footer_is_skipped_for_a_refusal() -> None:
-    chat = _read("components/WizardChat.tsx")
+    chat = _read("components/chat/MessageBlock.tsx")
     # The bug: the footer keyed on mode alone.
     assert not re.search(
         r"\{message\.mode === 'deterministic' && \(\s*<div[^>]*>\s*offline helper",

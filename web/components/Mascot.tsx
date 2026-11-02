@@ -4,7 +4,7 @@
  * Mascot — the always-present sprite guide in the bottom-right corner.
  *
  * Reacts to what the Wizard is doing (thinking / working / asking / happy /
- * error / sleeping) via the store in lib/mascot.ts; WizardChat publishes,
+ * error / sleeping) via the store in lib/mascot.ts; WizardThread publishes,
  * this component only renders. Art comes from a sprite sheet described by
  * /mascot/manifest.json — bundled at build time (lib/mascot.ts) and
  * re-fetched at mount so an approved likeness can replace the placeholder

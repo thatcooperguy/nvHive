@@ -94,7 +94,27 @@ import type {
   VaultMemoryRequest,
   VaultMemoryResult,
   VaultStatus,
+  VaultNote,
+  VaultNotesQuery,
+  VaultNotesResult,
+  VaultNoteDeleteResult,
+  Schedule,
+  SchedulesResult,
+  ScheduleCreateRequest,
+  SchedulePatchRequest,
+  ScheduleDeleteResult,
+  ScheduleRunOutcome,
+  ScheduleRunStarted,
+  ScheduleRunsResult,
 } from './types';
+// Pure shape helpers (no fetch, no DOM) so they stay testable under plain
+// `node --test lib/apiShapes.test.mjs`; api.ts itself cannot be imported by Node.
+import {
+  budgetStatusFallback,
+  budgetStatusQuery,
+  normalizeBudgetStatus,
+  scheduleRunConflictFromMessage,
+} from './apiShapes';
 
 function normalizeApiBase(value?: string | null): string | null {
   const trimmed = value?.trim();
@@ -470,11 +490,18 @@ export async function getInstallJobs(options: {
   kind?: string;
   status?: string;
   limit?: number;
+  /** Drop jobs of this kind — the Setup page passes `schedule-run` so an
+   * hourly schedule cannot push install jobs out of its window (0.46 §6). */
+  exclude_kind?: string;
+  /** Only the runs of one schedule (`request.schedule_id`). */
+  schedule_id?: string;
 } = {}): Promise<InstallJobsResult> {
   const params = new URLSearchParams();
   if (options.kind) params.set('kind', options.kind);
   if (options.status) params.set('status_filter', options.status);
   if (options.limit) params.set('limit', String(options.limit));
+  if (options.exclude_kind) params.set('exclude_kind', options.exclude_kind);
+  if (options.schedule_id) params.set('schedule_id', options.schedule_id);
   const qs = params.toString();
   return apiGet<InstallJobsResult>(`/v1/jobs${qs ? `?${qs}` : ''}`);
 }
@@ -899,28 +926,25 @@ export async function getModels(provider?: string): Promise<ModelsListResult> {
 
 // ─── Budget ──────────────────────────────────────────────────────────────────
 
-export async function getBudgetStatus(): Promise<BudgetStatus> {
+/**
+ * `GET /v1/budget/status[?since=<epoch ms>]`. With `since` (0.46 §7) the
+ * result carries `session` — the machine-wide ledger since that instant —
+ * beside `hourly_rate_usd`, `daily_cost_known` and `platform`; the pill
+ * passes the tab's `sessionStorage` start. `since` must be epoch
+ * MILLISECONDS: a seconds-scale value is a programming error and throws a
+ * `RangeError` here rather than a 422 from the server.
+ *
+ * A failed fetch resolves (as before) to a zero ledger, now flagged
+ * `unavailable: true` with `session: null` and `platform: null`, so a caller
+ * can tell "API offline" from "nothing spent". It never throws for a fetch.
+ */
+export async function getBudgetStatus(since?: number): Promise<BudgetStatus> {
+  const qs = budgetStatusQuery(since);
   try {
-    const raw = await apiGet<any>('/v1/budget/status');
-    return {
-      daily_spend: String(raw?.daily_spend ?? '0'),
-      daily_limit: String(raw?.daily_limit ?? '0'),
-      monthly_spend: String(raw?.monthly_spend ?? '0'),
-      monthly_limit: String(raw?.monthly_limit ?? '0'),
-      daily_queries: Number(raw?.daily_queries ?? 0),
-      monthly_queries: Number(raw?.monthly_queries ?? 0),
-      by_provider: raw?.by_provider ?? {},
-    };
+    const raw = await apiGet<unknown>(`/v1/budget/status${qs}`);
+    return normalizeBudgetStatus(raw);
   } catch {
-    return {
-      daily_spend: '0',
-      daily_limit: '0',
-      monthly_spend: '0',
-      monthly_limit: '0',
-      daily_queries: 0,
-      monthly_queries: 0,
-      by_provider: {},
-    };
+    return budgetStatusFallback();
   }
 }
 
@@ -1318,6 +1342,14 @@ export interface WizardChatTurn {
  * `approval_token` the confirmed execute must send back, which binds the
  * click to exactly this name and these arguments for fifteen minutes, once.
  * `disabled` (with `error`) means the kill switch is off for this workspace.
+ *
+ * Since 0.46 a confirm-class call whose tool has a planner (`generate_image`)
+ * also carries `plan` — the backend / model / cost verdict and its one-line
+ * `summary` — and its `arguments` include the server-pinned `profile` (and
+ * `profile_home` when the turn had one), which Run must echo back unchanged.
+ * No token is minted for those: the click is `confirmed: true` as for every
+ * confirm tool. An `ask_user` card's `arguments` are `WizardAskUserArguments`
+ * and it is answered in the chat, never executed.
  */
 export interface WizardChatToolCall {
   name: string;
@@ -1332,16 +1364,33 @@ export interface WizardChatToolCall {
 }
 
 /**
- * An auto-class call the server chose NOT to run this turn — `max_iterations`
- * was 1 or the profile's cost ceiling fired. Informational only: the UI lists
- * it as "not run: <reason>" and must never execute it (the user asked for a
- * shallow / cheap turn). Confirm-class calls travel separately in
- * `tool_calls` / `confirm_required`.
+ * Why a call landed in `deferred_tool_calls` (nvh/integrations/wizard/chat.py
+ * `DEFER_*`): `max_iterations` (depth 1), `followup_disabled`, `cost_ceiling`
+ * (the profile's per-turn ceiling fired) or, since 0.46, `question_pending` —
+ * a second `ask_user` in one turn, or a confirm / privileged sibling the
+ * model made conditional on a question nobody has answered yet. Open union:
+ * a reason this build has never heard of is still a string to display.
+ */
+export type WizardDeferredReason =
+  | 'max_iterations'
+  | 'followup_disabled'
+  | 'cost_ceiling'
+  | 'question_pending'
+  | string;
+
+/**
+ * A call the server chose NOT to run this turn — an auto-class call behind a
+ * depth / cost limit, or (0.46) anything held behind an unanswered question
+ * (`question_pending`). Informational only: the UI lists it as
+ * "not run: <reason>" and must never execute it (the user asked for a
+ * shallow / cheap turn, or has a question to answer first). Live
+ * confirm-class cards travel separately in `tool_calls` / `confirm_required`.
  */
 export interface WizardDeferredToolCall {
   name: string;
   arguments: Record<string, unknown>;
-  reason?: string | null;
+  /** Always set by the server; typed open for rows persisted before it was. */
+  reason?: WizardDeferredReason | null;
 }
 
 export interface WizardChatToolResult {
@@ -1543,6 +1592,16 @@ export interface AgentProfileSchema {
   // Agent Library grouping label ("Coding", "Music Production", …).
   // Empty/absent for the six core built-ins and ungrouped user profiles.
   category?: string;
+  // ── 0.46 ──
+  /** The on-persona prompt the empty state seeds the composer with when this
+   * agent is picked; '' = no starter card. `POST /v1/wizard/profiles`
+   * accepts it. Absent on older servers. */
+  starter?: string;
+  /** The vivid identifying colour of a core built-in's avatar spec (use it
+   * for chips and borders); '' for a user profile, absent on older servers. */
+  background?: string;
+  /** The dark ink that pairs with `background`; '' for a user profile. */
+  accent?: string;
 }
 
 /** Build a renderable URL given a profile's avatar field. Returns null when
@@ -1667,7 +1726,16 @@ export async function uploadAndIngest(
 export type WizardStreamEvent =
   | { type: 'iteration'; n: number }
   | { type: 'token'; text: string }
-  | { type: 'tool_call'; name: string; arguments: Record<string, unknown> }
+  | {
+      type: 'tool_call';
+      name: string;
+      arguments: Record<string, unknown>;
+      /** The registry's class for the tool (0.46): only an `auto` call is
+       * work in progress — a `confirm` / `privileged` call is about to become
+       * a card and the mascot must not move for it. `unknown` = not
+       * registered. Absent on older servers (treat as `auto`). */
+      safety_class?: WizardToolSafetyClass | 'unknown' | string;
+    }
   | { type: 'tool_result'; name: string; result: WizardChatToolResult['result'] }
   /** Confirm-class calls awaiting the user. Emitted once, immediately before `done`. */
   | { type: 'confirm_required'; tool_calls: WizardChatToolCall[] }
@@ -1904,8 +1972,27 @@ export interface WizardToolPlan {
   /** Decisions the dry run made that the server folded into the card's
    * `arguments` (the sandbox `shell`'s `isolation`). The approval token signs
    * them; the surfaced call's `arguments` already include them, so the card
-   * sends them back untouched. Informational here. */
+   * sends them back untouched. Informational here. For a confirm-class planner
+   * (`generate_image`) they are the pinned `profile` / `profile_home`. */
   pinned_arguments?: Record<string, unknown>;
+  // ── 0.46: a confirm-class planner's verdict (`generate_image`, imagegen.py `_plan`). ──
+  /** Which backend would render: `nvidia` (hosted), `comfyui` (local) or
+   * `null` when none is available (`ok` is then false and `error` says why). */
+  backend?: string | null;
+  /** Why this backend (or none): the ceiling rule, the recorded ComfyUI runtime, … */
+  reason?: string;
+  /** The model that would render; '' when none. */
+  model?: string;
+  /** `null` with `cost_known: false` for the hosted backend (no catalog price);
+   * `0` with `cost_known: true` for local ComfyUI. */
+  cost_usd?: number | null;
+  cost_known?: boolean;
+  /** The local ComfyUI runtime the plan found, when `backend` is `comfyui`. */
+  host?: string | null;
+  port?: number | null;
+  /** The plan line the card shows verbatim (e.g. the backend, the cost
+   * verdict and a GPU note) — `PlanDetails` does not render it; the card does. */
+  summary?: string;
 }
 
 /**
@@ -2339,4 +2426,139 @@ export function pullModelStream(
     }
   })();
   return () => controller.abort();
+}
+
+// ─── 0.46 Wave C — vault notes, schedules, authenticated blobs ──────────────
+// Append-only block (design §2, §3, §6). Every helper returns the envelope's
+// `data` like the rest of this file; errors propagate as `apiFetch` throws
+// them (`.statusCode` set) unless a function says otherwise.
+
+/** `GET /v1/vault/notes` — headers only (no `body`), newest first. */
+export async function listVaultNotes(query: VaultNotesQuery = {}): Promise<VaultNotesResult> {
+  const params = new URLSearchParams();
+  if (query.category) params.set('category', query.category);
+  if (query.tag) params.set('tag', query.tag);
+  if (query.q) params.set('q', query.q);
+  if (query.memory_only) params.set('memory_only', 'true');
+  if (query.limit) params.set('limit', String(query.limit));
+  const qs = params.toString();
+  return apiGet<VaultNotesResult>(`/v1/vault/notes${qs ? `?${qs}` : ''}`);
+}
+
+/** `GET /v1/vault/notes/{id}` — the full record, `body` included. 404 for an unknown id. */
+export async function getVaultNote(id: string): Promise<VaultNote> {
+  return apiGet<VaultNote>(`/v1/vault/notes/${encodeURIComponent(id)}`);
+}
+
+/** `DELETE /v1/vault/notes/{id}` — removes the file and, best effort, its RAG chunks. */
+export async function deleteVaultNote(id: string): Promise<VaultNoteDeleteResult> {
+  const envelope = await apiFetch<ApiEnvelope<VaultNoteDeleteResult>>(
+    `/v1/vault/notes/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  );
+  return envelope.data;
+}
+
+/** `GET /v1/schedules` — every record plus the runner block (lock state, tool roster, history cap). */
+export async function getSchedules(): Promise<SchedulesResult> {
+  return apiGet<SchedulesResult>('/v1/schedules');
+}
+
+/** `POST /v1/schedules` → the new record (201). A bad `every`, an unknown
+ * `profile` or `mode: do` throws with the server's plain-words `detail`. */
+export async function createSchedule(request: ScheduleCreateRequest): Promise<Schedule> {
+  return apiPost<Schedule>('/v1/schedules', request);
+}
+
+/** `GET /v1/schedules/{id}`. 404 for an unknown id. */
+export async function getSchedule(id: string): Promise<Schedule> {
+  return apiGet<Schedule>(`/v1/schedules/${encodeURIComponent(id)}`);
+}
+
+/** `PATCH /v1/schedules/{id}` with any subset of the editable fields → the updated record. */
+export async function updateSchedule(id: string, patch: SchedulePatchRequest): Promise<Schedule> {
+  const envelope = await apiFetch<ApiEnvelope<Schedule>>(`/v1/schedules/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+  return envelope.data;
+}
+
+/** `DELETE /v1/schedules/{id}`. */
+export async function deleteSchedule(id: string): Promise<ScheduleDeleteResult> {
+  const envelope = await apiFetch<ApiEnvelope<ScheduleDeleteResult>>(
+    `/v1/schedules/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  );
+  return envelope.data;
+}
+
+/**
+ * `POST /v1/schedules/{id}/run` — "Run now". Resolves to `{started}` (202:
+ * the `schedule-run` job to watch) or `{conflict}` when the server answered
+ * 409 because a run of this schedule is still in flight; the conflict names
+ * that run's `job_id`. `apiFetch` surfaces a 409 as a thrown Error whose
+ * `statusCode` is 409 and whose message is the JSON `detail` (plus an optional
+ * request-id suffix), so the branch is read back from exactly that — never
+ * swallowed. Any other failure (404, offline, …) still throws.
+ */
+export async function runSchedule(id: string): Promise<ScheduleRunOutcome> {
+  try {
+    const started = await apiPost<ScheduleRunStarted>(`/v1/schedules/${encodeURIComponent(id)}/run`, {});
+    return { started };
+  } catch (err) {
+    if ((err as { statusCode?: number } | null)?.statusCode === 409) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { conflict: scheduleRunConflictFromMessage(message, id) };
+    }
+    throw err;
+  }
+}
+
+/** `GET /v1/schedules/{id}/runs?limit` — the schedule's recent runs (1..100, default 20), newest first. */
+export async function listScheduleRuns(id: string, limit?: number): Promise<ScheduleRunsResult> {
+  const qs = limit ? `?limit=${encodeURIComponent(String(limit))}` : '';
+  return apiGet<ScheduleRunsResult>(`/v1/schedules/${encodeURIComponent(id)}/runs${qs}`);
+}
+
+/**
+ * Fetch a binary API path with the same auth headers every other call sends
+ * (`Authorization: Bearer` / `X-Hive-API-Key`), for routes behind
+ * `require_auth` that a bare `<img src>` could not reach — the generated
+ * image under `/v1/outputs/images/<scope>/<file>` (0.46 §3). Tries the same
+ * API bases as `apiFetch`; a base that answers with a non-2xx status throws
+ * (`statusCode` set) rather than falling through to the next base. The caller
+ * renders `URL.createObjectURL(blob)` and revokes it on unmount.
+ */
+export async function fetchApiBlob(path: string): Promise<Blob> {
+  const bases = getApiBases();
+  let lastNetworkError: unknown;
+
+  for (const base of bases) {
+    let res: Response;
+    try {
+      res = await fetch(`${base}${path}`, { headers: getApiAuthHeaders() });
+    } catch (err) {
+      lastNetworkError = err;
+      continue;
+    }
+
+    rememberApiBase(base);
+
+    if (!res.ok) {
+      const error = new Error(
+        res.status === 401 || res.status === 403
+          ? `Not authorised to read ${path} (HTTP ${res.status})`
+          : `HTTP ${res.status} for ${path}`,
+      ) as Error & { statusCode?: number };
+      error.statusCode = res.status;
+      throw error;
+    }
+
+    return res.blob();
+  }
+
+  throw lastNetworkError instanceof Error
+    ? lastNetworkError
+    : new Error(`Hive API is offline. Tried ${bases.join(', ')}`);
 }

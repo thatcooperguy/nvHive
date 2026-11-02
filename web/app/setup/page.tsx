@@ -967,7 +967,7 @@ export default function SetupPage() {
 
   const refreshInstallJobs = useCallback(async () => {
     try {
-      const data = await getInstallJobs({ limit: 8 });
+      const data = await getInstallJobs({ limit: 8, exclude_kind: 'schedule-run' });
       setApiStatus('connected');
       setInstallJobs(data.jobs);
       setJobsError(null);

@@ -2,7 +2,7 @@
  * Privileged-tool card helpers — pure functions over a Wizard tool schema and
  * an execute result. No JSX and no runtime imports, so the module runs under
  * plain `node --test lib/privileged.test.mjs`; the card that renders them is
- * `ToolCard` in components/WizardChat.tsx.
+ * `ToolCard` in components/chat/ToolCard.tsx.
  *
  * The `privileged` safety class is the sudo tier from
  * docs/proposals/SPARK_CONCIERGE_2026-09.md §3.4: a tool that changes the
@@ -38,13 +38,20 @@
  */
 
 import type {
+  WizardChatToolCall,
   WizardChatToolOutcome,
   WizardToolExecuteResult,
   WizardToolPlan,
   WizardToolSafetyClass,
   WizardToolSchema,
 } from './api';
-import type { PlaybookCatalogueEntry, PlaybookRunEvent, PlaybookRunStart } from './types';
+import type {
+  PlaybookCatalogueEntry,
+  PlaybookRunEvent,
+  PlaybookRunStart,
+  WizardImageResult,
+  WizardRememberResult,
+} from './types';
 
 /** Longest `summary` a history tool outcome carries to the server (which cuts
  * there too). Lives here rather than in api.ts so this module keeps no
@@ -76,6 +83,8 @@ export const NEEDS_TERMINAL_HINT = 'sudo needs a password here, so nvHive did no
  * failed), `disabled` (the kill switch is off) and `refused` (the tool
  * declined in band — `run_code` without Docker, a vision path outside the
  * allowed roots, a shell card whose isolation changed — so nothing ran).
+ * A fifth, `answered`, is the settled state of a question card (`ask_user`,
+ * 0.46): the user's answer went out as the next message, and nothing ran.
  */
 export type ToolCardStatus =
   | 'idle'
@@ -87,7 +96,8 @@ export type ToolCardStatus =
   | 'halted'
   | 'disabled'
   | 'refused'
-  | 'dismissed';
+  | 'dismissed'
+  | 'answered';
 
 /** Statuses that still want a Run / Skip click. Everything else is settled. */
 export function isPendingStatus(status: ToolCardStatus | string | undefined): boolean {
@@ -259,12 +269,19 @@ export function unwrapToolResult(
  * the model to look for before repeating the command verbatim — and never as
  * a success. Skipped and disabled cards are reported too, so the model does
  * not assume its proposal happened. Cut to `WIZARD_TOOL_OUTCOME_CHARS`.
+ *
+ * A question card (`ask_user`) is the one card whose outcome is `ok: true`
+ * without anything having run: `answered` carries the answer (the same
+ * text that went out as the user's message — the server's prompt says they
+ * are one answer, so the model does not double-weight it), and a skipped
+ * question says "not answered" rather than "not run" — the exact words the
+ * server's history test pins.
  */
 export function historyToolOutcome(
   name: string,
   status: ToolCardStatus | string | undefined,
   summary: string | undefined,
-  detail?: Pick<WizardToolExecuteResult, 'command'> | undefined | null,
+  detail?: ToolDetailLike | undefined | null,
 ): WizardChatToolOutcome | null {
   if (status === undefined || isPendingStatus(status) || status === 'running') return null;
   let ok = false;
@@ -273,6 +290,10 @@ export function historyToolOutcome(
     case 'ok':
       ok = true;
       text = summary?.trim() || 'ran';
+      break;
+    case 'answered':
+      ok = true;
+      text = questionAnswer(detail) || summary?.trim() || 'answered';
       break;
     case 'needs-terminal':
       text = `needs a terminal: ${terminalCommand(detail) || '(no command was returned)'}`;
@@ -290,12 +311,67 @@ export function historyToolOutcome(
       text = summary?.trim() || 'refused — nothing ran';
       break;
     case 'dismissed':
-      text = 'skipped by the user; not run';
+      text = name === QUESTION_TOOL ? QUESTION_SKIPPED_NOTE : 'skipped by the user; not run';
       break;
     default:
       text = summary?.trim() || 'failed';
   }
   return { name, ok, summary: text.slice(0, WIZARD_TOOL_OUTCOME_CHARS) };
+}
+
+/** The slice of a card's `toolDetails` entry `historyToolOutcome` reads: the
+ * hand-off `command`, and a question's answer (flat, or under `result`). */
+export type ToolDetailLike = Pick<WizardToolExecuteResult, 'command' | 'result'> & { answer?: unknown };
+
+/**
+ * A card outcome to fold into the thread's message list before the next
+ * request's history is built. `send` (chat/WizardThread.tsx) reads the
+ * `messages` closure, so a status a caller settles in the same tick — a
+ * question card's answer — would not be in it yet: the patch is applied to
+ * that message first (the same keys `runTool` patches) and committed to
+ * state as well, so the card agrees with what was sent. Without the fold the
+ * request carries no `tool_results` entry for the question and the server
+ * never renders `TOOL_RESULT ask_user`.
+ */
+export interface HistoryPatch {
+  messageId: string;
+  /** The card's key in `toolStatus` / `toolResults` / `toolDetails` (`toolKey`). */
+  key: string;
+  status: ToolCardStatus;
+  /** The one-line outcome the card shows (and history summarises). */
+  summary?: string;
+  /** The raw outcome `historyToolOutcome` reads `command` / the answer from. */
+  detail?: WizardToolExecuteResult;
+}
+
+/** The slice of a thread message `applyHistoryPatch` touches. */
+export interface PatchableMessage {
+  id: string;
+  toolStatus?: Record<string, ToolCardStatus>;
+  toolResults?: Record<string, string>;
+  toolDetails?: Record<string, WizardToolExecuteResult>;
+}
+
+/**
+ * The message list with `patch` folded into the message it names: the key's
+ * status always, its summary when given, its detail when given; every other
+ * message (and an unknown `messageId`) is returned untouched.
+ */
+export function applyHistoryPatch<T extends PatchableMessage>(list: readonly T[], patch: HistoryPatch): T[] {
+  return list.map(m => (
+    m.id === patch.messageId
+      ? {
+        ...m,
+        toolStatus: { ...(m.toolStatus ?? {}), [patch.key]: patch.status },
+        ...(patch.summary !== undefined
+          ? { toolResults: { ...(m.toolResults ?? {}), [patch.key]: patch.summary } }
+          : {}),
+        ...(patch.detail
+          ? { toolDetails: { ...(m.toolDetails ?? {}), [patch.key]: patch.detail } }
+          : {}),
+      }
+      : m
+  ));
 }
 
 export interface CardChrome {
@@ -316,6 +392,16 @@ export interface CardChrome {
   clickable: boolean;
 }
 
+export interface CardChromeOptions {
+  /**
+   * An `ask_user` card (0.46): the primary button reads "Answer", a pending
+   * card "Needs your answer". Neutral chrome otherwise — a question is not a
+   * privileged change and never a Run. Ignored for a privileged class (the
+   * server never surfaces `ask_user` as privileged; red wins if it did).
+   */
+  question?: boolean;
+}
+
 /**
  * Chrome for one card: colours, badges, button label and whether the buttons
  * show at all.
@@ -323,13 +409,16 @@ export interface CardChrome {
  * Status wins over class for the badge *text* (a finished privileged tool
  * reads "✓ Done"), while class wins for the border: a privileged card stays
  * red for the life of the conversation, so scrolling back shows at a glance
- * which cards touched the machine with sudo.
+ * which cards touched the machine with sudo. Called with two arguments the
+ * result is byte-identical to what it was before `options` existed.
  */
 export function cardChrome(
   safetyClass: WizardToolSafetyClass | string | undefined | null,
   status: ToolCardStatus | string,
+  options: CardChromeOptions = {},
 ): CardChrome {
   const privileged = safetyClass === PRIVILEGED_CLASS;
+  const question = options.question === true && !privileged;
   const chrome: CardChrome = {
     privileged,
     borderColor: privileged ? PRIVILEGED_COLOR : null,
@@ -337,7 +426,7 @@ export function cardChrome(
     classBadge: privileged ? PRIVILEGED_BADGE : null,
     badge: '',
     badgeColor: '#737373',
-    runLabel: privileged ? PRIVILEGED_RUN_LABEL : 'Run',
+    runLabel: privileged ? PRIVILEGED_RUN_LABEL : question ? QUESTION_ANSWER_LABEL : 'Run',
     clickable: isPendingStatus(status),
   };
 
@@ -348,6 +437,12 @@ export function cardChrome(
       break;
     case 'ok':
       chrome.badge = '✓ Done';
+      chrome.badgeColor = '#16a34a';
+      break;
+    case 'answered':
+      // The question went out as the user's next message; settled, green,
+      // and nothing ran. Status wins over class, as for every badge.
+      chrome.badge = QUESTION_ANSWERED_BADGE;
       chrome.badgeColor = '#16a34a';
       break;
     case 'error':
@@ -381,16 +476,198 @@ export function cardChrome(
       chrome.badgeColor = '#737373';
       break;
     case 'awaiting-confirm':
-      chrome.badge = privileged ? 'Needs your approval' : 'Needs confirmation';
+      chrome.badge = privileged ? 'Needs your approval' : question ? QUESTION_PENDING_BADGE : 'Needs confirmation';
       chrome.badgeColor = privileged ? PRIVILEGED_COLOR : '#d97706';
       break;
     case 'idle':
     default:
-      chrome.badge = privileged ? 'Needs your approval' : 'Click to run';
+      chrome.badge = privileged ? 'Needs your approval' : question ? QUESTION_PENDING_BADGE : 'Click to run';
       chrome.badgeColor = privileged ? PRIVILEGED_COLOR : '#d97706';
       break;
   }
   return chrome;
+}
+
+// ─── Question cards (`ask_user`, 0.46) ──────────────────────────────────────
+//
+// `ask_user` is a confirm-class tool with no machine side effect: the card
+// asks, the turn ends, and the user's answer is the next user message. The
+// request history also carries `tool_results: [{name: 'ask_user', ok: true,
+// summary: <answer, cut to WIZARD_TOOL_OUTCOME_CHARS>}]` so the server can
+// render `TOOL_RESULT ask_user` and the model knows WHICH question was
+// answered (the message is the authoritative, uncapped answer). Skipping
+// records `ok: false` with `QUESTION_SKIPPED_NOTE` — the exact wording the
+// server's history test pins. The card is never POSTed to
+// /v1/wizard/tools/execute: a stale client that does gets a harmless
+// `answered_in_chat` back, and nothing runs.
+
+/** The one tool that is answered in the chat instead of run. Exact match. */
+export const QUESTION_TOOL = 'ask_user';
+/** History line for a skipped question (nvh/integrations/wizard/chat.py pins the words). */
+export const QUESTION_SKIPPED_NOTE = 'skipped by the user; not answered';
+/** The server caps `choices` at six; anything past that is dropped, not shown. */
+export const QUESTION_MAX_CHOICES = 6;
+/** Badge while the question waits, and once it is answered. */
+export const QUESTION_PENDING_BADGE = 'Needs your answer';
+export const QUESTION_ANSWERED_BADGE = '✓ Answered';
+/** The question card's primary button — never "Run": nothing runs. */
+export const QUESTION_ANSWER_LABEL = 'Answer';
+
+/** Is this surfaced call a question for the user? Exact name match. */
+export function isQuestionCall(call: Pick<WizardChatToolCall, 'name'> | undefined | null): boolean {
+  return call?.name === QUESTION_TOOL;
+}
+
+/**
+ * The key a card's status / summary / detail live under in the message's
+ * maps. Today that is the tool name for every card: the server surfaces at
+ * most one card per name and arguments per turn and exactly one `ask_user`
+ * per turn (`_one_question_only`), and the bubble's maps and the card list
+ * key on the name too. This is the single place to change if two cards of
+ * one name ever need to coexist; every 0.46 code path goes through it.
+ */
+export function toolKey(call: Pick<WizardChatToolCall, 'name'>): string {
+  return call.name;
+}
+
+/** The question text, trimmed; '' when the arguments carry none. */
+export function questionText(call: Pick<WizardChatToolCall, 'arguments'> | undefined | null): string {
+  const q = call?.arguments?.question;
+  return typeof q === 'string' ? q.trim() : '';
+}
+
+/** The choice chips: strings only, trimmed, blanks dropped, at most six. */
+export function questionChoices(call: Pick<WizardChatToolCall, 'arguments'> | undefined | null): string[] {
+  return stringList(call?.arguments?.choices).slice(0, QUESTION_MAX_CHOICES);
+}
+
+/** Whether the card shows a free-text box. The server's default is true, so
+ * only an explicit `false` hides it. */
+export function questionAllowsFreeText(call: Pick<WizardChatToolCall, 'arguments'> | undefined | null): boolean {
+  return call?.arguments?.allow_free_text !== false;
+}
+
+/**
+ * The `toolDetails` entry for an answered question — the shape
+ * `historyToolOutcome` reads the answer back from. The answer sits under
+ * `result` (the handler-result slot every other card's detail uses) and as
+ * the `summary`, so the card shows it and history can quote it, without
+ * inventing a field on the execute envelope type.
+ */
+export function questionAnswerDetail(answer: string): WizardToolExecuteResult {
+  const text = answer.trim();
+  return { ok: true, summary: text, result: { answer: text } };
+}
+
+/** The answer an answered question's detail carries, or ''. Reads a flat
+ * `answer` (should an envelope ever carry one) before `result.answer`. */
+export function questionAnswer(detail: ToolDetailLike | undefined | null): string {
+  const flat = detail?.answer;
+  if (typeof flat === 'string' && flat.trim()) return flat.trim();
+  const nested = detail?.result?.answer;
+  return typeof nested === 'string' ? nested.trim() : '';
+}
+
+// ─── Calls the server did not run this turn ─────────────────────────────────
+
+/**
+ * Reasons `deferred_tool_calls` carry, in the user's words. Only the one
+ * that needs translating is listed: the depth / ceiling reasons keep the
+ * server's wording, which the notes have always shown verbatim.
+ */
+export const DEFERRED_REASON_LABELS: Readonly<Record<string, string>> = {
+  question_pending: 'held until you answer the question above',
+};
+
+/** The note text for a deferred call's reason: the translation when there is
+ * one, the server's wording otherwise, '' for none. */
+export function deferredReasonLabel(reason: string | null | undefined): string {
+  if (typeof reason !== 'string') return '';
+  const key = reason.trim();
+  if (!key) return '';
+  return DEFERRED_REASON_LABELS[key] ?? key;
+}
+
+// ─── Confirm-class planner cards (`generate_image`, `remember`, 0.46) ───────
+//
+// A confirm tool with a planner surfaces its card with `plan` (the backend,
+// the model, the cost verdict and a one-line `summary`) and with the
+// server-pinned `profile` / `profile_home` folded into `arguments`. The card
+// shows the plan line and sends the arguments back exactly as received; the
+// chrome stays the ordinary confirm chrome — a plan does not make a card
+// privileged. The results carry no `ok` the generic card logic can lean on
+// uniformly: `generate_image` says `ok`, `remember` says `saved`.
+
+/** Where confirmed image renders are served from; behind `require_auth`, so
+ * the card fetches with the API headers and renders an object URL. */
+export const IMAGE_OUTPUT_URL_PREFIX = '/v1/outputs/images/';
+
+/**
+ * The one shape the server mints for a render (imagegen.py `_output_url`):
+ * `<prefix><scope>/<file>` with `SCOPE_RE` `[A-Za-z0-9_-]{1,64}` and
+ * `FILENAME_RE` `name.ext`. Anything else — a `..` or `%2e%2e` segment, a
+ * query, a fragment, an empty segment, extra depth — is refused, so the
+ * authenticated fetch (`fetchApiBlob`) can only ever be steered at a file
+ * under the outputs route.
+ */
+const IMAGE_OUTPUT_URL_RE = /^\/v1\/outputs\/images\/[A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,5}$/;
+
+/** Is `url` a render path in the exact `<scope>/<file>` shape under the outputs route? */
+export function isImageOutputUrl(url: unknown): url is string {
+  return typeof url === 'string' && url.startsWith(IMAGE_OUTPUT_URL_PREFIX) && IMAGE_OUTPUT_URL_RE.test(url);
+}
+
+/** A `generate_image` success: an auth-gated `url` in the outputs route's exact shape. */
+export function isImageResult(result: unknown): result is WizardImageResult {
+  if (!result || typeof result !== 'object') return false;
+  const r = result as Record<string, unknown>;
+  return r.ok !== false && isImageOutputUrl(r.url);
+}
+
+/** The typed image result, or `null` when the outcome is not one. */
+export function imageResult(result: unknown): WizardImageResult | null {
+  return isImageResult(result) ? result : null;
+}
+
+/** A `remember` success (`saved: true` with the note's id); `null` otherwise. */
+export function rememberResult(result: unknown): WizardRememberResult | null {
+  if (!result || typeof result !== 'object') return null;
+  const r = result as Record<string, unknown>;
+  return r.saved === true && typeof r.id === 'string' && r.id ? (result as WizardRememberResult) : null;
+}
+
+/** The vault page's deep link to a note (`?id=` scrolls to and highlights it). */
+export function vaultNoteHref(id: string): string {
+  return `/vault?id=${encodeURIComponent(id)}`;
+}
+
+/**
+ * Did the unwrapped outcome say the tool failed? `ok: false` for most tools;
+ * `saved: false` for `remember`, whose result has no `ok` key at all (a
+ * missing `ok` is not a failure — many handlers never send one).
+ */
+export function isToolOutcomeFailure(outcome: Record<string, unknown> | undefined | null): boolean {
+  return outcome?.ok === false || outcome?.saved === false;
+}
+
+/**
+ * The plan line of a confirm card: the server's `summary` verbatim when it
+ * has one, else what the plan does say — backend, model and the cost text
+ * the caller formatted (lib/cost.ts `costPill`, kept out of here so this
+ * module stays free of runtime imports) — joined with ` · `. '' for no plan.
+ */
+export function planSummary(
+  plan: WizardToolPlan | string[] | unknown | undefined | null,
+  costText?: string | null,
+): string {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) return '';
+  const p = plan as Partial<WizardToolPlan>;
+  if (typeof p.summary === 'string' && p.summary.trim()) return p.summary.trim();
+  const parts: string[] = [];
+  if (typeof p.backend === 'string' && p.backend.trim()) parts.push(p.backend.trim());
+  if (typeof p.model === 'string' && p.model.trim()) parts.push(p.model.trim());
+  if (typeof costText === 'string' && costText.trim()) parts.push(costText.trim());
+  return parts.join(' · ');
 }
 
 // ─── Host OS: the privileged tier is Linux only ──────────────────────────────

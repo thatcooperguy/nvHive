@@ -234,6 +234,91 @@
   `tests/test_imagegen.py`, `tests/test_schedule_runner.py`,
   `tests/test_vault_notes_route.py`, `tests/test_cli_vault.py`,
   `tests/test_repl_do_confirm.py`.
+- **The Wizard's question card.** When the Wizard calls `ask_user`, the web
+  thread shows the question, up to six choice chips, a free-text box unless
+  the Wizard disallowed one, and Answer / Skip. Answer sends the text as
+  your next message and folds `{name: 'ask_user', ok: true, summary}` into
+  the request history so the Wizard knows which question was answered; Skip
+  records "skipped by the user; not answered". Nothing is posted to the
+  tool-execute route for a question, and the calls the Wizard held behind
+  one appear as "not run: <tool> — held until you answer the question
+  above". The mascot says "the Wizard has a question for you" when every
+  pending card is a question (the pure `web/lib/mascotRules.ts`, with
+  `web/lib/mascot.test.mjs`).
+- **Plan line and inline image on confirm cards.** A confirm card that
+  carries a planner verdict (`generate_image`) shows a `plan:` line — the
+  server's summary of backend, cost verdict and GPU note — above Run / Skip;
+  Run echoes the card's arguments unchanged, the server-pinned `profile`
+  and `profile_home` included. After Run the image renders inside the card,
+  fetched with the API key headers (a bare link would 401) and released on
+  unmount, with backend · model · size, the three-state cost pill, the saved
+  path and the server's note that nvHive does not prune that folder. A
+  saved `remember` card links "Open in vault" and notes redacted spans.
+- **The `/vault` notes list.** The page lists the vault's notes newest
+  first, with folder chips from the server's `directories` roster, tag
+  chips from the listed notes, a title/tag search box and a Memory toggle
+  that keeps records only (`nvh-memory/1` and `legacy`; `/vault?memory=1`
+  opens with it on); a row expands to the body and path; Forget confirms,
+  then removes the file and its search-index entry and says when the entry
+  could not be dropped; `/vault?id=<id>` — the link a `remember` card hands
+  out — scrolls to that note and clears any filter hiding it, fetching it
+  on its own when it is outside the loaded page. A Memory stat card counts
+  the records. The save form's folder list comes from the same roster, tags
+  start empty and saves are stamped `Source: web`. Helpers in
+  `web/lib/vaultNotes.ts` with a Node test.
+- **The session cost pill.** `Session 4h 12m · desktop ≈ $3.37 · cloud
+  $0.42` on a rented desktop (the desktop term is `budget.hourly_rate_usd`
+  × the time since this tab opened, or "set your hourly rate" when none is
+  set), `Session 4h 12m · cloud $0.42` on owned hardware, `local only` when
+  every counted model ran locally, `cloud ≥ $Y · cost unknown` when a model
+  has no catalog price, "spend unavailable" when the server could not read
+  the ledger, and the plain age when the API is unreachable; amber only
+  after fifteen minutes when cloud spend per hour exceeds the rate. It
+  polls `GET /v1/budget/status?since=` once a minute and sits in the shared
+  top bar on every page except `/setup`, and in the chat page's own bar.
+  `/settings` gains a read-only Costs card with the configured rate (or
+  "not set") and the `nvh config set budget.hourly_rate_usd 2.10` command.
+  Rules in `web/lib/sessionCost.ts` with a Node test.
+- **The `/schedules` page** (sidebar entry "Schedules") for the schedules
+  the API server runs: the list with interval, mode, profile, next run,
+  last status and a last-cost pill (nothing for a schedule that never ran);
+  Enable / Disable, Run now (an in-flight run is reported with its job id
+  from the server's 409), Delete with an inline confirm, Open thread into
+  the schedule's conversation, and a run drawer that tails a run started
+  from the page and lists the recorded runs with cost, answer preview and
+  deferred tool requests; an add form with `30m` / `1h` / `1d` intervals
+  validated in the browser, mode `ask` or `convene` only (do-mode stays
+  CLI-only) and a profile picker; a runner line naming who runs schedules
+  (the API server, `nvh schedule start`, or nobody) with the read-only
+  roster an unattended turn may call. Helpers in `web/lib/schedules.ts`
+  with a Node test. `/integrations` gains an "Any OpenAI-compatible client
+  (standard paths)" snippet with the `OPENAI_BASE_URL` / `OPENAI_API_KEY`
+  pair and the Messages-API `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`
+  pair.
+- **The web's typed API layer for the 0.46 routes** (`web/lib/types.ts`,
+  `web/lib/api.ts`, the pure `web/lib/apiShapes.ts` with a Node test):
+  vault notes, schedules (`runSchedule` resolves to `{started}` or, from
+  the 409, `{conflict}` naming the in-flight job), `fetchApiBlob` for
+  auth-gated binaries, `exclude_kind` / `schedule_id` on `getInstallJobs`,
+  `getBudgetStatus(since)` with the session, platform, hourly-rate and
+  `daily_cost_known` blocks (a seconds-scale `since` throws client-side),
+  `safety_class` on streamed `tool_call` events, the image planner's
+  verdict on `WizardToolPlan`, `question_pending` among the deferred
+  reasons and `starter` / `background` / `accent` on agent profiles.
+- **Docs and guards for the web surfaces.** WEBUI.md describes the question
+  card, the plan line and image render, the `/vault` list, the Costs card,
+  the `/schedules` page, the `/setup` job filter, the standard-path snippet
+  and the pill's states as page behaviour, and its Developing section names
+  `npm test` and the `web/components/chat/*` map; MASCOT.md gains the rows
+  for a `tool_call` whose `safety_class` is not `auto` (no change — the
+  card decides) and for `confirm_required` carrying only `ask_user` cards;
+  TESTING.md lists the web checks and the guard rows. New
+  `tests/test_web_surfaces.py` pins the surfaces: `/wizard` mounts
+  `WizardThread` and nothing imports the retired `WizardChat`, the question
+  card never reaches the execute route, `ScheduleMode` has no `do`, the
+  `/vault` page has no hand-typed folder list, and every new pure
+  `web/lib/*.ts` helper has a Node test beside it and imports nothing a
+  Node run cannot resolve.
 
 ### Changed
 - **`--verify` honours `exclude_providers`, and is independent or not at
@@ -344,6 +429,36 @@
 - **tests/test_agent_library.py** derives the valid tool whitelist from the
   registry roster instead of a hand-typed list; `tests/conftest.py` sets
   `NVH_SCHEDULER=0` and `NVH_RAG_AUTO_PULL=0` for every test.
+- **The Wizard chat surface moved** from `web/components/WizardChat.tsx` to
+  `web/components/chat/WizardThread.tsx`, with the view components split
+  out beside it (`MessageBlock`, `ToolCard`, `ServerToolTrace`,
+  `SourcesFooter`, `DeferredToolNotes`, `EmptyState` and the `Message`
+  model in `chat/types.ts`); behaviour is unchanged. `WizardThread` takes a
+  `conversationParam` and resumes from `?conversation=` or `?c=`; its
+  `send` accepts `{text?, historyPatch?}` so a card can send text without
+  touching the composer and fold its outcome into the history first (the
+  `?issue=` / `?starter=` deep links send through it instead of seeding the
+  draft). The `/save` slash command writes to the vault's `Wizard Memory`
+  folder with tags `wizard`, `chat` and `Source: web` — the same record as
+  the `remember` tool — instead of the old `wizard-chats` relabel. The web
+  pin tests read the new paths.
+- **The chat page's `USD $X.XX today` pill is gone**; the session cost pill
+  replaces it and the session-age pill (`SessionAgePill.tsx` is now a
+  re-export). The daily figure stays on `/system`'s Budget widget, which
+  says "Budget figures are unavailable right now" instead of showing a $0
+  ledger when the API is down or the ledger unreadable, and whose title
+  says it covers cloud-model spend, not desktop metering. A failed
+  `getBudgetStatus` resolves to a zero ledger flagged `unavailable` instead
+  of posing as nothing spent.
+- **A streamed `tool_call` whose `safety_class` is not `auto` no longer
+  moves the mascot to `working`** (the card decides) and the status line
+  reads "proposing <tool>…"; the Create Agent portrait fallback reads
+  "Image generation isn't configured (no NVIDIA API key, no local
+  ComfyUI). Upload an image instead." and names the backend and plan the
+  API reported. The Setup page lists install jobs with
+  `exclude_kind=schedule-run`, so hourly schedules no longer push install
+  jobs out of its window. `applyHistoryPatch` lives in the pure
+  `web/lib/privileged.ts` with a Node row.
 
 ### Fixed
 - **`GET /v1/health` no longer calls an unknown bind host loopback.** When
@@ -391,6 +506,21 @@
 - **The `scheduler` doctor row and `nvh schedule list`** name the
   `schedules.json.corrupt-<timestamp>` file after a quarantine and the row
   turns `warn` (the Wave A follow-up).
+- **Web review pass on the Wave C surfaces.** A question-card answer or
+  `?starter=` text beginning with `/` (a path such as `/mnt/nvme0`) is sent
+  to the Wizard instead of being swallowed as an unknown slash command —
+  only the composer issues slash commands; `/clear` drops both
+  `?conversation=` and `?c=` so a cleared thread is not resurrected on
+  reload; the question card's Answer is disabled while a turn streams
+  instead of ignoring the click; the pill reads `cloud $0.0000`, not
+  `local only`, for a tab in which nothing has run yet, and a configured
+  rate of exactly 0 never turns it amber; `/vault?id=` clears a filter
+  hiding the linked note before scrolling to it; the `/schedules` live
+  panel tells a watcher that lost the API (amber "lost contact" with a
+  Reconnect button — the run keeps going on the server) from a job that
+  failed; the Create Agent modal renders the avatar planner's `Plan:` line,
+  which the API sends as a string; a `remember` result with `saved: false`
+  renders as a failure instead of Done.
 
 ### Security
 - **Two routes that answered without the key now require it.**
@@ -450,6 +580,14 @@
   refuses the confirm-class `imagine` and never bills an image key
   unattended. SECURITY.md documents the pin's trust boundary and the
   absolute `$NVH_HOME` paths API responses carry.
+- **The web's image fetch is pinned to the server's URL shape.**
+  `isImageResult` accepts only the exact `/v1/outputs/images/<scope>/<file>`
+  form the server mints (no dot segments, query, fragment or extra depth),
+  so the authenticated fetch cannot be steered at another route; the bytes
+  travel through the same auth-header path every API call uses, to the API
+  origin only. The question card never reaches the tool-execute route and
+  mints nothing; a confirm card's Run echoes the server-pinned `profile`
+  and `profile_home` unchanged.
 
 ### Removed
 - **The pre-0.44 tool-call forms.** The agent loop no longer reads the

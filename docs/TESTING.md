@@ -13,6 +13,8 @@ python -m pytest tests/ -k "snapshot and not live" -q
 python -m pytest tests/ --cov=nvh --cov-report=term-missing
 python -m ruff check nvh/ tests/ --ignore E501,E402,N806,E702,F841   # CI's exact rule set
 python -m mypy nvh/sandbox nvh/catalog --strict --follow-imports=silent --ignore-missing-imports
+(cd web && npx tsc --noEmit -p tsconfig.json)   # WebUI types
+(cd web && npm test)                            # WebUI pure helpers: node --test lib/*.test.mjs
 ```
 
 `pyproject.toml` configures pytest: `asyncio_mode = "auto"` (async tests need
@@ -62,6 +64,9 @@ files are guards rather than unit tests:
 | `test_release_hardening.py` | `install.sh`, `nvh services` and the docs keep the bring-up contract |
 | `test_cli_mcp_group.py` | no name is both a command and a command group (the bug that hid `nvh mcp` and `nvh agent`) |
 | `test_config_doc_parity.py` | the generated blocks of `docs/CONFIGURATION.md` match their sources byte for byte (`scripts/gen_config_doc.py --check`): `wizard-tools` from the stock Wizard registry, `council-cabinets` from `COUNCIL_PRESETS` / `PRESET_DESCRIPTIONS`, `memory-record` from `MemoryRecord` (`nvh-memory/1`), `schedule-record` from `ScheduledTask` (`nvh-schedules/2`) and `wizard-meta` from `WIZARD_META_KEYS`, one row per dataclass field or key in source order; plus the kill-switch row's privileged-tool list and the legacy-homes paragraph's doctor row |
+| `test_web_surfaces.py` | the 0.46 web surfaces keep their shape: `/wizard` mounts `web/components/chat/WizardThread.tsx` and nothing imports the retired `components/WizardChat.tsx`; a question card (`ask_user`) is answered in the chat and never reaches the tool-execute route, and `answerQuestion` folds the outcome into the request history; `lib/mascot.ts` reads `safety_class` and names the question bubble; the session cost pill replaced the budget and age pills; the Sidebar, `/schedules` (modes `ask` / `convene` only; threads open at `/wizard?conversation=`), `/setup` (`exclude_kind: 'schedule-run'`) and `/vault` (no hand-typed folder list) pins; `ScheduleMode` has no `do`; every new pure `web/lib/*.ts` helper has a Node test beside it and imports nothing a Node run cannot resolve; `docs/WEBUI.md` and `docs/MASCOT.md` describe what shipped |
+| `test_web_mascot_refusal.py` | `deriveMascotState` in `web/lib/mascot.ts` reads `fallback_reason` through the shared `isWizardDeliberateRefusal` predicate and lands a deliberate refusal like `done`; `WizardThread` hands the whole error event to the mascot |
+| `test_web_wizard_refusal_status.py` | the Wizard bubble (`chat/MessageBlock.tsx`, `chat/types.ts`, `chat/WizardThread.tsx`) carries `fallbackReason` from the live event and the persisted tail and never dresses a refusal as the offline helper |
 
 ## Kinds of tests
 
@@ -81,6 +86,18 @@ files are guards rather than unit tests:
   errors="replace"` - copy that on Windows).
 - **MCP** - `test_mcp_client.py` runs a real stdio MCP server through the SDK
   pinned in the `dev` extra.
+- **Web** - `cd web && npm test` runs Node's built-in runner over
+  `web/lib/*.test.mjs` (`node --test lib/*.test.mjs`): `cost`, `privileged`,
+  `mascot` (through `lib/mascotRules.ts`), `apiShapes`, `vaultNotes`,
+  `sessionCost`, `schedules`, `attachments`, `cabinets`, `gpu`. The `.mjs`
+  files import the `.ts` helpers by explicit extension through Node's type
+  stripping, so a helper under test stays pure: no React, no DOM, no
+  `'use client'`, no Next import, no `@/` alias and no runtime import of
+  another `.ts` module (tsc refuses the `.ts` extension and Node cannot
+  resolve the extensionless form — `lib/schedules.ts` takes `costPill` as an
+  argument for that reason). What `tsc` cannot express — a literal a page
+  must keep, a file that must or must not exist — is pinned from Python by
+  the `test_web_*` guards in the table above.
 - **Installer** - `ci/integration-test-install.sh` installs the exact clean,
   committed checkout in a disposable Ubuntu container with no GPU access.
   The installer workflow runs `NVH_TEST_SKIP_MODEL=1 bash ci/integration-test-install.sh`
@@ -117,7 +134,7 @@ files are guards rather than unit tests:
 |---|---|
 | `test` | Ubuntu, Python 3.11 and 3.12: `ruff check` with the rule set above, `pytest tests/ -v`, then a coverage gate (`--cov-fail-under=49`) on 3.12 with upload to Codecov |
 | `typecheck` | `mypy nvh/sandbox nvh/catalog` gates; a repo-wide mypy runs as an informational signal and grows the gated list as modules reach zero errors |
-| `webui` | `npm ci`, `tsc --noEmit`, ESLint (findings warn, a crashed linter fails), `npm run build` on Node 22 |
+| `webui` | `npm ci`, `tsc --noEmit`, `npm test` (`node --test lib/*.test.mjs`), ESLint (findings warn, a crashed linter fails), `npm run build` on Node 22 |
 | `security` | `pip-audit` (informational) |
 | `build` | wheel + sdist, `twine check`, install into a clean venv and run `nvh version` / `nvh --help` |
 | `mcp-v1` | Python 3.12 with `mcp<2` pinned beside `.[dev]`: `tests/test_mcp_server.py`, `tests/test_mcp_client.py`, `tests/test_mcp_cabinet_sync.py` and `tests/test_cli_mcp_group.py`. The `mcp` extra resolves the 2.x SDK, so the `test` job only ever exercises that branch of the dual-SDK shim in `nvh/mcp_server.py` and `nvh/integrations/mcp_client.py`; this job keeps the 1.x branch (`mcp.server.fastmcp`) green in CI rather than only in a maintainer's venv (`tests/test_release_hardening.py` pins the job's pin and file list) |

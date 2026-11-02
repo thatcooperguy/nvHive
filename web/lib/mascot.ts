@@ -13,13 +13,16 @@
  *  2. `deriveMascotState` — the pure mapping from Wizard SSE events to states.
  *     It reads the payload, not just the type: `done` that still carries
  *     confirm-class tool calls keeps the mascot *asking* until the user runs
- *     or skips them (WizardChat publishes those follow-ups). `error` whose
+ *     or skips them (WizardThread publishes those follow-ups); a `tool_call`
+ *     moves it to *working* only for an `auto` call (its `safety_class`,
+ *     0.46) — a confirm / privileged call is about to become a card, and
+ *     the card decides (lib/mascotRules.ts holds the pure rules). `error` whose
  *     `fallback_reason` is a specialist's deliberate refusal is an answer
  *     and settles like `done`; a genuine `error` with pending cards plays
  *     the error strip and then *resumes asking* instead of idling
  *     (`deriveMascotResume`; `applyMascotEvent` does both).
  *  3. A tiny pub/sub store (`useMascotStore` via useSyncExternalStore) so
- *     WizardChat publishes and Mascot subscribes without prop drilling.
+ *     WizardThread publishes and Mascot subscribes without prop drilling.
  *     Timed transitions (happy → idle, error → idle or back to asking, idle
  *     → sleeping after 90s, tip auto-hide) live here too, so the component
  *     only renders.
@@ -30,6 +33,12 @@
 
 import { useSyncExternalStore } from 'react';
 import { isWizardDeliberateRefusal } from '@/lib/api';
+import {
+  MASCOT_ASKING_PRIVILEGED_LABEL,
+  MASCOT_ASKING_QUESTION_LABEL,
+  askingKind,
+  toolCallMovesMascot,
+} from '@/lib/mascotRules';
 import bundledManifest from '@/public/mascot/manifest.json';
 
 export const MASCOT_STATES = [
@@ -94,26 +103,37 @@ export const MASCOT_STATE_LABELS: Record<MascotState, string> = {
 /**
  * What `asking` means when one of the pending cards is a privileged (sudo)
  * one — a stronger sentence than the generic "needs your confirmation",
- * because the click ahead changes the machine rather than the workspace.
- * Used for the bubble WizardChat raises when a red card first appears and as
- * the accessible name of the card's approval region.
+ * because the click ahead changes the machine rather than the workspace —
+ * and when every pending card is a question (`ask_user`, 0.46): nothing
+ * will run, the Wizard is waiting for an answer. Both strings live in
+ * lib/mascotRules.ts (pure, Node-testable) and are re-exported here for the
+ * bubble WizardThread raises when such a card first appears and for the
+ * accessible name of the card's approval region.
  */
-export const MASCOT_ASKING_PRIVILEGED_LABEL = 'the Wizard needs your approval for a privileged change';
+export { MASCOT_ASKING_PRIVILEGED_LABEL, MASCOT_ASKING_QUESTION_LABEL };
 
 /**
- * Label for the `asking` state given the safety classes of the calls still
- * waiting for a click. Cheap by construction: the caller already holds the
- * schemas (WizardChat's tool catalog), so this is a scan of a short list, not
- * a lookup. Anything that is not exactly `privileged` — including a class
- * this build has never heard of — keeps the ordinary confirmation wording,
- * the same way an unknown class keeps the ordinary card.
+ * Label for the `asking` state given the safety classes — and, since 0.46,
+ * the names — of the calls still waiting for a click. Cheap by construction:
+ * the caller already holds the schemas (WizardThread's tool catalog), so this
+ * is a scan of a short list, not a lookup. A privileged card wins; every
+ * card an `ask_user` → the question wording; anything else — including a
+ * class this build has never heard of — keeps the ordinary confirmation
+ * wording, the same way an unknown class keeps the ordinary card
+ * (`askingKind` in lib/mascotRules.ts decides).
  */
 export function mascotAskingLabel(
   pendingSafetyClasses: readonly (string | undefined | null)[],
+  pendingNames: readonly string[] = [],
 ): string {
-  return pendingSafetyClasses.some(cls => cls === 'privileged')
-    ? MASCOT_ASKING_PRIVILEGED_LABEL
-    : MASCOT_STATE_LABELS.asking;
+  switch (askingKind(pendingSafetyClasses, pendingNames)) {
+    case 'privileged':
+      return MASCOT_ASKING_PRIVILEGED_LABEL;
+    case 'question':
+      return MASCOT_ASKING_QUESTION_LABEL;
+    default:
+      return MASCOT_STATE_LABELS.asking;
+  }
 }
 
 function isPositive(n: unknown): n is number {
@@ -197,17 +217,22 @@ export function resolveStrip(manifest: MascotManifest, state: MascotState): Masc
 
 /** The slice of a Wizard SSE event the mapping needs. `tool_calls` is the
  * confirm-class list that `confirm_required` and `done` both carry. The
- * server's `error` event does NOT carry it, so WizardChat attaches the list
+ * server's `error` event does NOT carry it, so WizardThread attaches the list
  * from the `confirm_required` it received earlier in the same turn before
  * handing the event over — the mapping treats all three alike.
  * `fallback_reason` rides along on `error` untouched: its value, not its
- * presence, says whether the event is a failure (`isWizardDeliberateRefusal`). */
+ * presence, says whether the event is a failure (`isWizardDeliberateRefusal`).
+ * `safety_class` rides along on `tool_call` (0.46): only an `auto` call is
+ * work in progress — see `toolCallMovesMascot`. */
 export interface MascotEventLike {
   type: string;
   tool_calls?: unknown;
   /** `error` only: why no LLM answered. `WIZARD_LOCAL_ONLY_FALLBACK_REASON`
    * is a specialist deliberately declining — an answer, not a failure. */
   fallback_reason?: string | null;
+  /** `tool_call` only: the registry's class for the tool (`auto`, `confirm`,
+   * `privileged`, `unknown`). Absent on older servers, which means `auto`. */
+  safety_class?: string | null;
 }
 
 /**
@@ -217,14 +242,22 @@ export interface MascotEventLike {
  * The backend emits `confirm_required` immediately before `done`, so a
  * type-only mapping would flip asking → happy in the same flush and the
  * mascot would idle while confirm cards wait. `done` therefore reads its
- * payload: pending confirm-class calls → `asking` (WizardChat publishes
+ * payload: pending confirm-class calls → `asking` (WizardThread publishes
  * `working` when the user runs one and `idle` when they skip); none → `happy`.
+ *
+ * `tool_call` reads its payload too (0.46). The server emits one for every
+ * call the model made, including the confirm / privileged ones it is about
+ * to surface as cards — so a type-only mapping flashed "running a tool" over
+ * a question nobody has answered yet. Only an `auto` call (or an event from
+ * an older server that carries no class) is work in progress and moves the
+ * sprite to `working`; for every other class the event changes nothing and
+ * the card that follows decides (`confirm_required` → `asking`).
  *
  * `error` reads its payload too. The server sets `fallback_reason` on every
  * error event that ended in deterministic text, and one value —
  * `WIZARD_LOCAL_ONLY_FALLBACK_REASON`, a local-only specialist declining an
  * explicit pin because no local provider was up — is the turn's *answer*:
- * WizardChat shows that text attributed and draws no banner, so the mascot
+ * WizardThread shows that text attributed and draws no banner, so the mascot
  * must not flinch either. Such an event lands exactly like `done` (asking
  * while cards are pending, else happy) and never announces "something went
  * wrong". Every other `error` — the LLM exception, "engine not initialized",
@@ -238,6 +271,9 @@ export function deriveMascotState(event: MascotEventLike | null | undefined): Ma
     case 'iteration':
       return 'thinking';
     case 'tool_call':
+      // The card decides for a confirm / privileged call; only an auto call
+      // (or no class at all — an older server) is work in progress.
+      return toolCallMovesMascot(event.safety_class) ? 'working' : null;
     case 'tool_result':
       return 'working';
     case 'confirm_required':
@@ -245,7 +281,7 @@ export function deriveMascotState(event: MascotEventLike | null | undefined): Ma
     case 'done':
       return settledState(event);
     case 'error':
-      // Same split as WizardChat's `wizardErrorBanner`: a deliberate refusal
+      // Same split as WizardThread's `wizardErrorBanner`: a deliberate refusal
       // is an answer, so it settles like `done`; only a genuine failure
       // plays the error strip.
       return isWizardDeliberateRefusal(event) ? settledState(event) : 'error';
@@ -271,7 +307,7 @@ function settledState(event: MascotEventLike): MascotState {
  * mascot idling under pending cards, exactly the bug `done` avoids. So an
  * `error` that still carries confirm-class calls plays the error strip for
  * its hold and then resumes `asking` — the same `tool_calls` check `done`
- * uses — and WizardChat's settle-on-Run/Skip logic takes over from there.
+ * uses — and WizardThread's settle-on-Run/Skip logic takes over from there.
  *
  * A deliberate refusal never enters `error` (`deriveMascotState` lands it on
  * `asking` or `happy` directly), so it has nothing to resume from and the
@@ -285,7 +321,7 @@ export function deriveMascotResume(event: MascotEventLike | null | undefined): M
 
 /**
  * Publish a Wizard SSE event to the store: derive the state and its resume
- * target and set both. The one call WizardChat makes per stream event.
+ * target and set both. The one call WizardThread makes per stream event.
  */
 export function applyMascotEvent(event: MascotEventLike | null | undefined): void {
   const state = deriveMascotState(event);

@@ -19,6 +19,7 @@ here; when it does, it is a file swap.
 | `web/public/mascot/sheet.png` | The sprite sheet (committed; the web build never regenerates it) |
 | `web/public/mascot/generate_sheet.py` | Stdlib-only Python that renders the placeholder sheet |
 | `web/lib/mascot.ts` | Manifest types + validation, `deriveMascotState(event)`, the pub/sub store (`useMascotStore`, `setMascotState`, `sayMascotTip`, `mascotTipProbeDue`) |
+| `web/lib/mascotRules.ts` | The pure, Node-tested rules behind two Behaviour rows below: which `asking` bubble the pending cards earn (`askingKind`) and whether a `tool_call` moves the sprite at all (`toolCallMovesMascot`); `mascot.ts` calls them and re-exports the two bubble labels. `web/lib/mascot.test.mjs` runs them under `npm test` |
 | `web/components/Mascot.tsx` | The sprite, speech bubble and menu; mounted by `LayoutShell` on every page including `/setup` |
 
 ## Manifest
@@ -79,21 +80,26 @@ confirm cards were still waiting.
 | Wizard event / UI action | State |
 |---|---|
 | `iteration` | thinking |
-| `tool_call`, `tool_result` | working |
+| `tool_call` with `safety_class` `auto` (or no class — an older server), `tool_result` | working |
+| `tool_call` whose `safety_class` is not `auto` (a confirm or privileged call about to become a card) | no change — the card decides (`toolCallMovesMascot`); the status line reads "proposing <tool>…" rather than "calling" |
 | `confirm_required` | asking |
 | `confirm_required` carrying a `privileged` (sudo) card | asking, and the bubble says "the Wizard needs your approval for a privileged change" (`mascotAskingLabel` / `MASCOT_ASKING_PRIVILEGED_LABEL`) — once per tool per session; any other class, known or not, keeps the plain confirmation wording |
+| `confirm_required` carrying only `ask_user` cards | asking, and the bubble says "the Wizard has a question for you" (`mascotAskingLabel` / `MASCOT_ASKING_QUESTION_LABEL`) — once per question, since each one is new; a privileged card beside it keeps the privileged wording |
 | `done` with non-empty `tool_calls` (confirm cards pending) | asking — stays until every card is run or skipped; a privileged card the kill switch has turned off starts settled (`disabled`, Skip only) and does not count |
 | `done` with no pending calls | happy → idle after 1.5 s |
 | user clicks **Run** on a card | working → happy / error (or back to asking while sibling cards still wait) |
+| user clicks **Answer** on a question card | the card settles (`answered`) and the answer goes out as the next turn, so the stream's own events drive the sprite from there (thinking → …); **Skip** on a question card behaves like Skip below |
 | user clicks **Skip** on a card | idle (or asking while sibling cards still wait) |
 | `error` (or a failed stream) | error → idle after 3 s; when confirm cards are still pending (the server emits `confirm_required` right before `error` on a later-iteration failure) error → asking after 3 s. A deliberate refusal (`fallback_reason: profile_local_only_provider_unavailable`) is an answer, not a failure: it ends like `done`, never in the error strip |
 | typing in the composer | idle — but only from happy / error / sleeping. Typing never interrupts thinking / working (a stream is in flight) or asking (confirm cards are pending); it only postpones sleep there (`mascotStateOnTyping`) |
 | 90 s with nothing happening | sleeping (click or type to wake) |
 
 `done.deferred_tool_calls` — auto-class calls the server skipped because Depth
-was 1 or the profile's cost ceiling fired — do not move the mascot. WizardChat
-lists them under the answer as muted `not run: <tool> — <reason>` lines and
-never executes them. Whitelist refusals (`tool_result` with
+was 1 or the profile's cost ceiling fired, and since 0.46 any call held behind
+an unanswered question (`reason: question_pending`) — do not move the mascot.
+WizardThread lists them under the answer as muted `not run: <tool> — <reason>`
+lines (`held until you answer the question above` for a `question_pending`
+one) and never executes them. Whitelist refusals (`tool_result` with
 `result.not_allowed = true`) likewise never ran: they appear as muted
 `not allowed for <specialist>: <tool>` lines, are excluded from the
 "Wizard used N tools" count and from Sources, and do not move the mascot
@@ -103,7 +109,7 @@ Tips (`sayMascotTip(text, { id, ttlMs })`) show once per `id` per browser
 session; the id is burned only when the bubble actually renders, so a hidden
 mascot never consumes a tip. Today: a welcome on `/setup`, and the most severe
 open finding from `/v1/wizard/diagnostics` when the Wizard page loads. That
-diagnostics probe is a full workspace scan (~360 ms), so WizardChat runs it
+diagnostics probe is a full workspace scan (~360 ms), so WizardThread runs it
 only while the mascot is visible, at most once per session
 (`sessionStorage["nvh.mascot.diagtip.probed"]`, set after the probe completes
 and the tip has had its chance to render), and shares the fetch with the

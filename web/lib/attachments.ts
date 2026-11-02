@@ -1,7 +1,7 @@
 /**
  * Image attachments for the Wizard composer — the pure rules behind the
  * attach button, the drop zone and the paste handler in
- * components/WizardChat.tsx.
+ * components/chat/WizardThread.tsx.
  *
  * Two kinds of file reach the Wizard surface and they take different roads:
  *

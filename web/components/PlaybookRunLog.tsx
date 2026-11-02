@@ -2,7 +2,7 @@
 
 /**
  * The live step log of a `playbook-run` job — one component for both places
- * that stream a run: the Wizard chat's tool card (components/WizardChat.tsx)
+ * that stream a run: the Wizard chat's tool card (components/chat/ToolCard.tsx)
  * and the Setup page's "Spark playbooks" cards (app/setup/page.tsx). One row
  * per step (mark, number, title, `sudo` tag, exit code), the rendered command
  * under it, the newest log lines (`PLAYBOOK_LOG_LINES_PER_STEP`) and, once

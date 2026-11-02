@@ -109,6 +109,15 @@ function IconAgents() {
   );
 }
 
+function IconSchedules() {
+  return (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round"
+        d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
 /* NVIDIA-themed Hive logo mark — darker outline for white bg */
 function HiveLogo() {
   return (
@@ -268,6 +277,7 @@ const BOTTOM_NAV = [
   { href: '/analytics', label: 'Usage', icon: <IconAnalytics /> },
   { href: '/settings', label: 'Preferences', icon: <IconSettings /> },
   { href: '/integrations', label: 'Developer Tools', icon: <IconIntegrations /> },
+  { href: '/schedules', label: 'Schedules', icon: <IconSchedules /> },
 ];
 
 export default function Sidebar({

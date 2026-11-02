@@ -5,9 +5,11 @@
  * give it a portrait. Round-trips through:
  *   POST   /v1/wizard/profiles                          (persist)
  *   POST   /v1/wizard/profiles/{name}/avatar/upload     (user-uploaded image)
- *   POST   /v1/wizard/profiles/{name}/avatar/generate   (ComfyUI; falls
+ *   POST   /v1/wizard/profiles/{name}/avatar/generate   (NVIDIA-hosted or
+ *                                                       local ComfyUI; falls
  *                                                       back to "upload your
- *                                                       own" when not wired)
+ *                                                       own" when neither is
+ *                                                       wired)
  *
  * Kept intentionally simple: title + description + persona prompt + a couple
  * of LLM knobs (provider/model/temperature) + portrait. Power users can edit
@@ -24,11 +26,21 @@ import {
   type AgentProfileSchema,
 } from '@/lib/api';
 
+/**
+ * What the portrait button says when the API could not render one and sent
+ * no words of its own. Since 0.46 the generate envelope names the `backend`
+ * it tried (`nvidia` / `comfyui`) and carries the planner's `plan`, whose
+ * `summary` is the one-line verdict — both are appended when present so the
+ * user can tell "no key" from "ComfyUI is down".
+ */
+const AVATAR_GENERATE_FALLBACK =
+  'Image generation isn’t configured (no NVIDIA API key, no local ComfyUI). Upload an image instead.';
+
 interface Props {
   open: boolean;
   onClose: () => void;
   onCreated?: (name: string) => void;
-  /** Tool names from the live /v1/wizard/tools catalog (WizardChat already
+  /** Tool names from the live /v1/wizard/tools catalog (WizardThread already
    * fetches it). When provided and non-empty these are the options; the
    * static list below is only the fallback for hosts without the catalog. */
   toolNames?: string[];
@@ -136,9 +148,11 @@ export default function CreateAgentModal({ open, onClose, onCreated, toolNames }
     setGenerating(true);
     setError(null);
     try {
-      // We POST to the generate endpoint optimistically; ComfyUI integration
-      // may return ok=false with a clear hint, which we surface as an info
-      // message rather than an error (it's the expected first-run state).
+      // We POST to the generate endpoint optimistically; the image helper
+      // (NVIDIA-hosted, else local ComfyUI) may return ok=false with a clear
+      // hint, which we surface as an info message rather than an error (it's
+      // the expected first-run state). The envelope's `backend` and `plan`
+      // (0.46) ride along in that message.
       const res = await fetch(
         `${getApiBaseLocal()}/v1/wizard/profiles/${encodeURIComponent(slug)}/avatar/generate`,
         {
@@ -161,7 +175,20 @@ export default function CreateAgentModal({ open, onClose, onCreated, toolNames }
         // Bust the cache so the avatar reload picks up the new image.
         setAvatarPreview(`/v1/wizard/profiles/${slug}/avatar?t=${Date.now()}`);
       } else {
-        setError(env?.data?.hint || env?.data?.error || 'ComfyUI portrait generation isn’t configured. Upload an image instead.');
+        const data = env?.data ?? {};
+        const base: string = data.hint || data.error || AVATAR_GENERATE_FALLBACK;
+        const backend = typeof data.backend === 'string' && data.backend ? data.backend : '';
+        // The avatar route sends `plan` as the planner's summary STRING
+        // (server.py `plan_summary`); an object with `summary` is tolerated.
+        const rawPlan: unknown = typeof data.plan === 'string' ? data.plan : data.plan?.summary;
+        const planLine = typeof rawPlan === 'string' ? rawPlan.trim() : '';
+        setError(
+          [
+            base,
+            backend && !base.includes(backend) ? `Backend: ${backend}.` : '',
+            planLine ? `Plan: ${planLine}` : '',
+          ].filter(Boolean).join(' '),
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'generate failed');

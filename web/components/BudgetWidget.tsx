@@ -4,6 +4,11 @@ import { useEffect, useState } from 'react';
 import { getBudgetStatus } from '@/lib/api';
 import type { BudgetStatus } from '@/lib/types';
 
+const NOT_CONFIGURED_COPY = 'Budget tracking is not configured for this local workspace yet.';
+// 0.46: `getBudgetStatus` resolves a failed fetch to a zero ledger flagged
+// `unavailable` (lib/api.ts) — say so instead of presenting $0 as spend.
+const UNAVAILABLE_COPY = 'Budget figures are unavailable right now: the API did not answer or the cost ledger could not be read.';
+
 function formatUSD(value: string): string {
   const n = parseFloat(value);
   if (isNaN(n)) return '$—';
@@ -63,9 +68,11 @@ export default function BudgetWidget({ className = '' }: Props) {
     const load = async () => {
       try {
         const data = await getBudgetStatus();
-        if (mounted) { setBudget(data); setError(null); }
-      } catch (err) {
-        if (mounted) setError(err instanceof Error ? err.message : 'Failed to load');
+        if (!mounted) return;
+        if (data.unavailable) { setBudget(null); setError(UNAVAILABLE_COPY); }
+        else { setBudget(data); setError(null); }
+      } catch {
+        if (mounted) setError(NOT_CONFIGURED_COPY);
       } finally {
         if (mounted) setLoading(false);
       }
@@ -83,7 +90,12 @@ export default function BudgetWidget({ className = '' }: Props) {
             <path strokeLinecap="round" strokeLinejoin="round"
               d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <span className="font-semibold text-sm text-[#0a0a0a] dark:text-[#fafafa]">Budget</span>
+          <span
+            className="font-semibold text-sm text-[#0a0a0a] dark:text-[#fafafa]"
+            title="Cloud-model spend against the daily and monthly limits in config.yaml. Nothing here meters the desktop or electricity; the hourly desktop rate lives in the session pill."
+          >
+            Budget
+          </span>
         </div>
         {loading && (
           <div className="w-3 h-3 border-2 border-[#2563eb]/30 border-t-[#2563eb] rounded-full animate-spin" />
@@ -92,7 +104,7 @@ export default function BudgetWidget({ className = '' }: Props) {
 
       {error ? (
         <div className="text-xs text-[#737373] font-mono dark:text-[#a3a3a3]">
-          Budget tracking is not configured for this local workspace yet.
+          {error}
         </div>
       ) : loading ? (
         <div className="space-y-4">

@@ -1,5 +1,7 @@
 // Regression tests for lib/privileged.ts — the presentation rules behind the
-// red approval card for `privileged` Wizard tools (WizardChat.tsx ToolCard).
+// red approval card for `privileged` Wizard tools (chat/ToolCard.tsx), and
+// since 0.46 the question card (`ask_user`), the deferred-reason labels and
+// the planner cards (`generate_image`, `remember`).
 //
 // Runs on Node's built-in runner with native type stripping, like gpu.test.mjs:
 //
@@ -12,6 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  IMAGE_OUTPUT_URL_PREFIX,
   NEEDS_TERMINAL_HINT,
   PLAYBOOK_HANDOFF_PREFIX,
   PLAYBOOK_INSTALL_TOOL,
@@ -25,21 +28,35 @@ import {
   PRIVILEGED_DISABLED_NOTE,
   PRIVILEGED_RUN_LABEL,
   PRIVILEGED_SUDO_NOTE,
+  QUESTION_ANSWERED_BADGE,
+  QUESTION_ANSWER_LABEL,
+  QUESTION_MAX_CHOICES,
+  QUESTION_PENDING_BADGE,
+  QUESTION_SKIPPED_NOTE,
+  QUESTION_TOOL,
   SYSTEM_CHANGES_UNAVAILABLE,
+  applyHistoryPatch,
   applyPlaybookEvent,
   cardChrome,
+  deferredReasonLabel,
   historyToolOutcome,
   hostOs,
+  imageResult,
   initialPlaybookRun,
+  isImageOutputUrl,
+  isImageResult,
   isPendingStatus,
   isPrivilegedCall,
   isPrivilegedDisabled,
+  isQuestionCall,
+  isToolOutcomeFailure,
   jobOutcome,
   manualStepsFromNotes,
   needsTerminal,
   planLines,
   planNotes,
   planNotesWithoutManual,
+  planSummary,
   playbookCardStatus,
   playbookCatalogue,
   playbookChips,
@@ -50,11 +67,19 @@ import {
   playbookRunStart,
   playbookStepIndex,
   playbookStepNumber,
+  questionAllowsFreeText,
+  questionAnswer,
+  questionAnswerDetail,
+  questionChoices,
+  questionText,
+  rememberResult,
   settlePlaybookRun,
   systemChangesAvailable,
   systemChangesUnavailableNote,
   terminalCommand,
+  toolKey,
   unwrapToolResult,
+  vaultNoteHref,
 } from './privileged.ts';
 
 /** A catalog entry with only the fields the helpers read. */
@@ -69,7 +94,7 @@ function schema(safety_class, extra = {}) {
   };
 }
 
-const STATUSES = ['idle', 'running', 'ok', 'error', 'awaiting-confirm', 'needs-terminal', 'disabled', 'refused', 'dismissed'];
+const STATUSES = ['idle', 'running', 'ok', 'error', 'awaiting-confirm', 'needs-terminal', 'disabled', 'refused', 'dismissed', 'answered'];
 const PENDING = ['idle', 'awaiting-confirm'];
 const SETTLED = STATUSES.filter(s => !PENDING.includes(s));
 
@@ -924,4 +949,257 @@ test('systemChangesUnavailableNote: the server\'s sentence, word for word, per O
   assert.equal(systemChangesUnavailableNote('linux'), 'System changes are not available on this platform yet');
   // One sentence, no trailing stop: the page adds its own punctuation.
   assert.doesNotMatch(systemChangesUnavailableNote('windows'), /[.!]$/);
+});
+
+// ═══ 0.46: question cards, deferred reasons, planner cards ═══════════════════
+
+test('question card: ask_user is the one question tool; toolKey is the name', () => {
+  assert.equal(QUESTION_TOOL, 'ask_user');
+  assert.equal(isQuestionCall({ name: 'ask_user', arguments: {} }), true);
+  assert.equal(isQuestionCall({ name: 'remember', arguments: {} }), false);
+  // Exact match only.
+  assert.equal(isQuestionCall({ name: 'Ask_User', arguments: {} }), false);
+  assert.equal(isQuestionCall({ name: 'ask_user ', arguments: {} }), false);
+  assert.equal(isQuestionCall(undefined), false);
+  assert.equal(isQuestionCall(null), false);
+  assert.equal(toolKey({ name: 'ask_user' }), 'ask_user');
+  assert.equal(toolKey({ name: 'apt_install' }), 'apt_install');
+});
+
+test('question card: text, at most six string choices and the free-text default', () => {
+  const call = {
+    name: 'ask_user',
+    arguments: {
+      question: '  Which disk should hold models?  ',
+      choices: [' /mnt/nvme0', '', 42, '/home', null, 'c', 'd', 'e', 'f', 'g'],
+    },
+  };
+  assert.equal(questionText(call), 'Which disk should hold models?');
+  assert.deepEqual(questionChoices(call), ['/mnt/nvme0', '/home', 'c', 'd', 'e', 'f']);
+  assert.equal(questionChoices(call).length, QUESTION_MAX_CHOICES);
+  assert.equal(questionAllowsFreeText(call), true);
+  assert.equal(questionAllowsFreeText({ name: 'ask_user', arguments: { question: 'q', allow_free_text: false } }), false);
+  // Only an explicit false hides the box: the server's default is true.
+  assert.equal(questionAllowsFreeText({ name: 'ask_user', arguments: { question: 'q', allow_free_text: 'no' } }), true);
+  assert.equal(questionAllowsFreeText(undefined), true);
+  assert.equal(questionText({ name: 'ask_user', arguments: {} }), '');
+  assert.equal(questionText({ name: 'ask_user', arguments: { question: 7 } }), '');
+  assert.equal(questionText(null), '');
+  assert.deepEqual(questionChoices({ name: 'ask_user', arguments: { choices: 'a,b' } }), []);
+  assert.deepEqual(questionChoices({ name: 'ask_user', arguments: {} }), []);
+  assert.deepEqual(questionChoices(null), []);
+});
+
+test('question card: the answer detail round-trips through questionAnswer', () => {
+  const detail = questionAnswerDetail('  /mnt/nvme0 ');
+  assert.deepEqual(detail, { ok: true, summary: '/mnt/nvme0', result: { answer: '/mnt/nvme0' } });
+  assert.equal(questionAnswer(detail), '/mnt/nvme0');
+  // A flat `answer` (should an envelope ever carry one) is read first.
+  assert.equal(questionAnswer({ answer: 'flat', result: { answer: 'nested' } }), 'flat');
+  assert.equal(questionAnswer({ answer: '  ', result: { answer: 'nested' } }), 'nested');
+  assert.equal(questionAnswer({ ok: true }), '');
+  assert.equal(questionAnswer({ result: { answer: 9 } }), '');
+  assert.equal(questionAnswer(undefined), '');
+  assert.equal(questionAnswer(null), '');
+});
+
+test('answered is settled, green and never clickable; a question card says Answer', () => {
+  assert.equal(isPendingStatus('answered'), false);
+  const answered = cardChrome('confirm', 'answered', { question: true });
+  assert.equal(answered.badge, QUESTION_ANSWERED_BADGE);
+  assert.equal(answered.badgeColor, '#16a34a');
+  assert.equal(answered.clickable, false);
+  assert.equal(answered.borderColor, null);
+  assert.equal(answered.classBadge, null);
+  for (const status of PENDING) {
+    const q = cardChrome('confirm', status, { question: true });
+    assert.equal(q.badge, QUESTION_PENDING_BADGE, status);
+    assert.equal(q.runLabel, QUESTION_ANSWER_LABEL, status);
+    assert.equal(q.clickable, true, status);
+    assert.equal(q.privileged, false, status);
+    assert.equal(q.classBadge, null, status);
+    assert.equal(q.borderColor, null, status);
+  }
+  assert.equal(cardChrome('confirm', 'dismissed', { question: true }).badge, 'Skipped');
+  assert.equal(cardChrome(undefined, 'idle', { question: true }).badge, QUESTION_PENDING_BADGE);
+  // Without the option (or with an empty one) the ordinary confirm chrome is
+  // byte-identical to before the option existed.
+  for (const status of STATUSES) {
+    assert.deepEqual(cardChrome('confirm', status, {}), cardChrome('confirm', status), status);
+    assert.deepEqual(cardChrome('confirm', status, { question: false }), cardChrome('confirm', status), status);
+  }
+  // Status wins for a non-question card too; a privileged card is never a
+  // question card (red and "Approve and run" win).
+  assert.equal(cardChrome('privileged', 'answered').badge, QUESTION_ANSWERED_BADGE);
+  assert.equal(cardChrome('privileged', 'answered').borderColor, PRIVILEGED_COLOR);
+  assert.equal(cardChrome('privileged', 'idle', { question: true }).runLabel, PRIVILEGED_RUN_LABEL);
+  assert.equal(cardChrome('privileged', 'idle', { question: true }).badge, 'Needs your approval');
+});
+
+test('historyToolOutcome: an answered question is ok with the answer; a skipped one says not answered', () => {
+  assert.deepEqual(historyToolOutcome('ask_user', 'answered', 'shown on the card', questionAnswerDetail('/mnt/nvme0')), {
+    name: 'ask_user', ok: true, summary: '/mnt/nvme0',
+  });
+  // No detail: the card's summary is the answer; nothing at all still reads as answered.
+  assert.deepEqual(historyToolOutcome('ask_user', 'answered', 'from the summary'), {
+    name: 'ask_user', ok: true, summary: 'from the summary',
+  });
+  assert.equal(historyToolOutcome('ask_user', 'answered', undefined).summary, 'answered');
+  // Cut to the history cap like every other outcome; the message itself is not.
+  const long = historyToolOutcome('ask_user', 'answered', '', questionAnswerDetail('y'.repeat(1000)));
+  assert.equal(long.summary.length, 300);
+  assert.equal(long.ok, true);
+  // The exact words the server's history test pins (tests/test_wizard_chat_stream.py).
+  assert.deepEqual(historyToolOutcome('ask_user', 'dismissed', undefined), {
+    name: 'ask_user', ok: false, summary: QUESTION_SKIPPED_NOTE,
+  });
+  assert.equal(QUESTION_SKIPPED_NOTE, 'skipped by the user; not answered');
+  // Every other tool keeps its wording.
+  assert.equal(historyToolOutcome('remember', 'dismissed', undefined).summary, 'skipped by the user; not run');
+  assert.equal(historyToolOutcome('generate_image', 'dismissed', 'x').summary, 'skipped by the user; not run');
+});
+
+test('deferredReasonLabel: question_pending is translated, other reasons pass through, none is empty', () => {
+  assert.equal(deferredReasonLabel('question_pending'), 'held until you answer the question above');
+  assert.equal(deferredReasonLabel('max_iterations'), 'max_iterations');
+  assert.equal(deferredReasonLabel('cost_ceiling'), 'cost_ceiling');
+  assert.equal(deferredReasonLabel('  followup_disabled '), 'followup_disabled');
+  assert.equal(deferredReasonLabel('a reason this build never heard of'), 'a reason this build never heard of');
+  assert.equal(deferredReasonLabel(''), '');
+  assert.equal(deferredReasonLabel('   '), '');
+  assert.equal(deferredReasonLabel(null), '');
+  assert.equal(deferredReasonLabel(undefined), '');
+});
+
+test('isImageResult / imageResult: only an ok result with an outputs URL counts', () => {
+  const img = {
+    ok: true,
+    url: '/v1/outputs/images/wizard/a.png',
+    path: '/home/x/outputs/images/wizard/a.png',
+    backend: 'comfyui',
+    model: 'sdxl',
+    width: 1024,
+    height: 1024,
+    cost_usd: 0,
+    cost_known: true,
+    latency_ms: 1200,
+    note: 'saved to /home/x/outputs/images/wizard/a.png; nvHive does not prune this folder',
+  };
+  assert.equal(IMAGE_OUTPUT_URL_PREFIX, '/v1/outputs/images/');
+  assert.equal(isImageResult(img), true);
+  assert.deepEqual(imageResult(img), img);
+  assert.equal(isImageResult({ ok: false, error: 'ComfyUI is down' }), false);
+  assert.equal(isImageResult({ ok: true, url: 'https://example.invalid/a.png' }), false);
+  assert.equal(isImageResult({ ok: true, url: '/v1/wizard/profiles/x/avatar' }), false);
+  assert.equal(isImageResult({ ok: false, url: '/v1/outputs/images/wizard/a.png' }), false);
+  assert.equal(isImageResult({ ok: true }), false);
+  // The exact <scope>/<file> shape only: no dot segment, query, fragment,
+  // empty segment or extra depth can steer the authenticated fetch elsewhere.
+  for (const url of [
+    '/v1/outputs/images/../../v1/wizard/context',
+    '/v1/outputs/images/%2e%2e/%2e%2e/v1/keys',
+    '/v1/outputs/images/wizard/..%2f..%2fv1/keys',
+    '/v1/outputs/images/wizard/a.png?x=1',
+    '/v1/outputs/images/wizard/a.png#frag',
+    '/v1/outputs/images//a.png',
+    '/v1/outputs/images/wizard/',
+    '/v1/outputs/images/wizard',
+    '/v1/outputs/images/wizard/sub/a.png',
+    '/v1/outputs/images/wizard/a.png/',
+    '/v1/outputs/images/wizard/a',
+    '//example.invalid/v1/outputs/images/wizard/a.png',
+  ]) {
+    assert.equal(isImageOutputUrl(url), false, url);
+    assert.equal(isImageResult({ ok: true, url }), false, url);
+  }
+  // What imagegen.py mints: `<timestamp>-<uuid8><suffix>` under a SCOPE_RE scope.
+  assert.equal(isImageOutputUrl('/v1/outputs/images/wizard/20261102093109-ab12cd34.png'), true);
+  assert.equal(isImageOutputUrl('/v1/outputs/images/my_profile-1/x.webp'), true);
+  assert.equal(isImageOutputUrl(undefined), false);
+  assert.equal(isImageOutputUrl(42), false);
+  assert.equal(imageResult(null), null);
+  assert.equal(imageResult('str'), null);
+  assert.equal(imageResult([]), null);
+});
+
+test('rememberResult / vaultNoteHref: saved:true with an id links to the vault; saved:false is a failure with no ok key', () => {
+  const saved = {
+    saved: true, id: 'ab12', path: '/v/Wizard Memory/x.md', title: 'x', category: 'Wizard Memory',
+    tags: [], indexed: true, redacted: 0,
+  };
+  assert.deepEqual(rememberResult(saved), saved);
+  assert.equal(rememberResult({ saved: false, error: 'body is all secret' }), null);
+  assert.equal(rememberResult({ saved: true }), null);
+  assert.equal(rememberResult({ saved: true, id: '' }), null);
+  assert.equal(rememberResult(undefined), null);
+  assert.equal(rememberResult('x'), null);
+  assert.equal(vaultNoteHref('ab12'), '/vault?id=ab12');
+  assert.equal(vaultNoteHref('a b'), '/vault?id=a%20b');
+  assert.equal(isToolOutcomeFailure({ saved: false, error: 'x' }), true);
+  assert.equal(isToolOutcomeFailure({ ok: false }), true);
+  assert.equal(isToolOutcomeFailure({ saved: true }), false);
+  assert.equal(isToolOutcomeFailure({ ok: true }), false);
+  // No verdict key is not a failure: many handlers never send one.
+  assert.equal(isToolOutcomeFailure({ answered_in_chat: true }), false);
+  assert.equal(isToolOutcomeFailure({}), false);
+  assert.equal(isToolOutcomeFailure(undefined), false);
+  assert.equal(isToolOutcomeFailure(null), false);
+});
+
+test('planSummary: the summary verbatim, else backend · model · cost, else nothing', () => {
+  assert.equal(
+    planSummary({ ok: true, commands: [], summary: ' local ComfyUI on 127.0.0.1:8188 · $0 · uses GPU memory while it runs ' }, '$0.0000'),
+    'local ComfyUI on 127.0.0.1:8188 · $0 · uses GPU memory while it runs',
+  );
+  assert.equal(planSummary({ ok: true, commands: [], backend: 'nvidia', model: 'sdxl-turbo' }, 'cost unknown'), 'nvidia · sdxl-turbo · cost unknown');
+  assert.equal(planSummary({ ok: true, commands: [], backend: 'comfyui' }), 'comfyui');
+  assert.equal(planSummary({ ok: true, commands: [], backend: 'comfyui', model: '' }, '  '), 'comfyui');
+  assert.equal(planSummary({ ok: false, commands: [], backend: null, error: 'no image backend' }), '');
+  assert.equal(planSummary({ ok: true, commands: [] }), '');
+  // A privileged plan (a bare command list or a Plan.to_dict without the image
+  // fields) has no plan line: PlanDetails shows its commands instead.
+  assert.equal(planSummary(['sudo apt-get install -y htop']), '');
+  assert.equal(planSummary({ ok: true, commands: ['sudo ufw enable'], changes: 'enables the firewall' }), '');
+  assert.equal(planSummary(null), '');
+  assert.equal(planSummary(undefined), '');
+  assert.equal(planSummary('summary as a string'), '');
+});
+
+test('applyHistoryPatch: folds one card outcome into the message it names and nothing else', () => {
+  const asked = {
+    id: 'm2',
+    role: 'assistant',
+    content: '',
+    toolCalls: [{ name: 'ask_user', arguments: { question: 'Which disk?' } }],
+    toolStatus: { ask_user: 'awaiting-confirm', remember: 'ok' },
+    toolResults: { remember: 'saved' },
+  };
+  const other = { id: 'm1', role: 'user', content: 'hi' };
+  const patch = {
+    messageId: 'm2',
+    key: 'ask_user',
+    status: 'answered',
+    summary: '/mnt/nvme0',
+    detail: questionAnswerDetail('/mnt/nvme0'),
+  };
+  const out = applyHistoryPatch([other, asked], patch);
+  assert.equal(out.length, 2);
+  assert.strictEqual(out[0], other, 'untouched messages keep their identity');
+  assert.notStrictEqual(out[1], asked, 'the patched message is a copy');
+  assert.deepEqual(out[1].toolStatus, { ask_user: 'answered', remember: 'ok' });
+  assert.deepEqual(out[1].toolResults, { remember: 'saved', ask_user: '/mnt/nvme0' });
+  assert.deepEqual(out[1].toolDetails, { ask_user: questionAnswerDetail('/mnt/nvme0') });
+  assert.deepEqual(asked.toolStatus, { ask_user: 'awaiting-confirm', remember: 'ok' }, 'the input is not mutated');
+  // The fold is what puts the answer on the wire: the patched message, read
+  // back the way `send` builds the history, yields the TOOL_RESULT line.
+  const line = historyToolOutcome('ask_user', out[1].toolStatus.ask_user, out[1].toolResults.ask_user, out[1].toolDetails.ask_user);
+  assert.deepEqual(line, { name: 'ask_user', ok: true, summary: '/mnt/nvme0' });
+  // Status only: no summary / detail keys are invented.
+  const bare = applyHistoryPatch([asked], { messageId: 'm2', key: 'ask_user', status: 'dismissed' });
+  assert.equal(bare[0].toolStatus.ask_user, 'dismissed');
+  assert.deepEqual(bare[0].toolResults, { remember: 'saved' });
+  assert.equal('toolDetails' in bare[0], false);
+  // An unknown message id changes nothing.
+  assert.deepEqual(applyHistoryPatch([other], patch), [other]);
+  assert.deepEqual(applyHistoryPatch([], patch), []);
 });
