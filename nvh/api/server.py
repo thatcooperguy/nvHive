@@ -45,9 +45,19 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 
+from nvh.api.deps import (  # re-exported: every `from nvh.api.server import ...` keeps working
+    _bearer_scheme,
+    _get_council_api_key,  # noqa: F401 — re-exported for callers that import it from here
+    _get_current_user_optional,
+    _response_envelope,
+    auth_mode,
+    get_engine,
+    key_required,
+    require_auth,
+)
 from nvh.api.services import QueryService
 from nvh.core import local_models
 from nvh.core.agents import generate_agents, get_preset_agents, list_presets
@@ -101,97 +111,10 @@ def _resource_pause_response(endpoint):
 # ---------------------------------------------------------------------------
 # Optional API key authentication
 # ---------------------------------------------------------------------------
-
-_bearer_scheme = HTTPBearer(auto_error=False)
-
-
-def _get_council_api_key() -> str | None:
-    """Return the HIVE_API_KEY env var if set, otherwise None (open mode)."""
-    return os.environ.get("HIVE_API_KEY") or None
-
-
-async def _get_current_user_optional(
-    credentials: HTTPAuthorizationCredentials | None,
-    x_key: str | None,
-) -> Any | None:
-    """Try to resolve a User from a bearer token if user auth is enabled.
-
-    Returns the User object on success, None if user auth is not active or the
-    token does not resolve to a user-based token.
-    """
-    from nvh.auth.auth import get_user_by_token, get_user_count
-    try:
-        if await get_user_count() == 0:
-            return None  # no users registered — fall through to API key mode
-    except Exception:
-        return None
-
-    token: str | None = None
-    if credentials:
-        token = credentials.credentials
-    elif x_key:
-        token = x_key
-
-    if token is None:
-        return None
-
-    return await get_user_by_token(token)
-
-
-async def require_auth(
-    request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-) -> Any:
-    """FastAPI dependency that enforces authentication.
-
-    Priority:
-    1. User-based auth (when users table has entries): validates API tokens
-       created via the /v1/auth/* endpoints.
-    2. Simple HIVE_API_KEY env var (single-user, legacy).
-    3. Open/local mode — whenever HIVE_API_KEY is unset: a request without a
-       valid user token is admitted even when users exist (users add a
-       credential; only the key closes the API). SECURITY.md documents this
-       and ``_auth_open_mode`` must keep mirroring it.
-
-    Accepts credentials via:
-    - ``Authorization: Bearer <token>`` header
-    - ``X-Hive-API-Key: <key>`` header
-    """
-    x_key = request.headers.get("X-Hive-API-Key")
-
-    # Try user-based auth first
-    user = await _get_current_user_optional(credentials, x_key)
-    if user is not None:
-        if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User account is disabled.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return user
-
-    # Fall back to simple API key
-    expected = _get_council_api_key()
-    if expected is None:
-        # Open mode — no auth required
-        return None
-
-    # Check Bearer token
-    if credentials and hmac.compare_digest(credentials.credentials, expected):
-        return None
-
-    # Check X-Hive-API-Key header
-    if x_key and hmac.compare_digest(x_key, expected):
-        return None
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=(
-            "Authentication required. Provide a valid API key via "
-            "'Authorization: Bearer <key>' or 'X-Hive-API-Key: <key>' header."
-        ),
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+# ``_bearer_scheme``, ``_get_council_api_key``, ``_get_current_user_optional``
+# and ``require_auth`` live in nvh/api/deps.py since 0.46 and are imported
+# above under their old names; the routes below keep depending on the bare
+# names, so a patch on ``nvh.api.server.require_auth`` still lands here.
 
 
 async def require_user_auth(
@@ -310,14 +233,11 @@ def _validate_webhook_url(url: str) -> None:
 # ---------------------------------------------------------------------------
 # Shared engine instance
 # ---------------------------------------------------------------------------
+# The lifespan assigns this global (``global _engine``) and tests swap it;
+# ``get_engine`` (nvh/api/deps.py, imported above) reads it from this module
+# at call time, so both keep working.
 
 _engine: Engine | None = None
-
-
-def get_engine() -> Engine:
-    if _engine is None:
-        raise RuntimeError("Engine not initialized. Server startup failed.")
-    return _engine
 
 
 async def _run_boot_preflight_on_startup(app: FastAPI) -> None:
@@ -581,10 +501,6 @@ async def request_logging_middleware(request: Request, call_next):
 def _decimal_to_str(value: Decimal | None) -> str | None:
     """Serialize Decimal to string to preserve precision."""
     return str(value) if value is not None else None
-
-
-def _response_envelope(data: Any) -> dict[str, Any]:
-    return {"status": "success", "data": data}
 
 
 def _catalog_cost_known(
@@ -915,12 +831,31 @@ async def _sse_query_stream(
 
 @app.get("/v1/health", summary="API health check")
 async def health_check() -> dict[str, Any]:
+    """Liveness, plus the facts a client needs before it sends a request.
+
+    ``bind_host`` is the interface ``run_server`` bound (``app.state`` or the
+    ``NVH_API_BIND_HOST`` it exports, see ``_api_bind_host``), or ``null``
+    when the app was not started by ``run_server`` (a bare ``uvicorn
+    nvh.api.server:app``, embedding, TestClient): the process then cannot
+    vouch for the interface it listens on, and a client must treat unknown as
+    not-loopback — the same ``None`` ``_privileged_network_refusal`` treats
+    as unknown rather than as safe. ``auth_mode`` is the first tier
+    ``require_auth`` applies (``users`` / ``key`` / ``open``,
+    ``nvh.api.deps.auth_mode``) and ``key_required`` whether a token-less
+    request is refused (``HIVE_API_KEY`` set; ``users`` without the key is
+    still open mode). All are deliberately on this open route so ``nvh
+    launch`` can refuse an off-loopback open-mode API or ask for a user token
+    client-side; SECURITY.md states the disclosure.
+    """
     engine = get_engine()
     enabled = engine.registry.list_enabled()
     return _response_envelope({
         "status": "ok",
         "engine_initialized": engine._initialized,
         "providers_enabled": len(enabled),
+        "bind_host": _api_bind_host(),
+        "auth_mode": await auth_mode(),
+        "key_required": key_required(),
     })
 
 
@@ -1427,6 +1362,11 @@ class VaultMemoryRequest(BaseModel):
     body: str = Field(..., min_length=1, max_length=20000)
     category: str = Field(default="Wizard Memory", max_length=80)
     tags: list[str] = Field(default_factory=list)
+    source: str = Field(
+        default="api",
+        max_length=16,
+        description="The writer stamped as `Source:` (`api`, `web`, `wizard`, ...; see MEMORY_SOURCES)",
+    )
     home_dir: str | None = Field(
         default=None,
         description="Optional NVH_HOME on the persistent mounted volume",
@@ -1499,18 +1439,27 @@ async def vault_memory_endpoint(
     request: VaultMemoryRequest,
     _auth: None = Depends(require_auth),
 ) -> dict[str, Any]:
-    """Write a Markdown memory note without using a database or root path."""
+    """Write a Markdown memory note without using a database or root path.
+
+    The writer refuses a body that is nothing but a secret
+    (``ValueError("nothing to remember after redacting secrets")``); that is
+    a client-input condition and comes back as a 400 with the writer's own
+    words, the text the REPL prints — not as a 500 with a server traceback.
+    """
     from nvh.integrations.workspace.vault import append_vault_memory
 
-    return _response_envelope(
-        append_vault_memory(
+    try:
+        note = append_vault_memory(
             request.title,
             request.body,
             category=request.category,
             tags=request.tags,
             home_dir=request.home_dir,
+            source=request.source,
         )
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _response_envelope(note)
 
 
 @app.post("/v1/vault/obsidian/install", summary="Install Obsidian rootlessly")
@@ -2564,8 +2513,10 @@ async def _auth_open_mode() -> bool:
     with no (or an unknown) token whenever the key is unset, however many rows
     the users table has, so counting users here would skip the bind-host
     refusal in the one configuration where the API really is open.
+    ``nvh.api.deps.key_required`` is the same predicate, inverted, for the
+    ``/v1/health`` payload.
     """
-    return _get_council_api_key() is None
+    return not key_required()
 
 
 async def _privileged_network_refusal(http_request: Request) -> dict[str, Any] | None:
@@ -6356,6 +6307,7 @@ class AnthropicMessageRequest(BaseModel):
 async def anthropic_messages(
     request: AnthropicMessageRequest,
     raw_request: Request,
+    _auth: Any = Depends(require_auth),
 ):
     """Anthropic Messages API compatible endpoint.
 
@@ -6487,6 +6439,42 @@ async def anthropic_messages(
 
 
 # ---------------------------------------------------------------------------
+# Standard paths  (/v1/chat/completions, /v1/completions, /v1/anthropic/v1/messages)
+# ---------------------------------------------------------------------------
+# ``OPENAI_BASE_URL=http://127.0.0.1:8000/v1`` and
+# ``ANTHROPIC_BASE_URL=http://127.0.0.1:8000/v1/anthropic`` now resolve: the
+# OpenAI SDKs append ``/chat/completions`` / ``/completions`` to their base
+# URL and the Anthropic SDKs append ``/v1/messages``. Each alias registers the
+# decorated handler object itself, so ``Depends(require_auth)`` and the
+# ``_resource_pause_response`` mapping carry over unchanged; ``/v1/proxy/*``
+# and ``/v1/anthropic/messages`` stay. ``GET /v1/models`` keeps the nvHive
+# envelope — the OpenAI-shaped list is ``/v1/proxy/models``.
+# ---------------------------------------------------------------------------
+
+app.add_api_route(
+    "/v1/chat/completions",
+    proxy_chat_completions,
+    methods=["POST"],
+    summary="OpenAI-compatible chat completions (standard path)",
+    tags=["proxy"],
+)
+app.add_api_route(
+    "/v1/completions",
+    proxy_completions,
+    methods=["POST"],
+    summary="OpenAI-compatible legacy text completions (standard path)",
+    tags=["proxy"],
+)
+app.add_api_route(
+    "/v1/anthropic/v1/messages",
+    anthropic_messages,
+    methods=["POST"],
+    summary="Anthropic Messages API proxy (SDK base-URL path)",
+    tags=["anthropic-proxy"],
+)
+
+
+# ---------------------------------------------------------------------------
 # Integrations API  (/v1/integrations/*)
 # ---------------------------------------------------------------------------
 
@@ -6495,7 +6483,7 @@ async def anthropic_messages(
     summary="Scan for installed AI platforms",
     tags=["integrations"],
 )
-async def integrations_scan():
+async def integrations_scan(_auth: Any = Depends(require_auth)):
     """Detect installed AI platforms and their connection status."""
     from nvh.integrations.diagnostics.detector import detect_platforms
 

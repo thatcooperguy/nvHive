@@ -188,6 +188,12 @@ _SECRET_PATTERNS: list[tuple[re.Pattern, str]] = [
     # sk-or-v1-…) go first: the plain pattern below stops at the second dash
     # and would leave the key body in the clear.
     (re.compile(r'sk-[a-z]+(?:-v\d+)?-[A-Za-z0-9_-]{20,}'), "[REDACTED:api_key]"),
+    # Provider prefixes with their own shape (NVIDIA, Groq, Hugging Face).
+    # ``gsk_`` must precede the plain pattern below, which would otherwise
+    # match its ``sk_…`` tail and leave a stray ``g`` in the clear.
+    (re.compile(r'nvapi-[A-Za-z0-9_-]{20,}'), "[REDACTED:nvidia_key]"),
+    (re.compile(r'gsk_[A-Za-z0-9]{20,}'), "[REDACTED:groq_key]"),
+    (re.compile(r'hf_[A-Za-z0-9]{20,}'), "[REDACTED:hf_token]"),
     (re.compile(r'(?:sk|pk|api[_-]?key)[_-][a-zA-Z0-9]{20,}'), "[REDACTED:api_key]"),
     (re.compile(r'ghp_[a-zA-Z0-9]{36,}'), "[REDACTED:github_pat]"),
     (re.compile(r'gho_[a-zA-Z0-9]{36,}'), "[REDACTED:github_oauth]"),

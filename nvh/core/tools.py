@@ -1294,6 +1294,7 @@ def audit_privileged_change(
             category="Decisions",
             tags=["privileged", name],
             home_dir=home_dir,
+            source="audit",
         )
         return {"saved": bool(note.get("saved")), "path": note.get("path"), "category": note.get("category")}
     except Exception as exc:

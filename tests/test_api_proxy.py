@@ -9,14 +9,17 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from decimal import Decimal
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 import nvh.api.server as server_module
+import nvh.storage.repository as repo
 from nvh.api.proxy import (
     anthropic_messages_to_nvhive,
+    anthropic_stream_generator,
     build_models_list,
     format_anthropic_response,
     format_openai_response,
@@ -36,7 +39,7 @@ from nvh.config.settings import (
     ProviderConfig,
     RoutingConfig,
 )
-from nvh.core.engine import Engine
+from nvh.core.engine import BudgetExceededError, Engine
 from nvh.providers.base import (
     CompletionResponse,
     FinishReason,
@@ -582,3 +585,214 @@ class TestStreamErrorPath:
         data_lines = [d for _, d in events if d.strip() not in ("[DONE]", "")]
         json_events = [json.loads(d) for d in data_lines]
         assert any("error" in e for e in json_events)
+
+
+# ---------------------------------------------------------------------------
+# Standard paths, auth tightening, streamed budget + ledger (0.46)
+# ---------------------------------------------------------------------------
+
+_KEY = "secret-test-key-abc123"
+_BEARER = {"Authorization": f"Bearer {_KEY}"}
+_CHAT = {"model": "auto", "messages": [{"role": "user", "content": "hello"}]}
+_TEXT = {"model": "auto", "prompt": "Say hi"}
+_ANTHROPIC = {"model": "auto", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 64}
+
+
+@pytest.fixture()
+def keyed_client(sync_db, monkeypatch):
+    """TestClient with HIVE_API_KEY set so require_auth demands a credential."""
+    monkeypatch.setenv("HIVE_API_KEY", _KEY)
+    yield from _client_for(_make_engine())
+
+
+@pytest.fixture()
+def open_client(sync_db, monkeypatch):
+    """TestClient with HIVE_API_KEY explicitly unset (open mode)."""
+    monkeypatch.delenv("HIVE_API_KEY", raising=False)
+    yield from _client_for(_make_engine())
+
+
+def _json_events(raw: str) -> list[dict]:
+    return [json.loads(d) for _, d in _parse_sse_events(raw) if d.strip() not in ("[DONE]", "")]
+
+
+class TestStandardPaths:
+    """``OPENAI_BASE_URL=.../v1`` and ``ANTHROPIC_BASE_URL=.../v1/anthropic`` resolve to the
+    same handler objects as ``/v1/proxy/*`` and ``/v1/anthropic/messages``, which stay."""
+
+    def test_chat_completions_returns_the_proxy_shape(self, open_client: TestClient) -> None:
+        std = open_client.post("/v1/chat/completions", json={**_CHAT, "stream": False})
+        legacy = open_client.post("/v1/proxy/chat/completions", json={**_CHAT, "stream": False})
+        assert std.status_code == legacy.status_code == 200
+        a, b = std.json(), legacy.json()
+        assert a["object"] == b["object"] == "chat.completion"
+        assert a["id"].startswith("chatcmpl-") and b["id"].startswith("chatcmpl-")
+        assert set(a) == set(b)
+        assert a["choices"][0]["message"]["content"] == b["choices"][0]["message"]["content"]
+
+    def test_chat_completions_streams_like_the_proxy_path(self, open_client: TestClient) -> None:
+        resp = open_client.post("/v1/chat/completions", json={**_CHAT, "stream": True})
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        events = _json_events(resp.text)
+        assert events[0]["choices"][0]["delta"].get("role") == "assistant"
+        assert all(e["object"] == "chat.completion.chunk" and e["id"].startswith("chatcmpl-") for e in events)
+        assert events[-1]["choices"][0]["finish_reason"] == "stop"
+        assert resp.text.rstrip().endswith("data: [DONE]")
+
+    def test_completions_returns_the_proxy_shape(self, open_client: TestClient) -> None:
+        std = open_client.post("/v1/completions", json=_TEXT)
+        legacy = open_client.post("/v1/proxy/completions", json=_TEXT)
+        assert std.status_code == legacy.status_code == 200
+        assert std.json()["object"] == legacy.json()["object"] == "text_completion"
+        assert std.json()["id"].startswith("cmpl-")
+        assert set(std.json()) == set(legacy.json())
+
+    def test_anthropic_sdk_path_returns_the_messages_shape(self, open_client: TestClient) -> None:
+        std = open_client.post("/v1/anthropic/v1/messages", json=_ANTHROPIC)
+        legacy = open_client.post("/v1/anthropic/messages", json=_ANTHROPIC)
+        assert std.status_code == legacy.status_code == 200
+        assert std.json()["type"] == legacy.json()["type"] == "message"
+        assert std.json()["id"].startswith("msg_")
+        assert set(std.json()) == set(legacy.json())
+
+    def test_aliases_are_in_the_schema_and_models_keeps_the_nvhive_envelope(self, open_client: TestClient) -> None:
+        paths = open_client.get("/openapi.json").json()["paths"]
+        for path in ("/v1/chat/completions", "/v1/completions", "/v1/anthropic/v1/messages",
+                     "/v1/proxy/chat/completions", "/v1/proxy/completions", "/v1/anthropic/messages"):
+            assert "post" in paths[path], path
+        # O1: GET /v1/models is not aliased; the OpenAI-shaped list stays at /v1/proxy/models.
+        assert set(open_client.get("/v1/models").json()) == {"status", "data"}
+        assert open_client.get("/v1/proxy/models").json()["object"] == "list"
+
+
+class TestStandardPathAuth:
+    """A keyed deployment demands the key on every proxy path, the Anthropic proxy included
+    (open until 0.46); ``/v1/proxy/health`` and ``/v1/health`` stay open for monitors."""
+
+    @pytest.mark.parametrize("path,body", [
+        ("/v1/chat/completions", _CHAT),
+        ("/v1/completions", _TEXT),
+        ("/v1/proxy/chat/completions", _CHAT),
+        ("/v1/anthropic/messages", _ANTHROPIC),
+        ("/v1/anthropic/v1/messages", _ANTHROPIC),
+    ])
+    def test_keyed_rejects_a_bare_request_and_accepts_the_bearer(self, keyed_client: TestClient, path, body) -> None:
+        assert keyed_client.post(path, json=body).status_code == 401
+        assert keyed_client.post(path, json=body, headers=_BEARER).status_code == 200
+
+    def test_health_routes_stay_open_when_keyed(self, keyed_client: TestClient) -> None:
+        assert keyed_client.get("/v1/proxy/health").status_code == 200
+        assert keyed_client.get("/v1/health").status_code == 200
+
+    @pytest.mark.parametrize("path", ["/v1/anthropic/messages", "/v1/anthropic/v1/messages"])
+    def test_open_mode_admits_the_anthropic_proxy(self, open_client: TestClient, path) -> None:
+        assert open_client.post(path, json=_ANTHROPIC).status_code == 200
+
+
+def _record_ledger(monkeypatch) -> list[dict]:
+    """Capture every ``QueryLog`` row ``Engine._log_query`` would write (it looks
+    ``repo.log_query`` up at call time)."""
+    rows: list[dict] = []
+
+    async def _log_query(**kwargs):
+        rows.append(kwargs)
+
+    monkeypatch.setattr(repo, "log_query", _log_query)
+    return rows
+
+
+class TestStreamedProxyLedger:
+    """Streamed completions are logged like non-streamed ones: one row, the final
+    chunk's cost and tokens, ``mode="proxy"``."""
+
+    def test_openai_stream_leaves_one_row_with_the_chunk_cost(self, open_client: TestClient, monkeypatch) -> None:
+        rows = _record_ledger(monkeypatch)
+        resp = open_client.post("/v1/chat/completions", json={**_CHAT, "stream": True})
+        assert resp.status_code == 200 and resp.text.rstrip().endswith("data: [DONE]")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["mode"] == "proxy"
+        assert row["provider"] == "alpha" and row["model"] == "test-model"
+        assert row["cost_usd"] == Decimal("0.0005")
+        assert (row["input_tokens"], row["output_tokens"]) == (10, 5)
+        assert row["status"] == "success"
+
+    def test_anthropic_stream_leaves_one_row_with_the_chunk_cost(self, open_client: TestClient, monkeypatch) -> None:
+        rows = _record_ledger(monkeypatch)
+        resp = open_client.post("/v1/anthropic/messages", json={**_ANTHROPIC, "stream": True})
+        assert resp.status_code == 200 and "message_stop" in resp.text
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["mode"] == "proxy"
+        assert row["provider"] == "alpha" and row["model"] == "test-model"
+        assert row["cost_usd"] == Decimal("0.0005")
+        assert (row["input_tokens"], row["output_tokens"]) == (10, 5)
+
+    def test_a_stream_that_errors_leaves_no_success_row(self, error_client: TestClient, monkeypatch) -> None:
+        rows = _record_ledger(monkeypatch)
+        resp = error_client.post("/v1/chat/completions", json={**_CHAT, "stream": True})
+        assert resp.status_code == 200
+        assert any("error" in e for e in _json_events(resp.text))
+        assert rows == []
+
+    def test_an_erroring_anthropic_stream_leaves_no_success_row(self, error_client: TestClient, monkeypatch) -> None:
+        rows = _record_ledger(monkeypatch)
+        resp = error_client.post("/v1/anthropic/messages", json={**_ANTHROPIC, "stream": True})
+        assert resp.status_code == 200
+        assert "event: error" in resp.text and "message_stop" not in resp.text
+        assert rows == []
+
+
+def _budget_blocked_engine() -> SimpleNamespace:
+    """A fake engine whose budget check refuses; the provider records every stream call."""
+    decision = SimpleNamespace(provider="alpha", model="test-model")
+    provider = SimpleNamespace(stream=MagicMock(name="stream"))
+    return SimpleNamespace(
+        config=CouncilConfig(),
+        router=SimpleNamespace(route=lambda **kw: decision),
+        registry=SimpleNamespace(has=lambda name: True, get=lambda name: provider),
+        _check_budget=AsyncMock(side_effect=BudgetExceededError("budget exhausted")),
+        _log_query=AsyncMock(),
+        provider=provider,
+    )
+
+
+class TestStreamedProxyBudget:
+    """``budget.hard_stop`` applies to streamed calls: the generator emits its own
+    error shape with ``type: budget_exceeded`` and never touches the provider."""
+
+    @pytest.mark.asyncio
+    async def test_openai_generator_emits_budget_exceeded_then_done(self) -> None:
+        engine = _budget_blocked_engine()
+        out = b"".join([c async for c in openai_stream_generator(engine, "hi", None, None, None, None, None, "auto")])
+        lines = [line for line in out.decode().splitlines() if line.startswith("data: ")]
+        assert len(lines) == 2
+        error = json.loads(lines[0][6:])["error"]
+        assert error == {"message": "budget exhausted", "type": "budget_exceeded", "code": "budget_exceeded"}
+        assert lines[1] == "data: [DONE]"
+        engine.provider.stream.assert_not_called()
+        engine._log_query.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_anthropic_generator_emits_budget_exceeded_error_event(self) -> None:
+        engine = _budget_blocked_engine()
+        out = b"".join([c async for c in anthropic_stream_generator(engine, "hi", None, None, None, None, None, "auto")])
+        text = out.decode()
+        events = _parse_sse_events(text)
+        assert [t for t, _ in events] == ["error"]
+        payload = json.loads(events[0][1])
+        assert payload == {"type": "error", "error": {"type": "budget_exceeded", "message": "budget exhausted"}}
+        assert "message_start" not in text and "message_stop" not in text
+        engine.provider.stream.assert_not_called()
+        engine._log_query.assert_not_awaited()
+
+    def test_endpoint_streams_the_refusal_as_an_event(self, open_client: TestClient) -> None:
+        engine = server_module._engine
+        assert isinstance(engine, Engine)
+        engine._check_budget = AsyncMock(side_effect=BudgetExceededError("budget exhausted"))  # type: ignore[method-assign]
+        resp = open_client.post("/v1/chat/completions", json={**_CHAT, "stream": True})
+        assert resp.status_code == 200
+        events = _json_events(resp.text)
+        assert len(events) == 1 and events[0]["error"]["type"] == "budget_exceeded"
+        assert resp.text.rstrip().endswith("data: [DONE]")

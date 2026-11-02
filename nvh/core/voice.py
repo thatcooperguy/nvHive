@@ -1,7 +1,7 @@
 """NVHive Voice I/O — speak to NVHive, hear responses.
 
 Uses:
-- Speech-to-text: Whisper via Groq (free, fast) or local Whisper via Ollama
+- Speech-to-text: Whisper via Groq (free, fast) or the local `whisper` CLI when it is on PATH
 - Text-to-speech: Edge TTS (free, no API key) or system TTS
 
 No additional dependencies required — uses httpx for API calls
@@ -43,7 +43,7 @@ async def speech_to_text(audio_path: str, provider: str = "groq") -> str:
                 pass
 
         if not key:
-            raise ValueError("Groq API key needed for voice input. Run: nvh groq")
+            raise ValueError("Groq API key needed for voice input. Run: nvh advisor add groq")
 
         async with httpx.AsyncClient() as client:
             with open(audio_path, "rb") as f:
@@ -149,7 +149,7 @@ async def play_audio(path: str) -> None:
 async def record_audio(duration: float = 10.0, output_path: str | None = None) -> str:
     """Record audio from microphone. Returns path to WAV file.
 
-    Uses sox (cross-platform), arecord (Linux/ALSA), or rec (macOS via sox).
+    Uses sox (`sox -d`, macOS and Linux) or arecord (Linux/ALSA); nothing else is tried.
     """
     import sys
 
@@ -157,7 +157,7 @@ async def record_audio(duration: float = 10.0, output_path: str | None = None) -
         output_path = tempfile.mktemp(suffix=".wav")
 
     if sys.platform == "darwin":
-        # macOS: try sox first, then afrecord (not standard), fall back to error
+        # macOS: sox -d, else error (no other recorder is tried)
         try:
             proc = await asyncio.create_subprocess_exec(
                 "sox", "-d", "-r", "16000", "-c", "1", output_path, "trim", "0", str(duration),
@@ -196,4 +196,4 @@ async def record_audio(duration: float = 10.0, output_path: str | None = None) -
     except (TimeoutError, FileNotFoundError):
         pass
 
-    raise RuntimeError("No audio recording tool found. Add arecord or ffmpeg to PATH; nvHive will not call apt.")
+    raise RuntimeError("No audio recording tool found. Add arecord or sox to PATH; nvHive will not call apt.")

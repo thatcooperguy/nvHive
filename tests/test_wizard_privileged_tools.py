@@ -387,6 +387,7 @@ async def test_confirmed_privileged_call_runs_and_writes_a_decisions_note(tmp_pa
     text = notes[0].read_text(encoding="utf-8")
     assert text.startswith("# Privileged change: Enable and start the OpenSSH server")
     assert "Category: Decisions" in text
+    assert "Source: audit" in text  # the audit writer names itself (nvh-memory/1 Source)
     assert "Outcome: applied" in text
     assert "#privileged" in text and "#stub_priv" in text
     assert "`sudo -n systemctl enable --now ssh` — exit 0" in text

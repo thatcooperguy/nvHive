@@ -58,6 +58,7 @@ files are guards rather than unit tests:
 | `test_model_currency.py` | `network` tier: the providers still serve the catalog's and the specs' model ids; its offline drift report (each override beside today's LiteLLM value, each active row nothing prices any more) is pinned without the network |
 | `test_release_hardening.py` | `install.sh`, `nvh services` and the docs keep the bring-up contract |
 | `test_cli_mcp_group.py` | no name is both a command and a command group (the bug that hid `nvh mcp` and `nvh agent`) |
+| `test_config_doc_parity.py` | the generated blocks of `docs/CONFIGURATION.md` match their sources byte for byte (`scripts/gen_config_doc.py --check`): `wizard-tools` from the stock Wizard registry, `council-cabinets` from `COUNCIL_PRESETS` / `PRESET_DESCRIPTIONS`, `memory-record` from `MemoryRecord` (`nvh-memory/1`), `schedule-record` from `ScheduledTask` (`nvh-schedules/2`) and `wizard-meta` from `WIZARD_META_KEYS`, one row per dataclass field or key in source order; plus the kill-switch row's privileged-tool list and the legacy-homes paragraph's doctor row |
 
 ## Kinds of tests
 
@@ -114,6 +115,7 @@ files are guards rather than unit tests:
 | `webui` | `npm ci`, `tsc --noEmit`, ESLint (findings warn, a crashed linter fails), `npm run build` on Node 22 |
 | `security` | `pip-audit` (informational) |
 | `build` | wheel + sdist, `twine check`, install into a clean venv and run `nvh version` / `nvh --help` |
+| `mcp-v1` | Python 3.12 with `mcp<2` pinned beside `.[dev]`: `tests/test_mcp_server.py`, `tests/test_mcp_client.py`, `tests/test_mcp_cabinet_sync.py` and `tests/test_cli_mcp_group.py`. The `mcp` extra resolves the 2.x SDK, so the `test` job only ever exercises that branch of the dual-SDK shim in `nvh/mcp_server.py` and `nvh/integrations/mcp_client.py`; this job keeps the 1.x branch (`mcp.server.fastmcp`) green in CI rather than only in a maintainer's venv (`tests/test_release_hardening.py` pins the job's pin and file list) |
 
 Linux is the only OS in the matrix on purpose; Windows and macOS are
 best-effort until the Linux journey is stable. The CLI presentation layer

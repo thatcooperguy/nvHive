@@ -7,12 +7,17 @@ Obsidian is not installed.
 
 from __future__ import annotations
 
+import hashlib
+import itertools
 import json
+import os
 import platform
 import re
 import shutil
 import stat
 import urllib.request
+import uuid
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -120,6 +125,387 @@ def _markdown_count(root: Path) -> int:
     if not root.exists():
         return 0
     return sum(1 for path in root.rglob("*.md") if path.is_file())
+
+
+def _memory_count(root: Path) -> int:
+    """``*.md`` files directly under ``Wizard Memory/`` — a directory count, not a parse."""
+    folder = root / "Wizard Memory"
+    if not folder.is_dir():
+        return 0
+    return sum(1 for path in folder.glob("*.md") if path.is_file())
+
+
+# ---------------------------------------------------------------------------
+# Memory records (nvh-memory/1)
+# ---------------------------------------------------------------------------
+
+MEMORY_SCHEMA = "nvh-memory/1"
+"""Schema of a note written by :func:`append_vault_memory` from 0.46 on."""
+
+LEGACY_SCHEMA = "legacy"
+"""A pre-0.46 ``append_vault_memory`` note: ``Created:``/``Category:``/``Tags:`` but no ``Id:``."""
+
+DOC_SCHEMA = "doc"
+"""A seeded YAML-frontmatter note (``---`` block) or a note with no meta paragraph: documentation, not a record."""
+
+MEMORY_SOURCES = ("wizard", "repl", "web", "api", "import", "audit")
+"""The documented ``Source:`` values.
+
+``repl`` (the REPL's ``/remember``), ``import`` (the legacy import) and
+``api`` (the route's default, and what every caller that passes no
+``source`` stamps) are written today; ``wizard``, ``web`` and ``audit`` are
+reserved for the writers Wave B adds — the Wizard's ``remember`` tool, the
+web ``/save`` path and the privileged-change audit in ``nvh/core/tools.py``,
+which still lands as ``api`` until it passes ``source="audit"``.
+"""
+
+# The header keys a record carries, one ``Key: value`` per line. A paragraph
+# is read as the meta paragraph only when every line is ``Key: value`` and at
+# least ``_MIN_META_KEYS`` of them are known: the pre-0.46 writer always
+# emitted ``Created:``, ``Category:`` and ``Tags:`` together and the 0.46
+# writer six keys, so a hand-written page whose first paragraph is a lone
+# "Note: ...", "Created: 2026-01-01" or "Source: Wikipedia" line keeps that
+# paragraph in its body and reads as ``doc``, not as a record.
+_META_KEYS = frozenset({"id", "schema", "created", "category", "tags", "source"})
+_MIN_META_KEYS = 2
+_META_LINE = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*):(?:\s|$)")
+_REDACTION_MARKER = re.compile(r"\[REDACTED:[a-z_]+\]")
+_MIN_BODY_CHARS = 8
+_HEADER_LINES = 12
+
+
+@dataclass
+class MemoryRecord:
+    """One vault memory note, as :func:`parse_vault_note` reads it.
+
+    The file is the record and the folder tree is the store; this dataclass is
+    the in-memory view. Every field carries ``metadata["doc"]`` so
+    ``scripts/gen_config_doc.py`` renders the schema table from ``fields()``.
+    """
+
+    id: str = field(metadata={"doc": (
+        "Stable record id written as `Id:`: `uuid4().hex` (32 hex characters); a note "
+        "without an `Id:` line derives `sha1(path relative to vault/)[:32]`, which is "
+        "stable until the file moves."
+    )})
+    schema: str = field(metadata={"doc": (
+        "`nvh-memory/1` for a record written from 0.46 on, `legacy` for a pre-0.46 "
+        "`append_vault_memory` note (a `Created:`/`Category:`/`Tags:` paragraph but no "
+        "`Id:`/`Schema:` lines), `doc` for a seeded YAML-frontmatter note or any note "
+        "without a meta paragraph, which is documentation rather than a record."
+    )})
+    title: str = field(metadata={"doc": (
+        "The first `# ` heading, always one line: internal newlines are collapsed to "
+        "spaces on write (the API caps it at 120 characters)."
+    )})
+    created: str = field(default="", metadata={"doc": (
+        "ISO-8601 UTC timestamp with seconds (`+00:00`) from the `Created:` line; empty "
+        "for a `doc` note."
+    )})
+    category: str = field(default="Wizard Memory", metadata={"doc": (
+        "The vault folder the note lives in, one of `VAULT_DIRS`, or empty for a note at the "
+        "vault root (the seeded `README.md` and `MAP.md`); an unknown category falls back to "
+        "`Wizard Memory` on write."
+    )})
+    tags: list[str] = field(default_factory=list, metadata={"doc": (
+        "Lower-case slugs from the `Tags:` line (`#tag` tokens; `none` means no tags) or "
+        "from a `doc` note's frontmatter `tags:` entry."
+    )})
+    source: str = field(default="api", metadata={"doc": (
+        "The writer of the record: `wizard`, `repl`, `web`, `api`, `import` or `audit`; "
+        "`api` when a record has no `Source:` line, empty for a `doc` note."
+    )})
+    body: str = field(default="", metadata={"doc": (
+        "Everything after the header paragraphs, stripped; empty in `list_vault_notes` "
+        "results, which read headers only (and include `doc` notes unless `memory_only=True`)."
+    )})
+    path: str = field(default="", metadata={"doc": (
+        "Absolute path of the Markdown file, taken from the filesystem and never "
+        "serialised into the note."
+    )})
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _vault_relative(path: Path) -> str:
+    """Posix path of ``path`` relative to its nearest ``vault/`` ancestor (the file name when there is none)."""
+    for parent in path.parents:
+        if parent.name == "vault":
+            return path.relative_to(parent).as_posix()
+    return path.name
+
+
+def derived_note_id(path: str | Path) -> str:
+    """The id of a note that carries no ``Id:`` line: ``sha1(relative posix path)[:32]``.
+
+    Stable while the file is not moved; ``nvh vault upgrade --add-ids`` writes this
+    same value so ids survive the upgrade.
+    """
+    return hashlib.sha1(_vault_relative(Path(path)).encode("utf-8")).hexdigest()[:32]
+
+
+def _tag_list(tags: list[str] | None) -> list[str]:
+    return [_slug(str(tag)).lower() for tag in (tags or []) if str(tag).strip()]
+
+
+def _parse_tag_line(value: str) -> list[str]:
+    return [token.lstrip("#").lower() for token in value.split() if token.startswith("#")]
+
+
+def _clean_source(source: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9_-]+", "", str(source).strip().lower())
+    return cleaned[:16] or "api"
+
+
+def _redact_counted(text: str) -> tuple[str, int]:
+    """``redact_secrets`` plus the number of markers it added."""
+    from nvh.core.agent_guardrails import redact_secrets
+
+    redacted = redact_secrets(text)
+    return redacted, max(0, redacted.count("[REDACTED:") - text.count("[REDACTED:"))
+
+
+def _non_marker_chars(text: str) -> int:
+    return len(re.sub(r"\s+", "", _REDACTION_MARKER.sub("", text)))
+
+
+def _meta_lines(block: str) -> dict[str, str] | None:
+    """``{key: value}`` of a meta paragraph, or None when the paragraph is body text."""
+    lines = [line for line in block.splitlines() if line.strip()]
+    if not lines:
+        return None
+    meta: dict[str, str] = {}
+    for line in lines:
+        match = _META_LINE.match(line)
+        if match is None:
+            return None
+        meta[match.group(1).lower()] = line[match.end():].strip()
+    if len(_META_KEYS & meta.keys()) < _MIN_META_KEYS:
+        return None
+    return meta
+
+
+def _frontmatter_tags(front: list[str]) -> list[str]:
+    tags: list[str] = []
+    in_list = False
+    for line in front:
+        stripped = line.strip()
+        if stripped.lower().startswith("tags:"):
+            value = stripped[5:].strip()
+            if value.startswith("[") and value.endswith("]"):
+                tags = [t.strip().strip("'\"").lstrip("#").lower() for t in value[1:-1].split(",") if t.strip()]
+                in_list = False
+            elif value:
+                tags = [value.strip("'\"").lstrip("#").lower()]
+                in_list = False
+            else:
+                in_list = True
+            continue
+        if in_list:
+            if stripped.startswith("- "):
+                tags.append(stripped[2:].strip().strip("'\"").lstrip("#").lower())
+            else:
+                in_list = False
+    return [tag for tag in tags if tag]
+
+
+def _parse_doc_note(raw: str, note_path: Path | None, derived: str, category_hint: str) -> MemoryRecord:
+    lines = raw.split("\n")
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    front = lines[1:end] if end is not None else []
+    rest = lines[end + 1:] if end is not None else lines[1:]
+    title = ""
+    body_lines = rest
+    for index, line in enumerate(rest):
+        if line.startswith("# "):
+            title = line[2:].strip()
+            body_lines = rest[index + 1:]
+            break
+        if line.strip():
+            break
+    return MemoryRecord(
+        id=derived,
+        schema=DOC_SCHEMA,
+        title=title or (note_path.stem if note_path is not None else ""),
+        created="",
+        category=category_hint,
+        tags=_frontmatter_tags(front),
+        source="",
+        body="\n".join(body_lines).strip(),
+        path=str(note_path) if note_path is not None else "",
+    )
+
+
+def parse_vault_note(text: str, *, path: str | Path | None = None) -> MemoryRecord | None:
+    """Read one vault note into a :class:`MemoryRecord`; None for an empty file.
+
+    Keeps the blank-line partition the REPL has always used (title paragraph /
+    meta paragraph / body), so a pre-0.46 note parses exactly as before: a
+    note with an ``Id:`` line is trusted, one with the pre-0.46 meta paragraph
+    but no ``Id:`` gets :func:`derived_note_id` and schema ``legacy``, and a
+    YAML-frontmatter note — or any note without a meta paragraph — parses as
+    schema ``doc`` with the same derived id. ``path`` supplies the derived id
+    and the category when the header has none.
+    """
+    raw = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    if not raw.strip():
+        return None
+    note_path = Path(path) if path is not None else None
+    derived = derived_note_id(note_path) if note_path is not None else ""
+    category_hint = ""
+    if note_path is not None and note_path.parent.name in VAULT_DIRS:
+        category_hint = note_path.parent.name
+    if raw.startswith("---\n"):
+        return _parse_doc_note(raw, note_path, derived, category_hint)
+
+    header, _, rest = raw.partition("\n\n")
+    first_line, _, header_rest = header.partition("\n")
+    meta: dict[str, str] = {}
+    if first_line.startswith("# "):
+        title = first_line[2:].strip()
+        meta_block, _, after_meta = rest.partition("\n\n")
+        found = _meta_lines(meta_block)
+        if found is None:
+            body = rest
+        else:
+            meta = found
+            body = after_meta
+        if header_rest.strip():
+            body = f"{header_rest}\n\n{body}"
+    else:
+        title = note_path.stem if note_path is not None else ""
+        body = raw
+
+    return MemoryRecord(
+        id=" ".join(meta.get("id", "").split()) or derived,
+        schema=meta.get("schema", "").strip() or (LEGACY_SCHEMA if meta else DOC_SCHEMA),
+        title=title,
+        created=meta.get("created", ""),
+        category=meta.get("category", "").strip() or category_hint,
+        tags=_parse_tag_line(meta.get("tags", "")),
+        source=(meta.get("source", "").strip() or "api") if meta else "",
+        body=body.strip(),
+        path=str(note_path) if note_path is not None else "",
+    )
+
+
+def _iter_vault_notes(vault: Path):
+    """Every ``*.md`` under the vault root, sorted.
+
+    Dot-folders are skipped, and so is any entry whose resolved path leaves
+    the root — a symlink or junction planted in a synced vault — so
+    ``list_vault_notes``, ``get_vault_note`` and ``delete_vault_note`` share
+    one boundary and a link to ``~/.ssh/id_ed25519`` is never read as a note.
+    """
+    if not vault.is_dir():
+        return
+    root = vault.resolve()
+    for path in sorted(vault.rglob("*.md")):
+        if any(part.startswith(".") for part in path.relative_to(vault).parts):
+            continue
+        if not path.is_file():
+            continue
+        try:
+            path.resolve().relative_to(root)
+        except (OSError, ValueError):
+            continue
+        yield path
+
+
+def _read_head(path: Path, lines: int = _HEADER_LINES) -> str:
+    with path.open(encoding="utf-8", errors="replace") as handle:
+        return "".join(itertools.islice(handle, lines))
+
+
+def list_vault_notes(
+    *,
+    category: str | None = None,
+    tag: str | None = None,
+    query: str | None = None,
+    memory_only: bool = False,
+    limit: int | None = 200,
+    home_dir: str | Path | None = None,
+) -> list[MemoryRecord]:
+    """Headers of the vault's notes, newest first; ``body`` is left empty.
+
+    Reads only the first lines of each file. ``memory_only`` keeps records
+    (``nvh-memory/1`` and ``legacy``) and drops ``doc`` notes; ``query`` is a
+    case-insensitive match over the title, the tags and the opening lines.
+    """
+    vault = _vault_root(home_dir)
+    wanted_tag = tag.strip().lstrip("#").lower() if tag else ""
+    needle = query.strip().lower() if query else ""
+    records: list[MemoryRecord] = []
+    for path in _iter_vault_notes(vault):
+        try:
+            record = parse_vault_note(_read_head(path), path=path)
+        except OSError:
+            continue
+        if record is None:
+            continue
+        if memory_only and record.schema == DOC_SCHEMA:
+            continue
+        if category and record.category != category:
+            continue
+        if wanted_tag and wanted_tag not in record.tags:
+            continue
+        if needle and needle not in f"{record.title}\n{' '.join(record.tags)}\n{record.body}".lower():
+            continue
+        record.body = ""
+        records.append(record)
+    records.sort(key=lambda record: (record.created, Path(record.path).name), reverse=True)
+    if limit is not None:
+        records = records[: max(0, int(limit))]
+    return records
+
+
+def _find_note_path(note_id: str, vault: Path) -> Path | None:
+    wanted = str(note_id or "").strip().lower()
+    if not wanted:
+        return None
+    for path in _iter_vault_notes(vault):
+        try:
+            record = parse_vault_note(_read_head(path), path=path)
+        except OSError:
+            continue
+        if record is not None and record.id.lower() == wanted:
+            return path
+    return None
+
+
+def get_vault_note(note_id: str, *, home_dir: str | Path | None = None) -> MemoryRecord | None:
+    """The full record (body included) for ``note_id``, or None when no note carries it."""
+    vault = _vault_root(home_dir)
+    path = _find_note_path(note_id, vault)
+    if path is None:
+        return None
+    try:
+        return parse_vault_note(path.read_text(encoding="utf-8"), path=path)
+    except OSError:
+        return None
+
+
+def delete_vault_note(note_id: str, *, home_dir: str | Path | None = None) -> dict[str, Any]:
+    """Remove the note file for ``note_id``: ``{deleted, path, id}`` plus ``error`` on refusal.
+
+    Refuses an id no note carries and a file whose resolved path leaves the
+    vault root. RAG chunks are the caller's to drop (``forget_vault_note``):
+    this module never imports RAG.
+    """
+    vault = _vault_root(home_dir)
+    path = _find_note_path(note_id, vault)
+    if path is None:
+        return {"deleted": False, "path": "", "id": note_id, "error": "unknown note id"}
+    try:
+        path.resolve().relative_to(vault.resolve())
+    except ValueError:
+        return {"deleted": False, "path": str(path), "id": note_id, "error": "note is outside the vault"}
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return {"deleted": False, "path": str(path), "id": note_id, "error": "note already gone"}
+    return {"deleted": True, "path": str(path), "id": note_id}
 
 
 def _seed_notes(vault: Path, home: Path) -> dict[str, str]:
@@ -965,10 +1351,20 @@ def vault_status(home_dir: str | Path | None = None) -> dict[str, Any]:
         "vault_dir": str(vault),
         "home_dir": str(layout.home),
         "markdown_files": _markdown_count(vault),
+        "memory_files": _memory_count(vault),
         "directories": {name: str(vault / name) for name in VAULT_DIRS},
         "conflicts": KNOWN_CONFLICTS,
         "obsidian": obsidian_status(home_dir=layout.home),
     }
+
+
+def _atomic_write(path: Path, content: str, token: str) -> None:
+    tmp = path.with_name(f".{path.stem}.{token}.tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def append_vault_memory(
@@ -978,35 +1374,68 @@ def append_vault_memory(
     category: str = "Wizard Memory",
     tags: list[str] | None = None,
     home_dir: str | Path | None = None,
+    source: str = "api",
 ) -> dict[str, Any]:
-    """Append a Markdown memory note under the vault."""
+    """Append a Markdown memory note under the vault as an ``nvh-memory/1`` record.
+
+    The title is collapsed to one line and, like the body, run through
+    ``redact_secrets`` (best-effort pattern redaction; the result's
+    ``redacted`` counts the markers added). A body that is nothing but a
+    secret — fewer than ``_MIN_BODY_CHARS`` characters outside the markers
+    once redacted — raises ``ValueError`` before anything is written. The file
+    keeps the ``{timestamp}-{slug}.md`` name and gains ``-{id[:8]}`` only when
+    that name already exists, so same-second same-title saves no longer
+    overwrite; it is written to a temp file and moved into place. ``source``
+    names the writer (one of :data:`MEMORY_SOURCES` by convention).
+    """
+    clean_title, title_hits = _redact_counted(" ".join(str(title).split()))
+    clean_body, body_hits = _redact_counted(str(body).strip())
+    redacted = title_hits + body_hits
+    if body_hits and _non_marker_chars(clean_body) < _MIN_BODY_CHARS:
+        raise ValueError("nothing to remember after redacting secrets")
+
     status = init_vault(home_dir)
     vault = Path(status["vault_dir"])
     safe_category = category if category in VAULT_DIRS else "Wizard Memory"
     target_dir = vault / safe_category
     target_dir.mkdir(parents=True, exist_ok=True)
 
+    note_id = uuid.uuid4().hex
     timestamp = _now()
-    filename = f"{timestamp.replace(':', '').replace('+', 'Z')}-{_slug(title)}.md"
-    path = target_dir / filename
-    tag_line = " ".join(f"#{_slug(tag).lower()}" for tag in (tags or []) if tag.strip())
-    path.write_text(
-        f"""# {title.strip()}
+    stem = f"{timestamp.replace(':', '').replace('+', 'Z')}-{_slug(clean_title)}"
+    path = target_dir / f"{stem}.md"
+    if path.exists():
+        path = target_dir / f"{stem}-{note_id[:8]}.md"
+    tag_list = _tag_list(tags)
+    tag_line = " ".join(f"#{tag}" for tag in tag_list)
+    safe_source = _clean_source(source)
+    _atomic_write(
+        path,
+        f"""# {clean_title}
 
+Id: {note_id}
+Schema: {MEMORY_SCHEMA}
 Created: {timestamp}
 Category: {safe_category}
 Tags: {tag_line or "none"}
+Source: {safe_source}
 
-{body.strip()}
+{clean_body}
 """,
-        encoding="utf-8",
+        note_id[:8],
     )
     return {
         "saved": True,
         "path": str(path),
         "category": safe_category,
-        "title": title.strip(),
+        "title": clean_title,
         "vault_dir": str(vault),
+        "id": note_id,
+        "schema": MEMORY_SCHEMA,
+        "created": timestamp,
+        "tags": tag_list,
+        "source": safe_source,
+        "redacted": redacted,
     }
 
 

@@ -32,6 +32,12 @@ import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+# The owned-device predicate has one home: ``OWNED_DEVICE_CLASSES`` and
+# ``PlatformFacts.is_owned`` in nvh/utils/platform_facts.py. "Check your
+# rented instance" is the wrong advice on a box the user owns — the driver
+# (or container passthrough) is what to check.
+from nvh.utils.platform_facts import OWNED_DEVICE_CLASSES
+
 logger = logging.getLogger(__name__)
 
 
@@ -161,11 +167,6 @@ def _model_findings(context: dict[str, Any]) -> list[Finding]:
     return out
 
 
-# Device classes where the user owns the box. "Check your rented instance" is
-# the wrong advice there — the driver (or container passthrough) is what to check.
-_OWNED_DEVICE_CLASSES = frozenset({"dgx-spark", "rtx-spark", "dgx", "workstation", "laptop"})
-
-
 def _memory_phrase(platform: dict[str, Any]) -> str:
     """``"128 GB of "`` when the pool was actually measured, else ``""``.
 
@@ -215,7 +216,7 @@ def _gpu_findings(context: dict[str, Any]) -> list[Finding]:
         return out
 
     if not detected:
-        if device_class in _OWNED_DEVICE_CLASSES:
+        if device_class in OWNED_DEVICE_CLASSES:
             check = ("check that this machine's NVIDIA driver is installed and "
                      "``nvidia-smi`` runs")
         else:

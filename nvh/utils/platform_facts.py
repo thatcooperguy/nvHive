@@ -127,6 +127,14 @@ DeviceClass = Literal[
     "dgx-spark", "rtx-spark", "dgx", "cloud-desktop", "workstation", "laptop", "unknown",
 ]
 
+# Device classes where the user owns the box: "check your rented instance" is
+# the wrong advice there — the driver (or container passthrough) is what to
+# check. The one definition in the tree (tests/test_platform_facts.py greps
+# for a second); ``PlatformFacts.is_owned`` and the Wizard findings read it.
+# ``cloud-desktop`` and ``unknown`` are not owned: a rented desktop is not,
+# and an inconclusive detection must not claim ownership.
+OWNED_DEVICE_CLASSES: frozenset[str] = frozenset({"dgx-spark", "rtx-spark", "dgx", "workstation", "laptop"})
+
 FACTS_CACHE_TTL_S = 15.0
 _LAPTOP_CHASSIS_TYPES = frozenset({"8", "9", "10", "14"})  # portable, laptop, notebook, sub-notebook
 _SUDO_GROUPS = frozenset({"sudo", "admin", "wheel"})
@@ -188,8 +196,21 @@ class PlatformFacts:
     # privilege fields (can_sudo / in_sudo_group) are placeholders, not answers.
     host_probe_pending: bool = False
 
+    @property
+    def is_owned(self) -> bool:
+        """True when the user owns this machine: an owned device class that is not a detected cloud host.
+
+        ``is_cloud`` overrides the class — a rented VM that classified as
+        ``workstation`` (the Linux-only cloud rule left it alone) is still
+        rented — and ``unknown`` is never owned.
+        """
+        return self.device_class in OWNED_DEVICE_CLASSES and not self.is_cloud
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        """Every field plus ``is_owned`` (a property, which ``asdict`` leaves out)."""
+        data = asdict(self)
+        data["is_owned"] = self.is_owned
+        return data
 
 
 # ---------------------------------------------------------------------------

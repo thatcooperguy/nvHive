@@ -6,6 +6,9 @@ No real API calls are made.
 
 from __future__ import annotations
 
+import asyncio
+import subprocess
+import sys
 import time
 from collections.abc import AsyncIterator
 from decimal import Decimal
@@ -15,6 +18,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+import nvh.api.deps as deps_module
 import nvh.api.server as server_module
 from nvh.api.server import QueryRequest, app
 from nvh.config.settings import (
@@ -756,3 +760,135 @@ class TestAPIEndpointCoverage:
         # - 401 because there's no token to identify
         # Either is acceptable — just not a 500.
         assert resp.status_code in (200, 401, 404)
+
+
+# ---------------------------------------------------------------------------
+# /v1/health facts and the integrations scan (0.46)
+# ---------------------------------------------------------------------------
+
+
+class TestHealthFacts:
+    """``GET /v1/health`` stays open and carries ``bind_host`` (``null`` when the app
+    was not started by ``run_server``), ``auth_mode`` (the first tier ``require_auth``
+    applies: ``users`` / ``key`` / ``open``) and ``key_required`` (whether a token-less
+    request is refused). SECURITY.md states the disclosure; ``nvh launch`` refuses on them."""
+
+    @staticmethod
+    def _users(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
+        import nvh.auth.auth as auth_mod
+
+        async def _count() -> int:
+            return count
+
+        monkeypatch.setattr(auth_mod, "get_user_count", _count)
+
+    @staticmethod
+    def _unstarted(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Neither ``run_server`` nor its env export recorded a bind host."""
+        monkeypatch.setattr(app.state, "bind_host", None, raising=False)
+        monkeypatch.delenv("NVH_API_BIND_HOST", raising=False)
+
+    def test_payload_carries_both_facts(self, test_client: TestClient) -> None:
+        data = test_client.get("/v1/health").json()["data"]
+        assert {"status", "engine_initialized", "providers_enabled", "bind_host", "auth_mode", "key_required"} <= set(data)
+        assert data["auth_mode"] in {"open", "key", "users"}
+        assert isinstance(data["key_required"], bool)
+
+    def test_open_mode(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        self._unstarted(monkeypatch)
+        data = test_client.get("/v1/health").json()["data"]
+        assert data["auth_mode"] == "open" and data["key_required"] is False
+        # Not started by run_server: the process cannot vouch for the interface it
+        # listens on, so it says so instead of asserting loopback (a bare
+        # ``uvicorn nvh.api.server:app --host 0.0.0.0`` must not read as safe).
+        assert data["bind_host"] is None
+
+    def test_key_mode_and_the_route_stays_open(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        resp = test_client.get("/v1/health")  # no credential
+        assert resp.status_code == 200
+        assert resp.json()["data"]["auth_mode"] == "key"
+        assert resp.json()["data"]["key_required"] is True
+
+    def test_users_mode_wins_over_the_key(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._users(monkeypatch, 1)
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        data = test_client.get("/v1/health").json()["data"]
+        # ``users`` without the key is still open mode (SECURITY.md); ``key_required``
+        # is the fact that tells the two apart, which ``auth_mode`` alone cannot.
+        assert data["auth_mode"] == "users" and data["key_required"] is False
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        data = test_client.get("/v1/health").json()["data"]
+        assert data["auth_mode"] == "users" and data["key_required"] is True
+
+    def test_bind_host_is_what_run_server_recorded(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(app.state, "bind_host", "0.0.0.0", raising=False)
+        assert test_client.get("/v1/health").json()["data"]["bind_host"] == "0.0.0.0"
+        # uvicorn's reload subprocess only sees run_server's env export.
+        monkeypatch.setattr(app.state, "bind_host", None, raising=False)
+        monkeypatch.setenv("NVH_API_BIND_HOST", "192.0.2.10")
+        assert test_client.get("/v1/health").json()["data"]["bind_host"] == "192.0.2.10"
+
+
+class TestIntegrationsScanAuth:
+    """``GET /v1/integrations/scan`` returns config paths, so a keyed deployment
+    demands the key (open until 0.46); open mode admits it as before."""
+
+    @pytest.fixture(autouse=True)
+    def _no_detection(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from nvh.integrations.diagnostics import detector
+
+        monkeypatch.setattr(detector, "detect_platforms", lambda: [])
+
+    def test_keyed_rejects_a_bare_get_and_accepts_the_key(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        assert test_client.get("/v1/integrations/scan").status_code == 401
+        resp = test_client.get("/v1/integrations/scan", headers={"X-Hive-API-Key": "k-for-test"})
+        assert resp.status_code == 200
+        assert resp.json()["data"]["total_count"] == 0
+
+    def test_open_mode_admits_the_scan(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        resp = test_client.get("/v1/integrations/scan")
+        assert resp.status_code == 200
+        assert resp.json()["data"]["platforms"] == []
+
+
+class TestDepsContract:
+    """``nvh/api/deps.py`` is the one definition of the shared dependencies: the server
+    re-exports the very same objects, the module imports without the server, and
+    SECURITY.md names it. Pinned so a ``def require_auth`` re-added to server.py (every
+    behaviour test would stay green) or a server import creeping into deps.py goes red."""
+
+    def test_server_re_exports_the_same_objects(self) -> None:
+        for name in deps_module.__all__:
+            assert getattr(server_module, name) is getattr(deps_module, name), name
+        source = Path(server_module.__file__).read_text(encoding="utf-8")
+        for name in ("require_auth", "get_engine", "_response_envelope", "auth_mode", "key_required"):
+            assert f"def {name}(" not in source, f"{name} is defined in nvh/api/deps.py, not in server.py"
+
+    def test_deps_imports_without_the_server(self) -> None:
+        code = (
+            "import sys, nvh.api.deps; "
+            "assert 'nvh.api.server' not in sys.modules, sorted(m for m in sys.modules if m.startswith('nvh.api'))"
+        )
+        subprocess.run([sys.executable, "-I", "-c", code], check=True, timeout=180)
+
+    def test_security_md_names_deps_for_require_auth(self) -> None:
+        text = (Path(server_module.__file__).parents[2] / "SECURITY.md").read_text(encoding="utf-8")
+        assert "`require_auth` in `nvh/api/deps.py`" in text
+        assert "`key_required`" in text and "`bind_host`" in text
+
+    def test_auth_mode_and_open_mode_agree_on_users_without_the_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The three tier predicates answer different questions; pinned against each
+        other in the one configuration where they look contradictory."""
+        TestHealthFacts._users(monkeypatch, 1)
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+        assert asyncio.run(deps_module.auth_mode()) == "users"
+        assert asyncio.run(server_module._auth_open_mode()) is True
+        assert deps_module.key_required() is False
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-test")
+        assert asyncio.run(deps_module.auth_mode()) == "users"
+        assert asyncio.run(server_module._auth_open_mode()) is False
+        assert deps_module.key_required() is True

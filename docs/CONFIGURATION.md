@@ -369,12 +369,14 @@ schedules, workflows, plugins, the routing explanation — lives under one of
 these directories: `storage_layout()` in `nvh/integrations/workspace/storage.py`
 is the single path oracle and `tests/test_single_root.py` fails on any new
 hard-coded home path. Two of these stores hold records that other tools may
-import later: the REPL's `/remember` notes, which are ordinary vault notes
-under the `Wizard Memory` category tagged `#repl` (`state/memory/memories.json`
-is only the pre-0.42 file the legacy migration copies in once and the REPL
-turns into those notes once), and `state/schedules.json` (scheduled tasks).
-Their record ids and on-disk schema will be documented before either store is
-reshaped.
+import later: the vault's memory notes (the REPL's `/remember` notes among
+them — ordinary notes under the `Wizard Memory` category tagged `#repl`;
+`state/memory/memories.json` is only the pre-0.42 file the legacy migration
+copies in once and the REPL turns into those notes once), and
+`state/schedules.json` (scheduled tasks). Their record ids and on-disk
+schema are documented below (`nvh-memory/1`, `nvh-schedules/2`), together
+with the `wizard-meta` tail the Wizard chat appends to the assistant rows it
+persists in `state/nvhive.db`.
 
 | Directory | Override | Holds |
 |---|---|---|
@@ -384,7 +386,7 @@ reshaped.
 | `cache/` | `NVH_CACHE` | `pip/`, `uv/`, `huggingface/`, `torch/`, `tmp/`, `catalog/`, `xdg/` (also exported as `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `TORCH_HOME`, `TMPDIR`, `XDG_CACHE_HOME`) |
 | `logs/` | `NVH_LOGS` | `install.log`, `api-server.log`, `nvhive.log`, service logs |
 | `config/` | `NVH_CONFIG` (legacy alias `HIVE_CONFIG_HOME`, still honoured and still exported) | `config.yaml`, `.env`, `user.json`, `global_context.md`, `workflows/`, `mcp-servers.json` |
-| `state/` | `NVH_STATE` | `nvhive.db` (SQLite: conversations, routing outcomes, costs), `schedules.json`, `last_query.json` (`nvh status --routing`), `memory/`, `legacy-migration.json`, capability marker, browser profiles |
+| `state/` | `NVH_STATE` | `nvhive.db` (SQLite: conversations, routing outcomes, costs), `schedules.json` (`nvh-schedules/2`; beside it a transient `schedules.json.<pid>-<token>.tmp` while a save is in flight and, after a parse failure, a quarantined `schedules.json.corrupt-<timestamp>`), `scheduler.lock` (reserved for the schedule runner; nothing writes it yet), `last_query.json` (`nvh status --routing`), `memory/` (holds only the pre-0.42 `memories.json` the legacy migration copies in once; `nvh rag import-legacy --memories` or the REPL turns it into `Wizard Memory` notes once, `Source: import`), `legacy-migration.json`, capability marker, browser profiles |
 | `plugins/` | `NVH_PLUGINS` | drop-in `.py` plugins (`nvh plugins`) |
 | `runtimes/` | `NVH_RUNTIME_HOME` | micromamba and other runtime fallbacks |
 | `apps/` | `NVH_APPS_HOME` | rootless Firefox, Obsidian, AppImages |
@@ -396,7 +398,130 @@ reshaped.
 | `backups/` | `NVH_BACKUPS` | config backups |
 | `support/` | `NVH_SUPPORT` | redacted support bundles from `nvh status --report` |
 | `catalog/` | `NVH_CATALOG` | cached setup catalog |
-| `vault/`, `rag/`, `jobs/`, `agent-profiles/` | — | Memory Vault notes, the RAG store, background-job metadata and logs, custom agent profiles |
+| `vault/`, `rag/`, `jobs/`, `agent-profiles/` | — | Memory Vault notes (one Markdown file per record, below), the RAG store, background-job metadata and logs, custom agent profiles |
+
+### Memory records (`nvh-memory/1`)
+
+A vault memory note is one Markdown file under
+`$NVH_HOME/vault/<Category>/<YYYY-MM-DDTHHMMSSZ0000>-<slug>[-<id8>].md`; the
+file is the record and the folder tree is the store (Obsidian-readable,
+RAG-indexable). `append_vault_memory` (`nvh/integrations/workspace/vault.py`,
+behind `POST /v1/vault/memory`, the REPL's `/remember`, the legacy import and
+the privileged-change audit) writes, in this order: the `# <title>` heading, a
+blank line, a header paragraph of `Key: value` lines — `Id:`, `Schema:
+nvh-memory/1`, `Created:`, `Category:`, `Tags:` (`#a #b`, or `none`),
+`Source:` — a blank line and the body. Readers ignore header keys they do not
+know. The `-<id8>` suffix (the first eight hex characters of the id) is
+appended only when that file name already exists, so two notes saved with the
+same title in the same second no longer overwrite each other, and the file is
+written to a temporary name and moved into place. The title and body pass
+through `redact_secrets` (`nvh/core/agent_guardrails.py`) before the write — a
+best-effort pattern pass; the result reports how many markers it inserted as
+`redacted`, and a body that is nothing but a secret is refused with `nothing
+to remember after redacting secrets`. Nothing is migrated in place: a pre-0.46
+note keeps its name and body and reads as `schema: legacy` with a derived id;
+a seeded note, or any note without a header paragraph (or with a lone
+`Key: value` line — a record's header carries at least two of the known
+keys), reads as `doc`: `list_vault_notes` returns it by default beside the
+records and drops it with `memory_only=True`. The table is generated from the
+`MemoryRecord` dataclass by `scripts/gen_config_doc.py`.
+
+<!-- BEGIN GENERATED: memory-record -->
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | `str` | Stable record id written as `Id:`: `uuid4().hex` (32 hex characters); a note without an `Id:` line derives `sha1(path relative to vault/)[:32]`, which is stable until the file moves. |
+| `schema` | `str` | `nvh-memory/1` for a record written from 0.46 on, `legacy` for a pre-0.46 `append_vault_memory` note (a `Created:`/`Category:`/`Tags:` paragraph but no `Id:`/`Schema:` lines), `doc` for a seeded YAML-frontmatter note or any note without a meta paragraph, which is documentation rather than a record. |
+| `title` | `str` | The first `# ` heading, always one line: internal newlines are collapsed to spaces on write (the API caps it at 120 characters). |
+| `created` | `str` | ISO-8601 UTC timestamp with seconds (`+00:00`) from the `Created:` line; empty for a `doc` note. |
+| `category` | `str` | The vault folder the note lives in, one of `VAULT_DIRS`, or empty for a note at the vault root (the seeded `README.md` and `MAP.md`); an unknown category falls back to `Wizard Memory` on write. |
+| `tags` | `list[str]` | Lower-case slugs from the `Tags:` line (`#tag` tokens; `none` means no tags) or from a `doc` note's frontmatter `tags:` entry. |
+| `source` | `str` | The writer of the record: `wizard`, `repl`, `web`, `api`, `import` or `audit`; `api` when a record has no `Source:` line, empty for a `doc` note. |
+| `body` | `str` | Everything after the header paragraphs, stripped; empty in `list_vault_notes` results, which read headers only (and include `doc` notes unless `memory_only=True`). |
+| `path` | `str` | Absolute path of the Markdown file, taken from the filesystem and never serialised into the note. |
+<!-- END GENERATED: memory-record -->
+
+### Schedule records (`nvh-schedules/2`)
+
+`state/schedules.json` is one JSON object, `{"schema": "nvh-schedules/2",
+"updated_at": "<ISO-8601>", "schedules": [record, ...]}`
+(`nvh.core.scheduler.SCHEDULE_SCHEMA`). A pre-0.46 file — a bare JSON array
+of records — still loads and is rewritten in the v2 shape on the next save,
+never on load; a record's unknown keys round-trip under `extra`, and a missing
+key takes the field's default: a record with no `id` reads with a derived
+32-hex id (a hash of the record, the same on every load until the first save
+writes it), one with no `interval_seconds` falls back to one day, and a
+record missing its `prompt` or `interval_seconds` loads disabled, so a
+half-written entry is listed but never due. A file that cannot be
+parsed is moved aside once to `schedules.json.corrupt-<YYYYmmddHHMMSS>` with
+one log line and the store starts empty, never silently zeroed. Saves write
+a private `schedules.json.<pid>-<token>.tmp` and `os.replace` it over the file
+(sorted keys), retrying briefly when Windows reports the file open in another
+process; the temp file is removed on every failure. New ids are
+`uuid4().hex`; legacy 8-character ids are kept verbatim. `last_status` is one
+of `ok`, `error`, `skipped` or `deferred` (`RUN_STATUSES`), `last_error` is
+cut to 300 characters (`MAX_ERROR_CHARS`), and `last_cost_usd` /
+`last_cost_known` are `null` on a schedule that has never run. The table is
+generated from the `ScheduledTask` dataclass.
+
+<!-- BEGIN GENERATED: schedule-record -->
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `id` | `str` | — | Record id; new records get `uuid4().hex` (32 hex characters), legacy 8-character ids are kept verbatim. |
+| `prompt` | `str` | — | The prompt each run sends. |
+| `interval_seconds` | `int` | — | Seconds between runs; the CLI accepts `parse_interval` syntax such as `30m`, `1h` or `1d`. |
+| `advisor` | `str` | — | Provider override for the run; empty means normal routing. |
+| `mode` | `str` | — | `ask`, `convene` or `do`; `do` runs tools unattended and is accepted by the CLI runner only. |
+| `last_run` | `str` | — | ISO-8601 UTC timestamp of the last run; empty before the first run. |
+| `next_run` | `float` | — | Epoch seconds at which the schedule is next due. |
+| `enabled` | `bool` | — | Whether the schedule can become due; disabled schedules never run. |
+| `created_at` | `str` | — | ISO-8601 UTC timestamp of when the schedule was added. |
+| `name` | `str` | `""` | Display label shown beside the prompt. |
+| `profile` | `str` | `""` | Agent profile applied to each run; its `max_cost_usd_per_turn` caps the run and its tool whitelist is intersected with the schedule runner's fixed read-only roster. |
+| `conversation_id` | `str` | `""` | The one conversation every run of this schedule appends to. |
+| `updated_at` | `str` | `""` | ISO-8601 UTC timestamp of the last field change or recorded run; empty for records written before 0.46. |
+| `last_status` | `str` | `""` | Outcome of the last run: `ok`, `error`, `skipped` or `deferred`; empty before the first run. |
+| `last_error` | `str` | `""` | Error text of the last run, truncated to 300 characters; empty when the last run did not fail. |
+| `last_job_id` | `str` | `""` | Id of the last run's job under `$NVH_HOME/jobs/`. |
+| `last_cost_usd` | `float \| None` | `null` | Cost of the last run in USD; `null` means never run or no figure, and the UI shows nothing for it. |
+| `last_cost_known` | `bool \| None` | `null` | Whether `last_cost_usd` is a trusted figure; `null` together with a `null` cost on a never-run schedule. |
+| `run_count` | `int` | `0` | Number of runs recorded, whatever their status. |
+| `extra` | `dict[str, Any]` | `{}` | Unknown keys, round-tripped. |
+<!-- END GENERATED: schedule-record -->
+
+### Wizard chat rows (`wizard-meta`)
+
+Every assistant row the Wizard chat persists to the `conversation_messages`
+table in `state/nvhive.db` ends with `\n\n<!-- wizard-meta: {json} -->`,
+written only by `_persist_wizard_turn` (`nvh/integrations/wizard/chat.py`);
+the row's own `input_tokens`, `output_tokens`, `cost_usd` and `latency_ms`
+columns are filled from the turn's meter (user rows keep the defaults), so the
+tail is no longer the only carrier of cost. The tail carries `v: 1`
+(`WIZARD_META_VERSION`) and readers ignore keys they do not know
+(`web/lib/wizardMeta.ts`). `source`, `v`, `used_profile`, `profile_reason`,
+`iterations`, `tool_calls`, `tool_results` and `deferred_tool_calls` are on
+every tail; `cost_usd`, `cost_known` and `latency_ms` only on turns a model
+answered; `mode` and `fallback_reason` only on deterministic turns;
+`streamed: true` only on turns served by the streaming endpoint. The table is
+generated from `WIZARD_META_KEYS`.
+
+<!-- BEGIN GENERATED: wizard-meta -->
+| Key | Meaning |
+|---|---|
+| `source` | Always `"wizard"`: the Wizard chat is the only writer of this tail. |
+| `v` | Schema version of this tail; currently `1`. |
+| `used_profile` | Name of the agent profile that answered, or `null` for the general Wizard (a deterministic answer names one only when a pinned specialist itself declined). |
+| `profile_reason` | Why the concierge chose or demoted that profile; `null` when the profile was pinned explicitly and no selection ran. |
+| `mode` | Deterministic turns only: `"deterministic"` — no model answered (offline helper, local-only refusal of a pin, or a failed LLM path). |
+| `fallback_reason` | Deterministic turns only: the LLM error text, `"engine not initialized"` or the local-only refusal reason. |
+| `iterations` | LLM round-trips attempted in the turn (`0` when no model was called). |
+| `tool_calls` | Confirm-class calls surfaced to the user as cards, without their `approval_token` and `approval_expires_at`. |
+| `tool_results` | Outcomes of the auto-class tools the server ran, plus whitelist refusals (`not_allowed: true`). |
+| `deferred_tool_calls` | Auto-class calls the loop did not run, each with a `reason` (follow-up disabled, iteration cap, cost ceiling). |
+| `cost_usd` | LLM-answered turns only: the turn's completions summed, in USD (`0` when the provider reported no cost). |
+| `cost_known` | LLM-answered turns only: whether `cost_usd` is a price (the catalog knows the model) or a placeholder the UI shows as "cost unknown". |
+| `latency_ms` | LLM-answered turns only: wall-clock milliseconds summed over the turn's completions. |
+| `streamed` | Streamed turns only: `true` when the streaming endpoint served the turn; absent otherwise. |
+<!-- END GENERATED: wizard-meta -->
 
 ### Legacy homes (pre-0.44)
 

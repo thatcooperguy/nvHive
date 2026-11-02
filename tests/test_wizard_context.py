@@ -13,6 +13,17 @@ from nvh.integrations.wizard.personality import (
     _format_context_block,
     build_system_prompt,
 )
+from nvh.utils.gpu import clear_gpu_detection_cache
+
+
+@pytest.fixture(autouse=True)
+def _cold_gpu_detection_cache():
+    """``wizard_context()`` runs the real GPU probe, which memoises the nvidia-smi
+    rows for a few seconds; leave that cache cold so a later module's patched
+    probes are what ``detect_gpu_status()`` sees (CI runs tests/ in one process)."""
+    clear_gpu_detection_cache()
+    yield
+    clear_gpu_detection_cache()
 
 
 def test_wizard_context_never_raises_when_all_helpers_fail() -> None:
@@ -35,6 +46,58 @@ def test_wizard_context_shape_has_all_required_keys() -> None:
     ctx = wizard_context()
     for key in ("gpu", "storage", "providers", "ollama_models", "recent_jobs", "receipts", "vault"):
         assert key in ctx, f"missing key: {key}"
+
+
+def test_platform_summary_carries_the_ownership_facts() -> None:
+    """The session-cost pill and the findings read is_cloud / cloud_provider /
+    is_owned beside device_class; is_owned is a PlatformFacts property, which
+    the getattr summary carries through."""
+    from nvh.utils.platform_facts import PlatformFacts
+
+    assert {"is_cloud", "cloud_provider", "is_owned"} <= set(context_module._PLATFORM_KEYS)
+    rented = PlatformFacts(os="linux", arch="x86_64", device_class="workstation", is_cloud=True, cloud_provider="aws")
+    with patch.object(context_module, "_safe_call", side_effect=lambda label, fn, *a, **kw: rented):
+        summary = context_module._platform_summary(None)
+    assert summary["device_class"] == "workstation"
+    assert summary["is_cloud"] is True
+    assert summary["cloud_provider"] == "aws"
+    assert summary["is_owned"] is False  # a rented VM that classified as a workstation is still rented
+
+
+def test_platform_summary_under_the_seeded_facts_is_an_owned_workstation() -> None:
+    """conftest seeds a non-cloud workstation, so the live summary says owned without a probe."""
+    summary = context_module._platform_summary(None)
+    assert summary["device_class"] == "workstation"
+    assert summary["is_cloud"] is False
+    assert summary["cloud_provider"] == ""
+    assert summary["is_owned"] is True
+    ctx = wizard_context()
+    assert {"is_cloud", "cloud_provider", "is_owned"} <= set(ctx["platform"])
+
+
+def test_vault_summary_reads_memory_files_from_vault_status() -> None:
+    """vault_status() reports memory_files itself (a directory count of Wizard Memory/*.md);
+    the summary reads that key and nothing else — the pre-0.46 file_count fallback is gone."""
+    status = {"initialized": True, "memory_files": 7, "markdown_files": 20, "file_count": 99, "obsidian_available": False}
+    with patch.object(context_module, "_safe_call", side_effect=lambda label, fn, *a, **kw: status):
+        summary = context_module._vault_summary(None)
+    assert summary == {"initialized": True, "memory_files": 7, "obsidian_available": False}
+    legacy = {"initialized": True, "file_count": 5}
+    with patch.object(context_module, "_safe_call", side_effect=lambda label, fn, *a, **kw: legacy):
+        assert context_module._vault_summary(None)["memory_files"] == 0
+
+
+def test_vault_summary_counts_the_real_vaults_memory_notes(tmp_path) -> None:
+    from nvh.integrations.workspace.vault import append_vault_memory, init_vault
+
+    init_vault(tmp_path)
+    seeded = context_module._vault_summary(tmp_path)
+    assert seeded["initialized"] is True
+    assert seeded["memory_files"] >= 1  # the seeded Wizard Memory note
+    append_vault_memory("Context test", "a body the summary never reads", home_dir=tmp_path)
+    assert context_module._vault_summary(tmp_path)["memory_files"] == seeded["memory_files"] + 1
+    # Metadata only: the note's body is not in the summary.
+    assert "a body the summary never reads" not in repr(context_module._vault_summary(tmp_path))
 
 
 def test_personality_persona_block_is_stable() -> None:

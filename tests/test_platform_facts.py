@@ -16,10 +16,13 @@ a DGX Spark must never be reported as a rented cloud desktop.
 
 from __future__ import annotations
 
+import dataclasses
+import re
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1537,3 +1540,62 @@ def test_to_dict_round_trips_all_fields(monkeypatch) -> None:
     ):
         assert key in data
     assert data["device_class"] in _ALL_DEVICE_CLASSES
+
+
+# ---------------------------------------------------------------------------
+# is_owned — the one owned-device predicate (the findings and the session-cost
+# pill read it from here; nothing else types the set)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("device_class", "owned"), [
+    ("dgx-spark", True),
+    ("rtx-spark", True),
+    ("dgx", True),
+    ("workstation", True),
+    ("laptop", True),
+    ("cloud-desktop", False),
+    ("unknown", False),
+])
+def test_is_owned_follows_the_device_class(device_class, owned) -> None:
+    facts = pf.PlatformFacts(device_class=device_class)
+    assert facts.is_owned is owned
+    assert (device_class in pf.OWNED_DEVICE_CLASSES) is owned
+
+
+def test_owned_classes_leave_out_exactly_the_rented_and_the_inconclusive() -> None:
+    assert pf.OWNED_DEVICE_CLASSES < _ALL_DEVICE_CLASSES
+    assert _ALL_DEVICE_CLASSES - pf.OWNED_DEVICE_CLASSES == {"cloud-desktop", "unknown"}
+
+
+@pytest.mark.parametrize("device_class", ["dgx-spark", "dgx", "workstation", "laptop"])
+def test_is_cloud_overrides_an_owned_class(device_class) -> None:
+    """A rented VM the Linux-only cloud rule left classified as a workstation is still rented."""
+    assert pf.PlatformFacts(device_class=device_class, is_cloud=True, cloud_provider="aws").is_owned is False
+    assert pf.PlatformFacts(device_class=device_class, is_cloud=False).is_owned is True
+
+
+def test_to_dict_carries_is_owned_beside_every_field() -> None:
+    owned = pf.PlatformFacts(device_class="dgx-spark").to_dict()
+    assert owned["is_owned"] is True
+    assert set(owned) == {f.name for f in dataclasses.fields(pf.PlatformFacts)} | {"is_owned"}
+    rented = pf.PlatformFacts(device_class="workstation", is_cloud=True, cloud_provider="gcp").to_dict()
+    assert rented["is_owned"] is False and rented["is_cloud"] is True and rented["cloud_provider"] == "gcp"
+    assert pf.PlatformFacts().to_dict()["is_owned"] is False  # device_class defaults to "unknown"
+
+
+def test_owned_device_classes_is_defined_once_under_nvh() -> None:
+    """Derive, don't type: the set lives in platform_facts.py and nothing under nvh/ re-types it."""
+    this_module = Path(pf.__file__).resolve()
+    package_root = this_module.parents[1]  # nvh/
+    assert package_root.name == "nvh"
+    literal = re.compile(r"frozenset\(\{[^}]*\"dgx-spark\"[^}]*\}\)")
+    assignment = re.compile(r"^_?OWNED_DEVICE_CLASSES\s*[:=]", re.MULTILINE)
+    typed = sorted(p for p in package_root.rglob("*.py") if literal.search(p.read_text(encoding="utf-8")))
+    assigned = sorted(p for p in package_root.rglob("*.py") if assignment.search(p.read_text(encoding="utf-8")))
+    assert typed == [this_module]
+    assert assigned == [this_module]
+    # The findings module reads the shared name rather than keeping its own copy.
+    findings = (package_root / "integrations" / "wizard" / "findings.py").read_text(encoding="utf-8")
+    assert "from nvh.utils.platform_facts import OWNED_DEVICE_CLASSES" in findings
+    assert "_OWNED_DEVICE_CLASSES" not in findings

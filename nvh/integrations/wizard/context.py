@@ -123,6 +123,11 @@ _PLATFORM_KEYS = (
     "can_sudo",
     "in_sudo_group",
     "windows_on_arm",
+    # Ownership facts for the session-cost pill and the findings: ``is_owned``
+    # is a property of PlatformFacts, which the getattr summary carries through.
+    "is_cloud",
+    "cloud_provider",
+    "is_owned",
 )
 
 
@@ -246,7 +251,7 @@ def _vault_summary(home_dir: str | Path | None) -> dict[str, Any]:
             return {"initialized": False}
         return {
             "initialized": bool(status.get("initialized")),
-            "memory_files": status.get("memory_files", status.get("file_count", 0)),
+            "memory_files": status.get("memory_files", 0),
             "obsidian_available": status.get("obsidian_available"),
         }
     except Exception as exc:

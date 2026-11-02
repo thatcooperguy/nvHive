@@ -3,12 +3,21 @@
 Exposes NVHive's multi-provider routing as a standard OpenAI API.
 Any tool that supports custom OpenAI base URLs can use NVHive:
 
-  # In .env or tool config:
-  OPENAI_API_BASE=http://localhost:8000/v1/proxy
+  # In .env or tool config (the OpenAI SDK reads OPENAI_BASE_URL; LangChain
+  # and LiteLLM also accept the older OPENAI_API_BASE spelling):
+  OPENAI_BASE_URL=http://localhost:8000/v1
   OPENAI_API_KEY=anything    # NVHive handles the real keys
 
-  # Or in code:
-  client = OpenAI(base_url="http://localhost:8000/v1/proxy")
+  # Or in code (``/v1/proxy`` is the same handler and stays):
+  client = OpenAI(base_url="http://localhost:8000/v1")
+
+Streamed completions check ``budget.hard_stop`` before the first provider
+call and write a ``QueryLog`` row (``mode="proxy"``) when the stream ends.
+The non-streamed calls on the same routes go through ``Engine.query`` in
+nvh/api/server.py and have always been logged there as ``mode="simple"``
+(the mode ``nvh ask`` writes), so budget totals and ``hard_stop`` see both
+while the ledger's ``mode`` column — ``/metrics`` ``task_type``, ``nvh
+history`` — tells a streamed proxy row from a non-streamed one.
 
 This means:
 - VSCode Copilot alternatives can use NVHive
@@ -40,14 +49,21 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from decimal import Decimal
 from typing import Any
 
 from nvh.core.atohi import ResourcePaused
+from nvh.core.engine import BudgetExceededError
+from nvh.providers.base import CompletionResponse, FinishReason, StreamChunk, Usage
 from nvh.providers.specs import PROVIDER_SPECS
+
+logger = logging.getLogger(__name__)
 
 
 async def _close_stream(iterator: Any) -> None:
@@ -84,6 +100,63 @@ def _terminal_resource_pause(*, anthropic: bool = False):
 
         return guarded
     return decorate
+
+
+# ---------------------------------------------------------------------------
+# Budget and ledger hooks for the streamed paths
+# ---------------------------------------------------------------------------
+
+
+async def _engine_hook(engine: Any, name: str, *args: Any, **kwargs: Any) -> Any:
+    """Call ``engine.<name>(...)`` when the engine has it, awaiting a coroutine.
+
+    Production engines are :class:`nvh.core.engine.Engine`, whose
+    ``_check_budget`` and ``_log_query`` are coroutine functions. The stream
+    tests drive these generators with bare namespaces and ``MagicMock``
+    engines that lack the hook or return a non-awaitable; those keep streaming.
+    A ``BudgetExceededError`` raised by the hook propagates to the caller.
+    """
+    hook = getattr(engine, name, None)
+    if hook is None or not callable(hook):
+        return None
+    result = hook(*args, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _stream_ledger_response(
+    chunk: StreamChunk | None, *, provider: str, model: str, latency_ms: int,
+) -> CompletionResponse:
+    """The ``CompletionResponse`` a finished stream is logged as.
+
+    Usage and cost come from the final chunk, the same fields the Wizard's
+    ``_meter_from_chunk`` reads; a stream that ended without them is logged
+    with zeros under the provider and model the generator routed to.
+    """
+    usage = chunk.usage if chunk is not None and chunk.usage is not None else Usage()
+    cost = chunk.cost_usd if chunk is not None and chunk.cost_usd is not None else Decimal("0")
+    return CompletionResponse(
+        content="",
+        model=(chunk.model if chunk is not None and chunk.model else model) or "",
+        provider=(chunk.provider if chunk is not None and chunk.provider else provider) or "",
+        usage=usage,
+        cost_usd=cost,
+        latency_ms=latency_ms,
+        finish_reason=(chunk.finish_reason if chunk is not None and chunk.finish_reason else FinishReason.STOP),
+    )
+
+
+async def _log_stream_spend(
+    engine: Any, chunk: StreamChunk | None, *, provider: str, model: str, started: float,
+) -> None:
+    """Write the ``QueryLog`` row for a stream that finished; never raises."""
+    try:
+        latency_ms = int((time.monotonic() - started) * 1000)
+        response = _stream_ledger_response(chunk, provider=provider, model=model, latency_ms=latency_ms)
+        await _engine_hook(engine, "_log_query", response, mode="proxy")
+    except Exception:
+        logger.debug("proxy stream: ledger write failed", exc_info=True)
 
 # ---------------------------------------------------------------------------
 # Model → provider mapping, derived from the spec table
@@ -366,6 +439,20 @@ async def openai_stream_generator(
         yield f"data: {json.dumps(error_chunk)}\n\ndata: [DONE]\n\n".encode()
         return
 
+    # The hard stop the non-stream path applies, before any provider is touched.
+    try:
+        await _engine_hook(engine, "_check_budget")
+    except BudgetExceededError as exc:
+        error_chunk = {
+            "error": {
+                "message": str(exc),
+                "type": "budget_exceeded",
+                "code": "budget_exceeded",
+            }
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\ndata: [DONE]\n\n".encode()
+        return
+
     provider = engine.registry.get(decision.provider)
     messages: list[Message] = []
     if sys_prompt:
@@ -397,6 +484,9 @@ async def openai_stream_generator(
 
     aiter = None
     finish_chunk = None
+    last_chunk: StreamChunk | None = None
+    failed = False
+    started = time.monotonic()
     try:
         aiter = provider.stream(
             messages=messages,
@@ -420,6 +510,7 @@ async def openai_stream_generator(
                     f"{CHUNK_STALL_TIMEOUT:.0f}s"
                 ) from exc
 
+            last_chunk = chunk
             if chunk.delta:
                 content_chunk = {
                     "id": chat_id,
@@ -457,6 +548,7 @@ async def openai_stream_generator(
                 break
 
     except Exception as exc:
+        failed = True
         error_chunk = {
             "error": {
                 "message": str(exc),
@@ -467,6 +559,14 @@ async def openai_stream_generator(
         yield f"data: {json.dumps(error_chunk)}\n\n".encode()
     finally:
         await _close_stream(aiter)
+
+    if not failed:
+        # Spend is recorded before the finish chunk goes out, so a consumer
+        # that leaves on the last token still leaves a ledger row behind.
+        await _log_stream_spend(
+            engine, last_chunk, provider=decision.provider or "",
+            model=decision.model or requested_model or "", started=started,
+        )
 
     if finish_chunk is not None:
         yield f"data: {json.dumps(finish_chunk)}\n\n".encode()
@@ -713,10 +813,12 @@ def build_models_list(registry: Any) -> dict[str, Any]:
 # through nvHive's engine. This lets OpenClaw users and any tool
 # that talks to the Anthropic API point at nvHive instead:
 #
-#   ANTHROPIC_API_URL=http://localhost:8000/v1/anthropic
-#   ANTHROPIC_API_KEY=anything
+#   ANTHROPIC_BASE_URL=http://localhost:8000/v1/anthropic
+#   ANTHROPIC_AUTH_TOKEN=<HIVE_API_KEY>   # any value in open mode
 #
-# nvHive handles routing, fallback, and multi-provider orchestration.
+# The SDKs send ANTHROPIC_API_KEY as ``x-api-key``, which ``require_auth``
+# does not read; ``ANTHROPIC_AUTH_TOKEN`` is the bearer it checks. nvHive
+# handles routing, fallback, and multi-provider orchestration.
 # ------------------------------------------------------------------
 
 _CLAUDE_STOP_TO_NVHIVE = {
@@ -853,6 +955,24 @@ async def anthropic_stream_generator(
         ).encode()
         return
 
+    # The hard stop the non-stream path applies, before any provider is
+    # touched. An Anthropic stream that fails before message_start ends on
+    # the error event alone, as the provider_unavailable path above does.
+    try:
+        await _engine_hook(engine, "_check_budget")
+    except BudgetExceededError as exc:
+        error_event = {
+            "type": "error",
+            "error": {
+                "type": "budget_exceeded",
+                "message": str(exc),
+            },
+        }
+        yield (
+            f"event: error\ndata: {json.dumps(error_event)}\n\n"
+        ).encode()
+        return
+
     provider = engine.registry.get(decision.provider)
     messages: list[Message] = []
     if sys:
@@ -894,6 +1014,9 @@ async def anthropic_stream_generator(
     ).encode()
 
     total_output_tokens = 0
+    last_chunk: StreamChunk | None = None
+    failed = False
+    started = time.monotonic()
     # Per-chunk stall timeout — keeps Anthropic-compatible clients from
     # hanging when a backing provider stalls mid-stream.
     CHUNK_STALL_TIMEOUT = 45.0  # noqa: N806 — local constant, intentional uppercase
@@ -935,10 +1058,12 @@ async def anthropic_stream_generator(
                     f"data: {json.dumps(delta_event)}\n\n"
                 ).encode()
 
+            last_chunk = chunk
             if chunk.usage:
                 total_output_tokens = chunk.usage.output_tokens
 
     except Exception as exc:
+        failed = True
         error_event = {
             "type": "error",
             "error": {
@@ -953,6 +1078,16 @@ async def anthropic_stream_generator(
         return
     finally:
         await _close_stream(aiter)
+
+    # Spend is recorded before the closing events go out, so a consumer that
+    # leaves on the last token still leaves a ledger row behind. A stream
+    # that ended on the error event above never reaches this line; the flag
+    # keeps that true even if the ``return`` moves.
+    if not failed:
+        await _log_stream_spend(
+            engine, last_chunk, provider=decision.provider or "",
+            model=decision.model or requested_model or "", started=started,
+        )
 
     # content_block_stop
     block_stop = {"type": "content_block_stop", "index": 0}

@@ -178,6 +178,8 @@ async def test_mcp_throwdown_runs_actual_critique(monkeypatch):
 @pytest.mark.parametrize("endpoint,stream", [
     ("/v1/proxy/chat/completions", False),
     ("/v1/proxy/chat/completions", True),
+    ("/v1/chat/completions", False),
+    ("/v1/chat/completions", True),
     ("/v1/anthropic/messages", False),
 ])
 def test_compatible_apis_execute_same_two_pass_workflow(monkeypatch, endpoint, stream, sync_db):

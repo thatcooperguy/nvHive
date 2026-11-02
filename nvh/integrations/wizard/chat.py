@@ -157,6 +157,46 @@ WIZARD_CORE_AUTO_TOOLS: frozenset[str] = frozenset({
     "diagnose", "refresh_models", "rag_ask_vault",
 })
 
+# Schema version of the ``<!-- wizard-meta: {...} -->`` tail that
+# :func:`_persist_wizard_turn` appends to every assistant row it writes.
+# Bump it when a key changes meaning or shape; adding a key is not a bump
+# (every reader ignores keys it does not know).
+WIZARD_META_VERSION = 1
+
+# Every key the wizard-meta tail can carry, with a one-line doc each. The
+# generated ``wizard-meta`` block of docs/CONFIGURATION.md is rendered from
+# this tuple (scripts/gen_config_doc.py), so it must describe exactly what
+# :meth:`_TurnSetup.meta` (LLM-answered turns) and :meth:`_TurnSetup.meta_for`
+# (deterministic turns) write — tests/test_wizard_persistence.py pins the
+# two key sets against it. Keys whose doc starts with "LLM-answered turns
+# only", "Deterministic turns only" or "Streamed turns only" are present on
+# those tails alone; every other key is on every tail.
+WIZARD_META_KEYS: tuple[tuple[str, str], ...] = (
+    ("source", 'Always `"wizard"`: the Wizard chat is the only writer of this tail.'),
+    ("v", f"Schema version of this tail; currently `{WIZARD_META_VERSION}`."),
+    ("used_profile", "Name of the agent profile that answered, or `null` for the general Wizard "
+                     "(a deterministic answer names one only when a pinned specialist itself declined)."),
+    ("profile_reason", "Why the concierge chose or demoted that profile; `null` when the profile was pinned "
+                       "explicitly and no selection ran."),
+    ("mode", 'Deterministic turns only: `"deterministic"` — no model answered (offline helper, '
+             "local-only refusal of a pin, or a failed LLM path)."),
+    ("fallback_reason", 'Deterministic turns only: the LLM error text, `"engine not initialized"` or the '
+                        "local-only refusal reason."),
+    ("iterations", "LLM round-trips attempted in the turn (`0` when no model was called)."),
+    ("tool_calls", "Confirm-class calls surfaced to the user as cards, without their `approval_token` and "
+                   "`approval_expires_at`."),
+    ("tool_results", "Outcomes of the auto-class tools the server ran, plus whitelist refusals "
+                     "(`not_allowed: true`)."),
+    ("deferred_tool_calls", "Auto-class calls the loop did not run, each with a `reason` (follow-up disabled, "
+                            "iteration cap, cost ceiling)."),
+    ("cost_usd", "LLM-answered turns only: the turn's completions summed, in USD (`0` when the provider "
+                 "reported no cost)."),
+    ("cost_known", "LLM-answered turns only: whether `cost_usd` is a price (the catalog knows the model) or a "
+                   'placeholder the UI shows as "cost unknown".'),
+    ("latency_ms", "LLM-answered turns only: wall-clock milliseconds summed over the turn's completions."),
+    ("streamed", "Streamed turns only: `true` when the streaming endpoint served the turn; absent otherwise."),
+)
+
 # Profiles carrying this tag keep their whitelist exactly, even when the
 # concierge chose them: no core-tool union. Set on built-ins whose prompt
 # forbids a tool (core ``vault-rag``: "Never call web_search").
@@ -232,6 +272,22 @@ async def _auto_fold_vault_chunk(
     return f"Relevant note: {source} (score {score:.2f}) — {text}"
 
 
+def _decimal_usd(value: Any) -> Decimal:
+    """``value`` as the ``Decimal`` the stores' ``cost_usd`` columns take.
+
+    The Wizard meters in ``float`` (:func:`_meter_from_chunk`); anything that
+    is not a finite number — a test double's attribute, ``None``, ``nan`` —
+    becomes ``0`` rather than a row that fails to write.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+        return Decimal("0")
+    try:
+        result = Decimal(str(value))
+    except Exception:
+        return Decimal("0")
+    return result if result.is_finite() else Decimal("0")
+
+
 async def _persist_wizard_turn(
     conversation_id: str | None,
     *,
@@ -240,8 +296,17 @@ async def _persist_wizard_turn(
     provider: str = "",
     model: str = "",
     metadata: dict[str, Any] | None = None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cost_usd: float | Decimal = 0,
+    latency_ms: int = 0,
 ) -> None:
     """Write the user + assistant pair to the conversations store.
+
+    The assistant row carries the turn's meter in its own columns
+    (``input_tokens``, ``output_tokens``, ``cost_usd``, ``latency_ms``) and the
+    ``wizard-meta`` tail (:data:`WIZARD_META_KEYS`, versioned by
+    :data:`WIZARD_META_VERSION`); the user row keeps the column defaults.
 
     Best-effort: if the conversation doesn't exist or the repo is unreachable,
     we log and continue. Persistence is a feature, not a correctness invariant.
@@ -263,6 +328,10 @@ async def _persist_wizard_turn(
         # downstream readers can parse the tool trace.
         content = assistant_text
         if metadata:
+            # The writer owns the format: every tail carries its schema
+            # version, whichever builder produced the dict.
+            if "v" not in metadata:
+                metadata = {"v": WIZARD_META_VERSION, **metadata}
             try:
                 content = f"{assistant_text}\n\n<!-- wizard-meta: {json.dumps(metadata, default=str)} -->"
             except Exception:
@@ -273,6 +342,10 @@ async def _persist_wizard_turn(
             content=content,
             provider=provider,
             model=model,
+            input_tokens=int(input_tokens or 0),
+            output_tokens=int(output_tokens or 0),
+            cost_usd=_decimal_usd(cost_usd),
+            latency_ms=int(latency_ms or 0),
         )
     except Exception as exc:
         logger.info("wizard: persistence skipped (%s)", exc)
@@ -1237,6 +1310,7 @@ class _TurnSetup:
             extra["tool_calls"] = _persistable_calls(extra["tool_calls"])
         return {
             "source": "wizard",
+            "v": WIZARD_META_VERSION,
             "used_profile": self.prof.profile_name,
             "profile_reason": self.profile_reason,
             **extra,
@@ -1252,6 +1326,7 @@ class _TurnSetup:
         """
         return {
             "source": "wizard",
+            "v": WIZARD_META_VERSION,
             "used_profile": result["used_profile"],
             "profile_reason": result["profile_reason"],
             "mode": result["mode"],
@@ -1840,6 +1915,10 @@ async def wizard_chat(
                     cost_known=cost_known,
                     latency_ms=total_latency_ms,
                 ),
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                cost_usd=total_cost_usd,
+                latency_ms=total_latency_ms,
             )
             return {
                 "answer": final_text,
@@ -1927,6 +2006,44 @@ def _meter_from_chunk(chunk: Any) -> tuple[float | None, int | None, int | None]
         int(in_tok) if _num(in_tok) else None,
         int(out_tok) if _num(out_tok) else None,
     )
+
+
+async def _log_streamed_turn(
+    engine: Any,
+    *,
+    provider: Any,
+    model: Any,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float,
+    latency_ms: int,
+) -> None:
+    """Write the streamed turn to the cost ledger (``QueryLog``, ``mode="wizard-chat"``).
+
+    The blocking path logs each ``CompletionResponse`` the provider returns
+    (:func:`wizard_chat`); a stream has no response object, so the turn's
+    metered totals — read off the final chunks by :func:`_meter_from_chunk`
+    and summed over its iterations — are folded into one. Without this row
+    the budget status, the analytics page and the session-cost pill never
+    see WebUI Wizard spend. Best-effort, like the blocking path's call: a
+    ledger failure never breaks the stream.
+    """
+    try:
+        from nvh.providers.base import CompletionResponse, Usage
+
+        in_tok = int(input_tokens or 0)
+        out_tok = int(output_tokens or 0)
+        response = CompletionResponse(
+            content="",
+            model=model if isinstance(model, str) else "",
+            provider=provider if isinstance(provider, str) else "",
+            usage=Usage(input_tokens=in_tok, output_tokens=out_tok, total_tokens=in_tok + out_tok),
+            cost_usd=_decimal_usd(cost_usd),
+            latency_ms=int(latency_ms or 0),
+        )
+        await engine._log_query(response, mode="wizard-chat")
+    except Exception:
+        logger.debug("wizard_chat_stream: query logging failed", exc_info=True)
 
 
 async def _filtered_token_stream(
@@ -2046,7 +2163,12 @@ async def wizard_chat_stream(
             "cost_ceiling_hit": bool, "cost_ceiling_usd": float | None,
             "used_profile": str | None, "profile_reason": str | None}`` —
         ``deferred_tool_calls`` are auto-class calls the loop did not run
-        (``max_iterations=1``, cost ceiling); the UI must not auto-run them
+        (``max_iterations=1``, cost ceiling); the UI must not auto-run them.
+        Right before ``done`` the turn is written to the cost ledger as one
+        ``QueryLog`` row (``mode="wizard-chat"``, the metered totals summed
+        over its iterations), as the blocking path does per completion; a
+        turn that ends in ``error`` after a metered iteration logs that
+        iteration's spend right before the ``error`` event
       - ``{"type": "error", "error": str, "fallback": str,
             "fallback_reason": str | None, "used_profile": str | None,
             "profile_reason": str | None}`` — the turn fell back to a
@@ -2081,6 +2203,18 @@ async def wizard_chat_stream(
 
     confirm_emitted = False
     decision: Any = None
+    # Same per-turn meter as the non-streaming path. Providers attach usage
+    # and cost to the final StreamChunk, so the profile ceiling is enforceable
+    # here too; latency is wall-clock per iteration. The totals live outside
+    # the ``try`` so the ``except`` branch can still log what the iterations
+    # that completed spent when a later one fails.
+    total_cost_usd: float = 0.0
+    total_latency_ms: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    # The model the final chunk named, else decision.model: its catalog row
+    # decides cost_known.
+    used_model: str = ""
     try:
         from nvh.providers.base import Message
 
@@ -2111,16 +2245,6 @@ async def wizard_chat_stream(
         temperature, max_tokens = prof.sampling_params(engine)
 
         final_text = ""
-        # Same per-turn meter as the non-streaming path. Providers attach
-        # usage + cost to the final StreamChunk, so the profile ceiling is
-        # enforceable here too; latency is wall-clock per iteration.
-        total_cost_usd: float = 0.0
-        total_latency_ms: int = 0
-        total_input_tokens: int = 0
-        total_output_tokens: int = 0
-        # The model the final chunk named, else decision.model: its catalog
-        # row decides cost_known.
-        used_model: str = ""
         cost_ceiling_hit = False
 
         iter_cap = _clamp_max_iterations(max_iterations)
@@ -2221,6 +2345,21 @@ async def wizard_chat_stream(
                 latency_ms=total_latency_ms,
                 streamed=True,
             ),
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
+            cost_usd=total_cost_usd,
+            latency_ms=total_latency_ms,
+        )
+        # One ledger row per streamed turn, written before ``done`` so a
+        # client that drops the connection after the answer cannot lose it.
+        await _log_streamed_turn(
+            engine,
+            provider=decision.provider,
+            model=used_model or decision.model,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
+            cost_usd=total_cost_usd,
+            latency_ms=total_latency_ms,
         )
         yield {
             "type": "done",
@@ -2267,6 +2406,19 @@ async def wizard_chat_stream(
             conversation_id, user_question=question, assistant_text=det,
             metadata=turn.meta_for(result, streamed=True),
         )
+        if total_cost_usd or total_input_tokens or total_output_tokens:
+            # Iterations that completed before the failure were metered. The
+            # blocking path logs each completion as it returns, so the stream
+            # must not lose them on its error path either.
+            await _log_streamed_turn(
+                engine,
+                provider=getattr(decision, "provider", None),
+                model=used_model or getattr(decision, "model", None),
+                input_tokens=total_input_tokens,
+                output_tokens=total_output_tokens,
+                cost_usd=total_cost_usd,
+                latency_ms=total_latency_ms,
+            )
         yield _error_event(result, error=error)
 
 

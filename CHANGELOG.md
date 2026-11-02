@@ -62,6 +62,67 @@
   included) and pins that the three routed loaders below return byte for
   byte what the direct read returned.
 
+- **Vault memory notes are `nvh-memory/1` records.** `append_vault_memory`
+  writes an `Id:` (`uuid4().hex`), a `Schema:` and a `Source:` line into the
+  header paragraph it already wrote, and the new readers `parse_vault_note`,
+  `list_vault_notes`, `get_vault_note`, `delete_vault_note` and
+  `derived_note_id` give every existing note a stable id without touching
+  the files: a pre-0.46 note reads as `schema: legacy` with a path-derived
+  id, a seeded note as `doc`. `vault_status()` reports `memory_files`; the
+  RAG bridge gained `index_vault_note` and `forget_vault_note` (exported
+  from `nvh.integrations.rag`) so one note can be indexed or dropped
+  without re-ingesting the vault, which is what the REPL's `/remember` and
+  `/forget` now do. The layout is the generated `memory-record` block in
+  CONFIGURATION.md.
+- **`state/schedules.json` is versioned as `nvh-schedules/2`.** The file is
+  a `{schema, updated_at, schedules}` wrapper; each record gains `name`,
+  `profile`, `conversation_id`, `updated_at`, `last_status`, `last_error`,
+  `last_job_id`, `last_cost_usd`, `last_cost_known`, `run_count` and `extra`
+  (unknown keys, round-tripped); `Scheduler` gains `get`, `set_enabled`,
+  `update` and `mark_run(status=ok|error|skipped|deferred, job_id, error,
+  cost_usd, cost_known, conversation_id)`, with `mark_completed` kept as
+  the alias of `mark_run(status="ok")`; new ids are 32-hex `uuid4().hex`.
+  Pinned by the new `tests/test_scheduler.py`; the layout is the generated
+  `schedule-record` block in CONFIGURATION.md.
+- **Three generated record-schema blocks in CONFIGURATION.md.**
+  `memory-record` from `MemoryRecord`, `schedule-record` from
+  `ScheduledTask` and `wizard-meta` from `WIZARD_META_KEYS`, rendered by
+  `scripts/gen_config_doc.py` from `dataclasses.fields()` and each field's
+  `metadata["doc"]` (types and defaults derived, never typed) and pinned by
+  `tests/test_config_doc_parity.py`, beside prose for the note header and
+  filename rule, the v2 schedules wrapper with its read-compat and
+  quarantine, and the wizard-meta presence rule. This closes the 0.46
+  ROADMAP obligation to document both stores before reshaping them; the
+  design they come from is `docs/proposals/ADDS_0_46_DESIGN_2026-11.md`.
+- **The Wizard's persisted `wizard-meta` tail is versioned** (`v: 1`,
+  `WIZARD_META_VERSION`) and described by `WIZARD_META_KEYS` in
+  `nvh/integrations/wizard/chat.py`, the source of the generated block.
+- **`nvh/api/deps.py` and the standard SDK paths.** `require_auth`, the
+  bearer scheme, the response envelope, `get_engine`, `auth_mode()` and
+  `key_required()` live in `nvh/api/deps.py`; `nvh/api/server.py` re-exports
+  every name, so existing imports and test patches keep working.
+  `POST /v1/chat/completions`, `POST /v1/completions` and
+  `POST /v1/anthropic/v1/messages` are the same handler objects as
+  `/v1/proxy/chat/completions`, `/v1/proxy/completions` and
+  `/v1/anthropic/messages`, which stay, so
+  `OPENAI_BASE_URL=http://127.0.0.1:8000/v1` and
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:8000/v1/anthropic` work as the SDKs
+  build them; `GET /v1/models` keeps the nvHive envelope (the OpenAI list is
+  `/v1/proxy/models`). `GET /v1/health` reports `bind_host` (`null` when the
+  app was not started by `run_server`), `auth_mode` (`open`, `key` or
+  `users`) and `key_required`.
+- **`PlatformFacts.is_owned`** and the single `OWNED_DEVICE_CLASSES` set in
+  `nvh/utils/platform_facts.py` (the Wizard findings import it;
+  `to_dict()` carries it); the Wizard context's platform block reports
+  `is_cloud`, `cloud_provider` and `is_owned`.
+- **`redact_secrets` knows three more key shapes:** `nvapi-…` (NVIDIA),
+  `gsk_…` (Groq) and `hf_…` (Hugging Face) are replaced like the OpenAI and
+  Anthropic prefixes already were.
+- **docs/TESTING.md** documents the `mcp-v1` CI job and the config-doc parity
+  guard; **docs/MAINTAINERS.md** names `MemoryRecord`, `ScheduledTask` and
+  `WIZARD_META_KEYS` as regeneration triggers and `mcp-v1` as a release
+  blocker.
+
 ### Changed
 - **`--verify` honours `exclude_providers`, and is independent or not at
   all.** The cross-check takes the exclusion set the answer was produced
@@ -83,6 +144,102 @@
   (`nvh/prompts/nvwizard_system.md`) read through `read_json` / `read_text`
   like every other shipped file; their fallbacks (generated catalog, empty
   library with one warning, built-in prompt with one warning) are unchanged.
+
+- **Streamed proxy completions are budget-checked and logged.** On every
+  OpenAI- and Anthropic-compatible path the stream checks `budget.hard_stop`
+  before the first provider call (one `budget_exceeded` error event instead
+  of tokens) and writes its spend to the query ledger when it ends
+  (`mode: proxy`; the non-streamed call on the same route goes through
+  `Engine.query` and stays `mode: simple`, and the budget totals sum both).
+  Until now a streaming client could spend past the budget unrecorded.
+  Coding tools stream by default, so this landed before the standard paths
+  did. A stream that ends in a provider error leaves no success row; a
+  provider that reports no usage on its final chunk still logs an
+  estimated output count and `0` input tokens (ROADMAP, Known follow-ups).
+- **Streamed Wizard turns reach the cost ledger.** A turn served by the
+  streaming endpoint is written once as `QueryLog` mode `wizard-chat`
+  (totals summed over its iterations) before `done`, and when a later
+  iteration fails the earlier iterations' metered spend is logged before the
+  `error` event; the assistant row's own `input_tokens`, `output_tokens`,
+  `cost_usd` and `latency_ms` columns are filled from the meter (the tail is
+  no longer the only carrier of cost).
+- **Vault memory writes.** Titles are collapsed to one line; title and body
+  pass through `redact_secrets` before the write and the result reports the
+  count as `redacted`; a note that is nothing but a secret is refused
+  (`nothing to remember after redacting secrets`, a 400 on
+  `POST /v1/vault/memory`, which also accepts `source`); two notes saved
+  with the same title in the same second no longer overwrite each other (the
+  second file gains a `-<id8>` suffix); notes are written to a temp file and
+  moved into place; `import_legacy_memories`, `/remember` and the
+  privileged-change audit stamp `Source: import` / `repl` / `audit`.
+- **The schedules store's legacy handling.** A pre-0.46 bare-array file
+  still loads unchanged (legacy 8-character ids kept) and is rewritten in the
+  v2 shape on the next save; a file that cannot be parsed is moved aside to
+  `schedules.json.corrupt-<timestamp>` with one log line instead of being
+  silently emptied; a record with no `id` reads with the same derived 32-hex
+  id in every process, one missing its prompt or interval loads disabled;
+  `Scheduler.update` refuses wrong-typed values before touching the record;
+  saves use a private per-process temp file, `os.replace` and sorted keys,
+  retry briefly when Windows reports the file open, and remove the temp file
+  on every failure.
+- **The CLI schedule runner records each run's outcome.** `nvh schedule
+  start` calls `mark_run(status="ok")` after a run and
+  `mark_run(status="error", error=...)` when it raises, so a failed run no
+  longer reads as completed in `nvh schedule list`.
+- **Docs and strings.** The proxy docstring and docs/INTEGRATIONS.md say
+  `OPENAI_BASE_URL` (LangChain and LiteLLM also accept the older
+  `OPENAI_API_BASE`) and gained a "Standard paths" section; the `NVH_HOME`
+  layout prose says the record schemas are documented below instead of
+  promising them, and the `state/` row names `scheduler.lock`, the transient
+  and quarantined `schedules.json` siblings and the pre-0.42-only role of
+  `memory/`; the Wizard context reads `vault_status()`'s `memory_files`
+  directly; `nvh/core/voice.py`'s stale strings match the code
+  (`nvh advisor add groq`; sox or arecord, nothing else is tried).
+
+### Fixed
+- **`GET /v1/health` no longer calls an unknown bind host loopback.** When
+  the app was not started by `run_server` (a bare
+  `uvicorn nvh.api.server:app`, an embedding, a test client) `bind_host` is
+  `null` instead of the fabricated `127.0.0.1`, so a client treats it as
+  not-loopback.
+- **REPL memory.** `/remember` derives the note title from the redacted
+  text, so a key split by the 60-character title cut cannot leak its prefix
+  into the heading, the file name or the RAG index; `/forget` unlinks the
+  matched file rather than deleting by id (a duplicate `Id:` copy no longer
+  makes it delete the wrong note); the legacy `memories.json` import skips a
+  secret-only row instead of aborting, leaving the marker unwritten and
+  re-importing on every start; `/remember` followed by `/exit` or Ctrl+D
+  still indexes the note (background tasks are drained before the loop
+  closes).
+- **Vault readers.** A hand-written page whose first paragraph is a single
+  `Created:` or `Source:` line stays a `doc` (a record's header carries at
+  least two known keys), and a symlink or junction that leaves the vault is
+  never listed, read or deleted as a note.
+- **Order-dependent GPU flake in `tests/test_wizard_context.py`.** The
+  real `wizard_context()` memoises nvidia-smi rows for five seconds, which
+  made the platform tests that run next on a GPU box see a real GPU; the
+  file now cold-starts that cache (autouse fixture).
+
+### Security
+- **Two routes that answered without the key now require it.**
+  `POST /v1/anthropic/messages` (and its alias `/v1/anthropic/v1/messages`)
+  and `GET /v1/integrations/scan`, which returns the config paths of the
+  tools it detects, go through `require_auth` like the rest. A keyed
+  deployment that points an Anthropic-compatible client at nvHive sends the
+  key as a bearer token (`ANTHROPIC_AUTH_TOKEN=<key>`); the SDKs' `x-api-key`
+  header is not a credential nvHive reads. In open mode nothing changes.
+- **`/v1/health` discloses `bind_host`, `auth_mode` and `key_required` on
+  purpose:** anyone who can reach the port learns them from the connection
+  and the 401 anyway, and `nvh launch` needs them to refuse an off-loopback
+  open-mode API before pointing a coding tool at it. SECURITY.md says so.
+- **Every vault memory write is redacted** (best-effort pattern pass; the
+  confirm card and the saved file remain the human check);
+  `delete_vault_note` refuses ids it does not know and paths that resolve
+  outside the vault root, and `index_vault_note` refuses files outside
+  `$NVH_HOME/vault`.
+- **The streamed-budget bypass is closed** (see Changed): a coding tool
+  streaming through the proxy can no longer spend past `budget.hard_stop`
+  unrecorded.
 
 ### Removed
 - **The pre-0.44 tool-call forms.** The agent loop no longer reads the

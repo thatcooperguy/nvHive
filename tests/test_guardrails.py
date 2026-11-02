@@ -202,6 +202,36 @@ class TestSecretsRedaction:
         result = redact_secrets(text)
         assert "SuperSecret" not in result
 
+    @pytest.mark.parametrize(("key", "marker"), [
+        ("nvapi-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_Ab", "[REDACTED:nvidia_key]"),
+        ("gsk_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789", "[REDACTED:groq_key]"),
+        ("hf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789", "[REDACTED:hf_token]"),
+    ])
+    def test_redacts_provider_prefixed_keys_with_their_own_marker(self, key, marker):
+        """NVIDIA, Groq and Hugging Face keys: the whole token goes, nothing of the
+        prefix or body survives, and the marker names the provider (the vault's
+        memory writer counts these markers to report how much it redacted)."""
+        assert redact_secrets(f"saved {key} for later") == f"saved {marker} for later"
+        assert redact_secrets(key) == marker
+
+    def test_groq_key_is_not_half_matched_by_the_plain_pattern(self):
+        """gsk_… precedes the plain sk_… row, which would otherwise match the
+        tail and leave ``g[REDACTED:api_key]``."""
+        result = redact_secrets("use gsk_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 here")
+        assert result == "use [REDACTED:groq_key] here"
+        assert "g[REDACTED" not in result and "api_key" not in result
+
+    def test_short_provider_prefixed_tokens_are_not_keys(self):
+        text = "nvapi-short gsk_short hf_hub_download hf_short"
+        assert redact_secrets(text) == text
+
+    def test_existing_rows_keep_their_precedence(self):
+        """The new rows sit between the dash-separated and the plain sk- rows; neither changed."""
+        assert redact_secrets("sk-abc123def456ghi789jkl012mno345pqr678stu901") == "[REDACTED:api_key]"
+        assert redact_secrets("sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdEf") == "[REDACTED:api_key]"
+        assert redact_secrets("ghp_abcdefghijklmnopqrstuvwxyz1234567890") == "[REDACTED:github_pat]"
+        assert redact_secrets("AKIAIOSFODNN7EXAMPLE") == "[REDACTED:aws_key]"
+
 
 # ---------------------------------------------------------------------------
 # Sensitive file blocking

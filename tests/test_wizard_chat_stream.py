@@ -9,6 +9,9 @@ We mock provider.stream to yield deterministic chunks and verify:
     auto-running
   - Engine-missing fallback yields a single error event with a fallback string
   - The done event carries the right final answer + iteration count
+  - The turn reaches the cost ledger (``engine._log_query``,
+    ``mode="wizard-chat"``) once, with the meter summed over its iterations,
+    and the persisted assistant row carries that meter in its columns
 
 Provider streams are mocked at the function level (``provider.stream``)
 so we don't depend on any real engine or LLM.
@@ -438,3 +441,188 @@ async def test_stream_done_non_zero_cost_is_known_even_without_a_row() -> None:
     done = events[-1]
     assert done["type"] == "done"
     assert done["cost_usd"] == pytest.approx(0.004) and done["cost_known"] is True
+
+
+# ── the stream path writes the ledger row and the row columns (Wave A4) ─────
+
+
+def _metered_engine(iterations: list[tuple[list[str], int, int, str, str]]) -> MagicMock:
+    """Like ``_fake_engine`` but each iteration ends with a final chunk that
+    carries ``usage`` / ``cost_usd`` / ``model`` the way a real provider's
+    does: ``(deltas, input_tokens, output_tokens, cost_usd, model)``."""
+    from nvh.providers.base import Usage
+
+    call_count = {"i": 0}
+
+    def stream_fn(**kwargs):
+        texts, in_tok, out_tok, cost, model = iterations[min(call_count["i"], len(iterations) - 1)]
+        call_count["i"] += 1
+
+        async def _gen():
+            for t in texts:
+                yield MagicMock(delta=t)
+            yield MagicMock(
+                delta="", model=model, cost_usd=Decimal(cost),
+                usage=Usage(input_tokens=in_tok, output_tokens=out_tok, total_tokens=in_tok + out_tok),
+            )
+        return _gen()
+
+    engine = _fake_engine([])
+    engine.registry.get.return_value.stream = MagicMock(side_effect=stream_fn)
+    engine._log_query = AsyncMock()
+    return engine
+
+
+@pytest.mark.asyncio
+async def test_stream_logs_one_ledger_row_with_the_summed_meter() -> None:
+    """A streamed turn reaches the cost ledger the way a blocking one does:
+    one ``_log_query`` with ``mode="wizard-chat"``, written before ``done``,
+    whose response sums the tokens and cost of every iteration and names the
+    model the chunks served and the provider the router picked."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    engine = _metered_engine([
+        (["Checking.\n", _REFRESH + "\n"], 10, 5, "0.001", "ollama/served:1b"),
+        (["Done."], 20, 7, "0.002", "ollama/served:1b"),
+    ])
+    order: list[str] = []
+
+    async def _log(response, mode):
+        order.append("log")
+
+    engine._log_query = AsyncMock(side_effect=_log)
+    with (
+        patch("nvh.api.server.get_engine", return_value=engine),
+        patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+        patch(
+            "nvh.integrations.wizard.chat._run_auto_tool",
+            new=AsyncMock(return_value={"ok": True, "result": {"count": 3}, "safety_class": "auto"}),
+        ),
+    ):
+        events = []
+        async for event in chat_mod.wizard_chat_stream("refresh my models"):
+            events.append(event)
+            if event["type"] == "done":
+                order.append("done")
+    done = events[-1]
+    assert done["type"] == "done" and done["iterations"] == 2
+    assert done["input_tokens"] == 30 and done["output_tokens"] == 12
+    assert done["cost_usd"] == pytest.approx(0.003)
+    assert order == ["log", "done"]
+
+    engine._log_query.assert_awaited_once()
+    assert engine._log_query.await_args.kwargs == {"mode": "wizard-chat"}
+    response = engine._log_query.await_args.args[0]
+    assert response.provider == "ollama" and response.model == "ollama/served:1b"
+    assert response.usage.input_tokens == 30 and response.usage.output_tokens == 12
+    assert response.usage.total_tokens == 42
+    assert isinstance(response.cost_usd, Decimal)
+    assert float(response.cost_usd) == pytest.approx(0.003)
+    assert response.cost_usd == Decimal(str(done["cost_usd"]))
+    assert response.latency_ms == done["latency_ms"]
+
+
+@pytest.mark.asyncio
+async def test_stream_done_survives_a_ledger_failure() -> None:
+    """The ledger is best-effort on both paths: a ``_log_query`` that raises
+    leaves the done event intact, with the meter it would have logged."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    engine = _metered_engine([(["Hello"], 3, 2, "0.004", "ollama/served:1b")])
+    engine._log_query = AsyncMock(side_effect=RuntimeError("ledger down"))
+    with (
+        patch("nvh.api.server.get_engine", return_value=engine),
+        patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+    ):
+        events = [e async for e in chat_mod.wizard_chat_stream("hi")]
+    done = events[-1]
+    assert done["type"] == "done" and "Hello" in done["answer"]
+    assert done["cost_usd"] == pytest.approx(0.004)
+    assert done["input_tokens"] == 3 and done["output_tokens"] == 2
+    engine._log_query.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stream_persists_the_meter_in_the_assistant_row_and_a_versioned_tail(monkeypatch) -> None:
+    """The streamed assistant row carries the summed meter in its own columns
+    and a ``v: 1`` tail with exactly the keys ``WIZARD_META_KEYS`` documents
+    for a streamed LLM turn."""
+    import json
+    import re
+
+    from nvh.integrations.wizard import chat as chat_mod
+
+    add_message = AsyncMock()
+    monkeypatch.setattr("nvh.storage.repository.add_message", add_message, raising=False)
+    engine = _metered_engine([(["Hello"], 3, 2, "0.004", "ollama/served:1b")])
+    with (
+        patch("nvh.api.server.get_engine", return_value=engine),
+        patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+    ):
+        events = [e async for e in chat_mod.wizard_chat_stream("hi", conversation_id="conv-stream")]
+    done = events[-1]
+    assert done["type"] == "done"
+    assert add_message.await_count == 2
+    user, asst = (c.kwargs for c in add_message.await_args_list)
+    assert user["role"] == "user" and "input_tokens" not in user
+    assert asst["role"] == "assistant"
+    assert asst["input_tokens"] == 3 and asst["output_tokens"] == 2
+    assert asst["cost_usd"] == Decimal("0.004") and asst["latency_ms"] == done["latency_ms"]
+    m = re.search(r"\n\n<!-- wizard-meta: (\{.*\}) -->$", asst["content"], re.DOTALL)
+    assert m, asst["content"]
+    meta = json.loads(m.group(1))
+    assert meta["v"] == chat_mod.WIZARD_META_VERSION == 1 and meta["streamed"] is True
+    assert set(meta) == {
+        "source", "v", "used_profile", "profile_reason", "iterations", "tool_calls", "tool_results",
+        "deferred_tool_calls", "cost_usd", "cost_known", "latency_ms", "streamed",
+    }
+    assert set(meta) <= {key for key, _ in chat_mod.WIZARD_META_KEYS}
+    assert meta["cost_usd"] == pytest.approx(0.004) and meta["latency_ms"] == done["latency_ms"]
+
+
+@pytest.mark.asyncio
+async def test_stream_error_path_logs_the_iterations_that_were_metered() -> None:
+    """Iteration 1 is metered and asks for a tool; iteration 2 raises. The blocking
+    path had already logged iteration 1 by then, so the stream logs it too — right
+    before the ``error`` event — instead of dropping the spend from the ledger."""
+    from nvh.integrations.wizard import chat as chat_mod
+
+    engine = _metered_engine([(["Checking.\n", _REFRESH + "\n"], 10, 5, "0.02", "ollama/served:1b")])
+    first_stream = engine.registry.get.return_value.stream.side_effect
+    calls = {"n": 0}
+
+    def stream_fn(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise TimeoutError("iteration 2 timed out")
+        return first_stream(**kwargs)
+
+    engine.registry.get.return_value.stream = MagicMock(side_effect=stream_fn)
+    order: list[str] = []
+
+    async def _log(response, mode):
+        order.append("log")
+
+    engine._log_query = AsyncMock(side_effect=_log)
+    with (
+        patch("nvh.api.server.get_engine", return_value=engine),
+        patch("nvh.integrations.wizard.context.wizard_context", return_value=_EMPTY_SNAPSHOT),
+        patch(
+            "nvh.integrations.wizard.chat._run_auto_tool",
+            new=AsyncMock(return_value={"ok": True, "result": {"count": 3}, "safety_class": "auto"}),
+        ),
+    ):
+        events = []
+        async for event in chat_mod.wizard_chat_stream("refresh my models"):
+            events.append(event)
+            if event["type"] == "error":
+                order.append("error")
+
+    assert events[-1]["type"] == "error" and "timed out" in events[-1]["error"]
+    assert calls["n"] == 2 and order == ["log", "error"]
+    engine._log_query.assert_awaited_once()
+    assert engine._log_query.await_args.kwargs == {"mode": "wizard-chat"}
+    response = engine._log_query.await_args.args[0]
+    assert response.provider == "ollama" and response.model == "ollama/served:1b"
+    assert (response.usage.input_tokens, response.usage.output_tokens) == (10, 5)
+    assert float(response.cost_usd) == pytest.approx(0.02)

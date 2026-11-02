@@ -7,6 +7,8 @@ Embedder is mocked. We verify:
   - `ensure_vault_indexed` is a true no-op when the collection has chunks
   - `ask_vault` triggers the auto-index then returns chunks in similarity order
   - The Wizard tool `rag_ask_vault` is registered and auto-class
+  - `index_vault_note` / `forget_vault_note` (0.46) key one note's chunks by
+    ``str(path.resolve())``, the same source ``ingest_vault`` writes
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ from nvh.integrations.rag.vault_bridge import (
     VAULT_COLLECTION,
     ask_vault,
     ensure_vault_indexed,
+    forget_vault_note,
+    index_vault_note,
     ingest_vault,
     vault_exists,
 )
@@ -141,3 +145,96 @@ def test_wizard_registry_includes_rag_ask_vault() -> None:
     assert tool is not None
     assert tool.safety_class == "auto"
     assert "question" in tool.parameters
+
+
+# ---------------------------------------------------------------------------
+# One-note indexing (0.46)
+# ---------------------------------------------------------------------------
+
+
+def _fake_embed() -> AsyncMock:
+    return AsyncMock(side_effect=lambda texts, **kw: [[1.0, 0.0]] * len(texts))
+
+
+def _sources(home: Path) -> set[str]:
+    with RagStore(home_dir=home) as store:
+        return {c.source for c in store.search(collection=VAULT_COLLECTION, query_vector=[1.0, 0.0], top_k=50)}
+
+
+@pytest.mark.asyncio
+async def test_index_vault_note_makes_a_later_note_answerable_without_reingest(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _make_vault(home)
+    embed = _fake_embed()
+    with patch("nvh.integrations.rag.ingest.embed_texts", new=embed):
+        assert (await ingest_vault(home_dir=home))["ok"] is True
+        before = embed.await_count
+
+        later = home / "vault" / "Wizard Memory" / "later.md"
+        later.parent.mkdir()
+        later.write_text("# Later\n\nId: abc\nSchema: nvh-memory/1\n\nComfyUI lives on the second NVMe.\n")
+        assert await index_vault_note(later, home_dir=home) is True
+        assert embed.await_count == before + 1  # one embed call for one note
+
+        with patch("nvh.integrations.rag.query.embed_one", new=AsyncMock(return_value=[1.0, 0.0])):
+            result = await ask_vault("where is ComfyUI?", home_dir=home, top_k=10)
+
+    assert result["ok"] is True
+    assert result["auto_indexed"] is False  # the vault was not re-ingested
+    assert str(later.resolve()) in {c["source"] for c in result["chunks"]}
+    assert any("second NVMe" in c["text"] for c in result["chunks"])
+
+    # Re-indexing the same note replaces its chunks instead of duplicating them.
+    with patch("nvh.integrations.rag.ingest.embed_texts", new=embed):
+        assert await index_vault_note(later, home_dir=home) is True
+    with RagStore(home_dir=home) as store:
+        assert store.collection_stats(VAULT_COLLECTION)["sources"] == 3
+
+
+@pytest.mark.asyncio
+async def test_index_vault_note_keys_chunks_by_the_resolved_path(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    vault = _make_vault(home)
+    embed = _fake_embed()
+    with patch("nvh.integrations.rag.ingest.embed_texts", new=embed):
+        await ingest_vault(home_dir=home)
+        # A string spelling of a note ingest_vault already indexed: same key, no second source.
+        assert await index_vault_note(str(vault / "notes.md"), home_dir=home) is True
+
+    sources = _sources(home)
+    assert str((vault / "notes.md").resolve()) in sources
+    assert sources == {str((vault / "notes.md").resolve()), str((vault / "ideas.md").resolve())}
+
+
+@pytest.mark.asyncio
+async def test_forget_vault_note_drops_only_that_notes_chunks(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    vault = _make_vault(home)
+    with patch("nvh.integrations.rag.ingest.embed_texts", new=_fake_embed()):
+        await ingest_vault(home_dir=home)
+
+    assert await forget_vault_note(vault / "notes.md", home_dir=home) >= 1
+    assert await forget_vault_note(vault / "notes.md", home_dir=home) == 0  # already gone
+
+    with RagStore(home_dir=home) as store:
+        assert store.collection_stats(VAULT_COLLECTION)["sources"] == 1
+    assert _sources(home) == {str((vault / "ideas.md").resolve())}
+
+
+@pytest.mark.asyncio
+async def test_index_vault_note_refuses_outside_missing_and_failing(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    vault = _make_vault(home)
+    outside = tmp_path / "elsewhere.md"
+    outside.write_text("# Outside\n\nNot a vault note.")
+    embed = _fake_embed()
+    with patch("nvh.integrations.rag.ingest.embed_texts", new=embed):
+        assert await index_vault_note(outside, home_dir=home) is False
+        assert await index_vault_note(vault / "missing.md", home_dir=home) is False
+    assert embed.await_count == 0
+    with RagStore(home_dir=home) as store:
+        assert store.collection_stats(VAULT_COLLECTION)["chunks"] == 0
+
+    # An embedder failure is reported as False, never raised at the caller.
+    with patch("nvh.integrations.rag.ingest.embed_texts", new=AsyncMock(side_effect=RuntimeError("ollama down"))):
+        assert await index_vault_note(vault / "notes.md", home_dir=home) is False

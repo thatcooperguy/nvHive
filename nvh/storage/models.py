@@ -95,7 +95,7 @@ class QueryLog(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
     conversation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    mode: Mapped[str] = mapped_column(String(16))  # simple, council, compare
+    mode: Mapped[str] = mapped_column(String(16))  # simple, council, compare, wizard-chat, proxy
     provider: Mapped[str] = mapped_column(String(64))
     model: Mapped[str] = mapped_column(String(128))
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)

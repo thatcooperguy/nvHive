@@ -11460,12 +11460,12 @@ def schedule_start(
                 )
                 response_text = resp.content
 
-            scheduler.mark_completed(task.id)
+            scheduler.mark_run(task.id, status="ok")
             await notify_task_complete(task.prompt[:50], response_text)
             return response_text
 
         except Exception as e:
-            scheduler.mark_completed(task.id)
+            scheduler.mark_run(task.id, status="error", error=str(e))
             await notify_task_complete(task.prompt[:50], f"Error: {e}", "")
             return f"Error: {e}"
 

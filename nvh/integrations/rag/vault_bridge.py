@@ -62,6 +62,67 @@ async def ingest_vault(
     )
 
 
+def _note_source(path: str | Path) -> str:
+    """The ``source`` the store keys a vault note's chunks by: ``str(path.resolve())``,
+    exactly what ``ingest_folder`` writes for the same file."""
+    return str(Path(path).expanduser().resolve())
+
+
+def _inside_vault(resolved: str, home_dir: str | Path | None) -> bool:
+    try:
+        Path(resolved).relative_to(_vault_dir(home_dir).resolve())
+    except ValueError:
+        return False
+    return True
+
+
+async def index_vault_note(
+    path: str | Path,
+    *,
+    home_dir: str | Path | None = None,
+    admission: AtohiAdmission | None = None,
+) -> bool:
+    """(Re)index one vault note without re-ingesting the vault.
+
+    Drops the note's current chunks (``delete_source`` keyed by the resolved
+    path) and ingests ``[(source, text)]`` through the same ``ingest_documents``
+    path ``ingest_vault`` uses, so the chunks are indistinguishable from a full
+    ingest. True when chunks were written. A path outside the vault, a missing
+    or empty file and an embedder failure all return False; the embedder never
+    raises out of here.
+    """
+    from nvh.integrations.rag.ingest import ingest_documents
+    from nvh.integrations.rag.store import RagStore
+
+    source = _note_source(path)
+    if not _inside_vault(source, home_dir):
+        return False
+    try:
+        text = Path(source).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    with RagStore(home_dir=home_dir) as store:
+        store.delete_source(collection=VAULT_COLLECTION, source=source)
+    if not text.strip():
+        return False
+    try:
+        result = await ingest_documents(
+            [(source, text)], collection=VAULT_COLLECTION, home_dir=home_dir, admission=admission,
+        )
+    except Exception as exc:  # the index is derived; never fail the caller's save
+        logger.debug("index_vault_note(%s) failed: %s", source, exc)
+        return False
+    return bool(result.get("ok")) and int(result.get("files_ingested") or 0) > 0
+
+
+async def forget_vault_note(path: str | Path, *, home_dir: str | Path | None = None) -> int:
+    """Drop one vault note's chunks from the ``vault`` collection; the number removed."""
+    from nvh.integrations.rag.store import RagStore
+
+    with RagStore(home_dir=home_dir) as store:
+        return int(store.delete_source(collection=VAULT_COLLECTION, source=_note_source(path)))
+
+
 async def ensure_vault_indexed(
     home_dir: str | Path | None = None, *, admission: AtohiAdmission | None = None,
 ) -> dict[str, Any]:

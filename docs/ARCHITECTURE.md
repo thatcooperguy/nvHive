@@ -107,7 +107,7 @@ graph TB
 
     subgraph nvHive
         API[API server :8000]
-        PROXY[/v1/proxy · /v1/anthropic]
+        PROXY[/v1/proxy · /v1/chat/completions · /v1/anthropic]
         MCP[MCP server]
         WIZ[AI Wizard]
         ENGINE[Engine: router · orchestrator · council · agent loop]

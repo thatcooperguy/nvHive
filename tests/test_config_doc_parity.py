@@ -1,33 +1,49 @@
-"""docs/CONFIGURATION.md's Wizard tool roster and cabinet table are generated (derive, don't type).
+"""docs/CONFIGURATION.md's rosters and record schemas are generated (derive, don't type).
 
-scripts/gen_config_doc.py fills two marker-delimited blocks: the Wizard's
+scripts/gen_config_doc.py fills five marker-delimited blocks: the Wizard's
 stock tool roster by safety class (``default_registry()`` with the
-machine-dependent discovery passes off) and the council cabinets from
-``COUNCIL_PRESETS`` / ``PRESET_DESCRIPTIONS``. The committed file must match
-byte-for-byte so a tool added, reclassified or re-described, or a cabinet
-changed, fails CI instead of drifting in the doc. The hand-written text the
-rosters sit in is pinned to the registries it names: the kill-switch row's
-list of privileged tools and the legacy-homes paragraph's doctor row.
+machine-dependent discovery passes off), the council cabinets from
+``COUNCIL_PRESETS`` / ``PRESET_DESCRIPTIONS``, and the three record schemas
+— ``memory-record`` from ``MemoryRecord`` (``nvh-memory/1``),
+``schedule-record`` from ``ScheduledTask`` (``nvh-schedules/2``) and
+``wizard-meta`` from ``WIZARD_META_KEYS`` — one row per dataclass field or
+tuple entry, read from ``dataclasses.fields()`` and ``metadata["doc"]``. The
+committed file must match byte-for-byte so a tool added, reclassified or
+re-described, a cabinet changed, or a record field added or re-described
+fails CI instead of drifting in the doc. The hand-written text the rosters
+sit in is pinned to the registries it names: the kill-switch row's list of
+privileged tools and the legacy-homes paragraph's doctor row.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
+import json
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import nvh.integrations.mcp_client as mcp_client
 import nvh.integrations.wizard.tools as wizard_tools
 from nvh.core.agents import COUNCIL_PRESETS, PRESET_DESCRIPTIONS
+from nvh.core.scheduler import ScheduledTask
 from nvh.core.tools import SAFETY_CLASSES
 from nvh.integrations.diagnostics.checks import DEEP, checks_for
+from nvh.integrations.wizard.chat import WIZARD_META_KEYS
 from nvh.integrations.workspace.migrate_legacy import LEGACY_MIGRATION_ENV
+from nvh.integrations.workspace.vault import MemoryRecord
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "gen_config_doc.py"
 DOC = ROOT / "docs" / "CONFIGURATION.md"
+BLOCK_NAMES = {"wizard-tools", "council-cabinets", "memory-record", "schedule-record", "wizard-meta"}
+# The nine pre-0.46 schedule fields stay required (no default) so a legacy record constructs positionally.
+LEGACY_SCHEDULE_FIELDS = (
+    "id", "prompt", "interval_seconds", "advisor", "mode", "last_run", "next_run", "enabled", "created_at",
+)
 
 
 @pytest.fixture(scope="module")
@@ -76,7 +92,7 @@ def test_committed_doc_matches_generator(generator, doc: str):
 
 
 def test_every_block_has_one_marker_pair(generator, doc: str):
-    assert set(generator.BLOCKS) == {"wizard-tools", "council-cabinets"}
+    assert set(generator.BLOCKS) == BLOCK_NAMES
     for name in generator.BLOCKS:
         assert doc.count(generator.BEGIN.format(name=name)) == 1, name
         assert doc.count(generator.END.format(name=name)) == 1, name
@@ -177,6 +193,76 @@ def test_cabinet_table_rows_are_the_presets(generator, doc: str):
 def test_every_preset_has_a_description():
     assert set(PRESET_DESCRIPTIONS) == set(COUNCIL_PRESETS)
     assert all(PRESET_DESCRIPTIONS.values())
+
+
+# --- the record schemas ---------------------------------------------------------
+
+
+def _required(f: dataclasses.Field) -> bool:
+    return f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
+
+
+def test_memory_record_table_has_one_row_per_field_in_order(generator, doc: str):
+    rows = [_cells(row) for row in _rows(generator.block_text(doc, "memory-record"))]
+    flds = dataclasses.fields(MemoryRecord)
+    assert [cells[0] for cells in rows] == [f"`{f.name}`" for f in flds]
+    assert [cells[0] for cells in rows][:3] == ["`id`", "`schema`", "`title`"]
+    for cells, f in zip(rows, flds, strict=True):
+        assert len(cells) == 3, f.name
+        assert cells[1] == f"`{generator._type_name(f.type)}`", f.name
+        assert cells[2] == generator._cell(f.metadata["doc"]) and cells[2], f.name
+
+
+def test_schedule_record_table_has_one_row_per_field_with_its_default(generator, doc: str):
+    rows = [_cells(row) for row in _rows(generator.block_text(doc, "schedule-record"))]
+    flds = dataclasses.fields(ScheduledTask)
+    assert [cells[0] for cells in rows] == [f"`{f.name}`" for f in flds]
+    for cells, f in zip(rows, flds, strict=True):
+        assert len(cells) == 4, f.name
+        assert cells[1] == f"`{generator._type_name(f.type)}`", f.name
+        if _required(f):
+            assert cells[2] == "—", f.name
+        elif f.default is not dataclasses.MISSING:
+            assert cells[2] == f"`{json.dumps(f.default)}`", f.name
+        else:
+            assert cells[2] == f"`{json.dumps(f.default_factory())}`", f.name
+        assert cells[3] == generator._cell(f.metadata["doc"]) and cells[3], f.name
+    # The required rows are exactly the pre-0.46 record, in its order; everything after has a default.
+    assert tuple(cells[0].strip("`") for cells in rows if cells[2] == "—") == LEGACY_SCHEDULE_FIELDS
+    assert [cells[0] for cells in rows][: len(LEGACY_SCHEDULE_FIELDS)] == [f"`{n}`" for n in LEGACY_SCHEDULE_FIELDS]
+
+
+def test_wizard_meta_table_has_one_row_per_key_in_order(generator, doc: str):
+    rows = [_cells(row) for row in _rows(generator.block_text(doc, "wizard-meta"))]
+    assert [cells[0] for cells in rows] == [f"`{key}`" for key, _doc in WIZARD_META_KEYS]
+    for cells, (key, meaning) in zip(rows, WIZARD_META_KEYS, strict=True):
+        assert len(cells) == 2, key
+        assert cells[1] == generator._cell(meaning) and cells[1], key
+    assert len({key for key, _doc in WIZARD_META_KEYS}) == len(WIZARD_META_KEYS)
+
+
+def test_type_names_read_like_the_source(generator):
+    # vault.py uses ``from __future__ import annotations`` (strings); scheduler.py does not (objects).
+    assert generator._type_name("list[str]") == "list[str]"
+    assert generator._type_name(str) == "str"
+    assert generator._type_name(float | None) == "float | None"
+    assert generator._type_name(dict[str, Any]) == "dict[str, Any]"
+    # A pipe in a type cell is escaped so the table keeps its column count.
+    assert "`float \\| None`" in generator.render_schedule_record()
+
+
+def test_record_prose_sits_beside_each_generated_table(doc: str):
+    layout = _section(doc, "## `NVH_HOME` layout", "### Legacy homes (pre-0.44)")
+    assert "are documented below" in layout and "will be documented before" not in layout
+    for heading, marker in (
+        ("### Memory records (`nvh-memory/1`)", "memory-record"),
+        ("### Schedule records (`nvh-schedules/2`)", "schedule-record"),
+        ("### Wizard chat rows (`wizard-meta`)", "wizard-meta"),
+    ):
+        assert layout.index(heading) < layout.index(f"<!-- BEGIN GENERATED: {marker} -->"), marker
+    state_row = next(line for line in doc.splitlines() if line.startswith("| `state/` |"))
+    for name in ("`schedules.json`", "`scheduler.lock`", "`schedules.json.corrupt-<timestamp>`", "pre-0.42 `memories.json`"):
+        assert name in state_row, name
 
 
 # --- the hand-written text around the rosters -----------------------------------

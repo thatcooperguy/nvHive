@@ -8,7 +8,7 @@ setups for Claude Code, Cursor, OpenClaw, NemoClaw and VS Code.
 |---|---|---|
 | Python SDK | `from nvh import ask` | scripts and apps in the same process |
 | REST API | `nvh serve` | anything that speaks HTTP; the WebUI uses it |
-| OpenAI-compatible proxy | `base_url=http://localhost:8000/v1/proxy` | any OpenAI SDK client, NemoClaw, OpenClaw |
+| OpenAI-compatible proxy | `OPENAI_BASE_URL=http://127.0.0.1:8000/v1` (or `.../v1/proxy`) | any OpenAI SDK client, NemoClaw, OpenClaw |
 | Anthropic-compatible proxy | `ANTHROPIC_BASE_URL=http://localhost:8000/v1/anthropic` | tools that speak the Messages API |
 | MCP server | `nvh mcp` / `nvhive-mcp` | Claude Code, Cursor, Claude Desktop, OpenClaw agents |
 | MCP client | `$NVH_HOME/config/mcp-servers.json` | give the Wizard external tools |
@@ -70,12 +70,14 @@ the structured logs.
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8000/v1/proxy", api_key="nvhive")
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="nvhive")
 client.chat.completions.create(model="auto", messages=[{"role": "user", "content": "Hello"}])
 ```
 
 `/v1/proxy/chat/completions`, `/v1/proxy/completions` and `/v1/proxy/models`
-mirror the OpenAI paths; `/v1/anthropic/messages` mirrors Anthropic's
+mirror the OpenAI paths, and since 0.46 the standard `/v1/chat/completions`
+and `/v1/completions` reach the same handlers (see [Standard
+paths](#standard-paths)); `/v1/anthropic/messages` mirrors Anthropic's
 Messages API. The `model` field selects a routing mode:
 
 | Model | Behaviour |
@@ -88,6 +90,37 @@ Messages API. The `model` field selects a routing mode:
 
 The header `x-nvhive-privacy: local-only` forces local inference for one
 request regardless of model.
+
+### Standard paths
+
+Since 0.46 the base URLs the OpenAI and Anthropic SDKs expect resolve as the
+SDKs build them:
+
+| Set | Resolves to | Same handler as |
+|---|---|---|
+| `OPENAI_BASE_URL=http://127.0.0.1:8000/v1` | `POST /v1/chat/completions`, `POST /v1/completions` | `/v1/proxy/chat/completions`, `/v1/proxy/completions` |
+| `ANTHROPIC_BASE_URL=http://127.0.0.1:8000/v1/anthropic` | `POST /v1/anthropic/v1/messages` (the SDKs append `/v1/messages`) | `/v1/anthropic/messages` |
+
+`/v1/proxy/*` and `/v1/anthropic/messages` stay. `GET /v1/models` keeps the
+nvHive envelope (the capability catalog, `{"status", "data"}`); the
+OpenAI-shaped list is `GET /v1/proxy/models`, so a tool that validates its
+provider against `/models` should keep `.../v1/proxy` as its base URL.
+`OPENAI_BASE_URL` is the variable the OpenAI SDK reads; LangChain and LiteLLM
+also accept the older `OPENAI_API_BASE` spelling.
+
+Streamed completions on every proxy path honour `budget.hard_stop` — the
+stream carries one `budget_exceeded` error event instead of tokens — and are
+written to the query ledger like the non-streamed ones, so `nvh budget` and
+`GET /v1/budget/status` count coding-tool traffic. The two rows differ in one
+column: a streamed call is logged as `mode: proxy`, a non-streamed call on the
+same route goes through `Engine.query` and is logged as `mode: simple` (the
+mode `nvh ask` writes), so `/metrics` and `nvh history` show proxy streams
+under their own label while the budget totals sum both.
+
+With `HIVE_API_KEY` set, every proxy path needs the key as a bearer token —
+the Anthropic proxy included since 0.46: `OPENAI_API_KEY=<key>` and
+`ANTHROPIC_AUTH_TOKEN=<key>` (the Anthropic SDKs send `ANTHROPIC_API_KEY` as
+`x-api-key`, which nvHive does not read). In open mode any value works.
 
 ## nvHive as an MCP server
 

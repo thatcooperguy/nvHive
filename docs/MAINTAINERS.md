@@ -57,8 +57,8 @@ minute for PyPI.
 1. Tests green locally and on the last CI run of `main`. `ci.yml` runs the
    suite on `ubuntu-latest` (Python 3.11 and 3.12) and on the
    `ubuntu-24.04-arm` job (Python 3.12, the DGX Spark target), plus the
-   typecheck, webui, security and build jobs; a red matrix is a release
-   blocker. `migration.yml` (Windows and macOS migration contracts) fires on
+   typecheck, webui, security, build and mcp-v1 jobs; a red matrix is a
+   release blocker. `migration.yml` (Windows and macOS migration contracts) fires on
    any `main` push that touches `pyproject.toml`, so the version bump runs it
    and it must be green too. `installer.yml` (installer contracts) runs on
    pushes to `main` and on pull requests that touch an installer or its
@@ -83,8 +83,12 @@ minute for PyPI.
    after any change to a catalog row, `RETIRED_MODEL_RENAMES` or the VRAM
    tier table, and the generated blocks of `docs/CONFIGURATION.md`
    (`python scripts/gen_config_doc.py`, `tests/test_config_doc_parity.py`)
-   after any change to the Wizard tool roster or to `COUNCIL_PRESETS` /
-   `PRESET_DESCRIPTIONS`. Each parity test runs its generator's `--check`.
+   after any change to the Wizard tool roster, to `COUNCIL_PRESETS` /
+   `PRESET_DESCRIPTIONS`, to the fields or `metadata["doc"]` sentences of
+   `MemoryRecord` (`nvh/integrations/workspace/vault.py`) or
+   `ScheduledTask` (`nvh/core/scheduler.py`), or to `WIZARD_META_KEYS`
+   (`nvh/integrations/wizard/chat.py`). Each parity test runs its
+   generator's `--check`.
 4. The latest `model-currency.yml` run (Actions tab; `gh run list
    --workflow=model-currency.yml -L 1`, or `gh workflow run
    model-currency.yml` for a fresh one) has been read: a provider that no
@@ -320,7 +324,8 @@ profile."
   `tests/test_provider_docs_parity.py`) and the marker-delimited blocks of
   `docs/MODELS.md` (`python scripts/gen_models_doc.py`,
   `tests/test_models_doc_parity.py`) and of `docs/CONFIGURATION.md` — the
-  Wizard tool roster and the cabinet table (`python scripts/gen_config_doc.py`,
+  Wizard tool roster, the cabinet table and the memory, schedule and
+  wizard-meta record schemas (`python scripts/gen_config_doc.py`,
   `tests/test_config_doc_parity.py`). `nvh/config/capabilities.yaml` is
   normalised the same way (`python scripts/gen_capabilities.py`,
   `tests/test_capabilities_catalog.py`): its retired/successor, Ollama vision

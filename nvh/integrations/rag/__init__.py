@@ -27,6 +27,8 @@ from nvh.integrations.rag.vault_bridge import (
     VAULT_COLLECTION,
     ask_vault,
     ensure_vault_indexed,
+    forget_vault_note,
+    index_vault_note,
     ingest_vault,
 )
 
@@ -36,8 +38,10 @@ __all__ = [
     "ask",
     "ask_vault",
     "ensure_vault_indexed",
+    "forget_vault_note",
     "format_context_block",
     "import_legacy_knowledge",
+    "index_vault_note",
     "ingest_files",
     "ingest_folder",
     "ingest_vault",

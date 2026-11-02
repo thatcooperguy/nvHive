@@ -75,22 +75,106 @@ REPL_MEMORY_CATEGORY = "Wizard Memory"
 
 
 def _memory_title(text: str) -> str:
-    first = text.strip().splitlines()[0]
+    """The note title for ``text``: its first line, cut to 60 characters.
+
+    The cut runs on the *redacted* text. ``append_vault_memory`` redacts the
+    title it is given, but a key the cut had already split is shorter than
+    the patterns' 20-character minimum and survived in the heading, the file
+    name and the RAG index; redacting first leaves a truncated marker instead.
+    """
+    from nvh.core.agent_guardrails import redact_secrets
+
+    first = redact_secrets(text).strip().splitlines()[0]
     return first if len(first) <= 60 else first[:57].rstrip() + "..."
 
 
 def _parse_memory_note(text: str) -> tuple[str, list[str], str]:
-    """Split an append_vault_memory note into (title, tags, body)."""
-    title = ""
-    tags: list[str] = []
-    header, _, body = text.partition("\n\n")
-    if header.startswith("# "):
-        title = header[2:].strip()
-    meta, _, body = body.partition("\n\n")
-    for line in meta.splitlines():
-        if line.startswith("Tags:"):
-            tags = [t.lstrip("#") for t in line[5:].split() if t.startswith("#")]
-    return title, tags, body.strip()
+    """Split a vault note into (title, tags, body) — a shim over ``parse_vault_note``.
+
+    Same contract as before 0.46 (the blank-line partition into title / meta
+    paragraph / body); the record reader now also understands ``Id:``,
+    ``Schema:`` and ``Source:`` lines.
+    """
+    from nvh.integrations.workspace.vault import parse_vault_note
+
+    record = parse_vault_note(text)
+    if record is None:
+        return "", [], ""
+    return record.title, list(record.tags), record.body
+
+
+_BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _run_best_effort(make_coro) -> None:
+    """Run the coroutine ``make_coro()`` returns without ever raising.
+
+    Inside the REPL (a loop is running) it is scheduled as a task; from a
+    plain call it runs to completion. Failures are swallowed: the RAG index is
+    a derived view of the vault and never decides whether a note is saved.
+    """
+
+    async def _guarded() -> None:
+        try:
+            await make_coro()
+        except Exception:
+            pass
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    try:
+        if loop is not None:
+            task = loop.create_task(_guarded())
+            _BACKGROUND_TASKS.add(task)
+            task.add_done_callback(_BACKGROUND_TASKS.discard)
+        else:
+            asyncio.run(_guarded())
+    except Exception:
+        pass
+
+
+async def _drain_background_tasks(timeout: float = 10.0) -> None:
+    """Let the RAG hooks ``/remember`` and ``/forget`` scheduled finish before the loop closes.
+
+    ``asyncio.run`` cancels whatever is still pending when ``run_repl``
+    returns, and the REPL reads input synchronously, so a ``/remember``
+    followed by ``/exit`` saved the note but never indexed it — and
+    ``ensure_vault_indexed`` re-ingests only an empty collection, so the note
+    stayed out of RAG until a full re-ingest. Bounded; the tasks already
+    swallow their own failures.
+    """
+    pending = [task for task in _BACKGROUND_TASKS if not task.done()]
+    if not pending:
+        return
+    console.print(f"[dim]Finishing {len(pending)} memory index update(s)...[/dim]")
+    try:
+        await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=timeout)
+    except Exception:
+        pass
+
+
+def _index_memory_note(path: str | Path) -> None:
+    """Best-effort: (re)index one vault note into the RAG ``vault`` collection."""
+
+    def _make():
+        from nvh.integrations.rag.vault_bridge import index_vault_note
+
+        return index_vault_note(path)
+
+    _run_best_effort(_make)
+
+
+def _forget_memory_index(path: str | Path) -> None:
+    """Best-effort: drop one vault note's chunks from the RAG ``vault`` collection."""
+
+    def _make():
+        from nvh.integrations.rag.vault_bridge import forget_vault_note
+
+        return forget_vault_note(path)
+
+    _run_best_effort(_make)
 
 
 def _repl_memory_notes() -> list[tuple[Path, str, str]]:
@@ -122,12 +206,32 @@ def _repl_memory_context(max_notes: int = 20) -> str:
 
 
 def _forget_repl_memories(keyword: str) -> int:
+    """Delete the #repl notes matching ``keyword`` (file and RAG chunks); the count removed.
+
+    Unlinks the matched file itself. A lookup by id (``delete_vault_note``,
+    kept for the API) would find the *first* note in the vault carrying the
+    same ``Id:`` line — an Obsidian copy or a sync-conflict duplicate — and
+    delete that one while the matched note survived in the ``<memory>`` block
+    with its RAG chunks gone. The file must still resolve inside the vault.
+    """
+    from nvh.integrations.workspace.vault import vault_status
+
+    vault_root = Path(vault_status()["vault_dir"]).resolve()
     needle = keyword.lower()
     removed = 0
     for path, title, body in _repl_memory_notes():
-        if needle in title.lower() or needle in body.lower():
-            path.unlink(missing_ok=True)
-            removed += 1
+        if needle not in title.lower() and needle not in body.lower():
+            continue
+        try:
+            path.resolve().relative_to(vault_root)
+        except (OSError, ValueError):
+            continue  # a link that leaves the vault is not ours to delete
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        _forget_memory_index(path)
+        removed += 1
     return removed
 
 
@@ -160,7 +264,7 @@ def import_legacy_memories(*, home_dir: str | Path | None = None) -> dict[str, A
     source = legacy_memory_file()
     marker = _legacy_memory_marker(home_dir)
     result: dict[str, Any] = {
-        "found": source.is_file(), "path": str(source), "imported": 0,
+        "found": source.is_file(), "path": str(source), "imported": 0, "skipped": 0,
         "marker": str(marker), "imported_at": None,
     }
     if marker.is_file():
@@ -189,10 +293,18 @@ def import_legacy_memories(*, home_dir: str | Path | None = None) -> dict[str, A
             title = f"{title} ({entry.get('id') or len(seen_titles)})"
         seen_titles.add(title)
         tags = [REPL_MEMORY_TAG, str(entry.get("type") or "").strip()]
-        append_vault_memory(
-            title, content, category=REPL_MEMORY_CATEGORY,
-            tags=[t for t in tags if t], home_dir=home_dir,
-        )
+        try:
+            append_vault_memory(
+                title, content, category=REPL_MEMORY_CATEGORY,
+                tags=[t for t in tags if t], home_dir=home_dir, source="import",
+            )
+        except ValueError:
+            # A row that is nothing but a secret (the pre-0.42 store never
+            # redacted). Skipped, not fatal: one such row must not stop the
+            # rows after it or leave the marker unwritten, which re-imported
+            # the rows before it on every REPL start.
+            result["skipped"] += 1
+            continue
         result["imported"] += 1
 
     marker.parent.mkdir(parents=True, exist_ok=True)
@@ -201,6 +313,7 @@ def import_legacy_memories(*, home_dir: str | Path | None = None) -> dict[str, A
             "imported_at": datetime.now(UTC).isoformat(),
             "source": str(source),
             "imported": result["imported"],
+            "skipped": result["skipped"],
         }, indent=2),
         encoding="utf-8",
     )
@@ -766,11 +879,18 @@ def _handle_command(line: str, session: ReplSession, engine: Engine | None = Non
             console.print("[yellow]Usage: /remember <text>[/yellow]")
         else:
             from nvh.integrations.workspace.vault import append_vault_memory
-            saved = append_vault_memory(
-                _memory_title(arg), arg,
-                category=REPL_MEMORY_CATEGORY, tags=[REPL_MEMORY_TAG],
-            )
-            console.print(f"[dim]Memory saved to vault: [bold]{Path(saved['path']).name}[/bold][/dim]")
+            try:
+                saved = append_vault_memory(
+                    _memory_title(arg), arg,
+                    category=REPL_MEMORY_CATEGORY, tags=[REPL_MEMORY_TAG], source="repl",
+                )
+            except ValueError as exc:
+                console.print(f"[yellow]Not saved: {exc}[/yellow]")
+            else:
+                _index_memory_note(saved["path"])
+                redacted = int(saved.get("redacted") or 0)
+                suffix = f" ({redacted} secret{'s' if redacted != 1 else ''} redacted)" if redacted else ""
+                console.print(f"[dim]Memory saved to vault: [bold]{Path(saved['path']).name}[/bold]{suffix}[/dim]")
 
     elif cmd == "/forget":
         if not arg:
@@ -1202,6 +1322,7 @@ async def run_repl(
         if user_input is None:
             console.print()
             _print_savings_summary(session)
+            await _drain_background_tasks()
             console.print("[dim]Goodbye.[/dim]")
             break
 
@@ -1244,6 +1365,7 @@ async def run_repl(
                 continue
             if not result:
                 _print_savings_summary(session)
+                await _drain_background_tasks()
                 console.print("[dim]Goodbye.[/dim]")
                 break
             continue
