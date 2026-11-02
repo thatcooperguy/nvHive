@@ -149,7 +149,8 @@ def test_ci_security_job_audits_the_project_dependency_set() -> None:
     """SECURITY.md says the `security` job runs pip-audit over nvHive's resolved
     dependency set. A bare `pip-audit` audits only the current interpreter, so
     the project must be installed before the audit step, and the editable
-    checkout (no PyPI entry) must be skipped or `--strict` always trips."""
+    checkout (no PyPI entry) must be skipped with `--skip-editable`; `--strict`
+    is not used because it makes that skip fatal (0.46)."""
     steps = _workflow("ci.yml")["jobs"]["security"]["steps"]
     runs = [s.get("run", "") for s in steps]
     install = next(i for i, run in enumerate(runs) if 'pip install -e ".[dev]"' in run)
@@ -162,6 +163,7 @@ def test_ci_security_job_audits_the_project_dependency_set() -> None:
     audit = next(i for i, run in enumerate(runs) if run.startswith("pip-audit"))
     assert install < voice < audit
     assert "--skip-editable" in runs[audit]
+    assert "--strict" not in runs[audit], "--strict makes the skipped editable checkout fatal"
 
 
 def test_ci_build_job_smokes_the_wheel_with_nvh_launch_list() -> None:
