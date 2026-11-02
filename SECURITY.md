@@ -69,7 +69,11 @@ generated: `scope` and `filename` are regex-validated (one folder level, one
 short image suffix), the resolved path must sit directly inside
 `$NVH_HOME/outputs/images/<scope>`, and `..`, a foreign scope, an unknown
 suffix, an escaping symlink or a missing file all answer 404, never 500;
-responses carry `Cache-Control: private, max-age=300`. The `/v1/vault/notes`
+responses carry `Cache-Control: private, max-age=300`. The WebUI fetches
+those images with the same key headers every API call sends, to the API
+origin only, and only for a URL of the exact `/v1/outputs/images/<scope>/<file>`
+shape the server mints (a dot segment, query, fragment or extra depth is
+refused client-side before any request). The `/v1/vault/notes`
 routes (`GET`, `GET /{id}`, `DELETE /{id}`) read the process home only — no
 `home_dir` field — and match ids against the notes' own `Id:` lines, never
 as paths. The seven `/v1/schedules` routes take `require_auth` too. A keyed
@@ -331,6 +335,9 @@ SDK version when the package imports.
 - The deny lists match patterns; a destructive command written in a shape they
   do not know is stopped only by the card you approve. Read the plan on every
   red card.
+- The Wizard's question card (`ask_user`) is answered in the chat: the WebUI
+  never posts it to the tool-execute route and no token is minted for it, so
+  a question is a message, not an action.
 - The `generate_image` card's `profile` pin (and its `profile_home`) is echoed
   back by the client and is not signed: it exists to stop the *model* from
   choosing the paid path under a profile ceiling, not to stop the person at
