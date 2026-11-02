@@ -90,6 +90,7 @@ confirm cards were still waiting.
 | user clicks **Run** on a card | working → happy / error (or back to asking while sibling cards still wait) |
 | user clicks **Answer** on a question card | the card settles (`answered`) and the answer goes out as the next turn, so the stream's own events drive the sprite from there (thinking → …); **Skip** on a question card behaves like Skip below |
 | user clicks **Skip** on a card | idle (or asking while sibling cards still wait) |
+| user holds the mic in the composer (hold-to-talk recording) | no change — tip only: the bubble says "Listening…" (`sayMascotTip` with a fresh id per recording and no auto-dismiss) until release clears it (`dismissMascotTip`); the sprite is never moved to `thinking`, which means the model is working. `web/components/VoiceButton.tsx` owns the tip; `deriveMascotState` never sees a recording |
 | `error` (or a failed stream) | error → idle after 3 s; when confirm cards are still pending (the server emits `confirm_required` right before `error` on a later-iteration failure) error → asking after 3 s. A deliberate refusal (`fallback_reason: profile_local_only_provider_unavailable`) is an answer, not a failure: it ends like `done`, never in the error strip |
 | typing in the composer | idle — but only from happy / error / sleeping. Typing never interrupts thinking / working (a stream is in flight) or asking (confirm cards are pending); it only postpones sleep there (`mascotStateOnTyping`) |
 | 90 s with nothing happening | sleeping (click or type to wake) |

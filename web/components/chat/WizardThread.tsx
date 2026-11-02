@@ -63,6 +63,8 @@ import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import AgentProfilePicker from '@/components/AgentProfilePicker';
 import CreateAgentModal from '@/components/CreateAgentModal';
+import ReadAloudToggle, { useReadAloud } from '@/components/ReadAloudToggle';
+import VoiceButton from '@/components/VoiceButton';
 import {
   AUTO_PROFILE,
   GENERAL_PROFILE,
@@ -140,6 +142,7 @@ import {
   setMascotState,
 } from '@/lib/mascot';
 import { costKnownFlag, costNumber } from '@/lib/cost';
+import { transcriptInsertion } from '@/lib/voice';
 import { metaNumber, parseWizardMeta } from '@/lib/wizardMeta';
 import EmptyState from './EmptyState';
 import MessageBlock from './MessageBlock';
@@ -320,6 +323,11 @@ export default function WizardThread({
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [attachNote, setAttachNote] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Voice (0.46 §8): the hold-to-talk mic needs the textarea for its
+  // Space-hold rule and to hand focus back with the transcript; Read aloud
+  // speaks each completed answer through the browser's own speechSynthesis.
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const readAloud = useReadAloud();
   // Conversation id is created on first user message — until then chats are
   // not persisted. /save, /pin, and reconnect-resume all key off this id.
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -1248,6 +1256,10 @@ export default function WizardThread({
               const historyContent = withAttachedImagePaths(text, event.attachment_paths);
               setMessages(prev => prev.map(m => (m.id === userMsg.id ? { ...m, historyContent } : m)));
             }
+            // Read aloud (0.46 §8): the completed answer, spoken once, only
+            // while the toggle is on (`speak` is a no-op otherwise). Tokens
+            // are never spoken — only the server's final text.
+            if (event.answer) readAloud.speak(event.answer);
             setIterationStatus(null);
             break;
           case 'error': {
@@ -1319,6 +1331,22 @@ export default function WizardThread({
       event.preventDefault();
       void send();
     }
+  };
+
+  // A hold-to-talk transcript is INSERTED into the draft (after whatever is
+  // already typed) and the textarea takes focus — it is never sent: a
+  // privileged request still has to be read and clicked (0.46 §8).
+  const handleTranscript = (text: string) => {
+    setDraft(prev => transcriptInsertion(prev, text));
+    noteMascotTyping();
+    composerRef.current?.focus();
+  };
+
+  // A Space TAP in the empty composer (shorter than the hold that records)
+  // still types the space it meant to; only a held Space opens the mic.
+  const handleSpaceTap = () => {
+    setDraft(prev => `${prev} `);
+    noteMascotTyping();
   };
 
   return (
@@ -1460,6 +1488,7 @@ export default function WizardThread({
         )}
         <div className="flex items-end gap-2">
           <textarea
+            ref={composerRef}
             value={draft}
             onChange={e => {
               setDraft(e.target.value);
@@ -1509,6 +1538,12 @@ export default function WizardThread({
               />
             </svg>
           </button>
+          <VoiceButton
+            onTranscript={handleTranscript}
+            onSpaceTap={handleSpaceTap}
+            composerRef={composerRef}
+            disabled={sending}
+          />
           <button
             type="button"
             onClick={() => void send()}
@@ -1569,6 +1604,7 @@ export default function WizardThread({
               </span>
             )}
           </button>
+          <ReadAloudToggle readAloud={readAloud} />
           <a
             href={
               draft.trim()

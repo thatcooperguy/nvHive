@@ -106,6 +106,11 @@ import type {
   ScheduleRunOutcome,
   ScheduleRunStarted,
   ScheduleRunsResult,
+  VoiceDownloadOutcome,
+  VoiceDownloadStarted,
+  VoiceStatus,
+  VoiceTranscript,
+  VoiceUnavailableDetail,
 } from './types';
 // Pure shape helpers (no fetch, no DOM) so they stay testable under plain
 // `node --test lib/apiShapes.test.mjs`; api.ts itself cannot be imported by Node.
@@ -115,6 +120,14 @@ import {
   normalizeBudgetStatus,
   scheduleRunConflictFromMessage,
 } from './apiShapes';
+// Pure voice readers (lib/voice.ts, Node-tested): the multipart filename, the
+// 503 / 409 detail parsers the two voice POSTs need.
+import {
+  baseMime,
+  voiceDownloadConflictFromMessage,
+  voiceFilenameForMime,
+  voiceUnavailableFromDetail,
+} from './voice';
 
 function normalizeApiBase(value?: string | null): string | null {
   const trimmed = value?.trim();
@@ -2561,4 +2574,112 @@ export async function fetchApiBlob(path: string): Promise<Blob> {
   throw lastNetworkError instanceof Error
     ? lastNetworkError
     : new Error(`Hive API is offline. Tried ${bases.join(', ')}`);
+}
+
+// ─── 0.46 Wave D — voice ─────────────────────────────────────────────────────
+// Append-only block (design §8). The three calls behind components/VoiceButton.tsx:
+// the status the plan is read from, the multipart transcribe POST, and the
+// explicit model download (a `voice-model-download` job the button tails with
+// `watchInstallJob`). Read aloud is browser `speechSynthesis`; no server TTS
+// call exists here. Audio never touches storage: the Blob goes straight from
+// the recorder into the request body.
+
+/** An Error thrown by the voice calls: `statusCode` set, and the parsed 503 detail when there is one. */
+export type VoiceApiError = Error & {
+  statusCode?: number;
+  requestId?: string;
+  unavailable?: VoiceUnavailableDetail | null;
+};
+
+/** `GET /v1/voice/status` — which STT paths this API has (local, Groq), the model, and any download in flight. */
+export async function getVoiceStatus(): Promise<VoiceStatus> {
+  return apiGet<VoiceStatus>('/v1/voice/status');
+}
+
+/**
+ * `POST /v1/voice/transcribe` — multipart, one `file` part. Hand-rolled
+ * instead of `apiFetch` because that helper always sends
+ * `Content-Type: application/json`, which would drop the multipart boundary;
+ * the browser sets the boundary itself when the body is a FormData and no
+ * Content-Type is given. Same API bases, same auth headers
+ * (`Authorization: Bearer` / `X-Hive-API-Key`) as every other call. The part
+ * carries the bare mime (`audio/webm`, not `audio/webm;codecs=opus`) and a
+ * matching filename, which the server checks against its accepted types.
+ *
+ * A non-2xx answer throws a `VoiceApiError`: `statusCode` is the HTTP status
+ * (401/403 no key, 413 too large, 415 wrong type, 503 no STT path), the
+ * message is the body's `detail` (its `hint` for a 503), and for a 503
+ * `unavailable` is the parsed `{downloading, hint, status}`.
+ */
+export async function transcribeAudio(blob: Blob, mime: string, provider?: string): Promise<VoiceTranscript> {
+  const type = baseMime(mime || blob.type);
+  const form = new FormData();
+  form.append('file', blob.type === type ? blob : new Blob([blob], { type }), voiceFilenameForMime(type));
+  if (provider) form.append('provider', provider);
+
+  const bases = getApiBases();
+  let lastNetworkError: unknown;
+
+  for (const base of bases) {
+    let res: Response;
+    try {
+      res = await fetch(`${base}/v1/voice/transcribe`, {
+        method: 'POST',
+        headers: getApiAuthHeaders(),
+        body: form,
+      });
+    } catch (err) {
+      lastNetworkError = err;
+      continue;
+    }
+
+    rememberApiBase(base);
+
+    if (!res.ok) {
+      let detail: unknown = `HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        detail = body?.error?.message ?? body?.detail ?? detail;
+      } catch {
+        // non-JSON body — keep the status text
+      }
+      const unavailable = res.status === 503 ? voiceUnavailableFromDetail(detail) : null;
+      const message =
+        typeof detail === 'string'
+          ? detail
+          : unavailable?.hint || JSON.stringify(detail);
+      const error = new Error(message || `HTTP ${res.status}`) as VoiceApiError;
+      error.statusCode = res.status;
+      error.requestId = res.headers.get('x-request-id') ?? undefined;
+      error.unavailable = unavailable;
+      throw error;
+    }
+
+    const envelope = (await res.json()) as ApiEnvelope<VoiceTranscript>;
+    return envelope.data;
+  }
+
+  throw lastNetworkError instanceof Error
+    ? lastNetworkError
+    : new Error(`Hive API is offline. Tried ${bases.join(', ')}`);
+}
+
+/**
+ * `POST /v1/voice/download` — start the explicit `voice-model-download` job
+ * (the first download is never implicit, design §8). Resolves to `{started}`
+ * with the job to watch, or `{conflict}` when the server answered 409 because
+ * a download is already in flight — the conflict names that job, so the
+ * button tails it instead. Any other failure throws as `apiFetch` does.
+ */
+export async function startVoiceDownload(model?: string): Promise<VoiceDownloadOutcome> {
+  try {
+    const started = await apiPost<VoiceDownloadStarted>('/v1/voice/download', model ? { model } : {});
+    return { started };
+  } catch (err) {
+    if ((err as { statusCode?: number } | null)?.statusCode === 409) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { conflict: voiceDownloadConflictFromMessage(message) };
+    }
+    throw err;
+  }
 }

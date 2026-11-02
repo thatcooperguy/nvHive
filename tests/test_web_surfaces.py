@@ -5,6 +5,8 @@ Wave C of the 0.46 adds changed only the browser: the Wizard chat moved from
 and grew a question card, a plan line and an inline image render; ``/vault``
 gained the notes list; the session cost pill replaced the chat page's budget
 pill and the layout's age pill; ``/schedules`` arrived with a sidebar entry.
+Wave D added the composer's hold-to-talk mic and Read-aloud toggle and the
+``nvh launch`` line on the ``/integrations`` snippet.
 Every one of those is a literal a page must keep, a file that must (or must
 not) exist, or a wiring rule between two files — none of which ``npx tsc
 --noEmit`` or ``node --test`` can express.
@@ -289,6 +291,7 @@ NEW_PURE_HELPERS = {
     "vaultNotes": "vaultNotes.test.mjs",
     "sessionCost": "sessionCost.test.mjs",
     "schedules": "schedules.test.mjs",
+    "voice": "voice.test.mjs",
 }
 
 RUNTIME_IMPORT = re.compile(r"^import\s+(?!type\b)", re.MULTILINE)
@@ -344,3 +347,135 @@ def test_testing_doc_lists_the_web_checks() -> None:
     testing = _doc("TESTING.md")
     assert "test_web_surfaces.py" in testing
     assert "node --test lib/*.test.mjs" in testing
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# D1: voice in the composer — inserted, never sent; the browser speaks
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def test_composer_mounts_the_mic_and_inserts_the_transcript() -> None:
+    thread = _read("components/chat/WizardThread.tsx")
+    assert "import VoiceButton from '@/components/VoiceButton';" in thread
+    assert "import { transcriptInsertion } from '@/lib/voice';" in thread
+    assert "<VoiceButton" in thread and "onTranscript={handleTranscript}" in thread
+    assert "onSpaceTap={handleSpaceTap}" in thread, "a Space tap types its space; only a hold records"
+    handler = _block(thread, "const handleTranscript = (text: string) => {", "\n  };\n")
+    assert "setDraft(prev => transcriptInsertion(prev, text));" in handler
+    assert "send(" not in handler, "a transcript is inserted into the draft, never sent"
+
+
+def test_read_aloud_speaks_the_finished_answer_once() -> None:
+    thread = _read("components/chat/WizardThread.tsx")
+    assert "import ReadAloudToggle, { useReadAloud } from '@/components/ReadAloudToggle';" in thread
+    assert "<ReadAloudToggle readAloud={readAloud} />" in thread
+    assert thread.count("readAloud.speak(") == 1, "spoken once, from the done branch only"
+    done = thread[thread.index("case 'done':") :]
+    done = done[: done.index("case 'error': {")]
+    assert "readAloud.speak(event.answer)" in done, "the server's final text, never the tokens"
+
+
+def test_voice_button_records_in_the_browser_and_never_sends() -> None:
+    button = _read("components/VoiceButton.tsx")
+    assert "new MediaRecorder(" in button and "MediaRecorder.isTypeSupported(" in button
+    assert "navigator.mediaDevices.getUserMedia(" in button
+    assert "window.isSecureContext" in button, "the mic renders only in a secure context"
+    assert "pickRecorderMime(" in button and "voicePlan(" in button
+    assert "VOICE_MAX_RECORDING_MS" in button
+    assert 'aria-label="Hold to talk"' in button
+    assert "sayMascotTip(VOICE_LISTENING_TIP" in button and "dismissMascotTip()" in button
+    assert "setMascotState(" not in button, "recording is a tip only; the sprite is the stream's"
+    assert "send(" not in button, "the button hands the transcript up; the user sends"
+    assert "createObjectURL" not in button and "localStorage" not in button, "audio is never stored"
+    # GET /v1/voice/status spells the in-flight job `download_job_id` (nvh/api/routes/voice.py
+    # `_status_payload`, pinned by tests/test_voice.py); the button must read that key.
+    assert "status.download_job_id" in button and "status.job_id" not in button
+    assert "VOICE_SPACE_HOLD_MS" in button and "onSpaceTap" in button, "Space records on a hold; a tap types"
+    assert "transcriptStatusLine(" in button, "the status line's wording lives in lib/voice.ts"
+    types_ts = _read("lib/types.ts")
+    status_type = _block(types_ts, "export interface VoiceStatus {", "\n}\n")
+    assert "download_job_id?: string | null;" in status_type and "\n  job_id" not in status_type
+
+    rules = _read("lib/voice.ts")
+    for name in (
+        "voicePlan", "pickRecorderMime", "canUseMicrophone", "transcriptInsertion",
+        "stripMarkdownForSpeech", "transcriptStatusLine",
+    ):
+        assert f"export function {name}(" in rules, name
+    assert "export const VOICE_INSECURE_HINT = 'voice needs https or localhost';" in rules
+    assert "export const VOICE_LISTENING_TIP = 'Listening…';" in rules
+    plan = _block(rules, "export function voicePlan(", "\n}\n")
+    assert "'insecure'" in plan and "'download-needed'" in plan
+    assert "canUseMicrophone(" in plan, "one mic gate: the helper the Node test covers drives the plan"
+
+
+def test_read_aloud_toggle_is_browser_only_and_settings_clears_its_key() -> None:
+    toggle = _read("components/ReadAloudToggle.tsx")
+    assert "window.speechSynthesis.speak(" in toggle
+    assert "window.speechSynthesis.cancel()" in toggle
+    assert "aria-pressed={enabled}" in toggle
+    assert "stripMarkdownForSpeech(" in toggle
+    assert "VOICE_READ_ALOUD_KEY" in toggle
+    assert "'@/lib/api'" not in toggle, "Read aloud is the browser's own synthesis; no server call"
+
+    rules = _read("lib/voice.ts")
+    assert "export const VOICE_READ_ALOUD_KEY = 'nvh.voice.readAloud';" in rules
+    settings = _read("app/settings/page.tsx")
+    keys = _block(settings, "const BROWSER_KEYS = [", "\n];")
+    assert "'nvh.voice.readAloud'" in keys, "Clear browser data must drop the Read-aloud preference"
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# D2: the /integrations snippet carries the nvh launch one-liner
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def test_integrations_snippet_carries_the_launch_one_liner() -> None:
+    page = _read("app/integrations/page.tsx")
+    assert "nvh launch <tool> --print" in page
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# The docs describe the Wave D surfaces
+# ───────────────────────────────────────────────────────────────────────────
+
+
+def test_webui_doc_names_the_mic_read_aloud_and_nvh_launch() -> None:
+    webui = _doc("WEBUI.md")
+    assert "hold-to-talk" in webui
+    assert "never sent" in webui
+    assert "Read aloud" in webui
+    assert "voice needs https or localhost" in webui
+    assert "Download model" in webui
+    assert "`nvh launch <tool> --print`" in webui
+    assert "components/VoiceButton.tsx" in webui and "components/ReadAloudToggle.tsx" in webui
+    developing = webui[webui.index("## Developing the UI") :]
+    assert "`voice`" in developing, "the node test list names voice.test.mjs's helper"
+
+
+def test_mascot_doc_has_the_recording_row() -> None:
+    mascot = _doc("MASCOT.md")
+    row = next(line for line in mascot.splitlines() if "hold-to-talk" in line)
+    assert "Listening…" in row
+    assert "`sayMascotTip`" in row and "`dismissMascotTip`" in row
+    assert "`thinking`" in row, "the row must say why the sprite does not move"
+
+
+def test_testing_and_architecture_docs_list_the_wave_d_guards() -> None:
+    testing = _doc("TESTING.md")
+    assert "`test_launch.py`" in testing
+    assert "`test_voice.py`" in testing
+    web_bullet = testing[testing.index("- **Web**") :]
+    assert "`voice`" in web_bullet
+    assert "nvh/api/routes/" in _doc("ARCHITECTURE.md")
+
+
+def test_configuration_and_models_docs_name_the_voice_extra() -> None:
+    config = _doc("CONFIGURATION.md")
+    assert "| `NVH_VOICE_STT_MODEL` | `small.en` |" in config
+    assert "### Voice from the Wizard chat" in config
+    assert "`nvh.voice.readAloud`" in config
+    assert "never fetched implicitly" in config
+    models = _doc("MODELS.md")
+    assert "`nvhive[voice]`" in models
+    assert "no local TTS pack" in models

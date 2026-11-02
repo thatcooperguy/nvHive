@@ -13,6 +13,7 @@ setups for Claude Code, Cursor, OpenClaw, NemoClaw and VS Code.
 | MCP server | `nvh mcp` / `nvhive-mcp` | Claude Code, Cursor, Claude Desktop, OpenClaw agents |
 | MCP client | `$NVH_HOME/config/mcp-servers.json` | give the Wizard external tools |
 | `nvh integrate` | `nvh integrate --scan` | detect and configure installed AI tools in one go |
+| `nvh launch` | `nvh launch --list` | start Claude Code with nvHive's MCP server registered, or print the snippet that points Codex, OpenCode, Continue or Cursor at the standard paths |
 
 ## Python SDK
 
@@ -152,6 +153,73 @@ the Anthropic proxy included since 0.46: `OPENAI_API_KEY=<key>` and
 `ANTHROPIC_AUTH_TOKEN=<key>` (the Anthropic SDKs send `ANTHROPIC_API_KEY` as
 `x-api-key`, which nvHive does not read). In open mode any value works.
 
+### `nvh launch`
+
+`nvh launch <tool>` points an installed coding tool at the standard paths
+without you copying anything: it checks `GET /v1/health`, then either
+launches the tool or prints the snippet to paste into the tool's config. Of
+the five shipped targets only `claude` launches anything — it registers
+nvHive's MCP server and runs `claude` with no nvHive variable in its
+environment (inference stays with Anthropic) — while `codex`, `opencode`,
+`continue` and `cursor` print their snippet and start nothing. A target of
+kind `env` would hand the tool the base URL and key through its child
+environment; no shipped row uses that kind yet. It never writes a
+third-party config file and never reads or renders a provider secret: the
+only key it passes is `HIVE_API_KEY` when set, else the documented
+placeholder `nvhive` — which means a snippet, a snippet-kind launch and
+`--inference-proxy` print your live `HIVE_API_KEY` in clear text when one is
+set, so keep that output out of pasted logs, issues and recordings.
+`nvh launch --list` shows the table below; `nvh launch <tool> --print`
+renders the variables or snippet offline (no API needed) for every target;
+arguments after the target (or after `--`) go to the tool. The targets live
+in the bundled `nvh/data/launch_targets.json`, read through `nvh.data`.
+
+| Target | Tool | How | Verified |
+|---|---|---|---|
+| `claude` | Claude Code | MCP: registers nvHive's MCP server (`claude mcp add nvhive -- nvhive-mcp`, the same step `nvh integrate` runs) and launches `claude`; inference stays with Anthropic | unverified |
+| `codex` | Codex CLI | snippet: a `~/.codex/config.toml` `[model_providers.nvhive]` stanza with `base_url`, `env_key = "HIVE_API_KEY"` and `wire_api = "chat"`, plus `model_provider = "nvhive"` | unverified |
+| `opencode` | OpenCode | snippet: an `opencode.json` provider entry with `baseURL` and the routing modes as model ids | unverified |
+| `continue` | Continue | snippet: a `~/.continue/config.yaml` model with `provider: openai` and `apiBase` | unverified |
+| `cursor` | Cursor | snippet: Settings → Models → Override OpenAI Base URL, the key field, and a custom model named `auto` | unverified |
+
+Every row carries `verified_on`. The five targets ship with `null`, which
+prints as "unverified against this tool's current version — `--print` shows
+exactly what nvHive sets": a tool's config shape is an external fact the
+repo cannot test, so the column stays honest until a maintainer records a
+date after running the tool against that release. The `docs_url` column of
+`--list` points at each tool's own documentation.
+
+Refusals exit 2 with the fix in the message: no healthy API answers on
+`--port` (default 8000) unless `--start-api` (`-y`) lets `nvh launch` start
+`nvh serve` on loopback — on a free port only: a port held by something that
+does not answer nvHive's health check is refused, never stopped (`nvh
+services restart` is the tool for a stale nvHive API); the API is in open
+mode (no `HIVE_API_KEY`) and its `bind_host` is not loopback — `null` counts
+as not loopback, so an API that `nvh serve` did not start is refused too;
+the API requires a key (`key_required`) and there is no `HIVE_API_KEY` in
+this shell — the placeholder would only earn a 401, so export the server's
+key first; or `auth_mode` is `users` and there is no `HIVE_API_KEY` here to
+forward (put a user token from `nvh auth create-token`, or the API key, in
+`HIVE_API_KEY`). The loopback test is the server's own (`localhost`,
+`127.0.0.1`, `::1`, with any port or IPv6 brackets stripped). An unknown
+target exits 1 and lists the names; after a launch the exit code is the
+tool's own — the tool also owns Ctrl-C, which never ends the launched
+session from the outside — and 127 when the tool is not on `PATH` (the
+command is resolved the way the shell resolves it, so an npm `claude.cmd`
+shim on Windows counts). `--print` makes none of these checks.
+
+`claude`: nvHive's Anthropic-compatible proxy does not pass `tool_use`
+through, which Claude Code needs, so `nvh launch claude` sets no
+`ANTHROPIC_*` variable and inference stays with Anthropic; it registers the
+MCP server and runs `claude` with any extra arguments. `nvh launch claude
+--inference-proxy` prints the `ANTHROPIC_BASE_URL=http://127.0.0.1:8000/v1/anthropic`
+/ `ANTHROPIC_AUTH_TOKEN` snippet anyway, marked unverified, for anyone who
+wants to try it without tools. `codex`: Codex's default provider speaks the
+Responses API, which nvHive does not serve, hence the `wire_api = "chat"`
+stanza that keeps it on `/chat/completions`. A tool that validates its
+provider against `GET /models` should use `http://127.0.0.1:8000/v1/proxy`
+as the base URL instead (see [Standard paths](#standard-paths)).
+
 ## nvHive as an MCP server
 
 Coding tools attach nvHive's router and council as tools:
@@ -281,7 +349,8 @@ not give you free Claude access, and needs at least one provider configured
 `nvh integrate --scan` detects installed NemoClaw, OpenClaw, Claude Code,
 Cursor and Claude Desktop; `nvh integrate --auto -y` writes the MCP
 registration for each without prompting. The manual commands are in the MCP
-server table above.
+server table above. `nvh launch claude` does the Claude Code registration and
+starts `claude` in one step; see [`nvh launch`](#nvh-launch).
 
 ## VS Code
 

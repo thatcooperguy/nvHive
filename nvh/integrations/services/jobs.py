@@ -268,7 +268,13 @@ def append_event(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _interrupted_message(kind: str) -> str:
-    """The wording an orphaned job gets, by kind: a schedule run is not retried by hand."""
+    """The wording an orphaned job gets, by kind: a schedule run is not retried by hand,
+    a speech-model download is started again (the partial snapshot is reused)."""
+    if kind == "voice-model-download":
+        return (
+            "Server restarted or disconnected while the speech model was downloading; "
+            "start the download again (files already fetched are reused)."
+        )
     if kind == "schedule-run":
         return (
             "Server restarted or disconnected while this run was in flight; "
@@ -294,6 +300,13 @@ def _canceled_message(kind: str, *, by_user: bool) -> str:
         return (
             "Run canceled before it finished (the server stopped); "
             "the schedule will run again at its next interval."
+        )
+    if kind == "voice-model-download":
+        if by_user:
+            return "Download canceled by user; start it again when you want the model (files already fetched are reused)."
+        return (
+            "Download canceled before it finished (the server stopped); "
+            "start it again (files already fetched are reused)."
         )
     return "Install job canceled by user."
 

@@ -1279,7 +1279,7 @@ export type InstallJobStatus =
 
 export interface InstallJob {
   id: string;
-  kind: 'wizard-mission' | 'comfyui-install' | 'studio-pack-install' | 'studio-model-install' | 'schedule-run' | string;
+  kind: 'wizard-mission' | 'comfyui-install' | 'studio-pack-install' | 'studio-model-install' | 'schedule-run' | 'voice-model-download' | string;
   title: string;
   status: InstallJobStatus;
   message: string;
@@ -2065,4 +2065,89 @@ export interface WizardRememberResult {
 export interface WizardRememberFailure {
   saved: false;
   error: string;
+}
+
+// ─── 0.46 Wave D — voice ─────────────────────────────────────────────────────
+// Append-only block (design §8). Every shape mirrors what nvh/core/voice.py
+// `voice_status()` and the routes in nvh/api/routes/voice.py send; nothing is
+// re-derived in the browser. The pure readers live in lib/voice.ts.
+
+/** `voice_status()['stt']`: which speech-to-text paths this API process has. */
+export interface VoiceSttStatus {
+  /** `faster_whisper` imports (the `voice` extra is installed on a platform with wheels). */
+  local_installed: boolean;
+  /** The weights for `model` are under the cache dir — no download needed. */
+  local_model_present: boolean;
+  /** Both of the above: the local path answers `provider: auto`. */
+  local_available: boolean;
+  /** A Groq key is configured (env or keyring), so `groq` can answer. */
+  groq_available: boolean;
+  /** The faster-whisper model name (`small.en` by default; `NVH_VOICE_STT_MODEL`). */
+  model: string;
+  /** Why the local path is unavailable, e.g. "no faster-whisper wheel for this platform"; null when it is available. */
+  reason: string | null;
+  [key: string]: unknown;
+}
+
+/** `voice_status()['tts']` — server-side TTS is optional; the web speaks through `speechSynthesis`. */
+export interface VoiceTtsStatus {
+  edge_available: boolean;
+  system_available: boolean;
+  [key: string]: unknown;
+}
+
+/** `GET /v1/voice/status` → `data`. */
+export interface VoiceStatus {
+  stt: VoiceSttStatus;
+  tts: VoiceTtsStatus;
+  /** A `voice-model-download` job is in flight (when the route reports it). */
+  downloading?: boolean;
+  /** That job's id, when `downloading` — `download_job_id`, as `_status_payload` spells it. */
+  download_job_id?: string | null;
+  [key: string]: unknown;
+}
+
+/** `POST /v1/voice/transcribe` → `data`: one transcript with its provenance and cost verdict. */
+export interface VoiceTranscript {
+  text: string;
+  /** `local` | `groq` | `whisper-cli` — whatever `speech_to_text` resolved `auto` to. */
+  provider: string;
+  model: string;
+  latency_ms: number;
+  /** 0 for the local path; null for Groq (no catalog row), paired with `cost_known: false`. */
+  cost_usd: number | null;
+  cost_known: boolean;
+}
+
+/** The same route's 503 `detail` while no STT path can answer (weights absent, nothing installed). */
+export interface VoiceUnavailableDetail {
+  downloading: boolean;
+  hint: string;
+  status?: VoiceStatus | null;
+}
+
+/** `POST /v1/voice/download` → `data` (202): the `voice-model-download` job to watch. */
+export interface VoiceDownloadStarted {
+  job_id: string;
+}
+
+/** The same route's 409 `detail` while a download is already in flight: `job_id` names that job. */
+export interface VoiceDownloadConflict {
+  message: string;
+  job_id: string;
+}
+
+/** What `startVoiceDownload` resolves to: exactly one of the two keys is set. */
+export type VoiceDownloadOutcome =
+  | { started: VoiceDownloadStarted; conflict?: undefined }
+  | { conflict: VoiceDownloadConflict; started?: undefined };
+
+/** One `voice-model-download` job event as `watchInstallJob` flattens it (`InstallJob.kind` admits the kind). */
+export interface VoiceDownloadEvent {
+  event: string;
+  status: string;
+  message: string;
+  /** The model being fetched, when the step names it. */
+  model?: string;
+  [key: string]: unknown;
 }

@@ -85,6 +85,7 @@ class TestTopLevel:
     "knowledge",
     "schedule",
     "vault",
+    "launch",
     "template",
     "webhook",
     "workflow",

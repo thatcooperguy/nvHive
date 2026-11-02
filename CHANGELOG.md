@@ -319,6 +319,116 @@
   `/vault` page has no hand-typed folder list, and every new pure
   `web/lib/*.ts` helper has a Node test beside it and imports nothing a
   Node run cannot resolve.
+- **`nvh launch <tool>` starts a coding tool against the local API, or
+  prints what to set.** Five targets ship as data in
+  `nvh/data/launch_targets.json` (read through `nvh.data`, packaged by the
+  `data/*.json` glob and smoked from the installed wheel by the build job's
+  `nvh launch --list`): `claude` registers nvHive's MCP server and launches
+  Claude Code with no nvHive variable set, so inference stays with Anthropic
+  (O11); `codex`, `opencode`, `continue` and `cursor` print the config
+  snippet to paste and start nothing — nvHive never writes a third-party
+  config file. `--print` renders any target without an API; `--list` shows
+  the roster; `--inference-proxy` prints the `ANTHROPIC_BASE_URL` stanza for
+  nvHive's Anthropic proxy (unverified); arguments after the target go to
+  the tool. Before a launch the command reads `GET /v1/health` and refuses
+  (exit 2) an open-mode API bound off-loopback, a keyed API when
+  `HIVE_API_KEY` is unset in the launching shell (the placeholder it would
+  print only earns a 401) and a users-mode API with no token; `--start-api`
+  (`-y`) starts `nvh serve` on loopback when nothing listens on `--port`
+  and refuses a port held by anything that is not a healthy nvHive API.
+  Ctrl-C goes to the launched tool, whose exit code is returned; the tool
+  is resolved the way the shell resolves it (an npm `claude.cmd` shim on
+  Windows launches); the health probe ignores proxy settings. Every row
+  carries `verified_on`, and all five ship `null`, which prints as
+  "unverified" until a maintainer runs the tool against its current
+  version. The `/integrations` standard-path snippet ends with the
+  one-liner; INTEGRATIONS.md gains `### nvh launch`.
+- **A local-first speech-to-text backend and the `/v1/voice` routes.**
+  `nvh/core/voice.py` gains faster-whisper (CPU, int8, `small.en` by
+  default; `NVH_VOICE_STT_MODEL` or `--stt-model` picks another size, a
+  `Systran/` or `mobiuslabsgmbh/` repo, or a converted directory spelled as
+  a path) behind a lazy import, loaded once per process from
+  `$NVH_CACHE/huggingface` and never downloaded implicitly: `nvh voice
+  --download` or `POST /v1/voice/download` (a `voice-model-download` job;
+  202 with the job id, 409 while one runs) is how the weights arrive, and
+  `model_present` requires the complete snapshot so a damaged one reads as
+  not downloaded. `speech_to_text(..., provider="auto")` returns a
+  `TranscriptResult` (text, provider, model, latency, cost and whether the
+  cost is known) and picks local when the weights are present, else Groq
+  Whisper (`whisper-large-v3`, cost unknown) when a key resolves, else
+  raises `VoiceUnavailable` carrying `voice_status()`. The router
+  (`nvh/api/routes/voice.py`, every route behind `require_auth`):
+  `POST /v1/voice/transcribe` (multipart `file`; `provider` `auto`, `local`
+  or `groq`; 415 for a non-audio part, 413 the moment the body passes
+  20 MB, 503 `{status, downloading, hint}` when no path exists, 502 when
+  the chosen path failed), `GET /v1/voice/status` (the paths this box has,
+  the in-flight download's job id and the hint), `POST /v1/voice/download`
+  and `POST /v1/voice/speak` (`audio/mpeg` through `edge-tts` when it is on
+  PATH, else 501 — the browser does the reading). Transcription runs under
+  `asyncio.to_thread` behind a per-process `Semaphore(1)`, so the one
+  uvicorn loop keeps answering; the clip is a temporary file unlinked on
+  every path. `nvh voice` gains `--stt auto|local|groq|whisper-cli`
+  (default `auto`), `--stt-model`, `--status` (a table of the speech paths
+  this box has) and `--download`, and its transcript line names the path,
+  latency and cost (`$0, on this device` or `cost unknown`). An orphaned or
+  canceled `voice-model-download` job says to start it again (files
+  already fetched are reused).
+- **A hold-to-talk mic and a Read aloud toggle in the Wizard composer.**
+  Hold the mic (or Space in the empty box, after a 200 ms hold — a tap
+  still types a space), speak, release: the browser's `MediaRecorder` clip
+  (60 s cap) goes to `POST /v1/voice/transcribe` and the transcript is
+  inserted into the draft, never sent — a privileged request is still
+  reviewed and clicked. The status line names the path that will answer
+  and its cost (`$0, on this device`, `Groq Whisper · cost unknown`),
+  offers **Download model (~480 MB)** when the `voice` extra is installed
+  without weights (the job it starts, or one another tab started, is
+  tailed through `/v1/jobs`), shows the install hint when no path exists
+  and `voice needs https or localhost` outside a secure context; the
+  mascot's bubble says "Listening…" while recording and the sprite stays
+  put. The **Read aloud** toggle speaks each finished answer through the
+  browser's `speechSynthesis` (offline; Markdown flattened, fenced code
+  read as "code omitted"; the preference lives in the browser-local
+  `nvh.voice.readAloud`, which **Clear browser data** on `/settings`
+  drops). `web/components/VoiceButton.tsx`, `ReadAloudToggle.tsx`, the
+  pure `web/lib/voice.ts` with `voice.test.mjs`, and `getVoiceStatus` /
+  `transcribeAudio` / `startVoiceDownload` in `web/lib/api.ts`.
+- **The `voice` extra and its CI steps.** `pip install 'nvhive[voice]'`
+  brings faster-whisper for the local path and stays outside `all` (O6);
+  its requirement carries `sys_platform != 'win32' or platform_machine !=
+  'ARM64'` (the design's `not (…)` spelling is not valid PEP 508), so on
+  Windows on Arm — where CTranslate2 and PyAV ship no wheels — the extra
+  installs nothing instead of failing and `nvh voice --status` /
+  `GET /v1/voice/status` say why. `ci.yml`: the `ubuntu-24.04-arm` matrix
+  entry runs an informational `pip install -e ".[voice]"` plus an import
+  (`continue-on-error`) whose log decides at release time whether the extra
+  ships for arm64; the `security` job installs the extra in its own
+  non-blocking step before `pip-audit`, so ctranslate2, huggingface_hub and
+  tokenizers are audited when a wheel exists for the runner's Python; the
+  `build` job runs `nvh launch --list` from the installed wheel.
+- **Docs and guards for launch and voice.** INTEGRATIONS.md (`### nvh
+  launch`: what launches, what prints, the refusals, the live key in
+  `--print` output), CONFIGURATION.md (the `NVH_VOICE_STT_MODEL` row and a
+  "Voice from the Wizard chat" section), MODELS.md (the speech rows: local
+  STT is the `voice` extra on the CPU, cloud STT is Groq Whisper, TTS is
+  the browser or Edge TTS from the CLI, no local TTS pack), MASCOT.md (the
+  recording row), WEBUI.md (the mic, the toggle, the Setup job list, the
+  cleared key, the `nvh launch` one-liner, the new test files),
+  ARCHITECTURE.md (`nvh/api/routes/` with one module per surface) and
+  TESTING.md (guard rows for `test_launch.py`, `test_voice.py`,
+  `test_cli_voice.py` and the CI changes). New `tests/test_launch.py`
+  (the bundled rows carry their keys and `verified_on`; the rendered
+  environment holds only the row's variables and never a provider secret;
+  the refusals mirror `/v1/health`; launch merges the environment over
+  `os.environ` with no shell; `claude` registers before launching),
+  `tests/test_voice.py` (a fake `faster_whisper` in `sys.modules` and a
+  weights marker under the hermetic cache: `auto` picks local only when
+  both exist; the streaming 413; the model allow-list; the TTS argument
+  path) and `tests/test_cli_voice.py` (the `nvh voice` flags); voice rows
+  in `tests/test_api.py`; `tests/test_release_hardening.py` pins the
+  marker by evaluation, `voice` outside `all`, the security job's step
+  order and the wheel smoke; `tests/test_web_surfaces.py` pins the
+  composer mount, the insert-never-send rule, the `download_job_id`
+  contract and the docs rows; the Node suite grows by the voice rows.
 
 ### Changed
 - **`--verify` honours `exclude_providers`, and is independent or not at
@@ -459,6 +569,28 @@
   `exclude_kind=schedule-run`, so hourly schedules no longer push install
   jobs out of its window. `applyHistoryPatch` lives in the pure
   `web/lib/privileged.ts` with a Node row.
+- **`speech_to_text` is synchronous and returns a `TranscriptResult`.** It
+  was `async def speech_to_text(audio_path, provider="groq") -> str`; it is
+  now `speech_to_text(audio_path, provider="auto", *, mime_type, filename,
+  model)`, run in a thread from async code (the API and `nvh voice` both
+  use `asyncio.to_thread`). `provider="local"` means in-process
+  faster-whisper; the pre-0.46 openai-whisper subprocess is
+  `provider="whisper-cli"`, reachable from `nvh voice` only, and it now
+  writes its transcript into a temporary directory rather than the
+  working directory. An unknown provider raises `ValueError`;
+  `VoiceUnavailable` subclasses `ValueError`, so the 0.45 Groq-key error
+  still matches. Groq's timeout is 60 s (was 30), the CLI's 300 s.
+  `nvh voice --stt` defaults to `auto` (was `groq`); `VoiceConfig.
+  stt_provider` keeps `groq` and is read by neither surface. The Groq key
+  lookup also honours `COUNCIL_GROQ_API_KEY` and the keyring entry
+  `nvh advisor add groq` writes.
+- **The `security` CI job installs the `voice` extra in its own non-blocking
+  step** after the hard `.[dev]` install and before `pip-audit`, so a
+  missing native wheel never turns the job red or skips the audit of
+  everything else. `register_claude_code` resolves `claude` through
+  `shutil.which`, so an npm shim registers on Windows. `/setup`'s job list
+  shows `voice-model-download` jobs beside installs (deliberate: it is the
+  one place a download can be watched outside the composer).
 
 ### Fixed
 - **`GET /v1/health` no longer calls an unknown bind host loopback.** When
@@ -521,6 +653,31 @@
   failed; the Create Agent modal renders the avatar planner's `Plan:` line,
   which the API sends as a string; a `remember` result with `saved: false`
   renders as a failure instead of Done.
+- **Review pass on the launch and voice surfaces.** `nvh launch` no longer
+  kills the launched tool on the first Ctrl-C (`subprocess.call` did; the
+  parent now ignores SIGINT while the child runs and returns the child's
+  own code), resolves the command the way the shell does (an npm
+  `claude.cmd` shim never launched through `CreateProcess`), probes
+  `/v1/health` with `trust_env=False` so a system proxy cannot make the
+  health line and the refusal disagree, refuses a keyed API when
+  `HIVE_API_KEY` is unset instead of printing the placeholder, and with
+  `--start-api` refuses a held port instead of handing it to the
+  stale-instance recovery that frees a port by killing its holder.
+  `POST /v1/voice/transcribe` reads the stream itself: FastAPI's
+  `UploadFile` had parsed and spooled the whole body before the 20 MB cap
+  was checked. `nvh voice --download` repairs an incomplete snapshot
+  instead of reporting "already downloaded" whenever any `model.bin`
+  exists. The mic tails a download another tab started (it read
+  `status.job_id`; the server sends `download_job_id`), keeps the in-flight
+  flag after a 503 instead of overwriting it with the bare snapshot, says
+  `$0, on this device` after a local transcript instead of `$0.0000`, and
+  swallows Space auto-repeat while recording (every repeat keydown had
+  typed a space into the box). Test hygiene: no test patches
+  `sys.platform` process-wide any more (the voice tests patch
+  `platform_has_wheel`), the non-blocking-loop test waits on an event
+  instead of a sleep, the stale event-loop scaffolding around the Groq-key
+  test is gone, and the web pins match `new MediaRecorder(` and
+  `window.speechSynthesis.speak(` rather than a header comment.
 
 ### Security
 - **Two routes that answered without the key now require it.**
@@ -588,6 +745,29 @@
   origin only. The question card never reaches the tool-execute route and
   mints nothing; a confirm card's Run echoes the server-pinned `profile`
   and `profile_home` unchanged.
+- **Speech never leaves the machine unless you chose a path that sends
+  it.** Every `/v1/voice` route requires the API credential. Audio is never
+  stored: the clip is a temporary file unlinked on every path, no request
+  can name a path on disk, and the browser keeps no object URL or storage
+  of a recording. The clip goes to Groq only when the person pressed the
+  mic (or ran `nvh voice`), the local path is absent and a Groq key is
+  configured — the status line says which path will answer before you
+  press. Over HTTP `provider` is `auto`, `local` or `groq` (`whisper-cli`
+  is the CLI's alone) and `model` is a faster-whisper size or a `Systran/`
+  / `mobiuslabsgmbh/` repo — a bare name is never read as a directory under
+  the server's working directory, so a caller cannot make
+  `POST /v1/voice/download` fetch an arbitrary repository or probe the
+  server's folders. The weights download only on an explicit request. The
+  system text-to-speech fallbacks (`espeak`, `say`) read the text from
+  stdin and edge-tts gets `--text=`, so caller text is never an argument.
+- **`nvh launch` renders only nvHive's own credential.** The environment
+  or snippet it builds holds the row's variables with the API base and
+  `HIVE_API_KEY` (or the `nvhive` placeholder in open mode); no provider
+  key is read or rendered, no shell is involved, and the four refusals
+  above run client-side before a tool is pointed at the server. `--print`,
+  a snippet-kind target and `--inference-proxy` show the live
+  `HIVE_API_KEY` in clear text on the terminal — keep that output out of
+  pasted logs. `--start-api` never frees a port something else holds.
 
 ### Removed
 - **The pre-0.44 tool-call forms.** The agent loop no longer reads the

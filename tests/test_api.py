@@ -1557,3 +1557,125 @@ class TestLifespanScheduler:
         monkeypatch.delenv("NVH_SCHEDULER", raising=False)
         server_module.run_server(host="127.0.0.1", port=8999, reload=False)
         assert "NVH_SCHEDULER" not in server_module.os.environ  # a plain `nvh serve` runs the scheduler
+
+
+class TestVoiceRoutes:
+    """``/v1/voice/*`` (nvh/api/routes/voice.py) through the server's ``include_router`` line:
+    the refusals a client meets on a box without the ``voice`` extra, the one job the download
+    route starts, and the key gate. tests/test_voice.py holds the backend matrix; here
+    ``faster_whisper`` is absent (``sys.modules`` entry ``None``) unless a test fakes it."""
+
+    @pytest.fixture(autouse=True)
+    def _no_voice_paths(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from nvh.api.routes import voice as voice_routes
+        from nvh.core import voice
+
+        monkeypatch.setitem(sys.modules, "faster_whisper", None)
+        for name in voice.GROQ_KEY_ENV:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(voice, "_keyring_groq_key", lambda: None)
+        monkeypatch.setattr(voice, "_LOCAL_MODELS", {})
+        monkeypatch.setattr(voice_routes, "_DOWNLOAD_JOB_ID", None)
+        monkeypatch.setattr(voice_routes, "_STT_LOCK", None)
+        # The reason string must read "install nvhive[voice]" whatever box runs this; patch the
+        # module's own seam rather than the interpreter-wide sys.platform.
+        monkeypatch.setattr(voice, "platform_has_wheel", lambda: True)
+        monkeypatch.delenv("HIVE_API_KEY", raising=False)
+
+    @staticmethod
+    def _post_clip(client: TestClient, body: bytes, mime: str = "audio/webm", name: str = "clip.webm"):
+        return client.post("/v1/voice/transcribe", files={"file": (name, body, mime)})
+
+    def test_transcribe_415_on_text(self, test_client: TestClient) -> None:
+        resp = self._post_clip(test_client, b"hello", mime="text/plain", name="notes.txt")
+        assert resp.status_code == 415, resp.text
+        assert "audio/webm" in resp.json()["detail"]
+
+    def test_transcribe_413_on_an_oversized_clip(self, test_client: TestClient) -> None:
+        resp = self._post_clip(test_client, b"\0" * (21 * 1024 * 1024))
+        assert resp.status_code == 413, resp.text
+        assert "20 MB" in resp.json()["detail"]
+
+    def test_transcribe_503_shape_when_no_path_exists(self, test_client: TestClient) -> None:
+        from nvh.core import voice
+
+        resp = self._post_clip(test_client, b"\x1aE\xdf\xa3" + b"\0" * 64)
+        assert resp.status_code == 503, resp.text
+        detail = resp.json()["detail"]
+        assert set(detail) == {"message", "status", "downloading", "hint"}
+        assert detail["downloading"] is False
+        assert detail["status"]["stt"]["local_installed"] is False
+        assert detail["status"]["stt"]["reason"] == voice.REASON_NOT_INSTALLED
+        assert detail["status"]["stt"]["groq_available"] is False
+        assert "nvhive[voice]" in detail["hint"] and "nvh advisor add groq" in detail["hint"]
+
+    def test_download_returns_a_job_id_and_a_second_call_409s(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Through a shared portal (``with TestClient``, no lifespan: a minimal app carrying the
+        router), since the job's consumer task must outlive the request that started it."""
+        import threading
+        import types
+
+        from fastapi import FastAPI
+
+        from nvh.api.routes import voice as voice_routes
+        from nvh.core import voice
+        from nvh.integrations.services import jobs
+
+        gate = threading.Event()
+        fake = types.ModuleType("faster_whisper")
+
+        def download_model(name: str, **kwargs) -> str:
+            gate.wait(timeout=10)
+            snap = voice.download_root() / "models--Systran--faster-whisper-small.en" / "snapshots" / "x"
+            snap.mkdir(parents=True, exist_ok=True)
+            (snap / "model.bin").write_bytes(b"\0" * 16)
+            (snap / "config.json").write_text("{}", encoding="utf-8")
+            (snap / "vocabulary.txt").write_text("<|endoftext|>\n", encoding="utf-8")
+            return str(snap)
+
+        fake.download_model = download_model  # type: ignore[attr-defined]
+        fake.WhisperModel = object  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "faster_whisper", fake)
+
+        mini = FastAPI()
+        mini.include_router(voice_routes.router)
+        with TestClient(mini, raise_server_exceptions=True) as client:
+            first = client.post("/v1/voice/download", json={"model": "small.en"})
+            assert first.status_code == 202, first.text
+            job_id = first.json()["data"]["job_id"]
+            assert job_id and first.json()["data"]["model"] == "small.en"
+            second = client.post("/v1/voice/download")
+            assert second.status_code == 409, second.text
+            assert second.json()["detail"]["job_id"] == job_id
+            assert client.get("/v1/voice/status").json()["data"]["downloading"] is True
+            gate.set()
+            for _ in range(500):
+                job = jobs.load_job(job_id, reconcile=False)
+                if job["status"] in jobs.TERMINAL_STATUSES:
+                    break
+                time.sleep(0.02)
+            assert job["status"] == "complete", job
+            assert job["kind"] == "voice-model-download" and job["request"]["model"] == "small.en"
+            assert client.get("/v1/voice/status").json()["data"]["downloading"] is False
+        assert voice_routes.download_in_flight() is None
+
+    def test_speak_501_without_edge_tts(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: None)
+        resp = test_client.post("/v1/voice/speak", json={"text": "hello"})
+        assert resp.status_code == 501, resp.text
+        assert resp.json()["detail"] == "browser speech synthesis is used; server TTS is optional"
+
+    def test_status_is_keyed_like_every_other_route(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVE_API_KEY", "k-for-voice")
+        assert test_client.get("/v1/voice/status").status_code == 401
+        assert self._post_clip(test_client, b"x").status_code == 401
+        assert test_client.post("/v1/voice/download").status_code == 401
+        assert test_client.post("/v1/voice/speak", json={"text": "hi"}).status_code == 401
+        ok = test_client.get("/v1/voice/status", headers={"X-Hive-API-Key": "k-for-voice"})
+        assert ok.status_code == 200, ok.text
+        data = ok.json()["data"]
+        assert {"stt", "tts", "downloading", "download_job_id", "hint"} <= set(data)
+        assert data["stt"]["local_installed"] is False and data["downloading"] is False
+        assert test_client.get("/v1/voice/status", headers={"Authorization": "Bearer k-for-voice"}).status_code == 200

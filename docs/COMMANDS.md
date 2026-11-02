@@ -60,6 +60,7 @@ to an advisor, and a task-shaped bare prompt asks for an explicit `nvh do`.
 
 | Command | Description |
 |---------|-------------|
+| `nvh launch [TOOL]` | Start a coding tool against the local nvHive API, or print what to set. |
 | `nvh mcp <command>` | Start the MCP (Model Context Protocol) server. |
 | `nvh models <command>` | Browse, install, and remove local Ollama models with VRAM-fit guidance. |
 | `nvh nemoclaw` | NemoClaw integration — use NVHive as your NemoClaw inference provider and MCP tool server. |

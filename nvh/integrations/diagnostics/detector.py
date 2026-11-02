@@ -209,10 +209,15 @@ def detect_platforms() -> list[Platform]:
 
 
 def register_claude_code() -> tuple[bool, str]:
-    """Register nvHive MCP server with Claude Code via CLI."""
+    """Register nvHive MCP server with Claude Code via CLI.
+
+    ``shutil.which`` resolves the command: an npm install leaves a ``claude.cmd``
+    shim on Windows that ``CreateProcess`` alone never finds (it appends only
+    ``.exe``), although ``claude`` works in the user's shell.
+    """
     try:
         result = subprocess.run(
-            ["claude", "mcp", "add", "nvhive", "--", "nvhive-mcp"],
+            [shutil.which("claude") or "claude", "mcp", "add", "nvhive", "--", "nvhive-mcp"],
             capture_output=True, text=True, timeout=15,
         )
         if result.returncode == 0:

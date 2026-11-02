@@ -63,7 +63,7 @@ nvh CLI · Web UI · Python SDK · MCP clients · OpenAI/Anthropic clients
 | Providers | `nvh/providers/specs.py`, `openai_compatible.py`, `registry.py`, `ollama_provider.py`, `triton_provider.py` | the `ProviderSpec` table, the one cloud adapter, lazy registration |
 | Config | `nvh/config/settings.py`, `nvh/config/capabilities.yaml`, `nvh/config/model_overrides.json` | Pydantic schema, env interpolation, the hand-maintained half of the model catalog (LiteLLM supplies price, context and flags; see [CONFIGURATION.md](CONFIGURATION.md#model-catalog)) |
 | Storage | `nvh/storage/` | SQLAlchemy + aiosqlite: conversations, routing outcomes, costs |
-| API | `nvh/api/server.py`, `nvh/api/proxy.py`, `nvh/api/services/query_service.py` | FastAPI app, compatible proxies, shared query service |
+| API | `nvh/api/server.py`, `nvh/api/deps.py`, `nvh/api/proxy.py`, `nvh/api/services/query_service.py`, `nvh/api/routes/` (`outputs.py`, `vault_notes.py`, `schedules.py`, `voice.py` — one module per surface, each behind `require_auth`) | FastAPI app, compatible proxies, shared query service, the 0.46 routers |
 | Wizard | `nvh/integrations/wizard/` (`chat.py`, `tools.py`, `profiles.py`, `concierge.py`, `system_settings.py`, `sandbox_tools.py`, `vision_bridge.py`) | chat loop, tools, profiles, the concierge that picks a hidden specialist per turn, privileged system-settings tools, the sandbox and vision bridges, troubleshooter, reconnect, mission builder |
 | Workspace | `nvh/integrations/workspace/` | `NVH_HOME` layout, mount autopilot, snapshot, vault, passport |
 | RAG | `nvh/integrations/rag/` | SQLite store, Ollama embeddings, chunker, vault bridge |

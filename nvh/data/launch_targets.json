@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "about": "Targets for `nvh launch <tool>`. Templates substitute only {base} (the nvHive API base URL, http://127.0.0.1:<port>/v1) and {key} (HIVE_API_KEY when set, else the documented placeholder nvhive). kind env: the variables reach the tool through its child environment only; kind snippet: the text is printed for the user to paste, nvHive writes no third-party config file; kind mcp: nvHive's MCP server is registered with the tool, which is then launched with inference unchanged. verified_on is null until a maintainer records a run against the tool's current release; every null prints as unverified.",
+  "targets": [
+    {
+      "name": "claude",
+      "display_name": "Claude Code",
+      "kind": "mcp",
+      "command": ["claude"],
+      "register": "claude_code",
+      "env": {},
+      "snippet": "# nvh launch claude\n#   1. claude mcp add nvhive -- nvhive-mcp    (registers nvHive's MCP server; repeatable)\n#   2. claude <extra args>                     (inference stays with Anthropic)\n# No inference variables are set: nvHive's Anthropic proxy does not pass tool_use\n# through, so pointing Claude Code's inference at it would break its tools.\n# `nvh launch claude --inference-proxy` prints that snippet anyway, marked unverified.",
+      "inference_proxy": "# Claude Code inference through nvHive's Anthropic proxy.\n# nvHive's Anthropic proxy does not pass tool_use through, so Claude Code's\n# tools would stop working; `nvh launch claude` keeps inference at Anthropic\n# and registers nvHive as an MCP server instead.\nANTHROPIC_BASE_URL={base}/anthropic\nANTHROPIC_AUTH_TOKEN={key}",
+      "docs_url": "https://code.claude.com/docs/en/mcp",
+      "verified_on": null,
+      "notes": [
+        "Registers nvHive as an MCP server (the same `claude mcp add nvhive -- nvhive-mcp` that `nvh integrate` runs) and launches `claude`; inference stays with Anthropic.",
+        "nvHive's Anthropic-compatible proxy drops tool_use, which Claude Code needs, so no ANTHROPIC_* variable is set; --inference-proxy prints that snippet marked unverified."
+      ]
+    },
+    {
+      "name": "codex",
+      "display_name": "Codex CLI",
+      "kind": "snippet",
+      "env": {},
+      "snippet": "# ~/.codex/config.toml — nvHive as a Codex model provider\n# Codex's default provider speaks the Responses API, which nvHive does not\n# serve; wire_api = \"chat\" keeps Codex on /chat/completions.\nmodel_provider = \"nvhive\"\nmodel = \"auto\"\n\n[model_providers.nvhive]\nname = \"nvHive\"\nbase_url = \"{base}\"\nenv_key = \"HIVE_API_KEY\"\nwire_api = \"chat\"\n\n# Then, in the shell that starts codex (any non-empty value in open mode):\n# export HIVE_API_KEY={key}",
+      "docs_url": "https://github.com/openai/codex/blob/main/docs/config.md",
+      "verified_on": null,
+      "notes": [
+        "Codex's default provider speaks the Responses API, which nvHive does not serve: the stanza sets wire_api = \"chat\" so Codex uses /chat/completions.",
+        "env_key names the variable Codex reads the key from; nvHive never writes ~/.codex/config.toml for you."
+      ]
+    },
+    {
+      "name": "opencode",
+      "display_name": "OpenCode",
+      "kind": "snippet",
+      "env": {},
+      "snippet": "// opencode.json (project) or ~/.config/opencode/opencode.json — nvHive as a provider\n{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"provider\": {\n    \"nvhive\": {\n      \"npm\": \"@ai-sdk/openai-compatible\",\n      \"name\": \"nvHive\",\n      \"options\": {\n        \"baseURL\": \"{base}\",\n        \"apiKey\": \"{key}\"\n      },\n      \"models\": {\n        \"auto\": { \"name\": \"nvHive auto-routing\" },\n        \"safe\": { \"name\": \"nvHive local-only\" }\n      }\n    }\n  }\n}",
+      "docs_url": "https://opencode.ai/docs/providers/",
+      "verified_on": null,
+      "notes": [
+        "An OpenAI-compatible provider entry keyed baseURL; the model ids are nvHive routing modes (auto, safe, council).",
+        "Paste it into opencode.json yourself; nvHive writes no third-party config file."
+      ]
+    },
+    {
+      "name": "continue",
+      "display_name": "Continue",
+      "kind": "snippet",
+      "env": {},
+      "snippet": "# ~/.continue/config.yaml — nvHive as an OpenAI-compatible model\nmodels:\n  - name: nvHive (auto)\n    provider: openai\n    model: auto\n    apiBase: {base}\n    apiKey: {key}\n    roles: [chat, edit, apply]",
+      "docs_url": "https://docs.continue.dev/",
+      "verified_on": null,
+      "notes": [
+        "The openai provider with apiBase pointed at nvHive; model is a routing mode (auto, safe, council).",
+        "Paste it into config.yaml yourself; nvHive writes no third-party config file."
+      ]
+    },
+    {
+      "name": "cursor",
+      "display_name": "Cursor",
+      "kind": "snippet",
+      "env": {},
+      "snippet": "# Cursor → Settings → Models → OpenAI API Key\n#   Override OpenAI Base URL: {base}\n#   OpenAI API Key:           {key}\n#   Add a custom model named \"auto\" (or \"safe\", \"council\") and select it.\n# If Cursor's key check fails, try {base}/proxy as the base URL: the OpenAI-shaped\n# model list is GET /v1/proxy/models (GET /v1/models keeps the nvHive envelope).",
+      "docs_url": "https://docs.cursor.com/",
+      "verified_on": null,
+      "notes": [
+        "Cursor has no config file for this: the base URL and key are typed into Settings → Models.",
+        "A tool that validates its provider against GET /models should use the /v1/proxy base URL instead (GET /v1/models keeps the nvHive envelope)."
+      ]
+    }
+  ]
+}

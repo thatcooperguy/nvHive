@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
 
 import nvh.core.local_models as lm
 from nvh.storage import repository
@@ -68,6 +69,41 @@ def test_all_extra_contains_runtime_extras() -> None:
     assert "mcp>=1.0,<3" in _resolve_extra(extras, "dev")
 
 
+def test_voice_extra_carries_the_win_arm64_marker_and_stays_outside_all() -> None:
+    """0.46 §8 / O6: `nvhive[voice]` is faster-whisper behind an environment marker
+    that skips Windows on Arm (CTranslate2 and PyAV ship no win_arm64 wheels, so the
+    extra installs nothing there instead of failing outright), and it stays outside
+    `all` and `dev` so a full install never pulls a CPU inference stack. The marker
+    is checked by evaluation, not by its spelling: PEP 508 has no prefix `not`, so
+    the design's `not (a and b)` is written as `a' or b'`."""
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = data["project"]["optional-dependencies"]
+
+    assert len(extras["voice"]) == 1
+    req = Requirement(extras["voice"][0])
+    assert req.name == "faster-whisper"
+    assert any(spec.operator == ">=" for spec in req.specifier)
+    assert req.marker is not None
+    marker = str(req.marker)
+    for token in ("sys_platform", "win32", "platform_machine", "ARM64"):
+        assert token in marker
+    assert req.marker.evaluate({"sys_platform": "win32", "platform_machine": "ARM64"}) is False
+    assert req.marker.evaluate({"sys_platform": "win32", "platform_machine": "AMD64"}) is True
+    assert req.marker.evaluate({"sys_platform": "linux", "platform_machine": "aarch64"}) is True
+    assert req.marker.evaluate({"sys_platform": "linux", "platform_machine": "x86_64"}) is True
+    assert req.marker.evaluate({"sys_platform": "darwin", "platform_machine": "arm64"}) is True
+
+    for umbrella in ("all", "dev"):
+        groups = {
+            name.strip()
+            for req_text in extras[umbrella]
+            if (match := _SELF_EXTRA.match(req_text))
+            for name in match.group("names").split(",")
+        }
+        assert "voice" not in groups
+        assert not any(r.startswith("faster-whisper") for r in _resolve_extra(extras, umbrella))
+
+
 def test_runtime_dependencies_match_imports() -> None:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     names = {re.split(r"[\[<>=!;\s]", dep, maxsplit=1)[0] for dep in data["project"]["dependencies"]}
@@ -114,11 +150,53 @@ def test_ci_security_job_audits_the_project_dependency_set() -> None:
     dependency set. A bare `pip-audit` audits only the current interpreter, so
     the project must be installed before the audit step, and the editable
     checkout (no PyPI entry) must be skipped or `--strict` always trips."""
-    runs = [s.get("run", "") for s in _workflow("ci.yml")["jobs"]["security"]["steps"]]
+    steps = _workflow("ci.yml")["jobs"]["security"]["steps"]
+    runs = [s.get("run", "") for s in steps]
     install = next(i for i, run in enumerate(runs) if 'pip install -e ".[dev]"' in run)
+    # 0.46 §8 widened the audit to the voice extra's tree (ctranslate2, huggingface_hub,
+    # tokenizers) in its own non-blocking step: native wheels can lag a Python release and
+    # must never turn the audit red or skip it.
+    voice = next(i for i, run in enumerate(runs) if 'pip install -e ".[voice]"' in run)
+    assert steps[voice].get("continue-on-error") is True
+    assert steps[install].get("continue-on-error") is None, "the dev install is the hard one"
     audit = next(i for i, run in enumerate(runs) if run.startswith("pip-audit"))
-    assert install < audit
+    assert install < voice < audit
     assert "--skip-editable" in runs[audit]
+
+
+def test_ci_build_job_smokes_the_wheel_with_nvh_launch_list() -> None:
+    """0.46 §5: `nvh launch --list` loads the bundled nvh/data/launch_targets.json from the
+    installed wheel, so a package-data regression fails the build. Nothing in pytest reads the
+    built wheel (tests/test_single_root.py checks the source tree against the globs), so this
+    step is the guard and this pin keeps it."""
+    steps = _workflow("ci.yml")["jobs"]["build"]["steps"]
+    verify = next(s for s in steps if s.get("name") == "Install wheel in clean venv")["run"]
+    lines = [line.strip() for line in verify.splitlines() if line.strip()]
+    install = next(i for i, line in enumerate(lines) if "pip install dist/*.whl" in line)
+    for command in ("nvh version", "nvh --help", "nvh launch --list"):
+        hit = next(i for i, line in enumerate(lines) if command in line)
+        assert install < hit, command
+
+
+def test_ci_voice_extra_step_is_informational_on_the_arm_runner() -> None:
+    """0.46 §8 / O6: the `test` job carries one non-blocking step that installs the
+    `voice` extra and imports faster_whisper on the ubuntu-24.04-arm matrix entry
+    only, between the dev install and Lint, so the arm64 wheel story is observed on
+    every push without ever turning the matrix red."""
+    ci = _workflow("ci.yml")
+    job = ci["jobs"]["test"]
+    assert any(entry.get("os") == "ubuntu-24.04-arm" for entry in job["strategy"]["matrix"]["include"])
+    names = [s.get("name") for s in job["steps"]]
+    assert names.count("Voice extra (informational, arm64)") == 1
+    assert names.index("Install dependencies") < names.index("Voice extra (informational, arm64)") < names.index("Lint")
+    step = next(s for s in job["steps"] if s.get("name") == "Voice extra (informational, arm64)")
+    assert step.get("continue-on-error") is True
+    assert "matrix.os == 'ubuntu-24.04-arm'" in step.get("if", "")
+    assert 'pip install -e ".[voice]"' in step["run"]
+    assert "import faster_whisper" in step["run"]
+    # The dev install itself is unchanged: the matrix never installs the extra for real.
+    install = next(s for s in job["steps"] if s.get("name") == "Install dependencies")
+    assert install["run"] == 'pip install -e ".[dev]"'
 
 
 def test_installer_workflow_runs_on_main_pushes_with_the_pr_path_filter() -> None:

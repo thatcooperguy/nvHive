@@ -96,6 +96,7 @@ def test_nvh_data_resolves_the_same_files_as_the_sub_package_anchors() -> None:
         (("catalog", "nvhive-catalog.json"), ("nvh.catalog", "nvhive-catalog.json")),
         (("catalog", "agent-library.json"), ("nvh.catalog", "agent-library.json")),
         (("prompts", "nvwizard_system.md"), ("nvh.prompts", "nvwizard_system.md")),
+        (("data", "launch_targets.json"), ("nvh.data", "launch_targets.json")),
     ]
     for parts, (package, name) in pairs:
         direct = Path(str(resources.files(package).joinpath(name))).resolve()

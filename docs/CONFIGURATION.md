@@ -405,7 +405,7 @@ persists in `state/nvhive.db`.
 | `$NVH_HOME/` | `NVH_HOME` | `nvh-env.sh`, `venv/`, `repo/`, `uninstall.sh` |
 | `bin/` | `NVH_BIN` | rootless Ollama, `nvhive-ai-studio`, `nvhive-openclaw` and other launchers |
 | `models/`, `models/ollama/` | `NVH_MODELS`, `OLLAMA_MODELS` | local model weights |
-| `cache/` | `NVH_CACHE` | `pip/`, `uv/`, `huggingface/`, `torch/`, `tmp/`, `catalog/`, `xdg/` (also exported as `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `TORCH_HOME`, `TMPDIR`, `XDG_CACHE_HOME`) |
+| `cache/` | `NVH_CACHE` | `pip/`, `uv/`, `huggingface/`, `torch/`, `tmp/`, `catalog/`, `xdg/` (also exported as `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `HF_HOME`, `HUGGINGFACE_HUB_CACHE`, `TORCH_HOME`, `TMPDIR`, `XDG_CACHE_HOME`); `huggingface/` is also where `nvh voice --download` puts the faster-whisper weights ([Voice](#voice-from-the-wizard-chat)) |
 | `logs/` | `NVH_LOGS` | `install.log`, `api-server.log`, `nvhive.log`, service logs |
 | `config/` | `NVH_CONFIG` (legacy alias `HIVE_CONFIG_HOME`, still honoured and still exported) | `config.yaml`, `.env`, `user.json`, `global_context.md`, `workflows/`, `mcp-servers.json` |
 | `state/` | `NVH_STATE` | `nvhive.db` (SQLite: conversations, routing outcomes, costs), `schedules.json` (`nvh-schedules/2`; beside it a transient `schedules.json.<pid>-<token>.tmp` while a save is in flight and, after a parse failure, a quarantined `schedules.json.corrupt-<timestamp>`), `scheduler.lock` (the schedule runner's heartbeat lock: a JSON file `{pid, started_at, heartbeat, poll_s, runner}` created exclusively by the API lifespan or `nvh schedule start`, rewritten every poll and stale only once its heartbeat is older than three polls — see [Schedule records](#schedule-records-nvh-schedules2)), `last_query.json` (`nvh status --routing`), `memory/` (holds only the pre-0.42 `memories.json` the legacy migration copies in once; `nvh rag import-legacy --memories` or the REPL turns it into `Wizard Memory` notes once, `Source: import`), `legacy-migration.json`, capability marker, browser profiles |
@@ -767,6 +767,7 @@ Storage overrides are in the table above. Everything else nvHive reads:
 | `NVAPI_KEY` | unset | NVIDIA-hosted image generation (`generate_image` from the Wizard chat, profile portraits); the only variable the image path reads — `NVIDIA_API_KEY` / `NIM_API_KEY` are never consulted, so a NIM chat key cannot move a box onto the paid hosted path ahead of local ComfyUI |
 | `NVH_NVIDIA_IMAGE_ENDPOINT`, `NVH_NVIDIA_IMAGE_MODEL` | NVIDIA's hosted SDXL Turbo endpoint, unset | endpoint and model hosted generation uses; the card's plan line names `NVH_NVIDIA_IMAGE_MODEL` or, unset, the endpoint's last path segment, and reports the hosted price as unknown (`cost_usd: null`, `cost_known: false`) |
 | `NVH_COMFYUI_CHECKPOINT` | `sd_xl_base_1.0.safetensors` | checkpoint the local ComfyUI workflow renders with (`generate_image` and profile portraits); ComfyUI is reached at the host and port recorded in `comfyui/comfyui-service.json` when nvHive started it, not assumed at the default port |
+| `NVH_VOICE_STT_MODEL` | `small.en` | faster-whisper model the local speech-to-text path loads (`pip install 'nvhive[voice]'`; `nvh voice --stt-model` overrides it per run; read when the request or command runs, not at import). The weights live under `$NVH_CACHE/huggingface` (`storage_layout().cache_dir / "huggingface"`, the layout's own `HF_HOME` spelling — the API process exports no `HF_HOME`) and are fetched only by `nvh voice --download` or the WebUI's **Download model** button, never on first use. The `voice` extra is outside `all`, and on Windows on Arm it installs nothing — its requirement carries `sys_platform != 'win32' or platform_machine != 'ARM64'` because no faster-whisper wheel exists there — so `nvh voice --status` and `GET /v1/voice/status` report `no faster-whisper wheel for this platform` and the Groq and browser paths remain ([Voice](#voice-from-the-wizard-chat)) |
 | `NVH_WEB_REF` | `v<version>` | git ref of the WebUI source `nvh webui` fetches |
 
 Installer-only knobs (`install.sh` / `start-linux.sh`):
@@ -1012,6 +1013,53 @@ privileged request — `remember` and `generate_image` included — is only
 recorded on the run as `{name, arguments, privileged, unattended: true}`
 (string arguments redacted) when the profile's own whitelist allows that tool,
 and refused otherwise; `mode: do` is CLI-only.
+
+### Voice from the Wizard chat
+
+The Wizard composer's hold-to-talk mic and **Read aloud** toggle
+([WEBUI.md](WEBUI.md#pages)) ride on four routes under `/v1/voice`
+(`nvh/api/routes/voice.py`), every one behind the same API credential as the
+rest of `/v1`. The browser records (`MediaRecorder`; the WebUI has no Python
+audio-capture path, which is also the only path on an RTX Spark) and posts
+the clip to `POST /v1/voice/transcribe` (multipart `file` of type `audio/webm`,
+`ogg`, `wav`, `mp4` or `mpeg`; anything else is 415, over 20 MB is 413 — the
+route reads the request stream itself, so an oversized clip is refused as the
+bytes arrive rather than after the whole body has been spooled).
+Speech-to-text is local-first, in the order `nvh voice --stt auto` uses too:
+
+1. **local** — faster-whisper inside the API process (CPU, int8, `small.en`
+   by default: `NVH_VOICE_STT_MODEL` above) when the optional `voice` extra is
+   installed (`pip install 'nvhive[voice]'`; outside `all`, and on Windows on
+   Arm it installs nothing because no wheel exists) **and** the weights are
+   under `$NVH_CACHE/huggingface`. $0; nothing leaves the machine. The weights
+   are never fetched implicitly: `POST /v1/voice/download` (the status line's
+   **Download model** button) starts the one explicit `voice-model-download`
+   job — it shows on `/setup`'s job list like an install — and `nvh voice
+   --download` is its terminal twin; until then the route answers 503 with
+   the hint.
+2. **groq** — Groq Whisper (`whisper-large-v3`) when a Groq key resolves
+   (`COUNCIL_GROQ_API_KEY`, `GROQ_API_KEY`, `HIVE_GROQ_API_KEY`, then the
+   keyring entry `nvh advisor add groq` writes). The clip leaves the box, and
+   the pill reads **cost unknown** because no catalog row prices it.
+3. otherwise the mic is disabled with the install hint, and
+   `GET /v1/voice/status` says what is missing (`reason`: `install
+   nvhive[voice]`, `model not downloaded` or `no faster-whisper wheel for
+   this platform`).
+
+Transcription runs in a worker thread behind a per-process semaphore, so the
+API's one event loop keeps answering while the CPU works. Audio is never
+stored: the clip lives in a temporary file for the request only and is
+unlinked on every path, and the transcript is inserted into the composer,
+never sent on its own. Text-to-speech in the WebUI is the browser's own
+`speechSynthesis` (offline; the preference is the browser-local key
+`nvh.voice.readAloud`, which **Clear browser data** on `/settings` drops);
+`POST /v1/voice/speak` runs `edge-tts` when it is on PATH and answers 501
+otherwise — there is no local TTS pack; the system voices it falls back to
+read the text from stdin, never from an argument. The pre-0.46 openai-whisper
+CLI stays reachable as `nvh voice --stt whisper-cli` from the CLI only: the
+route accepts `provider` `auto`, `local` or `groq`, and its `model` must be a
+faster-whisper size or a `Systran/` or `mobiuslabsgmbh/` repo id
+(`--stt-model` may also name a converted model directory spelled as a path).
 
 ## Workflows
 

@@ -327,20 +327,13 @@ class TestVoice:
         assert vc.auto_listen is True
 
     def test_speech_to_text_requires_groq_key(self):
+        # 0.46: speech_to_text is synchronous (the API runs it in a thread); the 0.45
+        # contract it keeps is the ValueError for an explicit Groq request without a key.
         from nvh.core.voice import speech_to_text
         with patch.dict("os.environ", {}, clear=True):
             with patch("keyring.get_password", side_effect=Exception("no keyring")):
-                # Skip if event loop is consumed by previous async tests
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_closed():
-                        pytest.skip("event loop closed by prior async test")
-                    with pytest.raises(ValueError, match="Groq API key"):
-                        loop.run_until_complete(
-                            speech_to_text("/fake.wav", provider="groq")
-                        )
-                except RuntimeError:
-                    pytest.skip("no event loop available")
+                with pytest.raises(ValueError, match="Groq API key"):
+                    speech_to_text("/fake.wav", provider="groq")
 
 
 # ---------------------------------------------------------------------------

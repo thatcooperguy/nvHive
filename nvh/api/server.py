@@ -61,6 +61,7 @@ from nvh.api.deps import (  # re-exported: every `from nvh.api.server import ...
 from nvh.api.routes import outputs as _outputs_routes
 from nvh.api.routes import schedules as _schedules_routes
 from nvh.api.routes import vault_notes as _vault_notes_routes
+from nvh.api.routes import voice as _voice_routes
 from nvh.api.services import QueryService
 from nvh.core import local_models
 from nvh.core.agents import generate_agents, get_preset_agents, list_presets
@@ -6943,11 +6944,14 @@ app.add_api_route(
 # ``schedules``: the seven /v1/schedules routes (list with the runner's lock
 # status and unattended tool roster, create, read, patch, delete, run now,
 # run log); the loop that runs them is the lifespan's ``_start_scheduler``.
+# ``voice``: POST /v1/voice/transcribe, GET /v1/voice/status, POST
+# /v1/voice/download (the ``voice-model-download`` job), POST /v1/voice/speak.
 # ---------------------------------------------------------------------------
 
 app.include_router(_outputs_routes.router)
 app.include_router(_vault_notes_routes.router)
 app.include_router(_schedules_routes.router)
+app.include_router(_voice_routes.router)
 
 
 # ---------------------------------------------------------------------------

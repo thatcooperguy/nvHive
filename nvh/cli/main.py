@@ -6582,6 +6582,150 @@ def openclaw(
 
 
 # ---------------------------------------------------------------------------
+# nvh launch — start a coding tool against the local nvHive API (0.46). The
+# targets are data (nvh/data/launch_targets.json, read through nvh.data) and
+# the logic lives in nvh.integrations.launch; this is a command, not a group,
+# so `nvh launch --list` and `nvh launch <tool>` share one registration.
+# ---------------------------------------------------------------------------
+
+@app.command(
+    rich_help_panel="Infrastructure",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def launch(
+    ctx: typer.Context,
+    tool: str | None = typer.Argument(
+        None, help="Target to launch — see --list (claude, codex, opencode, continue, cursor)",
+    ),
+    list_targets: bool = typer.Option(False, "--list", help="List the launch targets and exit"),
+    print_only: bool = typer.Option(
+        False, "--print",
+        help="Print the variables or snippet nvHive would set and exit (no API needed, nothing launched)",
+    ),
+    port: int = typer.Option(8000, "--port", help="nvHive API port"),
+    start_api: bool = typer.Option(
+        False, "--start-api", "-y",
+        help=(
+            "Start `nvh serve` on loopback when nothing listens on --port (a port held by anything "
+            "that is not a healthy nvHive API is refused, never freed)"
+        ),
+    ),
+    inference_proxy: bool = typer.Option(
+        False, "--inference-proxy",
+        help="claude only: print the ANTHROPIC_BASE_URL snippet for nvHive's Anthropic proxy (unverified) and exit",
+    ),
+):
+    """Start a coding tool against the local nvHive API, or print what to set.
+
+    Checks GET /v1/health, then either launches the tool or prints the text to
+    paste into its config — nvHive never writes a third-party config file.
+    Today `claude` is the one target that launches: it registers nvHive's MCP
+    server and runs `claude` with no nvHive variable set (inference stays with
+    Anthropic); codex, opencode, continue and cursor print their snippet and
+    start nothing. A target of kind `env` would get the base URL and key through
+    its child environment; no shipped row uses that kind yet. Refused (exit 2):
+    an open-mode API bound off-loopback, a keyed API with no HIVE_API_KEY in
+    this shell (the placeholder would only earn a 401), or a users-mode API with
+    no token in HIVE_API_KEY. `--print` renders every target without touching
+    the API — and shows the live HIVE_API_KEY when one is set. Arguments after
+    the target (or after `--`) go to the tool. Every target carries
+    `verified_on`; `null` prints as unverified.
+
+    Exit codes: the tool's own after a launch, 1 for an unknown target,
+    2 for a refusal, 127 when the tool is not on PATH.
+    """
+    from nvh.integrations import launch as launch_mod
+
+    targets = launch_mod.load_targets()
+
+    def _say(text: str, style: str = "") -> None:
+        body = escape(text)
+        console.print(
+            f"[{style}]{body}[/{style}]" if style else body, highlight=False, soft_wrap=True,
+        )
+
+    def _targets_table() -> Table:
+        table = Table(title="nvh launch targets")
+        table.add_column("name", no_wrap=True)
+        table.add_column("display name", no_wrap=True)
+        table.add_column("kind", no_wrap=True)
+        table.add_column("verified", no_wrap=True)
+        table.add_column("docs", overflow="fold")
+        for t in targets:
+            table.add_row(t.name, t.display_name, t.kind, launch_mod.verification_label(t), t.docs_url)
+        return table
+
+    if list_targets or tool is None:
+        console.print(_targets_table())
+        if tool is None and not list_targets:
+            _say("Name a target: nvh launch <name> [--print]", "yellow")
+            raise typer.Exit(code=launch_mod.EXIT_UNKNOWN_TARGET)
+        return
+
+    try:
+        target = launch_mod.get_target(tool, targets)
+    except launch_mod.UnknownTargetError as exc:
+        _say(str(exc), "red")
+        raise typer.Exit(code=launch_mod.EXIT_UNKNOWN_TARGET) from None
+
+    base = launch_mod.api_base(port)
+    key = launch_mod.api_key_for_launch()
+    verification = launch_mod.verification_line(target)
+
+    if inference_proxy:
+        snippet = launch_mod.render_inference_proxy(target, api_base=base, api_key=key)
+        if snippet is None:
+            _say(
+                f"{target.display_name} has no inference-proxy snippet; "
+                "--inference-proxy is for claude.",
+                "red",
+            )
+            raise typer.Exit(code=launch_mod.EXIT_UNKNOWN_TARGET)
+        for line in snippet.splitlines():
+            _say(line)
+        _say(verification, "yellow")
+        return
+
+    if print_only:
+        for line in launch_mod.describe(target, api_base=base, api_key=key):
+            _say(line)
+        for note in target.notes:
+            _say(f"note: {note}", "dim")
+        _say(verification, "yellow")
+        return
+
+    ok, reason = launch_mod.ensure_api_running(port, start=start_api)
+    if not ok:
+        _say(reason, "red")
+        raise typer.Exit(code=launch_mod.EXIT_REFUSED)
+    _say(reason, "dim")
+    health = launch_mod.health_for_launch(port)
+    refusal = launch_mod.refuse_if_unsafe(health, has_token=bool(os.environ.get("HIVE_API_KEY")))
+    if refusal:
+        _say(refusal, "red")
+        raise typer.Exit(code=launch_mod.EXIT_REFUSED)
+
+    if not target.launches:
+        launch_mod.launch(target, api_base=base, api_key=key, emit=_say)
+        for note in target.notes:
+            _say(f"note: {note}", "dim")
+        _say(verification, "yellow")
+        _say(
+            f"nvHive writes no third-party config: paste the snippet into "
+            f"{target.display_name}'s config and start it yourself.",
+            "dim",
+        )
+        return
+
+    _say(verification, "yellow")
+    code = launch_mod.launch(
+        target, api_base=base, api_key=key, extra_args=list(ctx.args), emit=_say,
+    )
+    if code:
+        raise typer.Exit(code=code)
+
+
+# ---------------------------------------------------------------------------
 # hive mcp — MCP server for Claude Code, Cursor, OpenClaw. Bare `nvh mcp`
 # starts the server; `nvh mcp servers …` (registered further down) manages
 # the external tool servers the Wizard attaches.
@@ -10829,27 +10973,142 @@ def costs(
 @app.command(rich_help_panel="Media")
 def voice(
     duration: int = typer.Option(10, "-d", "--duration", help="Recording duration in seconds"),
-    stt: str = typer.Option("groq", "--stt", help="Speech-to-text provider: groq, local"),
+    stt: str = typer.Option(
+        "auto",
+        "--stt",
+        help="Speech-to-text path: auto (local faster-whisper, then Groq), local, groq, whisper-cli",
+    ),
+    stt_model: str | None = typer.Option(
+        None,
+        "--stt-model",
+        help=(
+            "faster-whisper model for the local path (default: NVH_VOICE_STT_MODEL, else small.en), "
+            "or a converted model directory spelled as a path (./dir, /abs)"
+        ),
+    ),
     tts: str = typer.Option("edge", "--tts", help="Text-to-speech provider: edge, system"),
     advisor: str | None = typer.Option(None, "-a", "--advisor", help="Advisor to use"),
     model: str | None = typer.Option(None, "-m", "--model", help="Model to use"),
     no_speak: bool = typer.Option(False, "--no-speak", help="Skip TTS — show text only"),
+    download: bool = typer.Option(
+        False, "--download", help="Download the local speech model into the nvHive cache, then exit"
+    ),
+    status: bool = typer.Option(
+        False, "--status", help="Show which speech-to-text and text-to-speech paths this box has, then exit"
+    ),
 ):
     """Voice mode — speak your question, hear the answer.
 
-    Records audio from your microphone, transcribes it via Groq Whisper (free),
-    sends it to your default advisor, then reads the response aloud.
+    Records audio from your microphone, transcribes it (local faster-whisper
+    when the `voice` extra is installed and the model is downloaded, else Groq
+    Whisper when a Groq key exists), sends it to your default advisor, then
+    reads the response aloud. The local model is never fetched implicitly:
+    run `nvh voice --download` once, or press Download model in the WebUI.
 
     Examples:
-        nvh voice                      # 10-second recording, Groq STT, Edge TTS
-        nvh voice -d 20                # 20-second recording
+        nvh voice                      # 10-second recording, auto STT, Edge TTS
+        nvh voice --status             # which speech paths this box has
+        nvh voice --download           # fetch the local model (~480 MB)
+        nvh voice --stt groq -d 20     # 20-second recording through Groq Whisper
         nvh voice --no-speak           # transcribe + answer, but skip TTS
         nvh voice -a anthropic         # use a specific advisor
     """
+    from nvh.core.voice import (
+        STT_PROVIDERS,
+        VoiceBackendError,
+        VoiceConfig,
+        VoiceUnavailable,
+        approx_model_bytes,
+        download_model,
+        download_root,
+        model_present,
+        play_audio,
+        record_audio,
+        speech_to_text,
+        stt_hint,
+        text_to_speech,
+        voice_status,
+    )
+
+    model_name = stt_model or VoiceConfig().stt_model
+    if stt not in STT_PROVIDERS:
+        console.print(
+            f"[red]Unknown --stt value {escape(repr(stt))}[/red] — one of: {', '.join(STT_PROVIDERS)}"
+        )
+        raise typer.Exit(2)
+
+    def _yes_no(flag: bool) -> str:
+        return "[green]yes[/green]" if flag else "[dim]no[/dim]"
+
+    if status:
+        facts = voice_status(model_name)
+        stt_facts, tts_facts = facts["stt"], facts["tts"]
+        table = Table(title="Voice paths")
+        table.add_column("Path", style="bold")
+        table.add_column("Available")
+        table.add_column("Details")
+        table.add_row(
+            "Local STT (faster-whisper)",
+            _yes_no(stt_facts["local_available"]),
+            escape(
+                stt_facts["reason"]
+                or f"model {stt_facts['model']} under {stt_facts['download_root']}"
+            ),
+        )
+        table.add_row(
+            "Groq Whisper (cloud)",
+            _yes_no(stt_facts["groq_available"]),
+            "key found" if stt_facts["groq_available"] else "no Groq key — nvh advisor add groq",
+        )
+        table.add_row("Edge TTS (edge-tts on PATH)", _yes_no(tts_facts["edge_available"]), "")
+        table.add_row("System TTS (espeak / say)", _yes_no(tts_facts["system_available"]), "")
+        console.print(table)
+        console.print(
+            f"[dim]model: {escape(stt_facts['model'])}"
+            f" — weights under {escape(stt_facts['download_root'])}[/dim]"
+        )
+        hint = stt_hint(facts)
+        if hint:
+            console.print(f"[yellow]{escape(hint)}[/yellow]")
+        else:
+            console.print("[green]✓[/green] speech-to-text is ready")
+        raise typer.Exit(0)
+
+    if download:
+        if model_present(model_name):
+            console.print(
+                f"[green]✓[/green] {escape(model_name)} is already downloaded"
+                f" (under {escape(str(download_root()))})"
+            )
+            raise typer.Exit(0)
+        total = approx_model_bytes(model_name)
+
+        def _progress(done: int) -> None:
+            so_far = f"{done / 1e6:,.0f} MB"
+            if total:
+                so_far += f" of ~{total / 1e6:,.0f} MB"
+            console.print(f"  {so_far} so far", end="\r")
+
+        console.print(
+            f"[cyan]Downloading {escape(model_name)} into {escape(str(download_root()))} ...[/cyan]"
+        )
+        try:
+            path = download_model(model_name, progress=_progress)
+        except VoiceUnavailable as exc:
+            console.print(f"[yellow]{escape(str(exc))}[/yellow]")
+            hint = stt_hint(exc.status or voice_status(model_name))
+            if hint:
+                console.print(f"[dim]{escape(hint)}[/dim]")
+            raise typer.Exit(1)
+        except VoiceBackendError as exc:
+            console.print(f"[red]{escape(str(exc))}[/red]")
+            raise typer.Exit(1)
+        console.print(f"[green]✓[/green] {escape(model_name)} ready at {escape(str(path))}")
+        raise typer.Exit(0)
+
     async def _run_voice():
         from nvh.config.settings import load_config
         from nvh.core.engine import Engine
-        from nvh.core.voice import play_audio, record_audio, speech_to_text, text_to_speech
 
         config = load_config()
         engine = Engine(config=config)
@@ -10863,19 +11122,44 @@ def voice(
             console.print(f"[red]Recording failed: {e}[/red]")
             raise typer.Exit(1)
 
-        # Step 2: Transcribe
+        # Step 2: Transcribe — synchronous CPU/network work, so off the loop
+        # the same way nvh/api/routes/voice.py runs it.
         console.print("[dim]Transcribing...[/dim]")
         try:
-            transcript = await speech_to_text(audio_path, provider=stt)
+            result = await asyncio.to_thread(
+                speech_to_text,
+                audio_path,
+                stt,
+                mime_type="audio/wav",
+                filename=Path(audio_path).name,
+                model=model_name,
+            )
+        except VoiceUnavailable as e:
+            console.print(f"[yellow]{escape(str(e))}[/yellow]")
+            hint = stt_hint(e.status or voice_status(model_name))
+            if hint:
+                console.print(f"[dim]{escape(hint)}[/dim]")
+            raise typer.Exit(1)
         except Exception as e:
-            console.print(f"[red]Transcription failed: {e}[/red]")
+            console.print(f"[red]Transcription failed: {escape(str(e))}[/red]")
             raise typer.Exit(1)
 
-        if not transcript.strip():
+        transcript = result.text.strip()
+        if not transcript:
             console.print("[yellow]No speech detected.[/yellow]")
             raise typer.Exit(0)
 
-        console.print(f"[bold]You:[/bold] {transcript}")
+        if not result.cost_known:
+            cost = "cost unknown"
+        elif not result.cost_usd:
+            cost = "$0, on this device"
+        else:
+            cost = f"${result.cost_usd:.4f}"
+        console.print(f"[bold]You:[/bold] {escape(transcript)}")
+        console.print(
+            f"[dim]({escape(result.provider)} {escape(result.model)}"
+            f" · {result.latency_ms} ms · {cost})[/dim]"
+        )
 
         # Step 3: Query LLM
         console.print("[dim]Thinking...[/dim]")

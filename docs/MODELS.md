@@ -207,9 +207,9 @@ The remaining backends are hand-maintained in `studio_packs.py` and
 | Image control | ComfyUI + FLUX.1 ControlNet | 16 GB | opt-in | `comfy` pack + FLUX template |
 | Video (5B) | ComfyUI + Wan 2.2 5B | 8 GB | opt-in, 24+ GB tier | `comfy` pack + Wan 5B |
 | Video (14B) | ComfyUI + Wan 2.2 14B i2v | 24 GB | opt-in, 40+ GB tier | `comfy` pack + Wan 14B |
-| Speech — TTS (cloud, free) | Edge TTS (`nvh/core/voice.py`) | 0 GB | always | `nvh voice` |
-| Speech — STT (cloud, free) | Groq Whisper | 0 GB | needs a Groq key | `nvh advisor add groq` |
-| Speech — local STT/TTS | WhisperX + faster-whisper | 8 GB | opt-in, 24+ GB tier | `nvh studio --install music-producer-lab -y` |
+| Speech — TTS | the browser's own `speechSynthesis` in the WebUI (**Read aloud**); Edge TTS (`nvh/core/voice.py`, cloud, free) from the CLI | 0 GB | always | `nvh voice`; there is no local TTS pack |
+| Speech — STT (cloud) | Groq Whisper (`whisper-large-v3`; cost unknown) | 0 GB | needs a Groq key | `nvh advisor add groq` |
+| Speech — STT (local) | faster-whisper through the `nvhive[voice]` extra (CPU int8, `small.en` by default; `NVH_VOICE_STT_MODEL`) | 0 GB (CPU) | opt-in extra, outside `all`, not staged by the installer; installs nothing on Windows on Arm | `pip install 'nvhive[voice]'`, then `nvh voice --download` |
 | Music generation | ACE-Step | 6 GB | opt-in, 24+ GB tier | `nvh studio --install music -y` |
 
 "Opt-in" means `NVH_INSTALL_FULL_CAPABILITY=1` at install time. With it set
@@ -227,11 +227,18 @@ the marker is for a future Wizard consumer. The companion
 install time — slow and disk-hungry, meant for headless images that will
 never have a browser.
 
-Speech is the weakest leg: WhisperX rides in the music pack, there is no
-dedicated speech pack and no VRAM-gated local TTS. The default voice path is
-Edge TTS plus Groq Whisper, which works on any GPU including none. Cloud
-GRID/virtual GPUs report VRAM through `nvidia-smi` like real cards; the matrix
-applies as written.
+Speech is still the lightest leg, but it no longer hides in the music pack:
+local speech-to-text is the `nvhive[voice]` extra (faster-whisper on the CPU
+— no VRAM tier and no studio pack; the weights land under
+`$NVH_CACHE/huggingface` only when `nvh voice --download` or the WebUI's
+**Download model** button fetches them, and on Windows on Arm the extra
+installs nothing and `nvh voice --status` says why), cloud speech-to-text
+stays Groq Whisper at cost unknown, and text-to-speech is the browser's own
+speech synthesis in the WebUI or Edge TTS from the CLI — there is no local
+TTS pack ([CONFIGURATION.md](CONFIGURATION.md#voice-from-the-wizard-chat)).
+WhisperX still ships inside the music pack for that lab's own transcription.
+Cloud GRID/virtual GPUs report VRAM through `nvidia-smi` like real cards; the
+matrix applies as written.
 
 Source of truth in code: `nvh/core/local_models.py` (`LOCAL_MODEL_TIERS`,
 rendered by `nvh models tiers` and regenerated into this page by

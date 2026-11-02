@@ -515,7 +515,9 @@ OPENAI_API_KEY=<your HIVE_API_KEY, or any non-empty string in open mode>
 
 # Anthropic-SDK clients (the SDK appends /v1/messages itself)
 ANTHROPIC_BASE_URL=http://127.0.0.1:8000/v1/anthropic
-ANTHROPIC_AUTH_TOKEN=<your HIVE_API_KEY>`}
+ANTHROPIC_AUTH_TOKEN=<your HIVE_API_KEY>
+
+nvh launch <tool> --print   # claude | codex | opencode | continue | cursor`}
             </pre>
           </div>
 

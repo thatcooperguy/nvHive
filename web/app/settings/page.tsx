@@ -17,6 +17,7 @@ const BROWSER_KEYS = [
   'council_recent_queries',  // pre-0.42 /query history
   LEGACY_CHATS_KEY,          // pre-0.42 chat store (normally already imported)
   'hive_cmd_palette_recents',
+  'nvh.voice.readAloud',     // Read aloud toggle (0.46 voice; lib/voice.ts VOICE_READ_ALOUD_KEY)
 ];
 
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {

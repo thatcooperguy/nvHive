@@ -43,6 +43,15 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: pip install -e ".[dev]"
+      - name: Voice extra (informational, arm64)
+        # 0.46 §8 / O6: the `voice` extra (faster-whisper -> CTranslate2, PyAV) is
+        # believed to have Linux aarch64 CPU wheels, but no job installed anything
+        # beyond .[dev] before. This step records whether it installs and imports
+        # on the arm64 runner; it never fails the matrix. The CHANGELOG entry for
+        # 0.46 records the result (ship the extra, or Groq + browser only).
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: pip install -e ".[voice]" && python -c "import faster_whisper; print(faster_whisper.__version__)"
+        continue-on-error: true
       - name: Lint
         run: python -m ruff check nvh/ tests/ --ignore E501,E402,N806,E702,F841
       - name: Test
@@ -159,10 +168,14 @@ jobs:
 
   # Dependency vulnerability scan over the project's resolved dependency set
   # (runtime plus the serve, nvidia, mcp and rag extras the dev extra pulls
-  # in). A bare `pip-audit` audits the current interpreter, so the project is
-  # installed first or only pip-audit's own tree is checked; the editable
-  # checkout itself has no PyPI entry and is skipped. SECURITY.md describes
-  # this job; tests/test_release_hardening.py pins the step order.
+  # in, and the voice extra so ctranslate2, huggingface_hub and tokenizers are
+  # audited too). The voice extra is native wheels that can lag a Python
+  # release, so it installs in its own non-blocking step: a missing wheel never
+  # turns the job red or skips the audit of everything else. A bare `pip-audit`
+  # audits the current interpreter, so the project is installed first or only
+  # pip-audit's own tree is checked; the editable checkout itself has no PyPI
+  # entry and is skipped. SECURITY.md describes this job;
+  # tests/test_release_hardening.py pins the step order.
   security:
     runs-on: ubuntu-latest
     steps:
@@ -173,6 +186,9 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: pip install -e ".[dev]"
+      - name: Install voice extra (audited when it installs)
+        run: pip install -e ".[voice]"
+        continue-on-error: true
       - name: Install pip-audit
         run: pip install pip-audit
       - name: Audit installed dependencies
@@ -201,3 +217,4 @@ jobs:
           /tmp/verify/bin/pip install dist/*.whl
           /tmp/verify/bin/nvh version
           /tmp/verify/bin/nvh --help > /dev/null
+          /tmp/verify/bin/nvh launch --list > /dev/null
