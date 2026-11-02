@@ -63,6 +63,20 @@ credential nvHive reads). The OpenAI standard paths added in 0.46
 (`/v1/chat/completions`, `/v1/completions`) are the same handler objects as
 `/v1/proxy/...` and inherit its `require_auth`.
 
+Three surfaces added in 0.46 are authenticated from the start. `GET
+/v1/outputs/images/{scope}/{filename}` serves the images the Wizard
+generated: `scope` and `filename` are regex-validated (one folder level, one
+short image suffix), the resolved path must sit directly inside
+`$NVH_HOME/outputs/images/<scope>`, and `..`, a foreign scope, an unknown
+suffix, an escaping symlink or a missing file all answer 404, never 500;
+responses carry `Cache-Control: private, max-age=300`. The `/v1/vault/notes`
+routes (`GET`, `GET /{id}`, `DELETE /{id}`) read the process home only — no
+`home_dir` field — and match ids against the notes' own `Id:` lines, never
+as paths. The seven `/v1/schedules` routes take `require_auth` too. A keyed
+deployment answers 401 to all of them without the key
+(`tests/test_api.py`, `tests/test_vault_notes_route.py`,
+`tests/test_schedule_runner.py`).
+
 `GET /v1/health` stays open — monitors poll it — and since 0.46 reports
 `bind_host` (the interface `run_server` bound, or `null` when the app was not
 started by `run_server` — a bare `uvicorn nvh.api.server:app`, an embedding —
@@ -181,6 +195,26 @@ a red card that shows the exact commands. The privileged tools are
   tagged `privileged` and with the tool name. The vault is the one under
   `NVH_HOME`; nothing the model writes into the arguments can redirect the
   note.
+- **Nothing unattended.** A scheduled run (`mode: ask` under the API's
+  schedule runner, `nvh/integrations/services/schedule_runner.py`) is a
+  Wizard turn with no human present: it runs only the profile's whitelist
+  intersected with the read-only `SCHEDULE_AUTO_TOOLS` roster, never a
+  confirm or privileged tool, and never mints, stores or serves an approval
+  token — a request for a confirm or privileged tool the profile's own
+  whitelist allows is recorded on the run as `{name, arguments, privileged,
+  unattended: true}` with no plan and no token, its string arguments passed
+  through `redact_secrets` (a key the model wrote into `save_provider_key`
+  never reaches `jobs/<id>.jsonl` or `GET /v1/jobs/{id}/events`), and
+  stripped through `_persistable_calls` before any job event is written
+  (`tests/test_schedule_runner.py` greps every byte under `jobs/` for
+  `approval_token` and for the key); a request outside the profile's
+  whitelist is refused like any other call. It never asks a question either:
+  `ask_user` is not offered to an unattended turn. The API runner refuses
+  `mode: do` outright; only `nvh schedule start`, in your own terminal, runs
+  it. The same rule holds with a human present: a confirm or privileged call
+  the model makes in the same turn as an `ask_user` question is held in
+  `deferred_tool_calls`, never surfaced as an approvable card beside an
+  unanswered question.
 
 ## Deny lists
 
@@ -210,7 +244,16 @@ destructive shapes, not a sandbox: the card you read is the gate.
      `redact_secrets` as the only backstop;
    - `redact_secrets` replaces API keys, tokens, passwords and connection
      strings in tool output with `[REDACTED]` markers, and `truncate_output`
-     caps it.
+     caps it;
+   - the same `redact_secrets` runs over every vault memory before it is
+     written (`POST /v1/vault/memory`, the REPL's `/remember`, the Wizard's
+     `remember` tool). Pattern redaction is best-effort, so for `remember`
+     the confirm card showing the composed note is the check; the tool also
+     refuses outright a body carrying the literal `approval_token` or the
+     privileged terminal hint, writes only under the process home's
+     `vault/Wizard Memory/` (a model-supplied `home_dir` or `category` is
+     dropped), and every record it writes is listed and deletable through
+     `/v1/vault/notes` and `nvh vault forget <id>`.
 2. `nvh/integrations/wizard/system_settings.py` (the host-changing tools,
    applied to the rendered command after `check_command`):
    - `_DENIED` via `denied_reason`: user or password changes (only
@@ -288,6 +331,20 @@ SDK version when the package imports.
 - The deny lists match patterns; a destructive command written in a shape they
   do not know is stopped only by the card you approve. Read the plan on every
   red card.
+- The `generate_image` card's `profile` pin (and its `profile_home`) is echoed
+  back by the client and is not signed: it exists to stop the *model* from
+  choosing the paid path under a profile ceiling, not to stop the person at
+  the keyboard. Someone who edits the card's arguments on their own machine
+  spends their own `NVAPI_KEY`, and on a users-table deployment any
+  authenticated user could already reach the same hosted path by chatting
+  with the general Wizard; a per-user spend control would be a separate
+  feature.
+- Responses carry absolute paths under `$NVH_HOME` by design — `runner.lock_path`
+  on `GET /v1/schedules`, `path` on `/v1/vault/notes` rows and on the
+  `remember` card's result, the config paths `GET /v1/integrations/scan`
+  returns — and with the default home that path names your user directory.
+  They are behind `require_auth`; in open mode they go to anyone who can
+  reach the port, one more reason to set `HIVE_API_KEY` off loopback.
 - The subprocess fallback is not isolation. If you run untrusted code, install
   Docker or set `NVH_SANDBOX_REQUIRE_DOCKER=1`.
 - Open mode trusts the machine. Anything that can reach loopback on this host
