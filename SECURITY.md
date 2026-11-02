@@ -95,6 +95,22 @@ coding tool at the server. `users` without the key is still open mode, as
 above — which is why `key_required` is there: `auth_mode` alone cannot tell
 a keyed users deployment from an open one.
 
+`nvh launch <tool>` acts on those facts client-side before it points a
+coding tool at the server. It refuses (exit 2) an open-mode API bound
+off-loopback, a keyed API when `HIVE_API_KEY` is unset in the launching
+shell (the placeholder it would otherwise render only earns a 401), and a
+users-mode API with no token; with `--start-api` it starts `nvh serve` on
+loopback only when nothing listens on the port, and refuses a port held by
+anything that does not answer nvHive's `GET /v1/health` rather than
+freeing it. The environment or snippet it renders holds the row's own
+variables with the API base and `HIVE_API_KEY` (or the `nvhive`
+placeholder in open mode): no provider key is read or rendered and no
+shell is involved; only `claude` is launched today, with no nvHive
+variable at all (it registers the MCP server; inference stays with
+Anthropic). `--print`, a snippet-kind target and `--inference-proxy` show
+the live `HIVE_API_KEY` in clear text on the terminal — keep that output
+out of pasted logs.
+
 Streamed proxy completions (`/v1/proxy/chat/completions`,
 `/v1/chat/completions` and the Anthropic Messages paths) check
 `budget.hard_stop` before the first provider call and write their spend to
@@ -304,6 +320,36 @@ From the Wizard chat the rule is stricter (`nvh/integrations/wizard/sandbox_tool
   Docker sandbox can never run on the host, and one approved as "on this
   machine" never silently moves into a container.
 
+## Voice
+
+The four `/v1/voice` routes (`nvh/api/routes/voice.py`) sit behind
+`require_auth` like the rest of `/v1`. Audio is never stored: the clip
+posted to `POST /v1/voice/transcribe` lives in a temporary file for the
+request only and is unlinked on every path, no request can name a path on
+disk, and the WebUI keeps no object URL or browser storage of a recording.
+The route reads the request stream itself, so a non-audio part is refused
+when its headers arrive and a clip is refused the moment it passes 20 MB,
+with nothing beyond the cap spooled.
+
+Speech leaves the machine only on the Groq path, which `auto` takes only
+when the local faster-whisper path is absent (the `voice` extra not
+installed, or the weights not downloaded) and a Groq key is configured; the
+status line under the mic names the path that will answer before you press
+it, and `nvh voice --status` says the same on the CLI. The local weights
+download only on an explicit request (`POST /v1/voice/download` from the
+**Download model** button, or `nvh voice --download`), never as a side
+effect of a transcription. Over HTTP `provider` is `auto`, `local` or
+`groq` (`whisper-cli` is the CLI's alone) and `model` is a faster-whisper
+size or a `Systran/` / `mobiuslabsgmbh/` repository id; a bare name is
+never read as a directory under the server's working directory, so a
+caller cannot make the server fetch an arbitrary repository or probe its
+folders. The transcript is inserted into the composer, never sent: a
+privileged request still goes through its red card. Read aloud is the
+browser's own `speechSynthesis` and makes no request; `POST
+/v1/voice/speak` runs `edge-tts` when it is on PATH (text as `--text=`,
+never a bare argument) and answers 501 otherwise, and the system voices
+the CLI falls back to (`espeak`, `say`) read the text from stdin.
+
 ## Telemetry
 
 There is no analytics endpoint. The install-health logger (`nvh/telemetry.py`)
@@ -316,10 +362,13 @@ enable it, and never sends data over the network. See
 Dependabot checks the Python, npm and GitHub Actions dependencies weekly
 (`.github/dependabot.yml`), and the CI `security` job installs the project
 with its `dev` extra (the runtime dependencies plus `serve`, `nvidia`, `mcp`
-and `rag`; `vision` and `browser` are not installed there) and runs
-`pip-audit` over that resolved set on every push to `main`, every pull request
-against it and on manual dispatch (`.github/workflows/ci.yml`; it reports
-findings as warnings rather than failing the build).
+and `rag`; `vision` and `browser` are not installed there), then the `voice`
+extra in its own non-blocking step (so `ctranslate2`, `huggingface_hub` and
+`tokenizers` are audited whenever a wheel exists for the runner's Python, and
+a missing wheel never turns the job red or skips the rest of the audit), and
+runs `pip-audit` over that resolved set on every push to `main`, every pull
+request against it and on manual dispatch (`.github/workflows/ci.yml`; it
+reports findings as warnings rather than failing the build).
 
 With the MCP SDK 2.x line (what `pip install "nvhive[mcp]"` resolves today;
 mcp 1.x does not require it) and with recent FastAPI releases in the `serve`
@@ -352,6 +401,10 @@ SDK version when the package imports.
   returns — and with the default home that path names your user directory.
   They are behind `require_auth`; in open mode they go to anyone who can
   reach the port, one more reason to set `HIVE_API_KEY` off loopback.
+- Groq Whisper receives the clip itself when it is the path that answers;
+  nvHive forwards the audio and its filename and keeps nothing, but the
+  recording has left the machine. Install the `voice` extra and download
+  the model to keep speech on the device.
 - The subprocess fallback is not isolation. If you run untrusted code, install
   Docker or set `NVH_SANDBOX_REQUIRE_DOCKER=1`.
 - Open mode trusts the machine. Anything that can reach loopback on this host
