@@ -31,7 +31,7 @@ The browser only opens after every service passes a health check — including a
 
 **Model Manager.** nvHive detected your GPU at install, so every model in the catalog shows a *fits-your-GPU* verdict and disk size **before** you download. One-click install with live progress, or `nvh models pull gemma3:4b` from the terminal. [Guide →](docs/MODELS.md)
 
-**AI Wizard.** A streaming, tool-using assistant grounded in live workspace state. It can refresh models, run safe repairs, ingest files you drag into chat (PDFs included), and cite web sources — showing cost and latency per response. Attach external [MCP tool servers](docs/INTEGRATIONS.md#nvhive-as-an-mcp-client) and their tools join its toolset.
+**AI Wizard.** A streaming, tool-using assistant grounded in live workspace state. It can refresh models, run safe repairs, ingest files you drag into chat (PDFs included), and cite web sources — showing cost and latency per response. Attach external [MCP tool servers](docs/INTEGRATIONS.md#nvhive-as-an-mcp-client) and their tools join its toolset. Since 0.46 it asks you a question when it needs one, remembers notes into your vault, generates images, and takes dictation from a hold-to-talk mic (with Read aloud for its replies); scheduled prompts have their own page, `/schedules` (an `ask` schedule is an unattended Wizard turn), and every page's top bar shows the session's cost against your hourly desktop rate; `nvh launch <tool>` connects Claude Code, Codex, opencode, Cursor or Continue to it — the MCP server for Claude Code, a printed snippet for the others. [nvh launch →](docs/INTEGRATIONS.md#nvh-launch)
 
 **Agent Library and council mode.** 106 agent profiles grouped by category — coding, research, creative, GPU media, ops, smart home, first-run setup — each mappable to a local or cloud model. Council mode runs one question through multiple models in parallel and synthesizes the answers: `nvh convene "Redis or Postgres for session storage?"`. [Cabinets →](docs/CONFIGURATION.md#council-cabinets)
 
@@ -53,7 +53,7 @@ The browser only opens after every service passes a health check — including a
 - **GPU optional** — CPU-only machines get a small local model plus cloud free tiers
 - **Disk** — ~2 GB for the smallest local model; the installer shows sizes and checks free space before downloading
 
-Already have Python? `pip install nvhive` (extras: `[vision]`, `[rag]`, `[all]`).
+Already have Python? `pip install nvhive` (extras: `[vision]`, `[rag]`, `[all]`; `[voice]` adds local speech-to-text, sits outside `[all]` and installs nothing on Windows on Arm).
 
 ## If something breaks
 

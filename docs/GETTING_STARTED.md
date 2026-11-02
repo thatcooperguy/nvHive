@@ -61,7 +61,8 @@ instead of using Python — useful on images with no working `python3`.
 ### pip (Python 3.11+ already available)
 
 ```bash
-pip install nvhive        # extras: [serve] [mcp] [vision] [rag] [nvidia] [all]
+pip install nvhive        # extras: [serve] [mcp] [vision] [rag] [nvidia] [voice] [all]
+                          #   [voice] = local speech-to-text; outside [all], nothing on Windows on Arm
 nvh setup                 # free-tier wizard, no credit card
 nvh "Hello!"
 ```
@@ -356,8 +357,10 @@ wheel), installs Ollama's arm64 build instead of the x64 installer when
 `nvidia-smi` reports an NVIDIA GPU (without NVIDIA's Windows on Arm driver it
 installs no Ollama, sets up the cloud providers and says to re-run it once the
 driver is in), and says plainly that GPU acceleration is unverified there;
-local models are unverified as well, and device settings refuse on Windows as
-on any non-Linux host (the rule and the sentence the Wizard prints are in
+local models are unverified as well, the `voice` extra installs nothing (no
+faster-whisper wheel; `nvh voice --status` says so and the mic falls back to
+Groq Whisper when a key exists), and device settings refuse on Windows as on
+any non-Linux host (the rule and the sentence the Wizard prints are in
 [CONFIGURATION.md](CONFIGURATION.md#code-and-images-from-the-wizard-chat)).
 If you own an RTX Spark machine, please report what it shows through the
 [RTX Spark hardware facts](../.github/ISSUE_TEMPLATE/rtx-spark-facts.md) issue

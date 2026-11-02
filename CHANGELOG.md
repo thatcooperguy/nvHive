@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-02
+
+Seven of the eight add items of #133, on their second re-scope (the eighth,
+one chat surface, is held below), and the five items held out of 0.45. The
+Wizard asks instead of guessing (`ask_user` puts one clarifying question on a
+card and waits for the answer), keeps memory notes (`remember` writes an
+`nvh-memory/1` record that `/vault` lists behind a Memory toggle and `nvh
+vault list` / `forget` / `upgrade` manage) and makes images (`generate_image`
+is a confirm card with a plan line: NVIDIA-hosted when `NVAPI_KEY` is set,
+else local ComfyUI, and never the paid path under a profile cost ceiling while
+the price is unknown); schedules run inside the API process behind a heartbeat
+lock, with the seven `/v1/schedules` routes, `schedule-run` jobs and the
+`/schedules` page; the standard `/v1/chat/completions`, `/v1/completions` and
+`/v1/anthropic/v1/messages` paths sit beside `/v1/proxy/...` and `nvh launch
+<tool>` points Codex, opencode, Continue and Cursor at them (each prints its
+snippet and starts nothing) and gives Claude Code nvHive's MCP server instead
+(`claude` registers it and launches; inference stays with Anthropic, O11); the
+session cost pill reads `GET /v1/budget/status?since=` against
+`budget.hourly_rate_usd`; and the composer gains a hold-to-talk mic (the
+transcript is inserted, never sent) and a Read aloud toggle through the
+browser's `speechSynthesis`, with local speech-to-text from the `voice` extra
+(faster-whisper on the CPU, int8, `small.en`, weights fetched only by an
+explicit download) and Groq Whisper as the cloud fallback. Underneath: every
+vault memory note is an `nvh-memory/1` record and `state/schedules.json` an
+`nvh-schedules/2` store, `require_auth` and `key_required()` live in
+`nvh/api/deps.py`, `/v1/health` discloses `bind_host`, `auth_mode` and
+`key_required`, the Anthropic proxy and the integrations scan are behind the
+key, and streamed proxy and Wizard turns are budget-checked and written to the
+ledger. Carried from 0.45: `cost_known` beside every `cost_usd`, so a free
+reply and a `$0` nobody priced read differently, the process-group kill of an
+in-flight playbook command, `--verify` honouring `exclude_providers`, the last
+bundled-file readers going through `nvh.data`, and the pre-0.44 tool-call
+forms dropped from the agent loop's parser. O6 is decided by the arm64 CI
+step: `pip install -e ".[voice]"` installed and imported faster-whisper 1.2.1
+(ctranslate2 4.8.4) on the `ubuntu-24.04-arm` runner, so the `voice` extra
+ships as the local speech path on Linux arm64, the DGX Spark target (verified
+on the CI runner, not yet on Spark hardware); its requirement carries
+`sys_platform != 'win32' or platform_machine != 'ARM64'` (the design's `not
+(…)` spelling is not valid PEP 508), so on Windows on Arm the extra installs
+nothing and `nvh voice --status` says why. The design is
+`docs/proposals/ADDS_0_46_DESIGN_2026-11.md`.
+
+Not in this release: the `/` + `/wizard` shell merge (C1b in the design).
+Since Wave C the thread is `web/components/chat/WizardThread.tsx` and
+`/wizard` mounts it, but O9 was not confirmed, so the mount on `/` is held for
+0.47; `/wizard` stays a page until then, and the 0.42 `/query` and `/council`
+redirects in `web/next.config.js` stay with it, re-dated to retire together
+with the one-release `/wizard` redirect that follows the merge (O14; its 0.47
+date assumed a 0.46 merge and is the owner's to re-set). A `LOCAL_MODEL_TIERS`
+review for qwen3.6 stays an owner decision, and Phase 4 (the Spark binary and
+the unified-memory probe) waits on hardware facts.
+
 ### Added
 - **Cost pills tell a free reply from a $0 nobody priced.** Every API
   envelope that carries `cost_usd` now carries `cost_known` beside it: the
@@ -591,6 +643,19 @@
   `shutil.which`, so an npm shim registers on Windows. `/setup`'s job list
   shows `voice-model-download` jobs beside installs (deliberate: it is the
   one place a download can be watched outside the composer).
+- **The `security` job's `pip-audit` runs without `--strict`.** 0.44.1 made
+  the step install the project before the audit (a bare `pip-audit` checks
+  only the interpreter's own tree) and added `--skip-editable` beside the
+  `--strict` already there; in an editable checkout the two cannot both
+  hold — `--skip-editable` turns the `nvhive` checkout into a skipped
+  dependency and `--strict` makes any skipped dependency fatal — so every
+  run since exited at `nvhive: distribution marked as editable` without
+  printing a result, and the `::warning::` fired unconditionally. The run
+  line is now `pip-audit --desc --skip-editable || echo "::warning::…"`:
+  the editable checkout is skipped non-fatally, the audit of the installed
+  set completes, and the warning means a finding. The step stays
+  `continue-on-error`; `docs/MAINTAINERS.md` item 6 and its local command
+  drop `--strict` with it.
 
 ### Fixed
 - **`GET /v1/health` no longer calls an unknown bind host loopback.** When
@@ -768,6 +833,16 @@
   a snippet-kind target and `--inference-proxy` show the live
   `HIVE_API_KEY` in clear text on the terminal — keep that output out of
   pasted logs. `--start-api` never frees a port something else holds.
+- **The first real `pip-audit` result is read and recorded.** With `--strict`
+  gone the `security` job's audit lists thirteen advisories against
+  `filelock` 3.32.7 (CVE-2026-112907 through CVE-2026-112940, fixed in
+  4.2.1). nvHive names and imports no `filelock` API; the package arrives
+  through `litellm`, which pins `filelock<4.0`, so the fix cannot be
+  installed yet. The advisories need a local user able to plant names in
+  the directory that holds a lock, and nvHive's caches live under the
+  user-owned `NVH_HOME` layout, so the finding is knowingly accepted for
+  0.46.0 (SECURITY.md records it) and the floor moves to `filelock>=4.2.1`
+  when litellm lifts its pin.
 
 ### Removed
 - **The pre-0.44 tool-call forms.** The agent loop no longer reads the

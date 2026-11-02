@@ -134,7 +134,7 @@ files are guards rather than unit tests:
 
 | Job | What |
 |---|---|
-| `test` | Ubuntu, Python 3.11 and 3.12: `ruff check` with the rule set above, `pytest tests/ -v`, then a coverage gate (`--cov-fail-under=49`) on 3.12 with upload to Codecov; the `ubuntu-24.04-arm` matrix entry also runs a non-blocking `Voice extra (informational, arm64)` step (`pip install -e ".[voice]"` then `import faster_whisper`, `continue-on-error`) whose log decides whether the `voice` extra ships on arm64 |
+| `test` | Ubuntu, Python 3.11 and 3.12: `ruff check` with the rule set above, `pytest tests/ -v`, then a coverage gate (`--cov-fail-under=49`) on 3.12 with upload to Codecov; the `ubuntu-24.04-arm` matrix entry also runs a non-blocking `Voice extra (informational, arm64)` step (`pip install -e ".[voice]"` then `import faster_whisper`, `continue-on-error`) whose log decided O6 for 0.46 — faster-whisper installed and imported there, so the extra ships on arm64 — and keeps reporting whether the wheel still resolves on later runs |
 | `typecheck` | `mypy nvh/sandbox nvh/catalog` gates; a repo-wide mypy runs as an informational signal and grows the gated list as modules reach zero errors |
 | `webui` | `npm ci`, `tsc --noEmit`, `npm test` (`node --test lib/*.test.mjs`), ESLint (findings warn, a crashed linter fails), `npm run build` on Node 22 |
 | `security` | `pip-audit` (informational) over `.[dev]` plus the `voice` extra, which installs in its own non-blocking step so its tree (ctranslate2, huggingface_hub, tokenizers) is audited when it installs and a missing wheel never turns the job red |

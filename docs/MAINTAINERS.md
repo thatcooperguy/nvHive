@@ -23,11 +23,12 @@ python -m pytest tests/ -q
 #   that links to a file it does not carry fails tests/test_docs_links.py in CI.
 #   Whatever "Before tagging" (below) made you change — a re-extracted playbook
 #   with its --update'd scripts/playbook_upstream_snapshot.json, SECURITY.md,
-#   specs.py, local_models.py, capabilities.yaml — lands in its own commit
-#   before this one; the list below is the release commit alone
+#   specs.py, local_models.py, capabilities.yaml, a seeded vault note in
+#   nvh/integrations/workspace/vault.py — lands in its own commit before
+#   this one; the list below is the release commit alone
 git add CHANGELOG.md pyproject.toml nvh/__init__.py web/lib/version.ts README.md docs/ .github/ISSUE_TEMPLATE/
-git commit -s -m "Release 0.45.0: <one-line theme>" && git push
-git tag v0.45.0 && git push origin v0.45.0
+git commit -s -m "Release 0.46.0: <one-line theme>" && git push
+git tag v0.46.0 && git push origin v0.46.0
 ```
 
 `web/package.json` and `vscode-nvhive/package.json` stay at `0.1.0` by
@@ -46,7 +47,7 @@ workflow file `publish.yml`, repository `thatcooperguy/nvHive`). It also
 accepts `workflow_dispatch` as a recovery path:
 
 ```bash
-gh workflow run publish.yml --ref v0.45.0 -f target=pypi
+gh workflow run publish.yml --ref v0.46.0 -f target=pypi
 ```
 
 Expect 6–10 minutes for the GitHub Release (binary builds dominate) plus a
@@ -112,12 +113,14 @@ minute for PyPI.
    the module behind every rule, so a moved or renamed module, a new tool
    class or a changed default must be reflected before the tag, in its own
    commit: the release `git add` list does not carry `SECURITY.md`). The
-   `security` job of the last `ci.yml` run on `main` (`pip-audit --strict`
-   over the installed dependency set; non-blocking by design, so nothing
-   else surfaces it) has been read and every finding is either pinned away
-   or knowingly accepted; locally, `pip install pip-audit && pip-audit
-   --desc --strict --skip-editable` in the project venv gives the same
-   answer. No open Dependabot pull request is red: `.github/dependabot.yml`
+   `security` job of the last `ci.yml` run on `main` (`pip-audit --desc
+   --skip-editable` over the installed dependency set — not `--strict`,
+   which makes the skipped editable checkout fatal and aborts the audit
+   before it prints a result; non-blocking by design, so nothing else
+   surfaces it) has been read and every finding is either pinned away or
+   knowingly accepted; locally, `pip install pip-audit && pip-audit --desc
+   --skip-editable` in the project venv gives the same answer. No open
+   Dependabot pull request is red: `.github/dependabot.yml`
    covers pip, `web/` npm and GitHub Actions weekly, with security updates
    daily, so merge or close each one before tagging.
 7. README install URLs, PyPI metadata, release asset names, `NOTICE.md`,
@@ -131,16 +134,17 @@ minute for PyPI.
 ### Verifying, yanking, rolling back
 
 ```bash
-python -m venv /tmp/verify && /tmp/verify/bin/pip install nvhive==0.45.0
+python -m venv /tmp/verify && /tmp/verify/bin/pip install nvhive==0.46.0
 /tmp/verify/bin/nvh version && /tmp/verify/bin/nvh --help
 ```
 
 A wrong version or an import failure means **yank** the release on PyPI
 (`Options > Yank release` — hides it from new installs, keeps it for pinned
 users) and fix forward with a patch release. Never delete or force-push a
-released tag. Users on a broken release pin the previous one
-(`pip install 'nvhive==0.44.1'`); WebUI-versus-backend drift is fixed by
-`nvh webui --clean`.
+released tag. Users on a broken release pin the last one PyPI has
+(`pip install 'nvhive==0.42.0'` today: 0.43.0 to 0.45.0 have CHANGELOG
+sections but no tag or PyPI release yet, an owner item); WebUI-versus-backend
+drift is fixed by `nvh webui --clean`.
 
 ### Workflow-scoped pushes
 
