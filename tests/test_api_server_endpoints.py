@@ -1508,7 +1508,9 @@ class TestRunServerDefaults:
         for var in ("NVH_API_PORT", "NVH_API_SERVER_PROCESS", "NVH_API_BIND_HOST"):
             monkeypatch.setenv(var, os.environ.get(var, ""))
             monkeypatch.delenv(var)
-        monkeypatch.setattr(app.state, "bind_host", None, raising=False)
+        # Through the State dict: pytest 9.2's setattr records a Starlette State key
+        # as absent (see TestHealthFacts._bind_host in tests/test_api.py).
+        monkeypatch.setitem(app.state._state, "bind_host", None)
         return calls
 
     def test_signature_default_is_loopback(self):
@@ -1598,7 +1600,9 @@ class TestOpenModeIsClosedByTheKeyNotByUsers:
     def test_non_loopback_bind_with_users_and_no_key_is_refused(self, monkeypatch):
         monkeypatch.delenv("HIVE_API_KEY", raising=False)
         monkeypatch.setenv("NVH_API_BIND_HOST", "0.0.0.0")
-        monkeypatch.setattr(app.state, "bind_host", None, raising=False)
+        # Through the State dict: pytest 9.2's setattr records a Starlette State key
+        # as absent (see TestHealthFacts._bind_host in tests/test_api.py).
+        monkeypatch.setitem(app.state._state, "bind_host", None)
         self._users(monkeypatch, 1)
         local = self._bare_request({"Host": "localhost:8000"})
         refusal = asyncio.run(server_module._privileged_network_refusal(local))

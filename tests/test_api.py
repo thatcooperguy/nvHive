@@ -783,9 +783,24 @@ class TestHealthFacts:
         monkeypatch.setattr(auth_mod, "get_user_count", _count)
 
     @staticmethod
-    def _unstarted(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _bind_host(monkeypatch: pytest.MonkeyPatch, value: str | None) -> None:
+        """Record ``app.state.bind_host`` the way ``run_server`` does, restorably.
+
+        Through the ``State`` dict, not pytest's ``setattr`` on ``app.state``:
+        Starlette's ``State`` keeps its keys in ``_state`` and defines
+        ``__getattr__``, so pytest 9.2's ``setattr`` (which reads the old value
+        from the instance ``__dict__``) records the key as absent every time.
+        Patching it twice in one test then deletes twice at teardown — a
+        ``KeyError`` from ``State.__delattr__`` that aborted the rest of the undo
+        and leaked ``NVH_API_BIND_HOST`` into the session (CI run 41378464864).
+        ``setitem`` tolerates a key that is already gone.
+        """
+        monkeypatch.setitem(app.state._state, "bind_host", value)
+
+    @classmethod
+    def _unstarted(cls, monkeypatch: pytest.MonkeyPatch) -> None:
         """Neither ``run_server`` nor its env export recorded a bind host."""
-        monkeypatch.setattr(app.state, "bind_host", None, raising=False)
+        cls._bind_host(monkeypatch, None)
         monkeypatch.delenv("NVH_API_BIND_HOST", raising=False)
 
     def test_payload_carries_both_facts(self, test_client: TestClient) -> None:
@@ -823,10 +838,10 @@ class TestHealthFacts:
         assert data["auth_mode"] == "users" and data["key_required"] is True
 
     def test_bind_host_is_what_run_server_recorded(self, test_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(app.state, "bind_host", "0.0.0.0", raising=False)
+        self._bind_host(monkeypatch, "0.0.0.0")
         assert test_client.get("/v1/health").json()["data"]["bind_host"] == "0.0.0.0"
         # uvicorn's reload subprocess only sees run_server's env export.
-        monkeypatch.setattr(app.state, "bind_host", None, raising=False)
+        self._bind_host(monkeypatch, None)
         monkeypatch.setenv("NVH_API_BIND_HOST", "192.0.2.10")
         assert test_client.get("/v1/health").json()["data"]["bind_host"] == "192.0.2.10"
 
