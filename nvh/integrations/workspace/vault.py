@@ -1200,24 +1200,30 @@ strictly VRAM-tiered:
 - **8 GB+**: image generation starter (ComfyUI + Z-Image-Turbo).
 - **12 GB+**: + image editing (Qwen Image Edit 2509).
 - **16 GB+**: + image control (FLUX.1 ControlNet).
-- **24 GB+**: + video (Wan 2.2 5B), local speech (WhisperX +
-  faster-whisper via the music-producer-lab pack), music (ACE-Step).
+- **24 GB+**: + video (Wan 2.2 5B), studio speech (WhisperX via the
+  music-producer-lab pack), music (ACE-Step).
 - **40 GB+**: + video pro (Wan 2.2 14B i2v).
 
 There is no CPU-only override: the staging step only runs when a GPU
 is detected, and a small GPU stages only what its tier qualifies for.
-There is also no Piper TTS pack and no local TTS gated by VRAM — the
-default voice path is Edge TTS (cloud, free) for TTS and Groq Whisper
-(cloud, free with a key) for STT, which work on any rig including
-no-GPU ones.
+The Wizard's own speech-to-text is not VRAM-tiered at all: since 0.46
+the local path is the `nvhive[voice]` extra (faster-whisper on the CPU,
+int8, `small.en`), which works on no-GPU rigs and fetches its weights
+only when you run `nvh voice --download` or press **Download model** in
+the WebUI; on Windows on Arm the extra installs nothing. Without it,
+Groq Whisper (cloud, cost unknown) is the fallback when a key exists.
+There is still no Piper TTS pack and no local TTS gated by VRAM:
+text-to-speech is the browser's own speech synthesis (Read aloud) in
+the WebUI and Edge TTS (cloud, free) from the CLI.
 
 ## What "Omni" means here (and what it doesn't)
 
 NVIDIA Nemotron Omni is a **multimodal LLM** — vision + text in, text
 out. It is *not* an image generator (use ComfyUI + diffusion for that)
-and it is *not* a speech model (use WhisperX / XTTS for that).
-Image gen and speech are separately VRAM-gated capabilities, not part
-of "Omni."
+and it is *not* a speech model (use faster-whisper or WhisperX to
+transcribe, the browser or Edge TTS to speak).
+Image gen and the studio speech packs are separately VRAM-gated
+capabilities, not part of "Omni."
 
 ## How the staging marker works today
 
